@@ -450,6 +450,13 @@ received explicit unavailable responses; hosted tools were not qualified. The
 unit ended, but its socket files remain without a listener. The next exact-query
 fixture amendment has passed source review and local checks only.
 
+The [R5-r2 guarded-PREP attempt](provider-logins/codex-fresh-constructor-2026-10-27.json)
+passed all four measured space gates, then failed on the source-mapped
+`limit=200&includeDownloadUrls=true` installed-plugins query, which the fixture's
+exact allowlist excludes. The precise native caller branch remains unattested. Thirty-nine
+observed identities ended; the sample and listener proofs remain incomplete. Earlier
+FAILs remain intact; this adds no hosted success or runtime qualification.
+
 The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
 removed the two public Codex executable copies after collection, under their
 qualified execution guards. A separate cache-only follow-up removed one sealed

@@ -165,6 +165,105 @@
       },
       "secondary_credit_error": "Occurred after the permanent abort latch; no independent header/schema cause is established.",
       "next_source_amendment": "The exact query-only R4 fixture is source-reviewed and locally checked, not prepared or executed."
+    },
+    "r5_r2_attempt": {
+      "prepared_receipt_sha256": "b670cf0174f1ca6a5799227d031b4a88ce509c2b109ea059eef7a5378acb7749",
+      "outer_receipt_sha256": "7e51804364bef6354be590f4e19e9c83c11ff98ba82bd8b3ca3a2f69720e194e",
+      "inner_receipt_sha256": "4e15c9a60520b903ba56cc4a9d565da4a9d1cb8482dbf5bb023b9f6b2f26eeb7",
+      "result": "FAIL",
+      "prep_space_gates": [
+        {
+          "phase": "transfer",
+          "available_bytes": 966139904,
+          "required_bytes": 821936922,
+          "capacity_reserved": false
+        },
+        {
+          "phase": "extract",
+          "available_bytes": 649064448,
+          "required_bytes": 504961530,
+          "capacity_reserved": false
+        },
+        {
+          "phase": "copy",
+          "available_bytes": 608325632,
+          "required_bytes": 464637640,
+          "capacity_reserved": false
+        },
+        {
+          "phase": "run",
+          "available_bytes": 311169024,
+          "required_bytes": 167772160,
+          "capacity_reserved": false
+        }
+      ],
+      "first_failure": {
+        "kind": "unexpected provider query",
+        "path": "/backend-api/ps/plugins/installed",
+        "path_bytes": 33,
+        "path_sha256": "ba4b152505005de546513fdb50db122fd88ad78871d23746c2fa834e4f9c9a51",
+        "exact_query": "limit=200&includeDownloadUrls=true",
+        "query_pairs_at_zero_based_ledger_row_43": 2,
+        "prior_scope_global_form_accepted": true,
+        "pinned_source": {
+          "commit": "83086188ae0614bd882818ff1aa23f3194962012",
+          "remote_rs_span": [
+            2250,
+            2288
+          ],
+          "remote_rs_sha256": "890446011fcdab53516a3148e34b7b6780b1e2064fc0539dc7471dbca71c4075",
+          "caller": "remote_installed_plugin_sync.rs:131-145",
+          "caller_sha256": "4acd89515c391a34ea10eff947a187f79f457837eec5e224b3ead999e0df945f",
+          "caller_arguments": "All,true",
+          "manager_call_line": 1729,
+          "exact_runtime_caller_branch_attested": false
+        },
+        "interpretation": "The fixture's exact query allowlist excludes this source-mapped variant; the precise native caller branch remains unattested."
+      },
+      "timing_seconds": {
+        "inner": 14.098363,
+        "outer": 18.744997
+      },
+      "counts": {
+        "provider_routes": 48,
+        "native_frames": 4,
+        "prewarms": 1,
+        "mcp_messages": 3,
+        "mcp_calls": 0,
+        "main_inferences": 0,
+        "pty_bytes": 0
+      },
+      "cleanup": {
+        "unit_cgroup_empty_and_gone": true,
+        "observed_identities_ended": 39,
+        "sample_count": 32,
+        "sample_truncated": true,
+        "logical_alias_and_physical_socket_files_present": true,
+        "full_ownership_proved": false,
+        "fixture_listener_proof": false
+      },
+      "pins": {
+        "frozen_root_manifest_sha256": "f2c119f46826db1abdd97744e6cebcc28127d951591e12a953c257fb93a0bc69",
+        "packet_manifest_sha256": "c57e6caf891eb212d4559ddddcb7ae53c993c5e71cb5c82338321b935e5e357d",
+        "packet_files": 133,
+        "product_sha256": "31e6c3d9eb986aa625e7e3b65072c7d0e3bd316cdb6d35f284613ce89e420674",
+        "helper_sha256": "1d219f679732c17032da986d7c11cf96933186c54c1fb03748fb1eee5abcdf2c",
+        "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "root_controls_receipt_sha256": "6947cfd03480228842992932efbc116bc83c6627e20e61e26acfe5a261e5b148"
+      },
+      "controls": {
+        "root_controls_receipt_sha256": "6947cfd03480228842992932efbc116bc83c6627e20e61e26acfe5a261e5b148",
+        "old_lowspace_red": "RECLASSIFIED_SETUP_FAILURE_INCONCLUSIVE; original mock lacked name/isfile before modeled extraction.",
+        "current_exact_old_selector": "MEANINGFUL_EXPECTED_ASSERTION_RED",
+        "prior_old_lowspace_attempt": "SETUP_FAILURE_INCONCLUSIVE due to original mock failure; not regression RED."
+      },
+      "limits": [
+        "R2 full failure and all earlier failures remain unchanged.",
+        "No real accounts, live services, main change, release or recovery qualification follows.",
+        "This source candidate does not qualify runtime activation."
+      ],
+      "fixture_semantics": "An empty installed snapshot is authoritative and sync deletes stale cache. The existing empty mock is appropriate only for a fresh synthetic profile; no populated-user-cache preservation is claimed.",
+      "qualification": "Fresh managed TUI adoption remains unqualified; this failed attempt supplies no hosted-tool success, real-account or recovery proof."
     }
   }
 }
