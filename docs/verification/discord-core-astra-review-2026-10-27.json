@@ -37,5 +37,18 @@
     "This is a scoped component approval, not a release or installation approval.",
     "Live Discord and installed launchd/systemd reboot behavior were not exercised.",
     "Native provider internals and the frozen repository-wide gates are reviewed separately."
+  ],
+  "follow_up_reviews": [
+    {
+      "commit": "6a70f3e6d98fee11061620968173e10c7fec950b",
+      "scope": "Thread-only inheritance of explicitly configured parent-channel scope",
+      "verdict": "SHIP",
+      "finding": "Inherited scope requires the returned channel ID, guild ID, allowed parent ID, and discordgo.Channel.IsThread(); direct explicit channel and all-guild admission are unchanged.",
+      "verification": {
+        "command": "go test -race ./internal/discord -run 'TestParentScopeRequiresAnActualDiscordThread|TestConfiguredParentAllowsThreadAndPublicationRechecksItsScope' -count=1",
+        "exit_code": 0,
+        "result": "ok github.com/Nathandela/swarm/internal/discord 4.823s"
+      }
+    }
   ]
 }

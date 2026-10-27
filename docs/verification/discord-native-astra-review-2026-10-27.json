@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-27",
+  "reviewer": "Independent Astra native and final gate-correction review",
+  "verdict": "SHIP for the reviewed components; repository and installed-release gates are separate",
+  "claude": {
+    "qualified_versions": [
+      "2.1.296",
+      "2.1.310",
+      "2.1.311"
+    ],
+    "verdict": "SHIP",
+    "evidence": "discord-protocol/claude-native-lifecycle-2026-10-27.json",
+    "independent_native_fixture_seconds": 18.05,
+    "checks": [
+      "A native prompt paused during admission stays in its original conversation",
+      "A delayed old callback released after actual clear receives exact native rejection",
+      "Rejected text enters neither native user-message history nor model context",
+      "Owner input reaches the replacement conversation and old readiness remains revoked",
+      "Disabling the independent companion guard reproduces late admission"
+    ],
+    "scope_limit": "A refused attempt can appear briefly in the native UI and as queue-operation metadata; that is not model or user-message admission"
+  },
+  "hermes": {
+    "verdict": "SHIP under the conservative ADR037 contract",
+    "reviewed_fixes": [
+      "1a5d1db7",
+      "e03529b8"
+    ],
+    "native_source": "bf0203a794a07aac3ff764972ab9087baa4e4f4e (v0.22.5)",
+    "platform_evidence": [
+      "discord-protocol/hermes-native-shared-owner-2026-10-27.json",
+      "discord-protocol/hermes-native-shared-owner-linux-2026-10-27.json"
+    ],
+    "independent_race_seconds": {
+      "hermesinput": 2.536,
+      "skeleton_selected": 13.879,
+      "daemon_selected": 8.482,
+      "protocol_native_stop": 14.936
+    },
+    "checks": [
+      "Exact native receipt reference, authority epoch and canonical resume identity",
+      "Queued cancellation and scoped background stop still attempted when an unknown admission exists",
+      "Unknown stop or ordinary viewer exit uses non-ending detach",
+      "Pinned native SIGTERM cleanup closes transport without an ending detach or owner signal",
+      "A/B shared-owner isolation, native permission separation and restart without a new turn"
+    ],
+    "scope_limit": "No joined-work completion proof, automatic workspace cleanup or production credential-refresh claim"
+  },
+  "final_gate_corrections": {
+    "verdict": "SHIP",
+    "production_guards_changed": false,
+    "checks": [
+      "ContextGuard continuation fixtures wait for a durably recorded write, with an unwritten-attempt negative",
+      "Login-view redaction uses the real credential registry with unchanged public serialization assertions",
+      "Enrollment fixture retries are bounded and limited to ErrUnavailable, retaining real stopped-writer checks and terminal cleanup",
+      "Child environment fixture publishes by atomic rename and retains allowlist/leak assertions",
+      "Unused Hermes viewer helper removed; fixture exercises the actual non-ending exit path"
+    ],
+    "independent_race_seconds": {
+      "contextguard_login_selected": 7.6,
+      "hermes_viewer": 2.086,
+      "discord_user_agent": 4.307,
+      "login_retry_custody_selected": 16.091,
+      "child_environment_selected": 36.448
+    }
+  },
+  "limits": [
+    "No production sessions or credentials were touched by these reviews",
+    "Local mock Discord was expressly authorized by the owner; live bot credentials were not configured",
+    "Frozen repository-wide gates, release CI and installed artifacts require their own evidence"
+  ],
+  "constructor_review": {
+    "verdict": "SHIP",
+    "integrated_commit": "1c29e277f9acfeb774a1acf1c6fb4a8bb9728245",
+    "scope": "Publish roster/fanout/sweeper/journal workers only after immutable field initialization; safe unstarted close and failure cleanup",
+    "independent_race_seconds": {
+      "protocol": 5.016,
+      "skeleton": 19.106
+    },
+    "findings": "No missed initial roster, new deadlock or subscription leak; all constructors and private callers audited"
+  },
+  "release_manifest_review": {
+    "verdict": "SHIP",
+    "integrated_commit": "7cab3a96",
+    "scope": "Advertise maximum supported session read schema5 while classic writes remain1 and login writes remain4",
+    "independent_race_seconds": 2.86,
+    "checks": [
+      "Real Hermes Save/Load matches current compatibility card",
+      "Current-card activation succeeds",
+      "Schema4 activation and rollback refuse before execution"
+    ]
+  }
+}
