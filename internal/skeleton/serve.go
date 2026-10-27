@@ -59,6 +59,8 @@ import (
 // binary are the daemon's; PollInterval/StalenessThreshold tune the engine;
 // FakeAgentBin is the dev/test-only resolver for the reserved agent "fake".
 type Config struct {
+	NativeInputEnabled func() bool
+
 	StateDir, SocketPath, LockPath, LogPath, ShimBinary string
 	MaxSessions                                         int
 	PollInterval                                        time.Duration // engine fallback-poll cadence (E10.8); 0 = no cadence
@@ -355,20 +357,21 @@ func Serve(cfg Config) (*Daemon, error) {
 	// (Epic 12 toggle wiring). handleConn blocks on d.ready, so nothing is served
 	// until the assembly below is fully wired.
 	core, err := daemon.Open(daemon.Config{
-		StateDir:       cfg.StateDir,
-		BeforeLoad:     func() error { return loginmigration.RunLocked(cfg.StateDir) },
-		SocketPath:     cfg.SocketPath,
-		LockPath:       cfg.LockPath,
-		LogPath:        cfg.LogPath,
-		ShimBinary:     cfg.ShimBinary,
-		MaxSessions:    cfg.MaxSessions,
-		ConnHandler:    d.handleConn,
-		PreLaunch:      preLaunchWorktree,
-		FinalizeLaunch: d.prepareLoginLaunch,
-		PreDelete:      preDeleteWorktree,
-		OnSessionStart: d.registerSession,
-		OnSessionEnd:   d.endSession,
-		OpenCodeReady:  d.openCodeReady,
+		NativeInputEnabled: cfg.NativeInputEnabled,
+		StateDir:           cfg.StateDir,
+		BeforeLoad:         func() error { return loginmigration.RunLocked(cfg.StateDir) },
+		SocketPath:         cfg.SocketPath,
+		LockPath:           cfg.LockPath,
+		LogPath:            cfg.LogPath,
+		ShimBinary:         cfg.ShimBinary,
+		MaxSessions:        cfg.MaxSessions,
+		ConnHandler:        d.handleConn,
+		PreLaunch:          preLaunchWorktree,
+		FinalizeLaunch:     d.prepareLoginLaunch,
+		PreDelete:          preDeleteWorktree,
+		OnSessionStart:     d.registerSession,
+		OnSessionEnd:       d.endSession,
+		OpenCodeReady:      d.openCodeReady,
 		// Wave R7 (backendconnect.go): the core asks the ASSEMBLY whether a session needs a
 		// side process, because only the assembly may touch an adapter and only the core
 		// knows the session dir the plan is contained against.
@@ -383,7 +386,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		locals = append(locals, m.ID)
 	}
 	d.restoreDirectInputState(locals)
-	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID, d.contextGuards)
+	d.api = newCoreAPIUnstarted(core, cfg.FakeAgentBin, epID, d.contextGuards)
 	// Every later assembly failure must release the core lock and its watchers.
 	var loginStore *logins.Store
 	assembled := false
@@ -767,6 +770,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	// starts it; this closes the reconcile window if a backend became live first.
 	d.startContextGuardsForRunning()
 
+	// Publish all assembly callbacks before the roster worker can read them.
+	d.api.startWatch()
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
 	return d, nil
@@ -830,7 +835,7 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 			token = ""
 		}
 	}
-	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode || m.HermesNative {
 		d.eng.EndSession(m.ID)
 	} else {
 		d.registerExecutionSession(m, token, sources, d.core != nil)
@@ -1042,6 +1047,10 @@ func (d *Daemon) tapOnce(ctx context.Context) {
 	d.retryHookRetirements()
 	for _, m := range d.core.List() {
 		if d.rememberClaudeChatRuntime(m) || m.Status.Process != status.ProcessRunning {
+			continue
+		}
+		if m.HermesNative {
+			d.asyncOnce(ctx, &d.sampleMu, d.sampling, &d.sampleWG, m.ID, d.sampleHermesNative)
 			continue
 		}
 		if m.RequiredRuntime != persist.RequiredRuntimeOpenCode && (d.controlled == nil || !d.controlled(m.ID)) {
@@ -1552,6 +1561,9 @@ func EndpointIDForStateDir(stateDir string) string { return endpointID(stateDir)
 // directory. A session without the flag is untouched. The gate keeps the hook a
 // generic no-op for every non-worktree launch.
 func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
+	if spec.HermesInput != nil && spec.HermesInput.ResumeID != "" {
+		return spec.HermesInput.Cwd, nil
+	}
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return "", nil
 	}
@@ -1568,6 +1580,9 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 // worktree path chosen at launch. Older metadata without AgentCwd used the id as
 // its path component and takes the compatibility fallback.
 func preDeleteWorktree(m persist.Meta) error {
+	if m.HermesNative && m.ShimPID > 0 {
+		return errors.New("hermes native job completion is unproven; workspace retained")
+	}
 	if m.LaunchOptions[protocol.OptionWorktree] != "true" {
 		return nil
 	}

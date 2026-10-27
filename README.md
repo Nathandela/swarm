@@ -30,6 +30,7 @@ Inspired by Claude Code's Agent View, but agent-agnostic and open source.
 - **Safe daemon upgrades.** Restart or upgrade swarm while agents are running; the replacement daemon finds and reconnects to them.
 - **Agent CLI refresh.** Resume eligible idle Claude and Codex sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
 - **Provider logins.** Save and select native Claude Code and Codex logins in Options → Logins. See the [provider login guide](docs/operations/provider-logins.md).
+- **Team discussions in Discord.** Connect the whole local Swarm through your own named bot. Teammates can ask existing agents, owners can endorse a message, and agents publish deliberate replies. Each computer or VM keeps its own integration. See the [Discord guide](docs/ops/discord.md).
 - **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
 - **Remote companion.** The Android app in this repository can securely watch and control agents running on your computer.
 
@@ -95,7 +96,7 @@ The daemon starts automatically and opens the session board.
 | <kbd>n</kbd> | Start a session and choose its CLI, working directory, and optional tag |
 | <kbd>e</kbd> | Rename the selected session |
 | <kbd>t</kbd> | Tag the selected session; an empty tag clears it |
-| <kbd>o</kbd> | Options: how the board groups (status, repo, tag) and orders its rows. The choice is remembered across restarts |
+| <kbd>o</kbd> | Options: board grouping/order and the optional CLI return button. Choices are remembered across restarts |
 | <kbd>h</kbd> | Hand work to another supported CLI |
 | <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill a live session or delete a finished one; confirm with <kbd>y</kbd> |
 | <kbd>esc</kbd> | Close the TUI while agents keep running |
@@ -104,9 +105,11 @@ The board also takes the mouse: click an unselected session to select it, click 
 
 For phone terminals over SSH, layout follows the available columns and rows, including software-keyboard resizing. Compact rows prioritize names and attention; folded groups retain attention counts. Tap the attention count or press <kbd>g</kbd> to reveal an attention session. Text forms still use your keyboard and preserve terminal-native selection/paste. On the board or More, use your terminal's selection bypass modifier if available (usually <kbd>shift</kbd>, or <kbd>option</kbd> in iTerm2 and Terminal.app). Gesture translation depends on the terminal app; an actual client must emit mouse/wheel reports for those interactions.
 
-The board/menu minimum is 24×4 cells; text and decision screens require 32×8. Smaller screens preserve drafts and allow cancel/back while pausing new actions. Swarm stops requesting mouse input before handing the terminal to an attached agent. See the [mobile terminal interaction contract](docs/specifications/mobile-terminal-touch-plan.md) and [qualification evidence](docs/verification/mobile-terminal-touch/implementation.md).
+The board/menu minimum is 24×4 cells; text and decision screens require 32×8. Smaller screens preserve drafts and allow cancel/back while pausing new actions. Swarm stops board mouse capture before handing the terminal to an attached agent. See the [mobile terminal interaction contract](docs/specifications/mobile-terminal-touch-plan.md) and [qualification evidence](docs/verification/mobile-terminal-touch/implementation.md).
 
-Attach mode is raw passthrough: the agent's native full-screen interface remains untouched. swarm adds only a thin session header, which can be hidden. Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it. If the saved directory is unavailable, choose an existing directory to relocate and resume the same conversation, or press <kbd>esc</kbd> to cancel.
+Attach mode shows the agent's native interface with a reserved bottom return hint. Ctrl+Q returns to the board while the session keeps running. Enable **Options → CLI button** for a compact `[swarm]` touch target in that same row. It defaults off: enabling it captures mouse input across the terminal and can affect native selection/scrolling. Supported mouse modes use the button; older live shims without mouse-state metadata and unsupported modes retain Ctrl+Q. Unknown mode transitions can safely return you to the board with an explanation; turn the option off to continue raw attach. Actual Termux/iOS touch qualification remains open.
+
+Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it. If the saved directory is unavailable, choose an existing directory to relocate and resume the same conversation, or press <kbd>esc</kbd> to cancel.
 
 ## Status is the interface
 

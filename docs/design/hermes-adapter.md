@@ -12,7 +12,24 @@ process owner or wire protocol. Swarm's existing shim owns a PTY, Hermes's
 classic interactive CLI runs inside it, and the engine derives status from the
 emulated grid. The adapter remains a stateless strategy object under T-1.
 
+The separate [native message ingress qualification](../verification/discord-protocol/hermes-native-ingress.md)
+records stable v0.22.5 owned-gateway and multiclient TUI evidence. The separate activation-gated route uses the provider's persistent shared owner,
+canonical local identities and multiclient TUI. It preserves the classic launch
+below when disabled or below the qualified native floor. Source qualification,
+joined job completion and Discord release acceptance remain separate gates. The
+modern shared-owner source path has guarded macOS arm64 and Linux x86_64
+qualification; this does not extend the historical classic-screen evidence or
+certify an installed release artifact.
+
 ## Frozen decisions
+
+These decisions describe the legacy classic runtime. The activation-gated
+modern runtime follows [ADR-037](../adr/ADR-037-hermes-shared-native-owner.md):
+normal native home/authentication reuse, a persistent shared owner, one canonical
+native session per worker, `--tui` viewers, typed message ingress, and explicit
+unknown native work after viewer loss. It uses the provider's frozen working
+directory on resume and retains workspaces without joined job completion proof.
+Historical classic launches and their characterization remain unchanged.
 
 1. Swarm drives `hermes chat --cli`, even when the user's Hermes environment or
    configuration selects the newer TUI. `--cli` is an internal invariant, not a
@@ -237,6 +254,10 @@ important because prompt_toolkit repaints the status row in pieces; it is safer
 to retain `active` briefly than to announce a false ready state.
 
 ## Typed transport decision
+
+[ADR-037](../adr/ADR-037-hermes-shared-native-owner.md) accepts the separate modern
+Gateway runtime for qualified activated sessions. The deferred-transport
+decision below remains the boundary of the legacy pure terminal adapter.
 
 Hermes exposes richer integration surfaces documented at
 <https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration>.

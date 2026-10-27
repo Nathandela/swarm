@@ -23,6 +23,7 @@ type cliVersionProber struct {
 	path, cwd string
 	env       []string
 	output    *string
+	timeout   time.Duration
 }
 
 func (p cliVersionProber) LookPath(string) (string, error) { return p.path, nil }
@@ -41,7 +42,11 @@ func (b *cappedCLIOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 func (p cliVersionProber) Run(path string, args []string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), cliProbeTimeout)
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = cliProbeTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env, cmd.Dir = p.env, p.cwd
@@ -93,7 +98,13 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 		return nil, err
 	}
 	var output string
-	detection := adapter.Detect(ad, cliVersionProber{path: path, cwd: cwd, env: env, output: &output})
+	timeout := cliProbeTimeout
+	if agentType == "hermes" {
+		// Hermes's native release command can initialize its Python runtime and
+		// consult release metadata before exiting, even for a local stable install.
+		timeout = 10 * time.Second
+	}
+	detection := adapter.Detect(ad, cliVersionProber{path: path, cwd: cwd, env: env, output: &output, timeout: timeout})
 	if !detection.Found || detection.Version == "" || !detection.InRange {
 		return nil, fmt.Errorf("CLI version unavailable")
 	}
@@ -105,6 +116,9 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 	foundToken := false
 	for _, token := range strings.Fields(output) {
 		if strings.Contains(token, detection.Version) {
+			if agentType == "hermes" {
+				token = strings.TrimPrefix(token, "v")
+			}
 			if token != detection.Version {
 				return nil, fmt.Errorf("ambiguous CLI release version")
 			}

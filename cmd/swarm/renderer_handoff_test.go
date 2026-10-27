@@ -227,7 +227,7 @@ func TestProductionRunnerRendererRestore(t *testing.T) {
 				session.resize = func() error { err := afterPaint(); close(session.frames); return err }
 				runner := tui.NewAttachRunner(func(string) (attach.Session, func(), error) { return session, func() { cleaned = true }, nil }, hand)
 				run = func() error {
-					return runner(protocol.SessionView{ID: "private/session", Name: "private attach"}, false)
+					return runner(protocol.SessionView{ID: "private/session", Name: "private attach"}, false, false)
 				}
 			} else {
 				var socket string

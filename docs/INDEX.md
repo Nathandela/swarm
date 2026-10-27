@@ -14,6 +14,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
+- [Discord whole-swarm connection](ops/discord.md) — independent per-place bot setup, attributed teammate conversations, owner controls and deliberate replies; [decision](adr/ADR-036-whole-swarm-discord.md), [implementation and v0.24.0 deployment evidence](verification/discord-integration.md)
 - [Provider logins](operations/provider-logins.md) — saved Claude Code and Codex logins, usage and recovery
 - [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker
@@ -26,7 +27,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
-- [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — implemented SSH-terminal viewport, compact layout, folding and touch actions; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
+- [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — SSH-terminal viewport, compact layout, folding and touch actions, plus the opt-in attached `[swarm]` return-button integration contract; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
 
 - [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
 - [OpenCode minimum version and deployment status](verification/opencode-minimum-version-2026-10-19.md) — stable >=1.19.3 admission, connected checks, actual native recovery and sustained qualification boundaries
@@ -84,6 +85,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+
+- [Attached return-button v0.25.0 release](verification/mobile-terminal-v0250-release.md) — all 17 exact-tag gates, signed archives, verified Mac/VM installation, preserved captured shim instances and installed-byte smoke; busy supervisor convergence and actual handset qualification remain open
 - [Felix fix patch v0.23.1](verification/felix-v0231-integration.md) — failed-turn input, bracketed paste, journal write protection and durable isolated handoffs; integration choices, negative controls and release evidence
 - [Responsive terminal v0.23.0 release](verification/mobile-terminal-v0230-release.md) — signed publication and verified Mac/VM installation; busy daemon convergence and actual handset qualification remain open
 - [Storage patch v0.22.1 rollout](verification/storage-v0221-release.md) — signed publication and verified two-host installation; active-session daemon convergence deferred

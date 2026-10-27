@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"charm.land/lipgloss/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -185,6 +185,7 @@ type rootModel struct {
 	resume                                   resumeModel
 	handoff                                  handoffModel
 	options                                  optionsModel
+	touchBack                                bool
 	logins                                   loginsModel
 	loginsGeneration, loginsClientGeneration uint64
 	loginRunner                              LoginRunner
@@ -483,7 +484,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s := protocol.SessionView{ID: msg.id, Agent: msg.agent, Name: msg.name}
 			if m.attachRunner != nil {
 				m.screen = screenAttach
-				return m, runAttach(m.attachRunner, s, false)
+				return m, runAttach(m.attachRunner, s, false, m.touchBack)
 			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach

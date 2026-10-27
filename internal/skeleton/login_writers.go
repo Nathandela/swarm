@@ -67,7 +67,7 @@ func readNativeProof(stateRoot, local, name string, value any) error {
 	return json.Unmarshal(raw, value)
 }
 func verifyLoginWritersStopped(stateRoot string, meta persist.Meta) error {
-	if meta.SchemaVersion == persist.ClaudeSchemaVersion || meta.ClaudeRetirement != nil || meta.LoginRuntime != nil && (meta.AgentType == logins.ProviderClaude || logins.IsClaudeProfileRuntime(stateRoot, *meta.LoginRuntime)) {
+	if meta.SchemaVersion == persist.ClaudeSchemaVersion && !meta.HermesNative || meta.ClaudeRetirement != nil || meta.LoginRuntime != nil && (meta.AgentType == logins.ProviderClaude || logins.IsClaudeProfileRuntime(stateRoot, *meta.LoginRuntime)) {
 		if err := logins.VerifyClaudeNativeWritersStopped(stateRoot, meta.ID); err != nil {
 			return logins.ErrInUse
 		}

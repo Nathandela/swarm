@@ -91,7 +91,8 @@ func TestOptionsContextGuard_LoadToggleAndSave(t *testing.T) {
 		t.Fatal("compaction must not promise automatic task continuation")
 	}
 
-	// focus: group -> order -> auto compact, then toggle and save.
+	// focus: group -> order -> CLI button -> auto compact, then toggle and save.
+	m3 = send(m3, keyDown)
 	m3 = send(m3, keyDown)
 	m3 = send(m3, keyDown)
 	m3 = send(m3, keyRune(' '))

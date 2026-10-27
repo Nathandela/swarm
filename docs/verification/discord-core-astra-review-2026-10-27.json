@@ -1,0 +1,54 @@
+{
+  "date": "2026-10-27",
+  "reviewer": "Independent Astra core/control/publication review",
+  "reviewed_commit": "ed48be55ed2727ec4313aae21d01221f28ba5441",
+  "discord_core_last_change": "7498b84c4b6d5876a27cc3f80367b2b73bc21358",
+  "verdict": "SHIP",
+  "scope": [
+    "Discord configuration and service-unit rendering",
+    "Durable request replay, expiry, opt-out and explicit resume",
+    "Owner controls, attribution, endorsement and receptionist lifecycle",
+    "Gateway and REST cancellation, publication evidence and reply routing",
+    "Joined-context create, update and delete ordering",
+    "Connected local Gateway/REST/IPC mock behavior"
+  ],
+  "remaining_blockers_in_scope": [],
+  "confirmed_regressions_closed": [
+    "Unsafe linked configuration, token and database files",
+    "Systemd path escaping and permanent startup retry exhaustion",
+    "Revision replay, expired or revoked reads, and resumed opt-out decisions",
+    "Uncancelled Gateway/REST work and reconnect after shutdown",
+    "Gateway resume URL, session-expiry recovery and frame-size handling",
+    "Duplicate acknowledgements and native submission after cancellation",
+    "Claude adapter alias mismatch",
+    "Owner endorsement usable by the quoted source author",
+    "Picker replay submitting again after explicit resume",
+    "Resumed receptionist unable to reset",
+    "Expired bot reply silently selecting an unrelated worker",
+    "Delayed creates restoring deleted context and older edits overwriting newer edits"
+  ],
+  "verification": {
+    "command": "go test -race ./internal/discord -count=1",
+    "exit_code": 0,
+    "result": "ok github.com/Nathandela/swarm/internal/discord 33.711s",
+    "external_effects": "Local test servers and fake worker boundaries only; no production writes"
+  },
+  "limits": [
+    "This is a scoped component approval, not a release or installation approval.",
+    "Live Discord and installed launchd/systemd reboot behavior were not exercised.",
+    "Native provider internals and the frozen repository-wide gates are reviewed separately."
+  ],
+  "follow_up_reviews": [
+    {
+      "commit": "6a70f3e6d98fee11061620968173e10c7fec950b",
+      "scope": "Thread-only inheritance of explicitly configured parent-channel scope",
+      "verdict": "SHIP",
+      "finding": "Inherited scope requires the returned channel ID, guild ID, allowed parent ID, and discordgo.Channel.IsThread(); direct explicit channel and all-guild admission are unchanged.",
+      "verification": {
+        "command": "go test -race ./internal/discord -run 'TestParentScopeRequiresAnActualDiscordThread|TestConfiguredParentAllowsThreadAndPublicationRechecksItsScope' -count=1",
+        "exit_code": 0,
+        "result": "ok github.com/Nathandela/swarm/internal/discord 4.823s"
+      }
+    }
+  ]
+}

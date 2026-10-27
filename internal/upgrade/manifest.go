@@ -36,7 +36,7 @@ type CompatManifest struct {
 	Version          string `json:"version"`      // the release tag
 	Shimwire         int    `json:"shimwire"`     // internal/shimwire.Version
 	Protocol         int    `json:"protocol"`     // internal/protocol.Version
-	Schema           int    `json:"schema"`       // internal/persist.SchemaVersion
+	Schema           int    `json:"schema"`       // maximum supported session schema
 }
 
 // CurrentManifest is THIS build's card -- what the emitter writes at release,

@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -49,6 +50,67 @@ func readyLoginJob(t *testing.T) (*coreAPI, loginworker.Config, logins.Credentia
 	return &coreAPI{logins: &loginManager{store: store}}, c, credential
 }
 
+// Like watchLoginJobs, retry only unavailable custody and resume cleanup for
+// terminal jobs. Every attempt still runs the real stopped-writer checks.
+func completeLoginFixture(t *testing.T, a *coreAPI, c loginworker.Config) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	err := retryLoginFixtureUnavailable(ctx, func() error {
+		p, progressErr := loginworker.ReadProgress(c.StateRoot, c.JobID)
+		if progressErr == nil && (p.Phase == loginworker.PhaseFailed || p.Phase == loginworker.PhaseCanceled) {
+			return cleanupLoginJob(c)
+		}
+		return a.completeLoginJob(c)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func retryLoginFixtureUnavailable(ctx context.Context, attempt func() error) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := attempt()
+		if !errors.Is(err, loginworker.ErrUnavailable) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+func TestLoginFixtureUnavailableRetryPreservesRealCompletion(t *testing.T) {
+	a, c, _ := readyLoginJob(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	attempts := 0
+	err := retryLoginFixtureUnavailable(ctx, func() error {
+		attempts++
+		if attempts == 1 {
+			return errors.Join(loginworker.ErrUnavailable, errors.New("synthetic unsettled inventory"))
+		}
+		return a.completeLoginJob(c)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts < 2 {
+		t.Fatal("unavailable custody did not retry")
+	}
+	if done, err := loginworker.Completed(c); err != nil || !done {
+		t.Fatalf("real completion missing: %v", err)
+	}
+	if cleaned, err := loginworker.Cleaned(c); err != nil || !cleaned {
+		t.Fatalf("real cleanup missing: %v", err)
+	}
+}
+
 func TestLoginCompletionCrashDoesNotReplayOldGrant(t *testing.T) {
 	a, c, credential := readyLoginJob(t)
 	r, err := a.logins.store.Snapshot()
@@ -63,9 +125,7 @@ func TestLoginCompletionCrashDoesNotReplayOldGrant(t *testing.T) {
 	if _, _, err := a.logins.store.Relogin(r.Revision, c.JobID, credential); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.completeLoginJob(c); err != nil {
-		t.Fatal(err)
-	}
+	completeLoginFixture(t, a, c)
 	raw, err := os.ReadFile(filepath.Join(c.StateRoot, "logins", "saved", c.JobID, "credential.json"))
 	if err != nil || !strings.Contains(string(raw), "fixture-new-refresh") || strings.Contains(string(raw), "fixture-old-refresh") {
 		t.Fatal("old enrollment replayed over renewed credential")
@@ -79,8 +139,13 @@ func TestLoginCompletionCrashDoesNotReplayOldGrant(t *testing.T) {
 }
 
 func TestLoginViewsNeverContainCredentials(t *testing.T) {
-	a, c, _ := readyLoginJob(t)
-	if _, err := a.Logins(protocol.LoginsReq{Action: "complete", JobID: c.JobID}); err != nil {
+	a, c, credential := readyLoginJob(t)
+	// Redaction is independent of the host's transient native-writer inventory.
+	r, err := a.logins.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.logins.store.Import(r.Revision, logins.Login{ID: c.JobID, Provider: c.Provider, Label: c.Label, LastLoginJobID: c.JobID}, credential); err != nil {
 		t.Fatal(err)
 	}
 	view, err := a.Logins(protocol.LoginsReq{Action: "list"})
@@ -122,9 +187,7 @@ func TestDuplicateAndWrongLoginLeaveExistingGrantUntouched(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := a.completeLoginJob(c); err != nil {
-				t.Fatal(err)
-			}
+			completeLoginFixture(t, a, c)
 			p, err := loginworker.ReadProgress(c.StateRoot, c.JobID)
 			if err != nil || p.Phase != loginworker.PhaseFailed || p.ErrorCode != kind+"_login" {
 				t.Fatalf("wrong rejection: %+v %v", p, err)
@@ -190,5 +253,49 @@ func TestCodexEnrollmentUnsafeLauncherIsActionableBeforeAnyJob(t *testing.T) {
 	raw, e := os.ReadFile(path)
 	if e != nil || string(raw) != string(script) {
 		t.Fatal("fixture repair changed executable bytes")
+	}
+}
+
+func TestLoginFixtureRetryDoesNotHideOtherErrors(t *testing.T) {
+	for _, failure := range []error{loginworker.ErrInvalid, loginworker.ErrUnsafe, errors.New(loginworker.ErrUnavailable.Error())} {
+		attempts := 0
+		err := retryLoginFixtureUnavailable(t.Context(), func() error { attempts++; return failure })
+		if err != failure || attempts != 1 {
+			t.Fatalf("non-retryable error hidden: attempts=%d err=%v", attempts, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	attempts := 0
+	err := retryLoginFixtureUnavailable(ctx, func() error {
+		attempts++
+		if attempts == 3 {
+			cancel()
+		}
+		return loginworker.ErrUnavailable
+	})
+	if !errors.Is(err, context.Canceled) || attempts != 3 {
+		t.Fatalf("unavailable retry ignored bound: attempts=%d err=%v", attempts, err)
+	}
+}
+
+func TestLoginFixtureResumesTerminalJobCleanup(t *testing.T) {
+	a, c, _ := readyLoginJob(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := retryLoginFixtureUnavailable(ctx, func() error { return loginworker.Reject(c, "duplicate_login") }); err != nil {
+		t.Fatal(err)
+	}
+	completeLoginFixture(t, a, c)
+	progress, err := loginworker.ReadProgress(c.StateRoot, c.JobID)
+	if err != nil || progress.Phase != loginworker.PhaseFailed || progress.ErrorCode != "duplicate_login" {
+		t.Fatalf("terminal evidence changed: %v", err)
+	}
+	if cleaned, err := loginworker.Cleaned(c); err != nil || !cleaned {
+		t.Fatalf("terminal job cleanup missing: %v", err)
+	}
+	r, err := a.logins.store.Snapshot()
+	if err != nil || len(r.Logins) != 0 {
+		t.Fatalf("rejected grant was imported: %v", err)
 	}
 }

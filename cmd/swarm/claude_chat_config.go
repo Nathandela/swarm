@@ -121,7 +121,7 @@ func validateClaudeChatLaunchJSON(raw []byte) error {
 				seen[name] = true
 				if depth == 0 {
 					switch strings.ToLower(name) {
-					case "required_runtime", "conversation_id", "claude_chat_fixture", "session_id", "argv", "cwd", "env", "session_dir", "socket_path", "hook_socket_path", "hook_drain_token", "login_runtime", "login_state_root", "login_switch_id", "login_switch_source", "native_provider", "cli_identity", "input_embargo", "input_embargo_token", "opencode", "opencode_env", "opencode_initial_prompt", "backend_program", "backend_socket_path", "backend_cwd", "backend_args", "backend_env", "backend_agent_args", "backend_agent_command_args":
+					case "required_runtime", "conversation_id", "claude_chat_fixture", "session_id", "argv", "cwd", "env", "session_dir", "socket_path", "hook_socket_path", "hook_drain_token", "login_runtime", "login_state_root", "login_switch_id", "login_switch_source", "native_provider", "cli_identity", "input_embargo", "input_embargo_token", "opencode", "opencode_env", "opencode_initial_prompt", "backend_program", "backend_socket_path", "backend_cwd", "backend_args", "backend_env", "backend_agent_args", "backend_agent_command_args", "hermes_input", "agy_input", "claude_input":
 						if name != strings.ToLower(name) {
 							return fmt.Errorf("noncanonical Claude chat config key")
 						}

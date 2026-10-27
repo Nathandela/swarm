@@ -17,6 +17,7 @@ import (
 )
 
 type openCodeSendIntent struct {
+	Origin      *protocol.MessageOrigin `json:"origin,omitempty"`
 	Source      string                  `json:"source,omitempty"`
 	Identity    opencodebridge.Identity `json:"identity"`
 	MessageID   string                  `json:"message_id"`
@@ -91,10 +92,10 @@ func (d *Daemon) sendOpenCodeSemantic(local, operationID string, req protocol.Co
 		if source == adapter.SourceOwner && strings.HasPrefix(operationID, "semantic:supervision:") {
 			source = "supervisor"
 		}
-		intent := openCodeSendIntent{Source: source, Identity: identity, MessageID: openCodeMessageID(operationID, identity), TextHash: hex.EncodeToString(hash[:]), NotBeforeMS: time.Now().UnixMilli()}
+		intent := openCodeSendIntent{Origin: req.Origin, Source: source, Identity: identity, MessageID: openCodeMessageID(operationID, identity), TextHash: hex.EncodeToString(hash[:]), NotBeforeMS: time.Now().UnixMilli()}
 		if len(record.Request) != 0 {
 			var saved openCodeSendIntent
-			if json.Unmarshal(record.Request, &saved) != nil || saved.Identity != identity || saved.MessageID != intent.MessageID || saved.TextHash != intent.TextHash || saved.NotBeforeMS <= 0 || saved.Source != source && (saved.Source != "" || source != adapter.SourceOwner) {
+			if json.Unmarshal(record.Request, &saved) != nil || saved.Identity != identity || saved.MessageID != intent.MessageID || saved.TextHash != intent.TextHash || saved.NotBeforeMS <= 0 || !sameMessageOrigin(saved.Origin, req.Origin) || saved.Source != source && (saved.Source != "" || source != adapter.SourceOwner) {
 				return errors.New("OpenCode immutable native request conflicts with this submission")
 			}
 			intent = saved

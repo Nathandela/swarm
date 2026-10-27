@@ -14,7 +14,7 @@ import (
 // hosting Bubble Tea terminal, dials Client.Attach, and runs internal/attach over
 // the real controlling terminal; unit tests inject a fake that records the call. A
 // completed/lost row attaches READ-ONLY (G3).
-type AttachRunner func(session protocol.SessionView, readOnly bool) error
+type AttachRunner func(session protocol.SessionView, readOnly bool, touchBack bool) error
 
 // Option customizes the router at construction (see New).
 type Option func(*rootModel)
@@ -33,9 +33,9 @@ type attachDoneMsg struct{ err error }
 // runAttach invokes the runner off the update loop and reports completion. The
 // session and read-only flag are captured at the keypress, so a concurrent regroup
 // cannot retarget the attach.
-func runAttach(r AttachRunner, s protocol.SessionView, readOnly bool) tea.Cmd {
+func runAttach(r AttachRunner, s protocol.SessionView, readOnly, touchBack bool) tea.Cmd {
 	return func() tea.Msg {
-		return attachDoneMsg{err: r(s, readOnly)}
+		return attachDoneMsg{err: r(s, readOnly, touchBack)}
 	}
 }
 
@@ -61,7 +61,7 @@ type TerminalHandoff struct {
 // restores the terminal on return regardless of attach.Run's Reason. It is the thin
 // bubbletea-side adapter; cmd wires the dialer and terminal handoff.
 func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
-	return func(s protocol.SessionView, readOnly bool) error {
+	return func(s protocol.SessionView, readOnly, touchBack bool) error {
 		// NO TAKEOVER NOTE IS SAMPLED HERE ANY MORE (conversation surface, Wave G;
 		// agents-tracker-dwwv.3.1). What stood here read s.RemoteControlled once, before
 		// dialing, and painted "took over from phone" on the reserved row for the life of the
@@ -100,9 +100,10 @@ func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 			return err
 		}
 		_, err = attach.Run(attach.Config{
-			Term:     tc,
-			Session:  sess,
-			ReadOnly: readOnly,
+			Term:      tc,
+			Session:   sess,
+			ReadOnly:  readOnly,
+			TouchBack: touchBack,
 			// Chrome ON (ADR-006 v0.3): the return hint gets its OWN reserved bottom row
 			// — the PTY is sized to rows-1 and a DECSTBM region keeps the agent off that
 			// row — so it can no longer overdraw snapshot/agent content the way the v0.2

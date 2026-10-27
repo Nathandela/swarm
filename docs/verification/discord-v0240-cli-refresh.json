@@ -1,0 +1,55 @@
+{
+  "incident_date": "2026-10-27",
+  "investigation_scope": "Read-only local source/artifacts and authorized tf_nathan SSH metadata/log checks; no host/session/config mutations, message contents, credentials, or manual token access.",
+  "conclusion": "Existing default-enabled automatic provider CLI refresh performed the session replacement. Durable coordinator evidence and completion log identify CLI refresh, rather than an owner resume or ContextGuard continuation.",
+  "timeline_utc": {
+    "source_exit": "2026-10-27T02:36:10.061709442Z",
+    "replacement_created": "2026-10-27T02:36:10.444867447Z",
+    "coordinator_complete": "2026-10-27T02:36:37.633813747Z"
+  },
+  "source_exit": {
+    "exit_code": 137,
+    "exit_signal": "SIGKILL"
+  },
+  "provider": "claude",
+  "source_cli_version": "2.1.310",
+  "replacement_cli_version": "2.1.311",
+  "same_provider_conversation": true,
+  "durable_cli_refresh": {
+    "state": "complete",
+    "target_version": "2.1.311",
+    "replacement_binding_matches_observed_successor": true
+  },
+  "settings": {
+    "cli-refresh.json": "absent (existing policy means enabled)",
+    "auth-watch.json": "absent"
+  },
+  "sanitized_log": "2026/10/27 02:36:37 cli-refresh: replaced claude session [source] -> [replacement] at CLI 2.1.311; source row retained and conversation metadata preserved",
+  "prior_policy_provenance": {
+    "prior_installed_release": "v0.23.0",
+    "new_release": "v0.24.0",
+    "internal/skeleton/cli_refresh.go": {
+      "identical": true,
+      "git_blob": "6f9aa16fa543eac47dc6c690e27682f207d751ac"
+    },
+    "internal/skeleton/authwatch.go": {
+      "identical": true,
+      "git_blob": "de9e4fa1c6a8635d35175a66372f10314abf927c"
+    },
+    "original_feature_commit": "fc5eab08727b4af1829e673de4c1da67545d6be4",
+    "original_feature_date": "2026-10-03"
+  },
+  "source_path": [
+    "authWatcher.run: immediate startup tick then 30-second cadence; new kills forbidden until settled subsequent tick",
+    "tickCLIRefresh/workCLIRefresh: existing durable CLI work processed before discovery; stable newer CLI is eligible when enabled and safety checks pass",
+    "authWatcher.recycle: final safety/target revalidation, durable owned-kill claim, core.Kill, wait for observed exit, resumeClaimed",
+    "resumeCLIEnded: launches with exact source resume_from and target CLI identity, preserving lineage",
+    "core.Kill sends shim SIGTERM; shim may escalate to SIGKILL after grace, so exit137 alone does not imply an independent kill"
+  ],
+  "limits": [
+    "The exact initiator/time of the provider CLI installation update was not investigated.",
+    "The post-incident completed record does not retain the initial discovery time; the approximately 30-second startup relationship is consistent with the existing second-tick policy, not independently timestamped proof of discovery.",
+    "Current evidence does not distinguish SIGTERM escalation from an independent concurrent SIGKILL at the OS signal level; coordinator custody and completion identify the automatic replacement lifecycle.",
+    "Existing automatic CLI refresh and auth rotation retain their prior owner-configurable policies; deployment did not change either."
+  ]
+}

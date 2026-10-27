@@ -568,9 +568,10 @@ implementing a new opt-in Swarm chat for new Claude sessions only. This does
 not authorize converting existing sessions or replacing the default
 native-terminal interface.
 
-Main `6324374c` now includes Claude's native sender and independent queue guard,
-with native permission and conversation-change checks; these additions are not
-yet merged into this branch. Their submitted/started
+Released main `6324374c` includes Claude's native sender and independent queue guard,
+with native permission and conversation-change checks. The
+[reviewed feature-branch integration](../verification/provider-logins/main-integration-2026-10-27.json)
+preserves those paths, Hermes ownership and message provenance. Their submitted/started
 receipts prove message admission, not task completion or safe quota recovery.
 Before extending the native chat runtime, `h6sc.30` evaluates passive native mod
 events through the installed pinned CLI. The documented

@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-27",
+  "qualification": "real native TUI + installed copied binary + synthetic local model; modal and native lifecycle combined",
+  "red": {
+    "version": "2.1.296",
+    "elapsed_seconds": 23.144,
+    "failure": "after /clear the old native proof survived and AFTER_CLEAR_MARKER became a user message in the replacement native session"
+  },
+  "production_contract": {
+    "mandatory_mods": [
+      "swarm-native-input",
+      "swarm-native-input-guard"
+    ],
+    "guard_identity": "distinct from sender because native origin-chain re-entry excludes sender hooks",
+    "readiness": "matching native session/version, immutable per-mod generations, both live heartbeats, lifecycle_fence descriptor",
+    "revocation": "permanent for one shim generation; explicit owner refresh only",
+    "commands": [
+      "clear",
+      "resume",
+      "fork",
+      "branch",
+      "login",
+      "logout",
+      "exit"
+    ],
+    "tool_permission_capability": false
+  },
+  "green": [
+    {
+      "platform": "darwin arm64",
+      "version": "2.1.296",
+      "elapsed_seconds": 18.18,
+      "old_native_session": "5fcb4dfd-808b-48f4-9c86-6b370f872187",
+      "replacement_native_session": "a710782e-3a13-4e95-a3e4-9a02a2ff7141",
+      "binary_sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+    },
+    {
+      "platform": "linux amd64",
+      "version": "2.1.310",
+      "elapsed_seconds": 16.35,
+      "old_native_session": "33030fa2-1fff-4e83-9898-a71a35ac8204",
+      "replacement_native_session": "38277b58-5138-472a-a112-dee370638f69",
+      "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56"
+    },
+    {
+      "platform": "linux amd64",
+      "version": "2.1.311",
+      "elapsed_seconds": 15.45,
+      "old_native_session": "32cf7c32-6253-4655-ba55-146d51d08382",
+      "replacement_native_session": "65d55058-8790-4108-b346-6178010dae21",
+      "binary_sha256": "86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada"
+    }
+  ],
+  "assertions": {
+    "pending_tool_remained_unexecuted": true,
+    "old_draining_prompt_user_record_stayed_in_old_project": true,
+    "deliberately_delayed_old_sender_native_api_call_rejected_after_actual_id_change": true,
+    "late_old_call_in_native_user_history": false,
+    "late_old_call_in_model_context": false,
+    "owner_in_exact_replacement_project_user_record_and_model_context": true,
+    "ready_and_old_submit_refused_after_clear": true
+  },
+  "native_audit_limit": "A rejected API attempt may have queue-operation text and transient native UI rendering. Assertions distinguish those from user records/model admission.",
+  "source_ordering_296": [
+    "FCo has no expected session field; it queues using current native context.",
+    "Native caller-origin chain excludes the sender plugin; separate guard receives the event.",
+    "Qat reserves SCe turn guard before first downstream await; pW queues non-immediate slash commands while active.",
+    "Clear aliases reset/new, resume alias continue, branch and fork are not immediate.",
+    "uvt awaits classic and mod session.end handling before clear identity reset and controller resume landing."
+  ],
+  "isolation": "private physical binaries; synthetic HOME/auth; native updater disabled; Mac Seatbelt scratch-only writes/fake-provider port; VM bwrap read-only mounts, one owned RAM bind and fresh loopback-only namespace; positive/negative guard controls passed",
+  "reproduce": "SWARM_NATIVE_ADMISSION_FIXTURE=1 <native-arm64-go> test ./internal/claudeinput -run TestNativeClaudeModalAdmission -count=1 -v; VM uses crosscompiled package test inside the namespace contract recorded in native-vm-modal-2026-10-27.json",
+  "scope": "ordinary native transitions and native public API/mods; no production sessions, global settings, credentials, real inference, release or deployment",
+  "negative_control": {
+    "version": "2.1.296",
+    "elapsed_seconds": 30.78,
+    "change": "test-only compiler overlay disables only the companion guard prompt.submit condition; broker handshake, heartbeats, lifecycle retirement and sender checks stay enabled",
+    "observed": "late-clear native receipt became started after actual native identity replacement",
+    "result": "combined fixture failed its exact late-native-rejection assertion",
+    "purpose": "proves the distinct queue guard, rather than readiness revocation alone, closes the delayed native API race"
+  }
+}

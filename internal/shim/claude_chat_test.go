@@ -202,6 +202,7 @@ func TestClaudeChatFixtureConfigRefusesManagedAndMixedModes(t *testing.T) {
 		"image":           func(c *Config) { c.CLIIdentity = &persist.CLIIdentity{} },
 		"backend":         func(c *Config) { c.Backend = &BackendConfig{} },
 		"embargo":         func(c *Config) { c.InputEmbargo = "held" },
+		"native-input":    func(c *Config) { c.ClaudeInput = true },
 		"auto-message":    func(c *Config) { c.Argv = append(append([]string{}, c.Argv...), "hello") },
 	} {
 		t.Run(name, func(t *testing.T) {

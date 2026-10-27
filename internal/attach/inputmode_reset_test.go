@@ -21,7 +21,7 @@ func TestPassthrough_DetachResetsAgentInputModes(t *testing.T) {
 			sess := newFakeSession(tc.snap)
 			ch := runInBackground(Config{Term: term, Session: sess})
 
-			sess.pushFrame([]byte("\x1b[?1003h\x1b[?1006h\x1b[>5u")) // agent enables modes
+			sess.pushFrame([]byte("\x1b[?9h\x1b[?1001h\x1b[?1003h\x1b[?1006h\x1b[>5u")) // agent enables modes
 			eventually(t, func() bool { return bytes.Contains(term.outBytes(), []byte("\x1b[>5u")) })
 			term.feed([]byte{DefaultDetachKey})
 			if res := waitResult(t, ch); res.reason != ReasonDetached {
@@ -30,6 +30,11 @@ func TestPassthrough_DetachResetsAgentInputModes(t *testing.T) {
 
 			out := term.outBytes()
 			tail := out[bytes.LastIndex(out, []byte("\x1b[>5u")):]
+			for _, reset := range []string{"\x1b[?9l", "\x1b[?1001l"} {
+				if !bytes.Contains(tail, []byte(reset)) {
+					t.Fatalf("detach left native mouse mode enabled: reset=%q tail=%q", reset, tail)
+				}
+			}
 			if !bytes.HasSuffix(tail, []byte(inputModeResetSeq)) {
 				t.Fatalf("detach must end with the input-mode reset; tail=%q", tail)
 			}

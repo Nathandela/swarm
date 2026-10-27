@@ -39,7 +39,6 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
-	"github.com/Nathandela/swarm/internal/submitframe"
 )
 
 // maxPendingSends bounds one session's accepted-but-not-yet-echoed composer injections. A
@@ -81,6 +80,7 @@ type pendingSend struct {
 	text        string
 	operationID string
 	source      string
+	origin      *protocol.MessageOrigin
 	// clientRef is the id THE DAEMON MINTED and handed to the CLI with the message
 	// (Codex's `clientUserMessageId`), echoed back on the item as `clientId`. When it is
 	// set the correlation is EXACT and text is never consulted -- which is the one place
@@ -529,6 +529,13 @@ func (d *Daemon) semanticSendTransactional(machine, operationID string, req prot
 }
 
 func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.ComposerSendReq, begin func() error, source string) (protocol.ErrorCode, error) {
+	if req.Origin != nil {
+		if err := req.Origin.Validate(); err != nil {
+			return protocol.CodeInvalidField, err
+		}
+		origin := *req.Origin
+		req.Origin = &origin
+	}
 	originalBegin := begin
 	begin = func() error {
 		local, err := d.resolveChatSession(machine, req.Session)
@@ -596,14 +603,33 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		}
 		return code, err
 	}
+	if req.Origin != nil && meta.AgentType == "agy" {
+		return d.sendAgyNative(local, operationID, req, begin, lane, admittedBarrier)
+	}
+	if meta.HermesNative {
+		return d.sendHermesNative(local, operationID, req, begin, lane, admittedBarrier)
+	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
+	}
+	if req.Origin != nil && meta.AgentType == "claude" {
+		return d.sendClaudeNative(local, operationID, req, begin, lane, admittedBarrier)
 	}
 	// Resolve the sink only after this request reaches the queue head. A backend may be
 	// replaced or disappear while earlier messages are in provider I/O.
 	sink, code, serr := d.resolveMessageSink(local, req.Session)
 	if serr != nil {
 		return code, serr
+	}
+
+	if req.Origin != nil {
+		raw, err := json.Marshal(composerOriginIntent{Version: 1, Origin: req.Origin})
+		if err != nil {
+			return protocol.CodeInvalidField, err
+		}
+		if err := d.core.BindSemanticRequest(operationID, raw); err != nil {
+			return protocol.CodeInvalidField, err
+		}
 	}
 
 	// This test seam now drives a turn transition immediately before the coordinator
@@ -655,7 +681,7 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		if d.pendingSends == nil {
 			d.pendingSends = map[string][]pendingSend{}
 		}
-		pending = pendingSend{text: req.Text, operationID: operationID, at: d.chatNow(), source: source}
+		pending = pendingSend{text: req.Text, operationID: operationID, at: d.chatNow(), source: source, origin: req.Origin}
 		if sink.backend != nil {
 			// The echo key is minted HERE, sent with the message, and read straight back off the
 			// item's `clientId`. Minting it under the same itemMu hold as the precondition means
@@ -713,6 +739,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		d.dropPendingSend(local, operationID)
 		if errors.Is(err, errComposerStopped) {
 			return protocol.CodeStaleTurn, errIsLife5("composer send was superseded by Stop; nothing was sent")
+		}
+		if errors.Is(err, protocol.ErrSubmitUnsupported) {
+			return protocol.CodeStructuredUnsupported, fmt.Errorf("session %q uses a shim without atomic message submission; refresh this session before sending; nothing was typed", req.Session)
 		}
 		if errors.Is(err, protocol.ErrInputBusy) {
 			// ITS OWN CODE, because it has its own remedy: nothing is wrong with the
@@ -1071,12 +1100,8 @@ func (d *Daemon) requireStructuredComposer(local, session string) (protocol.Erro
 // own interrupt and dialog-answer keys do not poison the next send; the residual is an
 // approval key landing on an already-closed dialog, one untracked character.
 //
-// WHAT REMAINS. A shim that predates the transaction answers ErrSubmitUnsupported and this
-// falls through to the two unlocked writes below -- reachable only mid-upgrade, and
-// resolved by the daemon restart that replaces the shim. The merge is also exclusively a
-// property of THIS keystroke branch: resolveMessageSink's backend arm never touches the
-// PTY, and the only ComposerKeys implementor in the tree is Claude, so the class has a
-// known exit the day Claude gains a structured sink.
+// A surviving old shim must prove the transaction in its current hello. A daemon
+// restart preserves shims and cannot add this capability; absence refuses without input.
 func (d *Daemon) injectComposerTextTransactional(local string, keys []byte, lane *composerLane, admittedBarrier uint64, begin func() error) error {
 	if d.api == nil {
 		return errors.New("this daemon has no session tap wired")
@@ -1086,6 +1111,9 @@ func (d *Daemon) injectComposerTextTransactional(local string, keys []byte, lane
 		return fmt.Errorf("tap session %q: %w", local, err)
 	}
 	defer func() { _ = sub.Close() }()
+	if !sub.SupportsMessageSubmit() {
+		return protocol.ErrSubmitUnsupported
+	}
 	// Tap acquisition may dial and block, but it cannot deliver message bytes. Serialize the
 	// final Stop check, durable Begin and whole shim Submit under lane.mu so their order is
 	// indivisible: either Stop publishes first and this sends nothing, or Submit starts/finishes
@@ -1113,17 +1141,7 @@ func (d *Daemon) injectComposerTextTransactional(local string, keys []byte, lane
 		}
 		return serr
 	}
-	// AN OLD SHIM, MID-UPGRADE, and the only path left is the one that can merge. It is
-	// reached exactly when the running shim predates the transaction, which a daemon
-	// restart resolves.
-	if err := sub.Input(keys); err != nil {
-		return fmt.Errorf("%w: writing the message into session %q: %v", protocol.ErrComposerOutcomeUnknown, local, err)
-	}
-	time.Sleep(submitframe.Gap)
-	if err := sub.Input([]byte{'\r'}); err != nil {
-		return fmt.Errorf("%w: text delivered, submit not sent into session %q: %v", protocol.ErrComposerOutcomeUnknown, local, err)
-	}
-	return nil
+	return protocol.ErrSubmitUnsupported
 }
 
 // dropPendingSend withdraws one recorded injection by operation id (the failed-write path).
@@ -1183,6 +1201,10 @@ func (d *Daemon) stampComposerEchoLocked(sessionID, text, clientRef string, fiel
 		for i, p := range live {
 			if p.clientRef != clientRef {
 				continue
+			}
+			if p.origin != nil {
+				origin := *p.origin
+				fields["origin"] = &origin
 			}
 			fields["source"] = p.inputSource()
 			fields["operation_id"] = p.operationID

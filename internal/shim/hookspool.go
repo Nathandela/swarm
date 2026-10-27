@@ -435,32 +435,6 @@ func (s *HookSpool) Append(body []byte) (uint64, error) {
 	return seq, nil
 }
 
-// ReadFrom returns every record with Seq>after, in order, stopping at the first
-// corrupt/truncated one. hasGap names the boundary (gapAt is the first sequence that
-// could not be read). A clean tail is hasGap=false, gapAt=0.
-//
-// ONE RULE BINDS EVERY RETURN (R6 review fix-pack round 1, MEDIUM 7): every record in
-// recs has Seq < gapAt whenever hasGap is true. Nothing at or past a reported boundary
-// is ever handed back -- not the torn record, not anything after it, and not the
-// still-retained records that sit above a hole an out-of-band fold opened below them.
-// ADR-017's survival row says a proven gap "is never silently bridged"; returning the
-// far side of one to a caller that has no way to know which side it is looking at is
-// how that gets bridged by accident.
-//
-// after>0 additionally proves two things a plain content scan cannot (R6 review
-// fix-pack, BLOCKER 3): that the caller has not already seen sequences this spool
-// instance never produced (the file was destroyed and recreated under it), and that
-// nothing was folded away between what the caller last observed and what is now the
-// oldest record retained. Both report an honest gap rather than silently returning
-// nothing. after==0 ("I have never read anything") is exempt from both: a brand new
-// reader has no basis to expect content some earlier, already-acknowledged fold
-// legitimately retired before it ever connected.
-func (s *HookSpool) ReadFrom(after uint64) (recs []HookRecord, gapAt uint64, hasGap bool, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.readFromLocked(after)
-}
-
 // readDrainResponse supports the default production spool, not larger custom spools.
 func (s *HookSpool) readDrainResponse(after, fold uint64) (HookDrainResponse, error) {
 	s.mu.Lock()
@@ -495,6 +469,26 @@ func (s *HookSpool) readDrainResponse(after, fold uint64) (HookDrainResponse, er
 	return response, nil
 }
 
+// readFromLocked returns every record with Seq>after, in order, stopping at the first
+// corrupt/truncated one. hasGap names the boundary (gapAt is the first sequence that
+// could not be read). A clean tail is hasGap=false, gapAt=0.
+//
+// ONE RULE BINDS EVERY RETURN (R6 review fix-pack round 1, MEDIUM 7): every record in
+// recs has Seq < gapAt whenever hasGap is true. Nothing at or past a reported boundary
+// is ever handed back -- not the torn record, not anything after it, and not the
+// still-retained records that sit above a hole an out-of-band fold opened below them.
+// ADR-017's survival row says a proven gap "is never silently bridged"; returning the
+// far side of one to a caller that has no way to know which side it is looking at is
+// how that gets bridged by accident.
+//
+// after>0 additionally proves two things a plain content scan cannot (R6 review
+// fix-pack, BLOCKER 3): that the caller has not already seen sequences this spool
+// instance never produced (the file was destroyed and recreated under it), and that
+// nothing was folded away between what the caller last observed and what is now the
+// oldest record retained. Both report an honest gap rather than silently returning
+// nothing. after==0 ("I have never read anything") is exempt from both: a brand new
+// reader has no basis to expect content some earlier, already-acknowledged fold
+// legitimately retired before it ever connected.
 func (s *HookSpool) readFromLocked(after uint64) ([]HookRecord, uint64, bool, error) {
 	if after > 0 && after > s.lastSeq {
 		// The caller claims to have already seen a sequence this spool instance has

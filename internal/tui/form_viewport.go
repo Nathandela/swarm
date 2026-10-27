@@ -68,6 +68,9 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		if m.options.contextGuard.available {
 			f.context = "Context guard: Codex only · compacts when quiet and unattended, then continues the task\n" + f.context
 		}
+		if m.options.focus == optionsFocusTouchBack || m.options.touchBack {
+			f.context = touchBackSelectionNotice + "\n" + f.context
+		}
 	case m.screen == screenLogins:
 		l := m.logins
 		f = formContent{body: l.view(m.width, m.boardBodyRows(), m.connectionLost, m.loginRunner != nil), target: "Provider logins", hint: l.hint(m.connectionLost, m.loginRunner != nil, m.width), context: l.err}

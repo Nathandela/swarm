@@ -26,7 +26,7 @@ func (d *Daemon) retireClaudeReservation(id string, originalNoFork func() error)
 // Candidate routing is conservative. The shared retirement guard decides
 // the exact retirement authority before any destructive side effect.
 func claudeCustodyCandidate(m persist.Meta) bool {
-	return m.SchemaVersion == persist.ClaudeSchemaVersion || persist.IsClaudeChatRuntime(m) || m.ClaudeRetirement != nil || m.AgentType == logins.ProviderClaude && m.LoginRuntime != nil
+	return m.SchemaVersion == persist.ClaudeSchemaVersion && !m.HermesNative || persist.IsClaudeChatRuntime(m) || m.ClaudeRetirement != nil || m.AgentType == logins.ProviderClaude && m.LoginRuntime != nil
 }
 
 // Scan deliberately omits unreadable/future/corrupt metadata. Its missing row

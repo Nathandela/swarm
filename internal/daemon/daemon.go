@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	// carried here — and that rule is intact: nothing below constructs or consults
 	// an Adapter. internal/adapter depends only on internal/vt, so there is no cycle.
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/logins"
@@ -81,6 +83,9 @@ type Registry interface {
 
 // Config configures a daemon instance.
 type Config struct {
+	// NativeInputEnabled is checked at launch; nil keeps ordinary sessions unchanged.
+	NativeInputEnabled func() bool
+
 	StateDir    string
 	SocketPath  string
 	LockPath    string
@@ -153,11 +158,13 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
-	ClaudeChatFixture string                   `json:"-"` // derived only from the dev FakeAgentBin
-	RequiredRuntime   string                   `json:"-"`
-	OpenCodeBinding   *persist.OpenCodeBinding `json:"-"`
-	OpenCodeEnv       []string                 `json:"-"`
-	OpenCodeLaunch    *shim.OpenCodeConfig     `json:"-"`
+	ClaudeChatFixture string                     `json:"-"` // derived only from the dev FakeAgentBin
+	RequiredRuntime   string                     `json:"-"`
+	OpenCodeBinding   *persist.OpenCodeBinding   `json:"-"`
+	OpenCodeEnv       []string                   `json:"-"`
+	OpenCodeLaunch    *shim.OpenCodeConfig       `json:"-"`
+	HermesOrigins     []string                   `json:"-"`
+	HermesInput       *hermesinput.SessionConfig `json:"-"`
 	LoginRuntime      *logins.Runtime
 	LoginStateRoot    string
 	LoginSwitchID     string
@@ -499,7 +506,13 @@ func (d *Daemon) setStatus(id string, s status.Status, generation string) error 
 		d.writeMu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
 	}
-	if generation != "" && (closed || m.RequiredRuntime != persist.RequiredRuntimeOpenCode || m.OpenCodeBinding == nil || m.OpenCodeBinding.Generation != generation) {
+	if strings.HasPrefix(generation, "hermes:") {
+		desc, readErr := hermesinput.ReadDescriptor(d.sessionDir(id))
+		if closed || !m.HermesNative || readErr != nil || "hermes:"+desc.Generation != generation || desc.ShimPID != m.ShimPID || desc.ShimStartTime != m.ShimStartTime {
+			d.writeMu.Unlock()
+			return fmt.Errorf("daemon: stale Hermes native status observation")
+		}
+	} else if generation != "" && (closed || m.RequiredRuntime != persist.RequiredRuntimeOpenCode || m.OpenCodeBinding == nil || m.OpenCodeBinding.Generation != generation) {
 		d.writeMu.Unlock()
 		return fmt.Errorf("daemon: stale OpenCode status observation")
 	}
@@ -794,7 +807,17 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // reaching here, or the unfiltered value will reach the in-memory registry
 // (store.Save only protects disk, since it filters its own copy of m).
 func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
-	if persist.IsClaudeChatRuntime(*m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(d.cfg.StateDir, *m.LoginRuntime) {
+	if m.HermesNative && m.ConversationID == "" && m.CLIIdentity != nil {
+		if desc, readErr := hermesinput.ReadDescriptor(d.sessionDir(m.ID)); readErr == nil && desc.WorkerID == m.ID && desc.ShimPID == m.ShimPID && desc.ShimStartTime == m.ShimStartTime && desc.ProviderVersion == m.CLIIdentity.Version {
+			m.ConversationID = desc.Binding.SessionID
+		}
+	}
+	if m.HermesNative && m.Status.Process != status.ProcessRunning {
+		*m = protectHermesNative(*m)
+	}
+	if m.HermesNative {
+		m.SchemaVersion = persist.HermesSchemaVersion
+	} else if persist.IsClaudeChatRuntime(*m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(d.cfg.StateDir, *m.LoginRuntime) {
 		m.SchemaVersion = persist.ClaudeMetadataSchemaVersion(*m)
 	} else if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		m.SchemaVersion = persist.OpenCodeSchemaVersion
@@ -889,6 +912,9 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 		return
 	}
 	next := compute(cur)
+	if next.HermesNative {
+		next = protectHermesNative(next)
+	}
 	if processRank(next.Status.Process) <= processRank(cur.Status.Process) {
 		d.writeMu.Unlock()
 		return // would not advance the terminal state: refuse (S1)

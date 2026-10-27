@@ -52,6 +52,9 @@ func (a *coreAPI) deleteDiscussion(id string) error {
 	}
 	members := make(map[string]bool, len(attempts))
 	for _, m := range attempts {
+		if m.Status.NativeWorkUnknown {
+			return fmt.Errorf("delete: native work in attempt %q is unconfirmed; discussion and workspaces retained", m.ID)
+		}
 		if len(attempts) > 1 && m.Status.Process == status.ProcessRunning {
 			return fmt.Errorf("delete: discussion still has running attempt %q; stop it first", m.ID)
 		}

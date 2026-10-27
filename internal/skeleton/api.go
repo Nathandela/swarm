@@ -18,6 +18,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -666,6 +667,14 @@ var (
 )
 
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string, contextGuards *contextGuardManager) *coreAPI {
+	a := newCoreAPIUnstarted(core, fakeAgentBin, endpointID, contextGuards)
+	a.startWatch()
+	return a
+}
+
+// newCoreAPIUnstarted lets assembly wire every plain callback before publishing
+// the roster worker. Failure cleanup may close it without starting the worker.
+func newCoreAPIUnstarted(core *daemon.Daemon, fakeAgentBin, endpointID string, contextGuards *contextGuardManager) *coreAPI {
 	a := &coreAPI{
 		core:          core,
 		contextGuards: contextGuards,
@@ -685,9 +694,12 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string, contextGua
 		}
 		return protocol.NewShimStream(conn, caps)
 	})
+	return a
+}
+
+func (a *coreAPI) startWatch() {
 	a.wg.Add(1)
 	go a.watch()
-	return a
 }
 
 func (a *coreAPI) List() []persist.Meta { return a.core.List() }
@@ -1074,6 +1086,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			spec.ClientEnv = append([]string(nil), source.Env...)
 		}
 	}
+	if spec.AgentType == "hermes" && spec.HermesOrigins == nil {
+		spec.HermesOrigins = a.core.HermesConfigurationEnvironment(spec.ClientEnv)
+	}
 	if err := a.captureOpenCodeOrigin(&spec); err != nil {
 		return persist.Meta{}, err
 	}
@@ -1285,8 +1300,17 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		return persist.Meta{}, err
 	}
 
-	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
-		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" && a.core.NativeInputEnabled() || a.core.HermesNativeRequested(resolved)) {
+		probeEnv := resolved.ClientEnv
+		if a.core.HermesNativeRequested(resolved) {
+			for _, origin := range resolved.HermesOrigins {
+				if origin == "SWARM_HERMES_UNSUPPORTED_ORIGIN=1" {
+					return persist.Meta{}, errors.New("hermes native input requires a local provider home")
+				}
+			}
+			probeEnv = hermesinput.SessionEnvironment(probeEnv, resolved.HermesOrigins)
+		}
+		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], probeEnv, resolved.Cwd)
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || !sameProbedCLIInstallation(expected, observed)) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}

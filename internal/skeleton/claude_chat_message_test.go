@@ -227,6 +227,60 @@ func TestClaudeChatEnvelopeIdentityAliasesHaveNoFoldEffects(t *testing.T) {
 	}
 }
 
+func TestClaudeChatFixtureRejectsOriginWithoutEffects(t *testing.T) {
+	d := assemble(t)
+	m := launchClaudeMessageFixture(t, d)
+	client := dialClient(t, d, protocol.CapSemanticSend, protocol.CapJournal)
+	id := protocol.NamespacedID(d.api.endpointID, m.ID)
+	if _, err := client.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: id, Limit: 200}); err != nil {
+		t.Fatal(err)
+	}
+	instance, ok := d.sessionInstance(m.ID)
+	if !ok {
+		t.Fatal("fixture has no current instance")
+	}
+	req := protocol.ComposerSendReq{Session: id, SessionInstance: instance, Text: "attributed fixture message", Origin: &protocol.MessageOrigin{Kind: "external", InstallationID: "fixture", RequestID: "request", ActorID: "colleague"}}
+	if err := req.Origin.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	const operation = "fixture-origin-refusal"
+	if _, _, err := d.core.ClaimComposerOperation(operation, protocol.OpSemanticSend, m.ID, instance, hex.EncodeToString(schema.ComposerSendContentHash(&req))); err != nil {
+		t.Fatal(err)
+	}
+	beforeRecord, _ := d.core.ComposerOperation(operation)
+	beforeExecution, err := d.eng.ExecutionSnapshot(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforePrimary, err := d.core.ClaudeFixtureSnapshot(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(d.stateDir, m.ID, "claude-fixture-transcript.jsonl")
+	beforeTranscript, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	began := false
+	code, sendErr := d.api.SemanticSendTransactional(d.api.endpointID, operation, req, func() error { began = true; return d.core.BeginComposerOperation(operation) })
+	afterRecord, ok := d.core.ComposerOperation(operation)
+	afterExecution, executionErr := d.eng.ExecutionSnapshot(m.ID)
+	afterPrimary, primaryErr := d.core.ClaudeFixtureSnapshot(m.ID)
+	afterTranscript, transcriptErr := os.ReadFile(path)
+	if code != protocol.CodeStructuredUnsupported || sendErr == nil || began || !ok || executionErr != nil || primaryErr != nil || transcriptErr != nil {
+		t.Fatalf("origin refusal crossed admission: code=%q send=%v begin=%v record=%v execution=%v primary=%v transcript=%v", code, sendErr, began, ok, executionErr, primaryErr, transcriptErr)
+	}
+	if len(beforeRecord.Request) != 0 || len(beforeRecord.Evidence) != 0 || len(afterRecord.Request) != 0 || len(afterRecord.Evidence) != 0 || afterRecord.Phase != beforeRecord.Phase || afterExecution.OwnerRevision != beforeExecution.OwnerRevision || afterPrimary.OwnerRevision != beforePrimary.OwnerRevision || !bytes.Equal(afterTranscript, beforeTranscript) {
+		t.Fatal("refused origin changed request, evidence, revision or native transcript")
+	}
+	state := d.claudeFixtureState(m.ID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.operation != "" || state.evidence.OperationID != "" || state.ownerRevision != beforeExecution.OwnerRevision {
+		t.Fatal("refused origin acquired fixture operation custody")
+	}
+}
+
 func TestClaudeChatMessageConnectedEchoResultHistory(t *testing.T) {
 	d := assemble(t)
 	m := launchClaudeMessageFixture(t, d)

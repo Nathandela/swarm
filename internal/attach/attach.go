@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/vt"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TermControl is the injectable seam over the real controlling terminal, so the
@@ -64,6 +65,7 @@ type Config struct {
 	Session   Session
 	DetachKey byte   // default DefaultDetachKey (0x11, Ctrl+q) when zero
 	ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
+	TouchBack bool   // opt-in mouse return button on the existing reserved footer
 	Chrome    bool   // reserve the real bottom row for the return hint (ADR-006 v0.3); off = full passthrough (A-5)
 	Name      string // session label rendered in the reserved-row hint
 }
@@ -127,7 +129,7 @@ const altExitSeq = "\x1b[?1049l\x1b[?25h\x1b[0m"
 //
 // The Kitty keyboard stack is per screen buffer, so teardown emits this both before
 // and after exiting alt.
-const inputModeResetSeq = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
+const inputModeResetSeq = "\x1b[?9l\x1b[?1001l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
 	"\x1b[?1004l\x1b[?1007l\x1b[?2031l\x1b[?2004l\x1b[?1l\x1b>\x1b[>4m\x1b[<99u"
 
 // Run blocks driving the passthrough and ALWAYS restores the terminal before it
@@ -236,9 +238,15 @@ func Run(cfg Config) (reason Reason, err error) {
 	// parser tracks the terminal-output parser's position across all agent bytes
 	// (snapshot + frames) so the pump only injects re-assert bytes at a safe boundary
 	// (GROUND) — never mid escape sequence (A-1, ADR-006 v0.3.0).
-	var parser outParser
+	parser := outParser{c1: cfg.TouchBack}
+	mouseTracker := vt.NewMouseTracker(nil)
+	touch := &touchButton{}
+	touchLatchedOff := false
+	mouseOwned := false
+	mousePending := false
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
 		wasAlt = snap.AltScreen
+		mouseTracker = vt.NewMouseTracker(snap.Mouse)
 		// Clip the snapshot to the reserved area (rows-1 when chrome is on) so it never
 		// paints over the hint row.
 		rendered := vt.RenderSnapshotClipped(snap, cols, ptyRows(rows))
@@ -253,14 +261,61 @@ func Run(cfg Config) (reason Reason, err error) {
 		writeAll(out, notice)
 		parser.feedAll(notice)
 	}
+	touchLatchedOff = permanentMouseFallback(mouseTracker.State())
 	// Chrome is established AFTER the grid paint, whose clear+home would otherwise wipe
 	// it: chromeHint sets the scroll region and paints the hint on the reserved bottom
 	// row, saving/restoring the cursor (DECSC/DECRC) so the snapshot's cursor position
 	// survives (A-5). lastAssert seeds the output pump's re-assert throttle; chromeEngaged
 	// records that the region is ours to tear down.
 	var lastAssert time.Time
+	renderChrome := func(c, r int) {
+		state := mouseTracker.State()
+		tracking, supported := supportedMouse(state)
+		if permanentMouseFallback(state) {
+			touchLatchedOff = true
+		}
+		active := cfg.TouchBack && chromeActive(r) && c >= 7 && supported && !touchLatchedOff
+		touch.mu.Lock()
+		if touch.resized && (touch.wantedCols != c || touch.wantedRows != r) {
+			active = false
+		}
+		touch.nativeOff = state.Tracking == 0
+		touch.discardSGR = discardAfterMouseRelease(state, touch.discardSGR, mouseOwned)
+		if active {
+			touch.discardSGR = false
+		}
+		if touch.rows != r || touch.tracking != tracking || touch.enabled != active || mousePending {
+			touch.pressed = false
+		}
+		touch.enabled = false
+		touch.rows = r
+		touch.tracking = tracking
+		paintGeneration := touch.generation
+		touch.mu.Unlock()
+		written := true
+		if active && (!mouseOwned || mousePending) {
+			outer := uint16(vt.MouseTrackButton)
+			if tracking == 1003 {
+				outer = vt.MouseTrackAny
+			}
+			written = writeAll(out, mouseModes(vt.MouseState{Tracking: outer, Encoding: vt.MouseEncodeSGR, Known: true}))
+		} else if !active && mouseOwned {
+			writeAll(out, mouseModes(state))
+		}
+		mouseOwned = active
+		mousePending = false
+		painted := writeAll(out, chromeHint(cfg.Name, detachKey, c, r, active))
+		if !written || !painted {
+			touchLatchedOff = true
+			mousePending = true
+		}
+		touch.mu.Lock()
+		touch.capturing = active
+		touch.enabled = active && written && painted && paintGeneration == touch.generation
+		touch.mu.Unlock()
+	}
 	if chromeActive(rows) {
-		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows))
+		renderChrome(cols, rows)
 		chromeEngaged = true
 		lastAssert = time.Now()
 	}
@@ -296,6 +351,13 @@ func Run(cfg Config) (reason Reason, err error) {
 				_ = cfg.Session.Input(append([]byte(nil), p...))
 			}
 		}, signalDetach)
+		if cfg.TouchBack {
+			filter.mouse = touch.input
+			filter.activity = touch.cancelPress
+			filter.dropMouseCandidate = touch.dropMouseCandidate
+			filter.c1Input = touch.c1Input
+			filter.retainMouse = touch.retainMouse
+		}
 		for {
 			n, e := in.Read(buf)
 			if n > 0 && filter.Feed(buf[:n]) {
@@ -327,6 +389,7 @@ func Run(cfg Config) (reason Reason, err error) {
 			if e != nil {
 				continue
 			}
+			touch.resize(c, r)
 			_ = cfg.Session.Resize(c, ptyRows(r))
 			if winCh != nil {
 				select {
@@ -354,6 +417,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// before the loop tears down, so a raw-mode client killed by SIGINT/SIGTERM/
 	// SIGHUP never leaves a wrecked terminal behind (E8.2).
 	frames := cfg.Session.Frames()
+	var mouseOut *mouseOutput
 	// finish tears the loop down on the terminal paths: it releases the lease, and when
 	// chrome actually ENGAGED a row it resets the scroll region to full and clears the hint
 	// row so the board repaint that follows starts on a clean full-height screen, then hands
@@ -362,6 +426,10 @@ func Run(cfg Config) (reason Reason, err error) {
 	// panic path does not route through here — its deferred restore still runs, but out may
 	// be mid-fault, so its chrome cleanup is best-effort.
 	finish := func(r Reason) (Reason, error) {
+		if mouseOut != nil {
+			writeAll(out, mouseOut.pending)
+			mouseOut.pending = nil
+		}
 		_ = cfg.Session.Detach()
 		// Order matters when BOTH chrome and alt are active (deployment-committee,
 		// codex HIGH via agents-tracker-rs8): tear chrome down FIRST, then exit alt.
@@ -418,7 +486,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// reassertChrome re-emits region+hint at the current size and clears the owed re-assert.
 	// The caller has verified the parser is in GROUND (a safe boundary).
 	reassertChrome := func() {
-		writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+		renderChrome(curCols, curRows)
 		lastAssert = time.Now()
 		pendingReassert = false
 	}
@@ -428,23 +496,91 @@ func Run(cfg Config) (reason Reason, err error) {
 	// byte-identical to Chrome:false). The caller has verified the parser is in GROUND.
 	applyResizeChrome := func() {
 		if chromeActive(curRows) {
-			writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+			renderChrome(curCols, curRows)
 			chromeEngaged = true
 			lastAssert = time.Now()
 		} else if chromeEngaged {
+			touch.mu.Lock()
+			touch.enabled = false
+			touch.capturing = false
+			state := mouseTracker.State()
+			touch.nativeOff = state.Tracking == 0
+			touch.discardSGR = discardAfterMouseRelease(state, touch.discardSGR, mouseOwned)
+			touch.pressed = false
+			touch.mu.Unlock()
+			if mouseOwned {
+				writeAll(out, mouseModes(mouseTracker.State()))
+				mouseOwned = false
+			}
 			writeAll(out, []byte("\x1b[r"))
 			chromeEngaged = false
 		}
 		pendingResize = false
 	}
 
+	if cfg.TouchBack {
+		mouseOut = &mouseOutput{observe: func(b byte) bool {
+			oldState := mouseTracker.State()
+			if mouseTracker.Feed([]byte{b}) {
+				state := mouseTracker.State()
+				if mouseOwned && (!state.Known || ambiguousMouse(state) || state.Encoding&vt.MouseEncodePixel != 0) {
+					return false
+				}
+				_, supported := supportedMouse(state)
+				touch.mu.Lock()
+				ownedGesture := touch.ownedGesture
+				touch.nativeOff = state.Tracking == 0
+				touch.discardSGR = discardAfterMouseRelease(state, touch.discardSGR, false)
+				if oldState.Encoding != state.Encoding {
+					touch.nativeGesture = false
+					touch.nativeButtons = 0
+				}
+				touch.mu.Unlock()
+				if !supported && ownedGesture {
+					return false
+				}
+				mousePending = true
+				touch.mu.Lock()
+				touch.enabled = false
+				touch.generation++
+				touch.pressed = false
+				touch.mu.Unlock()
+				if permanentMouseFallback(state) {
+					touchLatchedOff = true
+				}
+			}
+			return true
+		}, write: func(p []byte) { writeAll(out, p) }, fallback: func() {
+			mousePending = true
+			touchLatchedOff = true
+			touch.mu.Lock()
+			touch.enabled = false
+			touch.capturing = false
+			state := mouseTracker.State()
+			touch.nativeOff = state.Tracking == 0
+			touch.discardSGR = discardAfterMouseRelease(state, touch.discardSGR, mouseOwned)
+			touch.pressed = false
+			touch.mu.Unlock()
+			if mouseOwned {
+				writeAll(out, mouseModes(mouseTracker.State()))
+				mouseOwned = false
+			}
+		}}
+	}
 	for {
 		select {
 		case f, ok := <-frames:
 			if !ok {
 				return finish(ReasonSessionEnd)
 			}
-			writeAll(out, f)
+			if mouseOut != nil {
+				if !mouseOut.feed(f) {
+					reason, _ := finish(ReasonDetached)
+					return reason, fmt.Errorf("CLI button stopped: terminal mouse state changed; turn off CLI button in Options to continue")
+				}
+			} else {
+				writeAll(out, f)
+			}
 			parser.feedAll(f)
 			// An owed resize (one that arrived mid-sequence) is applied first, at the current
 			// size, once the boundary is safe — outside the chromeActive gate below because
@@ -460,7 +596,7 @@ func Run(cfg Config) (reason Reason, err error) {
 			// timer is (re)armed so damage in the burst's last frame heals with no further
 			// output.
 			if chromeActive(curRows) {
-				if hasDamageSignature(f) {
+				if hasDamageSignature(f) || mousePending {
 					pendingReassert = true
 				}
 				if (pendingReassert || time.Since(lastAssert) >= chromeReassertInterval) && parser.inGround() {
@@ -509,19 +645,20 @@ func Run(cfg Config) (reason Reason, err error) {
 
 // writeAll writes p to w in full; a nil/empty slice is a no-op. A panicking writer
 // (a mid-render fault) propagates to Run's recover, which restores the terminal.
-func writeAll(w io.Writer, p []byte) {
+func writeAll(w io.Writer, p []byte) bool {
 	if len(p) == 0 {
-		return
+		return true
 	}
 	for len(p) > 0 {
 		n, err := w.Write(p)
 		if n > 0 {
 			p = p[n:]
 		}
-		if err != nil {
-			return
+		if err != nil || n == 0 {
+			return false
 		}
 	}
+	return true
 }
 
 // chromeHint reserves the real bottom row (ADR-006 v0.3): it sets the DECSTBM scroll
@@ -531,7 +668,7 @@ func writeAll(w io.Writer, p []byte) {
 // survive both the region change (DECSTBM homes the cursor) and the paint. The caller
 // guarantees rows > 2. It is re-emitted by the output pump to self-heal damage (a bare
 // CSI r region reset from the agent is repaired by the next re-assert).
-func chromeHint(name string, detachKey byte, cols, rows int) []byte {
+func chromeHint(name string, detachKey byte, cols, rows int, touch ...bool) []byte {
 	var b strings.Builder
 	b.WriteString("\x1b7")    // DECSC: save cursor + pen + origin mode
 	b.WriteString("\x1b[?6l") // DECOM off: make the reserved-row CUP absolute even if the agent enabled origin mode; DECRC below restores the agent's DECOM
@@ -544,7 +681,7 @@ func chromeHint(name string, detachKey byte, cols, rows int) []byte {
 	// v0.4 P2 (dim not reverse): a faint default-colored hint, not the harsh full-width
 	// reverse-video bar that read as a white strip on dark terminals.
 	b.WriteString("\x1b[2m") // faint/dim
-	b.WriteString(hintText(name, detachKey, cols))
+	b.WriteString(hintText(name, detachKey, cols, touch...))
 	b.WriteString("\x1b[0m") // reset pen
 	b.WriteString("\x1b[K")  // clear to end of the reserved row
 	b.WriteString("\x1b8")   // DECRC: restore cursor + pen
@@ -568,12 +705,13 @@ func chromeHint(name string, detachKey byte, cols, rows int) []byte {
 // critical, so it survives a narrow terminal; the note is informational. Dropped
 // whole rather than sliced because a half-note ("took ove") would eat the very
 // columns the affordance needs while saying nothing.
-func hintText(name string, detachKey byte, cols int) string {
+func hintText(name string, detachKey byte, cols int, touch ...bool) string {
 	s := name + "  " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm"
+	if len(touch) > 0 && touch[0] {
+		s = "[swarm] " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm  " + name
+	}
 	if cols > 0 {
-		if r := []rune(s); len(r) > cols {
-			s = string(r[:cols])
-		}
+		s = ansi.Truncate(s, cols, "")
 	}
 	return s
 }
@@ -619,7 +757,12 @@ func hasDamageSignature(f []byte) bool {
 // It is fed every OUTPUT byte from the agent (snapshot + frames) in order. It errs toward
 // "still in a sequence": a false non-ground only defers an injection (safe), whereas a
 // false ground could split a sequence (unsafe).
-type outParser struct{ st ptState }
+type outParser struct {
+	st         ptState
+	utf8Left   int
+	c1         bool
+	stringKind byte
+}
 
 type ptState uint8
 
@@ -634,10 +777,45 @@ const (
 
 // feed advances the tracker by one output byte.
 func (p *outParser) feed(b byte) {
+	if p.c1 {
+		if p.utf8Left > 0 && b >= 0x80 && b < 0xc0 {
+			p.utf8Left--
+			return
+		}
+		p.utf8Left = 0
+		switch {
+		case b >= 0xc2 && b <= 0xdf:
+			p.utf8Left = 1
+			return
+		case b >= 0xe0 && b <= 0xef:
+			p.utf8Left = 2
+			return
+		case b >= 0xf0 && b <= 0xf4:
+			p.utf8Left = 3
+			return
+		}
+		if b == 0x18 || b == 0x1a {
+			p.st = ptGround
+			return
+		}
+	}
 	switch p.st {
 	case ptGround:
-		if b == 0x1b {
+		switch b {
+		case 0x1b:
 			p.st = ptEsc
+		case 0x9b:
+			if p.c1 {
+				p.st = ptCSI
+			}
+		case 0x9d, 0x90, 0x9f, 0x9e, 0x98:
+			if p.c1 {
+				p.st = ptStr
+				p.stringKind = 'P'
+				if b == 0x9d {
+					p.stringKind = ']'
+				}
+			}
 		}
 	case ptEsc:
 		switch {
@@ -645,6 +823,7 @@ func (p *outParser) feed(b byte) {
 			p.st = ptCSI
 		case b == ']' || b == 'P' || b == '_' || b == '^' || b == 'X': // OSC/DCS/APC/PM/SOS
 			p.st = ptStr
+			p.stringKind = b
 		case b >= 0x20 && b <= 0x2f: // nF intermediate (e.g. ESC ( B)
 			p.st = ptNF
 		case b == 0x1b: // ESC ESC: restart the escape
@@ -670,8 +849,14 @@ func (p *outParser) feed(b byte) {
 		}
 	case ptStr:
 		switch b {
-		case 0x07: // BEL terminates (OSC)
-			p.st = ptGround
+		case 0x07: // BEL terminates OSC only in the opt-in parser
+			if !p.c1 || p.stringKind == ']' {
+				p.st = ptGround
+			}
+		case 0x9c:
+			if p.c1 {
+				p.st = ptGround
+			}
 		case 0x1b: // possible ST (ESC \)
 			p.st = ptStrEsc
 		default: // string payload
@@ -680,6 +865,12 @@ func (p *outParser) feed(b byte) {
 		switch b {
 		case '\\': // ST completes the string
 			p.st = ptGround
+		case 0x9c:
+			if p.c1 {
+				p.st = ptGround
+			} else {
+				p.st = ptStr
+			}
 		case 0x1b: // another ESC: keep awaiting '\'
 			p.st = ptStrEsc
 		default: // ESC + other inside a string: treat as string body
@@ -696,7 +887,7 @@ func (p *outParser) feedAll(b []byte) {
 }
 
 // inGround reports whether the parser is between sequences — a safe injection point.
-func (p *outParser) inGround() bool { return p.st == ptGround }
+func (p *outParser) inGround() bool { return p.st == ptGround && (!p.c1 || p.utf8Left == 0) }
 
 // inString reports whether the parser is inside a string sequence (OSC/DCS/APC/PM/
 // SOS), whose payload is free-form and may legally carry bytes that would otherwise

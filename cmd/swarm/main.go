@@ -26,8 +26,10 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -59,7 +61,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -67,6 +69,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
   swarm daemon     run the session daemon
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
+  swarm discord    connect this Swarm to Discord, or operate its local bridge
   swarm handoff    launch a supervised cross-CLI handoff
                    (--cli agent [--model m] [--name n]
                     [--supervision passive|manual|none] --context-file file)
@@ -135,6 +138,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchPilot(args[1:], stdout, stderr)
 	case "daemon":
 		return runDaemon(args[1:], stdout, stderr)
+	case "native-input":
+		return runNativeInput(args[1:], stderr)
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
 	case "internal":
@@ -143,6 +148,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
+	case "discord":
+		return dispatchDiscord(args[1:], stdout, stderr)
 	case "relay":
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
@@ -602,6 +609,7 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 	exe, _ := os.Executable() // the daemon spawns `swarm shim` from its own binary
 	return skeleton.Config{
 		StateDir:           stateDir,
+		NativeInputEnabled: func() bool { return discordNativeInputEnabled(stateDir) },
 		SocketPath:         os.Getenv(daemon.EnvSocket),
 		LockPath:           os.Getenv(daemon.EnvLock),
 		LogPath:            os.Getenv(daemon.EnvLog),
@@ -640,28 +648,31 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
-	RequiredRuntime   string               `json:"required_runtime,omitempty"`
-	ConversationID    string               `json:"conversation_id,omitempty"`
-	ClaudeChatFixture string               `json:"claude_chat_fixture,omitempty"`
-	LogPath           string               `json:"log_path,omitempty"`
-	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
-	LoginStateRoot    string               `json:"login_state_root,omitempty"`
-	LoginSwitchID     string               `json:"login_switch_id,omitempty"`
-	LoginSwitchSource string               `json:"login_switch_source,omitempty"`
-	NativeProvider    string               `json:"native_provider,omitempty"`
-	OpenCode          *shim.OpenCodeConfig `json:"opencode,omitempty"`
-	InputEmbargo      string               `json:"input_embargo,omitempty"`
-	InputEmbargoToken string               `json:"input_embargo_token,omitempty"`
-	CLIIdentity       *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID         string               `json:"session_id"`
-	Argv              []string             `json:"argv"`
-	Cwd               string               `json:"cwd"`
-	Env               []string             `json:"env"`
-	SocketPath        string               `json:"socket_path"`
-	SessionDir        string               `json:"session_dir"`
-	Cols              int                  `json:"cols"`
-	Rows              int                  `json:"rows"`
-	GraceMS           int                  `json:"grace_ms"`
+	RequiredRuntime   string                     `json:"required_runtime,omitempty"`
+	ConversationID    string                     `json:"conversation_id,omitempty"`
+	ClaudeChatFixture string                     `json:"claude_chat_fixture,omitempty"`
+	LogPath           string                     `json:"log_path,omitempty"`
+	LoginRuntime      *logins.Runtime            `json:"login_runtime,omitempty"`
+	LoginStateRoot    string                     `json:"login_state_root,omitempty"`
+	LoginSwitchID     string                     `json:"login_switch_id,omitempty"`
+	LoginSwitchSource string                     `json:"login_switch_source,omitempty"`
+	NativeProvider    string                     `json:"native_provider,omitempty"`
+	OpenCode          *shim.OpenCodeConfig       `json:"opencode,omitempty"`
+	InputEmbargo      string                     `json:"input_embargo,omitempty"`
+	InputEmbargoToken string                     `json:"input_embargo_token,omitempty"`
+	CLIIdentity       *persist.CLIIdentity       `json:"cli_identity,omitempty"`
+	SessionID         string                     `json:"session_id"`
+	Argv              []string                   `json:"argv"`
+	Cwd               string                     `json:"cwd"`
+	Env               []string                   `json:"env"`
+	SocketPath        string                     `json:"socket_path"`
+	SessionDir        string                     `json:"session_dir"`
+	Cols              int                        `json:"cols"`
+	Rows              int                        `json:"rows"`
+	GraceMS           int                        `json:"grace_ms"`
+	HermesInput       *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
+	AgyInput          *agyinput.Config           `json:"agy_input,omitempty"`
+	ClaudeInput       bool                       `json:"claude_input,omitempty"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
 	// old, pre-R6 launch config with no such key) disables it entirely (requirement
 	// 7's compat), leaving shim.Run's behavior exactly what it is today.
@@ -709,6 +720,9 @@ func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 		LogPath:           lc.LogPath,
 		OpenCode:          lc.OpenCode,
 		LoginRuntime:      lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
+		HermesInput:       lc.HermesInput,
+		AgyInput:          lc.AgyInput,
+		ClaudeInput:       lc.ClaudeInput,
 		InputEmbargo:      lc.InputEmbargo,
 		InputEmbargoToken: lc.InputEmbargoToken,
 		CLIIdentity:       lc.CLIIdentity,

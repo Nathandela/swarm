@@ -48,6 +48,10 @@ func ClaudeMetadataSchemaVersion(m Meta) int {
 	return ClaudeSchemaVersion
 }
 
+// HermesSchemaVersion prevents older daemons treating a native viewer exit as
+// proof that the persistent owner's work and workspace have stopped.
+const HermesSchemaVersion = 5
+
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
 
@@ -141,6 +145,7 @@ type Meta struct {
 	InputEmbargo     string                              `json:"input_embargo,omitempty"`
 	RequiredRuntime  string                              `json:"required_runtime,omitempty"`
 	OpenCodeBinding  *OpenCodeBinding                    `json:"opencode_binding,omitempty"`
+	HermesNative     bool                                `json:"hermes_native,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
 	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
@@ -275,10 +280,15 @@ func (s *Store) Save(m Meta) error {
 // The public Save guard compares stored custody before its raw rename callback.
 func (s *Store) metadataBytes(m Meta) (Meta, []byte, error) {
 	m.Env = FilterEnv(m.Env)
-	owned := m.SchemaVersion == ClaudeSchemaVersion || IsClaudeChatRuntime(m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime)
+	owned := m.SchemaVersion == ClaudeSchemaVersion && !m.HermesNative || IsClaudeChatRuntime(m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime)
 	ownedVersion := ClaudeMetadataSchemaVersion(m)
 	m.SchemaVersion = SchemaVersion
-	if m.AgentType == "fake" && ownedVersion == ClaudeChatSchemaVersion {
+	if m.HermesNative {
+		if owned || !validHermesMeta(m) {
+			return m, nil, fmt.Errorf("persist: invalid Hermes native runtime")
+		}
+		m.SchemaVersion = HermesSchemaVersion
+	} else if m.AgentType == "fake" && ownedVersion == ClaudeChatSchemaVersion {
 		m.SchemaVersion = ownedVersion
 		if !validClaudeChatFixtureMeta(m) {
 			return m, nil, fmt.Errorf("persist: invalid Claude chat fixture")
@@ -454,7 +464,7 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 		}
 		return m, nil
 	}
-	if m.SchemaVersion == ClaudeSchemaVersion || IsClaudeChatRuntime(m) {
+	if m.SchemaVersion == ClaudeSchemaVersion && !m.HermesNative || IsClaudeChatRuntime(m) {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(data, &fields); err != nil {
 			return Meta{}, err
@@ -471,6 +481,12 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	}
 	if m.ClaudeRetirement != nil {
 		return Meta{}, fmt.Errorf("claude retirement has no owned reservation")
+	}
+	if m.HermesNative {
+		if m.SchemaVersion != HermesSchemaVersion || !validHermesMeta(m) {
+			return Meta{}, fmt.Errorf("invalid Hermes native runtime")
+		}
+		return m, nil
 	}
 	if m.SchemaVersion == OpenCodeSchemaVersion || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if m.SchemaVersion != OpenCodeSchemaVersion || !validOpenCodeMeta(m) {
@@ -498,14 +514,14 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 }
 
 func validClaudeChatFixtureMeta(m Meta) bool {
-	return m.SchemaVersion == ClaudeChatSchemaVersion && m.RequiredRuntime == RequiredRuntimeClaudeChat && m.AgentType == "fake" && m.LoginRuntime == nil && m.CLIIdentity == nil && m.ClaudeRetirement == nil && m.OpenCodeBinding == nil && m.InputEmbargo == ""
+	return m.SchemaVersion == ClaudeChatSchemaVersion && m.RequiredRuntime == RequiredRuntimeClaudeChat && m.AgentType == "fake" && !m.HermesNative && m.LoginRuntime == nil && m.CLIIdentity == nil && m.ClaudeRetirement == nil && m.OpenCodeBinding == nil && m.InputEmbargo == ""
 }
 
 // This is decoding, not writer-stop authorization. The shared logins guard
 // validates retained private proofs again before any custody mutation.
 func validClaudeMeta(m Meta) bool {
 	validRuntime := m.SchemaVersion == ClaudeSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatSchemaVersion && m.RequiredRuntime == RequiredRuntimeClaudeChat
-	if !validRuntime {
+	if !validRuntime || m.HermesNative {
 		return false
 	}
 	if !validLoginMeta(m) || m.LoginRuntime.Provider != logins.ProviderClaude || m.LoginRuntime.ExternalAuth || m.InputEmbargo != "" || m.OpenCodeBinding != nil {
@@ -557,6 +573,10 @@ func validClaudeMeta(m Meta) bool {
 		}
 	}
 	return true
+}
+
+func validHermesMeta(m Meta) bool {
+	return m.HermesNative && m.AgentType == "hermes" && m.CLIIdentity != nil && m.CLIIdentity.Version != "" && m.ClaudeRetirement == nil && m.LoginRuntime == nil && m.RequiredRuntime == "" && m.OpenCodeBinding == nil && m.InputEmbargo == ""
 }
 
 func validLoginMeta(m Meta) bool {

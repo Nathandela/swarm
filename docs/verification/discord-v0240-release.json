@@ -1,0 +1,331 @@
+{
+  "schema": 1,
+  "recorded_at": "2026-10-27T02:44:17.583818+00:00",
+  "release": {
+    "tag": "v0.24.0",
+    "source_commit": "917b36fef0b0381cb26ce947acca93b3a68bae77",
+    "published_at": "2026-10-27T02:32:33Z",
+    "url": "https://github.com/Nathandela/swarm/releases/tag/v0.24.0"
+  },
+  "workflow": {
+    "id": 40437221855,
+    "url": "https://github.com/Nathandela/swarm/actions/runs/40437221855",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "container (pushgw-container.yml, reused) / build, scan, non-root, hardening",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / android (aar + gradle gate)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / remote v2 (workerd + Firestore emulator)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test (go test ./...)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / docs (required files)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test-darwin (macos)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / fuzz (active, bounded fuzztime)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / release dry-run (goreleaser snapshot, E13.1)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / lint (golangci-lint)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish immutable pushgw image",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish (goreleaser release)",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "artifact_verification": {
+    "source_commit": "917b36fef0b0381cb26ce947acca93b3a68bae77",
+    "release": "v0.24.0",
+    "signature_valid": true,
+    "tampered_checksums_rejected": true,
+    "trust_key": "d7938ebe67f5cb7ff202724352a7890cd0af8ca422c22e3e7af32b6284e7885a",
+    "container_manifest": {
+      "schema": 1,
+      "release": "v0.24.0",
+      "commit": "917b36fef0b0381cb26ce947acca93b3a68bae77",
+      "images": {
+        "pushgw": "ghcr.io/nathandela/swarm-pushgw@sha256:e4880882a1120ab7ffe0cae7d5942ba7b977b0dd3653426788c6a2dd70b60bc3"
+      }
+    },
+    "container_manifest_signed_by_checksums": false,
+    "archives": {
+      "swarm_0.24.0_darwin_all.tar.gz": {
+        "sha256": "0d8693cdffa49918a81a47b18ead636212816c6328fb4fd42391de14bf7630a8",
+        "compat": {
+          "login_schema": 1,
+          "account_schema": 1,
+          "account_jobs": 1,
+          "account_recovery": 3,
+          "account_worker": 6,
+          "account_shim": 2,
+          "account_config": 4,
+          "account_inventory": 1,
+          "account_auth": 1,
+          "version": "v0.24.0",
+          "shimwire": 2,
+          "protocol": 1,
+          "schema": 5
+        },
+        "binaries": {
+          "swarm": {
+            "sha256": "a1a21cbcc3ac57b9ef62e16a4779cc3c4f627394638f67115c94ae2df505e210",
+            "verified_architectures": {
+              "darwin_all-swarm-arm64": "f115cb8f24fec8299857cb734f6c648c9867f8750273278af01265a28920c229",
+              "darwin_all-swarm-x86_64": "ea3a3676720e5f62c3024642b58c61304e66f995ab7f6870f663916bcad50894"
+            }
+          },
+          "swarm-remote": {
+            "sha256": "ecd02fb12a641a93933ce41ee39c1dc7e3e88635e5b521f0f7290c57f41008d5",
+            "verified_architectures": {
+              "darwin_all-swarm-remote-arm64": "95dfd1a08398704e97acda7aaf744ffb9bb65d0efc485cca01203c9794e493c2",
+              "darwin_all-swarm-remote-x86_64": "1aba6b1ff3ab3b1e7766573e5676b5a09d9df169dd856efcc0a7675e34f7383c"
+            }
+          }
+        }
+      },
+      "swarm_0.24.0_linux_amd64.tar.gz": {
+        "sha256": "ed177aafbfda4f97295060c5c3eed7dc201e865e100c644417e6084ec3e8951a",
+        "compat": {
+          "login_schema": 1,
+          "account_schema": 1,
+          "account_jobs": 1,
+          "account_recovery": 3,
+          "account_worker": 6,
+          "account_shim": 2,
+          "account_config": 4,
+          "account_inventory": 1,
+          "account_auth": 1,
+          "version": "v0.24.0",
+          "shimwire": 2,
+          "protocol": 1,
+          "schema": 5
+        },
+        "binaries": {
+          "swarm": {
+            "sha256": "9dbf24ea7659b548ac57d0eb3557bcdd207ff8f5a61ac730182ba60f2258899c",
+            "verified_architectures": {
+              "linux_amd64-swarm": "9dbf24ea7659b548ac57d0eb3557bcdd207ff8f5a61ac730182ba60f2258899c"
+            }
+          },
+          "swarm-remote": {
+            "sha256": "203a090dd7767f99937fcbdc3950fdb0ad6186e5cc82f024fd12cb0e74210b8b",
+            "verified_architectures": {
+              "linux_amd64-swarm-remote": "203a090dd7767f99937fcbdc3950fdb0ad6186e5cc82f024fd12cb0e74210b8b"
+            }
+          }
+        }
+      },
+      "swarm_0.24.0_linux_arm64.tar.gz": {
+        "sha256": "f9d415a690a7b20c84e7af5ba08f38efc7f8133914f5cc89be532744d3cf5678",
+        "compat": {
+          "login_schema": 1,
+          "account_schema": 1,
+          "account_jobs": 1,
+          "account_recovery": 3,
+          "account_worker": 6,
+          "account_shim": 2,
+          "account_config": 4,
+          "account_inventory": 1,
+          "account_auth": 1,
+          "version": "v0.24.0",
+          "shimwire": 2,
+          "protocol": 1,
+          "schema": 5
+        },
+        "binaries": {
+          "swarm": {
+            "sha256": "895e9d81562d0ceb1e48d237b4bb61f794040dd1a1eba7a54e05199980e2946f",
+            "verified_architectures": {
+              "linux_arm64-swarm": "895e9d81562d0ceb1e48d237b4bb61f794040dd1a1eba7a54e05199980e2946f"
+            }
+          },
+          "swarm-remote": {
+            "sha256": "c8d07439eae3a03ed9a6e189252c6419bbf38b6905d16e047fec05b617aa33c9",
+            "verified_architectures": {
+              "linux_arm64-swarm-remote": "c8d07439eae3a03ed9a6e189252c6419bbf38b6905d16e047fec05b617aa33c9"
+            }
+          }
+        }
+      }
+    }
+  },
+  "binary_build_metadata": {
+    "version": "0.24.0",
+    "go_toolchain": "go1.26.10",
+    "source_commit": "917b36fef0b0381cb26ce947acca93b3a68bae77",
+    "vcs_modified": false,
+    "checked_binaries_or_slices": 8
+  },
+  "installation": {
+    "mac": {
+      "prior_installed_version": "0.23.0",
+      "installed_version": "0.24.0",
+      "daemon_direct_hello": "0.24.0",
+      "owner_environment": {
+        "host": "mac",
+        "owner_environment_preserved": true,
+        "saved_keys_before": 5,
+        "saved_keys_after": 5
+      },
+      "installed_hashes_match_signed_archive": true,
+      "installed_binary_sha256": {
+        "swarm": "a1a21cbcc3ac57b9ef62e16a4779cc3c4f627394638f67115c94ae2df505e210",
+        "swarm-remote": "ecd02fb12a641a93933ce41ee39c1dc7e3e88635e5b521f0f7290c57f41008d5"
+      },
+      "live_shims_before": 8,
+      "unchanged_shim_instances": 8,
+      "live_shims_after": 8,
+      "direct_roster_before": 29,
+      "direct_roster_after": 29,
+      "installed_cli_daemon_smoke": {
+        "version": "swarm 0.24.0 (go1.26.10)",
+        "installed_binary_sha256": "a1a21cbcc3ac57b9ef62e16a4779cc3c4f627394638f67115c94ae2df505e210",
+        "daemon_hello_build": "0.24.0",
+        "protocol": 1,
+        "isolated_daemon_entrypoint": true,
+        "empty_roster": true,
+        "unicode_label": true,
+        "rename_preserves_installation": true,
+        "custom_state_default_routing": true,
+        "private_config": true,
+        "disconnect_disables_activation": true,
+        "no_native_sessions_or_service_install": true,
+        "scope": "private HOME/state; synthetic token; no external Discord connection"
+      },
+      "install_method": "Homebrew cask upgrade",
+      "homebrew_receipt": "swarm 0.24.0",
+      "homebrew_command_exit": 1,
+      "homebrew_limit": "Cask installation succeeded and hashes match; unrelated pkgconf reinstall then failed because existing CLT does not support macOS27. No CLT removal/reinstall attempted.",
+      "remote_gateway_unit": "not installed; not created by deployment"
+    },
+    "vm": {
+      "prior_installed_version": "0.23.0",
+      "installed_version": "0.24.0",
+      "daemon_direct_hello": "0.24.0",
+      "owner_environment": {
+        "host": "vm",
+        "owner_environment_preserved": true,
+        "saved_keys_before": 8,
+        "saved_keys_after": 8
+      },
+      "installed_hashes_match_signed_archive": true,
+      "installed_binary_sha256": {
+        "swarm": "9dbf24ea7659b548ac57d0eb3557bcdd207ff8f5a61ac730182ba60f2258899c",
+        "swarm-remote": "203a090dd7767f99937fcbdc3950fdb0ad6186e5cc82f024fd12cb0e74210b8b"
+      },
+      "live_shims_before": 31,
+      "unchanged_shim_instances": 30,
+      "live_shims_after": 31,
+      "direct_roster_before": 296,
+      "direct_roster_after": 297,
+      "installed_cli_daemon_smoke": {
+        "version": "swarm 0.24.0 (go1.26.10)",
+        "installed_binary_sha256": "9dbf24ea7659b548ac57d0eb3557bcdd207ff8f5a61ac730182ba60f2258899c",
+        "daemon_hello_build": "0.24.0",
+        "protocol": 1,
+        "isolated_daemon_entrypoint": true,
+        "empty_roster": true,
+        "unicode_label": true,
+        "rename_preserves_installation": true,
+        "custom_state_default_routing": true,
+        "private_config": true,
+        "disconnect_disables_activation": true,
+        "no_native_sessions_or_service_install": true,
+        "scope": "private HOME/state; synthetic token; no external Discord connection"
+      },
+      "install_method": "Existing signature-verifying upgrade --stage/--activate; activation deferred busy daemon convergence (exit2); manual saved-owner-environment daemon restart; normal unattended pending retry then current",
+      "pending_convergence_cleared": true,
+      "remote_gateway_before": {
+        "unit_enabled": true,
+        "active": "inactive",
+        "substate": "dead",
+        "exit_status": 0
+      },
+      "remote_gateway_after": {
+        "unit_enabled": true,
+        "active": "inactive",
+        "substate": "dead",
+        "exit_status": 0
+      },
+      "session_delta": {
+        "native_provider": "claude",
+        "source_version": "2.1.310",
+        "replacement_version": "2.1.311",
+        "same_native_conversation": true,
+        "existing_cli_refresh_state": "complete",
+        "prior_policy_unchanged": true,
+        "evidence": "discord-v0240-cli-refresh.json"
+      }
+    }
+  },
+  "native_installed_fixture": "discord-hermes-installed-v0240.json",
+  "review": {
+    "implementation_core": "discord-core-astra-review-2026-10-27.json",
+    "implementation_native": "discord-native-astra-review-2026-10-27.json",
+    "deployment_procedure": "Independent Astra review approved the revised raw-hello/list snapshots, saved-owner-environment handoff and existing enabled/quiescent VM gateway convergence before execution.",
+    "final_deployment_evidence": "Astra independently compared raw CI, handoff snapshots, installed smoke/hash results, prior policy blobs and source freeze; approved closure after final evidence commit/push, with documented VM CLI-refresh exception."
+  },
+  "limits": [
+    "Discord Gateway/REST integration is exercised through the owner-authorized local mock; no actual Discord applications/tokens/server were configured.",
+    "Native provider fixtures use OS isolation and synthetic loopback model/auth; no cloud-provider login refresh or physical service reboot is claimed.",
+    "Installed Hermes fixture uses release-source core plus installed-binary shims; separate installed CLI/daemon smoke covers the released daemon entrypoint. Hermes uncertain native workspaces remain retained conservatively.",
+    "The universal Mac archive is unsigned/unnotarized for Gatekeeper; its executing arm64 slice has a verified linker ad-hoc signature. Release trust is the verified Ed25519 checksums.",
+    "The separately attached container manifest is not in the signed archive checksums; its image attestation was not independently verified."
+  ],
+  "test_resource_cleanup": {
+    "vm_owned_hermes_ram_bytes_reclaimed": 1641197568,
+    "matching_processes_before_cleanup": 0,
+    "signals_sent": false,
+    "global_auth_or_other_provider_fixtures_modified": false,
+    "sanitized_results_preserved": true
+  }
+}

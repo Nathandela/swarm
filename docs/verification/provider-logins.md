@@ -67,6 +67,23 @@ review and retirement issue `h6sc.26.1` cover that maintenance obligation. Full
 repository tests, actual release archive generation and arbitrary concurrent
 terminal lifecycle calls are not qualified by this checkpoint.
 
+## Main integration (2026-10-27)
+
+The [integration checkpoint](provider-logins/main-integration-2026-10-27.json)
+combines released main `6324374c` with this feature branch. Native sender/guard,
+message provenance, Hermes ownership and terminal navigation remain intact.
+Hermes records with unknown process identity remain savable; Claude custody
+checks stay strict. The development chat fixture refuses attributed messages
+before side effects. The old whole-spool read wrapper now exists only in tests.
+
+Current package and shard evidence covers all 1,348 skeleton names: 1,320 pass
+and 28 explicitly skip. The other 93 packages have current qualified coverage,
+with nine explicitly skipped packages. Build, vet, lint, ordinary performance budgets
+and versioned installation checks pass. Original failed commands and their
+corrections remain recorded; this is no single clean full-command claim.
+The literal full ordinary sweep, native recovery, device/release qualification
+and unresolved earlier regressions `h6sc.28`/`h6sc.29` remain separate gates.
+
 ## Native Claude mod observations (2026-10-27)
 
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)

@@ -71,6 +71,8 @@ import (
 
 const b94Module = "github.com/Nathandela/swarm"
 
+const b94CopiedTeaAPIReason = "Pinned Bubble Tea v2.0.2 upstream API retained with the complete source copy; current production uses a subset. Source hashes/inventory remain checked by TestCopiedSourceProvenance; retire the copy and this row through h6sc.26.1 after upstream qualification."
+
 // b94FacadePkg is the gomobile boundary: its exported surface is called from Java, so it is a
 // ROOT rather than a subject.
 const b94FacadePkg = b94Module + "/mobile"
@@ -86,6 +88,7 @@ var b94ReflectionMethods = map[string]bool{
 // caller is the POINT of the package, not a finding, so they are exempt wholesale rather than
 // symbol by symbol.
 var b94HarnessPkgs = map[string]string{
+	b94Module + "/internal/testutil/teatest":  "Pinned upstream Tea test helper, called only by TUI/e2e fixtures; its complete copied API and source provenance are retained for test type identity.",
 	b94Module + "/internal/phonesim":          "the phone simulator: a test double for the handset, driven only by tests and the E2E rigs.",
 	b94Module + "/internal/fakeagent":         "the scripted fake agent: a test fixture by construction.",
 	b94Module + "/internal/adapter/fixtureio": "adapter characterization fixtures, loaded only by the conformance harness.",
@@ -95,6 +98,57 @@ var b94HarnessPkgs = map[string]string{
 // acceptable. It is bidirectional -- an entry that becomes reachable fails too, so a symbol
 // that gets wired up cannot leave a stale exemption behind.
 var b94Allowed = map[string]string{
+	// ---- Pinned copied upstream API, removed with the copy (h6sc.26.1) ----
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.ClearScreen":            b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Every":                  b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Exec":                   b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.ExecProcess":            b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Interrupt":              b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.LogToFile":              b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.LogToFileWith":          b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.NewCursor":              b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.NewProgressBar":         b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Printf":                 b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Println":                b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Program.Kill":           b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Program.Printf":         b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Program.Println":        b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Program.Quit":           b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Program.Wait":           b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Raw":                    b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.ReadClipboard":          b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.ReadPrimaryClipboard":   b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestBackgroundColor": b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestCapability":      b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestCursorColor":     b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestCursorPosition":  b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestForegroundColor": b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestTerminalVersion": b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.RequestWindowSize":      b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Sequence":               b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.SetClipboard":           b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.SetPrimaryClipboard":    b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.Suspend":                b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithColorProfile":       b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithContext":            b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithEnvironment":        b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithFPS":                b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithFilter":             b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithWindowSize":         b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithoutCatchPanics":     b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithoutRenderer":        b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithoutSignalHandler":   b94CopiedTeaAPIReason,
+	"github.com/Nathandela/swarm/internal/thirdparty/bubbletea.WithoutSignals":         b94CopiedTeaAPIReason,
+	// ---- Cross-package spool fault/custody fixtures ----
+	"github.com/Nathandela/swarm/internal/shim.HookSpool.AdoptedLegacySequence": "Cross-package hookgap_recovery tests prove legacy-sequence adoption and conservative gap handling. Production performs adoption inside the spool constructor and reads bounded DRAIN evidence instead of this fixture getter.",
+	"github.com/Nathandela/swarm/internal/shim.HookSpool.Compact":               "Cross-package hookgap_recovery tests inject exact compacted-prefix and restarted-spool states. Production folds only through the authenticated bounded DRAIN path and stopped-producer custody checks.",
+	"github.com/Nathandela/swarm/internal/shim.HookSpool.IncarnationID":         "Cross-package hookgap_recovery and hookretirement tests bind exact old/current spool incarnations. Production obtains the same identity from authenticated bounded DRAIN responses.",
+	"github.com/Nathandela/swarm/internal/shim.HookSpool.ProducerCertificate":   "Cross-package hookretirement and Claude quarantine tests construct exact producer-custody counterexamples. Production obtains this attestation from authenticated bounded DRAIN responses.",
+	"github.com/Nathandela/swarm/internal/claudeinput.Broker.Descriptor":        "Native ingress fixture seam used by connected skeleton and actual-provider tests to obtain the owned broker proof. Production installs the same proof in a private descriptor read by the native JavaScript plugin; it does not drive its own native peer.",
+	"github.com/Nathandela/swarm/internal/claudeinput.Client.Exchange":          "Native JavaScript peer protocol driver for cross-package broker/composer race and actual-runtime qualification. Production Claude uses the embedded plugin's HTTP exchange, not a second Go peer.",
+	"github.com/Nathandela/swarm/internal/claudeinput.Client.Guard":             "Independent native JavaScript guard peer driver for cross-package lifecycle fixtures. Production guard.js uses the authenticated HTTP endpoint and never starts a Go guard peer.",
+	"github.com/Nathandela/swarm/internal/claudeinput.Client.Revoke":            "Native JavaScript lifecycle peer driver for cross-package revoke/race qualification. Production plugin.js revokes through its authenticated HTTP endpoint.",
+	"github.com/Nathandela/swarm/internal/agyinput.Broker.Descriptor":           "Connected skeleton/native-registration fixture seam for the session-owned broker descriptor. Production reads the private descriptor from its file in the native registration helper.",
 	// ---- ADR-027 implementation checkpoint: deliberately not a shipped v2 path ----
 	"github.com/Nathandela/swarm/internal/pushgw.NewServer": "ADR-027 / agents-tracker-wjp4.2: old local-store constructor is now used only by push unit and two phonecore HTTP fixtures. No production command calls it or offers a backend selector. Port those fixtures to the repository seam and delete this constructor/remaining old branches before P4; not runtime parity or P4 completion.",
 	"github.com/Nathandela/swarm/internal/pushgw.Backup":    "agents-tracker-wjp4.1: old command route removed; deletion of recovery implementation/tests was separately refused and awaits exact owner approval. Source retained without a production command caller, not a v2 backup or P4 completion.",

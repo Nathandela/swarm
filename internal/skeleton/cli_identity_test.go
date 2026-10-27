@@ -82,6 +82,21 @@ func TestCLIIdentityProbe(t *testing.T) {
 	}
 }
 
+func TestHermesVersionProbeAllowsNativeStartupBeyondOrdinaryBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("qualifies native CLI deadline")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hermes")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n/bin/sleep 3.1\nprintf 'Hermes Agent v0.22.5\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := probeCLIIdentity("hermes", path, []string{"PATH=" + dir}, dir)
+	if err != nil || got == nil || got.Version != "0.22.5" {
+		t.Fatalf("native release silently lost at ordinary deadline: %+v %v", got, err)
+	}
+}
+
 func TestCLIIdentityProbeFailures(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
 		{"malformed", "echo nonsense"}, {"failed", "echo '2.2.3 (Claude Code)'; exit 1"},

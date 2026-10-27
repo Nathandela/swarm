@@ -102,11 +102,12 @@ func newOrderedComposerUpstream() *orderedComposerUpstream {
 	return &orderedComposerUpstream{frames: make(chan []byte)}
 }
 
-func (u *orderedComposerUpstream) Snapshot() []byte      { return nil }
-func (u *orderedComposerUpstream) Frames() <-chan []byte { return u.frames }
-func (u *orderedComposerUpstream) Resize(int, int) error { return nil }
-func (u *orderedComposerUpstream) Close() error          { return nil }
-func (u *orderedComposerUpstream) Input([]byte) error    { return nil }
+func (u *orderedComposerUpstream) Snapshot() []byte            { return nil }
+func (u *orderedComposerUpstream) Frames() <-chan []byte       { return u.frames }
+func (u *orderedComposerUpstream) Resize(int, int) error       { return nil }
+func (u *orderedComposerUpstream) Close() error                { return nil }
+func (u *orderedComposerUpstream) Input([]byte) error          { return nil }
+func (u *orderedComposerUpstream) SupportsMessageSubmit() bool { return true }
 func (u *orderedComposerUpstream) Submit(string) error {
 	u.mu.Lock()
 	u.order = append(u.order, "submit")
@@ -662,5 +663,36 @@ func TestComposerIdempotency_FailedSendIsNeverReportedAppliedByOperationStatus(t
 	out, ok := r.sk.api.RemoteOperationOutcome(operationID)
 	if !ok || out.State != "outcome_unknown" {
 		t.Fatalf("failed composer operation status = ok %v %+v, want outcome_unknown and never applied", ok, out)
+	}
+}
+
+type oldComposerUpstream struct{ *orderedComposerUpstream }
+
+func (u *oldComposerUpstream) SupportsMessageSubmit() bool { return false }
+func (u *oldComposerUpstream) Submit(string) error         { return protocol.ErrSubmitUnsupported }
+func (u *oldComposerUpstream) Input([]byte) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.order = append(u.order, "unsafe raw input")
+	return nil
+}
+
+func TestComposerOldShimRefusesBeforeBeginWithoutRawInputFallback(t *testing.T) {
+	r := newInjectRig(t, composerGrid, claudeApproval("old-shim-composer"))
+	if err := r.att.Detach(); err != nil {
+		t.Fatal(err)
+	}
+	upstream := &oldComposerUpstream{newOrderedComposerUpstream()}
+	r.sk.api.tap = newTapManager(func(string) (protocol.SessionStream, error) { return upstream, nil })
+	begun := false
+	code, err := r.sk.api.SemanticSendTransactional(r.sk.api.endpointID, "old-shim-message", protocol.ComposerSendReq{Session: r.session, Text: "never type into an old shim"}, func() error { begun = true; return nil })
+	if err == nil || code != protocol.CodeStructuredUnsupported {
+		t.Fatalf("old shim refusal: code=%s error=%v", code, err)
+	}
+	if begun {
+		t.Fatal("old shim crossed durable execution boundary")
+	}
+	if len(upstream.recordedOrder()) != 0 {
+		t.Fatal("old shim received unsafe raw message writes")
 	}
 }

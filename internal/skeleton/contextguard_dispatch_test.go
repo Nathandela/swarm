@@ -51,9 +51,10 @@ func (f *fakeDispatchConn) plainSnapshot() []fakeDispatchCall {
 }
 
 type fakeDispatchBehavior struct {
-	refuseBeforeCallbacks bool          // the closed-conn shape: error before beforeWrite runs
-	replyErr              error         // returned AFTER the write (afterWrite has run)
-	replyGate             chan struct{} // when set, the reply blocks until the gate closes
+	refuseBeforeCallbacks bool            // the closed-conn shape: error before beforeWrite runs
+	replyErr              error           // returned AFTER the write (afterWrite has run)
+	replyGate             chan struct{}   // when set, the reply blocks until the gate closes
+	beforeWriteGate       <-chan struct{} // holds an attempted compact before revalidation/write
 }
 
 type fakeDispatchCall struct {
@@ -85,6 +86,13 @@ func (f *fakeDispatchConn) CallAtWriteBoundary(ctx context.Context, method strin
 	f.mu.Unlock()
 	if behavior.refuseBeforeCallbacks {
 		return errFakeConnClosed
+	}
+	if behavior.beforeWriteGate != nil {
+		select {
+		case <-behavior.beforeWriteGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if beforeWrite != nil {
 		if err := beforeWrite(); err != nil {
@@ -707,6 +715,32 @@ func (r *dispatchRig) requireNoPlainCallsFor(t *testing.T, d time.Duration) {
 	time.Sleep(d)
 	if calls := r.conn.plainSnapshot(); len(calls) != 0 {
 		t.Fatalf("plain calls = %d; want none", len(calls))
+	}
+}
+
+// An attempted compact can lose its last quiet check. A later native/manual
+// completion must not turn that unwritten attempt into our continuation.
+func TestContextGuardUnwrittenAttemptDoesNotOwnNativeCompletion(t *testing.T) {
+	r := newDispatchRig(t)
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	r.conn.script[0] = fakeDispatchBehavior{beforeWriteGate: gate}
+	r.ingestUsage(t, 1, 85, 100)
+	if calls := r.waitCalls(t, 1); calls[0].wrote {
+		t.Fatal("gated attempt already wrote")
+	}
+	r.setQuiet(false)
+	release()
+	r.waitPhase(t, contextguard.StatePendingIdle)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	r.setQuiet(true)
+	r.nudge()
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+	if calls := r.conn.snapshot(); len(calls) != 1 || calls[0].wrote {
+		t.Fatalf("refused attempt reached provider: %+v", calls)
 	}
 }
 

@@ -22,40 +22,49 @@ func TestPassthrough_KeystrokeEchoLatencyP95(t *testing.T) {
 	if testing.Short() {
 		t.Skip("latency budget is a full-run assertion")
 	}
-	const samples = 1000
-
-	term := newFakeTerm(80, 24)
-	sess := newFakeSession(mustSnap(t, "READY"))
-	sess.echo = true // round-trip: Input -> Frames
-
-	ch := runInBackground(Config{Term: term, Session: sess})
-	eventually(t, func() bool { return len(term.outBytes()) > 0 }) // snapshot painted
-
-	// Each sample is a distinct printable marker so its echo is unambiguous on Out
-	// without accidentally synthesizing a control-key byte.
-	rec := &latencyRecorder{out: term.out, seen: make(map[string]time.Time)}
-	baseline := len(term.outBytes())
-	rec.baseline = baseline
-
-	durations := make([]time.Duration, 0, samples)
-	for i := 0; i < samples; i++ {
-		marker := latencyMarker(i)
-		start := time.Now()
-		term.feed(marker)
-		d, ok := rec.waitEcho(marker, start, 2*time.Second)
-		if !ok {
-			t.Fatalf("keystroke %d never echoed back within 2s", i)
+	for _, touch := range []bool{false, true} {
+		name := "default"
+		if touch {
+			name = "touch"
 		}
-		durations = append(durations, d)
-	}
+		t.Run(name, func(t *testing.T) {
+			const samples = 1000
 
-	p95 := percentile(durations, 0.95)
-	if p95 >= 10*time.Millisecond {
-		t.Fatalf("keystroke echo p95 = %v, want < 10ms (N-2)", p95)
-	}
+			term := newFakeTerm(80, 24)
+			sess := newFakeSession(mustSnap(t, "READY"))
+			sess.echo = true // round-trip: Input -> Frames
 
-	term.feed([]byte{DefaultDetachKey})
-	_ = waitResult(t, ch)
+			ch := runInBackground(Config{Term: term, Session: sess, Chrome: touch, TouchBack: touch})
+			eventually(t, func() bool { return len(term.outBytes()) > 0 }) // snapshot painted
+
+			// Each sample is a distinct printable marker so its echo is unambiguous on Out
+			// without accidentally synthesizing a control-key byte.
+			rec := &latencyRecorder{out: term.out, seen: make(map[string]time.Time)}
+			baseline := len(term.outBytes())
+			rec.baseline = baseline
+
+			durations := make([]time.Duration, 0, samples)
+			for i := 0; i < samples; i++ {
+				marker := latencyMarker(i)
+				start := time.Now()
+				term.feed(marker)
+				d, ok := rec.waitEcho(marker, start, 2*time.Second)
+				if !ok {
+					t.Fatalf("keystroke %d never echoed back within 2s", i)
+				}
+				durations = append(durations, d)
+			}
+
+			p95 := percentile(durations, 0.95)
+			t.Logf("%d samples, keystroke echo p95 = %v", samples, p95)
+			if p95 >= 10*time.Millisecond {
+				t.Fatalf("keystroke echo p95 = %v, want < 10ms (N-2)", p95)
+			}
+
+			term.feed([]byte{DefaultDetachKey})
+			_ = waitResult(t, ch)
+		})
+	}
 }
 
 // latencyMarker is a unique keystroke marker. It encodes i as printable DECIMAL

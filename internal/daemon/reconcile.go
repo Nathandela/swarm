@@ -264,6 +264,11 @@ func (d *Daemon) putMem(m persist.Meta) *session {
 // mergeExit folds a shim's exit report into a meta: the process dimension becomes
 // exited and the exit code is recorded (G6 side-file merge).
 func mergeExit(m persist.Meta, ei shim.ExitInfo) persist.Meta {
+	if m.HermesNative {
+		m.Status = status.Status{Process: status.ProcessLost, Turn: status.TurnUnknown, Interaction: status.InteractionError, Attention: true, NativeWorkUnknown: true}
+		m.ResumeError = "Hermes viewer exited; native job completion is unproven and the workspace is retained"
+		return m
+	}
 	m.Status.Process = status.ProcessExited
 	code := ei.ExitCode
 	m.ExitCode = &code

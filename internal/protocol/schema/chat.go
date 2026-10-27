@@ -15,10 +15,11 @@ import "crypto/sha256"
 // advisory for message delivery: the daemon orders accepted messages per session and applies
 // each queue head to current provider state. TurnInterruptReq remains strictly turn-scoped.
 type ComposerSendReq struct {
-	Session         string `json:"session"`
-	SessionInstance string `json:"session_instance,omitempty"`
-	ExpectedTurn    string `json:"expected_turn,omitempty"`
-	Text            string `json:"text"`
+	Session         string         `json:"session"`
+	SessionInstance string         `json:"session_instance,omitempty"`
+	ExpectedTurn    string         `json:"expected_turn,omitempty"`
+	Text            string         `json:"text"`
+	Origin          *MessageOrigin `json:"origin,omitempty"`
 }
 
 // TurnInterruptReq is the turn_interrupt body (Mirror M2.4).
@@ -148,5 +149,11 @@ func ComposerSendContentHash(req *ComposerSendReq) []byte {
 	}
 	writeHashField(h, []byte(req.ExpectedTurn))
 	writeHashField(h, []byte(req.Text))
+	if req.Origin != nil {
+		writeHashField(h, []byte("message-origin-v1"))
+		for _, field := range req.Origin.fields() {
+			writeHashField(h, []byte(field))
+		}
+	}
 	return h.Sum(nil)
 }

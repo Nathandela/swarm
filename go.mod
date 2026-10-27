@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	charm.land/lipgloss/v2 v2.0.0
 	cloud.google.com/go/firestore v1.21.0
+	github.com/bwmarrin/discordgo v0.29.0
 	github.com/charmbracelet/colorprofile v0.4.2
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
 	github.com/charmbracelet/x/ansi v0.11.7
@@ -14,6 +15,7 @@ require (
 	github.com/coder/websocket v1.8.13
 	github.com/creack/pty v1.1.24
 	github.com/flynn/noise v1.1.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/lucasb-eyer/go-colorful v1.4.0
 	github.com/muesli/cancelreader v0.2.2

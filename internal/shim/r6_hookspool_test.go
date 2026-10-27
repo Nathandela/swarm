@@ -332,3 +332,10 @@ func TestHookSpool_CompactedFileStaysOwnerOnly0600(t *testing.T) {
 		t.Errorf("post-compaction spool file mode = %o, want 0600", perm)
 	}
 }
+
+// ReadFrom is the test-only whole-spool view; production uses bounded DRAIN.
+func (s *HookSpool) ReadFrom(after uint64) (recs []HookRecord, gapAt uint64, hasGap bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readFromLocked(after)
+}

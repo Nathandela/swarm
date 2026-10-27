@@ -84,6 +84,7 @@ type claudeCLIIdentity struct {
 }
 
 type claudeSessionMeta struct {
+	HermesNative    bool                         `json:"hermes_native"`
 	SchemaVersion   int                          `json:"schema_version"`
 	ID              string                       `json:"id"`
 	AgentType       string                       `json:"agent_type"`
@@ -172,7 +173,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 	if err != nil {
 		return m, ErrUnsafePath
 	}
-	routing := []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement", "required_runtime", "input_embargo", "opencode_binding", "native_provider"}
+	routing := []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement", "required_runtime", "input_embargo", "opencode_binding", "native_provider", "hermes_native"}
 	for name := range doc {
 		for _, key := range routing {
 			if name != key && strings.EqualFold(name, key) {
@@ -185,7 +186,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 			return m, ErrUnsafePath
 		}
 	}
-	if json.Unmarshal(raw, &m) != nil || !validClaudeSessionID(id) || m.ID != id || m.SchemaVersion < 0 || m.SchemaVersion > ClaudeChatReservationSchemaVersion || m.SchemaVersion == 2 || !claudeAuthProcessTuple(processcontain.Identity{PID: m.ShimPID, StartTime: m.ShimStartTime}) {
+	if json.Unmarshal(raw, &m) != nil || !validClaudeSessionID(id) || m.ID != id || m.SchemaVersion < 0 || m.SchemaVersion > ClaudeChatReservationSchemaVersion || m.SchemaVersion == 2 || !claudeAuthProcessTuple(processcontain.Identity{PID: m.ShimPID, StartTime: m.ShimStartTime}) && !claudeUnrelatedHermesMetadata(m) {
 		return m, ErrUnsafePath
 	}
 	if m.Runtime != nil {
@@ -200,6 +201,12 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 	}
 	if claudeFakeChatMetadata(m) {
 		if !validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()}) {
+			return m, ErrUnsafePath
+		}
+		return m, nil
+	}
+	if m.HermesNative {
+		if !claudeUnrelatedHermesMetadata(m) {
 			return m, ErrUnsafePath
 		}
 		return m, nil
@@ -631,11 +638,16 @@ func claudeSameRuntimeMeta(a, b claudeSessionMeta) bool {
 
 // This is a strict parsed metadata pair, not launch or writer-stop authority.
 func claudeOwnedMetadata(m claudeSessionMeta) bool {
-	return m.AgentType == ProviderClaude && m.Runtime != nil && m.Runtime.Provider == ProviderClaude && (m.SchemaVersion == ClaudeReservationSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime)
+	return !m.HermesNative && m.AgentType == ProviderClaude && m.Runtime != nil && m.Runtime.Provider == ProviderClaude && (m.SchemaVersion == ClaudeReservationSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime)
+}
+
+// Both runtimes use schema 5; only this exact unrelated runtime bypasses Claude custody.
+func claudeUnrelatedHermesMetadata(m claudeSessionMeta) bool {
+	return m.SchemaVersion == 5 && m.HermesNative && m.AgentType == "hermes" && m.CLI != nil && m.CLI.Version != "" && m.Runtime == nil && m.Retirement == nil && m.RequiredRuntime == "" && m.OpenCodeBinding == nil && m.InputEmbargo == "" && m.NativeProvider == ""
 }
 
 func claudeFakeChatMetadata(m claudeSessionMeta) bool {
-	return m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime && m.AgentType == "fake" && m.Runtime == nil && m.CLI == nil && m.Retirement == nil && m.InputEmbargo == "" && m.OpenCodeBinding == nil && m.NativeProvider == ""
+	return m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime && m.AgentType == "fake" && !m.HermesNative && m.Runtime == nil && m.CLI == nil && m.Retirement == nil && m.InputEmbargo == "" && m.OpenCodeBinding == nil && m.NativeProvider == ""
 }
 
 // ValidateClaudeChatFixtureMetadata validates storage shape only, never launch or custody.
@@ -947,6 +959,13 @@ func claudeUnmanagedRow(raw []byte, stateRoot, sessionID string) error {
 	_ = json.Unmarshal(raw, &candidate)
 	if version == ClaudeChatReservationSchemaVersion || candidate.RequiredRuntime == claudeChatRequiredRuntime {
 		return ValidateClaudeChatFixtureMetadata(raw, sessionID)
+	}
+	if candidate.HermesNative {
+		parsed, err := parseClaudeSessionMeta(raw, stateRoot, sessionID)
+		if err != nil || !claudeUnrelatedHermesMetadata(parsed) {
+			return ErrUnsafePath
+		}
+		return nil
 	}
 	if version >= ClaudeReservationSchemaVersion {
 		return ErrPending

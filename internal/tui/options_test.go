@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"charm.land/lipgloss/v2"
 	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 )
@@ -87,7 +87,8 @@ func TestOptionsWindowEscDiscardsAndPickersWrap(t *testing.T) {
 	m = send(m, keyRune('o'))
 	m = send(m, keyLeft) // group: status -> tag (wraps backward)
 	m = send(m, keyUp)   // focus wraps: group -> Provider logins
-	m = send(m, keyUp)   // Provider logins -> order
+	m = send(m, keyUp)   // Provider logins -> CLI button
+	m = send(m, keyUp)   // CLI button -> order
 	m = send(m, keyLeft) // order: arrival -> name (wraps backward)
 	rm := m.(rootModel)
 	if rm.options.grouping != groupByTag || rm.options.ordering != orderByName {

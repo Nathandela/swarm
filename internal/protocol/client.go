@@ -24,6 +24,7 @@ const clientTimeout = 10 * time.Second
 // stream over a single connection.
 type Client struct {
 	conn         net.Conn
+	ctx          context.Context
 	endpointID   string
 	caps         []string
 	buildVersion string
@@ -52,50 +53,72 @@ type Client struct {
 // satisfying errors.Is(err, ErrIncompatibleVersion) whose message names `swarm
 // daemon restart` and states the restart is safe (D-8).
 func Dial(socketPath string, caps []string) (*Client, error) {
-	conn, err := net.DialTimeout("unix", socketPath, clientTimeout)
+	return DialContext(context.Background(), socketPath, caps)
+}
+
+// DialContext binds the handshake and connected client's lifetime to ctx.
+func DialContext(ctx context.Context, socketPath string, caps []string) (*Client, error) {
+	conn, err := (&net.Dialer{Timeout: clientTimeout}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return nil, err
 	}
 	c := &Client{
 		conn:   conn,
+		ctx:    ctx,
 		respCh: make(chan Control, 1),
 		done:   make(chan struct{}),
 	}
+	if ctx.Done() != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = c.Close()
+			case <-c.done:
+			}
+		}()
+	}
 
 	if err := c.writeControl(Control{Op: OpHello, ProtocolVersion: Version, BuildVersion: version.Version, Capabilities: caps}); err != nil {
-		_ = conn.Close()
+		_ = c.Close()
 		return nil, err
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(clientTimeout))
 	typ, payload, err := wire.ReadFrame(conn)
 	if err != nil {
-		_ = conn.Close()
+		_ = c.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	if typ != wire.TControl {
-		_ = conn.Close()
+		_ = c.Close()
 		return nil, errors.New("protocol: handshake reply was not a control frame")
 	}
 	reply, err := DecodeControl(payload)
 	if err != nil {
-		_ = conn.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	if reply.Op == OpError {
-		_ = conn.Close()
+		_ = c.Close()
 		// The daemon rejected the handshake. Synthesize the D-8 guidance
 		// client-side rather than surfacing arbitrary daemon prose verbatim (F10).
 		return nil, fmt.Errorf("%w: %s", ErrIncompatibleVersion, d8ClientMessage())
 	}
 	if reply.Op != OpHello || reply.ProtocolVersion != Version {
-		_ = conn.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("%w: %s", ErrIncompatibleVersion, d8Message(reply.ProtocolVersion, Version))
 	}
 	c.endpointID = reply.EndpointID
 	c.caps = reply.Capabilities
 	c.buildVersion = reply.BuildVersion
+	if err = ctx.Err(); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
 	go c.readLoop()
 	return c, nil
 }
@@ -153,6 +176,9 @@ func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
 	timeout := clientTimeout
 	if r.Agent == "opencode" {
 		timeout = 75 * time.Second
+	}
+	if r.Agent == "hermes" {
+		timeout = 100 * time.Second
 	}
 	resp, err := c.requestWithTimeout(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r}, timeout)
 	if err != nil {
@@ -373,7 +399,13 @@ func contextGuardSettingsReplyError(resp Control) error {
 }
 
 func (c *Client) simpleOp(op, id string) error {
-	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})
+	timeout := clientTimeout
+	if op == OpKill || op == OpDelete {
+		// Native stop controls have their own bounded request plus local viewer
+		// shutdown. Keep the connection alive to receive an uncertain stop result.
+		timeout = 45 * time.Second
+	}
+	resp, err := c.requestWithTimeout(Control{Op: op, EndpointID: c.endpointID, SessionID: id}, timeout)
 	if err != nil {
 		return err
 	}
@@ -971,6 +1003,11 @@ func (c *Client) writeControl(ctrl Control) error {
 func (c *Client) writeFrame(typ wire.Type, payload []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	return wire.WriteFrame(c.conn, typ, payload)
 }
 

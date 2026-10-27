@@ -1,0 +1,17 @@
+{
+  "version": "1.4.7",
+  "message_submitted": true,
+  "receipt": {
+    "operation_id": "native-message",
+    "hash": "2313bef92ddb3145480b06f354d083d2521c3119ede1a87176fd1ca867d4f45b",
+    "state": "submitted",
+    "proof": {
+      "conversation_id": "5f91df8b-5592-45f3-b7dd-754961e8151c",
+      "project_id": "default-cli-project",
+      "generation": "1d6fa60a8454709f48017ff2dd60a850"
+    }
+  },
+  "tool_ran": false,
+  "marker_in_model_context": true,
+  "bootstrap_approved_once": true
+}

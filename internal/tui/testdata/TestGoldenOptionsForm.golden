@@ -2,9 +2,9 @@ swarm · options
 
 ▌ group       ◂ ● status   ○ repo   ○ tag ▸
   order       ◂ ● arrival   ○ activity   ○ created   ○ name ▸
+  CLI button  [ ] off
 
   logins      Provider logins →
-
 
 
 

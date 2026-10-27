@@ -13,6 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/agyinput"
+	"github.com/Nathandela/swarm/internal/claudeinput"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/logins"
@@ -114,30 +117,33 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
-	RequiredRuntime       string               `json:"required_runtime,omitempty"`
-	ConversationID        string               `json:"conversation_id,omitempty"`
-	ClaudeChatFixture     string               `json:"claude_chat_fixture,omitempty"`
-	LogPath               string               `json:"log_path,omitempty"`
-	LoginRuntime          *logins.Runtime      `json:"login_runtime,omitempty"`
-	LoginStateRoot        string               `json:"login_state_root,omitempty"`
-	LoginSwitchID         string               `json:"login_switch_id,omitempty"`
-	LoginSwitchSource     string               `json:"login_switch_source,omitempty"`
-	NativeProvider        string               `json:"native_provider,omitempty"`
-	OpenCode              *shim.OpenCodeConfig `json:"opencode,omitempty"`
-	OpenCodeEnv           []string             `json:"opencode_env,omitempty"`
-	OpenCodeInitialPrompt string               `json:"opencode_initial_prompt,omitempty"`
-	InputEmbargo          string               `json:"input_embargo,omitempty"`
-	InputEmbargoToken     string               `json:"input_embargo_token,omitempty"`
-	CLIIdentity           *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID             string               `json:"session_id"`
-	Argv                  []string             `json:"argv"`
-	Cwd                   string               `json:"cwd"`
-	Env                   []string             `json:"env"`
-	SocketPath            string               `json:"socket_path"`
-	SessionDir            string               `json:"session_dir"`
-	Cols                  int                  `json:"cols"`
-	Rows                  int                  `json:"rows"`
-	GraceMS               int                  `json:"grace_ms"`
+	RequiredRuntime       string                     `json:"required_runtime,omitempty"`
+	ConversationID        string                     `json:"conversation_id,omitempty"`
+	ClaudeChatFixture     string                     `json:"claude_chat_fixture,omitempty"`
+	LogPath               string                     `json:"log_path,omitempty"`
+	LoginRuntime          *logins.Runtime            `json:"login_runtime,omitempty"`
+	LoginStateRoot        string                     `json:"login_state_root,omitempty"`
+	LoginSwitchID         string                     `json:"login_switch_id,omitempty"`
+	LoginSwitchSource     string                     `json:"login_switch_source,omitempty"`
+	NativeProvider        string                     `json:"native_provider,omitempty"`
+	OpenCode              *shim.OpenCodeConfig       `json:"opencode,omitempty"`
+	OpenCodeEnv           []string                   `json:"opencode_env,omitempty"`
+	OpenCodeInitialPrompt string                     `json:"opencode_initial_prompt,omitempty"`
+	InputEmbargo          string                     `json:"input_embargo,omitempty"`
+	InputEmbargoToken     string                     `json:"input_embargo_token,omitempty"`
+	CLIIdentity           *persist.CLIIdentity       `json:"cli_identity,omitempty"`
+	SessionID             string                     `json:"session_id"`
+	Argv                  []string                   `json:"argv"`
+	Cwd                   string                     `json:"cwd"`
+	Env                   []string                   `json:"env"`
+	SocketPath            string                     `json:"socket_path"`
+	SessionDir            string                     `json:"session_dir"`
+	Cols                  int                        `json:"cols"`
+	Rows                  int                        `json:"rows"`
+	GraceMS               int                        `json:"grace_ms"`
+	HermesInput           *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
+	AgyInput              *agyinput.Config           `json:"agy_input,omitempty"`
+	ClaudeInput           bool                       `json:"claude_input,omitempty"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1). "" is the
 	// pre-R6 compat default the shim reads as "bind no hook listener at all".
 	HookSocketPath string `json:"hook_socket_path"`
@@ -343,6 +349,11 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 	if err := validateClaudeChatLaunchSpec(spec); err != nil {
 		return persist.Meta{}, err
 	}
+	hermes, hermesErr := d.hermesLaunchConfig(spec)
+	if hermesErr != nil {
+		return persist.Meta{}, hermesErr
+	}
+	spec.HermesInput = hermes
 	if spec.RequiredRuntime == persist.RequiredRuntimeOpenCode && spec.OpenCodeEnv == nil {
 		var err error
 		spec.OpenCodeEnv, err = d.OpenCodeEnvironment(spec.ClientEnv)
@@ -372,6 +383,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 	id := d.freshIDLocked()
 	now := time.Now()
 	m := persist.Meta{
+		HermesNative:    spec.HermesInput != nil,
 		LoginRuntime:    spec.LoginRuntime,
 		RequiredRuntime: spec.RequiredRuntime,
 		OpenCodeBinding: persist.CloneOpenCodeBinding(spec.OpenCodeBinding),
@@ -643,8 +655,18 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 	// reached. We never kill on failure here (crash-safe): the identity is already
 	// persisted, so a shim that fails to serve is left for reconcile to reconnect or
 	// reap.
-	if !d.waitShimServing(sock, launchConfirmTimeout) {
+	confirmTimeout := launchConfirmTimeout
+	if m.HermesNative {
+		confirmTimeout = 90 * time.Second
+	}
+	if !d.waitShimServing(sock, confirmTimeout) {
 		return m, fmt.Errorf("daemon: shim for session %s did not confirm serving", id)
+	}
+	if m.HermesNative {
+		if err := d.joinHermes(id); err != nil {
+			return m, err
+		}
+		m, _ = d.Get(id)
 	}
 	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		ctx, cancel := context.WithTimeout(context.Background(), openCodeJoinTimeout)
@@ -759,6 +781,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(filepath.Dir(spec.OpenCodeLaunch.BindingFile), "opencode-tui.json"))
 	}
 	lc := shimSpawnConfig{
+		HermesInput:  spec.HermesInput,
 		LogPath:      d.cfg.LogPath,
 		LoginRuntime: spec.LoginRuntime, LoginStateRoot: spec.LoginStateRoot, LoginSwitchID: spec.LoginSwitchID, LoginSwitchSource: spec.LoginSwitchSource,
 		OpenCode:       spec.OpenCodeLaunch,
@@ -780,6 +803,20 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
 		lc.RequiredRuntime, lc.ConversationID, lc.ClaudeChatFixture = spec.RequiredRuntime, spec.ConversationID, spec.ClaudeChatFixture
 		lc.LoginStateRoot = d.cfg.StateDir
+	}
+
+	if d.NativeInputEnabled() && spec.AgentType == "agy" && spec.CLIIdentity != nil && agyinput.SupportedVersion(spec.CLIIdentity.Version) {
+		command := agyinput.BootstrapCommand(d.cfg.ShimBinary, filepath.Join(dir, agyinput.DescriptorFile))
+		lc.AgyInput = &agyinput.Config{SessionID: id, Executable: spec.CLIIdentity.Path, Version: spec.CLIIdentity.Version, Fingerprint: spec.CLIIdentity.Fingerprint, Cwd: spec.Cwd, BootstrapCommand: command}
+		lc.Argv = agyinput.LaunchArgs(lc.Argv, command)
+	}
+	if d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled() && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
+		plugin, err := claudeinput.Install(dir)
+		if err != nil {
+			return nil, "", err
+		}
+		lc.ClaudeInput = true
+		lc.Argv = append([]string{lc.Argv[0], "--plugin-dir", plugin, "--plugin-dir", claudeinput.GuardPath(dir)}, lc.Argv[1:]...)
 	}
 	if spec.AgentType == "claude" || spec.AgentType == "codex" {
 		lc.NativeProvider = spec.AgentType

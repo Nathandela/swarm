@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/Nathandela/swarm/internal/tui"
 )
 
@@ -58,7 +58,7 @@ func TestClaudeChatViewConnectedOneTurnAndOwnedStop(t *testing.T) {
 	attaches := 0
 	model := tui.New(board, nil, tui.WithClaudeChatDialer(func() (tui.Client, error) {
 		return protocol.Dial(d.SocketPath(), []string{protocol.CapJournal, protocol.CapSemanticSend})
-	}), tui.WithAttachRunner(func(protocol.SessionView, bool) error { attaches++; return nil }))
+	}), tui.WithAttachRunner(func(protocol.SessionView, bool, bool) error { attaches++; return nil }))
 	defer func() { _ = model.(interface{ Close() error }).Close() }()
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 25})
 	var cmd tea.Cmd

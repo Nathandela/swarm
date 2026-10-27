@@ -23,17 +23,23 @@ var (
 // incomplete escape sequences across arbitrary Read boundaries and tracks
 // bracketed paste so pasted control bytes and key-looking text remain data.
 type detachInputFilter struct {
-	mu       sync.Mutex
-	key      byte
-	forward  func([]byte)
-	detach   func()
-	pending  []byte
-	inPaste  bool
-	detached bool
-	timer    *time.Timer
-	timerGen uint64
-	decoder  uv.EventDecoder
-	pos      outParser // ADR-019 string-payload gate, carried across reads
+	mu                 sync.Mutex
+	key                byte
+	forward            func([]byte)
+	detach             func()
+	pending            []byte
+	inPaste            bool
+	pasteEnd           []byte
+	detached           bool
+	timer              *time.Timer
+	timerGen           uint64
+	activity           func()
+	c1Input            func() bool
+	retainMouse        func() bool
+	dropMouseCandidate func() bool
+	mouse              func([]byte) (handled, detach bool)
+	decoder            uv.EventDecoder
+	pos                outParser // ADR-019 string-payload gate, carried across reads
 }
 
 func newDetachInputFilter(key byte, forward func([]byte), detach func()) *detachInputFilter {
@@ -65,13 +71,22 @@ func (f *detachInputFilter) Feed(p []byte) bool {
 }
 
 func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
+	c1 := f.mouse != nil
+	if f.c1Input != nil {
+		c1 = f.c1Input()
+	}
+	f.pos.c1 = c1
 	if f.inPaste {
+		end := f.pasteEnd
+		if end == nil {
+			end = bracketedPasteEnd
+		}
 		f.pending = append(f.pending, b)
-		for len(f.pending) > 0 && !bytes.HasPrefix(bracketedPasteEnd, f.pending) {
+		for len(f.pending) > 0 && !bytes.HasPrefix(end, f.pending) {
 			*out = append(*out, f.pending[0])
 			f.pending = f.pending[1:]
 		}
-		if bytes.Equal(f.pending, bracketedPasteEnd) {
+		if bytes.Equal(f.pending, end) {
 			*out = append(*out, f.pending...)
 			f.pending = nil
 			f.inPaste = false
@@ -83,15 +98,19 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 	}
 
 	payload := f.pos.inString()
+	continuation := f.pos.c1 && f.pos.utf8Left > 0 && b >= 0x80 && b < 0xc0
 
 	if len(f.pending) == 0 {
 		if !payload && b == f.key && b != '\x1b' {
 			return true
 		}
 		f.pos.feed(b)
-		if !payload && b == '\x1b' {
+		if !payload && !continuation && (b == '\x1b' || c1 && b == 0x9b) {
 			f.pending = append(f.pending, b)
 			return false
+		}
+		if !payload && f.activity != nil {
+			f.activity()
 		}
 		*out = append(*out, b)
 		return false
@@ -101,32 +120,63 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 	// arriving while such a report is incomplete is a real keypress, not part
 	// of the report. Preserve the report prefix, withhold the key, and detach.
 	if !payload && b == f.key && b != '\x1b' {
-		*out = append(*out, f.pending...)
+		if !mouseInputCandidate(f.pending) || f.dropMouseCandidate == nil || !f.dropMouseCandidate() {
+			*out = append(*out, f.pending...)
+		}
 		f.pending = nil
 		return true
 	}
 	f.pos.feed(b)
 	f.pending = append(f.pending, b)
-	if len(f.pending) == 2 && f.pending[1] != '[' {
+	if len(f.pending) == 2 && f.pending[0] == '\x1b' && f.pending[1] != '[' {
+		if f.activity != nil {
+			f.activity()
+		}
 		*out = append(*out, f.pending...)
 		f.pending = nil
 		return false
 	}
-	if len(f.pending) >= 3 && isCSIFinal(f.pending[len(f.pending)-1]) {
+	prefix := 2
+	if f.pending[0] == 0x9b {
+		prefix = 1
+	}
+	if len(f.pending) > prefix && isCSIFinal(f.pending[len(f.pending)-1]) {
 		seq := append([]byte(nil), f.pending...)
 		f.pending = nil
-		if bytes.Equal(seq, bracketedPasteStart) {
+		logical := seq
+		if seq[0] == 0x9b {
+			logical = append([]byte("\x1b["), seq[1:]...)
+		}
+		if bytes.Equal(logical, bracketedPasteStart) {
+			f.pasteEnd = bracketedPasteEnd
+			if seq[0] == 0x9b {
+				f.pasteEnd = []byte("\x9b201~")
+			}
+			if f.activity != nil {
+				f.activity()
+			}
 			*out = append(*out, seq...)
 			f.inPaste = true
 			return false
 		}
-		if f.isKittyDetach(seq) {
+		if f.mouse != nil {
+			if handled, detach := f.mouse(seq); handled {
+				return detach
+			}
+		}
+		if f.isKittyDetach(logical) {
 			return true
+		}
+		if f.activity != nil {
+			f.activity()
 		}
 		*out = append(*out, seq...)
 		return false
 	}
 	if len(f.pending) >= maxInputSequenceLen {
+		if f.activity != nil {
+			f.activity()
+		}
 		*out = append(*out, f.pending...)
 		f.pending = nil
 	}
@@ -186,6 +236,13 @@ func (f *detachInputFilter) flushTimedOut(gen uint64) {
 		return
 	}
 	f.timer = nil
+	if f.inPaste {
+		return
+	} // pending is only a bounded possible paste-end marker
+	// A recognized mouse prefix stays bounded here until its final byte arrives.
+	if f.mouse != nil && !f.inPaste && mouseInputCandidate(f.pending) && (f.retainMouse == nil || f.retainMouse()) {
+		return
+	}
 	if !f.inPaste && f.key == '\x1b' && bytes.Equal(f.pending, []byte{'\x1b'}) {
 		f.pending = nil
 		f.detached = true
@@ -194,6 +251,9 @@ func (f *detachInputFilter) flushTimedOut(gen uint64) {
 	}
 	p := append([]byte(nil), f.pending...)
 	f.pending = nil
+	if f.activity != nil {
+		f.activity()
+	}
 	f.forwardLocked(p)
 }
 
@@ -201,4 +261,8 @@ func (f *detachInputFilter) forwardLocked(p []byte) {
 	if len(p) > 0 && f.forward != nil {
 		f.forward(p)
 	}
+}
+
+func mouseInputCandidate(p []byte) bool {
+	return bytes.HasPrefix(p, []byte("\x1b[<")) || bytes.HasPrefix(p, []byte("\x9b<"))
 }

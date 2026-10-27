@@ -77,10 +77,14 @@ var remoteForbiddenOptions = map[string]string{
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
 	var clientEnv, openCodeEnv []string
+	var hermesOrigins []string
 	if !remote && req.Env != nil {
 		// Capture owner configuration origins before the launch allowlist removes
 		// them. Nil still requests daemon policy; an explicit empty env stays empty.
 		clientEnv = persist.FilterEnv(req.Env)
+		if req.Agent == "hermes" {
+			hermesOrigins = daemon.HermesConfigurationEnvironment(req.Env)
+		}
 		if req.Agent == "opencode" {
 			openCodeEnv = make([]string, 0)
 			for _, entry := range req.Env {
@@ -92,8 +96,9 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		}
 	}
 	return daemon.LaunchSpec{
-		AgentType: req.Agent,
-		Name:      SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
+		HermesOrigins: hermesOrigins,
+		AgentType:     req.Agent,
+		Name:          SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
 		// The launch-time tag takes the SAME sanitization as set_tag's (handleSetTag):
 		// a client is never trusted to have sanitized it, and a blank tag is no tag.
 		Tag:         strings.TrimSpace(SanitizeName(req.Tag)),
@@ -265,7 +270,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapOpenCodeObservation, CapNativeRequests,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -408,6 +413,7 @@ func Serve(d DaemonAPI, socketPath string) (*Server, error) {
 	}
 	s := newServer(d)
 	s.ln = ln
+	s.startWorkers()
 	s.wg.Add(1)
 	go s.acceptLoop(nil)
 	return s, nil
@@ -426,11 +432,12 @@ func Serve(d DaemonAPI, socketPath string) (*Server, error) {
 func NewServer(d DaemonAPI, endpointID string) *Server {
 	s := newServer(d)
 	s.endpointID = endpointID
+	s.startWorkers()
 	return s
 }
 
-// newServer allocates a Server and starts its event fan-out. The listener (Serve)
-// or the per-connection feed (NewServer/ServeConn) is layered on by the caller.
+// newServer allocates without publishing workers. Each constructor configures
+// its listener, endpoint and tier before calling startWorkers exactly once.
 func newServer(d DaemonAPI) *Server {
 	s := &Server{
 		d:                d,
@@ -446,6 +453,10 @@ func newServer(d DaemonAPI) *Server {
 	if observer, ok := d.(DirectInputObserver); ok {
 		s.SetDirectInputObserver(observer.ObserveDirectInput)
 	}
+	return s
+}
+
+func (s *Server) startWorkers() {
 	s.wg.Add(1)
 	go s.fanoutLoop()
 	// ADR-017 T6-c: expire idle terminal control generations on the SERVER's clock. It is
@@ -456,12 +467,11 @@ func newServer(d DaemonAPI) *Server {
 	go s.terminalSweepLoop()
 	// When the backend exposes a journal, drain its single source and fan journal
 	// events out to journal subscribers (reusing the bounded-queue evict discipline).
-	if jb, ok := d.(JournalBackend); ok {
+	if jb, ok := s.d.(JournalBackend); ok {
 		source, cancel := jb.JournalSubscribe()
 		s.wg.Add(1)
 		go s.journalFanoutLoop(jb, source, cancel)
 	}
-	return s
 }
 
 // ServeConn serves one already-accepted client connection to completion. It is
@@ -1494,7 +1504,7 @@ func (s *Server) supportedCaps() []string {
 		if cap == CapJournalSubscribeFrom && !journalFrom {
 			continue
 		}
-		if cap == CapSemanticSend && (s.remoteTier || !durable || !sender || !transactional || !semantic) {
+		if (cap == CapSemanticSend || cap == CapMessageOrigin) && (s.remoteTier || !durable || !sender || !transactional || !semantic) {
 			continue
 		}
 		out = append(out, cap)

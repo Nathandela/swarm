@@ -73,7 +73,7 @@ func TestWorkingAnimationInactiveOffGeneralAndRestartsOnReturn(t *testing.T) {
 
 func TestWorkingAnimationLapsesDuringAttachAndRestartsAfterDetach(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "compiling", time.Minute))
-	m := New(f, detectMixed(), WithAttachRunner(func(protocol.SessionView, bool) error { return nil }))
+	m := New(f, detectMixed(), WithAttachRunner(func(protocol.SessionView, bool, bool) error { return nil }))
 	m, _ = m.Update(keyEnter)
 	if got := m.(rootModel).screen; got != screenAttach {
 		t.Fatalf("screen during passthrough = %v, want attach so animation cannot repaint the handed-off terminal", got)

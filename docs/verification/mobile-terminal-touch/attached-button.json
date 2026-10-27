@@ -1,0 +1,395 @@
+{
+  "schema": 1,
+  "date": "2026-10-27",
+  "feature": "Optional attached [swarm] return button",
+  "source_commit": "185efa042f612e67bb5b6356c8a2db9164cc9be6",
+  "source_go_manifest_sha256": "a65995496ea0cb1025c7b125bd15e02af12e476adf93fe39c0d1dd0abe222d5c",
+  "changed_source_and_fixture_sha256": {
+    "cmd/swarm/touch_attach_test.go": "c1439d0e65d1192effc05a2319cd6ab81ee365cdc3b05c68556493ddfe1c48b0",
+    "internal/attach/attach.go": "9155cc719922e258dc54c201f8007d27e0e5d3df1e10c76abb1cd74163d4cb98",
+    "internal/attach/input_filter.go": "a0ef57b19681369e662cfc88db687741b3460c7d7da2733dd222b28cc5e22034",
+    "internal/attach/inputmode_reset_test.go": "168dcc7673d25146a32c74bb32c87583cae7bbda3c49e4bd93ebfb632278f8d9",
+    "internal/attach/latency_test.go": "f5a692d8f14e1e03c9ffa023def792e034a612b8bd581452ee11fd889c0d0451",
+    "internal/attach/mouse_output.go": "00694ce86e6b8fa389be884882c6438e30bb73ea8f9b2ec5dca552d0fd66efe9",
+    "internal/attach/touch.go": "07b893bb6e8d15b7bfc5e38a7c0bd29a75760d4668781ec44c9e7f82e4bff102",
+    "internal/attach/touch_test.go": "6388be008647bd4ddd4e32d30b646ab1b751ae5730e0a4cb6619b9d69fd0fec5",
+    "internal/testbin/supervise_test.go": "b0840fc0ff164502310aa1223bb77b7533c77dea9027ef4d0564d45fdfbb7903",
+    "internal/tui/attach.go": "c2a23caea9a550a00d45ebcc49713aa7db299e406e257f35f3d2282abd54c6d9",
+    "internal/tui/epic8_test.go": "ce1f7fc9ee469a33c3188eb47091cf0f379f2357f5ada8c7392146285f446932",
+    "internal/tui/form_viewport.go": "b4fc0862ca326a36e5974fa463ee7ae90346cb6bfc6742fac67c35fb8acd35f7",
+    "internal/tui/general.go": "a9a86b2995c0067546d97bd41a5090046a07edc6df1b950ebaf7c3952577ccb2",
+    "internal/tui/layout_persist_test.go": "b02bb081280c79066e26d3683b8d585008471d1439322c1734e91b865eaef99c",
+    "internal/tui/layout_store.go": "21766a0f10f1f103f18e9cf3405e61ced8c17b9fc5add2dbdd879150359306df",
+    "internal/tui/options.go": "ebf6a41caeccb2a24252566efb4e81f768d13e429e03d0c1bc7209f32e136854",
+    "internal/tui/options_contextguard_test.go": "a8e8f50e938a5f6a2a05100b27e5ab18d868c3acdfb235e1917f434d6572f649",
+    "internal/tui/options_test.go": "8171ec98e9c4657f2cfa2b59b7e97ba9fa7a7483fea5f1dc31d99ed649f45719",
+    "internal/tui/reconnect.go": "f3fc52fb077603dfbd2fd4d1b6a12b57c29fac922f0bc4d3c9964772b2e38f5f",
+    "internal/tui/reconnect_test.go": "1cefcc38c7c171217dd6cefd724648d5a4d84375c88026e833c7c5d1b1d71c6f",
+    "internal/tui/repaint_test.go": "959d2b8f4fc5d09d3368c958bc81bdd198c38fa938225762cc1f33afeed4042c",
+    "internal/tui/testdata/TestGoldenOptionsForm.golden": "b4fee2168b4b1250bcdf2e344ab1e33e9de6b89a7213927328492e2f1e8f36dc",
+    "internal/tui/touch_back_test.go": "5e9ef86057644cc89f65a79ca63eb25ffdef2ff58a069820ff02d76da3157b4b",
+    "internal/tui/tui.go": "0a0895dc9c54116686a4b380c5657cea4d1517e38746e4df899de6d23996f3b6",
+    "internal/vt/emulator.go": "909148d8e2c4657e2c4443617d51e94129c3e2a11569270b331b30212075a9cd",
+    "internal/vt/mouse.go": "b489adc6509ee0756d277ee37f6b8bf6ad6a9db77ebce7a6b2265b4d7558e7ee",
+    "internal/vt/mouse_state_test.go": "4d3dbc5d18834dd3854de7de6383744276d2de424bad9619ba8b9c2cc97e16df"
+  },
+  "application_sources_unchanged_since_full_runs": true,
+  "test_only_changes_since_full_run_start": [
+    "internal/attach/touch_test.go",
+    "internal/testbin/supervise_test.go",
+    "internal/tui/reconnect_test.go"
+  ],
+  "local_platform": {
+    "go": "go1.26.5 darwin/amd64",
+    "host_architecture": "arm64",
+    "gomaxprocs": 2,
+    "shared_go_caches": true,
+    "temporary_roots": "canonical, short, per-run"
+  },
+  "final_static_checks": [
+    {
+      "name": "build",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit": 0,
+      "seconds": 6.075,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "vet",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit": 0,
+      "seconds": 2.614,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "lint",
+      "command": [
+        "golangci-lint",
+        "run"
+      ],
+      "exit": 0,
+      "seconds": 7.513,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    }
+  ],
+  "initial_full_commands": [
+    {
+      "name": "build",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit": 0,
+      "seconds": 22.561,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "vet",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit": 0,
+      "seconds": 17.25,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "lint",
+      "command": [
+        "golangci-lint",
+        "run"
+      ],
+      "exit": 0,
+      "seconds": 54.917,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    {
+      "name": "vt-fuzz",
+      "command": [
+        "go",
+        "test",
+        "-run",
+        "^$",
+        "-fuzz",
+        "^FuzzFeedSplitConsistency$",
+        "-fuzztime=30s",
+        "-parallel=2",
+        "./internal/vt"
+      ],
+      "exit": 0,
+      "seconds": 57.365,
+      "log_sha256": "9aede888ca1e4adf05402863f88b33f6a614f510a519a96b11c162c3fc74d93d"
+    },
+    {
+      "name": "test",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-p",
+        "2",
+        "-timeout",
+        "30m",
+        "./..."
+      ],
+      "exit": 0,
+      "seconds": 1210.065,
+      "log_sha256": "dcc8fb1f3dd615d0e875654f8378a794f7fbb416e476cacde0463e857aa0ee95"
+    },
+    {
+      "name": "race",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-race",
+        "-count=1",
+        "-p",
+        "1",
+        "-timeout",
+        "45m",
+        "./..."
+      ],
+      "exit": 1,
+      "seconds": 2663.894,
+      "log_sha256": "72d91c095e29552b94f21a29c035c21c543e56a20f9d179f1dd77b7216c2c38a"
+    }
+  ],
+  "initial_full_metrics": {
+    "test": {
+      "test_and_subtest_pass_actions": 9781,
+      "skipped_tests": 65,
+      "passed_packages": 82,
+      "failed_tests": [],
+      "failed_packages": [],
+      "data_race_reports": 0
+    },
+    "race": {
+      "test_and_subtest_pass_actions": 9778,
+      "skipped_tests": 65,
+      "passed_packages": 80,
+      "failed_tests": [
+        "github.com/Nathandela/swarm/internal/testbin/TestSuperviseCleansAfterChildExit/registered",
+        "github.com/Nathandela/swarm/internal/testbin/TestSuperviseCleansAfterChildExit",
+        "github.com/Nathandela/swarm/internal/tui/TestReconnect_HydratedBannerExpires"
+      ],
+      "failed_packages": [
+        "github.com/Nathandela/swarm/internal/testbin",
+        "github.com/Nathandela/swarm/internal/tui"
+      ],
+      "data_race_reports": 0
+    }
+  },
+  "fixture_corrections": {
+    "testbin-tdd": {
+      "scope": "test-only internal/testbin/supervise_test.go",
+      "root_cause": "The500ms actual Go watchdog included copying/registering the test executable, detached child startup, readiness read, and report publication. Race gate expired at readiness before report; not a supervisor cleanup failure.",
+      "source_sha256": "b0840fc0ff164502310aa1223bb77b7533c77dea9027ef4d0564d45fdfbb7903",
+      "patch": "30s runaway guard for non-timeout fixture scenarios;5s real Go watchdog for timeout; timeout explicitly requires Go timeout panic in addition to unchanged report/identity/cleanup/exit checks.",
+      "public_api": "testing.M.startAlarm is internal and starts before runTests. testing.T.Deadline reports the deadline; no public API arms the Go watchdog after fixture readiness.",
+      "red": {
+        "overlay": "red-overlay.json",
+        "delay": "750ms between detached child Start and ready read, registered+timeout scenarios only",
+        "result": "FAIL2.809s, both missing report after500ms actual Go timeout",
+        "log": "red-delayed.log"
+      },
+      "green": {
+        "overlay": "green-overlay.json",
+        "same_delay": true,
+        "result": "PASS7.473s",
+        "registered_seconds": 1.21,
+        "timeout_seconds": 5.41,
+        "log": "green-delayed.log"
+      },
+      "negative_cause": {
+        "overlay": "wrong-cause-overlay.json",
+        "mutation": "replace timeout sleep with unrelated panic, preserving fixture report and exit2",
+        "result": "FAIL1.226s at actual-Go-watchdog assertion",
+        "log": "wrong-cause.log"
+      },
+      "full_package_normal": {
+        "command": "GOMAXPROCS=2 TMPDIR=/private/tmp/stb-luqkbmzl go test -p 2 ./internal/testbin -timeout 120s -count=1 -v",
+        "result": "PASS12.105s",
+        "log": "package-normal.log"
+      },
+      "full_package_race": {
+        "command": "GOMAXPROCS=2 TMPDIR=/private/tmp/stb-luqkbmzl go test -race -p 2 ./internal/testbin -timeout 180s -count=1 -v",
+        "result": "PASS21.605s",
+        "log": "package-race.log"
+      },
+      "evidence_sha256": "e5335fa2dec497c113977626a8e88bba93521626e258ded778a8d967c3ca3b14",
+      "log_sha256": {
+        "package-race.log": "d392435cbc145bfa7e894922004b52e3002d890a3e91e6bdc8f1e45939077019",
+        "red-delayed.log": "d8287eed6d13249abdfcca1db9229b544df18ff1c20e0384bf926561fa0e1bfb",
+        "green-delayed.log": "fb37b0122a353a540e90198f97f692b7c0f1a408ba3a2cef83ecf59dff472ffb",
+        "wrong-cause.log": "7812c2015075071d858f75bdaf241da39d40fcfc655e6ee94543ca5dbf719dc3",
+        "package-normal.log": "0c76c41c5c5a11d4a184adca734e2b9867042b682fe315cc0806a19512174e13"
+      }
+    },
+    "reconnect-screen-tdd": {
+      "scope": "Only TestReconnect_HydratedBannerExpires and newReconnectTestScreen helper in internal/tui/reconnect_test.go",
+      "source_sha256": "1cefcc38c7c171217dd6cefd724648d5a4d84375c88026e833c7c5d1b1d71c6f",
+      "diagnosis": "Pinned BubbleTea non-TTY renderer sets mapNl true and UV emits LF assuming CRLF translation; teatest writes to bytes.Buffer without that TTY translation, while VT default LNM is false. Exact failed fullpaint+CSI3;7H suffix diff then loses the retained co prefix at the expected banner columns.",
+      "primary_sources": {
+        "bubbletea": "charm.land/bubbletea/v2@v2.0.2/tea.go:1049-1057",
+        "teatest": "github.com/charmbracelet/x/exp/teatest/v2@v2.0.0-20260713092006-0d683c34c74b/teatest.go:132-159",
+        "ultraviolet": "github.com/charmbracelet/ultraviolet@v0.0.0-20260303162955-0b88c25f3fff/terminal_renderer.go:193-203",
+        "vt": "github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/cc.go:16-22"
+      },
+      "fix": "Prime test VT with CSI20h LF/newline mode. Preserve cumulative screen and per-WaitFor consumed offsets,3s waits,4.1s real expiry delay and final-model assertion; add actual-screen disappearance assertion. No application code changes.",
+      "raw_capture": "failed-renderer.raw (test logger indentation and final logger newline removed from the actual failed output)",
+      "red": {
+        "overlay": "red-replay-overlay.json",
+        "log": "red-replay.log",
+        "result": "FAIL2.247s; exact captured raw does not reconstruct codex banner at default VT mode"
+      },
+      "green_normal": {
+        "overlay": "green-replay-overlay.json",
+        "log": "green-normal.log",
+        "result": "PASS7.564s; exactraw replay and live banner appearance+expiry"
+      },
+      "green_race": {
+        "overlay": "green-replay-overlay.json",
+        "log": "green-race.log",
+        "result": "PASS10.495s; exactraw replay and live banner appearance+expiry"
+      },
+      "negative_missing_banner": {
+        "overlay": "missing-banner-overlay.json",
+        "log": "missing-banner-negative.log",
+        "result": "FAIL2.354s; only raw suffix changed, original codex needs input expectation retained"
+      },
+      "initial_negative_harness_correction": "Initial missing-suffix probe replaced its expectation too and passed; not counted as valid negative evidence. Preserved as negative-control-initial-mutated-expectation.log, corrected control then failed as expected.",
+      "full_package_normal": {
+        "command": "GOMAXPROCS=2 TMPDIR=/private/tmp/src-vfbzmggl go test -p 2 ./internal/tui -timeout 10m -count=1 -v",
+        "result": "PASS39.084s",
+        "log": "package-normal.log"
+      },
+      "full_package_race": {
+        "command": "GOMAXPROCS=2 TMPDIR=/private/tmp/src-vfbzmggl go test -race -p 2 ./internal/tui -timeout 10m -count=1 -v",
+        "result": "PASS57.690s, no race report",
+        "log": "package-race.log"
+      },
+      "final_source_sha256": "1cefcc38c7c171217dd6cefd724648d5a4d84375c88026e833c7c5d1b1d71c6f",
+      "evidence_sha256": "cd28c838520513375377dee32591f63e36044f0d8bdf4da70f36e033c2a81c58",
+      "log_sha256": {
+        "negative-control-initial-mutated-expectation.log": "334f97537513bbb09b1bf190410c1eafede7bc17ec830ee6f6aeb5cf61f54874",
+        "green-race.log": "fc9a33a60ccf9fdd5b84d790e8deb50210cd6392d463bcce468d65a9c33d816d",
+        "package-race.log": "e6a46fd6763613de18b7eb91a252843aa3752ae1a8fb0390384ae2a10be13245",
+        "green-normal.log": "13a1b5966c8ba211ee71b57ed27d337a7c56082c47327600aed89c5099d07c04",
+        "package-normal.log": "99b04596da676c7133517e69000e842e9c6f6c9ef1904e7de06f627c22f84e51",
+        "missing-banner-negative.log": "d2d2aa5c91916b4c5ad14694ed67a9085c9b07b56df3a24f5414eeae7a721a3d",
+        "red-replay.log": "f4e9075feb26fcce25fbf6630317b96371bf22891297c0533030a3d40b89df40"
+      }
+    }
+  },
+  "local_race_status": "Initial full command FAILED on two diagnosed test fixtures, not counted as passed. Fresh complete affected-package normal/race runs passed; exact-tag hosted full race remains required before publication.",
+  "linux_standalone_builds": [
+    {
+      "package": "vt",
+      "binary_sha256": "aeb09f04a461e4fd41dfcccc6afefb011526103642b11c54f34ae5ff62fd7f5f",
+      "build_seconds": 6.285,
+      "bytes": 7178455
+    },
+    {
+      "package": "attach",
+      "binary_sha256": "9b862540fa2ce1202ac014e1add4f3f624c17f1442c5ee9952064800f35a0a18",
+      "build_seconds": 1.784,
+      "bytes": 6806760
+    },
+    {
+      "package": "tui",
+      "binary_sha256": "8cec4fad00d94e4ca004415509f7050c326f75c3b1c40545b2642143beac6946",
+      "build_seconds": 17.477,
+      "bytes": 26280723
+    }
+  ],
+  "linux_native_execution": [
+    {
+      "package": "vt",
+      "exit": 0,
+      "seconds": 3.57,
+      "binary_sha256": "aeb09f04a461e4fd41dfcccc6afefb011526103642b11c54f34ae5ff62fd7f5f",
+      "log_sha256": "67cb7961564742eaa53b6dc96b6bfb3d1635d19188903b1f5a24f2433ae8c20b",
+      "pass_lines": 95
+    },
+    {
+      "package": "attach",
+      "exit": 0,
+      "seconds": 2.026,
+      "binary_sha256": "9b862540fa2ce1202ac014e1add4f3f624c17f1442c5ee9952064800f35a0a18",
+      "log_sha256": "3c100e93c1490e428f3364add0a6e37652dc5b2ef6e84db96f91066a592154cf",
+      "pass_lines": 105
+    },
+    {
+      "package": "tui",
+      "exit": 0,
+      "seconds": 0.06,
+      "binary_sha256": "8cec4fad00d94e4ca004415509f7050c326f75c3b1c40545b2642143beac6946",
+      "log_sha256": "e07b66ab497c7bd180c0756125552d68a79ad66a5c0b72e9660226eb816fd681",
+      "pass_lines": 6
+    }
+  ],
+  "linux_scope": "CGO-disabled test binaries cross-compiled with Go1.26.5 and executed on Linuxamd64; full VT and attach packages, focused TestTouchBack preference tests; no Go SDK upgrade or live Swarm action.",
+  "performance": {
+    "mac_added_echo_p95_us": {
+      "default": 15.459,
+      "touch": 15.25,
+      "samples_each": 1000
+    },
+    "linux_added_echo_p95_us": {
+      "default": 13.115,
+      "touch": 16.722,
+      "samples_each": 1000
+    },
+    "existing_live_shim_echo_p95_us": 265.708,
+    "existing_fifty_session_firstpaint_p95_ms": 3.663542,
+    "echo_budget_ms": 10,
+    "phone_or_ssh_latency_claim": false
+  },
+  "causal_controls": {
+    "disconnected_production_preference_wire": "isolated GOFLAGS overlay failed the actual CLI/daemon/shim/PTY smoke: missing [swarm]; shared files never mutated",
+    "negative_log_sha256": "21b97ac9fd485731f842a7c3be5915983e76e889ba033444e6a5196f33b521b7",
+    "disclosure_red_sha256": "ae7693532325fcc8ffc6aae2c7cf8f9103bebe61660663e8dfe677323e194120",
+    "disclosure_green_sha256": "900ec6bc8829291fbfe58da03e41cdc4d98184f364df87e808e15b3ea3509de8",
+    "bounded_vt_fuzz": {
+      "seconds": 30,
+      "executions": 14850,
+      "exit": 0,
+      "log_sha256": "9aede888ca1e4adf05402863f88b33f6a614f510a519a96b11c162c3fc74d93d"
+    }
+  },
+  "reviews": {
+    "astra": "Connected implementation, VT and fixture corrections approved; helpers and supervised installed-byte smoke overlay independently approved.",
+    "sol": "Independent attach/TUI review approved; separate causal fixture repairs tested and Astra-reviewed.",
+    "luna": "Client preference and isolated release-byte smoke preparation."
+  },
+  "publication": {
+    "target": "v0.25.0",
+    "status": "published; both binary pairs installed; safe supervisor convergence deferred",
+    "tag_source_commit": "6a6a432076a412d4326d57960810fe74f1876503",
+    "workflow_id": 40471411699,
+    "workflow_url": "https://github.com/Nathandela/swarm/actions/runs/40471411699",
+    "hosted_full_race_passed": true,
+    "hosted_full_normal_claim": false,
+    "release_record": "../mobile-terminal-v0250-release.json"
+  },
+  "limits": [
+    "Actual Termux/iOS and native-CLI combinations remain unqualified; no Android device attached and iOS client unidentified.",
+    "ppbw.4 remains open. Local PTYs and Linux tests do not establish thumb accuracy, client gestures or network-visible latency.",
+    "Older live shims have no mouse metadata: keep sessions running and retain Ctrl+Q; do not restart agents to demonstrate the button.",
+    "Option is off by default; capture changes terminal-wide selection/scroll behavior.",
+    "Input has no frame/mode epoch. Recognized report/paste-end prefixes stay bounded across stalls; ambiguous early Escape/ESC[ keeps the existing50ms timeout.",
+    "No hosted service, remote gateway initialization or Android publication is performed by this feature."
+  ]
+}

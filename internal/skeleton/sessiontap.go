@@ -468,7 +468,7 @@ func (s *tapSub) Input(p []byte) error {
 // IT IS A SEPARATE VERB FROM [tapSub.Input] BECAUSE IT IS A SEPARATE GUARANTEE. Input is a
 // stream of bytes with no boundaries in it; a message HAS a boundary, and everything that
 // makes this defect possible lives in the gap between a message's two halves. An upstream
-// that proves no transaction answers ErrSubmitUnsupported and the caller degrades, visibly.
+// that proves no transaction answers ErrSubmitUnsupported and the composer refuses.
 func (s *tapSub) Submit(text string) error {
 	if s.mode != readWrite {
 		return nil

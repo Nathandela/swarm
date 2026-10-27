@@ -101,6 +101,9 @@ func newClaudeFixtureUUID() (string, error) {
 }
 
 func (d *Daemon) sendClaudeFixture(local, operation string, req protocol.ComposerSendReq, begin func() error, source string) (protocol.ErrorCode, error) {
+	if req.Origin != nil {
+		return protocol.CodeStructuredUnsupported, errClaudeFixtureMessage
+	}
 	s := d.claudeFixtureState(local)
 	if s == nil || source != adapter.SourceOwner || operation == "" || req.Text == "" || !utf8.ValidString(req.Text) || len(req.Text) > shimwire.MaxClaudeFixtureTextBytes {
 		return protocol.CodeStructuredUnsupported, errClaudeFixtureMessage
