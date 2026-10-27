@@ -131,5 +131,30 @@
     "measured_free_bytes_after": 966811648,
     "reclaimed_bytes_claimed": false,
     "fresh_complete_pid_census_claimed": false
+  },
+  "r5_cache_followup": {
+    "date": "2026-10-27",
+    "scope": "One sealed duplicate public-transfer input from the failed R5-r2 fixture; separate orphan-preserving cache contract.",
+    "dry_run_sha256": "8e61759fd64d448edbc939378d03174b6bb1771105baac4c7dbe1fb92e27c793",
+    "apply_receipt_sha256": "a65b1f2b5c8c5c8ec141cf038077bf7f3e8e41d1ada8758c30c25dacf8fd45f5",
+    "target": {
+      "relative_path": "codex-source",
+      "mode": "0600",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "device": 2049,
+      "inode": 845649
+    },
+    "qualified_nontruncating_write_execution_exclusion_held_through_unlink_and_parent_fsync": true,
+    "preserved": "Separate native executable, evidence, local backup and current orphan endpoint entries. No historical endpoint identity continuity claimed.",
+    "historical_observed_identities_ended": 39,
+    "historical_retained_sample": 32,
+    "sample_truncated": true,
+    "fresh_complete_pid_or_fd_census_claimed": false,
+    "session_retirement_or_full_listener_proof_claimed": false,
+    "measured_free_bytes_after": 603607040,
+    "guaranteed_reclaimed_bytes_or_capacity_reservation_claimed": false,
+    "review": "Root and independent Sol reviewed source, dry-run and apply GREEN.",
+    "local_pre_ssh_refusal": "Initial copied parent output files caused a local refusal before SSH. They were preserved under historical-parent-R2 in the clean-output revision; no deletion occurred in that invocation."
   }
 }
