@@ -1,0 +1,25 @@
+{
+  "schema_version": 5,
+  "id": "retained",
+  "agent_type": "claude",
+  "cwd": "/fixture/project",
+  "shim_pid": 0,
+  "shim_start_time": 0,
+  "required_runtime": "claude-native-control",
+  "login_runtime": {
+    "provider": "claude",
+    "epoch": 1,
+    "identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "home": "/fixture/state/logins/provider/claude/profiles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "cli_identity": {
+    "path": "/fixture/claude",
+    "version": "2.1.310",
+    "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "status": {
+    "Process": "running",
+    "Turn": "idle",
+    "Interaction": "none"
+  }
+}

@@ -730,6 +730,9 @@ func (d *Daemon) prepareLaunchRuntime(spec *LaunchSpec, m *persist.Meta, dir str
 }
 
 func validateClaudeChatLaunchSpec(spec LaunchSpec) error {
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		return shim.ErrClaudeNativeControlDormant
+	}
 	if spec.RequiredRuntime != "" && spec.RequiredRuntime != persist.RequiredRuntimeOpenCode && spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat {
 		return errors.New("daemon: unknown required runtime")
 	}
@@ -804,6 +807,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.RequiredRuntime, lc.ConversationID, lc.ClaudeChatFixture = spec.RequiredRuntime, spec.ConversationID, spec.ClaudeChatFixture
 		lc.LoginStateRoot = d.cfg.StateDir
 	}
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		lc.RequiredRuntime = spec.RequiredRuntime
+	}
 
 	if d.NativeInputEnabled() && spec.AgentType == "agy" && spec.CLIIdentity != nil && agyinput.SupportedVersion(spec.CLIIdentity.Version) {
 		command := agyinput.BootstrapCommand(d.cfg.ShimBinary, filepath.Join(dir, agyinput.DescriptorFile))
@@ -875,6 +881,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	shimArgs := []string{"shim"}
 	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
 		shimArgs = append(shimArgs, "--require-claude-chat")
+	}
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		shimArgs = append(shimArgs, "--require-claude-native-control")
 	}
 	if spec.OpenCodeLaunch != nil {
 		shimArgs = append(shimArgs, "--require-opencode-tui")

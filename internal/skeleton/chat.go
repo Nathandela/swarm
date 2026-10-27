@@ -317,6 +317,11 @@ func (l *composerLane) enterRecycle(claimed bool) (alreadyRecycling bool) {
 // durable Killed claim after restart: Running rows may need a signal redrive;
 // terminal rows are still owed a serialized replacement launch.
 func (d *Daemon) restoreAuthRecycle(local string) {
+	if d.core != nil {
+		if meta, ok := d.core.Get(local); ok && meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+			return // An unqualified automatic obligation cannot embargo explicit owner actions.
+		}
+	}
 	lane := d.composerLaneFor(local)
 	lane.mu.Lock()
 	lane.recycling = true

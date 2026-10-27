@@ -22,6 +22,7 @@ const (
 	ClaudeReservationSchemaVersion     = 5
 	ClaudeChatReservationSchemaVersion = 6
 	claudeChatRequiredRuntime          = "claude-chat"
+	ClaudeNativeControlRuntime         = "claude-native-control"
 	NativeProcessFile                  = "native-process.json"
 	NativeStoppedFile                  = "native-writers-stopped.json"
 	ClaudeRetirementVersion            = 1
@@ -181,7 +182,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 			}
 		}
 	}
-	for _, key := range []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time"} {
+	for _, key := range []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "required_runtime"} {
 		if bytes.Equal(bytes.TrimSpace(doc[key]), []byte("null")) {
 			return m, ErrUnsafePath
 		}
@@ -212,9 +213,9 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 		return m, nil
 	}
 	owned := m.Runtime != nil && IsClaudeProfileRuntime(stateRoot, *m.Runtime)
-	if m.SchemaVersion == ClaudeReservationSchemaVersion || m.SchemaVersion == ClaudeChatReservationSchemaVersion || m.RequiredRuntime == claudeChatRequiredRuntime || owned || m.Retirement != nil {
+	if m.SchemaVersion == ClaudeReservationSchemaVersion || m.SchemaVersion == ClaudeChatReservationSchemaVersion || m.RequiredRuntime == claudeChatRequiredRuntime || m.RequiredRuntime == ClaudeNativeControlRuntime || owned || m.Retirement != nil {
 		terminalLegacy := claudeLegacyRuntime(stateRoot, m) && m.Retirement != nil
-		if !claudeOwnedMetadata(m) || (!owned && (!terminalLegacy || m.SchemaVersion == ClaudeChatReservationSchemaVersion)) || (!validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()})) {
+		if !claudeOwnedMetadata(m) || (!owned && (!terminalLegacy || m.SchemaVersion == ClaudeChatReservationSchemaVersion || m.RequiredRuntime == ClaudeNativeControlRuntime)) || (!validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()})) {
 			return m, ErrUnsafePath
 		}
 		if owned && (m.CLI == nil || !filepath.IsAbs(m.CLI.Path) || filepath.Clean(m.CLI.Path) != m.CLI.Path || strings.ContainsAny(m.CLI.Path, "\x00\r\n") || m.CLI.Version != "2.1.310" || !IsClaudeCLIFingerprint(m.CLI.Fingerprint)) {
@@ -638,7 +639,23 @@ func claudeSameRuntimeMeta(a, b claudeSessionMeta) bool {
 
 // This is a strict parsed metadata pair, not launch or writer-stop authority.
 func claudeOwnedMetadata(m claudeSessionMeta) bool {
-	return !m.HermesNative && m.AgentType == ProviderClaude && m.Runtime != nil && m.Runtime.Provider == ProviderClaude && (m.SchemaVersion == ClaudeReservationSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime)
+	return !m.HermesNative && m.AgentType == ProviderClaude && m.Runtime != nil && m.Runtime.Provider == ProviderClaude && (m.SchemaVersion == ClaudeReservationSchemaVersion && (m.RequiredRuntime == "" || m.RequiredRuntime == ClaudeNativeControlRuntime) || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime)
+}
+
+// ValidateClaudeRuntimeTag shares strict authority JSON parsing with metadata readers.
+func ValidateClaudeRuntimeTag(raw []byte) error {
+	doc, err := jsonObject(raw)
+	if err != nil {
+		return err
+	}
+	for name, value := range doc {
+		if strings.EqualFold(name, "required_runtime") {
+			if name != "required_runtime" || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return ErrUnsafePath
+			}
+		}
+	}
+	return nil
 }
 
 // Both runtimes use schema 5; only this exact unrelated runtime bypasses Claude custody.
@@ -957,6 +974,9 @@ func claudeUnmanagedRow(raw []byte, stateRoot, sessionID string) error {
 	}
 	var candidate claudeSessionMeta
 	_ = json.Unmarshal(raw, &candidate)
+	if candidate.RequiredRuntime == ClaudeNativeControlRuntime {
+		return ErrPending // The new owned runtime cannot be authored before login storage exists.
+	}
 	if version == ClaudeChatReservationSchemaVersion || candidate.RequiredRuntime == claudeChatRequiredRuntime {
 		return ValidateClaudeChatFixtureMetadata(raw, sessionID)
 	}

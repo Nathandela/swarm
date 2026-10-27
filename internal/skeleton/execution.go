@@ -83,11 +83,16 @@ func (d *Daemon) observeExecutionOwnerWrite(local string) error {
 }
 
 func (d *Daemon) executionCustodyUnsafe(local string) bool {
-	if d.eng == nil || d.executionStore == nil || d.core == nil {
+	if d.core == nil {
 		return false
 	}
 	meta, ok := d.core.Get(local)
-	if !ok || meta.AgentType != "codex" {
+	// This observation subset never authorizes automatic session effects, even
+	// when execution storage is absent or an old status writer reports Idle.
+	if ok && meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		return true
+	}
+	if d.eng == nil || d.executionStore == nil || !ok || meta.AgentType != "codex" {
 		return false
 	}
 	return d.eng.ExecutionCustodyUnsafe(local)

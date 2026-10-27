@@ -13,6 +13,7 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
@@ -86,10 +87,19 @@ func (d *Daemon) withAuthResumeFence(local string, attempt func() bool) (attempt
 	}
 	lane.endMu.Lock()
 	defer lane.endMu.Unlock()
+	heldNativeControl := false
+	if d.core != nil {
+		meta, ok := d.core.Get(local)
+		heldNativeControl = ok && meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl
+	}
 	lane.mu.Lock()
 	if lane.ownerEnding {
 		lane.mu.Unlock()
 		return false, false
+	}
+	if heldNativeControl {
+		lane.mu.Unlock()
+		return false, true // Keep the obligation held; no successor may lose this runtime fence.
 	}
 	if !lane.recycling {
 		lane.recycling = true

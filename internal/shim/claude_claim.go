@@ -108,7 +108,7 @@ func (s *managedNativeScope) validateClaudeReservation(cfg Config) error {
 		return errLoginResolution
 	}
 	var m persist.Meta
-	if json.Unmarshal(raw, &m) != nil || m.SchemaVersion != persist.ClaudeSchemaVersion || m.ID != cfg.SessionID || m.AgentType != logins.ProviderClaude || m.LoginRuntime == nil || *m.LoginRuntime != *cfg.LoginRuntime || m.ProviderCwd() != cfg.Cwd || !reflect.DeepEqual(m.CLIIdentity, cfg.CLIIdentity) || m.ClaudeRetirement != nil || m.InputEmbargo != "" || m.RequiredRuntime != "" || m.OpenCodeBinding != nil || m.Status.Process != status.ProcessRunning {
+	if json.Unmarshal(raw, &m) != nil || m.SchemaVersion != persist.ClaudeSchemaVersion || m.ID != cfg.SessionID || m.AgentType != logins.ProviderClaude || m.LoginRuntime == nil || *m.LoginRuntime != *cfg.LoginRuntime || m.ProviderCwd() != cfg.Cwd || !reflect.DeepEqual(m.CLIIdentity, cfg.CLIIdentity) || m.ClaudeRetirement != nil || m.InputEmbargo != "" || m.RequiredRuntime != cfg.RequiredRuntime || cfg.RequiredRuntime != "" && cfg.RequiredRuntime != persist.RequiredRuntimeClaudeNativeControl || m.OpenCodeBinding != nil || m.Status.Process != status.ProcessRunning {
 		return errLoginResolution
 	}
 	if m.ShimPID == 0 {

@@ -36,7 +36,7 @@ var errClaudeChatCapture = errors.New("shim: Claude primary capture incomplete")
 // ValidateClaudeChatConfig grants no managed or native authority. The caller
 // separately requires AgentType=fake and its configured dev FakeAgentBin.
 func ValidateClaudeChatConfig(cfg Config) error {
-	if cfg.RequiredRuntime == "" && cfg.ClaudeChatFixture == "" {
+	if (cfg.RequiredRuntime == "" || cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl) && cfg.ClaudeChatFixture == "" {
 		return nil
 	}
 	if cfg.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !adapter.IsCanonicalConversationID(cfg.ConversationID) || !filepath.IsAbs(cfg.ClaudeChatFixture) || filepath.Clean(cfg.ClaudeChatFixture) != cfg.ClaudeChatFixture || len(cfg.Argv) != 3 || cfg.Argv[0] != cfg.ClaudeChatFixture || cfg.Argv[1] != "--claude-primary-fixture" || cfg.Argv[2] != "--session-id="+cfg.ConversationID || cfg.LoginRuntime != nil || cfg.CLIIdentity != nil || cfg.NativeProvider != "" || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.Backend != nil || cfg.OpenCode != nil || cfg.HermesInput != nil || cfg.AgyInput != nil || cfg.ClaudeInput || cfg.InputEmbargo != "" || cfg.InputEmbargoToken != "" || !persist.ValidID(cfg.SessionID) || cfg.HookSpoolMaxBytes > hookSpoolDefaultMaxBytes {

@@ -97,6 +97,14 @@ in either fixed 20-run diagnostic batch; its cause and `h6sc.29` remain open.
 
 ## Native Claude mod observations (2026-10-27)
 
+The [dormant runtime fence checkpoint](provider-logins/claude-native-control-fences-2026-10-27.json)
+adds immutable metadata carriage, older-reader refusal and explicit holds at the
+existing automatic session-effect paths, including restored account/CLI claims.
+Manual actions and credential observation retain their existing policy. Focused
+and connected race checks, build, vet and lint pass, with one documented
+Linux-only skip on macOS. Both daemon and shim refuse launch of this runtime;
+the observer producer/reducer and automatic recovery are not enabled.
+
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
 retains one 56-event native trace with exact composer, prompt, turn and history
 identities. A successful Read result matches the next HTTP request's canonical

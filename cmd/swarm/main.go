@@ -777,6 +777,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	configPath := fs.String("config", "", "path to the JSON launch config")
 	requireOpenCode := fs.Bool("require-opencode-tui", false, "require a managed OpenCode TUI launch")
 	requireClaudeChat := fs.Bool("require-claude-chat", false, "require a Claude chat primary launch")
+	requireClaudeControl := fs.Bool("require-claude-native-control", false, "require a managed Claude native control launch")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
@@ -786,7 +787,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return 2
 	}
 
-	if *requireOpenCode && *requireClaudeChat {
+	if *requireOpenCode && (*requireClaudeChat || *requireClaudeControl) || *requireClaudeChat && *requireClaudeControl {
 		_, _ = fmt.Fprintln(stderr, "shim: runtime markers are mutually exclusive")
 		return 2
 	}
@@ -795,6 +796,8 @@ func runShim(args []string, _, stderr io.Writer) int {
 		requiredRuntime = persist.RequiredRuntimeOpenCode
 	} else if *requireClaudeChat {
 		requiredRuntime = persist.RequiredRuntimeClaudeChat
+	} else if *requireClaudeControl {
+		requiredRuntime = persist.RequiredRuntimeClaudeNativeControl
 	}
 	data, err := readShimLaunchConfigBytes(*configPath, requiredRuntime)
 	if err != nil {

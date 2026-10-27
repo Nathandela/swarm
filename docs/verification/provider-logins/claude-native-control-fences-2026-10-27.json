@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-27",
+  "issue": "agents-tracker-h6sc.32",
+  "scope": "Stage A: dormant native Claude runtime carriage and automatic-effect fences only",
+  "base_commit": "23187e3c",
+  "runtime": {"schema_version": 5, "required_runtime": "claude-native-control"},
+  "source_and_evidence": {
+    "frozen_manifest": "/private/tmp/h6sc32-stage-a-20261027/frozen-stage-a/manifest.json",
+    "frozen_manifest_sha256": "443017ba15bdeeb6d131200da92f92c039d7ce8afa18040aa9e674f3c7432e8f",
+    "source_diff_sha256": "b34bfe7c4ce3419ad77dac2ab49740c0b4c6fce1c92cf4fcda1380215d4b7a29",
+    "exit_and_source_receipts_sha256": "db235e9869295a797211a9fa0b4168aa6ad3ba5be4f3c69bf41f029384a318a5",
+    "command_exit_summary_sha256": "c1beaab9806a8689873d9208b8f9d1b5cf33bd164ec7828adce4e38d6798446f",
+    "changed_source_files": 21,
+    "root_verification": "All frozen files, working source pins and raw-log counts/hashes independently checked."
+  },
+  "behavior": [
+    "The exact owned schema/runtime pair survives ordinary metadata writers; stripping, conversion, duplicate/null/aliased tags and invalid ownership are refused.",
+    "A matching internal shim sentinel is required. Daemon admission and direct shim execution both refuse this dormant runtime before session/provider setup.",
+    "Automatic session effects remain forbidden even with absent/corrupt execution storage, nil engine/store or stale Idle status. Existing supervisor, authwatch, account-switch stop and ContextGuard paths consume this fence.",
+    "Restored account/CLI obligations cannot launch a successor that omits the runtime tag. The held obligation remains pending; it does not create a new manual-input/end embargo.",
+    "Explicit owner Stop/Delete and metadata changes retain existing arbitration. Credential observation continues. Ordinary Claude, Codex, Hermes and fake chat policy is preserved."
+  ],
+  "test_first": {
+    "runtime_red_sha256": "7873fbd6f0671531aadb9f1bb3221e2c9e6d7e00a482aff20d9fc970a71c5af1",
+    "consumer_red_sha256": "b56159c9317b2979b9e93dab00276a69069085e0d4115bd94deaa78707bbaa71",
+    "restored_successor_red_sha256": "9004c88363150c016ee72214895b9d299aaba1a4c6922474bdb10f72fb9ac60b",
+    "counterexamples": "Actual account and CLI mock successor constructors each ran once without the fence. Wrong-schema/direct-writer, uninitialized-root and manual Stop/Delete failures were also reproduced before correction.",
+    "inconclusive_attempt": "The earlier mixed review run hit an uninitialized retry-map fixture panic; it is retained and is not used as the complete restored-successor proof."
+  },
+  "gates": {
+    "focused_race": {"pass_events": 49, "fail_events": 0, "skips": 0, "log_sha256": "a67b25b9c33b340450186f6614f9885d9367ccb6a224a05ae9e20cec78e0a6b9"},
+    "connected_race": {"packages": 6, "pass_events": 322, "fail_events": 0, "skips": 1, "log_sha256": "0fce29eb57419c1758fde480d753faf5d076d12bde27e916181eefee15d82160"},
+    "skip": "TestClaudeSelectedReloginCompletionKeepsPendingCopyAndAvoidsFleetRestart: synthetic saved-file authority is Linux-only; no Darwin Keychain use.",
+    "older_readers": "Actual feature 03b4a32e, v0.25.0 and v0.23.1 Load/Scan/daemon reconciliation each pass two checks: row omitted, zero recorded lifecycle/save effects, metadata and execution bytes unchanged. v0.24 persist source is byte-identical to v0.25 but was not separately executed.",
+    "build_all_exit": 0,
+    "vet_six_affected_packages_exit": 0,
+    "lint_exit": 0,
+    "lint_issues": 0,
+    "diff_check_exit": 0,
+    "final_source_delta": "After the race/build/vet runs, only two error strings were lowercased for ST1005; final lint/typechecking passed."
+  },
+  "limits": [
+    "No launch selector or existing-session conversion enables this runtime. There is no observation producer, durable control reducer or automatic recovery in this checkpoint.",
+    "This does not qualify native quota semantics, complete actors, queued input, same-process login adoption, near-limit transition or continuation.",
+    "Tests ran on macOS with one explicit Linux-only skip. Full final repository/platform/native gates and Astra review remain open.",
+    "No native provider execution, live discussion migration, main change or release occurred for this slice."
+  ]
+}

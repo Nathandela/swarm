@@ -991,13 +991,9 @@ func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
 	if w.withResumeFence == nil {
 		return attempt()
 	}
-	attempted, retry := w.withResumeFence(m.ID, attempt)
-	if !attempted {
-		// An owner terminal action already owned this edge. The owner's persisted
-		// row transition/delete is the cancellation authority; workPending forgets
-		// and persists our claim instead of ever launching from that source.
-		return false
-	}
+	// An owner end returns false/false; a held unqualified runtime returns
+	// false/true so the obligation remains pending without a successor effect.
+	_, retry = w.withResumeFence(m.ID, attempt)
 	return retry
 }
 

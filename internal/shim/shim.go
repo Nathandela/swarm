@@ -160,6 +160,12 @@ func Run(cfg Config) (agentExit int, err error) {
 	if err := ValidateClaudeChatConfig(cfg); err != nil {
 		return 0, err
 	}
+	if err := ValidateClaudeNativeControlConfig(cfg); err != nil {
+		return 0, err
+	}
+	if cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		return 0, ErrClaudeNativeControlDormant
+	}
 	externalBirth := cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && cfg.LoginSwitchID == ""
 	if externalBirth {
 		if err := validateCodexExternalReservation(cfg); err != nil {

@@ -16,7 +16,7 @@ import (
 const claudeChatLaunchConfigMaxBytes = 1 << 20
 
 func readShimLaunchConfigBytes(path, requiredRuntime string) ([]byte, error) {
-	if requiredRuntime != persist.RequiredRuntimeClaudeChat {
+	if requiredRuntime != persist.RequiredRuntimeClaudeChat && requiredRuntime != persist.RequiredRuntimeClaudeNativeControl {
 		return os.ReadFile(path) // Preserve legacy configuration read policy.
 	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
@@ -43,7 +43,7 @@ func readShimLaunchConfigBytes(path, requiredRuntime string) ([]byte, error) {
 
 func decodeShimLaunchConfig(data []byte, requiredRuntime string) (shimLaunchConfig, error) {
 	var lc shimLaunchConfig
-	if requiredRuntime == persist.RequiredRuntimeClaudeChat && len(data) > claudeChatLaunchConfigMaxBytes {
+	if (requiredRuntime == persist.RequiredRuntimeClaudeChat || requiredRuntime == persist.RequiredRuntimeClaudeNativeControl) && len(data) > claudeChatLaunchConfigMaxBytes {
 		return lc, fmt.Errorf("claude chat config exceeds read limit")
 	}
 	var fields map[string]json.RawMessage
@@ -58,6 +58,23 @@ func decodeShimLaunchConfig(data []byte, requiredRuntime string) (shimLaunchConf
 	}
 	if err := json.Unmarshal(data, &lc); err != nil {
 		return lc, err
+	}
+	if requiredRuntime == persist.RequiredRuntimeClaudeNativeControl || lc.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		if requiredRuntime != persist.RequiredRuntimeClaudeNativeControl || lc.RequiredRuntime != requiredRuntime || len(data) > claudeChatLaunchConfigMaxBytes {
+			return lc, fmt.Errorf("claude native control requires matching marker and runtime configuration")
+		}
+		if err := validateClaudeChatLaunchJSON(data); err != nil {
+			return lc, err
+		}
+		for _, key := range []string{"backend_agent_command_args", "opencode_env", "opencode_initial_prompt"} {
+			if value := fields[key]; len(value) != 0 && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return lc, fmt.Errorf("claude native control cannot carry %s", key)
+			}
+		}
+		if err := shim.ValidateClaudeNativeControlConfig(shimConfigFromLaunch(lc)); err != nil {
+			return lc, err
+		}
+		return lc, validateShimRuntime(lc, false)
 	}
 	if requiredRuntime == persist.RequiredRuntimeClaudeChat || chatSelector {
 		if requiredRuntime != persist.RequiredRuntimeClaudeChat || lc.RequiredRuntime != persist.RequiredRuntimeClaudeChat {

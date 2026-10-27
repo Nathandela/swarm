@@ -803,7 +803,7 @@ func (m *loginManager) resumeSwitchSession(op *logins.Switch, index int) {
 			_ = m.store.SaveSwitch(*op)
 			return
 		}
-		attempted, _ := m.d.withAuthResumeFence(source.ID, func() bool {
+		attempted, retry := m.d.withAuthResumeFence(source.ID, func() bool {
 			fresh, err := m.d.authw.launch(daemon.LaunchSpec{AgentType: source.AgentType, Name: source.Name, Tag: source.Tag, Cwd: source.Cwd, ClientEnv: source.Env, Cols: authRecycleCols, Rows: authRecycleRows, SpawnedFrom: source.SpawnedFrom, SpawnIntent: source.SpawnIntent, Supervision: source.Supervision, LoginRuntime: &runtime, LoginStateRoot: m.d.stateDir, LoginSwitchID: op.ID, LoginSwitchSource: source.ID, InputEmbargo: op.ID, Options: options})
 			if fresh.ID != "" {
 				row.ChildID = fresh.ID
@@ -815,7 +815,7 @@ func (m *loginManager) resumeSwitchSession(op *logins.Switch, index int) {
 			_ = m.store.SaveSwitch(*op)
 			return row.Phase != "failed"
 		})
-		if !attempted {
+		if !attempted && !retry {
 			row.Phase = "cancelled"
 			_ = m.store.SaveSwitch(*op)
 		}
