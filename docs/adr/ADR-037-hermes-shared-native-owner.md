@@ -122,8 +122,8 @@ native APIs provide cancellation requests or snapshots without terminal proof.
 
 The [Hermes native ingress evidence](../verification/discord-protocol/hermes-native-ingress.md)
 separates historical v0.22.5 API/TUI characterization, assembled deterministic
-core tests, and the remaining guarded real shared-owner qualification. No Linux,
-production credential-refresh, installed-artifact or all-five release claim is
+core tests, and guarded real shared-owner qualification on macOS arm64 and Linux
+x86_64. No production credential-refresh, installed-artifact or all-five release claim is
 made by this ADR.
 
 ## Alternatives considered

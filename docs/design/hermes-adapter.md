@@ -16,7 +16,10 @@ The separate [native message ingress qualification](../verification/discord-prot
 records stable v0.22.5 owned-gateway and multiclient TUI evidence. The separate activation-gated route uses the provider's persistent shared owner,
 canonical local identities and multiclient TUI. It preserves the classic launch
 below when disabled or below the qualified native floor. Source qualification,
-joined job completion and Discord release acceptance remain separate gates.
+joined job completion and Discord release acceptance remain separate gates. The
+modern shared-owner source path has guarded macOS arm64 and Linux x86_64
+qualification; this does not extend the historical classic-screen evidence or
+certify an installed release artifact.
 
 ## Frozen decisions
 
