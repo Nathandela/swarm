@@ -478,6 +478,10 @@ with no unexpected provider route. All 35 observed identities ended and the nati
 endpoint disappeared, but ownership and listener proofs remain incomplete. Diagnosis
 is pending; no retry or deadline change, native qualification or recovery claim follows.
 
+R7 failed during startup ownership observation before an inner receipt or input/rotation
+proof. A later seed PASS qualifies only the current helper's finite synthetic seed
+prerequisite; the earlier seed failure remains unexplained and unreproduced.
+
 The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
 removed the two public Codex executable copies after collection, under their
 qualified execution guards. A separate cache-only follow-up removed one sealed

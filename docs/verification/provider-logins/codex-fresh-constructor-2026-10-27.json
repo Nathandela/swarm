@@ -343,6 +343,64 @@
         "draft_only_proved": false,
         "paste_burst_hypothesis": "Pinned native source supports Enter suppression as a possibility; these records do not prove the cause."
       }
+    },
+    "r7_followup": {
+      "prepared_sha256": "2c33e7433fcf0454c648a7228a966aea28dfd5235733048c826a44e830ed46ea",
+      "outer_run_sha256": "a3cf71a83d6b087b39590bc58aee8dce37b431918fe21f1dc02bb20faf94510f",
+      "full_case": "FAIL_BEFORE_INNER_RECEIPT",
+      "timing_seconds": 1.935,
+      "first_failure": "Unattributed/zombie observation raced PID 15258 start 748453 before inner receipt; no input or credential-rotation proof; cause unknown.",
+      "cleanup": {
+        "observed_tuples": 5,
+        "sample_truncated": false,
+        "exact_unit_kill_attempted": true,
+        "unit_cgroup_empty_and_gone": true,
+        "all_observed_identities_ended": true,
+        "pins_unchanged": true
+      },
+      "resource_observation": "Last available pids/memory event counters showed no max/oom event, but were sampled before the failure and do not prove state at the failure instant.",
+      "r7_seed_attempt": {
+        "receipt_sha256": "0c499be5328911fab33e5e2e0239d07723019e14b0cd0cb55436d6ad2ea7b747",
+        "result": "FAIL",
+        "first_failure": "Same-start process identity had unresolved executable/cgroup before acceptance.",
+        "marker_lines": 29,
+        "marker_bytes": 878,
+        "stdout_bytes": 0,
+        "metadata": "NULL",
+        "unit_empty_and_gone": true,
+        "cause": "UNKNOWN"
+      },
+      "diagnostic_only_seed": {
+        "receipt_sha256": "e2b0bc2740f3f0443fc8d48ad5d7df25710594509823a56f39e4d438cb9b59f2",
+        "result": "PASS_DIAGNOSTIC_ONLY",
+        "elapsed_seconds": 0.289906,
+        "synthetic_registry": "Two ready entries, A selected at epoch 1, no switch.",
+        "marker_lines": 29,
+        "marker_bytes": 878,
+        "stdout_bytes": 302,
+        "stdout_matches_prepared": true,
+        "one_observed_identity_ended": true,
+        "unit_empty_and_gone": true,
+        "helper_sha256": "b56fac5d567b01dc5e73b4305ff00cb72815fdfd98d34f27d818121fe4dc4aad",
+        "packet_manifest_sha256": "105b20c03ef907ec7798eb53fedd26869702bb615e3841f51c4324f7efbb4e52",
+        "qualification": "Current helper finite seed prerequisite passed; no native, auth or full-case qualification."
+      },
+      "diagnostic_source": {
+        "captures_existing_state_fields_without_predicate_changes": true,
+        "executed": false,
+        "manifest_sha256": "e4a43c543bf24bfa30d517b190e5a7e35fc2e2632249884855ed64a9af2398dc"
+      },
+      "pins": {
+        "source_commit": "492abbf947c32a57a61ad67e6eae1b9caa6d8e9a",
+        "helper_source_sha256": "9cd481e0ee2e8eead0f175d4a404bc91e3bf3e6fc1f60463a1cef6194c535903",
+        "product_sha256": "31e6c3d9eb986aa625e7e3b65072c7d0e3bd316cdb6d35f284613ce89e420674",
+        "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+      },
+      "relation": "The later PASS did not reproduce or explain the original seed failure and does not establish a causal repair.",
+      "limits": [
+        "The state-diagnostic amendment has not been prepared or executed.",
+        "No account, live-service, main, release, or recovery qualification."
+      ]
     }
   }
 }
