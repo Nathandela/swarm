@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "FOCUSED_REGRESSION_CHECKS_PASS_FULL_ORIGINAL_RUN_FAILED_NATIVE_GATE_OPEN",
+  "status": "AFFECTED_REGRESSION_PACKAGES_PASS_ORIGINAL_FULL_FAILURE_PRESERVED_NATIVE_GATE_OPEN",
   "worktree": "/private/tmp/swarm-seamless-implementation-20261024",
   "original_full_race": {
     "head": "35cf2f8c",
@@ -192,7 +192,29 @@
       "Feature worktree now wraps the master/tty closes in deferred funcs with ignored cleanup errors; production code unchanged.",
       "Lint rerun passes. The Linux 8054 terminal run predates only these cleanup wrappers."
     ],
-    "affected_package_race_rerun": "PENDING"
+    "affected_package_race_rerun": {
+      "head": "7d6b8461",
+      "exit_code": 0,
+      "status": "PASS_AFFECTED_PACKAGES_ONLY",
+      "command": "test -race -mod=readonly -p=1 -count=1 -timeout=20m -json ./internal/attach ./cmd/swarm ./cmd/swarm-char ./internal/skeleton ./internal/verify",
+      "counts_tests": {
+        "pass": 3064,
+        "skip": 81
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/attach": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm-char": "pass",
+        "github.com/Nathandela/swarm/internal/skeleton": "pass",
+        "github.com/Nathandela/swarm/internal/verify": "pass"
+      },
+      "started": "2026-10-28T22:58:02.603665+01:00",
+      "ended": "2026-10-28T23:15:42.182442+01:00",
+      "stdout_sha256": "807fa94ccc2d5e9ef8d54f42254e29668c0b38b51ea19cef1918f4d98657bc24",
+      "original_full_command_remains_failed": true,
+      "native_gate_open": true,
+      "receipt": "/private/tmp/swarm-affected-regression-race-20261028-r2-result.json"
+    }
   },
   "source_checkpoint": {
     "terminal_fix_commit": "8054cd16",

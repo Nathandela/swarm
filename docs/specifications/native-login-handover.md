@@ -665,6 +665,10 @@ retains Stop/read custody without restoring input. Native decisions, complete
 actors/workflows, long history and automatic recovery remain unqualified; this
 source checkpoint grants no deployment or release claim.
 
+The [regression follow-up](../verification/provider-logins/claude-chat-regression-checkpoint-2026-10-28.json)
+records terminal teardown fixes and passing race suites for all five affected
+packages. The original full-run failure is retained; native qualification remains open.
+
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their
 existing behavior. Retained running or ended chat discussions are fenced from
