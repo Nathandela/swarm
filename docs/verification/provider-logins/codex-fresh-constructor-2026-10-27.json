@@ -715,7 +715,18 @@
       "source_explanation": "Pinned native direct thread/start subscribes its creator only, then broadcasts global thread/status. Internal auto-attach uses a different agent-control channel.",
       "product_timing": "Late production resume and missing first events is a hypothesis; no production resume timestamps were captured.",
       "resume_caveat": "Native running resume can emit idle lifecycle and dispatch goal/queued work. It cannot be treated as passive attachment.",
-      "next": "A separately reviewed two-client protocol canary is planned; no replay is synthesized as an event and no automatic recovery is enabled."
+      "next": "A separately reviewed two-client protocol canary is planned; no replay is synthesized as an event and no automatic recovery is enabled.",
+      "official_api_followup": {
+        "scope": "Source/API inspection only; no binary qualification or universal absence claim.",
+        "versions": {
+          "0.164.0": "6aaac694803004a63c6f393d153c96d22521a6b9",
+          "0.165.0": "360319d8dee62d87e2d59fc0c21805d79519cfed",
+          "main": "bea47c06dfac12ecce362090418e12a6faeedbf9"
+        },
+        "result": "No suitable passive lifecycle subscription in inspected complete request surfaces; resume retains idle callbacks and no passive/defer switch.",
+        "protocol_source": "https://github.com/openai/codex/blob/360319d8dee62d87e2d59fc0c21805d79519cfed/codex-rs/app-server-protocol/src/protocol/common.rs",
+        "resume_source": "https://github.com/openai/codex/blob/360319d8dee62d87e2d59fc0c21805d79519cfed/codex-rs/app-server/src/request_processors/thread_lifecycle.rs#L952-L969"
+      }
     }
   }
 }

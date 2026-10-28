@@ -396,5 +396,27 @@
     ],
     "retained_evidence_and_authentication": true,
     "limits": "Retired-unit/cgroup and recorded sampled-birth checks, full hashes and owned descriptor guards only; no complete birth/FD/session/endpoint or guaranteed reclaim claim."
+  },
+  "three_older_public_image_caches": {
+    "targets": [
+      {
+        "target": "/tmp/scx.5pslufiq/native/codex",
+        "receipt_sha256": "71053a98368057d9af363d7cc458605312ce3996bdbea40c47d8552afffde18c"
+      },
+      {
+        "target": "/tmp/scx.llsl69ev/native/codex",
+        "receipt_sha256": "cfb6a4ac9bd97055a0d07c71bd564b558e200b5074c2afb64478b426609bd919"
+      },
+      {
+        "target": "/tmp/scx.pb6q3wru/native/codex",
+        "receipt_sha256": "43386414bedd35e650f71cb0b4b7b09e8338f403d2892ba748ed8f75aadd4d13"
+      }
+    ],
+    "bytes_unlinked": 890596440,
+    "full_local_hash_backup_retained": true,
+    "last_free_bytes_snapshot": 1061560320,
+    "capacity_reserved": false,
+    "current_canary_preserved": "/tmp/scx.al5i9ihx/native/codex",
+    "limits": "Only public executable copies; no credential/discussion/evidence deletion, complete birth/FD/session/endpoint or guaranteed reclaim claim."
   }
 }

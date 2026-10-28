@@ -403,6 +403,19 @@ claim deduplication of arbitrarily forged native lifecycle sequences.
 Existing owner input, native decision, stop/delete and ContextGuard fences
 remain the shared admission points; do not create another general scheduler.
 
+Global Codex thread/status notifications do not establish a lifecycle
+subscription. The [R12 diagnostics](../verification/provider-logins/codex-fresh-constructor-2026-10-27.json)
+and pinned native source show that ordinary thread creation subscribes its
+creator. Rejoining after materialization can miss earlier turn/item events.
+Canonical paginated history is separately sourced state; never manufacture
+past lifecycle notifications from it or use an empty snapshot as actor proof.
+Native `thread/resume` can also replay requests and invoke idle goal/queue
+callbacks. An active-state precheck is not an atomic passive-attachment guard.
+Inspected 0.164.0, 0.165.0 and pinned main offer no suitable passive subscribe
+method. Keep automatic effects fenced while qualifying reconciliation or
+creator-stream observation; no Codex UI replacement is authorized by this work.
+
+
 ### Handover and recovery
 
 A handover records desired account/epoch and included native incarnations.
