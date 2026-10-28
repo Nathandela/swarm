@@ -465,6 +465,33 @@
         "No main inference, held MCP work, account adoption, continuation or completed task was qualified.",
         "All prior failures remain preserved; no live Swarm, main or release changes."
       ]
+    },
+    "r8_preparation_and_seed": {
+      "date": "2026-10-28",
+      "native_case_result": "NOT_RUN",
+      "initial_prepare_result": "FAIL_BEFORE_NATIVE_PUBLICATION",
+      "initial_prepare_log_sha256": "6d95384e021b75e59681a3511111428930a9e0f56b805230f9f0607ec2c1c15c",
+      "initial_artifact_manifest_sha256": "5619f887d2af1ecf57cf5fb1b0f2347a64ebd6885338bcf7170c2b6c3f964a29",
+      "cause": "A stale supervisor packet PIN was missed during artifact review. The preparation assertion stopped before publishing the native binary or starting a unit.",
+      "corrected_artifact_manifest_sha256": "b8d24b7aabd276f6ca6284b2cd1be0c7fc981f223f264bcea28c3c49cf43a005",
+      "corrected_supervisor_sha256": "56fc4b3d0b202b35df5105653f3b1ba741d8dd261bacbb97547d9120d92677f2",
+      "correction": "One derived supervisor PIN literal; existing functional code and binaries unchanged.",
+      "fresh_prepare_result": "PASS_PREPARATION_ONLY",
+      "fresh_prepare_receipt_sha256": "bfcc055ae85e7d5d5f3bcb803ae326f8df221eff4d0ff8709333fc772a300d4f",
+      "packet_manifest_sha256": "aa0c0febfd9a9d19d181033186dc25094409ec1eacfa49dc93b6e7f5002054dc",
+      "seed_source_manifest_sha256": "2d7916422075d7497310691ec55416e0c15ee71f603c7e237a69ab8fba4ca6c5",
+      "fresh_seed_result": "FAIL",
+      "fresh_seed_receipt_sha256": "4e575071e15591211478f2fa47453beb92a45e8e0f7bbcba21abc11bdd8fa43b",
+      "seed_failure": "Executable ENOENT with the same recorded process birth and unchanged cgroup; three observed states were R,R,R. The observer rejected it before its final read, so the final state is unknown.",
+      "seed_marker_lines": 29,
+      "seed_metadata_qualified": false,
+      "seed_unit_and_cgroup_gone": true,
+      "known_seed_birth_ended": true,
+      "native_sessions_or_model_requests_started": false,
+      "limits": [
+        "Neither preparation success nor complete seed markers qualify the failed seed or the full native case.",
+        "The prior failures remain preserved; no current account-adoption, continuation or production qualification follows."
+      ]
     }
   }
 }

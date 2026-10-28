@@ -197,5 +197,70 @@
     "measured_free_bytes_after": 539885568,
     "guaranteed_reclaimed_bytes_or_reservation_claimed": false,
     "review": "Root and independent Sol source, dry-run and actual apply receipt GREEN."
+  },
+  "r5_r6_image_cache_followup": {
+    "date": "2026-10-28",
+    "result": "PASS_FILE_CACHE_ONLY",
+    "source_manifest_sha256": "491f2cd5914fe96098238d03eda3afa855005b7478d4e73c7cf4e4aa7ec9f7aa",
+    "targets": [
+      {
+        "path": "/tmp/scx.xdk3lsqm/native/codex",
+        "dry_run_receipt_sha256": "6b8502c294ab16e95749fdc92b5265dae87a67e251eac4672417f4b240983de6",
+        "apply_receipt_sha256": "1085a6fb3c9b55ee6ecb9c418b52e76310337846f2441cb6abfe1772092e63e6",
+        "device": 2049,
+        "inode": 858499,
+        "historical_observed_count": 39,
+        "sampled_births_rechecked": 32,
+        "measured_free_bytes_after": 473432064
+      },
+      {
+        "path": "/tmp/scx.cqcceh04/native/codex",
+        "dry_run_receipt_sha256": "a02e45213c62d4d8531639b98f703efdd75a68b474773c91d1b12eff41fdf161",
+        "apply_receipt_sha256": "374c2e33055a47d0fb50c034058da065a3792575b024c7c7f7902c04788f6c0f",
+        "device": 2049,
+        "inode": 858472,
+        "historical_observed_count": 35,
+        "sampled_births_rechecked": 32,
+        "measured_free_bytes_after": 770322432
+      }
+    ],
+    "sha256_each": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "bytes_each": 296865480,
+    "recorded_file_sizes_removed": 593730960,
+    "same_inode_as_dry_run": true,
+    "global_nontruncating_write_execution_guard_held_through_unlink": true,
+    "unlink_and_directory_fsync_completed": true,
+    "historical_samples_truncated": true,
+    "all_other_stage_entries_preserved": true,
+    "limits": [
+      "Fresh process checks cover only the 32 recorded sampled births per case.",
+      "This is not session retirement, endpoint closure, complete execution history, general open-FD exclusion, guaranteed space reclaim or future-FD execution exclusion.",
+      "Measured free capacity is not reserved."
+    ]
+  },
+  "r8_unexecuted_input_followup": {
+    "date": "2026-10-28",
+    "result": "PASS_TRANSFER_CACHE_ONLY",
+    "path": "/tmp/scx.v0rkyzzr/codex-source",
+    "source_manifest_sha256": "9fc58bed03e65f781b087db57b55ebcdf5099ebf86335eb18a6b32a5d6256eb9",
+    "dry_run_receipt_sha256": "0d9641c7b40791dc3125ead637207315ff8081cab7a096a26ee162973684f522",
+    "apply_receipt_sha256": "d908e81f3eab6c32ec008868f6564d9af531e8caa8bda63fcb7d11139121bc7c",
+    "device": 2049,
+    "inode": 258373,
+    "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "recorded_file_size_removed": 296865480,
+    "mode": "0600",
+    "known_failed_prepare_log_sha256": "6d95384e021b75e59681a3511111428930a9e0f56b805230f9f0607ec2c1c15c",
+    "known_command_stopped_before_native_publication": true,
+    "native_prepared_run_tmp_remained_absent": true,
+    "same_inode_as_dry_run": true,
+    "nontruncating_execution_guard_held_through_unlink": true,
+    "unlink_and_parent_fsync_completed": true,
+    "all_other_entries_and_failure_evidence_preserved": true,
+    "measured_free_bytes_after": 709251072,
+    "limits": [
+      "The no-native statement concerns this pinned failed prepare command, not universal host history.",
+      "No process, endpoint, session, general open-FD, guaranteed reclaim or future-FD execution claim."
+    ]
   }
 }
