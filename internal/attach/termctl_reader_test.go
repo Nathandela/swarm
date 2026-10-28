@@ -41,8 +41,8 @@ func TestRealTermRestoreCancelsJoinsReadBeforeClosing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer master.Close()
-	defer tty.Close()
+	defer func() { _ = master.Close() }()
+	defer func() { _ = tty.Close() }()
 	reader := &heldTermCancelReader{entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{}), closeErr: errors.New("synthetic polling close error")}
 	term := &realTerm{in: tty, out: tty, cr: reader}
 	restore, err := term.MakeRaw()

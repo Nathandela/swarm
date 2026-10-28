@@ -1,0 +1,201 @@
+{
+  "schema": 1,
+  "status": "FOCUSED_REGRESSION_CHECKS_PASS_FULL_ORIGINAL_RUN_FAILED_NATIVE_GATE_OPEN",
+  "worktree": "/private/tmp/swarm-seamless-implementation-20261024",
+  "original_full_race": {
+    "head": "35cf2f8c",
+    "command": "test -race -mod=readonly -p=1 -count=1 -timeout=20m -json ./...",
+    "exit_code": 1,
+    "started": "2026-10-28T22:05:10.690507+01:00",
+    "ended": "2026-10-28T22:51:02.225519+01:00",
+    "counts_actions": {
+      "start": 94,
+      "run": 12090,
+      "output": 26367,
+      "pass": 12011,
+      "skip": 163,
+      "fail": 10,
+      "pause": 16,
+      "cont": 16
+    },
+    "counts_tests": {
+      "pass": 11930,
+      "skip": 154,
+      "fail": 6
+    },
+    "counts_packages": {
+      "pass": 81,
+      "fail": 4,
+      "skip": 9
+    },
+    "preserved_result": "/private/tmp/swarm-full-race-20261028-result.json",
+    "preserved_jsonl": "/private/tmp/swarm-full-race-20261028.jsonl",
+    "stdout_sha256": "c359ef877b75f4f0e80dacd95ce59a0ec00ee4a1ed5aa2bd7f465293c1b9f011",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status": "FAIL_PRESERVED_NOT_RETROACTIVELY_GREEN"
+  },
+  "failure_groups": [
+    {
+      "package": "cmd/swarm",
+      "tests": [
+        "TestProductionRunnerRendererRestore/login",
+        "TestProductionRunnerRendererRestore"
+      ],
+      "finding": "Race detector observed terminal read/close overlap in the cancellation path.",
+      "fix": "Commit 8054cd16 makes realTerm cancellation join/retire the read before closing polling descriptors, and adds focused regression coverage.",
+      "evidence": {
+        "handoff": "/private/tmp/swarm-terminal-read-tdd-20261028-r1/HANDOFF.json",
+        "focused_result": "PASS on Darwin focused handoff and Linux focused run.",
+        "focused_results": {
+          "renderer_race20": {
+            "status": "PASS",
+            "pass": 61,
+            "fail": 0,
+            "skip": 0,
+            "source_unchanged": true
+          },
+          "attach_race_suite": {
+            "status": "PASS",
+            "pass": 145,
+            "fail": 0,
+            "skip": 1,
+            "source_unchanged": true
+          }
+        },
+        "linux_run": {
+          "path": "/private/tmp/swarm-terminal-read-linux-result-20261028-r1/RUN.json",
+          "sha256": "d3afa42370e5f8d87796083c08d86eb749d31134682b9da467a54f5af0e8565f",
+          "test_green": true,
+          "qualified": false,
+          "skips": [],
+          "matched_tests": {
+            "attach.ReadRetirement": 1,
+            "swarm-char.AdapterFlagResolvesRegisteredProductionAdapter": 1,
+            "swarm.RendererRestore_attach": 20,
+            "swarm.RendererRestore_login": 20
+          },
+          "packages_passed": [
+            "cmd/swarm",
+            "cmd/swarm-char",
+            "internal/attach"
+          ],
+          "cleanup": {
+            "cgroup_gone": true,
+            "unit_not_found": true
+          },
+          "source_unchanged": true
+        }
+      }
+    },
+    {
+      "package": "cmd/swarm-char",
+      "tests": [
+        "TestRun_AdapterFlagResolvesRegisteredProductionAdapter"
+      ],
+      "finding": "Selected registered Claude adapter schema now includes its native default choice, model, and skip-permissions options; the old test expected only two options.",
+      "fix": "Commit 8054cd16 updates the assertion to validate the registered adapter schema with three options while retaining its Hooks assertion.",
+      "evidence": {
+        "handoff": "/private/tmp/swarm-terminal-read-tdd-20261028-r1/HANDOFF.json",
+        "focused_result": "PASS in Linux focused run and terminal handoff char race suite.",
+        "focused_results": {
+          "char_race_suite": {
+            "status": "PASS",
+            "pass": 16,
+            "fail": 0,
+            "skip": 0,
+            "source_unchanged": true
+          }
+        }
+      }
+    },
+    {
+      "package": "internal/skeleton",
+      "tests": [
+        "TestClaudeChatSavedIntentRequiresCurrentDurableExecutionRevision/wrong-conversation"
+      ],
+      "finding": "Fixture failed before the intended assertion because native history reported primary read publication pending.",
+      "fix": "Test-only fixture helper prepares the primary durable history publication before wrong-conversation validation; origin rejection and init-publication lag fixtures are also covered.",
+      "evidence": {
+        "saved_intent_and_connected": {
+          "path": "/private/tmp/swarm-fixture-publication-race10-20261028.jsonl",
+          "sha256": "c53a230eb03334f04320fcb70266c1236aa7b1398c63f0e569acd5fa49088a95",
+          "test_pass_events": 70,
+          "fail": 0,
+          "skip": 0,
+          "runs": 10,
+          "tests_per_run": [
+            "SavedIntentRequiresCurrentDurableExecutionRevision including all subtests",
+            "ClaudeChatMessageConnectedEchoResultHistory"
+          ]
+        },
+        "origin_and_init_publication": {
+          "path": "/private/tmp/swarm-fixture-origin-publication-race5-20261028.jsonl",
+          "sha256": "5dc64d2854b6087aab3f6801e80cfbcf37ac5ac5d69aae3ce83be9c3e02d5833",
+          "test_pass_events": 50,
+          "fail": 0,
+          "skip": 0,
+          "runs": 5,
+          "tests_per_run": [
+            "ClaudeChatFixtureRejectsOriginWithoutEffects",
+            "ClaudeChatFixtureInitPublicationLagStaysPending including subtests"
+          ]
+        }
+      }
+    },
+    {
+      "package": "internal/verify",
+      "tests": [
+        "TestB94_EveryExportedSymbolIsReachableFromProduction"
+      ],
+      "finding": "The reachability check found claudeinput.Broker.Descriptor reachable from production while still listed in b94Allowed.",
+      "fix": "Test-ledger change removes the stale claudeinput.Broker.Descriptor exemption now that production reachability is demonstrated.",
+      "evidence": {
+        "focused_result": "PASS",
+        "path": "/private/tmp/swarm-reachability-green-20261028.jsonl",
+        "sha256": "2860c4bc8c7271a36d8934475191d5118eabd3e118eb3aa46127bdabb8231f89",
+        "test_pass_events": 1,
+        "fail": 0,
+        "skip": 0
+      }
+    }
+  ],
+  "qualification": {
+    "native_provider_qualification": "OPEN",
+    "production_qualification": "OPEN",
+    "release_qualification": "OPEN",
+    "note": "Focused Linux run is direct terminal read-retirement verification only and explicitly unqualified. Regression checks do not establish native provider behavior, production readiness, or release qualification.",
+    "native_host_test_strategy": "Use reviewed synthetic-only host transport with no privileged operation; unobserved bypass traffic unmeasured, no offline/network/whole-host isolation claim."
+  },
+  "quality_gates": {
+    "path": "/private/tmp/swarm-regression-gates-20261028-r1/RESULT.json",
+    "results": {
+      "build": {
+        "exit_code": 0,
+        "seconds": 8.24
+      },
+      "vet": {
+        "exit_code": 0,
+        "seconds": 6.24
+      },
+      "lint": {
+        "exit_code": 1,
+        "seconds": 50.65
+      },
+      "lint_r2": {
+        "exit_code": 0,
+        "seconds": 6.09
+      }
+    },
+    "status": "BUILD_VET_LINT_PASS_AFTER_TEST_CLEANUP_FIX",
+    "lint_findings": [
+      "Initial lint failed only two unchecked test descriptor Close returns in internal/attach/termctl_reader_test.go:44-45.",
+      "Feature worktree now wraps the master/tty closes in deferred funcs with ignored cleanup errors; production code unchanged.",
+      "Lint rerun passes. The Linux 8054 terminal run predates only these cleanup wrappers."
+    ],
+    "affected_package_race_rerun": "PENDING"
+  },
+  "source_checkpoint": {
+    "terminal_fix_commit": "8054cd16",
+    "remaining_changes": "Pending-only fixture setup helper, removal of stale reachability exemption, explicit ignored test cleanup errors; no production auth or recovery authority changes."
+  }
+}

@@ -120,9 +120,7 @@ func TestClaudeChatSavedIntentRequiresCurrentDurableExecutionRevision(t *testing
 			m := launchClaudeMessageFixture(t, d)
 			client := dialClient(t, d, protocol.CapSemanticSend, protocol.CapJournal)
 			id := protocol.NamespacedID(d.api.endpointID, m.ID)
-			if _, err := client.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: id, Limit: 200}); err != nil {
-				t.Fatal(err)
-			}
+			readClaudeFixtureHistoryWhenPublished(t, client, id)
 			snapshot, err := d.core.ClaudeFixtureSnapshot(m.ID)
 			if err != nil || snapshot.OwnerRevision != 0 {
 				t.Fatal("unwritten primary precondition", err)
@@ -233,17 +231,7 @@ func TestClaudeChatFixtureRejectsOriginWithoutEffects(t *testing.T) {
 	m := launchClaudeMessageFixture(t, d)
 	client := dialClient(t, d, protocol.CapSemanticSend, protocol.CapJournal)
 	id := protocol.NamespacedID(d.api.endpointID, m.ID)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		_, err := client.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: id, Limit: 200})
-		if err == nil {
-			break
-		}
-		if !strings.Contains(err.Error(), errClaudeFixturePending.Error()) || time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	readClaudeFixtureHistoryWhenPublished(t, client, id)
 	instance, ok := d.sessionInstance(m.ID)
 	if !ok {
 		t.Fatal("fixture has no current instance")
@@ -319,9 +307,9 @@ func TestClaudeChatMessageConnectedEchoResultHistory(t *testing.T) {
 	if err != nil || receipt.State != "completed" || receipt.NativeSessionID != m.ConversationID || receipt.NativeMessageID == "" || receipt.Agent != "fake" || receipt.OutcomeSource != "claude_primary_fixture" {
 		t.Fatalf("no exact admitted fixture result: receipt=%+v err=%v", receipt, err)
 	}
-	page, err := c.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: id, Limit: 200})
-	if err != nil || !page.Floor || page.Scope == "" || len(page.Items) != 3 {
-		t.Fatalf("genuine fixture history was not connected: page=%+v err=%v", page, err)
+	page := readClaudeFixtureHistoryWhenPublished(t, c, id)
+	if !page.Floor || page.Scope == "" || len(page.Items) != 3 {
+		t.Fatalf("genuine fixture history was not connected: page=%+v", page)
 	}
 	joined, _ := json.Marshal(page.Items)
 	if !bytes.Contains(joined, []byte("owned fixture message")) || !bytes.Contains(joined, []byte("fixture reply:")) {
@@ -400,5 +388,21 @@ func TestClaudeChatFixtureInitPublicationLagStaysPending(t *testing.T) {
 				t.Fatal("fixture publication classification changed authority", kind, err)
 			}
 		})
+	}
+}
+
+// Retry only the explicit read-publication gap, before any adversarial mutation.
+func readClaudeFixtureHistoryWhenPublished(t *testing.T, client *protocol.Client, session string) schema.NativeHistoryPage {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		page, err := client.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: session, Limit: 200})
+		if err == nil {
+			return page
+		}
+		if !strings.HasSuffix(err.Error(), errClaudeFixturePending.Error()) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
