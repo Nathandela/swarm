@@ -232,7 +232,7 @@ func TestMobileBoardCollapseModesAndNearbyFocus(t *testing.T) {
 func TestMobileBoardMenuReleaseAndNativeOwnership(t *testing.T) {
 	m := mobileBoard(t, 24, 4)
 	r := m.(rootModel)
-	if !strings.Contains(bottomRow(t, m), "[New]") {
+	if !strings.Contains(bottomRow(t, m), "[More (m)]") {
 		t.Fatal("missing action strip")
 	}
 	// More activates only after its own completed release.
@@ -245,20 +245,22 @@ func TestMobileBoardMenuReleaseAndNativeOwnership(t *testing.T) {
 	if r.general.more == nil || m.View().MouseMode != tea.MouseModeCellMotion {
 		t.Fatal("More did not take navigation capture")
 	}
+	m = send(m, keyDown) // Open precedes Rename in the menu.
+	r = m.(rootModel)
 	y := -1
 	for i, l := range r.moreLines() {
 		if l.key == "e" {
 			y = 1 + i - r.general.more.top
 		}
 	}
-	if y < 1 || y > 2 {
+	if y < 1 || y > r.moreBudget() {
 		t.Fatal("Rename not visible in minimum menu")
 	}
-	m = send(m, tea.MouseClickMsg{X: 23, Y: y, Button: tea.MouseLeft})
+	m = send(m, tea.MouseClickMsg{X: 3, Y: y, Button: tea.MouseLeft})
 	if m.(rootModel).general.editing {
 		t.Fatal("entry acted on press")
 	}
-	m = send(m, tea.MouseReleaseMsg{X: 23, Y: y, Button: tea.MouseLeft})
+	m = send(m, tea.MouseReleaseMsg{X: 3, Y: y, Button: tea.MouseLeft})
 	r = m.(rootModel)
 	if !r.general.editing || r.general.editID != "endpoint/0" || m.View().MouseMode != tea.MouseModeNone {
 		t.Fatal("menu rename failed captured identity/native editing ownership")

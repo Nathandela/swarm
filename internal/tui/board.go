@@ -412,11 +412,11 @@ func (m rootModel) boardStrip() string {
 	if m.connectionLost {
 		return ellipsis(m.generalStatus(), m.width)
 	}
-	text := "[New] [" + m.boardOpenLabel() + "] [More]"
-	hint := " · n new · ⏎ attach (ctrl+q returns) · m more · o options"
-	if m.width >= ansi.StringWidth(text+hint) {
-		text += hint
+	var labels []string
+	for _, b := range m.boardButtons() {
+		labels = append(labels, b.text())
 	}
+	text := strings.Join(labels, " ")
 	if m.clientVersion != "" && m.width >= 72 && m.width-ansi.StringWidth(text)-ansi.StringWidth(m.clientVersion) >= 3 {
 		text += strings.Repeat(" ", m.width-ansi.StringWidth(text)-ansi.StringWidth(m.clientVersion)) + m.clientVersion
 	}

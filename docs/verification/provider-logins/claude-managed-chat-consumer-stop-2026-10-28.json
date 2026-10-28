@@ -213,5 +213,16 @@
     "vet": "go vet ./... passed",
     "lint": "golangci-lint run: 0 issues; existing unknown gomnd directive warning",
     "source_unchanged_during_crossbuild_and_race": true
+  },
+  "integration": {
+    "main_commit": "b609dfa6",
+    "resolution": "Preserved the existing vendored Bubble Tea runtime for the newly added responsive button files. Main unchanged.",
+    "race": {
+      "tui_pass": 717,
+      "attach_pass": 143,
+      "attach_skip": 1,
+      "fail": 0,
+      "log_sha256": "6f99d12b9694e6ffb05351663401cfe62c50189aaf96ab147d74fc2af33a8039"
+    }
   }
 }

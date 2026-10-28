@@ -53,34 +53,30 @@ func (m rootModel) moreLines() []menuLine {
 				lines = append(lines, menuLine{text: part})
 			}
 		}
-		lines = append(lines, menuLine{"Rename", "e"}, menuLine{"Tag", "t"})
-		if !m.general.more.running {
-			key := "r"
-			if s.Status.Process == status.ProcessRunning {
-				key = ""
+		sameProcess := (s.Status.Process == status.ProcessRunning) == m.general.more.running
+		if sameProcess && m.general.more.running {
+			lines = append(lines, menuLine{"Open", "enter"})
+		}
+		for _, b := range sessionButtons(s) {
+			if !sameProcess && (b.key == "r" || b.key == "x") {
+				continue
 			}
-			lines = append(lines, menuLine{"Resume", key})
+			lines = append(lines, menuLine{b.label, b.key})
 		}
-		lines = append(lines, menuLine{"Handoff", "h"})
-		label := "Delete"
-		if s.Status.Process == status.ProcessRunning {
-			label = "Kill"
-		}
-		if (s.Status.Process == status.ProcessRunning) == m.general.more.running {
-			lines = append(lines, menuLine{label, "x"})
-		} else {
+		if !sameProcess {
 			lines = append(lines, menuLine{text: "Target state changed; reopen More"})
 		}
 	} else if m.general.more.target != "" {
 		lines = append(lines, menuLine{text: "Target disappeared"})
 	}
-	return append(lines, menuLine{"Options", "o"}, menuLine{"Quit", "q"})
+	return append(lines, menuLine{"New", "n"}, menuLine{"Options", "o"}, menuLine{"Attention", "g"}, menuLine{"Quit", "q"})
 }
 func (m rootModel) moreBudget() int {
 	if m.height <= 0 {
 		return 20
 	}
-	return max(1, m.height-2)
+	buttons := m.moreButtons()
+	return max(1, m.height-2-buttons[len(buttons)-1].y)
 }
 func (m *rootModel) revealMore() {
 	menu := m.general.more
@@ -99,6 +95,7 @@ func (m rootModel) moreView() string {
 		return boundedBoard("Need 24×4 · esc back", m.width, m.height)
 	}
 	menu := m.general.more
+	buttons := m.moreButtons()
 	label := "More"
 	if s, ok := m.general.sessionByID(menu.target); ok {
 		label += " · " + displayName(s) + " · " + attentionToken(s)
@@ -112,14 +109,28 @@ func (m rootModel) moreView() string {
 		if i == menu.sel {
 			prefix = "▌ "
 		}
-		lines = append(lines, prefix+ellipsis(items[i].text, m.width-2))
+		text := items[i].text
+		if items[i].key != "" {
+			text = (actionButton{label: text, key: items[i].key}).text()
+		}
+		lines = append(lines, prefix+ellipsis(text, m.width-2))
 	}
 	if m.height > 0 {
-		for len(lines) < m.height-1 {
+		for len(lines) < m.height-1-buttons[len(buttons)-1].y {
 			lines = append(lines, "")
 		}
 	}
-	lines = append(lines, "↑↓ scroll · esc back")
+	footer := []string{""}
+	for _, b := range buttons {
+		for len(footer) <= b.y {
+			footer = append(footer, "")
+		}
+		if footer[b.y] != "" {
+			footer[b.y] += " "
+		}
+		footer[b.y] += b.text()
+	}
+	lines = append(lines, footer...)
 	return boundedBoard(strings.Join(lines, "\n"), m.width, m.height)
 }
 func (m rootModel) updateMore(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -157,12 +168,26 @@ func (m rootModel) updateMore(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if menu.sel >= 0 && menu.sel < len(lines) {
 			return m.activateMore(lines[menu.sel].key)
 		}
+	default:
+		if k.Mod == 0 || isCtrlX(k) {
+			for _, l := range m.moreLines() {
+				if l.key != "" && (isCtrlX(k) && l.key == "x" || k.Mod == 0 && k.Text == l.key && l.key != "x") {
+					if m.width < 24 || m.height > 0 && m.height < 4 {
+						return m, nil
+					}
+					return m.activateMore(l.key)
+				}
+			}
+		}
 	}
 	return m, nil
 }
 func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 	if key == "" || m.general.more == nil {
 		return m, nil
+	}
+	if key == "back" || key == "up" || key == "down" {
+		return m.updateMore(actionKey(key))
 	}
 	target := m.general.more.target
 	eligible := false
@@ -181,8 +206,8 @@ func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.general.more = nil
-	if key == "o" {
-		return m.updateGeneral(tea.KeyPressMsg{Text: "o"})
+	if key == "o" || key == "n" || key == "g" {
+		return m.updateGeneral(actionKey(key))
 	}
 	if _, ok := m.general.sessionByID(target); !ok {
 		return m, m.general.setBanner("menu target disappeared")
@@ -191,11 +216,7 @@ func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 	m.general.commandID = target
 	var next tea.Model
 	var cmd tea.Cmd
-	if key == "x" {
-		next, cmd = m.updateGeneral(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
-	} else {
-		next, cmd = m.updateGeneral(tea.KeyPressMsg{Text: key})
-	}
+	next, cmd = m.updateGeneral(actionKey(key))
 	updated := next.(rootModel)
 	updated.general.commandID = ""
 	return updated, cmd
@@ -209,6 +230,11 @@ func (m rootModel) boardCommandSession() (protocol.SessionView, bool) {
 func (m rootModel) moreTarget(x, y int) boardGesture {
 	menu := m.general.more
 	g := boardGesture{}
+	for _, b := range m.moreButtons() {
+		if y == m.moreBudget()+1+b.y && x >= b.x && x < b.x+b.width {
+			return boardGesture{kind: actionMenu, id: b.key, x0: b.x, x1: b.x + b.width, y: y, generation: m.general.geometry, pressX: x, pressY: y}
+		}
+	}
 	if y < 1 || y > m.moreBudget() {
 		return g
 	}
@@ -217,7 +243,11 @@ func (m rootModel) moreTarget(x, y int) boardGesture {
 	if i >= len(lines) || lines[i].key == "" {
 		return g
 	}
-	return boardGesture{kind: actionMenu, id: lines[i].key, x0: 0, x1: m.width, y: y, generation: m.general.geometry, pressX: x, pressY: y}
+	width := ansi.StringWidth((actionButton{label: lines[i].text, key: lines[i].key}).text())
+	if x < 2 || x >= 2+width {
+		return g
+	}
+	return boardGesture{kind: actionMenu, id: lines[i].key, x0: 2, x1: 2 + width, y: y, generation: m.general.geometry, pressX: x, pressY: y}
 }
 func (m *rootModel) scrollMore(mouse tea.Mouse) {
 	if mouse.Y < 1 || mouse.Y > m.moreBudget() || mouse.X < 0 || mouse.X >= m.width {

@@ -18,7 +18,7 @@ func TestRouter_StartsOnGeneralView(t *testing.T) {
 	if !strings.Contains(v, "WORKING") {
 		t.Fatalf("expected general view group header WORKING, got:\n%s", v)
 	}
-	if !strings.Contains(v, "new") { // footer "n new"
+	if !strings.Contains(v, "[New (n)]") {
 		t.Fatalf("expected general-view footer keymap (n new), got:\n%s", v)
 	}
 }
@@ -60,13 +60,13 @@ func TestRouter_GeneralToAttachAndBack(t *testing.T) {
 	if !strings.Contains(v, "claude") || !strings.Contains(v, "~/Code/quanthome-api") {
 		t.Fatalf("attach screen must identify the selected session (agent + cwd), got:\n%s", v)
 	}
-	if strings.Contains(v, "n new") {
+	if strings.Contains(v, "[New (n)]") {
 		t.Fatalf("attach screen must not render the general-view footer, got:\n%s", v)
 	}
 
 	m = send(m, keyEsc)
 	v = view(m)
-	if !strings.Contains(v, "NEEDS INPUT") || !strings.Contains(v, "new") {
+	if !strings.Contains(v, "NEEDS INPUT") || !strings.Contains(v, "[New (n)]") {
 		t.Fatalf("expected general view after Esc from attach, got:\n%s", v)
 	}
 }

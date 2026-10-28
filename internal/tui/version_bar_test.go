@@ -27,7 +27,7 @@ func TestBottomBar_ShowsTheBuildVersionAtTheRightEdge(t *testing.T) {
 	if !strings.HasSuffix(row, want) {
 		t.Fatalf("bottom row %q does not end with %q", row, want)
 	}
-	if !strings.HasPrefix(row, "[New] [Open] [More]") {
+	if !strings.HasPrefix(row, "[New (n)] [Open (⏎)] [More (m)]") {
 		t.Fatalf("bottom row %q lost the shortcuts", row)
 	}
 	if got := lipgloss.Width(row); got != testCols {
@@ -54,7 +54,7 @@ func TestBottomBar_DropsTheVersionWhenTheRowCannotHoldBoth(t *testing.T) {
 	if strings.Contains(row, version.Version) {
 		t.Fatalf("a 40-column row still carries the version: %q", row)
 	}
-	if !strings.HasPrefix(row, "[New] [Open] [More]") {
+	if !strings.HasPrefix(row, "[New (n)] [Open (⏎)] [More (m)]") {
 		t.Fatalf("narrow row %q lost the shortcuts", row)
 	}
 	if got := lipgloss.Width(row); got > 40 {

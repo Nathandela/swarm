@@ -19,6 +19,7 @@ type touchButton struct {
 	discardSGR             bool
 	nativeOff              bool
 	rows                   int
+	width                  int
 	tracking               int
 	pressed                bool
 	nativeGesture          bool
@@ -79,7 +80,7 @@ func (t *touchButton) input(seq []byte) (bool, bool) {
 		return true, false
 	}
 	release := seq[len(seq)-1] == 'm'
-	target := t.enabled && x >= 1 && x <= 7 && y == t.rows
+	target := t.enabled && x >= 1 && x <= t.width && y == t.rows
 	// Preserve native gesture ownership even when its release lands on our footer.
 	if t.nativeGesture {
 		button := b & 3

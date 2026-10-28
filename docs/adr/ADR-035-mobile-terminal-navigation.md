@@ -80,3 +80,9 @@ Publish an active hitbox only after terminal output establishes it; cancel befor
 Recognized mouse prefixes and partial paste-end markers remain buffered within fixed bounds across stalls. The preexisting 50 ms timeout remains for ambiguous bare Escape/`ESC [`; stalls there may lose a tap. Actual Ctrl+Q remains available. Malformed nested escapes and passthrough wrappers cannot establish mode authority, so native/tmux coverage cannot be inferred from the cell-report envelope.
 
 Local synthetic and PTY gates permit source integration with the preference off by default. Actual Termux and the identified iOS terminal must still qualify touch, selection/paste, keyboard resize and repeated attach/detach before a handset compatibility claim. This amendment neither records a release nor closes the physical gate.
+
+## Combined action-label amendment — 2026-10-28
+
+At the owner's request, buttons use `[Name (shortcut)]` without a repeated keyboard legend. The [compact-button contract](../specifications/mobile-terminal-touch-plan.md#compact-action-buttons-amendment--2026-10-28) supersedes the fixed three-control strip: whole context-eligible controls fill one board row; overflow, including New at minimum width, remains reachable inside More. Every selected-agent command has a labelled pointer entry point. More has wrapping Back/Up/Down controls and working displayed shortcuts. Painting and hit-testing share cell geometry; selection and process changes invalidate gestures. Native editors and confirmation ownership stay unchanged.
+
+The attached return control becomes `[swarm (ctrl+q)]`, using the configured detach key. Complete dynamic label width replaces the original seven-cell activation/hit threshold. This changes presentation and bounds only, retaining all mode-authority and input-ownership limits above. Historical v0.25.0 evidence describes the original label.

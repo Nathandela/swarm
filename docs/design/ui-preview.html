@@ -152,7 +152,7 @@
   <div class="term" id="mockup" tabindex="0" aria-label="Interactive swarm mockup. Use arrow keys, enter, n, x, q and escape."></div>
 
   <h3>Mobile terminal navigation</h3>
-  <p>On a narrow SSH terminal, names and attention take priority. Scroll the viewport independently from keyboard focus, tap group headers to fold, and use New/Open/More for existing actions. Folded groups remain keyboard stops; the pinned attention count and <kbd>g</kbd> reveal sessions waiting for you. Forms preserve native text selection and adapt to the height left by the software keyboard. The attached agent still owns its native interface.</p>
+  <p>On a narrow SSH terminal, names and attention take priority. Buttons combine action and shortcut, such as <code>[Open (⏎)]</code> and <code>[More (m)]</code>. Wide screens expose the selected agent's Rename, Tag, Handoff and Kill controls, or Resume/Delete when ended. Whole buttons that do not fit remain in More, including New at minimum width. More has tappable Back/Up/Down controls that wrap at narrow widths. Scroll the viewport independently from keyboard focus and tap group headers to fold. Folded groups remain keyboard stops; the pinned attention count and <kbd>g</kbd> reveal sessions waiting for you. Forms preserve native text selection and adapt to the height left by the software keyboard. The attached agent still owns its native interface.</p>
 
   <h3>Design intent</h3>
   <div class="cols">
@@ -161,7 +161,7 @@
     <div class="card"><h4 style="color:var(--tok)">READY FOR REVIEW</h4><p>The agent finished its turn. Attach, review the diff, send the next prompt — the session drops back to Working.</p></div>
     <div class="card"><h4 style="color:var(--tgrey)">COMPLETED</h4><p>Exited sessions, exit code shown. They stay listed (transcript on disk) until you delete them with <span class="mono">x</span>.</p></div>
   </div>
-  <div class="note">Attach shows the agent CLI's native interface with a reserved bottom return hint. The optional CLI button adds [swarm] to that same row and uses the existing detach path. It defaults off because terminal-wide mouse capture can affect selection and scrolling. Unsupported modes and older live shims retain Ctrl+Q; actual handset qualification remains open.</div>
+  <div class="note">Attach shows the agent CLI's native interface with a reserved bottom return hint. The optional CLI button combines the label and configured shortcut as [swarm (ctrl+q)] in that same row and uses the existing detach path. Its complete label must fit. It defaults off because terminal-wide mouse capture can affect selection and scrolling. Unsupported modes and older live shims retain Ctrl+Q; actual handset qualification remains open.</div>
 </section>
 
 <!-- ============ FLOW ============ -->

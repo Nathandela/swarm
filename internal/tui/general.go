@@ -541,7 +541,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.general.confirm {
 		return m.updateConfirm(k)
 	}
-	if m.boardNavigation(k) {
+	if m.general.commandID == "" && m.boardNavigation(k) {
 		return m, nil
 	}
 	if !m.boardUsable() && k.Code != tea.KeyEsc {
@@ -634,10 +634,10 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // openSelected is ⏎ on the board, and a click on the selected row (ADR-029 D3): attach the
 // selection captured now.
 func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
-	if !m.boardUsable() || !m.general.actionVisible() || m.connectionLost {
+	if !m.boardUsable() || m.connectionLost || m.general.commandID == "" && !m.general.actionVisible() {
 		return m, nil
 	}
-	s, ok := m.general.selected()
+	s, ok := m.boardCommandSession()
 	if !ok {
 		return m, nil
 	}

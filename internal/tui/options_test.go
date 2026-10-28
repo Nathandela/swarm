@@ -112,7 +112,7 @@ func TestOptionsWindowEscDiscardsAndPickersWrap(t *testing.T) {
 // `go test ./internal/tui/ -update`.
 func TestGoldenOptionsForm(t *testing.T) {
 	tm := startTM(t, New(newFakeClient(), detectMixed()))
-	waitContains(t, tm, "options") // general footer painted first
+	waitContains(t, tm, "[Options (o)]") // general footer painted first
 	tm.Send(keyRune('o'))
 	waitContains(t, tm, "· options")
 	quitTM(t, tm)
