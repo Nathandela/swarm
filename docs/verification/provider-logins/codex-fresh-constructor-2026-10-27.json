@@ -662,15 +662,36 @@
     },
     "r11_budget_accounting_candidate": {
       "date": "2026-10-28",
-      "result": "SOURCE_ONLY_NOT_EXECUTED_OR_QUALIFIED",
+      "result": "SOURCE_ONLY_THEN_R11_FULL_CASE_FAIL; NOT_QUALIFIED",
       "source_root": "/private/tmp/swarm-codex-budget-accounting-source-20261028-r11",
       "source_manifest_sha256": "075db7a5ea8023dc208f65962cb9e0e2efb66a1b13afd36f8db26b13d3826c86",
       "base_artifact_manifest_sha256": "adbf133d93e68bb62cae2d2ebe2fb315c74a3bf69dbd0db6ca5751ea05853cc3",
       "accounting_tests": 12,
       "original_oracle_vectors": 110,
       "description": "Separates attempted HTTP/WS requests from CONNECT and usage-fact rows; the 64-request application cap remains unchanged.",
-      "no_actual_case_or_prep_executed": true,
-      "qualification": "Source and local controls only. This candidate does not repair the R10 FAIL and is not a native, MAIN/MCP, adoption, or provider-rotation qualification."
+      "qualification": "Source and local controls only. This candidate does not repair the R10 FAIL and is not a native, MAIN/MCP, adoption, or provider-rotation qualification.",
+      "source_checkpoint_result": "SOURCE_ONLY_NOT_EXECUTED_OR_QUALIFIED",
+      "at_source_checkpoint_no_actual_case_or_prep_executed": true,
+      "subsequent_attempt_receipt_sha256": "bb5efc43b5d21a2085a3f6634e0a0095b0ed998145f40fa96da0976ccf297e4a",
+      "subsequent_attempt_packet_manifest_sha256": "597d14460b504aaf892e77ca0996b0a0779d15eba8bf6dc648f0fdc9645c1a46"
+    },
+    "r11_actual_attempt": {
+      "date": "2026-10-28",
+      "result": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-codex-outer-qoscwew1/run.json",
+      "outer_receipt_sha256": "bb5efc43b5d21a2085a3f6634e0a0095b0ed998145f40fa96da0976ccf297e4a",
+      "inner_receipt": "/private/tmp/swarm-codex-outer-qoscwew1/tmp/ctui-vjjiwbea/receipt.inner.json",
+      "inner_receipt_sha256": "295c679fb9416d2ea74e1be9fd7cb11d48f98046b589d263dfcc6d0739764eb4",
+      "packet_manifest_sha256": "597d14460b504aaf892e77ca0996b0a0779d15eba8bf6dc648f0fdc9645c1a46",
+      "failure": "model observation join deadline; cause of missed native lifecycle UNKNOWN",
+      "accounting": "35 HTTP/WS requests / 64 cap; 31 CONNECT / 32 cap; 3 usage facts / 32 cap; 69 ledger rows / 128 cap. All separate caps stayed under limit.",
+      "transport": "31 accepted, 0 rejected, 0 TLS failures; drained=true",
+      "native_activity": "title=1; prewarms=2; main=0; MCP messages=3; MCP calls=0",
+      "input_lifecycle": "trace empty; observed lifecycle rows=0; native coverage incomplete",
+      "product_evidence": "/private/tmp/swarm-codex-r11-existing-evidence-20261028.json sha256=88643bf1d74ee28f78ee5f27129b35d64f7d8cb36d84819dc118800b58ef1444; unit not found; execution.json sha256=5f7c09f7f560b8d1077ea9aeb24e34b5cc43331d2cc08b8665911221fc917ee1; codex sequence=1, state=unobserved, items={}, no event-coverage proof",
+      "diagnostic_plan": "/private/tmp/swarm-codex-r11-lifecycle-diagnostic-plan-20261028-r1/PLAN.json sha256=45f452aa6513047f6c0eb46f7e3a4f92e937a4efd37a5a4177cda4d1cf5771c6; NOT EXECUTED",
+      "cleanup": "unit/cgroup empty and gone; sampled births ended=32/35 (truncated); fixture listeners closed=false",
+      "qualification": "Full gate remains FAIL. No MAIN/MCP/adoption/release qualification."
     }
   }
 }

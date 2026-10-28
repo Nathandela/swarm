@@ -48,7 +48,8 @@
     "The E1 native attempt failed before provider requests on read-only /tmp/claude-0 startup; native assembly, ordinary asset preservation and actual guard execution remain unqualified.",
     "The test adapter and exact mounts have source review; a fresh fixture must correct native scratch access before its report/lease/status and asset-preservation oracles can qualify.",
     "Every native birth requires a freshly validated normal auth receipt; the earlier short-lived synthetic receipt must not be reused after its warm-receipt floor.",
-    "Native actor/startup coverage, account adoption, unfinished-quota recovery, final GG-4 and Astra review remain open."
+    "Native actor/startup coverage, account adoption, unfinished-quota recovery, final GG-4 and Astra review remain open.",
+    "The scratch-corrected replacement passes its 49 focused race tests and Linux builds; artifact/PREP/native execution remain separate gates."
   ],
   "latest_native_attempt": {
     "case": "E1 operator actual outer attempt",
@@ -84,5 +85,14 @@
     "private_helper_sha256": "9d75e0ab763387105d207beeeccd9db9d2b4314aca99ae750e65acf212b24da0"
   },
   "result_scope": "The PASS_PRIVATE_SOURCE_AND_BUILD_ONLY result records the source/build checkpoint; the separate E1 native attempt is a recorded startup FAIL and does not qualify native assembly.",
-  "native_assembly_case_qualified": false
+  "native_assembly_case_qualified": false,
+  "scratch_corrected_source_build": {
+    "source_manifest_sha256": "8b378c86ae85fec75a23a061f14bc75851cd33b0bd6225dd608f7ea8c396c2d9",
+    "build_record_sha256": "6dce5acd0b32993742aa4e9f94e46bd9f4029b3c47ede3a5d4031a025b2d0073",
+    "focused_race_pass": 49,
+    "swarm_sha256": "526e581917931e976e573f8a1eb2a8bd19afdaaf093209ce53a91e911a1d7723",
+    "helper_sha256": "f740ed6a88159b8b67df33d85d6a4b6d040fae8826d39b39eb96840dc0614eb6",
+    "native_case_executed": false,
+    "review": "Root, Sol and Astra source GREEN; build only, no native or production qualification"
+  }
 }

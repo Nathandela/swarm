@@ -364,5 +364,23 @@
         "fresh_birth_checks": "recorded sample only; no complete fresh census"
       }
     ]
+  },
+  "r11_three_archive_cache_followup": {
+    "date": "2026-10-28",
+    "result": "APPLIED_THREE_PUBLIC_PACKET_ARCHIVES_ONLY",
+    "applied_receipt": "/private/tmp/swarm-codex-r11-three-archive-cache-retirement-20261028-source/retirement-applied.json",
+    "applied_receipt_sha256": "ceecccc893cedd1d5eec892c9861c9471ea275d7e7a272155a3310b6ed9c0fca",
+    "targets": "/tmp/scx.9er0cpb1/packet.tar.gz; /tmp/scx.n2dnbkvi/packet.tar.gz; /tmp/scx.g1ip1hk_/packet.tar.gz",
+    "archive_sha256": "05dad2b259769e49fb83585ead65a6ff22707d4ac2a295bb20b938325e261581; b95de4aaaed4e6d67f15138e487a4416c371914eebd15375ac910ceec3f2d62c; 78fc5c6bbb616e6452d2b168f7e32f671bd1de005edcf8ddf5766175618d3dba",
+    "archives": 3,
+    "bytes_each": 20109711,
+    "total_bytes_unlinked": 60329133,
+    "read_descriptor_guard_and_parent_fsync_completed_for_all": true,
+    "local_backup_full_hashes_verified": true,
+    "no_other_deletes_in_this_operation": true,
+    "history_samples": "R8 18/18 untruncated; R9 17/17 untruncated; R10 32/35 truncated.",
+    "measured_free_bytes_after": 539521024,
+    "guaranteed_reclaimed_bytes_or_capacity_reservation_claimed": false,
+    "limits": "Only the three packet.tar.gz files were unlinked. No full PID/FD/session/endpoint or future-exec claim."
   }
 }
