@@ -51,7 +51,32 @@
         "control_group": "",
         "same_invocation": true
       },
-      "cleanup": "Exact auth signal refused after normal worker retirement removed its cgroup. Original ready intent retained; explicit normal recovery requires the original worker config and fresh scope checks."
+      "cleanup": "Exact auth signal refused after normal worker retirement removed its cgroup. Original ready intent retained; explicit normal recovery requires the original worker config and fresh scope checks.",
+      "normal_recovery_followup": {
+        "result": "PASS_CLEANUP_ONLY",
+        "preflight_receipt_sha256": "8910142b8e637a48a9497a2acd5e8f7c8cb1a8ffd9659db56678d51ca8784ba4",
+        "receipt_sha256": "3f89925f9a744bc6fcd63dcf844194c3880231203da1057fa6b37e133e373204",
+        "scope": "One existing recovery-driver action with the original retained worker config; no new worker or retirement of the ready intent.",
+        "original_payload_archived": {
+          "regular_files": 4,
+          "entries": 11,
+          "bytes": 1544
+        },
+        "acknowledgment": {
+          "Settled": true,
+          "MetadataCleanupUnknown": false
+        },
+        "retained_ready_intent_unchanged": true,
+        "canonical_credentials_unchanged": true,
+        "native_image_unchanged": true,
+        "nonce_payload_collected": true,
+        "exact_unit_not_found": true,
+        "cgroup_gone": true,
+        "all_ten_recorded_births_ended": true,
+        "earlier_preflight_hold": "A prior read-only check mistook namespace-local UID0 for host ownership. Actual host UID1000 with unchanged native bytes and metadata was checked before the corrected preflight.",
+        "original_case_result": "FAIL",
+        "missing_proxy_or_final_selection_evidence_reconstructed": false
+      }
     },
     {
       "name": "R4 corrected process observer",
