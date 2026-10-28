@@ -692,6 +692,30 @@
       "diagnostic_plan": "/private/tmp/swarm-codex-r11-lifecycle-diagnostic-plan-20261028-r1/PLAN.json sha256=45f452aa6513047f6c0eb46f7e3a4f92e937a4efd37a5a4177cda4d1cf5771c6; NOT EXECUTED",
       "cleanup": "unit/cgroup empty and gone; sampled births ended=32/35 (truncated); fixture listeners closed=false",
       "qualification": "Full gate remains FAIL. No MAIN/MCP/adoption/release qualification."
+    },
+    "r12_lifecycle_diagnostic": {
+      "date": "2026-10-28",
+      "result": "FAIL_ORIGINAL_QUALIFICATION_DIAGNOSTICS_RETAINED",
+      "outer_receipt_sha256": "d6d1d90b072c5379da34f52da6ba82da6ecb6ff0514ab6bf08bd06b7e21561dc",
+      "inner_receipt_sha256": "129f54e2b9d5c3f457d66a0c386e8dfba2cbe0de1acc0ffff51e5329d1943885",
+      "artifact_manifest_sha256": "fd2dd2db2e78fb08332b51dab3a7bb4b0e896b2109b41acbb249d82e788a9c21",
+      "observed_frames": 13,
+      "omitted_rows": 0,
+      "diagnostic_loss": false,
+      "turn_or_item_notifications": 0,
+      "snapshot": "Separately sourced paginated MAIN snapshot contains one in-progress turn and canonical native user UUID; it is not a delivered lifecycle event.",
+      "product_projection": "Exact session/shim/backend/feed joins validated; sequence1/unobserved with empty turn and items.",
+      "provider_requests": 35,
+      "provider_connects": 31,
+      "provider_transport_drained": true,
+      "main_inferences": 0,
+      "mcp_calls": 0,
+      "failure": "model observation join deadline",
+      "cleanup": "Cgroup gone and all recorded observed births ended; 35 historical identities,32-sample truncated; no complete birth/endpoint/session claim.",
+      "source_explanation": "Pinned native direct thread/start subscribes its creator only, then broadcasts global thread/status. Internal auto-attach uses a different agent-control channel.",
+      "product_timing": "Late production resume and missing first events is a hypothesis; no production resume timestamps were captured.",
+      "resume_caveat": "Native running resume can emit idle lifecycle and dispatch goal/queued work. It cannot be treated as passive attachment.",
+      "next": "A separately reviewed two-client protocol canary is planned; no replay is synthesized as an event and no automatic recovery is enabled."
     }
   }
 }

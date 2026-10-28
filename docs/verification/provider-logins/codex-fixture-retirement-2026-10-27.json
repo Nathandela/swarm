@@ -382,5 +382,19 @@
     "measured_free_bytes_after": 539521024,
     "guaranteed_reclaimed_bytes_or_capacity_reservation_claimed": false,
     "limits": "Only the three packet.tar.gz files were unlinked. No full PID/FD/session/endpoint or future-exec claim."
+  },
+  "r12_cache_followup": {
+    "scope": "Exact redundant public executable/archive copies only; full local hash backups retained.",
+    "native_receipt_sha256": "eb10941b95b87815de92eac932b85725ca1106ae507aabd5a55a06913f0f4041",
+    "native_bytes_unlinked": 296865480,
+    "archive_receipt_sha256": "5622bcb4ed464a80a0ab6f7596f3599d680e6a2be7f0d11da3e45575d3ea8d23",
+    "archive_bytes_unlinked": 60329995,
+    "target_stages": [
+      "/tmp/scx.xdk3lsqm",
+      "/tmp/scx.cqcceh04",
+      "/tmp/scx.7lsvzxnp"
+    ],
+    "retained_evidence_and_authentication": true,
+    "limits": "Retired-unit/cgroup and recorded sampled-birth checks, full hashes and owned descriptor guards only; no complete birth/FD/session/endpoint or guaranteed reclaim claim."
   }
 }
