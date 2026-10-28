@@ -443,3 +443,70 @@ func TestClaudeChatNativeMetadataUsesExactHouseStatusKeys(t *testing.T) {
 		t.Fatal("duplicate nested status gained authority")
 	}
 }
+
+// Component-only pre-capability bootstrap: no native birth or provider-write qualification.
+func TestClaudeChatFreshBootstrapBindsInstanceBeforeInitialClaim(t *testing.T) {
+	for _, mode := range []string{"fresh", "stale-birth", "cold", "mint-failure", "generic-send"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newNativeA2Fixture(t, "success", "idle")
+			root := t.TempDir()
+			closing := make(chan struct{})
+			close(closing)
+			// A separate component has no prior instance, capabilities or consumer.
+			// Missing native scope plus closed shutdown stops after the early claim.
+			d := &Daemon{core: f.d.core, stateDir: root, closing: closing}
+			d.capStore.dir = root
+			d.api = &coreAPI{endpointID: f.d.machineID()}
+			d.api.claudeNativeLaunched = d.bootstrapClaudeNativeLaunch
+			if mode != "cold" {
+				d.noteClaudeNativeLiveLaunch(f.meta)
+			}
+			m := f.meta
+			if mode == "stale-birth" {
+				m.ShimStartTime++
+			}
+			if mode == "mint-failure" {
+				blocker := filepath.Join(root, "blocked")
+				if err := os.WriteFile(blocker, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				d.capStore.dir = blocker
+			}
+			operation := "claude-initial:" + m.ID
+			var err error
+			if mode == "generic-send" {
+				err = d.sendClaudeNativeInitialPrompt(m, operation, "initial binding component")
+			} else {
+				err = d.api.claudeNativeLaunched(m, "", "initial binding component")
+			}
+			if err == nil {
+				t.Fatal("unavailable component unexpectedly dispatched input")
+			}
+			record, claimed := d.core.ComposerOperation(operation)
+			if mode == "fresh" {
+				raw, readErr := os.ReadFile(filepath.Join(root, m.ID, sessionInstanceFile))
+				instance, birth := decodeSessionInstance(string(raw))
+				if readErr != nil || instance == "" || birth != incarnationOf(m.ShimPID, []int64{m.ShimStartTime}) {
+					t.Fatalf("fresh bootstrap did not persist exact winning instance before initial claim: %v", readErr)
+				}
+				if !claimed || record.SessionInstance != instance || record.Phase != idempotency.PhaseFailed || len(record.Request) != 0 {
+					t.Fatal("fresh bootstrap did not retain the shutdown-rejected initial claim", record)
+				}
+			} else {
+				if claimed {
+					t.Fatal("refused bootstrap acquired an initial operation", record)
+				}
+				if mode != "mint-failure" {
+					if _, exists := d.sessionInstance(m.ID); exists {
+						t.Fatal("refused bootstrap minted an instance")
+					}
+				}
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if len(f.writes) != 0 || f.answers != 0 {
+				t.Fatal("early binding component wrote provider input")
+			}
+		})
+	}
+}
