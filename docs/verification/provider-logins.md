@@ -123,8 +123,7 @@ The [native validator check](provider-logins/claude-native-control-validator-202
 accepted the exact sender-off guard package on Linux Claude 2.1.310 with warnings,
 with zero observed provider-listener attempts and clean unit retirement. This
 qualifies validator acceptance only. Interactive loading and the assembled launch
-canary remain open; the isolated fixture first needs a qualified normal auth
-enrollment receipt.
+canary remain open; every run requires a fresh verified auth enrollment receipt.
 
 The [synthetic enrollment prerequisite attempts](provider-logins/claude-native-auth-prerequisite-2026-10-28.json)
 retain the earlier failures and one passing fresh case after a narrow process
@@ -132,6 +131,11 @@ observer fix. The actual Swarm worker produced a ready receipt, normal recovery
 settled and collected it, and normal APIs provisioned and selected the profile.
 The proxy observed one profile request and no model requests. Interactive guard
 loading and account adoption remain unqualified.
+
+The [private assembly source check](provider-logins/claude-native-control-assembly-2026-10-28.json)
+adds a private test route through the normal product launch path. Focused race
+checks and both Linux builds pass. Native execution remains untested, and
+shipping admission and automatic recovery remain disabled.
 
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
 retains one 56-event native trace with exact composer, prompt, turn and history

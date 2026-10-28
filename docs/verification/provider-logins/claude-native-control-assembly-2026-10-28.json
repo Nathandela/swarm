@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-28",
+  "result": "PASS_PRIVATE_SOURCE_AND_BUILD_ONLY",
+  "native_assembly_case_executed": false,
+  "shipping_admission_enabled": false,
+  "automatic_recovery_enabled": false,
+  "production_source_base": "94a67085df27a1297efe56d77a276f3aea7f87e0",
+  "source_manifest_sha256": "40497c1f77530ca5ee7b1fbc437f46b2614231f8f1c2f0a0c6fdba0fc23df0b7",
+  "source_inventory_sha256": "a993993daea95a3a293b9b86486f63cd20740c104277d8bd25d5536feafe59f1",
+  "source_files": 3916,
+  "private_changes": {
+    "existing_overlay_files": [
+      "internal/skeleton/api.go",
+      "internal/daemon/launch.go",
+      "internal/shim/shim.go"
+    ],
+    "overlay_added_lines": 92,
+    "fixed_owner_helper_lines": 222,
+    "normal_product_assembly": "cmd/swarm daemon -> coreAPI -> normal login/profile preparation -> daemon -> shim -> native guard/spool/drainer/store/status",
+    "normal_profile_admission_and_held_cli_image_changed": false,
+    "sender_allowed_by_private_admission": false
+  },
+  "validation": {
+    "meaningful_compiled_baseline_failure_log_sha256": "9ab20b3fc98334a3008480fde497c124620288c7908111dcdb10a9fd42628dec",
+    "sandbox_command_failure_preserved_sha256": "20c0633118ce2bc76234ce89e543534e971898e238ce87c7a24a3a22b4325784",
+    "four_package_race_pass_actions": 49,
+    "four_package_race_log_sha256": "0d0243603711bbd566f6c04143e34b1a6b6c45f0d6685434496a582a7f49479c",
+    "final_helper_race_pass_actions": 3,
+    "final_helper_race_log_sha256": "170e04cdcad7d8ee0c246cdc25742cb8e7bc9af860d40ada346d26fb45f3e4b3",
+    "both_linux_builds_exit_zero": true
+  },
+  "linux_amd64_binaries": {
+    "swarm": {
+      "sha256": "e85d5704f67aac5867a92c89f1f7ee9523cce3ca2cb8a9e84668aca5ebdebff5",
+      "bytes": 30742024
+    },
+    "stagee1": {
+      "sha256": "e2613ae31770702ceabe0f1f166f2a34f4cc9172a3279524a48980b3e73d382d",
+      "bytes": 11845128
+    }
+  },
+  "review": {
+    "root_source_and_all_inventory_pins": "GREEN_PRIVATE_SOURCE_ONLY",
+    "independent_sol_source_and_connected_flow": "GREEN_PRIVATE_SOURCE_ONLY",
+    "production_or_astra_signoff": false
+  },
+  "remaining": [
+    "The native assembly, ordinary asset preservation and actual guard execution are not qualified.",
+    "The test adapter, exact mounts and report/lease/status oracles still need implementation and review.",
+    "Every native birth requires a freshly validated normal auth receipt; the earlier short-lived synthetic receipt must not be reused after its warm-receipt floor.",
+    "Native actor/startup coverage, account adoption, unfinished-quota recovery, final GG-4 and Astra review remain open."
+  ]
+}
