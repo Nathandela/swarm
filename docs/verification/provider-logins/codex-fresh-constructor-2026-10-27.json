@@ -401,6 +401,70 @@
         "The state-diagnostic amendment has not been prepared or executed.",
         "No account, live-service, main, release, or recovery qualification."
       ]
+    },
+    "r7_state_diagnostic_attempt": {
+      "date": "2026-10-28",
+      "result": "FAIL",
+      "source_commit": "492abbf947c32a57a61ad67e6eae1b9caa6d8e9a",
+      "source_manifest_sha256": "021fb1b3bdf9382175debb2e2c43cbe6d5d8f683f1e8bf7d22b97eca858dda80",
+      "prepared_receipt_sha256": "fc53e2560cc59d54b5f18ddb22ee7cfbbad1fef2a5eccb97b5d5de3d1a492112",
+      "outer_receipt_sha256": "e18b3798d19877ff8584800e381f3804c00191f3848623d7e086d34f72d76ab0",
+      "inner_receipt_sha256": "2f38900d5dddf212b6b84f13ea67bb7a0b49c292aae61161ad4b4b69f30974ce",
+      "outer_elapsed_seconds": 4.955343845000243,
+      "inner_elapsed_seconds": 4.300669776999712,
+      "seed": {
+        "first_attempt_result": "FAIL",
+        "first_receipt_sha256": "b8160b2901b0fa96f507c49f8a4b97acbf005331697b33268dbc2096ee7a1476",
+        "failed_component": "exe ENOENT with unchanged recorded birth; terminal state unknown",
+        "terminal_only_observer_fix_manifest_sha256": "578a83c08557fc1a3b35c3a9a7ec4658488245ccbfe5e28cae28dc115d7c83db",
+        "old_regression": "RED",
+        "focused_controls_passed": 6,
+        "connected_control_commands_exit_zero": 3,
+        "later_result": "PASS_FINITE_SEED_ONLY",
+        "later_receipt_sha256": "2b42f5c31cd5834d32c441a9b0e419d74316baefbd7da1b776a8c083c2e3eaf6",
+        "prior_cause_or_exercised_native_branch_proven": false
+      },
+      "controlled_input": {
+        "one_paste_wire_ack": true,
+        "settle_milliseconds": 203.7970969995513,
+        "exact_local_composer_row": 40,
+        "final_pre_enter_main_activity": false,
+        "one_enter_wire_ack": true,
+        "native_main_lifecycle_observed": false,
+        "tool_ready_observed": false,
+        "native_turn_admission_qualified": false
+      },
+      "failure": {
+        "description": "Strict mock provider rejected an unimplemented user-settings GET before any main inference.",
+        "path_sha256": "2d221e5895dd4465353896b94cb5cd78b90dc7dedf8f46de98f90e463c8ec133",
+        "path_bytes": 31,
+        "query_pairs": 0,
+        "source_matched_path": "/backend-api/wham/settings/user",
+        "native_caller_branch_proven": false
+      },
+      "counts": {
+        "main_inferences": 0,
+        "mcp_calls": 0,
+        "prewarms": 1,
+        "route_requests": 56,
+        "pty_bytes": 0
+      },
+      "retirement": {
+        "unit_and_cgroup_gone": true,
+        "all_recorded_births_ended": true,
+        "observed_births": 36,
+        "sample_truncated": true,
+        "pins_unchanged": true,
+        "native_listener_absent": true,
+        "native_socket_and_alias_files_retained": true,
+        "complete_fixture_listener_proof": false
+      },
+      "limits": [
+        "The earlier R7 process-state race did not recur; this does not diagnose or fix it.",
+        "Transport acknowledgments and the exact draft row do not establish native turn admission.",
+        "No main inference, held MCP work, account adoption, continuation or completed task was qualified.",
+        "All prior failures remain preserved; no live Swarm, main or release changes."
+      ]
     }
   }
 }

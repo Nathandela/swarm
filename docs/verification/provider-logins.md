@@ -489,6 +489,11 @@ R7 failed during startup ownership observation before an inner receipt or input/
 proof. A later seed PASS qualifies only the current helper's finite synthetic seed
 prerequisite; the earlier seed failure remains unexplained and unreproduced.
 
+A later diagnostic run witnessed one controlled paste, the exact draft row and
+one Enter acknowledgment, then failed on the source-mapped user-settings GET.
+It reached no main inference or held MCP call. The earlier process-state race
+did not recur, and native turn admission and account adoption remain unqualified.
+
 The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
 removed the two public Codex executable copies after collection, under their
 qualified execution guards. A separate cache-only follow-up removed one sealed
