@@ -18,6 +18,19 @@ import (
 
 // Only the winning live launch invokes this; hydration never submits owner input.
 func (d *Daemon) bootstrapClaudeNativeLaunch(m persist.Meta, _ string, text string) error {
+	if !d.claudeNativeInitialBirthMatches(m) || m.ShimPID <= 0 || m.ShimStartTime <= 0 {
+		return errClaudeFixtureMessage
+	}
+	lane := d.composerLaneFor(m.ID)
+	lane.mu.Lock()
+	live := lane.claudeNativeLive
+	lane.mu.Unlock()
+	if !live {
+		return errClaudeFixtureMessage
+	}
+	if _, err := d.adoptOrMintSessionInstance(m.ID, m.ShimPID, m.ShimStartTime); err != nil {
+		return err
+	}
 	operation := "claude-initial:" + m.ID
 	var req protocol.ComposerSendReq
 	if text != "" {
@@ -84,13 +97,20 @@ func (d *Daemon) sendClaudeNativeInitialPrompt(m persist.Meta, operation, text s
 	return d.dispatchClaudeNativeInitial(m, operation, req)
 }
 
-func (d *Daemon) claimClaudeNativeInitial(m persist.Meta, operation, text string) (protocol.ComposerSendReq, bool, error) {
-	var req protocol.ComposerSendReq
-	if operation == "" || len(operation) > 128 || text == "" || !utf8.ValidString(text) || len(text) > shimwire.MaxClaudeFixtureTextBytes || m.SchemaVersion != 6 || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || m.AgentType != "claude" || m.LoginRuntime == nil || m.CLIIdentity == nil {
-		return req, false, errClaudeFixtureMessage
+func (d *Daemon) claudeNativeInitialBirthMatches(m persist.Meta) bool {
+	if m.SchemaVersion != 6 || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || m.AgentType != "claude" || m.LoginRuntime == nil || m.CLIIdentity == nil {
+		return false
 	}
 	current, ok := d.core.Get(m.ID)
-	if !ok || current.ShimPID != m.ShimPID || current.ShimStartTime != m.ShimStartTime || current.ConversationID != m.ConversationID || current.LoginRuntime == nil || current.CLIIdentity == nil || *current.LoginRuntime != *m.LoginRuntime || *current.CLIIdentity != *m.CLIIdentity || current.ProviderCwd() != m.ProviderCwd() {
+	return ok && current.SchemaVersion == m.SchemaVersion && current.RequiredRuntime == m.RequiredRuntime && current.AgentType == m.AgentType && current.ShimPID == m.ShimPID && current.ShimStartTime == m.ShimStartTime && current.ConversationID == m.ConversationID && current.LoginRuntime != nil && current.CLIIdentity != nil && *current.LoginRuntime == *m.LoginRuntime && *current.CLIIdentity == *m.CLIIdentity && current.ProviderCwd() == m.ProviderCwd()
+}
+
+func (d *Daemon) claimClaudeNativeInitial(m persist.Meta, operation, text string) (protocol.ComposerSendReq, bool, error) {
+	var req protocol.ComposerSendReq
+	if operation == "" || len(operation) > 128 || text == "" || !utf8.ValidString(text) || len(text) > shimwire.MaxClaudeFixtureTextBytes {
+		return req, false, errClaudeFixtureMessage
+	}
+	if !d.claudeNativeInitialBirthMatches(m) {
 		return req, false, errClaudeFixtureMessage
 	}
 	instance, ok := d.sessionInstance(m.ID)
