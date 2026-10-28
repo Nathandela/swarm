@@ -669,6 +669,12 @@ The [regression follow-up](../verification/provider-logins/claude-chat-regressio
 records terminal teardown fixes and passing race suites for all five affected
 packages. The original full-run failure is retained; native qualification remains open.
 
+The [installed-native preflight](../verification/provider-logins/claude-native-host-preflight-2026-10-28.json)
+passes synthetic AUTH and observed workspace trust, but public launch is blocked:
+native setup under umask `0002` created shared settings with mode `0664`, which
+the unchanged private-file validators refuse. Native write-mode preservation
+must be measured before choosing the prospective fix.
+
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their
 existing behavior. Retained running or ended chat discussions are fenced from

@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "status": "NATIVE_PUBLIC_LAUNCH_BLOCKED_BEFORE_BIRTH_BY_SHARED_SETTINGS_MODE",
+  "native": {
+    "version": "2.1.310",
+    "platform": "linux-amd64",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56"
+  },
+  "source": {
+    "auth_fixture_archive_sha256": "8bed47ecd6a69f51f08f266fec1b91af0b203ed161c3cec1f72aa721db5da07a",
+    "private_transport_archive_sha256": "3571704623c49a7fdd07951062c8a0678e82b69aca9f11b58f73d033cc311433",
+    "shipping_source_modified": false,
+    "instrumented_transport_only": true
+  },
+  "auth_preflight": {
+    "production_start_recover_provision_select_receipt": "PASS",
+    "fresh_synthetic_grants_only": true,
+    "profile_requests": 1,
+    "model_requests": 0,
+    "proxy_errors": [],
+    "native_auth_scope_retired": true,
+    "evidence": "/private/tmp/swarm-host-native-retry-20261028-r1/AUTH-collected.json"
+  },
+  "native_trust": {
+    "status": "OBSERVED_NATIVE_UI_AND_NATIVE_WRITTEN_WITNESS",
+    "inputs": [
+      "Confirm observed Dark theme",
+      "Continue observed security notes",
+      "Select observed Yes, I trust this folder for empty synthetic CWD"
+    ],
+    "task_prompt_submitted": false,
+    "native_configuration_injected": false,
+    "evidence": {
+      "root": "/dev/shm/swarm-auth-prep.e1mva7vv",
+      "cwd": "/dev/shm/swarm-auth-prep.e1mva7vv/work",
+      "unit": "swarm-a4-trust-e1mva7vv.service",
+      "native_stopped_observed": true,
+      "native_written_trust_observed": true,
+      "scope": {
+        "MainPID": "2987585",
+        "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-a4-trust-e1mva7vv.service",
+        "LoadState": "loaded",
+        "ActiveState": "active",
+        "InvocationID": "aa3dfdd47db2443b8b5efd6331aae453",
+        "pid_start": "8845388"
+      },
+      "transcript": {
+        "path": "/dev/shm/swarm-auth-prep.e1mva7vv/trust.typescript",
+        "sha256": "687d0417620bb504757b601926b36da3950602e5e0b1adb172e80958f65acc7a"
+      },
+      "native_written_witness": {
+        "path": "/dev/shm/swarm-auth-prep.e1mva7vv/state/logins/provider/claude/profiles/022fa17ba9933faeadcceddc8405a8da9b262a476ea706487ee4994c3e1d999a/.claude.json",
+        "sha256": "7e2f4831960f5a8b0018793f91d266a28a9268bc3716495a53ae0da7ba5e392e"
+      }
+    },
+    "trust_proxy_status": "FAILED_TRANSPORT_CENSUS_UNKNOWN_CONNECT",
+    "trust_proxy_joined": {
+      "accepted": 4,
+      "application_tail_observation": "buffered plus <=20ms; later unread bytes unknown",
+      "connects": 4,
+      "errors": [
+        "unexpected CONNECT"
+      ],
+      "kernel_no_egress_claimed": false,
+      "models": 0,
+      "observed_proxy_traffic_only": true,
+      "profiles": 1
+    },
+    "trust_proxy_cgroup_gone": true
+  },
+  "public_test": {
+    "name": "TestClaudeChatActualNativePublicLaunchWiresDeterministicInitialOnce",
+    "exit_code": 1,
+    "failure": "selected native profile prerequisite absent unsafe login storage path",
+    "discussion_born": false,
+    "model_requests": 0,
+    "proxy_errors": [],
+    "proxy_cgroup_gone": true,
+    "evidence": "/private/tmp/swarm-host-native-retry-20261028-r1/PUBLIC-outer.json",
+    "stdout_sha256": "dbc751e39b534c24c93480e2104d8d656570b81e588858656629b79a639055d9"
+  },
+  "confirmed_root_cause": {
+    "native_created_target": {
+      "path": "/dev/shm/swarm-auth-prep.e1mva7vv/state/logins/provider/claude/native/settings.json",
+      "mode": "0o664",
+      "uid": 1000,
+      "links": 1,
+      "type": "file"
+    },
+    "path": "Runtime -> claudeProfileReady -> verifyClaudeAliases -> validateClaudeAliasSources -> nativeOwned; readPrivate also refuses writable settings",
+    "inherited_umask": "0002",
+    "native_profile_config_mode": "0600",
+    "backups_directory_not_the_runtime_throw": true,
+    "validators_unchanged": true,
+    "tracking": "agents-tracker-h6sc.34"
+  },
+  "next_gate": "Measure native preservation of precreated private settings across actual writes before selecting provisioning or managed-Claude umask fix; restrictive umask also affects project tool writes.",
+  "limits": [
+    "No live accounts or installed Swarm changed.",
+    "No offline, kernel-egress or whole-host filesystem isolation claim.",
+    "Unknown CONNECT remains blocked; no route guesses or allowlist expansion.",
+    "First PTY attempt failed because local heredoc stdin did not forward input; exact native birth and cgroup cleanup recorded separately.",
+    "Public flow, account adoption, quota recovery, workflow completeness and release remain open."
+  ]
+}
