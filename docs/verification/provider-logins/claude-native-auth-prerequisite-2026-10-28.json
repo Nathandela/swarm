@@ -124,6 +124,24 @@
       },
       "local_operator_setup_error": "An invalid mktemp template failed before stage creation; corrected before this one native case. No remote unit or account attempt was retried.",
       "interactive_or_adoption_qualified": false
+    },
+    {
+      "name": "R5 current synthetic auth receipt",
+      "result": "PASS_SYNTHETIC_AUTH_PREREQUISITE_ONLY",
+      "receipt_path": "/private/tmp/swarm-claude-native-auth-prep-operator-20261028-r5/outer-receipt-collected.json",
+      "receipt_sha256": "e7235bb0e02d181f1c77d629d49e6750d155bae6098524afabb7326c7e538235",
+      "qualified": true,
+      "e1_qualified": false,
+      "scope": "synthetic auth only",
+      "fresh_recovery": true,
+      "controller_and_auth_units_retired": true,
+      "canonical_credentials_unchanged": true,
+      "artifacts_unchanged": true,
+      "kernel_no_egress_claimed": false,
+      "whole_host_write_isolation_claimed": false,
+      "expires_at": "2026-10-28T04:28:38.259Z",
+      "current_reuse_status": "TIME_BOUNDED: native births must precede warm-receipt floor 2026-10-28T04:23:38.259Z; consumed E1 stage is never retried",
+      "limitations": "Synthetic auth prerequisite only. It does not qualify E1, native assembly, interactive use, adoption, kernel no-egress, or whole-host write isolation."
     }
   ],
   "production_written_shape_fixture_sha256": "2a2e05ffd0fa1c0d816312909e47f12da2143981ec0477ed753b7e4977df71ab",
@@ -131,6 +149,7 @@
     "Earlier failures remain failures; the R4 pass qualifies only this fresh synthetic enrollment, normal recovery and profile selection.",
     "Observed proxy traffic was one profile request and zero model requests; unrestricted host egress and whole-host filesystem isolation are not claimed. No interactive guard loading or account adoption is qualified.",
     "Z-state observations carry no current executable, thread-completeness or process-death credit; retirement still requires independent birth disappearance and exact cgroup proofs.",
-    "Shipping admission and automatic recovery remain disabled; no production or Astra signoff."
+    "Shipping admission and automatic recovery remain disabled; no production or Astra signoff.",
+    "The R5 synthetic receipt has an exact expiry and warm-receipt floor; its auth-only pass does not qualify the E1 native attempt."
   ]
 }

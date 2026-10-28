@@ -262,5 +262,107 @@
       "The no-native statement concerns this pinned failed prepare command, not universal host history.",
       "No process, endpoint, session, general open-FD, guaranteed reclaim or future-FD execution claim."
     ]
+  },
+  "october_28_constructor_run_cleanup_followup": {
+    "date": "2026-10-28",
+    "scope": "Recorded cleanup outcomes for three failed Codex constructor attempts; process cleanup evidence is separate from public image-file retirement.",
+    "runs": [
+      {
+        "case": "R8",
+        "result": "FAIL",
+        "outer_receipt": "/private/tmp/swarm-codex-outer-ljb8pc89/run.json",
+        "outer_receipt_sha256": "50db6688299304d4ccdc4444585b4ef4f65a24a974f8235e8e7138379f2fe871",
+        "stage": "/tmp/scx.9er0cpb1",
+        "observed_tuples": 18,
+        "sample_count": 18,
+        "sample_truncated": false,
+        "unit_cgroup_empty_and_gone": true,
+        "observed_recorded_births_ended": true,
+        "pins_unchanged": true,
+        "known_fixture_listeners_closed": false,
+        "historical_endpoint_fields": {
+          "logical": "/tmp/scx.9er0cpb1/tmp/ctui-hk5b_9go/s/ww7zhk7fulnu6mmv/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/e7a49c9cd960062812ce59b51e6a4cd5c427181cb9d30208e64dca5a7a96b09a",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        },
+        "complete_birth_or_session_retirement_claimed": false
+      },
+      {
+        "case": "R9",
+        "result": "FAIL",
+        "outer_receipt": "/private/tmp/swarm-codex-outer-i0_yqq12/run.json",
+        "outer_receipt_sha256": "f3c38e8906f2dad105ef12e8db68ca25678569026ffcda05b8d39b31ab46812b",
+        "stage": "/tmp/scx.n2dnbkvi",
+        "observed_tuples": 17,
+        "sample_count": 17,
+        "sample_truncated": false,
+        "unit_cgroup_empty_and_gone": true,
+        "observed_recorded_births_ended": true,
+        "pins_unchanged": true,
+        "known_fixture_listeners_closed": false,
+        "historical_endpoint_fields": {
+          "logical": "/tmp/scx.n2dnbkvi/tmp/ctui-eyjztljj/s/jtob6o2yaquqrtqr/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/f85ae3df6bc651672e75b47f0dbed220e5bfeadd53d16f26fc2634880df4524d",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        },
+        "complete_birth_or_session_retirement_claimed": false
+      },
+      {
+        "case": "R10",
+        "result": "FAIL",
+        "outer_receipt": "/private/tmp/swarm-codex-outer-122kb56o/run.json",
+        "outer_receipt_sha256": "946f19da8d779ab56f85e1f279c2a951626c1cd795a9a65f01f194c92ae932f4",
+        "stage": "/tmp/scx.g1ip1hk_",
+        "observed_tuples": 35,
+        "sample_count": 32,
+        "sample_truncated": true,
+        "unit_cgroup_empty_and_gone": true,
+        "observed_recorded_births_ended": true,
+        "pins_unchanged": true,
+        "known_fixture_listeners_closed": false,
+        "historical_endpoint_fields": {
+          "logical": "/tmp/scx.g1ip1hk_/tmp/ctui-_72fnsar/s/apnj3kv763mq7m2l/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/caa13f6dfc2c1628021b9b3f71a02a7d24cbbc545acdf589fac774df8fe12818",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        },
+        "complete_birth_or_session_retirement_claimed": false
+      }
+    ],
+    "limits": [
+      "No complete birth trace, FD census, session retirement, endpoint-entry cleanup, guaranteed reclaim or future-exec exclusion is inferred.",
+      "Historical fixture endpoint records are retained as evidence; their presence or absence is not a new cleanup claim."
+    ],
+    "public_image_cache_retirements": [
+      {
+        "target": "/tmp/scx.9er0cpb1/native/codex",
+        "receipt_sha256": "11058bd58a96bfbcf80c5a697732183778fb82ed7c4dfd043a53cd6046c40c83",
+        "bytes_unlinked": 296865480,
+        "kernel_execution_exclusion_held": true,
+        "local_full_hash_backup_retained": true,
+        "fresh_birth_checks": "recorded sample only; no complete fresh census"
+      },
+      {
+        "target": "/tmp/scx.n2dnbkvi/native/codex",
+        "receipt_sha256": "9af842d6ffcf2dfa0bdad32e14e82dde0790a646aca832f726a5a52a93909a85",
+        "bytes_unlinked": 296865480,
+        "kernel_execution_exclusion_held": true,
+        "local_full_hash_backup_retained": true,
+        "fresh_birth_checks": "recorded sample only; no complete fresh census"
+      },
+      {
+        "target": "/tmp/scx.g1ip1hk_/native/codex",
+        "receipt_sha256": "8d984805e3197a7f921301de51916991f44f9f5d19e6bb3e9c45c924a326fdd3",
+        "bytes_unlinked": 296865480,
+        "kernel_execution_exclusion_held": true,
+        "local_full_hash_backup_retained": true,
+        "fresh_birth_checks": "recorded sample only; no complete fresh census"
+      }
+    ]
   }
 }

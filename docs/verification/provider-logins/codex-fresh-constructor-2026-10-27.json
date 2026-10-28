@@ -42,7 +42,8 @@
   "limits": [
     "The failed attempt is unchanged; neither the seed result nor the observed constructor progress qualifies the complete case.",
     "No actual account adoption, loaded-turn handover, continuation, installed 0.164.0 compatibility or release qualification follows.",
-    "Main, installed Swarm services and live discussions were unchanged. Unknown provider routes remain failures."
+    "Main, installed Swarm services and live discussions were unchanged. Unknown provider routes remain failures.",
+    "R8, R9 and R10 actual constructor attempts remain failures. R11 budget accounting is a source-only candidate with no PREP or actual case execution and does not qualify R10."
   ],
   "followups": {
     "r2_seed_attempt": {
@@ -492,6 +493,184 @@
         "Neither preparation success nor complete seed markers qualify the failed seed or the full native case.",
         "The prior failures remain preserved; no current account-adoption, continuation or production qualification follows."
       ]
+    },
+    "r8_actual_attempt": {
+      "date": "2026-10-28",
+      "result": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-codex-outer-ljb8pc89/run.json",
+      "outer_receipt_sha256": "50db6688299304d4ccdc4444585b4ef4f65a24a974f8235e8e7138379f2fe871",
+      "inner_artifact": null,
+      "inner_receipt_present": false,
+      "unit": "swarm-codex-721bf9e9e09e4c41",
+      "observed_tuples": 18,
+      "sample_truncated": false,
+      "first_failure": "Executable ENOENT at PID 35816, start 1630485; same-cgroup observed states R,R,Z; inner receipt was not produced.",
+      "failure_entries": [
+        "ValueError:exe ENOENT unresolved {\"pid\":35816,\"start\":1630485,\"component\":\"exe\",\"errno\":2,\"states\":[\"R\",\"R\",\"Z\"],\"same_cgroup\":true}",
+        "inner artifact:FileNotFoundError",
+        "proof/finalize:ValueError:inner case failed or incomplete; full ownership unproved"
+      ],
+      "cleanup": {
+        "empty": true,
+        "directory_gone": true,
+        "observed_identities_ended": true,
+        "pins_unchanged": true,
+        "known_fixture_listeners_closed": false,
+        "complete_birth_or_listener_retirement_claimed": false,
+        "native_endpoint_closure_record": {
+          "logical": "/tmp/scx.9er0cpb1/tmp/ctui-hk5b_9go/s/ww7zhk7fulnu6mmv/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/e7a49c9cd960062812ce59b51e6a4cd5c427181cb9d30208e64dca5a7a96b09a",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        }
+      },
+      "qualification": "Failure preserved; no inner pass, adoption, role, session, or complete birth-trace claim."
+    },
+    "r9_actual_attempt": {
+      "date": "2026-10-28",
+      "result": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-codex-outer-i0_yqq12/run.json",
+      "outer_receipt_sha256": "f3c38e8906f2dad105ef12e8db68ca25678569026ffcda05b8d39b31ab46812b",
+      "inner_artifact": null,
+      "inner_receipt_present": false,
+      "unit": "swarm-codex-66bfbe5defd5d585",
+      "observed_tuples": 17,
+      "sample_truncated": false,
+      "state_race": {
+        "pid": 38973,
+        "initial_birth": 1779945,
+        "final_birth": 1779945,
+        "final_birth_validated": false,
+        "initial_state": "R",
+        "final_state": "Z",
+        "expected_state": "R",
+        "branch": "exe_ENOENT_retake",
+        "retake_states": [
+          "R",
+          "R"
+        ]
+      },
+      "final_birth_validated": false,
+      "failure_entries": [
+        "ValueError:unattributed/zombie state raced pid=38973 start=1779945",
+        "inner artifact:FileNotFoundError",
+        "proof/finalize:ValueError:inner case failed or incomplete; full ownership unproved"
+      ],
+      "cleanup": {
+        "empty": true,
+        "directory_gone": true,
+        "observed_identities_ended": true,
+        "pins_unchanged": true,
+        "known_fixture_listeners_closed": false,
+        "complete_birth_or_listener_retirement_claimed": false,
+        "native_endpoint_closure_record": {
+          "logical": "/tmp/scx.n2dnbkvi/tmp/ctui-eyjztljj/s/jtob6o2yaquqrtqr/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/f85ae3df6bc651672e75b47f0dbed220e5bfeadd53d16f26fc2634880df4524d",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        }
+      },
+      "qualification": "Failure preserved; the final same-birth Z observation was not validated by the run. No retroactive pass or adoption claim."
+    },
+    "r10_actual_attempt": {
+      "date": "2026-10-28",
+      "result": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-codex-outer-122kb56o/run.json",
+      "outer_receipt_sha256": "946f19da8d779ab56f85e1f279c2a951626c1cd795a9a65f01f194c92ae932f4",
+      "inner_receipt": "/private/tmp/swarm-codex-outer-122kb56o/tmp/ctui-_72fnsar/receipt.inner.json",
+      "inner_receipt_sha256": "3f487b79624fa2fb9b295f5ea9b99986c23c3853c9a8bfa6be22592966dadd4a",
+      "unit": "swarm-codex-a80029f4810f7082",
+      "observed_tuples": 35,
+      "sample_truncated": true,
+      "first_failure": "Provider request cap from the old mixed-ledger counter.",
+      "provider_accounting_at_failure": {
+        "legacy_route_requests_counter": 64,
+        "total_ledger_rows": 64,
+        "actual_http_ws_application_requests": 32,
+        "connect_rows": 29,
+        "usage_facts": 3,
+        "interpretation": "The 64-row ledger counter reached its cap at 32 actual HTTP/WS requests because CONNECT and usage-fact bookkeeping shared the same count."
+      },
+      "provider_transport": {
+        "accepted": 30,
+        "rejected": 0,
+        "tls_handshake_failures": 0,
+        "drained": false
+      },
+      "counts": {
+        "observer_requests": 14,
+        "native_frames": 7,
+        "frame_bytes": 1081,
+        "native_frame_bytes": 2774,
+        "route_requests": 64,
+        "main_inferences": 0,
+        "title_inferences": 0,
+        "prewarms": 2,
+        "mcp_messages": 3,
+        "mcp_message_bytes": 258,
+        "mcp_calls": 0,
+        "pty_bytes": 0,
+        "summary_bytes": 12374,
+        "scratch_bytes": 3892029,
+        "cgroup_directories": 0
+      },
+      "inner_failures": [
+        "ValueError:provider failure: ValueError:provider request cap",
+        "ValueError:provider request cap"
+      ],
+      "cleanup": {
+        "empty": true,
+        "directory_gone": true,
+        "observed_identities_ended": true,
+        "pins_unchanged": true,
+        "known_fixture_listeners_closed": false,
+        "complete_birth_or_listener_retirement_claimed": false,
+        "native_endpoint_closure_record": {
+          "logical": "/tmp/scx.g1ip1hk_/tmp/ctui-_72fnsar/s/apnj3kv763mq7m2l/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/caa13f6dfc2c1628021b9b3f71a02a7d24cbbc545acdf589fac774df8fe12818",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        }
+      },
+      "inner_cleanup": {
+        "started_monotonic": 19686.72551989,
+        "listeners_closed": false,
+        "children_ended": true,
+        "owned_only": true,
+        "elapsed_seconds": 2.1254950350012223,
+        "cgroup_empty": false,
+        "external_cleanup_required": true,
+        "outer_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-codex-a80029f4810f7082.service",
+        "owned_child_pids": [
+          42559,
+          42564,
+          42569,
+          42649,
+          42742,
+          42767,
+          42774,
+          42779,
+          42785,
+          42790,
+          42813
+        ]
+      },
+      "qualification": "Transport accepted 30 and was not drained. The run remains FAIL; no successful native case, adoption, MAIN/MCP qualification or account rotation is claimed."
+    },
+    "r11_budget_accounting_candidate": {
+      "date": "2026-10-28",
+      "result": "SOURCE_ONLY_NOT_EXECUTED_OR_QUALIFIED",
+      "source_root": "/private/tmp/swarm-codex-budget-accounting-source-20261028-r11",
+      "source_manifest_sha256": "075db7a5ea8023dc208f65962cb9e0e2efb66a1b13afd36f8db26b13d3826c86",
+      "base_artifact_manifest_sha256": "adbf133d93e68bb62cae2d2ebe2fb315c74a3bf69dbd0db6ca5751ea05853cc3",
+      "accounting_tests": 12,
+      "original_oracle_vectors": 110,
+      "description": "Separates attempted HTTP/WS requests from CONNECT and usage-fact rows; the 64-request application cap remains unchanged.",
+      "no_actual_case_or_prep_executed": true,
+      "qualification": "Source and local controls only. This candidate does not repair the R10 FAIL and is not a native, MAIN/MCP, adoption, or provider-rotation qualification."
     }
   }
 }
