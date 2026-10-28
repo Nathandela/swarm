@@ -127,10 +127,11 @@ canary remain open; the isolated fixture first needs a qualified normal auth
 enrollment receipt.
 
 The [synthetic enrollment prerequisite attempts](provider-logins/claude-native-auth-prerequisite-2026-10-28.json)
-retain a genuine ready receipt from the actual Swarm worker. The complete case
-still failed when its process observer rejected an exiting process; final proxy,
-selection and recovery evidence is missing. This does not qualify interactive
-loading or account adoption.
+retain the earlier failures and one passing fresh case after a narrow process
+observer fix. The actual Swarm worker produced a ready receipt, normal recovery
+settled and collected it, and normal APIs provisioned and selected the profile.
+The proxy observed one profile request and no model requests. Interactive guard
+loading and account adoption remain unqualified.
 
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
 retains one 56-event native trace with exact composer, prompt, turn and history

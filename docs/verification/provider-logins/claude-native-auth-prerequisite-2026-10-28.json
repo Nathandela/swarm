@@ -1,7 +1,7 @@
 {
   "date": "2026-10-28",
   "scope": "Private synthetic enrollment prerequisite for the dormant native-control launch canary; no real accounts or live Swarm changes.",
-  "result": "FAIL",
+  "result": "PASS_SYNTHETIC_AUTH_PREREQUISITE_ONLY",
   "product_source_commit": "94a67085df27a1297efe56d77a276f3aea7f87e0",
   "native_version": "2.1.310",
   "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
@@ -52,12 +52,59 @@
         "same_invocation": true
       },
       "cleanup": "Exact auth signal refused after normal worker retirement removed its cgroup. Original ready intent retained; explicit normal recovery requires the original worker config and fresh scope checks."
+    },
+    {
+      "name": "R4 corrected process observer",
+      "result": "PASS_SYNTHETIC_AUTH_PREREQUISITE_ONLY",
+      "receipt_sha256": "353e5ff5d5fbe50f4cf5de5b97687a13e670f27ee7ca7b5f34f2fcab2daa7539",
+      "prepare_receipt_sha256": "4e345f2b046c5fd608e7fc6a76b5bad91d141fd680573dd7f758a20c465aa549",
+      "binding_sha256": "09ae957338a21160bd9fb5cd12b847f4cb7dd7623d9ed49f6e169bda92a17bb8",
+      "fixture_manifest_sha256": "def211c71f13da439a043387d7225842c19b50431e59447d383aadeab6002b80",
+      "elapsed_seconds": 1.7863425399991684,
+      "observer_fix": "One private predicate accepts an executable-unavailable transition when existing final reads confirm the same process birth in Z and the cgroup is unchanged. Process-death and signal checks are unchanged.",
+      "pure_controls": {
+        "old_source_regression": "RED",
+        "process_observer_checks_passed": 9,
+        "existing_adapter_checks_passed": 10
+      },
+      "positive_witnesses": {
+        "normal_actual_swarm_auth_ready": true,
+        "fresh_normal_recovery_settled": true,
+        "profile_provisioned_and_selected": true,
+        "runtime_epoch": 1,
+        "normal_receipt_validation": true,
+        "retained_ready_intent": true,
+        "canonical_credentials_unchanged": true,
+        "native_and_artifact_pins_unchanged": true
+      },
+      "observed_proxy_traffic": {
+        "accepted": 1,
+        "application_tail_observation": "buffered plus <=20ms; later unread bytes unknown",
+        "connects": 1,
+        "errors": [],
+        "kernel_no_egress_claimed": false,
+        "models": 0,
+        "observed_proxy_traffic_only": true,
+        "profiles": 1
+      },
+      "retirement": {
+        "controller_and_auth_units_not_found": true,
+        "both_cgroups_gone": true,
+        "all_observed_births_ended": true,
+        "signals_needed": false,
+        "sampled_controller_births": 5,
+        "sampled_auth_births": 3,
+        "complete_birth_trace_claimed": false,
+        "sampled_scratch_bytes": 22356
+      },
+      "local_operator_setup_error": "An invalid mktemp template failed before stage creation; corrected before this one native case. No remote unit or account attempt was retried.",
+      "interactive_or_adoption_qualified": false
     }
   ],
   "production_written_shape_fixture_sha256": "2a2e05ffd0fa1c0d816312909e47f12da2143981ec0477ed753b7e4977df71ab",
   "limits": [
-    "A genuine ready receipt does not turn the failed case into a pass.",
-    "No model-traffic absence, completed profile selection, interactive guard loading or account adoption is qualified by this attempt.",
+    "Earlier failures remain failures; the R4 pass qualifies only this fresh synthetic enrollment, normal recovery and profile selection.",
+    "Observed proxy traffic was one profile request and zero model requests; unrestricted host egress and whole-host filesystem isolation are not claimed. No interactive guard loading or account adoption is qualified.",
     "Z-state observations carry no current executable, thread-completeness or process-death credit; retirement still requires independent birth disappearance and exact cgroup proofs.",
     "Shipping admission and automatic recovery remain disabled; no production or Astra signoff."
   ]
