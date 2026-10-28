@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -51,6 +52,12 @@ func init() {
 		_ = os.WriteFile(os.Getenv("SWARM_TEST_CLAUDE_LIFECYCLE_DIR")+"/descendant.expired", []byte("natural expiry"), 0600)
 		os.Exit(99)
 	case claudeLifecycleChildArg:
+		line, err := bufio.NewReader(os.Stdin).ReadBytes('\n')
+		if err != nil { os.Exit(86) }
+		var init struct { Type string `json:"type"`; ID string `json:"request_id"`; Request struct { Subtype string `json:"subtype"` } `json:"request"` }
+		if json.Unmarshal(line, &init) != nil || init.Type != "control_request" || init.ID == "" || init.Request.Subtype != "initialize" { os.Exit(87) }
+		// Synthetic protocol mechanics only; the held-image test is not native qualification.
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"type":"control_response","response":map[string]any{"subtype":"success","request_id":init.ID,"response":map[string]any{"pid":os.Getpid(),"claude_code_version":"2.1.310","session_state":"idle"}}}) != nil { os.Exit(88) }
 		mode := os.Getenv("SWARM_TEST_CLAUDE_LIFECYCLE_MODE")
 		if mode == "descendant" {
 			image, err := os.Executable()

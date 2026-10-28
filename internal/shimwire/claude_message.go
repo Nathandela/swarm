@@ -17,15 +17,18 @@ type ClaudePrimaryIdentity struct {
 }
 
 type ClaudePrimarySnapshot struct {
-	Identity         ClaudePrimaryIdentity `json:"identity"`
-	ObservedSequence uint64                `json:"observed_sequence"`
-	DurableSequence  uint64                `json:"durable_sequence"`
-	ReaderRevision   uint64                `json:"reader_revision"`
-	OwnerRevision    uint64                `json:"owner_revision"`
-	Healthy          bool                  `json:"healthy"`
-	PendingPartial   bool                  `json:"pending_partial"`
-	StdoutEOF        bool                  `json:"stdout_eof"`
-	StderrEOF        bool                  `json:"stderr_eof"`
+	InitializeRequestID        string                `json:"initialize_request_id"`
+	InitializeResponseSequence uint64                `json:"initialize_response_sequence"`
+	Initialized                bool                  `json:"initialized"`
+	Identity                   ClaudePrimaryIdentity `json:"identity"`
+	ObservedSequence           uint64                `json:"observed_sequence"`
+	DurableSequence            uint64                `json:"durable_sequence"`
+	ReaderRevision             uint64                `json:"reader_revision"`
+	OwnerRevision              uint64                `json:"owner_revision"`
+	Healthy                    bool                  `json:"healthy"`
+	PendingPartial             bool                  `json:"pending_partial"`
+	StdoutEOF                  bool                  `json:"stdout_eof"`
+	StderrEOF                  bool                  `json:"stderr_eof"`
 }
 
 type ClaudeMessageRequest struct {

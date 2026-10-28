@@ -130,6 +130,12 @@ type claudeChatCapture struct {
 	done                          chan struct{}
 	spool                         *HookSpool
 	server                        *server
+	native                        bool
+	initializeRequestID           string // capture.mu
+	initializeSequence            uint64
+	initializeWritten             bool
+	initializeState               string
+	nativeInputBlocked            bool
 	lifetimeLoss                  *atomic.Bool
 	stderrBytes                   uint64
 	stderrTruncated               bool
@@ -214,11 +220,15 @@ func (c *claudeChatCapture) admit(raw []byte) bool {
 		return false
 	}
 	c.sequence++
+	invalidNative := c.native && !c.observeNativeInitialize(raw, c.sequence)
 	c.frames++
 	c.bytes += len(body)
 	c.queue <- claudeChatFrame{body: body, sequence: c.sequence} // capacity reserved under the same lock; never waits on fsync
 	c.mu.Unlock()
-	return true
+	if invalidNative {
+		c.fail()
+	}
+	return !invalidNative
 }
 
 func (c *claudeChatCapture) readStdout(r io.Reader) {
@@ -490,9 +500,18 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 	capture = newClaudeChatCapture(spool, srv, identity)
 	capture.stdin, capture.stdout = inW, outR
 	if birth != nil {
-		capture.lifetimeLoss = &lifetimeLoss
+		capture.native, capture.lifetimeLoss = true, &lifetimeLoss
 	} else {
 		srv.claudePrimary.Store(capture)
+	}
+	// Reserve/write initialize before the reader can contend for admission; the
+	// owned pipes retain early stdout until these readers start immediately below.
+	var initializeErr error
+	if capture.native {
+		initializeErr = capture.initializeNative()
+		if initializeErr != nil {
+			capture.fail()
+		}
 	}
 	var readers sync.WaitGroup
 	readers.Add(2)
@@ -532,5 +551,5 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 	writeErr := writeFileAtomic(cfg.SessionDir, claudeChatCaptureFile, body)
 	code, sig := interpretExit(waitErr)
 	exitErr := persistSideFiles(cfg.SessionDir, code, sig, nil)
-	return code, errors.Join(captureErr, writeErr, exitErr)
+	return code, errors.Join(initializeErr, captureErr, writeErr, exitErr)
 }

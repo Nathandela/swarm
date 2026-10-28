@@ -126,7 +126,11 @@ func (c *claudeChatCapture) primarySnapshot() *shimwire.ClaudePrimarySnapshot {
 	defer c.admission.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return &shimwire.ClaudePrimarySnapshot{Identity: c.identity, ObservedSequence: c.sequence, DurableSequence: c.durableSequence, ReaderRevision: c.readerRevision, OwnerRevision: c.ownerRevision, Healthy: !c.captureLost() && !c.eof[0] && !c.eof[1], PendingPartial: len(c.partial) > 0 || c.oversized, StdoutEOF: c.eof[0], StderrEOF: c.eof[1]}
+	sequence := uint64(0)
+	if c.initialized() {
+		sequence = c.initializeSequence
+	}
+	return &shimwire.ClaudePrimarySnapshot{InitializeRequestID: c.initializeRequestID, InitializeResponseSequence: sequence, Initialized: c.initialized(), Identity: c.identity, ObservedSequence: c.sequence, DurableSequence: c.durableSequence, ReaderRevision: c.readerRevision, OwnerRevision: c.ownerRevision, Healthy: !c.captureLost() && !c.eof[0] && !c.eof[1], PendingPartial: len(c.partial) > 0 || c.oversized, StdoutEOF: c.eof[0], StderrEOF: c.eof[1]}
 }
 
 func (c *claudeChatCapture) writeMessage(req shimwire.ClaudeMessageRequest) shimwire.ClaudeMessageResult {
@@ -138,6 +142,9 @@ func (c *claudeChatCapture) writeMessage(req shimwire.ClaudeMessageRequest) shim
 	deadline := time.Now().Add(3 * time.Second)
 	c.mu.Lock()
 	healthy := !c.captureLost() && !c.eof[0] && !c.eof[1] && c.durableSequence == c.sequence
+	if c.native {
+		healthy = healthy && c.initialized() && c.initializeState == "idle" && !c.nativeInputBlocked
+	}
 	observed := c.sequence
 	c.mu.Unlock()
 	if req.Version != 1 || len(req.OperationID) == 0 || len(req.OperationID) > 128 || !adapter.IsCanonicalConversationID(req.NativeUserUUID) || len(req.Text) == 0 || len(req.Text) > shimwire.MaxClaudeFixtureTextBytes || !utf8.ValidString(req.Text) || req.Identity != c.identity || req.ExpectedOwnerRevision != c.ownerRevision || req.OwnerRevision <= c.ownerRevision || req.ThroughStreamSequence != observed || req.ReaderRevision != c.readerRevision || !healthy || observed == 0 || len(c.partial) != 0 || c.oversized || c.stdin == nil || c.stdout == nil {
@@ -151,85 +158,119 @@ func (c *claudeChatCapture) writeMessage(req shimwire.ClaudeMessageRequest) shim
 	if err != nil || ready&unix.POLLOUT == 0 || ready&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 {
 		return result
 	}
-	var native struct {
-		Type    string `json:"type"`
-		UUID    string `json:"uuid"`
-		Session string `json:"session_id"`
-		Parent  any    `json:"parent_tool_use_id"`
-		Message struct {
+	var body []byte
+	if c.native {
+		body, err = json.Marshal(struct {
+			Type    string `json:"type"`
+			UUID    string `json:"uuid"`
+			Message struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"message"`
+		}{Type: "user", UUID: req.NativeUserUUID, Message: struct {
 			Role    string `json:"role"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"message"`
+			Content string `json:"content"`
+		}{"user", req.Text}})
+	} else {
+		var native struct {
+			Type    string `json:"type"`
+			UUID    string `json:"uuid"`
+			Session string `json:"session_id"`
+			Parent  any    `json:"parent_tool_use_id"`
+			Message struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		native.Type, native.UUID, native.Session = "user", req.NativeUserUUID, c.identity.NativeSessionID
+		native.Message.Role = "user"
+		native.Message.Content = append(native.Message.Content, struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{"text", req.Text})
+		body, err = json.Marshal(native)
 	}
-	native.Type, native.UUID, native.Session = "user", req.NativeUserUUID, c.identity.NativeSessionID
-	native.Message.Role = "user"
-	native.Message.Content = append(native.Message.Content, struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}{"text", req.Text})
-	body, err := json.Marshal(native)
 	if err != nil {
 		return result
 	}
 	body = append(body, '\n')
-	raw, err := c.stdin.SyscallConn()
-	if err != nil {
-		return result
-	}
-	// Every later result is uncertain until the complete LF-terminated write
-	// returns. Reserving before the first syscall forbids duplicate attempts.
+	// Fixture retains attempted-revision semantics; native reports only complete
+	// delivered lines. Admission serializes duplicate attempts in both paths.
 	c.mu.Lock()
 	if c.captureLost() || c.eof[0] || c.eof[1] {
 		c.mu.Unlock()
 		return result
 	}
-	c.ownerRevision = req.OwnerRevision
+	if !c.native {
+		c.ownerRevision = req.OwnerRevision
+	}
 	c.mu.Unlock()
-	result.Status = "uncertain"
+	result.Status = c.writePrimaryLine(body, deadline)
+	if c.native && result.Status == "written" {
+		c.mu.Lock()
+		c.ownerRevision = req.OwnerRevision
+		c.mu.Unlock()
+	}
+	return result
+}
+
+// Caller owns admission. Stop only arbitrates each nonblocking syscall; it
+// never waits on this operation's polling, parser, or persistence locks.
+func (c *claudeChatCapture) writePrimaryLine(body []byte, deadline time.Time) string {
+	raw, err := c.stdin.SyscallConn()
+	if err != nil {
+		c.fail()
+		return "uncertain"
+	}
 	written := 0
 	for written < len(body) {
-		if !time.Now().Before(deadline) {
-			c.fail()
-			return result
-		}
 		var n int
 		var writeErr error
-		expired := false
+		stopped, expired := false, false
 		controlErr := raw.Control(func(fd uintptr) {
+			if c.native {
+				c.server.pgidMu.Lock()
+				defer c.server.pgidMu.Unlock()
+				c.mu.Lock()
+				unavailable := c.captureLost() || c.eof[0] || c.eof[1]
+				c.mu.Unlock()
+				if c.server.pendingSig != 0 || unavailable {
+					stopped = true
+					return
+				}
+			}
 			if !time.Now().Before(deadline) {
 				expired = true
 				return
 			}
 			n, writeErr = unix.Write(int(fd), body[written:])
 		})
-		if expired {
-			c.fail()
-			return result
+		if stopped && written == 0 {
+			return "refused"
 		}
 		if n > 0 {
 			written += n
 		}
-		if controlErr != nil || writeErr != nil && !errors.Is(writeErr, unix.EAGAIN) && !errors.Is(writeErr, unix.EINTR) {
+		if stopped || expired || controlErr != nil || writeErr != nil && !errors.Is(writeErr, unix.EAGAIN) && !errors.Is(writeErr, unix.EINTR) {
 			c.fail()
-			return result
+			return "uncertain"
 		}
 		if written == len(body) {
-			result.Status = "written"
-			return result
+			return "written"
 		}
 		if !time.Now().Before(deadline) {
 			c.fail()
-			return result
+			return "uncertain"
 		}
 		if _, err := claudePipePollUntil(c.stdin, unix.POLLOUT, 10, deadline); err != nil {
 			c.fail()
-			return result
+			return "uncertain"
 		}
 	}
-	return result
+	return "written"
 }
 
 // Interrupted readiness consumes no stream bytes. Retry only EINTR, within the

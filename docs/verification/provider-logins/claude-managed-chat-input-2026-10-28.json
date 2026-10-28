@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-28",
+  "status": "dormant input transport checkpoint; native qualification open",
+  "changes": [
+    "One owned initialize request; exact case-sensitive request ID/PID/version acknowledgement becomes ready only within the durable captured prefix.",
+    "Native user messages use string content; delivered revisions allow gaps after refused intents.",
+    "Stop arbitrates each nonblocking write syscall; partial or uncertain sends cannot retry. Fixture codec retained."
+  ],
+  "source_sha256": {
+    "internal/shim/claude_chat.go": "0f0858453ecfef7c74bcd798155a6af10251c8d6d6c135dac11e546d5c7c9f6f",
+    "internal/shim/claude_message.go": "07fda3f5833fd528f8b9fc2f228f93549d6f671c4ba8a537700824b32bc7b3f1",
+    "internal/shim/claude_chat_initialize.go": "6f29314cc64d1eb34f1b185d13def0c8281978ad6ac8f121232d10c4a118f161",
+    "internal/shimwire/claude_message.go": "47aadb988248a5aa43930d65a9da7d4c73db4cfc434d8f047d1edc7dd355748e",
+    "internal/shim/claude_native_initialize_test.go": "8d11fc5c700edd521acc96d4f122c590947c478a96838e12004c04d8f6b44455",
+    "internal/shim/claude_native_write_linux_test.go": "cbf0932c9052b5b2fc4a00027646b0e88fa139cfb926612ef198f6f8a3c91592",
+    "internal/shim/claude_native_lifecycle_test.go": "35cab207a0fa4daf7d9ac80a07d7d0030216bc8c6a9f401e7fcebf3e9dcfcee0"
+  },
+  "checks": {
+    "focused_race": {
+      "pass": 32,
+      "fail": 0,
+      "log_sha256": "b8bfd570cb0e61ac4a93820f46ecab44ebe8b2f394d77415048117a2073928b5"
+    },
+    "full_shim_race": {
+      "pass": 472,
+      "skip": 30,
+      "fail": 0,
+      "seconds": 172.57,
+      "log_sha256": "a3d427547f3fd52e63545f406b36fede86f7413bbc09f6c2b5323ab1fd56d456"
+    },
+    "alias_negative_control": {
+      "failed_test_actions": 8,
+      "log_sha256": "40dabcebc4c90f0de1888dd96b6f3384129047bba92da6dbb24eb5a67aacbf8d"
+    },
+    "vet": "passed internal/shim and internal/shimwire",
+    "lint": {
+      "status": "passed; 0 issues",
+      "scope": "internal/shim and internal/shimwire",
+      "note": "Analyzer cache writes outside workspace were denied; analysis completed with no findings."
+    }
+  },
+  "review": "Root and independent Astra source review; alias finding reproduced and fixed.",
+  "limitations": [
+    "Portable synthetic pipes and captured frames; no installed Claude or actual account-switch proof.",
+    "Linux partial-write and native managed-lifecycle qualification remain separate.",
+    "Consumer/history/UI and independent Stop work remains uncommitted and is not included in this checkpoint.",
+    "No public native admission or automatic continuation enabled."
+  ]
+}

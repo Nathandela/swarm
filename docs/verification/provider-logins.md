@@ -58,6 +58,13 @@ results with 30 skips. Guard-removal checks fail the intended assertions; build,
 vet and lint pass. Public native launch, input, independent Stop and automatic
 effects remain disabled pending the native message/history bridge.
 
+The [native input transport checkpoint](provider-logins/claude-managed-chat-input-2026-10-28.json)
+adds one correlated initialize, native string messages and per-write Stop fencing.
+The full Mac shim race suite passes 472 results with 30 skips. An acknowledgement
+field-alias failure was reproduced and fixed. These are synthetic transport
+checks; native input, history, independent socket Stop and automatic recovery
+remain unqualified and disabled.
+
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and
 managed schema 5/6. Saved `fake6` mode is immutable; malformed or mixed rows are
