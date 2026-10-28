@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -129,6 +130,12 @@ type claudeChatCapture struct {
 	done                          chan struct{}
 	spool                         *HookSpool
 	server                        *server
+	lifetimeLoss                  *atomic.Bool
+	stderrBytes                   uint64
+	stderrTruncated               bool
+	readinessMu                   sync.Mutex
+	readinessRead, readinessWrite *os.File
+	readinessCancelled            bool
 }
 
 func newClaudeChatCapture(spool *HookSpool, srv *server, identity claudeChatPrimaryIdentity) *claudeChatCapture {
@@ -152,10 +159,17 @@ func newClaudeChatCapture(spool *HookSpool, srv *server, identity claudeChatPrim
 	return c
 }
 
+func (c *claudeChatCapture) captureLost() bool {
+	return c.lost || c.lifetimeLoss != nil && c.lifetimeLoss.Load()
+}
+
 func (c *claudeChatCapture) fail() {
 	c.mu.Lock()
 	first := !c.lost
 	c.lost = true
+	if c.lifetimeLoss != nil {
+		c.lifetimeLoss.Store(true)
+	}
 	c.mu.Unlock()
 	if first {
 		c.signalMu.Lock()
@@ -194,7 +208,7 @@ func (c *claudeChatCapture) admit(raw []byte) bool {
 	}
 	c.mu.Lock()
 	body, err := encodeClaudeChatEnvelope(c.identity, raw, c.sequence+1, clock.Nano())
-	if err != nil || c.sequence == ^uint64(0) || c.lost || c.frames == claudeChatFrames || len(body) > claudeChatBytes-c.bytes {
+	if err != nil || c.sequence == ^uint64(0) || c.captureLost() || c.frames == claudeChatFrames || len(body) > claudeChatBytes-c.bytes {
 		c.mu.Unlock()
 		c.fail()
 		return false
@@ -208,18 +222,16 @@ func (c *claudeChatCapture) admit(raw []byte) bool {
 }
 
 func (c *claudeChatCapture) readStdout(r io.Reader) {
+	defer c.closeReadiness()
 	var buf [32 << 10]byte
 	for {
 		_, err := c.consumeStdout(r, buf[:])
 		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
-			if c.stdout != nil {
-				// shortcut: finite dev fixture polls at 10ms; use cancellable runtime readiness before native/fleet activation.
-				if _, pollErr := claudePipePoll(c.stdout, unix.POLLIN, 10); pollErr != nil && !errors.Is(pollErr, unix.EINTR) {
+			if err := c.waitReadiness(); err != nil {
+				if !errors.Is(err, context.Canceled) {
 					c.fail()
-					return
 				}
-			} else {
-				time.Sleep(time.Millisecond)
+				return
 			}
 			continue
 		}
@@ -229,27 +241,35 @@ func (c *claudeChatCapture) readStdout(r io.Reader) {
 	}
 }
 
-// Stderr remains diagnostics, never an alternate primary provenance stream.
-// Fixed chunks and a finite per-run budget bound this fixture's diagnostic lane.
+// Drain continuously; retain only the diagnostic tail, never primary frames.
 func (c *claudeChatCapture) readStderr(r io.Reader, diagnostic io.Writer) {
+	const retained = 64 << 10
 	var buf [32 << 10]byte
-	total, writable := 0, true
+	tail := make([]byte, 0, retained)
 	for {
 		n, err := r.Read(buf[:])
 		if n > 0 {
-			if n > claudeChatBytes-total {
+			c.mu.Lock()
+			if uint64(n) > ^uint64(0)-c.stderrBytes {
+				c.mu.Unlock()
 				c.fail()
-				writable = false
-			} else if writable {
-				written, writeErr := diagnostic.Write(buf[:n])
-				if writeErr != nil || written != n {
-					c.fail()
-					writable = false
-				}
-				total += n
+				return
 			}
+			c.stderrBytes += uint64(n)
+			c.stderrTruncated = c.stderrBytes > retained
+			c.mu.Unlock()
+			if len(tail)+n > retained {
+				tail = tail[len(tail)+n-retained:]
+			}
+			tail = append(tail, buf[:n]...)
 		}
 		if err != nil {
+			if len(tail) > 0 {
+				written, writeErr := diagnostic.Write(tail)
+				if writeErr != nil || written != len(tail) {
+					c.fail()
+				}
+			}
 			if errors.Is(err, io.EOF) {
 				c.mu.Lock()
 				c.eof[1] = true
@@ -266,11 +286,13 @@ func (c *claudeChatCapture) result() ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	body, err := json.Marshal(struct {
-		StdoutEOF bool `json:"stdout_eof"`
-		StderrEOF bool `json:"stderr_eof"`
-		Loss      bool `json:"loss"`
-	}{c.eof[0], c.eof[1], c.lost})
-	if c.lost || !c.eof[0] || !c.eof[1] {
+		StdoutEOF       bool   `json:"stdout_eof"`
+		StderrEOF       bool   `json:"stderr_eof"`
+		Loss            bool   `json:"loss"`
+		StderrBytes     uint64 `json:"stderr_bytes"`
+		StderrTruncated bool   `json:"stderr_truncated"`
+	}{c.eof[0], c.eof[1], c.captureLost(), c.stderrBytes, c.stderrTruncated})
+	if c.captureLost() || !c.eof[0] || !c.eof[1] {
 		err = errors.Join(err, errClaudeChatCapture)
 	}
 	return body, err
@@ -295,21 +317,65 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	if err := validateClaudeChatReservation(cfg, shimStart); err != nil {
 		return 0, err
 	}
+	fixtureEnv := make([]string, 0, len(cfg.Env)+1)
+	for _, entry := range cfg.Env {
+		if !strings.HasPrefix(entry, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR=") {
+			fixtureEnv = append(fixtureEnv, entry)
+		}
+	}
+	cfg.Env = append(fixtureEnv, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR="+cfg.SessionDir)
+	return runClaudeChatLifetime(cfg, sigCh, nil, nil)
+}
+
+func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirth, scope *managedNativeScope) (agentExit int, runErr error) {
+	if (birth == nil) != (scope == nil) {
+		return 0, errLoginResolution
+	}
+	shimStart, err := procstart.StartTime(os.Getpid())
+	if err != nil || shimStart <= 0 {
+		return 0, errClaudeChatCapture
+	}
 	spool, err := OpenHookSpoolProducer(filepath.Join(cfg.SessionDir, HookSpoolFile), cfg.HookSpoolMaxBytes)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { runErr = errors.Join(runErr, spool.Close()) }()
-	listener, err := listen(cfg.SocketPath)
-	if err != nil {
-		return 0, err
+	srv := newServer(nil, cfg.SocketPath, nil, nil, nil, 0, cfg.GraceTimeout, cfg.Metrics)
+	var controlDone chan struct{}
+	if birth == nil {
+		listener, err := listen(cfg.SocketPath)
+		if err != nil {
+			return 0, err
+		}
+		srv.listener, srv.claudeChat = listener, true
+		controlDone = make(chan struct{})
+		go func() { defer close(controlDone); srv.acceptLoop() }()
+	} else {
+		srv.managedSignals = scope.subreaper
 	}
-	srv := newServer(listener, cfg.SocketPath, nil, nil, nil, 0, cfg.GraceTimeout, cfg.Metrics)
-	srv.claudeChat = true
-	acceptDone := make(chan struct{})
-	go func() { defer close(acceptDone); srv.acceptLoop() }()
 	var controlStopOnce sync.Once
-	stopControl := func() { controlStopOnce.Do(func() { srv.shutdown(shimwire.Control{}); <-acceptDone }) }
+	stopControl := func() {
+		controlStopOnce.Do(func() {
+			if controlDone != nil {
+				srv.shutdown(shimwire.Control{})
+				<-controlDone
+			}
+		})
+	}
+	var hooks *hookServer
+	var hookDone chan struct{}
+	var lifetimeLoss atomic.Bool
+	defer func() {
+		if lifetimeLoss.Load() {
+			runErr = errors.Join(runErr, errClaudeChatCapture)
+		}
+	}()
+	defer func() {
+		if hooks != nil {
+			hooks.stopAndJoin()
+			<-hookDone
+		}
+	}()
 	var capture *claudeChatCapture
 	var containmentOnce sync.Once
 	finishContainment := func() {
@@ -317,6 +383,9 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 			stopControl()
 			if capture != nil {
 				capture.retireSignals()
+			}
+			if hooks != nil {
+				hooks.claudeOrigin.retire()
 			}
 			srv.finishEscalation()
 		})
@@ -349,27 +418,13 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	if err != nil {
 		return 0, err
 	}
-	fixtureEnv := make([]string, 0, len(cfg.Env)+1)
-	for _, entry := range cfg.Env {
-		if !strings.HasPrefix(entry, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR=") {
-			fixtureEnv = append(fixtureEnv, entry)
-		}
-	}
-	fixtureEnv = append(fixtureEnv, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR="+cfg.SessionDir)
 	if err := claudePipeNonblock(inW); err != nil {
 		return 0, err
 	}
 	if err := claudePipeNonblock(outR); err != nil {
 		return 0, err
 	}
-	cmd := &exec.Cmd{Path: cfg.Argv[0], Args: cfg.Argv, Env: buildEnv(fixtureEnv), Dir: cfg.Cwd, Stdin: inR, Stdout: outW, Stderr: errW, SysProcAttr: &syscall.SysProcAttr{Setpgid: true}}
-	if testHookAfterSignalArm != nil {
-		testHookAfterSignalArm()
-	}
-	if err := startClaudeChatPrimary(cmd, sigCh); err != nil {
-		finishContainment()
-		return 0, err
-	}
+	cmd := &exec.Cmd{Path: cfg.Argv[0], Args: cfg.Argv, Env: buildEnv(cfg.Env), Dir: cfg.Cwd, Stdin: inR, Stdout: outW, Stderr: errW, SysProcAttr: &syscall.SysProcAttr{Setpgid: true}}
 	sigDone, sigJoined := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(sigJoined)
@@ -382,10 +437,48 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	var signalStopOnce sync.Once
 	stopSignals := func() { signalStopOnce.Do(func() { close(sigDone); <-sigJoined }) }
 	defer stopSignals()
-	srv.setAgentPgid(cmd.Process.Pid)
+	if birth != nil {
+		if cfg.HookSocketPath == "" {
+			return 0, errClaudeChatCapture
+		}
+		l, err := listen(cfg.HookSocketPath)
+		if err != nil {
+			return 0, err
+		}
+		hooks = newHookServer(l, spool, cfg.HookToken)
+		identity := claudeChatPrimaryIdentity{SessionID: cfg.SessionID, RequiredRuntime: cfg.RequiredRuntime, NativeSessionID: cfg.ConversationID, ShimPID: os.Getpid(), ShimStartTime: shimStart}
+		if err := hooks.bindClaudeChatOrigin(identity, scope.preclaim, &lifetimeLoss, srv); err != nil {
+			_ = l.Close()
+			hooks = nil
+			return 0, err
+		}
+		hookDone = make(chan struct{})
+		go func() { defer close(hookDone); hooks.acceptLoop() }()
+	}
+	if testHookAfterSignalArm != nil {
+		testHookAfterSignalArm()
+	}
+	var startErr error
+	if birth != nil {
+		startErr = birth.startStdio(scope, cfg, cmd, srv, sigCh)
+	} else {
+		startErr = srv.startClaudeChatPrimary(cmd, sigCh)
+	}
+	if startErr != nil && cmd.Process == nil {
+		return 0, startErr
+	}
 	_ = inR.Close()
 	_ = outW.Close()
 	_ = errW.Close()
+	if startErr != nil {
+		stopSignals()
+		finishContainment()
+		_ = cmd.Wait()
+		return 0, startErr
+	}
+	if scope != nil {
+		scope.reapWhileRunning(cmd.Process.Pid)
+	}
 	primaryStart, identityErr := procstart.StartTime(cmd.Process.Pid)
 	if identityErr != nil || primaryStart <= 0 {
 		stopSignals()
@@ -396,7 +489,11 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	identity := claudeChatPrimaryIdentity{SessionID: cfg.SessionID, RequiredRuntime: cfg.RequiredRuntime, NativeSessionID: cfg.ConversationID, ShimPID: os.Getpid(), ShimStartTime: shimStart, PrimaryPID: cmd.Process.Pid, PrimaryStartTime: primaryStart}
 	capture = newClaudeChatCapture(spool, srv, identity)
 	capture.stdin, capture.stdout = inW, outR
-	srv.claudePrimary.Store(capture)
+	if birth != nil {
+		capture.lifetimeLoss = &lifetimeLoss
+	} else {
+		srv.claudePrimary.Store(capture)
+	}
 	var readers sync.WaitGroup
 	readers.Add(2)
 	go func() { defer readers.Done(); capture.readStdout(claudePipeReader{file: outR}) }()
@@ -419,9 +516,15 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	case <-readDone:
 	case <-time.After(grace):
 		capture.fail()
+		capture.cancelReadiness()
 		_ = outR.Close()
 		_ = errR.Close()
 		<-readDone
+	}
+	if hooks != nil {
+		hooks.stopAndJoin()
+		<-hookDone
+		hooks = nil
 	}
 	close(capture.queue)
 	<-capture.done // persistence must join; Stop already contained the child

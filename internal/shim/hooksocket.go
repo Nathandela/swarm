@@ -113,7 +113,8 @@ type hookServer struct {
 	// check entirely. POST carries no token of its own by design -- a spooled
 	// record's OWN embedded auth is checked downstream at daemon apply time, not at
 	// accept time -- so a hook that fires while the daemon is down still lands.
-	token string
+	token        string
+	claudeOrigin *claudeChatHookOrigin
 
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
@@ -201,9 +202,23 @@ func (h *hookServer) servePost(conn net.Conn, brace byte) {
 	r := io.MultiReader(bytes.NewReader([]byte{brace}), io.LimitReader(conn, hookPostMaxBytes))
 	var body json.RawMessage
 	if err := json.NewDecoder(r).Decode(&body); err != nil {
+		if h.claudeOrigin != nil {
+			h.claudeOrigin.fail()
+		}
 		return
 	}
+	if h.claudeOrigin != nil {
+		var err error
+		body, err = h.claudeOrigin.wrap(body)
+		if err != nil {
+			h.claudeOrigin.fail()
+			return
+		}
+	}
 	if _, err := h.spool.Append(body); err != nil {
+		if h.claudeOrigin != nil {
+			h.claudeOrigin.fail()
+		}
 		return
 	}
 	_, _ = conn.Write([]byte{HookAckByte})
@@ -234,6 +249,12 @@ func (h *hookServer) serveDrain(conn net.Conn) {
 // shutdown stops accepting, closes every tracked connection, joins every handler,
 // then closes the spool. It is safe to call even if acceptLoop was never started.
 func (h *hookServer) shutdown() {
+	h.stopAndJoin()
+	_ = h.spool.Close()
+}
+
+// Shared stdio ownership joins hook handlers without closing its one producer.
+func (h *hookServer) stopAndJoin() {
 	h.mu.Lock()
 	h.closing = true
 	conns := make([]net.Conn, 0, len(h.conns))
@@ -247,5 +268,4 @@ func (h *hookServer) shutdown() {
 		_ = c.Close()
 	}
 	h.handlers.Wait()
-	_ = h.spool.Close()
 }

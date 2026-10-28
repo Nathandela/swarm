@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -125,7 +126,7 @@ func (c *claudeChatCapture) primarySnapshot() *shimwire.ClaudePrimarySnapshot {
 	defer c.admission.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return &shimwire.ClaudePrimarySnapshot{Identity: c.identity, ObservedSequence: c.sequence, DurableSequence: c.durableSequence, ReaderRevision: c.readerRevision, OwnerRevision: c.ownerRevision, Healthy: !c.lost && !c.eof[0] && !c.eof[1], PendingPartial: len(c.partial) > 0 || c.oversized, StdoutEOF: c.eof[0], StderrEOF: c.eof[1]}
+	return &shimwire.ClaudePrimarySnapshot{Identity: c.identity, ObservedSequence: c.sequence, DurableSequence: c.durableSequence, ReaderRevision: c.readerRevision, OwnerRevision: c.ownerRevision, Healthy: !c.captureLost() && !c.eof[0] && !c.eof[1], PendingPartial: len(c.partial) > 0 || c.oversized, StdoutEOF: c.eof[0], StderrEOF: c.eof[1]}
 }
 
 func (c *claudeChatCapture) writeMessage(req shimwire.ClaudeMessageRequest) shimwire.ClaudeMessageResult {
@@ -136,7 +137,7 @@ func (c *claudeChatCapture) writeMessage(req shimwire.ClaudeMessageRequest) shim
 	defer c.admission.Unlock()
 	deadline := time.Now().Add(3 * time.Second)
 	c.mu.Lock()
-	healthy := !c.lost && !c.eof[0] && !c.eof[1] && c.durableSequence == c.sequence
+	healthy := !c.captureLost() && !c.eof[0] && !c.eof[1] && c.durableSequence == c.sequence
 	observed := c.sequence
 	c.mu.Unlock()
 	if req.Version != 1 || len(req.OperationID) == 0 || len(req.OperationID) > 128 || !adapter.IsCanonicalConversationID(req.NativeUserUUID) || len(req.Text) == 0 || len(req.Text) > shimwire.MaxClaudeFixtureTextBytes || !utf8.ValidString(req.Text) || req.Identity != c.identity || req.ExpectedOwnerRevision != c.ownerRevision || req.OwnerRevision <= c.ownerRevision || req.ThroughStreamSequence != observed || req.ReaderRevision != c.readerRevision || !healthy || observed == 0 || len(c.partial) != 0 || c.oversized || c.stdin == nil || c.stdout == nil {
@@ -181,7 +182,7 @@ func (c *claudeChatCapture) writeMessage(req shimwire.ClaudeMessageRequest) shim
 	// Every later result is uncertain until the complete LF-terminated write
 	// returns. Reserving before the first syscall forbids duplicate attempts.
 	c.mu.Lock()
-	if c.lost || c.eof[0] || c.eof[1] {
+	if c.captureLost() || c.eof[0] || c.eof[1] {
 		c.mu.Unlock()
 		return result
 	}
@@ -247,5 +248,81 @@ func claudePipePollUntil(file *os.File, events int16, timeout int, deadline time
 		if !errors.Is(err, unix.EINTR) {
 			return ready, err
 		}
+	}
+}
+
+// Poll outside read admission. A separate close-only pipe wakes an idle reader
+// without borrowing its descriptor or a persistence lock.
+func (c *claudeChatCapture) waitReadiness() error {
+	c.readinessMu.Lock()
+	if c.readinessCancelled {
+		c.readinessMu.Unlock()
+		return context.Canceled
+	}
+	if c.stdout == nil {
+		c.readinessMu.Unlock()
+		return errClaudeChatCapture
+	}
+	if c.readinessRead == nil {
+		r, w, err := os.Pipe()
+		if err != nil {
+			c.readinessMu.Unlock()
+			return err
+		}
+		c.readinessRead, c.readinessWrite = r, w
+	}
+	stop := c.readinessRead
+	c.readinessMu.Unlock()
+	output, err := c.stdout.SyscallConn()
+	if err != nil {
+		return err
+	}
+	wake, err := stop.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var pollErr error
+	err = output.Control(func(fd uintptr) {
+		controlErr := wake.Control(func(cancel uintptr) {
+			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}, {Fd: int32(cancel), Events: unix.POLLIN}}
+			for {
+				_, pollErr = unix.Poll(fds, -1)
+				if errors.Is(pollErr, unix.EINTR) {
+					continue
+				}
+				if pollErr == nil && fds[1].Revents != 0 {
+					pollErr = context.Canceled
+				}
+				return
+			}
+		})
+		if controlErr != nil {
+			pollErr = controlErr
+		}
+	})
+	if err != nil {
+		return err
+	}
+	return pollErr
+}
+func (c *claudeChatCapture) cancelReadiness() {
+	c.readinessMu.Lock()
+	defer c.readinessMu.Unlock()
+	c.readinessCancelled = true
+	if c.readinessWrite != nil {
+		_ = c.readinessWrite.Close()
+		c.readinessWrite = nil
+	}
+}
+func (c *claudeChatCapture) closeReadiness() {
+	c.readinessMu.Lock()
+	defer c.readinessMu.Unlock()
+	if c.readinessWrite != nil {
+		_ = c.readinessWrite.Close()
+		c.readinessWrite = nil
+	}
+	if c.readinessRead != nil {
+		_ = c.readinessRead.Close()
+		c.readinessRead = nil
 	}
 }

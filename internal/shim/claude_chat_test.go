@@ -452,7 +452,8 @@ func TestClaudeChatStderrIsBoundedDiagnosticsNotPrimary(t *testing.T) {
 		lost  bool
 	}{
 		{"ordinary", bytes.NewBufferString("diagnostic\n"), io.Discard, false},
-		{"overflow", bytes.NewReader(bytes.Repeat([]byte("x"), claudeChatBytes+1)), io.Discard, true},
+		// Lifetime verbosity is bounded retention, not a primary-capture failure.
+		{"verbose-tail", bytes.NewReader(bytes.Repeat([]byte("x"), claudeChatBytes+1)), io.Discard, false},
 		{"read-error", &claudeChatDataError{}, io.Discard, true},
 		{"write-error", bytes.NewBufferString("diagnostic\n"), claudeChatErrorWriter{}, true},
 	} {

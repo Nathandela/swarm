@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-28",
+  "result": "PASS_DORMANT_SHARED_MANAGED_LIFECYCLE",
+  "task": "agents-tracker-h6sc.25.3",
+  "source_pins": {
+    "internal/shim/claude_chat.go": "247f5edbbcce15923418196d40f9311e6089d2c81dbedc6067a2a03913e4b97f",
+    "internal/shim/claude_message.go": "153cfa39108e3d9ae70f9e5b6b8bd769f3648be9ae6691e65472c8620eae01ff",
+    "internal/shim/claude_claim.go": "8272164d7beb62ce6dc9008988433371640325e84e5e65d19ccdf3fa30e4902b",
+    "internal/shim/hooksocket.go": "646c2d6ad17b3496840fc934fa9f4ab1b534dfcf88663931a777a2d3a8fe34a8",
+    "internal/shim/claude_chat_native.go": "4b1181a0160efb1f30cb0f66c16e3c50cbee1fe1f99fa8f21a1bbb596ddbca16",
+    "internal/shim/claude_chat_test.go": "a50aac307232d269fef0e0c5e835b639c5e3e6144fb8103c321b80ddd3b38ebf",
+    "internal/shim/claude_native_claim_test.go": "de90b75becfa19639a99eba0c1268d5e2877596294bbf80edef540f1de78258a",
+    "internal/shim/claude_native_hooks_test.go": "efe908e80ccbcff43232700b6c51b7d6a4a023bd7403cfc90069a3e33c80f145",
+    "internal/shim/claude_native_readiness_test.go": "26b456ec2c97ae82a54c99489bc647f5207698c9583acfa088ba955f700bea98",
+    "internal/shim/claude_native_lifecycle_test.go": "f92fcfd5f17541669e3e995f47225f5909846b3fe4b4fce2a69f5898d2dc77aa"
+  },
+  "scope": [
+    "The existing fixture and prepared managed primary share one lifetime, explicit pipes and one HookSpool producer.",
+    "Hook POSTs receive shim-authored hook provenance, immutable pre-start scope and a sticky early-loss latch; they cannot claim stdout provenance.",
+    "Start/Stop arbitration registers children before publication; containment is independent of held publication/capture I/O.",
+    "Stdout readiness is cancellable; stderr drains with a 64KiB retained tail and explicit byte/truncation facts.",
+    "Exact native schema6 reservation support preserves older cases; invalid profile runtimes refuse before touching retained custody."
+  ],
+  "public_native_admission": false,
+  "native_control_snapshot_or_writer_exposed": false,
+  "automatic_effects": false,
+  "actual_native_cli_executed": false,
+  "baseline": {
+    "portable_jsonl_sha256": "3655b9afd3c2125ef484c86f1fd67f12f311b81700bc58067cad8828e9b4acdd",
+    "portable_pass": 19,
+    "portable_skip": 1,
+    "portable_fail": 12,
+    "old_behavior_overlay_sha256": "4e491ebc5d69c0a7e550381661fddb01aef51860fbd3a76a20ecca2ecebd02cf",
+    "old_behavior_pass": 1,
+    "old_behavior_intended_assertion_fails": 6,
+    "distinction": "API absence, actual behavioral RED and Linux synthetic mechanics are separate."
+  },
+  "validation": {
+    "focused_portable_pass": 32,
+    "focused_portable_skip": 1,
+    "focused_portable_fail": 0,
+    "affected_claude_race_pass": 149,
+    "affected_claude_race_skip": 24,
+    "full_mac_shim_race_pass": 440,
+    "full_mac_shim_race_skip": 30,
+    "full_mac_shim_race_fail": 0,
+    "full_mac_shim_race_log_sha256": "66b612b3919874d41e141d9116733108febae496635291ab2fc5fd48f9921e43",
+    "linux_prepared_helper_cases": 8,
+    "linux_pass_actions": 9,
+    "linux_fail_actions": 0,
+    "linux_evidence_sha256": "934b0e7f0bcd2f499dd38b6c98ef917d2c051044f5bc541c3dd637a9e50d4d64",
+    "linux_unit_absent_and_cgroup_gone": true,
+    "guard_omission_evidence_sha256": "172a8031c7e9ad6d62cd6cb25c7451b6272d6a11c5f9e3d1c20e5414b6107b09",
+    "cancel_wake_omission_log_sha256": "fcb51dc7808dace9ad89303e05f0adc18da7aaf0bd66235804bdd8f5b3e12308",
+    "build_exit": 0,
+    "vet_exit": 0,
+    "lint_exit": 0,
+    "quality_record_sha256": "33d088bc2772175d1cf459f17181541f66156c637de3678153fb724d887753ed"
+  },
+  "limits": [
+    "Linux tests use copied Go ELFs and synthetic settled credentials, without the race detector; Mac skips are not Linux race evidence.",
+    "Actual native initialize/message/history, authenticated independent Stop, capabilities, caller activation and provider handover remain separate gates.",
+    "No complete actor census, automatic continuation, parent-feature completion or full-repository test claim."
+  ]
+}

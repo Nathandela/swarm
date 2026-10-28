@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
@@ -102,13 +103,24 @@ func (s *managedNativeScope) validateClaudeReservation(cfg Config) error {
 			if lower != key {
 				return errLoginResolution
 			}
+		case "conversation_id":
+			if cfg.RequiredRuntime == persist.RequiredRuntimeClaudeChat && lower != key {
+				return errLoginResolution
+			}
 		}
 	}
 	if !sameBirthJSON(fields["login_runtime"], cfg.LoginRuntime) || !sameBirthJSON(fields["cli_identity"], cfg.CLIIdentity) {
 		return errLoginResolution
 	}
 	var m persist.Meta
-	if json.Unmarshal(raw, &m) != nil || m.SchemaVersion != persist.ClaudeSchemaVersion || m.ID != cfg.SessionID || m.AgentType != logins.ProviderClaude || m.LoginRuntime == nil || *m.LoginRuntime != *cfg.LoginRuntime || m.ProviderCwd() != cfg.Cwd || !reflect.DeepEqual(m.CLIIdentity, cfg.CLIIdentity) || m.ClaudeRetirement != nil || m.InputEmbargo != "" || m.RequiredRuntime != cfg.RequiredRuntime || cfg.RequiredRuntime != "" && cfg.RequiredRuntime != persist.RequiredRuntimeClaudeNativeControl || m.OpenCodeBinding != nil || m.Status.Process != status.ProcessRunning {
+	if json.Unmarshal(raw, &m) != nil {
+		return errLoginResolution
+	}
+	validMode := m.SchemaVersion == persist.ClaudeSchemaVersion && (cfg.RequiredRuntime == "" || cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl)
+	if m.SchemaVersion == persist.ClaudeChatSchemaVersion && cfg.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		validMode = adapter.IsCanonicalConversationID(cfg.ConversationID) && m.ConversationID == cfg.ConversationID && cfg.ClaudeChatFixture == "" && cfg.HermesInput == nil && cfg.AgyInput == nil && !cfg.ClaudeInput
+	}
+	if !validMode || m.ID != cfg.SessionID || m.AgentType != logins.ProviderClaude || m.LoginRuntime == nil || *m.LoginRuntime != *cfg.LoginRuntime || m.ProviderCwd() != cfg.Cwd || !reflect.DeepEqual(m.CLIIdentity, cfg.CLIIdentity) || m.ClaudeRetirement != nil || m.InputEmbargo != "" || m.RequiredRuntime != cfg.RequiredRuntime || m.OpenCodeBinding != nil || m.Status.Process != status.ProcessRunning {
 		return errLoginResolution
 	}
 	if m.ShimPID == 0 {

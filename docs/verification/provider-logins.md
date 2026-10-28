@@ -50,6 +50,14 @@ race run passes 408 results with 29 skips; build, vet and lint pass. Linux
 positive mechanics were not race-tested. Native protocol, managed-descendant
 and socket Stop, native chat admission and automatic effects remain unqualified.
 
+The [shared managed lifecycle checkpoint](provider-logins/claude-managed-chat-lifecycle-2026-10-28.json)
+adds one producer with separate hook/stdout provenance, early loss retention,
+cancellable readiness, bounded stderr and containment during held storage I/O.
+Eight Linux prepared-scope cases pass; the full Mac shim race run passes 440
+results with 30 skips. Guard-removal checks fail the intended assertions; build,
+vet and lint pass. Public native launch, input, independent Stop and automatic
+effects remain disabled pending the native message/history bridge.
+
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and
 managed schema 5/6. Saved `fake6` mode is immutable; malformed or mixed rows are
