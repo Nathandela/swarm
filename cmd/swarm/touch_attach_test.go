@@ -95,16 +95,16 @@ func TestTUI_TouchReturnPreservesLiveSession(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			waitText(0, "[Open]")
+			waitText(0, "[Open (⏎)]")
 			for round, answer := range []string{"before-return", "after-return"} {
 				start := len(out.String())
 				write("\r")
 				hint := "ctrl+q returns to swarm"
 				if enabled {
-					hint = "[swarm]"
+					hint = "[swarm (ctrl+q)]"
 				}
 				waitText(start, hint)
-				if !enabled && strings.Contains(out.String()[start:], "[swarm]") {
+				if !enabled && strings.Contains(out.String()[start:], "[swarm (ctrl+q)]") {
 					t.Fatal("disabled preference exposed a touch button")
 				}
 				write(answer + "\r")
@@ -118,7 +118,7 @@ func TestTUI_TouchReturnPreservesLiveSession(t *testing.T) {
 				} else {
 					write("\x11")
 				}
-				waitText(start, "[Open]")
+				waitText(start, "[Open (⏎)]")
 				views, err := client.List()
 				if err != nil || len(views) != 1 || views[0].ID != id {
 					t.Fatalf("session changed after return: views=%+v err=%v", views, err)

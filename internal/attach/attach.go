@@ -267,6 +267,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// row, saving/restoring the cursor (DECSC/DECRC) so the snapshot's cursor position
 	// survives (A-5). lastAssert seeds the output pump's re-assert throttle; chromeEngaged
 	// records that the region is ours to tear down.
+	buttonWidth := ansi.StringWidth(touchLabel(detachKey))
 	var lastAssert time.Time
 	renderChrome := func(c, r int) {
 		state := mouseTracker.State()
@@ -274,7 +275,7 @@ func Run(cfg Config) (reason Reason, err error) {
 		if permanentMouseFallback(state) {
 			touchLatchedOff = true
 		}
-		active := cfg.TouchBack && chromeActive(r) && c >= 7 && supported && !touchLatchedOff
+		active := cfg.TouchBack && chromeActive(r) && c >= buttonWidth && supported && !touchLatchedOff
 		touch.mu.Lock()
 		if touch.resized && (touch.wantedCols != c || touch.wantedRows != r) {
 			active = false
@@ -289,6 +290,7 @@ func Run(cfg Config) (reason Reason, err error) {
 		}
 		touch.enabled = false
 		touch.rows = r
+		touch.width = buttonWidth
 		touch.tracking = tracking
 		paintGeneration := touch.generation
 		touch.mu.Unlock()
@@ -694,21 +696,16 @@ func chromeHint(name string, detachKey byte, cols, rows int, touch ...bool) []by
 // does not exist yet.
 //
 
-// hintText builds the reserved-row hint, truncated to fit cols columns: the session
-// name and the return affordance ("<name>  ctrl+q returns to swarm"), plus the
-// takeover note when this attach evicted a phone's control lease. The key label
-// tracks the configured detach key. Truncation keeps a wide row from wrapping (a wrap
-// on the bottom row scrolls); cols<=0 disables truncation.
-//
-// TRUNCATION ORDER (nx44.7 ruling): the note goes LAST and is dropped WHOLE when the
-// row cannot hold it. The ctrl+q affordance is the escape route and is safety-
-// critical, so it survives a narrow terminal; the note is informational. Dropped
-// whole rather than sliced because a half-note ("took ove") would eat the very
-// columns the affordance needs while saying nothing.
+func touchLabel(detachKey byte) string {
+	return "[swarm (" + strings.ToLower(keyLabel(detachKey)) + ")]"
+}
+
+// hintText gives a complete active button priority over the session name. When
+// the button cannot fit, retain the plain keyboard hint; cols<=0 is unbounded.
 func hintText(name string, detachKey byte, cols int, touch ...bool) string {
 	s := name + "  " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm"
-	if len(touch) > 0 && touch[0] {
-		s = "[swarm] " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm  " + name
+	if len(touch) > 0 && touch[0] && (cols <= 0 || cols >= ansi.StringWidth(touchLabel(detachKey))) {
+		s = touchLabel(detachKey) + "  " + name
 	}
 	if cols > 0 {
 		s = ansi.Truncate(s, cols, "")

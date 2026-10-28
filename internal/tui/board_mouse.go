@@ -2,7 +2,6 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 type boardAction uint8
@@ -11,15 +10,16 @@ const (
 	actionNone boardAction = iota
 	actionOpen
 	actionFold
-	actionNew
-	actionMore
 	actionAttention
 	actionMenu
+	actionCommand
 )
 
 type boardGesture struct {
 	kind           boardAction
 	id             string
+	key            string
+	label          string
 	x0, x1, y      int
 	generation     uint64
 	pressX, pressY int
@@ -38,20 +38,13 @@ func (m rootModel) boardTarget(x, y int) boardGesture {
 		return g
 	}
 	if y == m.height-1 {
-		open := m.boardOpenLabel()
-		openWidth := ansi.StringWidth(open)
-		switch {
-		case x < 5:
-			g.kind = actionNew
-			g.x1 = 5
-		case x >= 6 && x < 8+openWidth && open != "—":
-			g.kind = actionOpen
-			g.x0 = 6
-			g.x1 = 8 + openWidth
-		case x >= 9+openWidth && x < 15+openWidth:
-			g.kind = actionMore
-			g.x0 = 9 + openWidth
-			g.x1 = 15 + openWidth
+		for _, b := range m.boardButtons() {
+			if x >= b.x && x < b.x+b.width {
+				g.kind, g.key, g.label = actionCommand, b.key, b.text()
+				g.x0, g.x1 = b.x, b.x+b.width
+				g.id = m.general.selectedID()
+				return g
+			}
 		}
 		return g
 	}
@@ -126,7 +119,7 @@ func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		target := m.boardTarget(mouse.X, mouse.Y)
-		if target.kind != g.kind || target.id != g.id {
+		if target.kind != g.kind || target.id != g.id || target.key != g.key || target.label != g.label {
 			return m, nil
 		}
 		switch g.kind {
@@ -136,12 +129,10 @@ func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.general.fold(g.id, !m.general.isCollapsed(g.id))
 		case actionAttention:
 			m.general.revealAttention()
-		case actionNew:
-			return m.updateGeneral(tea.KeyPressMsg{Text: "n"})
-		case actionMore:
-			m.openMore()
 		case actionMenu:
 			return m.activateMore(g.id)
+		case actionCommand:
+			return m.updateGeneral(actionKey(g.key))
 		}
 	}
 	return m, nil
@@ -162,6 +153,16 @@ func (m rootModel) boardShape() uint64 {
 	add(m.height)
 	add(int(m.screen))
 	add(m.general.top)
+	str(m.general.selectedID())
+	str(m.general.focusSection)
+	if s, ok := m.general.selected(); ok {
+		str(string(s.Status.Process))
+	}
+	for _, b := range m.boardButtons() {
+		str(b.text())
+		add(b.x)
+		add(b.width)
+	}
 	if m.connectionLost {
 		add(101)
 	}

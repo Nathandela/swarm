@@ -24,7 +24,7 @@ func TestTouchClickRequiresCompleteGesture(t *testing.T) {
 		{"string", "\x1b]0;\x1b[<0;2;24M\x1b[<0;2;24m\a", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			touch := &touchButton{enabled: true, rows: 24}
+			touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 			var out bytes.Buffer
 			f := newDetachInputFilter(DefaultDetachKey, func(p []byte) { out.Write(p) }, nil)
 			f.mouse = touch.input
@@ -49,7 +49,7 @@ func TestTouchClickRequiresCompleteGesture(t *testing.T) {
 
 func TestTouchBodyForwarding(t *testing.T) {
 	for _, tracking := range []int{0, 1000, 1002, 1003} {
-		touch := &touchButton{enabled: true, rows: 24, tracking: tracking}
+		touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24, tracking: tracking}
 		press := []byte("\x1b[<0;2;2M")
 		motion := []byte("\x1b[<32;3;2M")
 		if handled, _ := touch.input(press); handled != (tracking == 0) {
@@ -62,13 +62,59 @@ func TestTouchBodyForwarding(t *testing.T) {
 }
 
 func TestTouchHintHasPriorityAndCellWidth(t *testing.T) {
-	for _, cols := range []int{7, 8, 15, 40} {
-		s := hintText("界界界界界界界界界界", DefaultDetachKey, cols, true)
-		if len(s) < 7 || s[:7] != "[swarm]" {
-			t.Fatalf("button lost: %q", s)
+	for _, key := range []byte{DefaultDetachKey, 0x1d, 0x7f} {
+		label := "[swarm (ctrl+q)]"
+		switch key {
+		case 0x1d:
+			label = "[swarm (ctrl+])]"
+		case 0x7f:
+			label = "[swarm (del)]"
 		}
-		if w := ansi.StringWidth(s); w > cols {
-			t.Fatalf("width %d exceeds %d: %q", w, cols, s)
+		width := ansi.StringWidth(label)
+		for _, cols := range []int{width - 1, width, width + 1, width + 6} {
+			got := hintText("界界界界界", key, cols, true)
+			if cols >= width {
+				want := ansi.Truncate(label+"  界界界界界", cols, "")
+				if got != want {
+					t.Fatalf("key=%x cols=%d got %q want %q", key, cols, got, want)
+				}
+			} else if bytes.Contains([]byte(got), []byte("[swarm")) {
+				t.Fatalf("partial button: %q", got)
+			}
+			if ansi.StringWidth(got) > cols {
+				t.Fatalf("hint exceeds width: %q", got)
+			}
+		}
+	}
+}
+
+func TestTouchLabelCaptureThresholdAndEdges(t *testing.T) {
+	for _, tc := range []struct {
+		key   byte
+		label string
+	}{{DefaultDetachKey, "[swarm (ctrl+q)]"}, {0x7f, "[swarm (del)]"}} {
+		width := ansi.StringWidth(tc.label)
+		for _, cols := range []int{width - 1, width, width + 1} {
+			t.Run(fmt.Sprintf("%x/%d", tc.key, cols), func(t *testing.T) {
+				term := newFakeTerm(cols, 24)
+				sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
+				ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true, DetachKey: tc.key})
+				want := hintText("", tc.key, cols, true)
+				out := waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte(want)) })
+				if got := bytes.Contains(out, []byte("\x1b[?1002h")); got != (cols >= width) {
+					t.Fatalf("capture=%v at width=%d", got, cols)
+				}
+				if cols >= width {
+					term.feed([]byte(fmt.Sprintf("\x1b[<0;%d;24M\x1b[<0;%d;24mx", width+1, width+1)))
+					eventually(t, func() bool { return string(sess.inputBytes()) == "x" })
+					term.feed([]byte(fmt.Sprintf("\x1b[<0;%d;24M\x1b[<0;%d;24m", width, width)))
+				} else {
+					term.feed([]byte{tc.key})
+				}
+				if result := waitResult(t, ch); result.reason != ReasonDetached {
+					t.Fatalf("result=%+v", result)
+				}
+			})
 		}
 	}
 }
@@ -79,7 +125,7 @@ func TestTouchRunClickAndReadOnly(t *testing.T) {
 			term := newFakeTerm(80, 24)
 			sess := newFakeSession(mustSnap(t, "GRID"))
 			ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true, ReadOnly: readOnly})
-			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 			term.feed([]byte("\x1b[<0;2;24M\x1b[<0;2;24m"))
 			if result := waitResult(t, ch); result.reason != ReasonDetached {
 				t.Fatalf("result=%+v", result)
@@ -92,7 +138,7 @@ func TestTouchRunClickAndReadOnly(t *testing.T) {
 }
 
 func TestTouchNativeGestureKeepsRelease(t *testing.T) {
-	touch := &touchButton{enabled: true, rows: 24, tracking: 1002}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24, tracking: 1002}
 	for _, seq := range []string{"\x1b[<0;2;2M", "\x1b[<32;3;24M", "\x1b[<0;3;24m"} {
 		if handled, detach := touch.input([]byte(seq)); handled || detach {
 			t.Fatalf("native gesture intercepted: %q", seq)
@@ -141,7 +187,7 @@ func TestTouchUnsupportedAndLegacySnapshotDoNotCapture(t *testing.T) {
 		sess := newFakeSession(raw)
 		ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
 		out := waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("returns to swarm")) })
-		if bytes.Contains(out, []byte("[swarm]")) || bytes.Contains(out, []byte("\x1b[?1002h")) {
+		if bytes.Contains(out, []byte("[swarm (ctrl+q)]")) || bytes.Contains(out, []byte("\x1b[?1002h")) {
 			t.Fatalf("unsupported capture: %q", out)
 		}
 		term.feed([]byte{DefaultDetachKey})
@@ -150,7 +196,7 @@ func TestTouchUnsupportedAndLegacySnapshotDoNotCapture(t *testing.T) {
 }
 
 func TestTouchResizeCancelsGesture(t *testing.T) {
-	touch := &touchButton{enabled: true, capturing: true, rows: 24}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), capturing: true, rows: 24}
 	touch.input([]byte("\x1b[<0;2;24M"))
 	touch.resize(80, 30)
 	if handled, detach := touch.input([]byte("\x1b[<0;2;24m")); !handled || detach {
@@ -195,7 +241,7 @@ func TestTouchRunPreservesNativeBodyReports(t *testing.T) {
 			term := newFakeTerm(80, 24)
 			sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true, Tracking: tracking, Encoding: vt.MouseEncodeSGR}))
 			ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 			press := "\x1b[<0;2;2M"
 			motion := "\x1b[<32;3;2M"
 			release := "\x1b[<0;3;24m"
@@ -218,7 +264,7 @@ func TestTouchRunQueryFallbackRestoresNativeBeforeSplitQuery(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	sess.frames <- []byte("\x1b[?10")
 	sess.frames <- []byte("02$pQUERY")
 	out := waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("QUERY")) })
@@ -254,7 +300,7 @@ func TestTouchRunUnknownNativeStateDetachesBeforeOperation(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	sess.frames <- []byte("\x1b[?1002")
 	sess.frames <- []byte("r")
 	if result := waitResult(t, ch); result.reason != ReasonDetached {
@@ -297,7 +343,7 @@ func (t footerFailTerm) Out() io.Writer { return footerFailWriter{t.out} }
 type footerFailWriter struct{ out io.Writer }
 
 func (w footerFailWriter) Write(p []byte) (int, error) {
-	if bytes.Contains(p, []byte("[swarm]")) {
+	if bytes.Contains(p, []byte("[swarm (ctrl+q)]")) {
 		return 0, io.ErrClosedPipe
 	}
 	return w.out.Write(p)
@@ -305,7 +351,7 @@ func (w footerFailWriter) Write(p []byte) (int, error) {
 
 func TestTouchOtherInputCancelsActivation(t *testing.T) {
 	for _, middle := range []string{"x", "\x1b[O", "\x1b[I", "\x1b[200~paste\x1b[201~"} {
-		touch := &touchButton{enabled: true, rows: 24}
+		touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 		var out bytes.Buffer
 		f := newDetachInputFilter(DefaultDetachKey, func(p []byte) { out.Write(p) }, nil)
 		f.mouse = touch.input
@@ -320,7 +366,7 @@ func TestTouchOtherInputCancelsActivation(t *testing.T) {
 }
 
 func TestTouchWrongReleaseKeepsFooterOwnership(t *testing.T) {
-	touch := &touchButton{enabled: true, rows: 24, tracking: 1002}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24, tracking: 1002}
 	for _, seq := range []string{"\x1b[<0;2;24M", "\x1b[<1;2;24m", "\x1b[<0;2;2m"} {
 		if handled, detach := touch.input([]byte(seq)); !handled || detach {
 			t.Fatalf("footer gesture leaked/detached: %q", seq)
@@ -329,7 +375,7 @@ func TestTouchWrongReleaseKeepsFooterOwnership(t *testing.T) {
 }
 
 func TestTouchMalformedParametersDoNotActivate(t *testing.T) {
-	touch := &touchButton{enabled: true, rows: 24}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 	for _, seq := range []string{"\x1b[<0;+2;24M", "\x1b[<0; 2;24M", "\x1b[<0;0;24M"} {
 		if handled, detach := touch.input([]byte(seq)); handled || detach {
 			t.Fatalf("malformed mouse accepted: %q", seq)
@@ -341,7 +387,7 @@ func TestTouchMalformedParametersDoNotActivate(t *testing.T) {
 }
 
 func TestTouchC1InputAndPaste(t *testing.T) {
-	touch := &touchButton{enabled: true, rows: 24}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 	f := newDetachInputFilter(DefaultDetachKey, func([]byte) {}, nil)
 	f.mouse = touch.input
 	if !f.Feed([]byte("\x9b<0;2;24M\x9b<0;2;24m")) {
@@ -362,7 +408,7 @@ func TestTouchC1InputAndPaste(t *testing.T) {
 }
 
 func TestTouchOwnedReleaseConsumedAfterCaptureDisabled(t *testing.T) {
-	touch := &touchButton{enabled: true, rows: 24, tracking: 1002}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24, tracking: 1002}
 	touch.input([]byte("\x1b[<0;2;24M"))
 	touch.enabled = false
 	touch.capturing = false
@@ -378,7 +424,7 @@ func TestTouchResizeDuringBlockedPaintCannotPublishOldHitbox(t *testing.T) {
 	term := blockingTouchTerm{base, writer}
 	sess := &blockingTouchResize{fakeSession: newFakeSession(touchSnapshot(t, vt.MouseState{Known: true})), entered: make(chan struct{}), allow: make(chan struct{})}
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, base, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, base, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	sess.frames <- []byte("\x1b[2J")
 	select {
 	case <-writer.blocked:
@@ -415,7 +461,7 @@ type blockingTouchWriter struct {
 }
 
 func (w *blockingTouchWriter) Write(p []byte) (int, error) {
-	if bytes.Contains(p, []byte("[swarm]")) {
+	if bytes.Contains(p, []byte("[swarm (ctrl+q)]")) {
 		w.paints++
 		if w.paints == 2 {
 			close(w.blocked)
@@ -462,7 +508,7 @@ func TestTouchRunDefersChromeAcrossUTF8AndC1String(t *testing.T) {
 			term := newFakeTerm(80, 24)
 			sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 			ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 			baseline := len(term.outBytes())
 			sess.frames <- []byte(parts[0])
 			waitOut(t, term, func(b []byte) bool { return len(b) >= baseline+len(parts[0]) })
@@ -494,7 +540,7 @@ func TestTouchRunFlushesHeldPrefixOnceBeforeTeardown(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	prefix := "\x1b[?1002$"
 	sess.frames <- []byte(prefix)
 	sess.endSession()
@@ -511,7 +557,7 @@ func TestTouchFailedModeWriteCannotArmOnLaterRepaint(t *testing.T) {
 	term := blockingTouchTerm{base, writer}
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, base, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, base, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	sess.frames <- []byte("\x1b[2J")
 	waitOut(t, base, func(b []byte) bool { return bytes.Contains(b, []byte("\x1b[2m  ctrl+q")) })
 	base.feed([]byte("\x1b[<0;2;24M\x1b[<0;2;24mx"))
@@ -535,7 +581,7 @@ func (w *modeFailWriter) Write(p []byte) (int, error) {
 
 func TestTouchPartialMouseCandidateDoesNotTimeoutIntoPTY(t *testing.T) {
 	var out bytes.Buffer
-	touch := &touchButton{enabled: true, rows: 24}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 	f := newDetachInputFilter(DefaultDetachKey, func(p []byte) { out.Write(p) }, nil)
 	f.mouse = touch.input
 	f.Feed([]byte("\x1b[<0;2;"))
@@ -552,7 +598,7 @@ func TestTouchEncodingChangeDuringOwnedGestureReturnsBeforeLegacyRelease(t *test
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true, Tracking: vt.MouseTrackNormal, Encoding: vt.MouseEncodeSGR}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	term.feed([]byte("\x1b[<0;2;24Mx"))
 	eventually(t, func() bool { return string(sess.inputBytes()) == "x" })
 	sess.frames <- []byte("\x1b[?1006l")
@@ -568,7 +614,7 @@ func TestTouchEncodingChangeDuringOwnedGestureReturnsBeforeLegacyRelease(t *test
 func TestTouchSplitPasteEndSurvivesTimeout(t *testing.T) {
 	for _, csi := range []string{"\x1b[", "\x9b"} {
 		var out bytes.Buffer
-		touch := &touchButton{enabled: true, rows: 24}
+		touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 		f := newDetachInputFilter(DefaultDetachKey, func(p []byte) { out.Write(p) }, nil)
 		f.mouse = touch.input
 		f.Feed([]byte(csi + "200~data" + csi + "20"))
@@ -602,7 +648,7 @@ func TestTouchInitialUnknownStaysLatchedAfterTinyResizeAndReset(t *testing.T) {
 	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("RESET")) })
 	term.setSize(80, 24)
 	out := waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("returns to swarm")) })
-	if bytes.Contains(out, []byte("[swarm]")) {
+	if bytes.Contains(out, []byte("[swarm (ctrl+q)]")) {
 		t.Fatalf("initial unknown capture recovered unexpectedly: %q", out)
 	}
 	term.feed([]byte{DefaultDetachKey})
@@ -615,7 +661,7 @@ func TestTouchNativeStartupCanEnterSGRAfterLegacyTracking(t *testing.T) {
 			term := newFakeTerm(80, 24)
 			sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 			ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 			if split {
 				sess.frames <- []byte("\x1b[?1003hLEGACY")
 				waitOut(t, term, func(b []byte) bool {
@@ -626,7 +672,7 @@ func TestTouchNativeStartupCanEnterSGRAfterLegacyTracking(t *testing.T) {
 				sess.frames <- []byte("\x1b[?1003h\x1b[?1006hREADY")
 			}
 			waitOut(t, term, func(b []byte) bool {
-				return bytes.Contains(b, []byte("READY")) && bytes.Count(b, []byte("[swarm]")) >= 2
+				return bytes.Contains(b, []byte("READY")) && bytes.Count(b, []byte("[swarm (ctrl+q)]")) >= 2
 			})
 			term.feed([]byte("\x1b[<0;2;24M\x1b[<0;2;24m"))
 			if result := waitResult(t, ch); result.reason != ReasonDetached || result.err != nil {
@@ -640,7 +686,7 @@ func TestTouchNativeStartupCanEnterSGRAfterLegacyTracking(t *testing.T) {
 }
 
 func TestTouchTimedOutOrdinaryEscapeCancelsPress(t *testing.T) {
-	touch := &touchButton{enabled: true, rows: 24}
+	touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), rows: 24}
 	var out bytes.Buffer
 	f := newDetachInputFilter(DefaultDetachKey, func(p []byte) { out.Write(p) }, nil)
 	f.mouse = touch.input
@@ -676,7 +722,7 @@ func TestTouchLegacyFallbackPreservesNativeCoordinatesAndDropsQueuedSGR(t *testi
 
 func TestTouchDetachDropsOwnedPartialMouseCandidate(t *testing.T) {
 	for _, native := range []int{0, 1002} {
-		touch := &touchButton{enabled: true, capturing: true, rows: 24, tracking: native}
+		touch := &touchButton{enabled: true, width: ansi.StringWidth("[swarm (ctrl+q)]"), capturing: true, rows: 24, tracking: native}
 		var out bytes.Buffer
 		f := newDetachInputFilter(DefaultDetachKey, func(p []byte) { out.Write(p) }, nil)
 		f.mouse = touch.input
@@ -699,7 +745,7 @@ func TestTouchAmbiguousNativeMasksReturnBeforeReplay(t *testing.T) {
 		term := newFakeTerm(80, 24)
 		sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true, Tracking: vt.MouseTrackNormal, Encoding: vt.MouseEncodeSGR}))
 		ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-		waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+		waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 		baseline := len(term.outBytes())
 		sess.frames <- []byte(change)
 		result := waitResult(t, ch)
@@ -716,7 +762,7 @@ func TestTouchPixelTransitionDuringCaptureReturns(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	sess.frames <- []byte("\x1b[?1016h")
 	result := waitResult(t, ch)
 	if result.reason != ReasonDetached || result.err == nil {
@@ -734,7 +780,9 @@ func TestTouchPixelFallbackPreservesNativeReports(t *testing.T) {
 			term := newFakeTerm(80, 24)
 			sess := newFakeSession(touchSnapshot(t, state))
 			ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-			waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("returns to swarm")) })
+			waitOut(t, term, func(b []byte) bool {
+				return bytes.Contains(b, []byte("returns to swarm")) || legacyFirst && bytes.Contains(b, []byte("[swarm (ctrl+q)]"))
+			})
 			if legacyFirst {
 				sess.frames <- []byte("\x1b[?1003hLEGACY")
 				waitOut(t, term, func(b []byte) bool {
@@ -756,7 +804,7 @@ func TestTouchNativeOffQueryFallbackDropsQueuedReports(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	sess.frames <- []byte("\x1b[?1006$pREADY")
 	waitOut(t, term, func(b []byte) bool {
 		return bytes.Contains(b, []byte("READY")) && bytes.Contains(b, []byte("\x1b[2m  ctrl+q"))
@@ -772,14 +820,14 @@ func TestTouchTinyHeightPauseDropsQueuedReportsAndGrowRearms(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession(touchSnapshot(t, vt.MouseState{Known: true}))
 	ch := runInBackground(Config{Term: term, Session: sess, Chrome: true, TouchBack: true})
-	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm]")) })
+	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b, []byte("[swarm (ctrl+q)]")) })
 	baseline := len(term.outBytes())
 	term.setSize(80, 2)
 	waitOut(t, term, func(b []byte) bool { return bytes.Contains(b[baseline:], []byte("\x1b[r")) })
 	term.feed([]byte("\x1b[<0;2;2M\x1b[<0;2;2m\x9b<0;2;2M\x9b<0;2;2mx"))
 	eventually(t, func() bool { return string(sess.inputBytes()) == "x" })
 	term.setSize(80, 24)
-	waitOut(t, term, func(b []byte) bool { return bytes.Count(b, []byte("[swarm]")) >= 2 })
+	waitOut(t, term, func(b []byte) bool { return bytes.Count(b, []byte("[swarm (ctrl+q)]")) >= 2 })
 	term.feed([]byte("\x1b[<0;2;24M\x1b[<0;2;24m"))
 	if result := waitResult(t, ch); result.reason != ReasonDetached || result.err != nil {
 		t.Fatalf("grow did not rearm button: %+v", result)

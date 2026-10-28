@@ -247,7 +247,7 @@ func TestLaunch_UnusableAgentSelectableAndRefusedWithReason(t *testing.T) {
 func TestGoldenLaunchForm(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "") // deterministic: golden captures the no-auth baseline
 	tm := startTM(t, New(newFakeClient(), detectMixed()))
-	waitContains(t, tm, "new")                  // general footer painted first
+	waitContains(t, tm, "[New (n)]")            // general footer painted first
 	tm.Send(detectMsg{agents: detectMixed()()}) // deliver async detection so agents render (not "checking...")
 	tm.Send(keyRune('n'))
 	waitContains(t, tm, "new session")

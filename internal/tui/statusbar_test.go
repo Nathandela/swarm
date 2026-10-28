@@ -27,13 +27,11 @@ func TestStatusBar_AnchoredOnGeneral(t *testing.T) {
 		t.Fatalf("full-screen view must be %d rows tall, got %d", testRows, len(lines))
 	}
 	last := lines[len(lines)-1]
-	if !strings.Contains(last, "new") || !strings.Contains(last, "attach") {
+	if !strings.Contains(last, "[New (n)]") || !strings.Contains(last, "[Open (⏎)]") {
 		t.Fatalf("bottom status bar must carry the general context keys, got last line %q", last)
 	}
-	// Chrome defaults off (ADR-006, item 5) so the board must teach the detach key:
-	// the attach hint carries "ctrl+q returns" for discoverability.
-	if !strings.Contains(last, "ctrl+q returns") {
-		t.Fatalf("bottom status bar must teach the detach key (ctrl+q returns), got last line %q", last)
+	if strings.Contains(last, "returns") {
+		t.Fatalf("board repeats the attached screen's return hint: %q", last)
 	}
 }
 

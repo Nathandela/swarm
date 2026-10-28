@@ -36,9 +36,9 @@ func TestMobileFrames(t *testing.T) {
 		want          []string
 	}{
 		{"board_40x8", 40, 8, nil, []string{"Login API", "approval", "New", "More"}},
-		{"board_24x4", 24, 4, nil, []string{"Login API", "approval", "New", "More"}},
+		{"board_24x4", 24, 4, nil, []string{"Login API", "approval", "Open", "More"}},
 		{"fold_40x8", 40, 8, func(m tea.Model) tea.Model { return send(send(m, keyDown), tea.KeyPressMsg{Code: tea.KeyLeft}) }, []string{"Expand", "WORKING"}},
-		{"more_24x4", 24, 4, func(m tea.Model) tea.Model { return send(m, keyRune('m')) }, []string{"More", "Rename", "esc back"}},
+		{"more_24x4", 24, 4, func(m tea.Model) tea.Model { return send(m, keyRune('m')) }, []string{"More", "[Open (⏎)]", "[Back (esc)]", "[Down (↓)]"}},
 		{"prompt_40x8", 40, 8, func(m tea.Model) tea.Model {
 			m = send(m, detectMsg{agents: []AgentInfo{{Name: "claude", Installed: true, InRange: true}}})
 			r := send(m, keyRune('n')).(rootModel)
