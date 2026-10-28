@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
-	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 type claudeChatClient interface {
@@ -73,7 +74,7 @@ func (m rootModel) openClaudeChat(session protocol.SessionView) (tea.Model, tea.
 	m.closeClaudeChat()
 	m.chatGeneration++
 	ctx, cancel := context.WithCancel(m.connections.ctx)
-	m.chat = claudeChatModel{session: session, generation: m.chatGeneration, ctx: ctx, cancel: cancel, notice: "Connecting to fixture chat", readUntil: time.Now().Add(5 * time.Second)}
+	m.chat = claudeChatModel{session: session, generation: m.chatGeneration, ctx: ctx, cancel: cancel, notice: "Connecting to chat", readUntil: time.Now().Add(5 * time.Second)}
 	m.chat.view = newChatView(nil, nil, m.chat.notice, "", false).resize(m.width, m.height)
 	if sameScope {
 		m.chat.view = previous.view.resize(m.width, m.height)
@@ -108,7 +109,7 @@ func (m rootModel) openClaudeChat(session protocol.SessionView) (tea.Model, tea.
 		}
 		if err == nil {
 			if _, ok := send.Client.(claudeChatClient); !ok {
-				err = errors.New("message connection lacks fixture chat contract")
+				err = errors.New("message connection lacks chat contract")
 			}
 		}
 		if err == nil {
@@ -174,12 +175,12 @@ func claudeChatReadCmd(chat claudeChatModel) tea.Cmd {
 				break
 			}
 		}
-		if !found || result.session.RequiredRuntime != "claude-chat" || result.session.Agent != "fake" || result.page.Version != 1 {
+		if !found || !validClaudeChatRead(result.session, result.page) || result.session.Agent != chat.session.Agent {
 			result.err = errClaudeChatScope
 			return result
 		}
-		if result.session.Capabilities == nil || result.session.Capabilities.NativeInteractionVersion != 1 {
-			result.err = errors.New("fixture history not ready")
+		if result.session.Capabilities == nil {
+			result.err = errors.New("chat history not ready")
 			return result
 		}
 		if result.session.Capabilities.Validate() != nil {
@@ -228,7 +229,7 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 			return m, nil, true
 		}
 		m.chat.send, m.chat.control = v.send, v.control
-		m.chat.notice = "Loading fixture history"
+		m.chat.notice = "Loading history"
 		return m, m.readClaudeChat(), true
 	case claudeChatReadMsg:
 		if m.screen != screenChat || v.generation != m.chat.generation {
@@ -246,8 +247,14 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 		m.chat.projectHistory()
 		m.chat.ready = v.session.Capabilities.NativeComposer && !m.chat.stopped && !m.chat.stopPending && m.chat.operation == ""
 		m.chat.notice = "Dev fixture; workflow custody remains incomplete · ctrl+x Stop · esc back"
+		if v.session.Agent == "claude" {
+			m.chat.notice = "Claude chat · ctrl+x Stop · esc back"
+		}
 		if m.chat.operation != "" {
 			m.chat.receiptState = v.receipt.State
+			if v.receipt.Reason != "" {
+				m.chat.notice = v.receipt.Reason + " · ctrl+x Stop"
+			}
 			if (v.receipt.State == "admitted" || v.receipt.State == "completed") && fixtureEchoVisible(v.page, v.receipt, m.chat.pendingText) && m.chat.view.draft.text == m.chat.pendingText {
 				m.chat.view.draft.set("")
 			}
@@ -258,7 +265,9 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 			if time.Now().Before(m.chat.readUntil) {
 				return m, claudeChatPoll(m.chat), true
 			}
-			m.chat.notice = "Receipt pending; no resend · ctrl+x Stop"
+			if v.receipt.Reason == "" {
+				m.chat.notice = "Receipt pending; no resend · ctrl+x Stop"
+			}
 		}
 		return m, nil, true
 	case claudeChatSentMsg:
@@ -363,6 +372,41 @@ func (m rootModel) updateClaudeChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg { return claudeChatActionMsg{generation: generation, intent: cmd()} }
 }
 
+func validClaudeChatRead(session protocol.SessionView, page schema.NativeHistoryPage) bool {
+	c := session.Capabilities
+	if session.RequiredRuntime != "claude-chat" || c == nil || c.Validate() != nil {
+		return false
+	}
+	if session.Agent == "fake" {
+		return c.Provider == "fake" && c.NativeInteractionVersion == 1 && page.Version == 1
+	}
+	return session.Agent == "claude" && c.Provider == "claude" && c.ProviderVersion == "2.1.310" && c.NativeInteractionVersion == 2 && page.Version == 2 && !c.StructuredChat && !c.TerminalFallback && !c.TerminalControl && !c.Interrupt
+}
+
+func claudeChatText(raw json.RawMessage, native bool) (string, bool) {
+	var text string
+	if native && json.Unmarshal(raw, &text) == nil {
+		return text, true
+	}
+	var blocks []struct{ Type, Text string }
+	if json.Unmarshal(raw, &blocks) != nil {
+		return "", false
+	}
+	if !native {
+		if len(blocks) == 1 && blocks[0].Type == "text" {
+			return blocks[0].Text, true
+		}
+		return "", false
+	}
+	var parts []string
+	for _, block := range blocks {
+		if block.Type == "text" {
+			parts = append(parts, block.Text)
+		}
+	}
+	return strings.Join(parts, "\n"), len(parts) > 0
+}
+
 func fixtureEchoVisible(page schema.NativeHistoryPage, receipt protocol.SemanticMessageReceipt, text string) bool {
 	for _, raw := range page.Items {
 		var row struct {
@@ -370,10 +414,17 @@ func fixtureEchoVisible(page schema.NativeHistoryPage, receipt protocol.Semantic
 			Session    string `json:"sessionId"`
 			Message    struct {
 				Role    string
-				Content []struct{ Type, Text string }
+				Content json.RawMessage
 			}
 		}
-		if json.Unmarshal(raw, &row) == nil && row.Type == "user" && row.UUID == receipt.NativeMessageID && row.Session == receipt.NativeSessionID && row.Message.Role == "user" && len(row.Message.Content) == 1 && row.Message.Content[0].Type == "text" && row.Message.Content[0].Text == text {
+		if json.Unmarshal(raw, &row) != nil {
+			continue
+		}
+		body, ok := claudeChatText(row.Message.Content, page.Version == 2)
+		if page.Version == 2 {
+			ok = json.Unmarshal(row.Message.Content, &body) == nil
+		}
+		if ok && row.Type == "user" && row.UUID == receipt.NativeMessageID && row.Session == receipt.NativeSessionID && row.Message.Role == "user" && body == text {
 			return true
 		}
 	}
@@ -387,13 +438,18 @@ func (m *claudeChatModel) projectHistory() {
 			Type    string
 			Message struct {
 				Role    string
-				Content []struct{ Type, Text string }
+				Content json.RawMessage
 			}
 		}
-		if json.Unmarshal(raw, &row) == nil && (row.Type == "user" || row.Type == "assistant") && len(row.Message.Content) == 1 && row.Message.Content[0].Type == "text" {
-			item, _ := json.Marshal(map[string]any{"kind": "message_snapshot", "role": row.Message.Role, "text": row.Message.Content[0].Text})
-			items = append(items, item)
+		if json.Unmarshal(raw, &row) != nil || (row.Type != "user" && row.Type != "assistant") || row.Message.Role != row.Type {
+			continue
 		}
+		text, ok := claudeChatText(row.Message.Content, m.page.Version == 2)
+		if !ok {
+			continue
+		}
+		item, _ := json.Marshal(map[string]any{"kind": "message_snapshot", "role": row.Message.Role, "text": text})
+		items = append(items, item)
 	}
 	m.view.items = items
 	m.view = m.view.clampTop()

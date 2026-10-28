@@ -93,7 +93,7 @@ func (d *Daemon) executionCustodyUnsafe(local string) bool {
 	meta, ok := d.core.Get(local)
 	// This observation subset never authorizes automatic session effects, even
 	// when execution storage is absent or an old status writer reports Idle.
-	if ok && meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+	if ok && (meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl || meta.RequiredRuntime == persist.RequiredRuntimeClaudeChat) {
 		return true
 	}
 	if d.eng == nil || d.executionStore == nil || !ok || meta.AgentType != "codex" {

@@ -208,6 +208,12 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 	if len(rec.Request) == 0 {
 		return result, nil
 	}
+	var nativeKind struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(rec.Request, &nativeKind) == nil && nativeKind.Kind == "claude_native_message" {
+		return d.claudeNativeChatReceipt(local, operationID, rec), nil
+	}
 	var fixtureKind struct {
 		Kind string `json:"kind"`
 	}

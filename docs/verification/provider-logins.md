@@ -65,6 +65,15 @@ field-alias failure was reproduced and fixed. These are synthetic transport
 checks; native input, history, independent socket Stop and automatic recovery
 remain unqualified and disabled.
 
+The [native consumer and independent Stop checkpoint](provider-logins/claude-managed-chat-consumer-stop-2026-10-28.json)
+connects native-shaped frames, durable owner requests, actual history files and
+version 2 chat reads. Linux synthetic checks pass 38 consumer, 15 Stop-client
+and 52 shim assertions with no skips; the real client-path test fails against
+the preserved pre-fix implementation. Five affected Mac race suites pass 2,422
+results with 34 skips. These checks do not qualify the installed Claude CLI.
+Public launch, cold Stop hydration, long history, complete actors and automatic
+recovery remain open; automatic effects stay disabled.
+
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and
 managed schema 5/6. Saved `fake6` mode is immutable; malformed or mixed rows are

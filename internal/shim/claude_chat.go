@@ -334,10 +334,10 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 		}
 	}
 	cfg.Env = append(fixtureEnv, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR="+cfg.SessionDir)
-	return runClaudeChatLifetime(cfg, sigCh, nil, nil)
+	return runClaudeChatLifetime(cfg, sigCh, nil, nil, nil)
 }
 
-func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirth, scope *managedNativeScope) (agentExit int, runErr error) {
+func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirth, scope *managedNativeScope, retained *server) (agentExit int, runErr error) {
 	if (birth == nil) != (scope == nil) {
 		return 0, errLoginResolution
 	}
@@ -350,7 +350,10 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 		return 0, err
 	}
 	defer func() { runErr = errors.Join(runErr, spool.Close()) }()
-	srv := newServer(nil, cfg.SocketPath, nil, nil, nil, 0, cfg.GraceTimeout, cfg.Metrics)
+	srv := retained
+	if srv == nil {
+		srv = newServer(nil, cfg.SocketPath, nil, nil, nil, 0, cfg.GraceTimeout, cfg.Metrics)
+	}
 	var controlDone chan struct{}
 	if birth == nil {
 		listener, err := listen(cfg.SocketPath)
@@ -360,12 +363,16 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 		srv.listener, srv.claudeChat = listener, true
 		controlDone = make(chan struct{})
 		go func() { defer close(controlDone); srv.acceptLoop() }()
-	} else {
-		srv.managedSignals = scope.subreaper
+	} else if retained == nil || srv.claudeStopBinding == nil || srv.claudeStopDone == nil {
+		return 0, errLoginResolution
 	}
 	var controlStopOnce sync.Once
 	stopControl := func() {
 		controlStopOnce.Do(func() {
+			if retained != nil {
+				srv.stopClaudeChatControl()
+				return
+			}
 			if controlDone != nil {
 				srv.shutdown(shimwire.Control{})
 				<-controlDone
@@ -397,7 +404,11 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 			if hooks != nil {
 				hooks.claudeOrigin.retire()
 			}
-			srv.finishEscalation()
+			if retained != nil {
+				srv.finishClaudeChatControl()
+			} else {
+				srv.finishEscalation()
+			}
 		})
 	}
 	defer finishContainment()
@@ -501,9 +512,8 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 	capture.stdin, capture.stdout = inW, outR
 	if birth != nil {
 		capture.native, capture.lifetimeLoss = true, &lifetimeLoss
-	} else {
-		srv.claudePrimary.Store(capture)
 	}
+	srv.claudePrimary.Store(capture)
 	// Reserve/write initialize before the reader can contend for admission; the
 	// owned pipes retain early stdout until these readers start immediately below.
 	var initializeErr error

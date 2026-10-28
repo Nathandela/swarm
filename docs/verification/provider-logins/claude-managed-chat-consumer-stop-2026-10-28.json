@@ -1,0 +1,217 @@
+{
+  "date": "2026-10-28",
+  "status": "dormant native consumer and independent Stop checkpoint; caller/native qualification open",
+  "implementation": [
+    "Native initialize/echo/assistant/result folding separates primary sequence from mixed hook cursor and preserves global UnknownActors.",
+    "Durable owner intent precedes readiness; exact namespaced caller, UUID/text correlation, recursively unambiguous fields, ordinary tools and main-only completion.",
+    "Anchored native profile history supplies version2 chat rendering, separate read/input readiness and exact observed echo before clearing a draft.",
+    "Immutable snapshot-independent Stop binding precedes birth preparation; kernel PID/UID/birth checks, a shared three-second network deadline and no fallback signal or lifecycle release.",
+    "Retained owner Stop bypasses consumer, login and core lookup; dormant registration requires bound Stop before publishing native state."
+  ],
+  "source_sha256": {
+    "internal/daemon/claude_chat_dispatch.go": "22b8662696c5e0136339ba3ed1fc86d7299800c28ae132c517bc40f550552960",
+    "internal/protocol/schema/capability.go": "13c8bb3edabbb86d35b045d47219c19fcf6a4f4061872b6c7cf04614100d8033",
+    "internal/shim/claude_chat.go": "655b9ad822863af39bf57024c624c5486322cf878962c705e26c41727e557cca",
+    "internal/shim/claude_chat_native.go": "587f896c9b5223a7bc3193e79784a29ffee67d442f96e2191789f77197f61e34",
+    "internal/shim/server.go": "50d2546d1874bbdcdcb9fa2c8c5bc7641f51c29e218a184752ee62e65137a802",
+    "internal/shimwire/shimwire.go": "fe775daa8f44fe38f70c2cc343471c328e6388a4b92dcd40e233d2e8da7d588c",
+    "internal/skeleton/auth_recycle_owner.go": "92ae533534f971d9bb5cd267216e937ffc06f370046cf2f544cb46096e876106",
+    "internal/skeleton/capability.go": "ed6c5b119739415370d40dd5a31ea6b0ab68ae670aef4cf649b9c783f3e7a432",
+    "internal/skeleton/chat.go": "87c75c3372e34c5e034754805967d2f9596abf97dd9471e7118b44341fdb5b4b",
+    "internal/skeleton/claude_chat_quarantine.go": "e5483ac65864708164797da9032336ac59a971642fa006694c5771cb183b8d59",
+    "internal/skeleton/execution.go": "a579ca196c8f5cfd2cac0ce405f56365fb94be35b7c299ff4011df4f851dffc6",
+    "internal/skeleton/hookdrain.go": "04de425510d163aed650f2eff705cd524116d526de48f44d883f5c82bc1f8366",
+    "internal/skeleton/hookdrainloop.go": "0a2385c221ba83fff2e0cdcc88e1c424ced0ecfa1db5f3a8889979521a361214",
+    "internal/skeleton/opencode_history_page.go": "0a8d7746cc7a9fce3259f49be7e7e94d352e12aaada869d367fd6359b1d0b241",
+    "internal/skeleton/opencode_receipt.go": "3a39c7b4796cd533b60df1b417dee32d15281b5d36415e7178bd1f73580be050",
+    "internal/skeleton/serve.go": "806850007c5897158e2c771f33f2f32314425dc8d3d00dd708e49dc21df89b85",
+    "internal/tui/claude_chat.go": "c2e684b5f2dcac53615cbc282067325431125a6c39d6dd6e6b0d8758f2c6f537",
+    "internal/daemon/claude_native_stop.go": "d5d5ef9c2332f28d33b9672837911a38dde87542632100d2290d209acf5fecf7",
+    "internal/daemon/claude_native_stop_client_test.go": "851b6a3bbcae80c9afa4caf3b8ee7e3a6456846e21c9eba0194b1a85288770c9",
+    "internal/daemon/claude_native_stop_linux.go": "39bdef5a556f2c9d06e1e91a4b9876208c4d8da42e9c9a0d1b81bfba271eb65a",
+    "internal/daemon/claude_native_stop_other.go": "201ceacfba3763ee664377a6e1cdb8b866a4b0cc0b48c9010e3813e9c3bd8115",
+    "internal/logins/claude_history.go": "f9eba0569b9ca181280253f09671039cdeecacae1dd6c87a347a20846eabac53",
+    "internal/logins/claude_history_test.go": "4cae37c6471c809d8b774a688f877594589cf48d7f2484d6bf5348b62d857fbd",
+    "internal/protocol/schema/claude_chat_native_capability_test.go": "635c8e0cece0e6b6664801984352b80838c5e3caef4511e31fd8fb0ccb2ee07e",
+    "internal/shim/claude_chat_stop.go": "20840e10d11555005e8d1d884dcb1e6ea41bbe7fc01219240b2097dad698ed0c",
+    "internal/shim/claude_chat_stop_transport_test.go": "3f98c715f4bbe77f584ecdceb069c7e46d28cead73cc24fadf2a12d8203e2136",
+    "internal/shimwire/claude_stop.go": "792625efdddfffb95d21ed4f81d072333c9772ff41a8bf7338409eb5e1aa40e6",
+    "internal/skeleton/claude_chat_native.go": "445795b5088425ec93b8227fb514e342374c9d2a36c577bf47c454da4f84abc4",
+    "internal/skeleton/claude_chat_native_stop.go": "2ed8738e19bb1daa5921ba70399d46cd5d966badb60bcee34360e3acdc88e2cb",
+    "internal/skeleton/claude_chat_native_stop_linux_test.go": "b9e8a261556cd5cd18df0b91666cf4ccfe4abb45987d27c67829caa200c5fa6a",
+    "internal/skeleton/claude_chat_native_stop_test.go": "e280dcb51122ffd292830cd7497c16294afea5ff87d4df74d4813bc8ea2f624e",
+    "internal/skeleton/claude_chat_native_test.go": "28f0628453b52de8d9038ea7b098747a0fbb9a19cd1aba9f861d9e9882e44a3e",
+    "internal/tui/claude_chat_native_test.go": "12898c3044ec60d20ba23a1e512d24c29e05924176c8cccc0ac50e4c56741558"
+  },
+  "linux_build": {
+    "skeleton.test": {
+      "exit_code": 0,
+      "seconds": 17.37510620802641
+    },
+    "caller-red.test": {
+      "exit_code": 0,
+      "seconds": 16.900012957979925
+    },
+    "daemon.test": {
+      "exit_code": 0,
+      "seconds": 3.0293492920463905
+    },
+    "shim.test": {
+      "exit_code": 0,
+      "seconds": 3.0727887080283836
+    },
+    "swarm": {
+      "exit_code": 0,
+      "seconds": 5.105368750053458
+    },
+    "source_changed": [],
+    "artifacts": {
+      "caller-red.test": {
+        "bytes": 38264100,
+        "sha256": "c7f93a95eec03b3ba8f9a9a6144e8c06dc873481526a9a4245d2fd46a38ab964"
+      },
+      "swarm": {
+        "bytes": 31060317,
+        "sha256": "56e79542c93149529259b7507edb622322027cb6e1e310eda9bef10615e39924"
+      },
+      "skeleton.test": {
+        "bytes": 38264862,
+        "sha256": "cfa5a0b99fe8ad8a729f0201bb78162e4d1dff6597ac1ee5783a34e4dc333755"
+      },
+      "daemon.test": {
+        "bytes": 15089549,
+        "sha256": "e239379ba2467c390697613c16ef2224ee9d1f20606029b656b9b7326cd4998c"
+      },
+      "shim.test": {
+        "bytes": 15992744,
+        "sha256": "1b27ff340e45f656ceaf33ab69ee8af730cfea9b151bb0ff1a40883d3d701a39"
+      },
+      "swarm-fake-agent": {
+        "bytes": 4548197,
+        "sha256": "b71cd80e0b5fc9b0c58f27bed8c3809be94cd2b98ae90c883aeb93de4ffe5d35"
+      }
+    }
+  },
+  "linux_synthetic_checks": {
+    "consumer": {
+      "pass": 38,
+      "fail": 0,
+      "skip": 0,
+      "test_green": true,
+      "markers_complete": true,
+      "cleanup": {
+        "cgroup_gone": true,
+        "unit_not_found": true
+      },
+      "run_sha256": "e6fddfa6144ed848257519e3a59b0662b5814c61145f4b57835a666fdafbf617",
+      "log_sha256": "e63aaf38ad72dccbb67d74be5d8cac9ae603ff53654f855245a937acfbb2084e",
+      "go_copy_witnesses": 2
+    },
+    "stop_client": {
+      "pass": 15,
+      "fail": 0,
+      "skip": 0,
+      "test_green": true,
+      "markers_complete": true,
+      "cleanup": {
+        "cgroup_gone": true,
+        "unit_not_found": true
+      },
+      "run_sha256": "aaeb18acc805ff296e00100a36b9d1b19bede4826dd86f29441b46bda22977b6",
+      "log_sha256": "2af5039e63e5ddad01978a9546f2eefcffeac8cc93764865385303900b307d28",
+      "go_copy_witnesses": 2
+    },
+    "shim": {
+      "pass": 52,
+      "fail": 0,
+      "skip": 0,
+      "test_green": true,
+      "markers_complete": true,
+      "cleanup": {
+        "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-a2-shim-srn1tpm7.service",
+        "directory_gone": true,
+        "exact_unit_not_found": true
+      },
+      "run_sha256": "b7258b87ab7b8867f7345d9b20eb3e693fdd630022614c73779ccd1a8ae7fee9",
+      "log_sha256": "ceae5e91adf67b6ac80f7cdfa4fbb6a35bf4e0126d675bb189ee75b6c9d97fe7",
+      "go_copy_witnesses": 1
+    },
+    "caller_before_fix": {
+      "pass": 0,
+      "fail": 1,
+      "skip": 0,
+      "test_green": false,
+      "markers_complete": true,
+      "cleanup": {
+        "cgroup_gone": true,
+        "unit_not_found": true
+      },
+      "run_sha256": "598c748387067e037edfb8fbf8e401806e25bd7f496b0b31d4e578c1da12b48f",
+      "log_sha256": "cf8d9186c4c9e318a754937266483b17d60edd4c196578261e85bf3eddf6c388",
+      "go_copy_witnesses": 2
+    }
+  },
+  "mac_affected_race": {
+    "counts": {
+      "shim": {
+        "pass": 490,
+        "skip": 31
+      },
+      "logins": {
+        "pass": 686
+      },
+      "tui": {
+        "pass": 698
+      },
+      "schema": {
+        "pass": 72
+      },
+      "daemon": {
+        "pass": 476,
+        "skip": 3
+      }
+    },
+    "packages": [
+      {
+        "Package": "github.com/Nathandela/swarm/internal/shim",
+        "Action": "pass",
+        "Elapsed": 176.083
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/logins",
+        "Action": "pass",
+        "Elapsed": 214.796
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/tui",
+        "Action": "pass",
+        "Elapsed": 102.917
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/protocol/schema",
+        "Action": "pass",
+        "Elapsed": 1.208
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/daemon",
+        "Action": "pass",
+        "Elapsed": 296.21
+      }
+    ],
+    "log_sha256": "5049ed45f12e8a91c54d1c9a01490f2b2ed1b3be3607bc462870117ce7ddf19f"
+  },
+  "reviews": "Independent Astra source review found and verified fixes for JSON ambiguity, durable intent ordering, hidden history, ordinary tool blocking, busy completion race, namespaced caller and mandatory Stop retention. Root reviewed connected caller and Stop paths.",
+  "limitations": [
+    "Linux runs use synthetic native-shaped peers/owned children, not the installed Claude CLI or real account switching.",
+    "Native public launch, cold Stop-only hydration wiring, deterministic initial prompt caller and installed-image qualification remain separate A3/A4 gates.",
+    "Automatic continuation remains disabled; actor completeness and quota-request credential binding remain unqualified.",
+    "Native history is a bounded first-turn slice (512KiB/4096 records); longer conversation paging is not qualified.",
+    "Full repository and full skeleton race gates remain open. Actual direct Linux race testing is next; shared cached Go1.26.10 and gcc were found on the VM."
+  ],
+  "quality": {
+    "build": "go build ./... passed",
+    "vet": "go vet ./... passed",
+    "lint": "golangci-lint run: 0 issues; existing unknown gomnd directive warning",
+    "source_unchanged_during_crossbuild_and_race": true
+  }
+}

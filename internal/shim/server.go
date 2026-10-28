@@ -60,15 +60,18 @@ var testHookAfterPTYResize func()
 // the hub still couples the pipeline to at most one live subscriber (S10), so a
 // later attach supersedes an earlier one.
 type server struct {
-	claudePrimary  atomic.Pointer[claudeChatCapture]
-	claudeChat     bool
-	openCode       *OpenCodeConfig
-	hub            *hub
-	ptmx           *os.File
-	ptyIn          *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
-	graceTimeout   time.Duration
-	managedSignals bool // dedicated managed shim: PID-bound descendant signals
-	claudeRetire   func()
+	claudeStopBinding                 *shimwire.ClaudeStopBinding
+	claudeStopDone                    chan struct{}
+	claudeStopClose, claudeStopFinish sync.Once
+	claudePrimary                     atomic.Pointer[claudeChatCapture]
+	claudeChat                        bool
+	openCode                          *OpenCodeConfig
+	hub                               *hub
+	ptmx                              *os.File
+	ptyIn                             *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
+	graceTimeout                      time.Duration
+	managedSignals                    bool // dedicated managed shim: PID-bound descendant signals
+	claudeRetire                      func()
 
 	// pgidMu guards the two process groups this shim contains. The AGENT's group is known
 	// at construction on the ordinary path and only after the go-ahead on a backend
@@ -214,6 +217,7 @@ func (s *server) acceptLoop() {
 func (s *server) serveConn(conn net.Conn) {
 	cw := &connWriter{conn: conn}
 	var sub *subscriber
+	var stopHelloed bool
 	var helloed bool // gate: no op is honored until a hello frame arrives
 	defer func() {
 		if sub != nil {
@@ -238,6 +242,22 @@ func (s *server) serveConn(conn net.Conn) {
 				continue // tolerate malformed control payloads (shimwire contract)
 			}
 			if ctrl.Type == shimwire.TypeHello {
+				if ctrl.ClaudeStopV1 {
+					stopHelloed = s.claudeStopBinding != nil && ctrl.WireVersion == shimwire.Version
+					reply := shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version}
+					if stopHelloed {
+						reply.ClaudeStopV1 = true
+						copy := *s.claudeStopBinding
+						reply.ClaudeStopBinding = &copy
+					}
+					cw.writeControl(reply)
+					if ctrl.WireVersion != shimwire.Version {
+						return
+					}
+					helloed = true
+					continue
+				}
+				stopHelloed = false
 				helloed = true
 				// Record whether the daemon advertised snapshot chunking (per-connection),
 				// and advertise the shim's own support in the reply. Both are OPTIONAL hello
@@ -260,6 +280,14 @@ func (s *server) serveConn(conn net.Conn) {
 			}
 			if !helloed {
 				continue // ignore attach/resize/signal until the client has said hello
+			}
+			if ctrl.Type == shimwire.TypeClaudeStop {
+				result := s.stopClaudeChat(ctrl.ClaudeStop, payload, stopHelloed)
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeClaudeStopResult, ClaudeStopResult: &result})
+				continue
+			}
+			if s.claudeStopBinding != nil && (ctrl.Type == shimwire.TypeSignal || stopHelloed) {
+				return
 			}
 			if s.claudeChat && ctrl.Type == shimwire.TypeClaudeMessage {
 				result := shimwire.ClaudeMessageResult{Version: 1, Status: "refused"}

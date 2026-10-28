@@ -13,6 +13,7 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
@@ -114,6 +115,13 @@ func (d *Daemon) withAuthResumeFence(local string, attempt func() bool) (attempt
 }
 
 func (d *Daemon) ownerKill(local string) error {
+	if value, retained := d.claudeNativeStops.Load(local); retained {
+		handle := value.(claudeNativeStopHandle)
+		if handle.binding.ScopeGeneration == "" {
+			return daemon.ErrClaudeNativeStopUnconfirmed
+		}
+		return daemon.StopClaudeNative(handle.socket, handle.binding)
+	}
 	if s := d.claudeFixtureState(local); s != nil {
 		s.fail()
 		s.mu.Lock()

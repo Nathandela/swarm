@@ -280,6 +280,15 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 		return protocol.SessionCapabilities{}, false
 	}
 	if d.claudeChatQuarantined(sessionID) {
+		if s := d.claudeNativeState(sessionID); s != nil {
+			c = passiveClaudeChatCapabilities(c)
+			s.mu.Lock()
+			if s.healthy && s.initialized {
+				c.NativeInteractionVersion = 2
+			}
+			s.mu.Unlock()
+			return c, true
+		}
 		return d.claudeFixtureCapabilities(sessionID, passiveClaudeChatCapabilities(c)), true
 	}
 	c.NativeInteractionVersion = 0

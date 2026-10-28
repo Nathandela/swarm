@@ -119,6 +119,10 @@ const (
 // Control is the single message envelope for every shimwire control message;
 // which fields are meaningful depends on Type.
 type Control struct {
+	ClaudeStopV1         bool                   `json:"claude_stop_v1,omitempty"`
+	ClaudeStopBinding    *ClaudeStopBinding     `json:"claude_stop_binding,omitempty"`
+	ClaudeStop           *ClaudeStopRequest     `json:"claude_stop,omitempty"`
+	ClaudeStopResult     *ClaudeStopResult      `json:"claude_stop_result,omitempty"`
 	ClaudePrimaryV1      bool                   `json:"claude_primary_v1,omitempty"`
 	ClaudePrimary        *ClaudePrimarySnapshot `json:"claude_primary,omitempty"`
 	ClaudeMessage        *ClaudeMessageRequest  `json:"claude_message,omitempty"`

@@ -221,6 +221,7 @@ type Daemon struct {
 	// itemMu like every other per-session ingest-side map above.
 	hookSeq            map[string]*hookSeen
 	claudeChatRetained sync.Map // session IDs captured before ordinary consumers can run
+	claudeNativeStops  sync.Map // immutable Stop handles; empty entries refuse unsafe fallback
 
 	// capStore is the daemon-authored per-session capability record store (ADR-017 T2 /
 	// playbook §6.2; capability.go).

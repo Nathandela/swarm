@@ -13,6 +13,9 @@ var errClaudeChatQuarantined = errors.New("skeleton: Claude chat runtime is reta
 func (d *Daemon) rememberClaudeChatRuntime(m persist.Meta) bool {
 	if persist.IsClaudeChatRuntime(m) {
 		d.claudeChatRetained.Store(m.ID, struct{}{})
+		if m.AgentType == "claude" {
+			d.claudeNativeStops.LoadOrStore(m.ID, claudeNativeStopHandle{})
+		}
 		return true
 	}
 	_, retained := d.claudeChatRetained.Load(m.ID)

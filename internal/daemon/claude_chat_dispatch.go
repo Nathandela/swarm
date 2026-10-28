@@ -32,6 +32,14 @@ type ClaudeFixtureIntent struct {
 }
 
 func DecodeClaudeFixtureIntent(raw []byte) (ClaudeFixtureIntent, error) {
+	return decodeClaudeMessageIntent(raw, false)
+}
+
+func DecodeClaudeNativeIntent(raw []byte) (ClaudeFixtureIntent, error) {
+	return decodeClaudeMessageIntent(raw, true)
+}
+
+func decodeClaudeMessageIntent(raw []byte, native bool) (ClaudeFixtureIntent, error) {
 	var i ClaudeFixtureIntent
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -41,7 +49,7 @@ func DecodeClaudeFixtureIntent(raw []byte) (ClaudeFixtureIntent, error) {
 	h, err := hex.DecodeString(i.TextSHA256)
 	canonical, _ := json.Marshal(i)
 	id := i.Identity
-	if !bytes.Equal(canonical, raw) || i.Version != 1 || i.Kind != "claude_fixture_message" || !persist.ValidID(id.SessionID) || id.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !adapter.IsCanonicalConversationID(id.NativeSessionID) || id.ShimPID <= 0 || id.ShimStartTime <= 0 || id.PrimaryPID <= 0 || id.PrimaryStartTime <= 0 || i.SessionInstance == "" || len(i.SessionInstance) > 256 || !adapter.IsCanonicalConversationID(i.NativeUserUUID) || err != nil || len(h) != 32 || hex.EncodeToString(h) != i.TextSHA256 || i.TextBytes <= 0 || i.TextBytes > shimwire.MaxClaudeFixtureTextBytes || i.ExpectedOwnerRevision == ^uint64(0) || i.OwnerRevision != i.ExpectedOwnerRevision+1 {
+	if !bytes.Equal(canonical, raw) || i.Version != 1 || (!native && i.Kind != "claude_fixture_message" || native && i.Kind != "claude_native_message") || !persist.ValidID(id.SessionID) || id.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !adapter.IsCanonicalConversationID(id.NativeSessionID) || id.ShimPID <= 0 || id.ShimStartTime <= 0 || id.PrimaryPID <= 0 || id.PrimaryStartTime <= 0 || i.SessionInstance == "" || len(i.SessionInstance) > 256 || !adapter.IsCanonicalConversationID(i.NativeUserUUID) || err != nil || len(h) != 32 || hex.EncodeToString(h) != i.TextSHA256 || i.TextBytes <= 0 || i.TextBytes > shimwire.MaxClaudeFixtureTextBytes || i.ExpectedOwnerRevision == ^uint64(0) || (!native && i.OwnerRevision != i.ExpectedOwnerRevision+1 || native && i.OwnerRevision <= i.ExpectedOwnerRevision) {
 		return i, errClaudeFixtureDispatch
 	}
 	return i, nil
@@ -53,6 +61,9 @@ func claudeFixtureMetaMatches(m persist.Meta, id shimwire.ClaudePrimaryIdentity)
 	return m.SchemaVersion == 6 && m.AgentType == "fake" && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat && m.ID == id.SessionID && m.ConversationID == id.NativeSessionID && m.ShimPID == id.ShimPID && m.ShimStartTime == id.ShimStartTime && m.Status.Process == status.ProcessRunning && m.LoginRuntime == nil && m.CLIIdentity == nil && id.PrimaryPID > 0 && id.PrimaryStartTime > 0
 }
 
+func claudeNativeMetaMatches(m persist.Meta, id shimwire.ClaudePrimaryIdentity) bool {
+	return m.InputEmbargo == "" && m.SchemaVersion == 6 && m.AgentType == "claude" && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat && m.ID == id.SessionID && m.ConversationID == id.NativeSessionID && m.ShimPID == id.ShimPID && m.ShimStartTime == id.ShimStartTime && m.Status.Process == status.ProcessRunning && m.LoginRuntime != nil && m.LoginRuntime.Provider == "claude" && m.CLIIdentity != nil && m.CLIIdentity.Version == "2.1.310" && m.ClaudeRetirement == nil && id.PrimaryPID > 0 && id.PrimaryStartTime > 0
+}
 func dialClaudeFixture(sock string) (net.Conn, shimwire.ClaudePrimarySnapshot, error) {
 	deadline := time.Now().Add(3 * time.Second)
 	c, err := net.DialTimeout("unix", sock, time.Until(deadline))
@@ -77,14 +88,14 @@ func dialClaudeFixture(sock string) (net.Conn, shimwire.ClaudePrimarySnapshot, e
 
 func (d *Daemon) ClaudeFixtureSnapshot(local string) (shimwire.ClaudePrimarySnapshot, error) {
 	m, ok := d.Get(local)
-	if !ok || m.AgentType != "fake" || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !d.shimIdentityMatches(m) {
+	if !ok || (m.AgentType != "fake" && m.AgentType != "claude") || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !d.shimIdentityMatches(m) {
 		return shimwire.ClaudePrimarySnapshot{}, errClaudeFixtureDispatch
 	}
 	c, snapshot, err := dialClaudeFixture(shimSocketPath(d.cfg.StateDir, local))
 	if c != nil {
 		_ = c.Close()
 	}
-	if err != nil || !claudeFixtureMetaMatches(m, snapshot.Identity) {
+	if err != nil || !claudeFixtureMetaMatches(m, snapshot.Identity) && !claudeNativeMetaMatches(m, snapshot.Identity) {
 		return shimwire.ClaudePrimarySnapshot{}, errClaudeFixtureDispatch
 	}
 	return snapshot, nil
@@ -94,6 +105,7 @@ func (d *Daemon) ClaudeFixtureSnapshot(local string) (shimwire.ClaudePrimarySnap
 type ClaudeFixtureDispatch struct {
 	d            *Daemon
 	local        string
+	native       bool
 	request      shimwire.ClaudeMessageRequest
 	unlock       func()
 	mu           sync.Mutex
@@ -101,6 +113,12 @@ type ClaudeFixtureDispatch struct {
 }
 
 func (d *Daemon) PrepareClaudeFixtureDispatch(local string, request shimwire.ClaudeMessageRequest, bound []byte) (*ClaudeFixtureDispatch, error) {
+	return d.prepareClaudeMessageDispatch(local, request, bound, false)
+}
+func (d *Daemon) PrepareClaudeNativeDispatch(local string, request shimwire.ClaudeMessageRequest, bound []byte) (*ClaudeFixtureDispatch, error) {
+	return d.prepareClaudeMessageDispatch(local, request, bound, true)
+}
+func (d *Daemon) prepareClaudeMessageDispatch(local string, request shimwire.ClaudeMessageRequest, bound []byte, native bool) (*ClaudeFixtureDispatch, error) {
 	unlock, err := d.lockComposerCustody()
 	if err != nil {
 		return nil, err
@@ -114,9 +132,16 @@ func (d *Daemon) PrepareClaudeFixtureDispatch(local string, request shimwire.Cla
 	for _, rec := range records {
 		// One fixture turn has no authority to supersede a different operation.
 		if rec.OperationID != request.OperationID {
+			if native {
+				other, e := DecodeClaudeNativeIntent(rec.Request)
+				if e != nil || other.OwnerRevision >= request.OwnerRevision {
+					return fail()
+				}
+				continue
+			}
 			return fail()
 		}
-		intent, e := DecodeClaudeFixtureIntent(rec.Request)
+		intent, e := decodeClaudeMessageIntent(rec.Request, native)
 		textHash := sha256.Sum256([]byte(request.Text))
 		matched = e == nil && request.Version == 1 && utf8.ValidString(request.Text) && len(request.Text) == intent.TextBytes && hex.EncodeToString(textHash[:]) == intent.TextSHA256 && rec.Phase == idempotency.PhaseExecuting && bytes.Equal(rec.Request, bound) && intent.Identity == request.Identity && intent.NativeUserUUID == request.NativeUserUUID && intent.OwnerRevision == request.OwnerRevision && intent.ExpectedOwnerRevision == request.ExpectedOwnerRevision && rec.SessionInstance == intent.SessionInstance
 	}
@@ -124,7 +149,7 @@ func (d *Daemon) PrepareClaudeFixtureDispatch(local string, request shimwire.Cla
 		return fail()
 	}
 
-	return &ClaudeFixtureDispatch{d: d, local: local, request: request, unlock: unlock}, nil
+	return &ClaudeFixtureDispatch{native: native, d: d, local: local, request: request, unlock: unlock}, nil
 }
 
 func (g *ClaudeFixtureDispatch) Close() {
@@ -149,7 +174,7 @@ func (g *ClaudeFixtureDispatch) Write() (shimwire.ClaudeMessageResult, error) {
 		return result, errClaudeFixtureDispatch
 	}
 	s, ok := g.d.sessions[g.local]
-	valid := !g.d.closed && ok && claudeFixtureMetaMatches(s.meta, r.Identity)
+	valid := !g.d.closed && ok && ((!g.native && claudeFixtureMetaMatches(s.meta, r.Identity)) || (g.native && claudeNativeMetaMatches(s.meta, r.Identity)))
 	var m persist.Meta
 	if valid {
 		m = s.meta

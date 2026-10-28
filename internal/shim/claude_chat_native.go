@@ -70,6 +70,11 @@ func runClaudeChatManaged(cfg Config, signals <-chan os.Signal) (code int, runEr
 		return 0, err
 	}
 	defer func() { runErr = errors.Join(runErr, scope.finish()) }()
+	srv, err := startClaudeChatStopServer(cfg, scope)
+	if err != nil {
+		return 0, err
+	}
+	defer srv.finishClaudeChatControl()
 	birth, err := prepareClaudeBirth(cfg, scope)
 	if err != nil {
 		return 0, err
@@ -84,13 +89,18 @@ func runClaudeChatManaged(cfg Config, signals <-chan os.Signal) (code int, runEr
 	if err := birth.preStartError(signals, birth.prepareImage(cfg)); err != nil {
 		return 0, err
 	}
-	return birth.runClaudeChatStdio(cfg, scope, signals)
+	return runClaudeChatLifetime(cfg, signals, birth, scope, srv)
 }
 func (b *claudeBirth) runClaudeChatStdio(cfg Config, scope *managedNativeScope, signals <-chan os.Signal) (int, error) {
 	if b == nil || scope == nil || cfg.RequiredRuntime != persist.RequiredRuntimeClaudeChat || scope.validateClaudeStart(cfg) != nil {
 		return 0, errLoginResolution
 	}
-	return runClaudeChatLifetime(cfg, signals, b, scope)
+	srv, err := startClaudeChatStopServer(cfg, scope)
+	if err != nil {
+		return 0, err
+	}
+	defer srv.finishClaudeChatControl()
+	return runClaudeChatLifetime(cfg, signals, b, scope, srv)
 }
 
 // Fixture Start shares the pending-Stop arbitration of managed startStdio.

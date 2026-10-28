@@ -156,6 +156,7 @@ var testHookComposerBackendBegunNotYetCalled atomic.Pointer[func(local string)]
 type composerLane struct {
 	claudeAdmitMu          sync.Mutex
 	pendingClaudeAdmission uint64
+	claudeNative           *claudeNativeState
 	claudeFixture          *claudeFixtureState
 	mu                     sync.Mutex
 	ready                  *sync.Cond
@@ -556,6 +557,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	local, err := d.resolveChatSession(machine, req.Session)
 	if err != nil {
 		return protocol.CodeInvalidField, errIsLife5("composer send: %v", err)
+	}
+	if d.claudeNativeState(local) != nil {
+		return d.sendClaudeNativeChat(local, operationID, req, originalBegin, source)
 	}
 	if d.claudeFixtureState(local) != nil {
 		return d.sendClaudeFixture(local, operationID, req, originalBegin, source)
