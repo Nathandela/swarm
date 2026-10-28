@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-28",
+  "result": "PASS_DORMANT_SYNTHETIC_MANAGED_STDIO_PREREQUISITE",
+  "task": "agents-tracker-h6sc.25.2",
+  "source_pins": {
+    "internal/shim/claude_start.go": "f40cdfb7c1e56797445e1da2523150f2fc06a72de106cf1581516c6015b3505f",
+    "internal/shim/claude_stdio_start_test.go": "9dc3f5ff6fb600dd0848ab5c87bb761bedd50131035b7b29b15b9c059ca17898"
+  },
+  "review": "Root, independent Sol and Astra source review; Astra verified retained validation and approved this scoped checkpoint",
+  "production_callers_added": false,
+  "native_chat_admission_enabled": false,
+  "automatic_recovery_enabled": false,
+  "native_provider_executed": false,
+  "behavior": [
+    "One shared final selected-profile and held-image birth fence serves the existing PTY wrapper and a dormant stdio entry point.",
+    "Stdio accepts explicit file descriptors and its own process group; Stop check, Start and child registration share the existing signal mutex.",
+    "Publication sync runs outside that mutex. Publication failure returns the live unwaited child for caller containment and one Wait."
+  ],
+  "linux_synthetic": {
+    "test_binary_sha256": "3353d3fc1073e24db9f4555df89d8cef8aac31f83b66845df7578787f8f26de8",
+    "api_absence_red_evidence_sha256": "c97ca11023870210020809aadb573d460969eb8d8b76548b7b45e0b39104604c",
+    "behavioral_green_evidence_sha256": "86efa186fb17e17cede41cf97862146404214027f11aec0ff310c20fa146fee7",
+    "pass_actions": 16,
+    "skip_actions": 1,
+    "fail_actions": 0,
+    "omission_and_pty_evidence_sha256": "0404a068c5b3b693d74ea38645c5c3c7b10fe78c59dc82ba9abd77c7073ba73e",
+    "meaningful_omissions": [
+      "Final selected-profile admission bypass caused the stale-selection assertion to fail.",
+      "Omitting server pending Stop allowed a late Start and failed the intended assertion.",
+      "Registering the child after held publication sync prevented timely containment and failed the intended assertion."
+    ],
+    "existing_pty_pass_actions": 9,
+    "all_recorded_units_absent_and_cgroups_gone": true,
+    "unchanged_TestMain": true,
+    "fake_agent_setup": "A fixed private go shim copies the exact Root-built fake-agent ELF for TestMain; no remote source/toolchain/cache changes.",
+    "native_authentication_or_protocol_qualified": false
+  },
+  "mac_race": {
+    "package": "./internal/shim",
+    "pass_actions": 408,
+    "skip_actions": 29,
+    "fail_actions": 0,
+    "elapsed_seconds": 173.901,
+    "log_sha256": "f005d6b3e69095f46dd5806830e8c234c4b650ea4c3d0d82d40704b80c769edd"
+  },
+  "quality": {
+    "record_sha256": "230665e68886ca1ad0661b6ec4dc299eac20086ab7fe8c5126c08ebf32404f1d",
+    "build_exit": 0,
+    "vet_exit": 0,
+    "lint_exit": 0,
+    "source_after_unchanged": true
+  },
+  "limits": [
+    "Linux positive mechanics used a copied synthetic Go ELF and process-group signals, without the race detector. Mac race skips do not establish positive Linux race coverage.",
+    "Native stream protocol, managed-descendant and authenticated socket Stop, a stalled Start deadline, native assets/workflows, restart and account adoption remain separate gates.",
+    "No native chat activation, automatic effects, complete parent feature or full repository quality-gate claim."
+  ]
+}

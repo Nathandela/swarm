@@ -25,8 +25,8 @@ At that checkpoint, message sending, history control, decisions, recovery and
 public routing were inactive. Native qualification remains open.
 The [constructor receipt](provider-logins/claude-chat-constructor-2026-10-27.json)
 records 170 applied focused race passes, 85 ordinary regression passes, 41
-post-lint race passes, and passing build/vet/lint checks. Main/release gates
-`h6sc.26`, `h6sc.28` and `h6sc.29` remain open.
+post-lint race passes, and passing build/vet/lint checks. Those checks did not
+close all release gates; Beads records their current status.
 
 The [later thin-message checkpoint](provider-logins/claude-chat-message-2026-10-27.json)
 connects the fake-only one-turn primary through the actual TUI model and owner
@@ -39,7 +39,16 @@ The broader affected-package race run failed, including the existing terminal
 restore blocker and an aggregate skeleton timeout; the receipt preserves the
 test/doc setup failures and their focused corrections. No managed/native/public
 launch, native decisions, runtime restart/rejoin, ordinary subsequent turns or
-automatic continuation is qualified. Final Astra review remains unavailable.
+automatic continuation is qualified. Final Astra review was unavailable at that
+thin-message checkpoint.
+
+The [managed stdio birth prerequisite](provider-logins/claude-managed-stdio-birth-2026-10-28.json)
+shares the existing held-image/profile birth fence with a dormant stdio starter.
+Linux synthetic mechanics pass 16 assertions; three removed safeguards fail the
+intended checks, and existing PTY checks pass nine assertions. The full Mac shim
+race run passes 408 results with 29 skips; build, vet and lint pass. Linux
+positive mechanics were not race-tested. Native protocol, managed-descendant
+and socket Stop, native chat admission and automatic effects remain unqualified.
 
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and

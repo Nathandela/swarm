@@ -576,19 +576,23 @@ with native permission and conversation-change checks. The
 [reviewed feature-branch integration](../verification/provider-logins/main-integration-2026-10-27.json)
 preserves those paths, Hermes ownership and message provenance. Their submitted/started
 receipts prove message admission, not task completion or safe quota recovery.
-Before extending the native chat runtime, `h6sc.30` evaluates passive native mod
-events through the installed pinned CLI. The documented
+The `h6sc.30` investigation evaluates passive native mod events through the
+installed pinned CLI. The documented
 [turn, tool and session hooks](https://code.claude.com/docs/en/plugins/mods/reference)
-could preserve the native terminal interface, but unfinished-work, human-wait,
-cancellation and background-work discrimination remain unqualified. This
-investigation grants no automatic continuation authority.
+provide finite observations, but unfinished-work, human-wait, cancellation and
+background-work discrimination remain unqualified. This investigation grants no
+automatic continuation authority and does not replace the approved structured
+chat runtime.
 
 The [first passive native mod observation](../verification/provider-logins/claude-native-mod-observation-2026-10-27.json)
 now joins one Linux Claude 2.1.310 owner prompt to its main turn, a completed
 Read and an exact-prompt typed quota failure in durable native history. A
 completed-answer capture also satisfies the corrected offline oracle; its
-original command failure is retained. These finite results support further
-investigation of the native terminal interface before extending Swarm chat.
+original command failure is retained. These results characterize the native
+terminal interface; they do not gate implementation of the approved Swarm chat.
+Further passive-terminal assembly work is parked after the
+[isolated startup failures](../verification/provider-logins/claude-native-control-assembly-2026-10-28.json).
+That runtime still has unknown actor coverage and refuses all automatic effects.
 The later [human-state observations](../verification/provider-logins/claude-native-human-state-2026-10-27.json)
 observe an exact live question and one human-Esc cancellation. Native history
 does not durably record either exclusion in these cases: both question commands
@@ -653,8 +657,8 @@ R3 capture, real config/metadata binding, replay UUID, and signal/Stop/EOF clean
 At that checkpoint, message sending, history control, decisions, recovery and
 public routing were inactive. This was not native or release qualification. The
 [constructor evidence](../verification/provider-logins/claude-chat-constructor-2026-10-27.json)
-records passing focused and ordinary regression checks. Main/release gates
-`h6sc.26`, `h6sc.28` and `h6sc.29` remain open.
+records passing focused and ordinary regression checks. These checks did not
+close the overall release gates; Beads records their current status.
 
 The current development slice connects that fake primary to the existing TUI
 chat view, one durable semantic owner message, exact native-style echo/result,
@@ -683,6 +687,39 @@ journal, hook spool, execution record, native request/decision handlers and
 anchored transcript history. Do not create a Codex-style backend or a second
 transcript store. Native request decisions require their own positive replay and
 correlation gates; unsupported requests stay visible and unanswered.
+
+The reviewed native Exit A implementation first shares the existing managed
+birth fence between PTY and stdio launch: held image, final selected-profile
+admission, exact reservation and one Wait. Register child containment before
+publication can block on storage. This prerequisite keeps native chat admission
+disabled. Linux 2.1.310 is the first target; macOS remains a separate gate.
+
+Native readiness comes from an exact initialize control response bound to the
+owned process, version and human-request state. Native `system/init` can arrive
+after the first user message. Consume the actual replay, assistant, tool and
+result shapes: an assistant frame UUID differs from its message ID, and a result
+with subtype `success` can still have `is_error=true`. An own UUID/text replay
+proves admission only. Keep hook-origin and primary-origin envelopes distinct,
+with one spool producer and separate spool and primary-stream sequences.
+
+After request validity and identity checks, persist each valid prepared or
+queued owner intent before FIFO waiting or native delivery readiness. That
+revision revokes older automatic authority even if delivery waits or refuses;
+never roll it back. An initialized conversation stops qualifying for pristine
+empty history once such an intent exists. Read history through the existing
+anchored profile resolver; missing history after admission is unavailable.
+
+Managed owner Stop needs a narrow containment path independent of the consumer,
+engine, coordinator queue and persistence writers. Retain exact managed
+reservation, session/conversation, profile, shim birth and scope authority; reuse
+the negotiated authenticated control socket with one absolute operation deadline.
+Linearize Stop against Start and provider writes, including a child born while
+publication sync is blocked. Missing or mismatched proof sends no signal and
+returns unconfirmed. Delivery proves neither death nor retirement, release or
+successor authority. Tests must hold actual execution/semantic sync and
+coordinator/store access while proving containment and no late input. The
+existing coordinator `OwnerEnd` and core `Kill` paths alone can block before
+signaling and do not establish this contract.
 
 The hook transport now bounds complete DRAIN replies before application. DRAIN
 is unframed JSON, with a 64 MiB encoded-response cap independent of

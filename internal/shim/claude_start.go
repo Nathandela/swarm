@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"reflect"
 	"runtime"
+	"syscall"
 
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/loginworker"
@@ -91,6 +92,24 @@ func (b *claudeBirth) preStartError(signals <-chan os.Signal, err error) error {
 // start never waits for the child. If publication fails after Start, return its
 // live PTY/process to Run's existing drain/contain/one-Wait path. Never retry.
 func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd, ws *pty.Winsize, signals <-chan os.Signal) (*os.File, error) {
+	return b.startOwned(scope, cfg, cmd, ws, nil, signals)
+}
+
+// Dormant prerequisite: explicit descriptors keep Wait independent of I/O pumps.
+func (b *claudeBirth) startStdio(scope *managedNativeScope, cfg Config, cmd *exec.Cmd, srv *server, signals <-chan os.Signal) error {
+	if cmd == nil || srv == nil || !reflect.DeepEqual(cmd.SysProcAttr, &syscall.SysProcAttr{Setpgid: true}) {
+		return errLoginResolution
+	}
+	for _, stream := range []any{cmd.Stdin, cmd.Stdout, cmd.Stderr} {
+		if file, ok := stream.(*os.File); !ok || file == nil {
+			return errLoginResolution
+		}
+	}
+	_, err := b.startOwned(scope, cfg, cmd, nil, srv, signals)
+	return err
+}
+
+func (b *claudeBirth) startOwned(scope *managedNativeScope, cfg Config, cmd *exec.Cmd, ws *pty.Winsize, srv *server, signals <-chan os.Signal) (*os.File, error) {
 	if b == nil || b.store == nil || b.image == nil || b.anchor == nil || runtime.GOOS != "linux" || cfg.LoginRuntime == nil || cfg.CLIIdentity == nil || cmd == nil || cmd.Path != cfg.CLIIdentity.Path || !reflect.DeepEqual(cmd.Args, cfg.Argv) || cmd.Dir != cfg.Cwd || len(cmd.ExtraFiles) != 0 {
 		return nil, errLoginResolution
 	}
@@ -110,8 +129,26 @@ func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd
 		// original argv[0] and all flags remain unchanged; pathname is never reopened.
 		cmd.Path = "/proc/self/fd/3"
 		cmd.ExtraFiles = []*os.File{b.image}
-		scope.startAttempted = true
-		ptmx, err = pty.StartWithSize(cmd, ws)
+		if srv == nil {
+			scope.startAttempted = true
+			ptmx, err = pty.StartWithSize(cmd, ws)
+		} else {
+			srv.pgidMu.Lock()
+			if srv.pendingSig != 0 {
+				srv.pgidMu.Unlock()
+				return context.Canceled
+			}
+			if err := b.preStartError(signals, nil); err != nil {
+				srv.pgidMu.Unlock()
+				return err
+			}
+			scope.startAttempted = true
+			err = cmd.Start()
+			if err == nil && cmd.Process != nil {
+				srv.pgid = cmd.Process.Pid
+			}
+			srv.pgidMu.Unlock()
+		}
 		if err != nil {
 			return err
 		}

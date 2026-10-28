@@ -45,44 +45,32 @@
     "production_or_astra_signoff": false
   },
   "remaining": [
-    "The E1 native attempt failed before provider requests on read-only /tmp/claude-0 startup; native assembly, ordinary asset preservation and actual guard execution remain unqualified.",
-    "The test adapter and exact mounts have source review; a fresh fixture must correct native scratch access before its report/lease/status and asset-preservation oracles can qualify.",
+    "Both actual E1 attempts remain failed; the scratch-corrected run reached a normal native connectivity check that the isolated mock environment did not support.",
+    "Further passive-terminal fixture work is parked. Carry the pinned normal network and ordinary setup/asset findings into structured-runtime qualification; keep native-control admission and automatic effects disabled.",
     "Every native birth requires a freshly validated normal auth receipt; the earlier short-lived synthetic receipt must not be reused after its warm-receipt floor.",
     "Native actor/startup coverage, account adoption, unfinished-quota recovery, final GG-4 and Astra review remain open.",
-    "The scratch-corrected replacement passes its 49 focused race tests and Linux builds; artifact/PREP/native execution remain separate gates."
+    "The scratch-corrected replacement passed 49 focused race tests and Linux builds; its native attempt failed before any observed fixture/model HTTP request."
   ],
   "latest_native_attempt": {
-    "case": "E1 operator actual outer attempt",
-    "result": "FAIL_BEFORE_PROVIDER_REQUESTS",
-    "outer_receipt_path": "/private/tmp/swarm-claude-native-stage-e1-operator-20261028-r2/outer-receipt-collected.json",
-    "outer_receipt_sha256": "6ef7826149b68954d503728e4be8be5795629ba266718bc6bc1fff3fa42c7604",
-    "inner_receipt_sha256": "a102c024704663336556b3fc018d91c58961e240ac1933b7ec0299c647e3c829",
-    "identity_tail_evidence_path": "/private/tmp/swarm-e1-startup-existing-evidence-20261028.json",
-    "identity_tail_evidence_sha256": "9197b4c10671366e37ca7adda2bbda4694bf04e188e54aabbf310c7abd911005",
-    "identity_tail_sha256": "676decea059ebf1c30076934db55ba3f19912996a9cce9f31333ee170c566cf5",
-    "exit_code": 1,
-    "startup_error": "EROFS: read-only file system, mkdir '/tmp/claude-0'",
-    "native_identity_tail_exit_code": 1,
-    "inner_error": "AssertionError:owner helper failed screen",
-    "http_provider_requests": 0,
-    "request_list": [],
-    "http_census": [],
-    "provider_errors": [],
-    "unit": "swarm-stage-e1-a7b4603fa008e46312a1de98",
-    "cleanup": {
-      "cgroup_empty_and_gone": true,
-      "all_recorded_observed_births_ended": true,
-      "complete_birth_census_claimed": false,
-      "cleanup_errors": [],
-      "source_archive_readonly_native_unchanged": true
+    "case": "E1 scratch-corrected fresh R3",
+    "result": "FAIL_WITH_ZERO_OBSERVED_FIXTURE_MODEL_REQUESTS",
+    "outer_receipt_sha256": "b077e60b684a239ab02dace36dcaef7f56b181c86b6e12d67900c005a5349b39",
+    "inner_receipt_sha256": "875ed35bedde11d3b021b74c15dd494402839960e2d7b5b6be3cb66095b7ddf4",
+    "startup_evidence_sha256": "2bc6c50e4420714f73a21306319215eb879440c269906cdd349f191237f0da26",
+    "native_exit_code": 1,
+    "startup_error": "Native api.anthropic.com connectivity check failed with ECONNREFUSED through the deliberately closed HTTPS_PROXY. Zero fixture/model HTTP requests were observed; official startup connectivity was attempted.",
+    "controller_error": "finite native evidence deadline",
+    "secondary_validation_error": "authentication projection changed; exact changed field and cause UNKNOWN; this does not establish a production authentication fault",
+    "elapsed_seconds": 36.01787839299868,
+    "kernel_cleanup": {
+      "cgroup_empty_gone": true,
+      "all_observed_births_ended": true,
+      "complete_birth_census_claimed": false
     },
-    "actor_census": "unknown",
-    "finite_prefix_only": true,
+    "cleanup_errors": [],
+    "source_archive_authority_native_unchanged": true,
     "qualified": false,
-    "qualification_boundary": "The case failed during native startup before any HTTP/provider request. Cgroup cleanup and sampled-birth endings are recorded; actor census remains unknown, and complete birth/session/adoption qualification is absent.",
-    "source_manifest_sha256": "75a960170652738515252583b224570c8b91dddd6cdb7d80eefa3fd1f006acc6",
-    "private_swarm_sha256": "ad49f20d0c002e33e3822eb8741337278be017455b375c0a1f304a07aebec47b",
-    "private_helper_sha256": "9d75e0ab763387105d207beeeccd9db9d2b4314aca99ae750e65acf212b24da0"
+    "observed_fixture_model_requests": 0
   },
   "result_scope": "The PASS_PRIVATE_SOURCE_AND_BUILD_ONLY result records the source/build checkpoint; the separate E1 native attempt is a recorded startup FAIL and does not qualify native assembly.",
   "native_assembly_case_qualified": false,
@@ -92,7 +80,43 @@
     "focused_race_pass": 49,
     "swarm_sha256": "526e581917931e976e573f8a1eb2a8bd19afdaaf093209ce53a91e911a1d7723",
     "helper_sha256": "f740ed6a88159b8b67df33d85d6a4b6d040fae8826d39b39eb96840dc0614eb6",
-    "native_case_executed": false,
+    "native_case_executed": true,
     "review": "Root, Sol and Astra source GREEN; build only, no native or production qualification"
-  }
+  },
+  "prior_native_attempts": [
+    {
+      "case": "E1 operator actual outer attempt",
+      "result": "FAIL_BEFORE_PROVIDER_REQUESTS",
+      "outer_receipt_path": "/private/tmp/swarm-claude-native-stage-e1-operator-20261028-r2/outer-receipt-collected.json",
+      "outer_receipt_sha256": "6ef7826149b68954d503728e4be8be5795629ba266718bc6bc1fff3fa42c7604",
+      "inner_receipt_sha256": "a102c024704663336556b3fc018d91c58961e240ac1933b7ec0299c647e3c829",
+      "identity_tail_evidence_path": "/private/tmp/swarm-e1-startup-existing-evidence-20261028.json",
+      "identity_tail_evidence_sha256": "9197b4c10671366e37ca7adda2bbda4694bf04e188e54aabbf310c7abd911005",
+      "identity_tail_sha256": "676decea059ebf1c30076934db55ba3f19912996a9cce9f31333ee170c566cf5",
+      "exit_code": 1,
+      "startup_error": "EROFS: read-only file system, mkdir '/tmp/claude-0'",
+      "native_identity_tail_exit_code": 1,
+      "inner_error": "AssertionError:owner helper failed screen",
+      "http_provider_requests": 0,
+      "request_list": [],
+      "http_census": [],
+      "provider_errors": [],
+      "unit": "swarm-stage-e1-a7b4603fa008e46312a1de98",
+      "cleanup": {
+        "cgroup_empty_and_gone": true,
+        "all_recorded_observed_births_ended": true,
+        "complete_birth_census_claimed": false,
+        "cleanup_errors": [],
+        "source_archive_readonly_native_unchanged": true
+      },
+      "actor_census": "unknown",
+      "finite_prefix_only": true,
+      "qualified": false,
+      "qualification_boundary": "The case failed during native startup before any HTTP/provider request. Cgroup cleanup and sampled-birth endings are recorded; actor census remains unknown, and complete birth/session/adoption qualification is absent.",
+      "source_manifest_sha256": "75a960170652738515252583b224570c8b91dddd6cdb7d80eefa3fd1f006acc6",
+      "private_swarm_sha256": "ad49f20d0c002e33e3822eb8741337278be017455b375c0a1f304a07aebec47b",
+      "private_helper_sha256": "9d75e0ab763387105d207beeeccd9db9d2b4314aca99ae750e65acf212b24da0"
+    }
+  ],
+  "source_diagnosis_manifest_sha256": "4967b84c19e023bcab8a103206fe8960e47bcd419a9cba612bcaf57080365301"
 }
