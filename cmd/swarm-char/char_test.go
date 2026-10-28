@@ -479,8 +479,8 @@ func TestRun_CLIWiresInputHooksAndSelectedAdapter(t *testing.T) {
 // registered production adapters (internal/adapter/registry), wrapped to ignore
 // the fixture argument since a production adapter is fixture-independent.
 // Driving -adapter claude against the fake agent must emit the CLAUDE adapter's
-// capability entry (Hooks:true from its hook events, Options:2 from its model +
-// skip-permissions options) — not the default refadapter's.
+// capability entry and explicit native-default interface schema, alongside model
+// and skip-permissions options — not the default refadapter's.
 func TestRun_AdapterFlagResolvesRegisteredProductionAdapter(t *testing.T) {
 	script := writeScript(t, "print hello\nexit 0\n")
 	var stdout, stderr bytes.Buffer
@@ -503,8 +503,18 @@ func TestRun_AdapterFlagResolvesRegisteredProductionAdapter(t *testing.T) {
 	if !entry.Hooks {
 		t.Error("Hooks=false: -adapter claude did not resolve the registered claude adapter")
 	}
-	if entry.Options != 2 {
-		t.Errorf("Options=%d, want 2 (claude declares model + dangerously-skip-permissions)", entry.Options)
+	ctor, ok := resolveAdapter("claude")
+	if !ok {
+		t.Fatal("registered Claude adapter was not resolved")
+	}
+	options := ctor(adapter.Fixture{}).Options()
+	declared := map[string]adapter.OptionSpec{}
+	for _, option := range options {
+		declared[option.Key] = option
+	}
+	iface := declared["claude_interface"]
+	if entry.Options != len(options) || declared["model"].Type != "string" || declared["dangerously-skip-permissions"].Type != "bool" || declared["dangerously-skip-permissions"].Default != "false" || iface.Type != "choice" || iface.Default != "native" || len(iface.Choices) != 2 || iface.Choices[0] != "native" || iface.Choices[1] != "swarm-chat" {
+		t.Errorf("Claude capability/schema contract changed: count=%d options=%+v", entry.Options, options)
 	}
 }
 

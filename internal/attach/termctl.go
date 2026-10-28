@@ -19,9 +19,11 @@ import (
 // cfmakeraw-equivalent flag set, IXON cleared so Ctrl+S reaches the agent and Ctrl+Q
 // arrives as a plain byte (consumed as the detach key by default, not XON/XOFF).
 type realTerm struct {
-	in  *os.File
-	out *os.File
-	cr  cancelreader.CancelReader
+	in      *os.File
+	out     *os.File
+	cr      cancelreader.CancelReader
+	readMu  sync.Mutex
+	retired bool // readMu; one realTerm owns one cancelable-reader lifetime
 }
 
 // NewTermControl builds the production TermControl over in/out (stdin/stdout).
@@ -33,12 +35,27 @@ func NewTermControl(in, out *os.File) (TermControl, error) {
 	return &realTerm{in: in, out: out, cr: cr}, nil
 }
 
-func (t *realTerm) In() io.Reader  { return t.cr }
+func (t *realTerm) In() io.Reader { return t }
+
+func (t *realTerm) Read(p []byte) (int, error) {
+	t.readMu.Lock()
+	defer t.readMu.Unlock()
+	if t.retired {
+		return 0, cancelreader.ErrCanceled
+	}
+	return t.cr.Read(p)
+}
 func (t *realTerm) Out() io.Writer { return t.out }
 
 // MakeRaw puts the terminal in raw mode and returns an idempotent restore that puts
 // the termios back and cancels the input reader so a blocked read unwinds.
 func (t *realTerm) MakeRaw() (func() error, error) {
+	t.readMu.Lock()
+	retired := t.retired
+	t.readMu.Unlock()
+	if retired {
+		return nil, cancelreader.ErrCanceled
+	}
 	fd := int(t.in.Fd())
 	old, err := readTermios(fd)
 	if err != nil {
@@ -66,9 +83,14 @@ func (t *realTerm) MakeRaw() (func() error, error) {
 	return func() error {
 		var e error
 		once.Do(func() {
-			e = writeTermios(fd, old)
+			// A poll-ready Read must finish in raw mode, without needing a newline.
+			defer func() { e = writeTermios(fd, old) }()
 			t.cr.Cancel()
+			// Cancel wakes Read; join it before closing its private polling fds.
+			t.readMu.Lock()
+			t.retired = true
 			_ = t.cr.Close()
+			t.readMu.Unlock()
 		})
 		return e
 	}, nil
