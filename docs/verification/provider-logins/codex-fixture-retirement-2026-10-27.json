@@ -177,5 +177,25 @@
     "earlier_failure": "An initial dry-run refused before any operation because stale directory literals did not join the intended stage. Exact receipt hashing prevented a wrong-stage operation. Three directory joins now derive from the fixed intended stage, with wrong-parent regression checks.",
     "label_revision": "The unexecuted initial private packet was corrected in place for its historical count label. Its prior source was reconstructed and hash-verified; no complete prior-packet retention is claimed. The later failed dry-run and corrected clean-r2 packet are retained.",
     "review": "Root and independent Sol reviewed corrected source; Root reviewed the actual dry-run and apply receipts."
+  },
+  "r7_image_cache_followup": {
+    "date": "2026-10-28",
+    "scope": "One consumed synthetic R7 public executable cache; separate file-cache-only contract.",
+    "source_manifest_sha256": "d20b776705b3b6c0b64cd0c455c2714ba7167a488de88854137f74bed9c73b17",
+    "dry_run_sha256": "7f5595b83417201db0df111264bab18df745ff814baab3cbe2b64cffb48ee546",
+    "apply_receipt_sha256": "d7c7c10fec5c8a1a8fbf16cbd86dba370953367391f764951e51402b29462c17",
+    "target_relative_path": "native/codex",
+    "bytes_unlinked": 296865480,
+    "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "device": 2049,
+    "inode": 803631,
+    "five_recorded_identities_freshly_ended_and_exact_unit_cgroup_absent": true,
+    "nontruncating_global_inode_execution_exclusion_held_through_unlink_fsync": true,
+    "preserved": "Installed CLI, local native backup, all other stage files and evidence.",
+    "endpoint_witness_or_absence_claimed": false,
+    "session_retirement_or_complete_birth_trace_claimed": false,
+    "measured_free_bytes_after": 539885568,
+    "guaranteed_reclaimed_bytes_or_reservation_claimed": false,
+    "review": "Root and independent Sol source, dry-run and actual apply receipt GREEN."
   }
 }
