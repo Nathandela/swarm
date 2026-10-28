@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-28",
+  "scope": "Private synthetic enrollment prerequisite for the dormant native-control launch canary; no real accounts or live Swarm changes.",
+  "result": "FAIL",
+  "product_source_commit": "94a67085df27a1297efe56d77a276f3aea7f87e0",
+  "native_version": "2.1.310",
+  "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+  "private_driver_source_manifest_sha256": "a93540fac77ddc1bd093ae3812982ac81eeda0b2ad5d142935fcc045d97f8e7f",
+  "private_swarm_sha256": "c7a95e9191d670d5e8476f536cfdbc919169ae167734461fe8af1fcfcfc493d7",
+  "private_driver_sha256": "600422547b2cfd0ea04c6e7c9bcd09d91c5736bc34b5401ee960e55e0e67f28d",
+  "cases": [
+    {
+      "name": "R2 binding-file preflight",
+      "receipt_sha256": "b42723fd47661ec8cb58d5b59b0c2bacddb9b9397f6373df2e07dfc35beb45bd",
+      "result": "REFUSED_BEFORE_CASE",
+      "cause": "Transferred binding mode was 0644; the fixture requires 0600."
+    },
+    {
+      "name": "R2 prepared intent observer",
+      "receipt_sha256": "6eb38b6d6f86fc02cc02c1d7acf2c5c9000a2c9a35ab656cfcc2f8602c47af50",
+      "result": "FAIL",
+      "cause": "Observer expected a zero scope object, but the production writer omits scope on a prepared version-1 intent. The parser refused immediately and the controller was killed; final collection later reached its deadline. Retained read-only inspection found no current worker."
+    },
+    {
+      "name": "R3 coherent process transition",
+      "receipt_sha256": "a6d8e093f0a1bb50614f021e7806f7669e8192d1a89e88f3df3dc6885726b1be",
+      "result": "FAIL",
+      "binding_sha256": "4c9cbcfd2e701f220f963795e4d2931bd5bbae612085c2a6f549bd250791cd58",
+      "elapsed_seconds": 1.7307612439999502,
+      "cause": "Observer refused same-birth executable-ENOENT observations R,R,Z with unchanged cgroup. It killed the controller before final proxy and selection evidence was retained.",
+      "positive_witnesses": {
+        "normal_actual_swarm_auth_ready": true,
+        "durable_intent_version": 2,
+        "unit_retired": true,
+        "stop_proof": "scope-tree",
+        "controller_cgroup_gone": true,
+        "auth_cgroup_gone": true,
+        "all_observed_births_ended": true,
+        "native_and_artifact_pins_unchanged": true
+      },
+      "missing_evidence": [
+        "Final driver ready/selection/runtime/receipt validation",
+        "Proxy close and network audit",
+        "Normal recovery settlement and unit collection"
+      ],
+      "retained_auth_unit_state": {
+        "load": "loaded",
+        "active": "active",
+        "sub": "exited",
+        "main_pid": 0,
+        "control_group": "",
+        "same_invocation": true
+      },
+      "cleanup": "Exact auth signal refused after normal worker retirement removed its cgroup. Original ready intent retained; explicit normal recovery requires the original worker config and fresh scope checks."
+    }
+  ],
+  "production_written_shape_fixture_sha256": "2a2e05ffd0fa1c0d816312909e47f12da2143981ec0477ed753b7e4977df71ab",
+  "limits": [
+    "A genuine ready receipt does not turn the failed case into a pass.",
+    "No model-traffic absence, completed profile selection, interactive guard loading or account adoption is qualified by this attempt.",
+    "Z-state observations carry no current executable, thread-completeness or process-death credit; retirement still requires independent birth disappearance and exact cgroup proofs.",
+    "Shipping admission and automatic recovery remain disabled; no production or Astra signoff."
+  ]
+}

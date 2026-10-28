@@ -126,6 +126,12 @@ qualifies validator acceptance only. Interactive loading and the assembled launc
 canary remain open; the isolated fixture first needs a qualified normal auth
 enrollment receipt.
 
+The [synthetic enrollment prerequisite attempts](provider-logins/claude-native-auth-prerequisite-2026-10-28.json)
+retain a genuine ready receipt from the actual Swarm worker. The complete case
+still failed when its process observer rejected an exiting process; final proxy,
+selection and recovery evidence is missing. This does not qualify interactive
+loading or account adoption.
+
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
 retains one 56-event native trace with exact composer, prompt, turn and history
 identities. A successful Read result matches the next HTTP request's canonical
