@@ -446,6 +446,10 @@ func (s *Store) claudeCommonMutationAllowed(r Registry) error { return s.claudeM
 
 // A nil login denotes the common native identity file shared by legacy writers.
 func (s *Store) claudeMutationAllowed(r Registry, login *Login) error {
+	return s.claudeMutationScopeAllowed(r, login, false)
+}
+
+func (s *Store) claudeMutationScopeAllowed(r Registry, login *Login, sharedSettings bool) error {
 	state, err := openClaudeCustodyState(s.StateRoot())
 	if err != nil {
 		return err
@@ -538,7 +542,7 @@ func (s *Store) claudeMutationAllowed(r Registry, login *Login) error {
 				return ErrUnsafePath
 			}
 		}
-		foreign := m.Runtime != nil && ((login != nil && m.Runtime.Identity != login.Identity) || (login == nil && m.Runtime.Home != s.Home(ProviderClaude)))
+		foreign := !sharedSettings && m.Runtime != nil && ((login != nil && m.Runtime.Identity != login.Identity) || (login == nil && m.Runtime.Home != s.Home(ProviderClaude)))
 		if foreign {
 			if _, err := state.Lstat(filepath.Join(m.ID, NativeProcessFile)); err == nil {
 				raw, err := readClaudeCustody(state, filepath.Join(m.ID, NativeProcessFile), 64<<10, &bytes)

@@ -121,6 +121,7 @@ func readPrivate(root *os.Root, name string, limit int64) ([]byte, error) {
 }
 
 type writeOps struct {
+	link    func(string, string) error
 	remove  func(string) error
 	rename  func(string, string) error
 	syncDir func(string) error
@@ -169,6 +170,14 @@ func openPrivateDir(root *os.Root, dir string) (*os.Root, error) {
 // synced temporary inode, rename, then synced parent. The boolean distinguishes
 // failure before visibility from an uncertain durability failure after rename.
 func durableReplace(root *os.Root, name string, data []byte, ops writeOps) (bool, error) {
+	return durableWrite(root, name, data, ops, false)
+}
+
+func durableCreate(root *os.Root, name string, data []byte, ops writeOps) (bool, error) {
+	return durableWrite(root, name, data, ops, true)
+}
+
+func durableWrite(root *os.Root, name string, data []byte, ops writeOps, exclusive bool) (bool, error) {
 	dir := filepath.Dir(name)
 	parent, err := openPrivateDir(root, dir)
 	if err != nil {
@@ -187,7 +196,12 @@ func durableReplace(root *os.Root, name string, data []byte, ops writeOps) (bool
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = parent.Remove(filepath.Base(tmpName)) }()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = parent.Remove(filepath.Base(tmpName))
+		}
+	}()
 	if err = tmp.Chmod(0o600); err == nil {
 		_, err = tmp.Write(data)
 	}
@@ -201,14 +215,35 @@ func durableReplace(root *os.Root, name string, data []byte, ops writeOps) (bool
 	if err != nil {
 		return false, err
 	}
-	rename := ops.rename
-	if rename == nil {
-		rename = func(oldName, newName string) error {
-			return parent.Rename(filepath.Base(oldName), filepath.Base(newName))
+	if exclusive {
+		link := ops.link
+		if link == nil {
+			link = func(oldName, newName string) error {
+				return parent.Link(filepath.Base(oldName), filepath.Base(newName))
+			}
 		}
-	}
-	if err := rename(tmpName, name); err != nil {
-		return false, err
+		if err := link(tmpName, name); err != nil {
+			return false, err
+		}
+		// A failed retirement must remain visibly unsafe, never repaired on return.
+		cleanup = false
+		remove := ops.remove
+		if remove == nil {
+			remove = func(name string) error { return parent.Remove(filepath.Base(name)) }
+		}
+		if err := remove(tmpName); err != nil {
+			return true, ErrDurabilityUncertain
+		}
+	} else {
+		rename := ops.rename
+		if rename == nil {
+			rename = func(oldName, newName string) error {
+				return parent.Rename(filepath.Base(oldName), filepath.Base(newName))
+			}
+		}
+		if err := rename(tmpName, name); err != nil {
+			return false, err
+		}
 	}
 	syncDir := ops.syncDir
 	if syncDir == nil {

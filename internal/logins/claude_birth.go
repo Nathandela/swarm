@@ -91,6 +91,9 @@ func (s *Store) AdmitClaudeProfileBirth(rt Runtime, cwd string, startAndPublish 
 		if _, err := s.claudeProfileReady(r, l.Identity); err != nil {
 			return err
 		}
+		if err := s.settleClaudeSettings(); err != nil {
+			return err
+		}
 		intent, err := s.readClaudeAuthIntent(l.ID)
 		if err != nil {
 			return err

@@ -384,6 +384,7 @@ func TestClaudeProfileCrashBeforeOwnerMarkerStaysPending(t *testing.T) {
 
 func TestClaudeProfileMissingAssetsKeepExactAliasesAndOneHistoryTree(t *testing.T) {
 	s := testStore(t)
+	s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) { return nil, nil }
 	l := add(t, s, ProviderClaude, "A", claudeCredential("a", "grant"))
 	if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, l.ID, nil); err != nil {
 		t.Fatal(err)

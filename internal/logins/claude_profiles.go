@@ -143,7 +143,7 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 			slices.Sort(all)
 			all = slices.Compact(all)
 			if slices.Equal(all, record.CWDs) {
-				return nil
+				return s.ensureClaudeSettings(r)
 			}
 			if !validClaudeCWDs(all) {
 				return ErrCapacity
@@ -152,6 +152,9 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 				return ErrIneligible
 			}
 			if err := reserveClaudeProfileSpace(r, identity, all); err != nil {
+				return err
+			}
+			if err := s.ensureClaudeSettings(r); err != nil {
 				return err
 			}
 			definitions, err := s.claudeMCPDefinitions(all)
@@ -284,6 +287,9 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 			return err
 		}
 		if err = s.provisionClaudeAliases(dir); err != nil {
+			return err
+		}
+		if err = s.ensureClaudeSettings(r); err != nil {
 			return err
 		}
 		if err = s.writeClaudeMCPDefinitions(dir, definitions, true); err != nil {

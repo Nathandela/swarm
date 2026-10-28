@@ -18,9 +18,12 @@ func TestClaudeDesiredStaleReadyCommitsPendingWithoutConsumingReceipt(t *testing
 	for _, kind := range []string{"generation", "expiry", "malformed", "missing", "target"} {
 		t.Run(kind, func(t *testing.T) {
 			s, _, b, ref := newSettledReadyClaudeAuthTest(t)
+			helperInventory := s.grantWriters
+			s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) { return nil, nil }
 			if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, b.ID, []string{"/work"}); err != nil {
 				t.Fatal(err)
 			}
+			s.grantWriters = helperInventory
 			grant := filepath.Join(s.savedNativeHome(b.ID), ".credentials.json")
 			switch kind {
 			case "generation":
