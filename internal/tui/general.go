@@ -576,7 +576,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// a non-running row (a running session has nothing to resume). The daemon
 		// validates the source and composes the adapter's resume argv from the source's
 		// captured conversation id.
-		if s, ok := m.boardCommandSession(); ok && s.Status.Process != status.ProcessRunning {
+		if s, ok := m.boardCommandSession(); ok && s.Status.Process != status.ProcessRunning && sessionAllowsSuccessor(s) {
 			return m.beginResume(s)
 		}
 	case k.Text == "e":
@@ -611,7 +611,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the moment a source cannot cooperate, the only moment a hands-off handoff is
 		// needed. Status now suggests the form's default method and never decides;
 		// the supervised method still revalidates the row at submit.
-		if s, ok := m.boardCommandSession(); ok {
+		if s, ok := m.boardCommandSession(); ok && sessionAllowsSuccessor(s) {
 			m.handoff = newHandoffModel(s, m.agents, m.detected, m.width)
 			m.screen = screenHandoff
 			m.detectGen++
@@ -646,9 +646,15 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	// attach and swallow the error (the field-test silent no-op), surface an
 	// actionable banner and never attempt it.
 	if s.Status.Process != status.ProcessRunning {
+		if !sessionAllowsSuccessor(s) {
+			return m, m.general.setBanner("chat has ended - create a new session, ctrl+x delete")
+		}
 		return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
 	}
 	if s.RequiredRuntime == "claude-chat" {
+		if s.Agent != "fake" && !validClaudeChatSession(s) {
+			return m, m.general.setBanner("chat read capability is unavailable; Stop remains available")
+		}
 		return m.openClaudeChat(s)
 	}
 	if m.attachRunner != nil {

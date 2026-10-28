@@ -34,7 +34,7 @@ func TestClaudeChatCarriageDerivesOnlyConfiguredFixture(t *testing.T) {
 }
 
 func TestClaudeChatCarriageRefusesUnownedSelectorsWithoutMutation(t *testing.T) {
-	for _, kind := range []string{"empty", "unknown", "public-claude", "no-dev-fixture", "remote-preset", "initial-prompt", "import", "resume-empty", "handoff-empty", "lineage", "argv", "managed", "cli", "backend", "raw-runtime", "raw-fixture"} {
+	for _, kind := range []string{"empty", "unknown", "no-dev-fixture", "remote-preset", "initial-prompt", "import", "resume-empty", "handoff-empty", "lineage", "argv", "managed", "cli", "backend", "raw-runtime", "raw-fixture"} {
 		t.Run(kind, func(t *testing.T) {
 			api := &coreAPI{fakeAgentBin: "/fixture/fake"}
 			spec := a2PrivateChatSpec()
@@ -43,8 +43,6 @@ func TestClaudeChatCarriageRefusesUnownedSelectorsWithoutMutation(t *testing.T) 
 				spec.Options["claude_interface"] = ""
 			case "unknown":
 				spec.Options["claude_interface"] = "other"
-			case "public-claude":
-				spec.AgentType = "claude"
 			case "no-dev-fixture":
 				api.fakeAgentBin = ""
 			case "remote-preset":

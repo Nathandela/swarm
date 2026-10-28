@@ -35,7 +35,8 @@ func (cc *clientConn) handleSemanticStatus(c Control) {
 		cc.replyErrorCode("semantic receipt capability was not negotiated", CodeNotImplemented)
 		return
 	}
-	if len(c.OperationID) > 128 || !strings.HasPrefix(c.OperationID, "semantic:") {
+	initial := strings.HasPrefix(c.OperationID, "claude-initial:") && len(c.OperationID) > len("claude-initial:") && len(c.OperationID) <= 128
+	if !initial && (len(c.OperationID) > 128 || !strings.HasPrefix(c.OperationID, "semantic:")) {
 		cc.replyErrorCode("semantic_status requires a semantic operation ID", CodeInvalidField)
 		return
 	}
@@ -55,7 +56,7 @@ func (cc *clientConn) handleSemanticStatus(c Control) {
 		cc.replyError("semantic receipt: " + err.Error())
 		return
 	}
-	if receipt.OperationID != c.OperationID || receipt.Session != local {
+	if receipt.OperationID != c.OperationID || receipt.Session != local || initial && receipt.Agent != "claude" {
 		cc.replyError("semantic receipt identity mismatch")
 		return
 	}

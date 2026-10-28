@@ -1,7 +1,6 @@
 package shim
 
-// This constructor is deliberately available only through the existing dev
-// FakeAgentBin seam. Managed/native chat admission remains unavailable.
+// Structured stdout capture serves both the dev fixture and the explicit managed chat.
 import (
 	"context"
 	"encoding/json"
@@ -34,11 +33,13 @@ const (
 
 var errClaudeChatCapture = errors.New("shim: Claude primary capture incomplete")
 
-// ValidateClaudeChatConfig grants no managed or native authority. The caller
-// separately requires AgentType=fake and its configured dev FakeAgentBin.
+// ValidateClaudeChatConfig checks carriage; owned native birth separately validates reservation and image custody.
 func ValidateClaudeChatConfig(cfg Config) error {
 	if (cfg.RequiredRuntime == "" || cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl) && cfg.ClaudeChatFixture == "" {
 		return nil
+	}
+	if cfg.RequiredRuntime == persist.RequiredRuntimeClaudeChat && cfg.ClaudeChatFixture == "" {
+		return validateClaudeNativeChatConfig(cfg)
 	}
 	if cfg.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !adapter.IsCanonicalConversationID(cfg.ConversationID) || !filepath.IsAbs(cfg.ClaudeChatFixture) || filepath.Clean(cfg.ClaudeChatFixture) != cfg.ClaudeChatFixture || len(cfg.Argv) != 3 || cfg.Argv[0] != cfg.ClaudeChatFixture || cfg.Argv[1] != "--claude-primary-fixture" || cfg.Argv[2] != "--session-id="+cfg.ConversationID || cfg.LoginRuntime != nil || cfg.CLIIdentity != nil || cfg.NativeProvider != "" || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.Backend != nil || cfg.OpenCode != nil || cfg.HermesInput != nil || cfg.AgyInput != nil || cfg.ClaudeInput || cfg.InputEmbargo != "" || cfg.InputEmbargoToken != "" || !persist.ValidID(cfg.SessionID) || cfg.HookSpoolMaxBytes > hookSpoolDefaultMaxBytes {
 		return errors.New("shim: Claude primary fixture configuration refused")
@@ -562,4 +563,66 @@ func runClaudeChatLifetime(cfg Config, sigCh <-chan os.Signal, birth *claudeBirt
 	code, sig := interpretExit(waitErr)
 	exitErr := persistSideFiles(cfg.SessionDir, code, sig, nil)
 	return code, errors.Join(initializeErr, captureErr, writeErr, exitErr)
+}
+
+func validateClaudeNativeChatConfig(cfg Config) error {
+	cli := cfg.CLIIdentity
+	if cfg.RequiredRuntime != persist.RequiredRuntimeClaudeChat || !adapter.IsCanonicalConversationID(cfg.ConversationID) || !persist.ValidID(cfg.SessionID) || !filepath.IsAbs(cfg.LoginStateRoot) || filepath.Clean(cfg.LoginStateRoot) != cfg.LoginStateRoot || cfg.SessionDir != filepath.Join(cfg.LoginStateRoot, cfg.SessionID) || cfg.NativeProvider != logins.ProviderClaude || cfg.LoginRuntime == nil || !logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) || cli == nil || cli.Version != "2.1.310" || !logins.IsClaudeCLIFingerprint(cli.Fingerprint) || !filepath.IsAbs(cli.Path) || filepath.Clean(cli.Path) != cli.Path || len(cfg.Argv) == 0 || cfg.Argv[0] != cli.Path || !filepath.IsAbs(cfg.Cwd) || filepath.Clean(cfg.Cwd) != cfg.Cwd || cfg.ClaudeChatFixture != "" || cfg.Backend != nil || cfg.OpenCode != nil || cfg.HermesInput != nil || cfg.AgyInput != nil || cfg.ClaudeInput || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.InputEmbargo != "" || cfg.InputEmbargoToken != "" || cfg.HookSpoolMaxBytes > hookSpoolDefaultMaxBytes {
+		return errors.New("shim: invalid managed Claude chat configuration")
+	}
+	seen := map[string]bool{}
+	for i := 1; i < len(cfg.Argv); i++ {
+		arg := cfg.Argv[i]
+		if strings.HasPrefix(arg, "--session-id=") {
+			if seen["--session-id"] || arg != "--session-id="+cfg.ConversationID {
+				return errClaudeChatCapture
+			}
+			seen["--session-id"] = true
+			continue
+		}
+		if seen[arg] && arg != "--plugin-dir" {
+			return errClaudeChatCapture
+		}
+		seen[arg] = true
+		switch arg {
+		case "-p", "--verbose", "--replay-user-messages", "--dangerously-skip-permissions":
+		case "--input-format", "--output-format", "--permission-prompt-tool", "--permission-prompts", "--settings", "--model", "--name", "--plugin-dir":
+			i++
+			if i >= len(cfg.Argv) {
+				return errClaudeChatCapture
+			}
+			value := cfg.Argv[i]
+			switch arg {
+			case "--input-format", "--output-format":
+				if value != "stream-json" {
+					return errClaudeChatCapture
+				}
+			case "--permission-prompt-tool":
+				if value != "stdio" {
+					return errClaudeChatCapture
+				}
+			case "--permission-prompts":
+				if value != "host" {
+					return errClaudeChatCapture
+				}
+			case "--settings":
+				settings, ok := nativeInitializeObject([]byte(value), "autoContinueAtUsageLimit")
+				if !ok || strings.TrimSpace(string(settings["autoContinueAtUsageLimit"])) != "false" {
+					return errClaudeChatCapture
+				}
+			default:
+				if value == "" {
+					return errClaudeChatCapture
+				}
+			}
+		default:
+			return errClaudeChatCapture
+		}
+	}
+	for _, flag := range []string{"-p", "--input-format", "--output-format", "--verbose", "--replay-user-messages", "--permission-prompt-tool", "--permission-prompts", "--settings", "--session-id"} {
+		if !seen[flag] {
+			return errClaudeChatCapture
+		}
+	}
+	return nil
 }

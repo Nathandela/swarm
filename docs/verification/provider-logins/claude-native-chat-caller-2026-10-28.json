@@ -1,0 +1,98 @@
+{
+  "date": "2026-10-28",
+  "status": "unreleased explicit native caller implementation checks pass; installed native qualification remains open",
+  "source_archive": {
+    "sha256": "84187aeed15ff37eff6995c04689b38abfc80404e103ddb7eee4aaa1c445688d",
+    "bytes": 80619520,
+    "go_source_changed_after_snapshot": []
+  },
+  "source_sha256": {
+    "cmd/swarm/claude_chat_config.go": "23e1c4a2ee9b8e281083675072b24b994e341a0efb8797510c590a0e2b1499d8",
+    "cmd/swarm/claude_chat_native_config_test.go": "b9c877402e69e492cd8cbf188ab1f6668515ccc0f4967a58be4356a0bfc0a5c6",
+    "cmd/swarm/claude_chat_spawn_test.go": "ad25773568393b8b3567cefb43d177c65722f0effe7f5dfe0db18a7de570ec96",
+    "cmd/swarm/spawn.go": "50cd1a5c37a25971309e9d5d7e2de313af02780bd0f13e45a19890b869ebe8f9",
+    "internal/adapter/claude/claude.go": "92234abeb0c301398f7bcc3283a463654d2b1822b10be5d4a1fca7ac311c81c2",
+    "internal/adapter/claude/claude_chat_command_test.go": "51c1e201f984c64a57fafe0df6cb3d9cb660f0621a8be2f992405cfacd0c635d",
+    "internal/daemon/claude_chat_dispatch.go": "587699d8aa0ccff74f08a57383b9cf6ca11a5e0cc909a85bf72b98ec65e4c945",
+    "internal/daemon/launch.go": "c9558aad0d6ff0250e1111c4be5b7f6366f637c859cd1d5b5ef0563373033633",
+    "internal/protocol/claude_chat_native_list_test.go": "4c7aae030b04677f614d22dd32b8133f01161b44ae22a56a908a0e9429e793a4",
+    "internal/protocol/semantic_status.go": "130c0c1bd5a8cc246446b9b7bbb7d7735dcbe24d34bd644fcc2c31940bcbd9ff",
+    "internal/protocol/server.go": "49088c30843e22b46480a053081b9cce8029d3c60f8276c6f30419fe1eaf7b40",
+    "internal/shim/claude_chat.go": "c1ad4c010c04f6472591941f6b0c9b2974d00c3df0396b10944dbaabe4a69173",
+    "internal/shim/shim.go": "09c3c904cb56e4c2be6d3a19ed17a7e67a3f70b1cbfaa448455b145638f5062b",
+    "internal/skeleton/api.go": "4d7c59bfef8aea44f40d451a6d5ed375193de807f8ae73d9d9861c97f642bd2e",
+    "internal/skeleton/capability.go": "917cff795019b631ca52e1b9fdc6cd8720b4418e0bc8351cc64116a037b48b15",
+    "internal/skeleton/chat.go": "43d53d1940c335a9b0e94734e9a2809d496aa854697b9a1ac8ee77d2d73c16ca",
+    "internal/skeleton/claude_chat_adoption_test.go": "b4bcfd6b785daf2ad738b3c819166ed7786beb356bc15901be1d06e886c4a42e",
+    "internal/skeleton/claude_chat_caller_test.go": "6166d5efd10d987019c079b58735eee4f72c4bcbdde7c98d97164b6b506e3fdb",
+    "internal/skeleton/claude_chat_carriage_test.go": "5fd7c96b20ed8f044de26598a1efa88e24c4f934923637fb8f950e0d56dad001",
+    "internal/skeleton/claude_chat_initial_prompt.go": "aaac947dc1e7c6247ca4dd016b589bac4b441c39f0a22dd528cc866588733b4b",
+    "internal/skeleton/claude_chat_initial_prompt_test.go": "9fb15c53452a29b95dfb761ce5a2894d784591759ef89c20c4fd76afa6c2d46c",
+    "internal/skeleton/claude_chat_message.go": "9c451d5561074978d37dc308f692b55cd991e0e8903308883fa8538c1b163e02",
+    "internal/skeleton/claude_chat_message_test.go": "268743274fbfdb96994568fbf24db0b39beb00a811e22c8f35e764e8c01d5a56",
+    "internal/skeleton/claude_chat_native.go": "7f76ae638b353e0a8cbb15d2b4582bd2c8ce7773e33028e95a34336e0deb38ef",
+    "internal/skeleton/claude_chat_native_test.go": "82d410a2df9db568c2a4396736f1155f6c3e0346713e2573dd9ac5042ffd3ca5",
+    "internal/skeleton/claude_chat_public_native_test.go": "b714f5717ef5f450c3d56de48750e8a63199aaf28a701136e3a8d652df6d4f22",
+    "internal/skeleton/hookdrainloop.go": "b434d4a7bb75a1b11042b077271706ddc713b632760f4d4f65c6be9b7fad4495",
+    "internal/skeleton/opencode_receipt.go": "55bcd47ec7c8aa10eb41eaceaf787a79a2af68c2bf20c6110b10c5a8991214c4",
+    "internal/skeleton/serve.go": "51c2a23769f0192746eb4736f1cb44f9a2ffd3613dc1113c7e76935615f8fe3b",
+    "internal/tui/action_buttons.go": "295f2bc75f37ea2b84feee616c8a6796c508f2381944a2899e6c0e0138679756",
+    "internal/tui/board.go": "b2576e9ded9d698023b86a96fed68aff24c609d256c823925b06609c379e316e",
+    "internal/tui/claude_chat.go": "100ea850ce94e1180a850372ac67beee96b3723176e0870b8d6b30bfc3c33566",
+    "internal/tui/claude_chat_actions_test.go": "603380d87b301f2ab1df3cbf2f6686c2812113865a0fa3a769ca4fc715edf9a7",
+    "internal/tui/claude_chat_launch_test.go": "5aa285ddc5a2d835aeabb7e2d4e10d3966e803bd366696ed096b5e41a62f424d",
+    "internal/tui/general.go": "20c8de0a26a799710fdcb7313b5c5715431a8f642ab551db1a62e6007a7eade2",
+    "internal/tui/launch.go": "4b6f72d49f8e68c2ad05c4ced88f5655180f4661970a9e8690663d06fa9b56e2",
+    "internal/tui/reconnect.go": "087067f744d86e93d4007a4fa6faa9d57e5991e455919c4f051cf281fedc3688",
+    "internal/tui/resume.go": "ce1593aa87a8a7b60c51275c7cc2e87d1fd1dbed110eb1353ec9ff4100324a4b",
+    "internal/tui/tui.go": "0294cdb6e0c3411fc5339824a8a6420d9ee9a2eddc952adffd7829906381c47f"
+  },
+  "behavior": [
+    "Explicit fresh local Linux Claude2.1.310 swarm-chat selector; ordinary native/default and existing sessions unchanged.",
+    "Initial text excluded from argv, one deterministic claude-initial:<winning-session-ID> semantic operation; newer owner intent supersedes delayed initial, executing/uncertain/hydration never redrives.",
+    "Native readiness and retained Stop precede fresh input. Cold restart retains Stop/read evidence but cannot restore input authority.",
+    "Native UI keeps exact draft until observed history echo, continues read-only polling beyond five seconds, and recovers same-instance read/control connections without resending.",
+    "Resume/Handoff/raw attach/resize/interrupt are unavailable for this runtime; normal settings/hooks/MCP and model selection retain existing adapter composition."
+  ],
+  "checks": {
+    "mac_focused_race": {
+      "pass": 390,
+      "skip": 14,
+      "fail": 0,
+      "log_sha256": "5ee013f856de84b7376be5be5e9a5ca192042603424ee10c3b46c9dae10c0024"
+    },
+    "metadata_house_case": {
+      "red": "preserved old-parser overlay fails accepting actual persist.Meta/status serialization",
+      "green": "current parser accepts exact house keys and rejects aliases/duplicates"
+    },
+    "linux_race": {
+      "pass": 529,
+      "fail": 0,
+      "skip": 1,
+      "open_skip": "TestClaudeChatActualNativePublicLaunchWiresDeterministicInitialOnce",
+      "packages_passed": 7,
+      "log_sha256": "4a67c66185b47aad3634137dbd81a018d123235ce08603fbc5aea7f35491baf5",
+      "source_and_module_files_unchanged": true,
+      "exact_unit_and_cgroup_gone": true,
+      "oracle_correction": "Original runner mistakenly expected a schema subpackage test in ./internal/protocol. Original false result retained; R3 offline re-evaluation uses only direct files of selected packages. No Go execution repeated or replaced.",
+      "offline_reevaluation_sha256": "0f564bb59c60c136ed3579eed7b151db8ab0213b546e2e925ee208e2f2d3d070",
+      "independent_review": "Astra independently rehashed archive/RUN/log and verified all174 expected direct-package top-level tests; implementation-only GREEN, native gate open."
+    },
+    "build": "go build ./... passed",
+    "vet": "go vet ./... passed",
+    "lint": "golangci-lint run: 0 issues, existing unknown gomnd warning"
+  },
+  "failed_runs_retained": [
+    "Preimplementation Linux baseline:39 failed actions and1 explicit native skip; source unchanged and cgroup gone.",
+    "First direct Linux A2 run lacked two pinned modules and skipped integration setup; module cache repaired and runs kept separate.",
+    "Old unbound-quarantine Stop success expectation contradicted approved no-fallback contract; test now asserts unconfirmed/no signal/unchanged custody.",
+    "A3 Linux common-registration failure exposed status key casing; portable regression reproduced failure against old parser and passes with exact house spellings."
+  ],
+  "limits": [
+    "Actual installed-image launch/initialize/message/result/history/Stop qualification remains unrun and is explicitly skipped.",
+    "The private native-smoke proxy/preparer tests pass, but genuine native folder trust and complete hosting isolation are not qualified.",
+    "Automatic continuation, exact unfinished quota recovery, complete actors/workflows and all public release gates remain open.",
+    "Native history remains bounded512KiB/4096records; long-history paging is not production-qualified.",
+    "Full repository GG-4 and the final merged source review/release gates remain required. No main merge, live daemon deployment or release performed."
+  ]
+}

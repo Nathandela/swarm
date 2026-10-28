@@ -36,6 +36,7 @@ type claudeNativeState struct {
 	nativeScope       logins.NativeProcessInfo
 	deliveredRevision uint64
 	busy              bool
+	liveInput         bool
 }
 
 func (d *Daemon) claudeNativeState(local string) *claudeNativeState {
@@ -49,8 +50,19 @@ func (d *Daemon) claudeNativeState(local string) *claudeNativeState {
 	return l.claudeNative
 }
 func (d *Daemon) registerClaudeNativeChat(m persist.Meta) error {
-	if m.InputEmbargo != "" || m.SchemaVersion != 6 || m.AgentType != "claude" || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || m.LoginRuntime == nil || m.CLIIdentity == nil || m.CLIIdentity.Version != "2.1.310" || m.ClaudeRetirement != nil || !adapter.IsCanonicalConversationID(m.ConversationID) || d.logins == nil {
+	if m.InputEmbargo != "" || m.SchemaVersion != 6 || m.AgentType != "claude" || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || m.LoginRuntime == nil || m.CLIIdentity == nil || m.CLIIdentity.Version != "2.1.310" || m.ClaudeRetirement != nil || !adapter.IsCanonicalConversationID(m.ConversationID) {
 		return errClaudeFixtureMessage
+	}
+	// Retained Stop precedes snapshot, registry, execution-store and consumer locks.
+	coldScope, err := d.readClaudeNativeScope(m, shimwire.ClaudePrimaryIdentity{})
+	if err != nil {
+		return err
+	}
+	if err = d.retainClaudeNativeStop(m, coldScope.Generation); err != nil {
+		return err
+	}
+	if d.logins == nil || d.core == nil {
+		return errClaudeFixturePending
 	}
 	root, err := d.logins.store.OpenClaudeProfileProjects(*m.LoginRuntime)
 	if err != nil {
@@ -63,20 +75,23 @@ func (d *Daemon) registerClaudeNativeChat(m persist.Meta) error {
 	if err != nil {
 		return err
 	}
-	scope, err := d.readClaudeNativeScope(m, snap.Identity)
-	if err != nil {
-		return err
+	if snap.Identity.PrimaryPID <= 0 || snap.Identity.PrimaryStartTime <= 0 {
+		return errClaudeFixturePending
 	}
-	if err = d.retainClaudeNativeStop(m, scope.Generation); err != nil {
-		return err
+	scope, err := d.readClaudeNativeScope(m, snap.Identity)
+	if err != nil || scope.Generation != coldScope.Generation {
+		return errClaudeFixtureMessage
 	}
 	lane := d.composerLaneFor(m.ID)
 	lane.mu.Lock()
-	if lane.claudeNative == nil {
-		lane.claudeNative = &claudeNativeState{claudeFixtureState: claudeFixtureState{meta: m, identity: snap.Identity, healthy: true}, nativeScope: scope, deliveredRevision: snap.OwnerRevision}
+	fresh := lane.claudeNative == nil
+	if fresh {
+		lane.claudeNative = &claudeNativeState{claudeFixtureState: claudeFixtureState{meta: m, identity: snap.Identity, healthy: true}, nativeScope: scope, deliveredRevision: snap.OwnerRevision, liveInput: lane.claudeNativeLive}
 	}
 	lane.mu.Unlock()
-	d.registerExecutionSession(m, "", nil, false)
+	if fresh {
+		d.registerExecutionSession(m, "", nil, false)
+	}
 	return nil
 }
 
@@ -84,6 +99,12 @@ func (d *Daemon) sendClaudeNativeChat(local, operation string, req protocol.Comp
 	s := d.claudeNativeState(local)
 	if s == nil || source != adapter.SourceOwner || req.Origin != nil || operation == "" || req.Text == "" || !utf8.ValidString(req.Text) || len(req.Text) > shimwire.MaxClaudeFixtureTextBytes {
 		return protocol.CodeStructuredUnsupported, errClaudeFixtureMessage
+	}
+	s.mu.Lock()
+	liveInput := s.liveInput
+	s.mu.Unlock()
+	if !liveInput {
+		return protocol.CodeInputBusy, errors.New("native Claude chat input remains disabled after restart")
 	}
 	resolved, err := d.resolveChatSession(d.machineID(), req.Session)
 	if err != nil || resolved != local {
@@ -123,6 +144,9 @@ func (d *Daemon) sendClaudeNativeChat(local, operation string, req protocol.Comp
 	s.mu.Lock()
 	identity, delivered := s.identity, s.deliveredRevision
 	s.mu.Unlock()
+	if strings.HasPrefix(operation, "claude-initial:") && len(rec.Request) == 0 && execution.OwnerRevision != 0 {
+		return protocol.CodeStaleTurn, errors.New("initial message was superseded by a newer explicit owner intent")
+	}
 	hash := sha256.Sum256([]byte(req.Text))
 	var intent daemon.ClaudeFixtureIntent
 	if len(rec.Request) > 0 {
@@ -157,6 +181,7 @@ func (d *Daemon) sendClaudeNativeChat(local, operation string, req protocol.Comp
 		s.evidence = claudeFixtureEvidence{Version: 2, Kind: "claude_native_message", OperationID: operation, Intent: intent, State: "prepared", RawHashes: []string{s.initHash}}
 	}
 	s.ownerRevision = intent.OwnerRevision
+	s.ready = false
 	s.mu.Unlock()
 	if blocked {
 		return protocol.CodeInputBusy, errClaudeFixtureMessage
@@ -253,6 +278,9 @@ func (d *Daemon) sendClaudeNativeChat(local, operation string, req protocol.Comp
 }
 
 func (d *Daemon) proveClaudeNativeReady(local string, s *claudeNativeState) error {
+	s.mu.Lock()
+	s.ready = false
+	s.mu.Unlock()
 	snap, err := d.core.ClaudeFixtureSnapshot(local)
 	if err != nil {
 		return err
@@ -270,6 +298,7 @@ func (d *Daemon) proveClaudeNativeReady(local string, s *claudeNativeState) erro
 	if !s.healthy || !s.initialized || s.busy || s.reason != "" || s.inputFault || snap.Identity != s.identity || !snap.Initialized || !snap.Healthy || snap.PendingPartial || snap.StdoutEOF || snap.StderrEOF || s.sequence != s.folded || snap.ObservedSequence != s.folded || snap.DurableSequence != s.folded {
 		return errClaudeFixtureMessage
 	}
+	s.ready = true
 	return nil
 }
 
@@ -301,6 +330,7 @@ func (hd *HookDrainer) drainClaudeNativeLocked() (int, int, error) {
 		s.mu.Unlock()
 		count++
 	}
+	_ = hd.d.proveClaudeNativeReady(s.meta.ID, s)
 	return count, 0, nil
 }
 
@@ -343,6 +373,7 @@ func (d *Daemon) consumeClaudeNative(s *claudeNativeState, body []byte) error {
 	s.mu.Lock()
 	valid := s.healthy && env.Identity == s.identity && env.Seq == s.sequence+1
 	intent, evidence := s.intent, s.evidence
+	s.ready = false
 	s.mu.Unlock()
 	if !valid || snap.Identity != env.Identity || !snap.Healthy || snap.StdoutEOF || snap.StderrEOF {
 		return errClaudeFixtureMessage
@@ -537,6 +568,9 @@ func (d *Daemon) consumeClaudeNative(s *claudeNativeState, body []byte) error {
 	if f.Type == "control_response" {
 		h := sha256.Sum256(env.Raw)
 		s.initHash = hex.EncodeToString(h[:])
+		if s.evidence.State == "prepared" && len(s.evidence.RawHashes) == 1 && s.evidence.RawHashes[0] == "" {
+			s.evidence.RawHashes = []string{s.initHash}
+		}
 	}
 	s.mu.Unlock()
 	_ = fields
@@ -557,10 +591,21 @@ func (d *Daemon) claudeNativeChatReceipt(local, operation string, rec idempotenc
 		r.OutcomeSource = "claude_primary_native"
 	} else if rec.Phase == idempotency.PhasePrepared {
 		r.State = "prepared"
+	} else if rec.Phase == idempotency.PhaseFailed {
+		var outcome struct {
+			OK      bool   `json:"ok"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(rec.Outcome, &outcome) == nil && !outcome.OK {
+			r.State = "rejected"
+			r.Reason = outcome.Message
+		}
 	}
 	if s := d.claudeNativeState(local); s != nil {
 		s.mu.Lock()
-		r.Reason = s.reason
+		if s.reason != "" {
+			r.Reason = s.reason
+		}
 		s.mu.Unlock()
 	}
 	return r
@@ -721,22 +766,17 @@ func (d *Daemon) readClaudeNativeScope(m persist.Meta, id shimwire.ClaudePrimary
 	if err != nil || !os.SameFile(before, after) {
 		return n, errClaudeFixtureMessage
 	}
-	f, err := session.OpenFile(logins.NativeProcessFile, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return n, err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return n, err
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || stat.Uid != uint32(os.Getuid()) || stat.Nlink != 1 || info.Size() > 64<<10 {
+	metaRaw, err := readClaudeNativeCustody(session, "meta.json", 1<<20)
+	if err != nil || !strictClaudeNativeJSON(metaRaw, "metadata", 0) {
 		return n, errClaudeFixtureMessage
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, 64<<10+1))
-	if err != nil || len(raw) > 64<<10 {
+	var saved persist.Meta
+	if json.Unmarshal(metaRaw, &saved) != nil || saved.SchemaVersion != 6 || saved.ID != m.ID || saved.AgentType != "claude" || saved.RequiredRuntime != persist.RequiredRuntimeClaudeChat || saved.ConversationID != m.ConversationID || saved.ShimPID != m.ShimPID || saved.ShimStartTime != m.ShimStartTime || saved.LoginRuntime == nil || saved.CLIIdentity == nil || m.LoginRuntime == nil || m.CLIIdentity == nil || *saved.LoginRuntime != *m.LoginRuntime || *saved.CLIIdentity != *m.CLIIdentity || saved.ProviderCwd() != m.ProviderCwd() || saved.InputEmbargo != "" || saved.ClaudeRetirement != nil || saved.Status.Process != status.ProcessRunning {
 		return n, errClaudeFixtureMessage
+	}
+	raw, err := readClaudeNativeCustody(session, logins.NativeProcessFile, 64<<10)
+	if err != nil {
+		return n, err
 	}
 	if !strictClaudeNativeJSON(raw, "scope", 0) {
 		return n, errClaudeFixtureMessage
@@ -754,7 +794,7 @@ func (d *Daemon) readClaudeNativeScope(m persist.Meta, id shimwire.ClaudePrimary
 		return n, errClaudeFixtureMessage
 	}
 	generation, e := hex.DecodeString(n.Generation)
-	if e != nil || len(generation) != 16 || hex.EncodeToString(generation) != n.Generation || n.SchemaVersion != logins.ClaudeNativeWriterSchemaVersion || n.Provider != "claude" || n.Runtime != *m.LoginRuntime || n.SessionID != m.ID || n.Cwd != m.ProviderCwd() || n.CLIFingerprint != m.CLIIdentity.Fingerprint || n.ShimPID != m.ShimPID || n.ShimStartTime != m.ShimStartTime || n.PID != id.PrimaryPID || n.StartTime != id.PrimaryStartTime || n.PGID != n.PID || n.BackendPID != 0 || n.BackendStartTime != 0 || n.IncidentID != "" {
+	if e != nil || len(generation) != 16 || hex.EncodeToString(generation) != n.Generation || n.SchemaVersion != logins.ClaudeNativeWriterSchemaVersion || n.Provider != "claude" || n.Runtime != *m.LoginRuntime || n.SessionID != m.ID || n.Cwd != m.ProviderCwd() || n.CLIFingerprint != m.CLIIdentity.Fingerprint || n.ShimPID != m.ShimPID || n.ShimStartTime != m.ShimStartTime || n.PID < 0 || n.StartTime < 0 || (n.PID == 0) != (n.StartTime == 0) || id.PrimaryPID > 0 && (n.PID != id.PrimaryPID || n.StartTime != id.PrimaryStartTime) || n.PGID != n.PID || n.BackendPID != 0 || n.BackendStartTime != 0 || n.IncidentID != "" {
 		return n, errClaudeFixtureMessage
 	}
 	_ = object
@@ -860,6 +900,12 @@ func strictClaudeNativeJSON(raw []byte, context string, depth int) bool {
 		keys = []string{"subtype", "tool_name"}
 	case "scope":
 		keys = []string{"schema_version", "generation", "backend_pid", "backend_start_time", "pid", "pgid", "start_time", "shim_pid", "shim_start_time", "provider", "runtime", "incident_id", "session_id", "cwd", "cli_fingerprint"}
+	case "metadata":
+		keys = []string{"schema_version", "id", "agent_type", "required_runtime", "conversation_id", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement", "input_embargo", "status"}
+	case "cli":
+		keys = []string{"path", "version", "fingerprint"}
+	case "status":
+		keys = []string{"Process", "Turn", "Interaction", "Attention", "NativeWorkUnknown"}
 	case "runtime":
 		keys = []string{"provider", "epoch", "identity", "home", "external_auth"}
 	case "envelope":
@@ -885,6 +931,12 @@ func strictClaudeNativeJSON(raw []byte, context string, depth int) bool {
 			child = "initialize"
 		case context == "frame" && key == "request":
 			child = "request"
+		case context == "metadata" && key == "login_runtime":
+			child = "runtime"
+		case context == "metadata" && key == "cli_identity":
+			child = "cli"
+		case context == "metadata" && key == "status":
+			child = "status"
 		case context == "scope" && key == "runtime":
 			child = "runtime"
 		case context == "envelope" && key == "primary":
@@ -897,4 +949,46 @@ func strictClaudeNativeJSON(raw []byte, context string, depth int) bool {
 		}
 	}
 	return true
+}
+
+func readClaudeNativeCustody(root *os.Root, name string, limit int64) ([]byte, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || stat.Uid != uint32(os.Getuid()) || stat.Nlink != 1 || info.Size() > limit {
+		return nil, errClaudeFixtureMessage
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(raw)) > limit {
+		return nil, errClaudeFixtureMessage
+	}
+	return raw, nil
+}
+
+// Only the core's fresh OnSessionStart event may grant in-process input custody.
+// Reconcile calls that event before core assignment; later hydration never calls this.
+func (d *Daemon) noteClaudeNativeLiveLaunch(m persist.Meta) {
+	if d.core == nil || m.AgentType != "claude" || m.RequiredRuntime != persist.RequiredRuntimeClaudeChat || m.Status.Process != status.ProcessRunning {
+		return
+	}
+	current, ok := d.core.Get(m.ID)
+	if !ok || current.ShimPID != m.ShimPID || current.ShimStartTime != m.ShimStartTime || current.ConversationID != m.ConversationID || current.LoginRuntime == nil || m.LoginRuntime == nil || *current.LoginRuntime != *m.LoginRuntime {
+		return
+	}
+	lane := d.composerLaneFor(m.ID)
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	lane.claudeNativeLive = true
+	if s := lane.claudeNative; s != nil {
+		s.mu.Lock()
+		s.liveInput = true
+		s.mu.Unlock()
+	}
 }

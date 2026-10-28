@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -133,6 +134,9 @@ func (d *Daemon) prepareClaudeMessageDispatch(local string, request shimwire.Cla
 		// One fixture turn has no authority to supersede a different operation.
 		if rec.OperationID != request.OperationID {
 			if native {
+				if len(rec.Request) == 0 && (rec.Phase == idempotency.PhaseFailed || rec.Phase == idempotency.PhasePrepared && strings.HasPrefix(rec.OperationID, "claude-initial:")) {
+					continue
+				}
 				other, e := DecodeClaudeNativeIntent(rec.Request)
 				if e != nil || other.OwnerRevision >= request.OwnerRevision {
 					return fail()

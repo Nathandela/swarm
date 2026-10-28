@@ -407,8 +407,8 @@ func (d *Daemon) consumeClaudeFixture(s *claudeFixtureState, body []byte) error 
 		if e != nil {
 			return errClaudeFixturePending
 		}
-		if current.Identity != env.Identity || !current.Healthy || current.PendingPartial || current.StdoutEOF || current.StderrEOF || current.ObservedSequence != env.Sequence || current.DurableSequence != env.Sequence || current.OwnerRevision != 0 {
-			return errClaudeFixtureMessage
+		if e = claudeFixtureInitPublication(current, env.Identity, env.Sequence); e != nil {
+			return e
 		}
 		text = "Fixture primary initialized"
 	case "user":
@@ -615,4 +615,18 @@ func validClaudeFixtureEvidence(rec idempotency.Record, e claudeFixtureEvidence,
 	default:
 		return false
 	}
+}
+
+func claudeFixtureInitPublication(current shimwire.ClaudePrimarySnapshot, identity shimwire.ClaudePrimaryIdentity, sequence uint64) error {
+	if current.Identity != identity || !current.Healthy || current.StdoutEOF || current.StderrEOF || current.OwnerRevision != 0 {
+		return errClaudeFixtureMessage
+	}
+	// Append becomes visible before its contiguous prefix is published in the snapshot.
+	if current.PendingPartial || current.ObservedSequence < sequence || current.DurableSequence < sequence {
+		return errClaudeFixturePending
+	}
+	if current.ObservedSequence != sequence || current.DurableSequence != sequence {
+		return errClaudeFixtureMessage
+	}
+	return nil
 }

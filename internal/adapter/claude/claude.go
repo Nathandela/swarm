@@ -21,6 +21,7 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -123,19 +124,23 @@ func (claudeAdapter) SupportedVersions() adapter.VersionConstraint {
 }
 
 // Command composes the launch argv: `claude` + the inline-JSON --settings hook
-// injection (T-2) + any declared option flags + the initial prompt (positional).
+// injection (T-2) and declared options. Only native-terminal mode carries a positional prompt.
 // It is pure and deterministic — the settings JSON is emitted with sorted keys.
 func (claudeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
-	settings, err := hookSettingsJSON()
+	chat := spec.Options["claude_interface"] == "swarm-chat"
+	settings, err := hookSettingsJSON(chat)
 	if err != nil {
 		return nil, err
 	}
 	argv := []string{binary, "--settings", settings}
+	if chat {
+		argv = append(argv, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages", "--permission-prompt-tool", "stdio", "--permission-prompts", "host")
+	}
 	if spec.Name != "" {
 		argv = append(argv, "--name", spec.Name)
 	}
 	argv = append(argv, optionFlags(spec.Options)...)
-	if spec.InitialPrompt != "" {
+	if !chat && spec.InitialPrompt != "" {
 		argv = append(argv, spec.InitialPrompt)
 	}
 	return argv, nil
@@ -144,6 +149,7 @@ func (claudeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 // Options is the declarative launch-option schema the launch form renders.
 func (claudeAdapter) Options() []adapter.OptionSpec {
 	return []adapter.OptionSpec{
+		{Key: "claude_interface", Label: "Interface", Type: "choice", Default: "native", Choices: []string{"native", "swarm-chat"}},
 		// Editable free text; left/right cycle these aliases the claude CLI accepts.
 		// Empty value = the CLI's own default model.
 		{Key: "model", Label: "Model", Type: "string", Suggest: []string{"sonnet", "opus", "haiku"}},
@@ -186,10 +192,13 @@ func (claudeAdapter) SignalSources() []adapter.SignalSource {
 // resumes nothing. Resumed sessions need the same per-invocation hooks as fresh
 // sessions so swarm remains their status and lifecycle observer.
 func (claudeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
+	if spec.Options["claude_interface"] == "swarm-chat" {
+		return nil, errors.New("claude Swarm chat requires a fresh session")
+	}
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	settings, err := hookSettingsJSON()
+	settings, err := hookSettingsJSON(false)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +272,7 @@ func (claudeAdapter) TranscriptFileName(convID string) string {
 // hookSettingsJSON renders the inline --settings value that installs the swarm
 // hooks per-invocation. It marshals a fixed structure (sorted map keys), so the
 // output is deterministic and valid JSON.
-func hookSettingsJSON() (string, error) {
+func hookSettingsJSON(chat bool) (string, error) {
 	type cmd struct {
 		Type    string `json:"type"`
 		Command string `json:"command"`
@@ -275,9 +284,15 @@ func hookSettingsJSON() (string, error) {
 	for _, h := range hookEvents {
 		hooks[h.event] = []matcher{{Hooks: []cmd{{Type: "command", Command: hookCommandPrefix + h.event}}}}
 	}
-	b, err := json.Marshal(struct {
-		Hooks map[string][]matcher `json:"hooks"`
-	}{Hooks: hooks})
+	settings := struct {
+		Hooks                    map[string][]matcher `json:"hooks"`
+		AutoContinueAtUsageLimit *bool                `json:"autoContinueAtUsageLimit,omitempty"`
+	}{Hooks: hooks}
+	if chat {
+		disabled := false
+		settings.AutoContinueAtUsageLimit = &disabled
+	}
+	b, err := json.Marshal(settings)
 	if err != nil {
 		return "", err
 	}

@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
@@ -20,9 +22,11 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/journal"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/shimwire"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
@@ -206,8 +210,9 @@ type coreAPI struct {
 	// (ADR-017 T2-a): the first authors a record the instant a launch succeeds, the
 	// second is the PURE READ the remote-tier gate consults. Both nil until Serve wires
 	// them, and nil is fail-closed -- no record authored, no record found.
-	onLaunched  func(persist.Meta)
-	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
+	onLaunched           func(persist.Meta)
+	claudeNativeLaunched func(persist.Meta, string, string) error
+	sessionCaps          func(local string) (protocol.SessionCapabilities, bool)
 	// withSessionStateSnapshot, when wired by the full assembly, runs a journal
 	// roster boundary and its capability lookups under one shared state fence.
 	withSessionStateSnapshot func(func())
@@ -1233,7 +1238,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 	return a.launchResolvedWithOutcome(composed, &coreAttempted)
 }
 
-// This prerequisite is dev-only; managed/public chat requires the complete connected exit.
+// Derive chat carriage only from an explicit fresh local selector.
 func (a *coreAPI) prepareClaudeChatFixtureLaunch(spec *daemon.LaunchSpec) error {
 	for _, option := range []string{protocol.OptionResumeFrom, protocol.OptionHandoffFrom} {
 		if ref := spec.Options[option]; ref != "" && a.core != nil {
@@ -1250,7 +1255,19 @@ func (a *coreAPI) prepareClaudeChatFixtureLaunch(spec *daemon.LaunchSpec) error 
 	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat || spec.ClaudeChatFixture != "" {
 		return fmt.Errorf("launch: Claude chat selectors are internally derived")
 	}
-	if !present {
+	if !present || mode == "native" && spec.AgentType == "claude" {
+		return nil
+	}
+	if mode == "swarm-chat" && spec.AgentType == "claude" {
+		if !utf8.ValidString(spec.InitialPrompt) || len(spec.InitialPrompt) > shimwire.MaxClaudeFixtureTextBytes || runtime.GOOS != "linux" || spec.ClientEnv == nil || spec.ConversationID != "" || len(spec.Argv) != 0 || spec.ResumedFrom != "" || spec.SpawnedFrom != "" || spec.SpawnIntent != "" || spec.Supervision != "" || spec.LoginRuntime != nil || spec.LoginStateRoot != "" || spec.LoginSwitchID != "" || spec.LoginSwitchSource != "" || spec.InputEmbargo != "" || spec.CLIIdentity != nil || spec.ExpectedCLIIdentity != nil || spec.Backend != nil || spec.OpenCodeLaunch != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil || spec.AuthIdentity != "" {
+			return fmt.Errorf("launch: native Claude chat requires a fresh local owner launch")
+		}
+		for _, key := range []string{protocol.OptionResumeFrom, protocol.OptionResumeConversationID, protocol.OptionResumeRelocate, protocol.OptionHandoffFrom} {
+			if _, exists := spec.Options[key]; exists {
+				return fmt.Errorf("launch: native Claude chat cannot resume, import or hand off")
+			}
+		}
+		spec.RequiredRuntime = persist.RequiredRuntimeClaudeChat
 		return nil
 	}
 	if mode != "swarm-chat" || spec.AgentType != "fake" || a.fakeAgentBin == "" || !filepath.IsAbs(a.fakeAgentBin) || filepath.Clean(a.fakeAgentBin) != a.fakeAgentBin || spec.ClientEnv == nil || spec.InitialPrompt != "" || spec.ConversationID != "" || len(spec.Argv) != 0 || spec.ResumedFrom != "" || spec.SpawnedFrom != "" || spec.SpawnIntent != "" || spec.Supervision != "" || spec.LoginRuntime != nil || spec.LoginStateRoot != "" || spec.LoginSwitchID != "" || spec.LoginSwitchSource != "" || spec.InputEmbargo != "" || spec.CLIIdentity != nil || spec.ExpectedCLIIdentity != nil || spec.RequiredRuntime != "" || spec.OpenCodeLaunch != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil || spec.Backend != nil || spec.AuthIdentity != "" {
@@ -1342,6 +1359,9 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		}
 	}
 
+	if resolved.RequiredRuntime == persist.RequiredRuntimeClaudeChat && resolved.AgentType == "claude" && (resolved.LoginRuntime == nil || resolved.CLIIdentity == nil || resolved.CLIIdentity.Version != "2.1.310" || !logins.IsClaudeProfileRuntime(a.stateDir, *resolved.LoginRuntime)) {
+		return persist.Meta{}, fmt.Errorf("launch: native Claude chat requires the selected managed profile and Claude 2.1.310")
+	}
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
 	}
@@ -1374,6 +1394,11 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 	// Daemon.authorLaunchedSessionCapabilities); an unwired coreAPI, which is every unit
 	// test that builds one directly, simply authors nothing and the session keeps T2-a's
 	// honest status card.
+	if m.RequiredRuntime == persist.RequiredRuntimeClaudeChat && m.AgentType == "claude" && a.claudeNativeLaunched != nil {
+		if err := a.claudeNativeLaunched(m, resolved.OperationID, resolved.InitialPrompt); err != nil {
+			log.Printf("skeleton: native Claude chat %s retains initial draft: %v", m.ID, err)
+		}
+	}
 	if fn := a.onLaunched; fn != nil {
 		fn(m)
 	}

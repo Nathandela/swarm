@@ -186,7 +186,25 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 		m.daemonVersion = bv.BuildVersion()
 	}
 	banner := m.reconcileRoster(msg.sessions)
-	cmds := []tea.Cmd{waitForEvent(m.events), banner}
+	var chatCmd tea.Cmd
+	if m.screen == screenChat {
+		m.chat.ready = false
+		matched := false
+		for _, row := range msg.sessions {
+			if row.ID == m.chat.session.ID && validClaudeChatSession(row) && m.chat.session.Capabilities != nil && row.Capabilities.SessionInstance == m.chat.session.Capabilities.SessionInstance {
+				next, cmd := m.openClaudeChat(row)
+				m = next.(rootModel)
+				chatCmd = cmd
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			m.closeClaudeChat()
+			m.chat.notice = "Chat scope unavailable after reconnect; return to the board"
+		}
+	}
+	cmds := []tea.Cmd{waitForEvent(m.events), banner, chatCmd}
 	if m.screen == screenGeneral && !m.ticking {
 		m.ticking = true
 		cmds = append(cmds, repaintTick())

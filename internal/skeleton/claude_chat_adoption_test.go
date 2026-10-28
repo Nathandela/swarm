@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -145,9 +146,9 @@ func TestClaudeChatQuarantineSurvivesDaemonCloseAndAdoption(t *testing.T) {
 	a2Unchanged(t, before)
 }
 
-func TestClaudeChatOwnerStopRemainsAvailable(t *testing.T) {
+func TestClaudeChatUnboundQuarantineStopRemainsUnconfirmed(t *testing.T) {
 	d, m, paths := a2SurvivingQuarantine(t)
-	before := a2Snapshot(t, paths)
+	before := a2Snapshot(t, append(paths, filepath.Join(d.stateDir, m.ID, "meta.json"), filepath.Join(d.stateDir, m.ID, "execution.json")))
 	client := dialClient(t, d)
 	id := protocol.NamespacedID(d.api.endpointID, m.ID)
 	if att, err := client.Attach(id); err == nil {
@@ -170,24 +171,17 @@ func TestClaudeChatOwnerStopRemainsAvailable(t *testing.T) {
 	if started, err := procstart.StartTime(m.ShimPID); err != nil || started != m.ShimStartTime {
 		t.Fatal("owner Stop fixture lost its exact live shim before Kill", err)
 	}
-	if err := client.Kill(id); err != nil {
-		t.Fatalf("explicit owner Stop refused: %v", err)
+	startedAt := time.Now()
+	if err := client.Kill(id); err == nil || !strings.Contains(err.Error(), "unconfirmed") {
+		t.Fatalf("unbound old shim must remain unconfirmed: %v", err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		row, ok := d.core.Get(m.ID)
-		started, identityErr := procstart.StartTime(m.ShimPID)
-		// Signal-0 ESRCH positively proves absence; a start-token change proves reuse.
-		// Darwin's StartTime EIO alone never establishes death.
-		ended := syscall.Kill(m.ShimPID, 0) == syscall.ESRCH || (identityErr == nil && started != m.ShimStartTime)
-		if ok && row.Status.Process != status.ProcessRunning && ended {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("owner Stop did not reach terminal state")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if time.Since(startedAt) > 3*time.Second {
+		t.Fatal("unbound Stop waited on unrelated lifecycle work")
 	}
-	// Stop may change lifecycle metadata; retained hook custody still cannot fold.
+	if started, err := procstart.StartTime(m.ShimPID); err != nil || started != m.ShimStartTime || syscall.Kill(m.ShimPID, 0) != nil {
+		t.Fatal("unbound Stop signalled or lost the exact retained shim", err)
+	}
+	// This old-mode synthetic shim has no native birth/Stop binding. Test-owned
+	// cleanup is registered by a2SurvivingQuarantine, outside owner Stop authority.
 	a2Unchanged(t, before)
 }

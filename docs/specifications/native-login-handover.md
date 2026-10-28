@@ -649,12 +649,21 @@ OAuth implementation is part of the initial design.
 
 ## Opt-in Claude chat implementation
 
-**Implementation in progress; the public/native runtime is not active.** New Claude
-sessions will be able to choose **Swarm chat (experimental)** through the launch
+**Unreleased; installed-native qualification and deployment remain open.** The
+feature branch implements an explicit fresh local Linux Claude2.1.310 caller. New Claude
+sessions can choose **Swarm chat (experimental)** through the launch
 form or `swarm spawn --interface swarm-chat`. Ordinary launches remain native
 terminal sessions; existing sessions are unchanged. Initially refuse resume,
 handoff/import, remote/preset use, unsupported runtimes and platforms. Persist an
 exact `claude-chat` runtime discriminator so old readers fail closed.
+
+The [caller checkpoint](../verification/provider-logins/claude-native-chat-caller-2026-10-28.json)
+connects explicit launch, managed stdio, deterministic initial owner input,
+version 2 chat reads and independent Stop. Seven Linux race-tested packages pass
+529 checks with one explicit native-image gate still skipped. Cold restart
+retains Stop/read custody without restoring input. Native decisions, complete
+actors/workflows, long history and automatic recovery remain unqualified; this
+source checkpoint grants no deployment or release claim.
 
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their
@@ -673,7 +682,7 @@ public routing were inactive. This was not native or release qualification. The
 records passing focused and ordinary regression checks. These checks did not
 close the overall release gates; Beads records their current status.
 
-The current development slice connects that fake primary to the existing TUI
+The earlier development slice connected that fake primary to the existing TUI
 chat view, one durable semantic owner message, exact native-style echo/result,
 bounded history and owned Stop. Reader publication, execution revision and
 process identity fence input and evidence; Stop completes while the test holds
@@ -704,7 +713,7 @@ correlation gates; unsupported requests stay visible and unanswered.
 The reviewed native Exit A implementation first shares the existing managed
 birth fence between PTY and stdio launch: held image, final selected-profile
 admission, exact reservation and one Wait. Register child containment before
-publication can block on storage. This prerequisite keeps native chat admission
+publication can block on storage. At that prerequisite checkpoint native chat admission stayed
 disabled. Linux 2.1.310 is the first target; macOS remains a separate gate.
 
 Native readiness comes from an exact initialize control response bound to the

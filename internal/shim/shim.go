@@ -181,6 +181,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
 	if cfg.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		if cfg.ClaudeChatFixture == "" {
+			return runClaudeChatManaged(cfg, sigCh)
+		}
 		return runClaudeChatPrimary(cfg, sigCh)
 	}
 	managed, err := beginManagedNativeScope(cfg)

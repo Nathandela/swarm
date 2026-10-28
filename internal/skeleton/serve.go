@@ -471,6 +471,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// the remote-tier capability gate consults. Wired here and nowhere else, so there is
 	// exactly one place that decides a bare coreAPI authors nothing.
 	d.api.onLaunched = d.authorLaunchedSessionCapabilities
+	d.api.claudeNativeLaunched = d.bootstrapClaudeNativeLaunch
 	d.api.sessionCaps = d.sessionCapabilities
 	// Freeze capability instance authors and chat-plane transitions outside the
 	// daemon's writeMu boundary. This follows the existing author -> transition ->
@@ -789,6 +790,15 @@ func Serve(cfg Config) (*Daemon, error) {
 // callbacks / the grid heuristic drive it.
 func (d *Daemon) registerSession(m persist.Meta, token string) {
 	quarantined := d.rememberClaudeChatRuntime(m)
+	if quarantined && m.AgentType == "claude" && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		err := d.registerClaudeNativeChat(m)
+		if d.core != nil {
+			d.noteClaudeNativeLiveLaunch(m)
+		}
+		if err == nil {
+			return
+		}
+	}
 	if d.eng == nil {
 		return
 	}

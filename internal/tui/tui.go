@@ -115,11 +115,14 @@ type workingAnimationMsg struct{}
 // and a SUCCESS carries the daemon-returned session id + agent so the router can
 // auto-attach straight into the new session (bd agents-tracker-stc).
 type launchResultMsg struct {
-	generation uint64
-	id         string // namespaced id of the new session on success ("" if the producer omits it)
-	agent      string // the new session's agent, for the attach chrome label
-	name       string // the new session's label (P2); carried into the auto-attach chrome hint
-	err        error
+	session       *protocol.SessionView
+	chat          bool
+	initialPrompt string
+	generation    uint64
+	id            string // namespaced id of the new session on success ("" if the producer omits it)
+	agent         string // the new session's agent, for the attach chrome label
+	name          string // the new session's label (P2); carried into the auto-attach chrome hint
+	err           error
 }
 
 // beginUpgradeMsg kicks the daemon auto-restart from Init through Update (which owns
@@ -474,7 +477,25 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A launch/resume failed: surface the reason on the general board's banner
 		// (B1 — never a silent failure) and stay on the board.
 		if msg.err != nil {
+			if msg.chat && msg.id != "" {
+				return m, m.general.setBanner("session created " + msg.id + "; chat unavailable: " + msg.err.Error())
+			}
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
+		}
+		if msg.chat {
+			if msg.session == nil || !validClaudeChatSession(*msg.session) {
+				return m, m.general.setBanner("chat capability unavailable; open the session after refresh")
+			}
+			next, cmd := m.openClaudeChat(*msg.session)
+			chat := next.(rootModel)
+			if msg.initialPrompt != "" {
+				chat.chat.view.draft.set(msg.initialPrompt)
+				chat.chat.pendingText = msg.initialPrompt
+				chat.chat.operation = "claude-initial:" + strings.TrimPrefix(msg.id, msg.session.EndpointID+"/")
+				chat.chat.busy = true
+				chat.chat.ready = false
+			}
+			return chat, cmd
 		}
 		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
 		// reusing the exact attach path Enter uses on a running row (the session is

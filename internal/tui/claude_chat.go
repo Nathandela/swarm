@@ -22,16 +22,16 @@ type claudeChatClient interface {
 var errClaudeChatScope = errors.New("fixture chat scope changed")
 
 type claudeChatModel struct {
-	session                                      protocol.SessionView
-	generation                                   uint64
-	ctx                                          context.Context
-	cancel                                       context.CancelFunc
-	send, control                                *ownedClient
-	view                                         chatView
-	page                                         schema.NativeHistoryPage
-	operation, pendingText, receiptState, notice string
-	busy, ready, stopped, stopPending            bool
-	readUntil                                    time.Time
+	session                                                     protocol.SessionView
+	generation                                                  uint64
+	ctx                                                         context.Context
+	cancel                                                      context.CancelFunc
+	send, control                                               *ownedClient
+	view                                                        chatView
+	page                                                        schema.NativeHistoryPage
+	operation, pendingText, receiptState, receiptReason, notice string
+	busy, ready, stopped, stopPending                           bool
+	readUntil                                                   time.Time
 }
 
 func WithClaudeChatDialer(d DaemonReconnector) Option { return func(m *rootModel) { m.chatDialer = d } }
@@ -79,7 +79,7 @@ func (m rootModel) openClaudeChat(session protocol.SessionView) (tea.Model, tea.
 	if sameScope {
 		m.chat.view = previous.view.resize(m.width, m.height)
 		m.chat.page = previous.page
-		m.chat.operation, m.chat.pendingText, m.chat.receiptState = previous.operation, previous.pendingText, previous.receiptState
+		m.chat.operation, m.chat.pendingText, m.chat.receiptState, m.chat.receiptReason = previous.operation, previous.pendingText, previous.receiptState, previous.receiptReason
 		m.chat.stopped, m.chat.stopPending = previous.stopped, previous.stopPending
 	}
 	m.screen = screenChat
@@ -198,6 +198,11 @@ func claudeChatReadCmd(chat claudeChatModel) tea.Cmd {
 	}
 }
 
+func (chat claudeChatModel) shouldPoll() bool {
+	nativePending := chat.session.Agent == "claude" && (chat.operation != "" || !chat.ready)
+	return (nativePending || time.Now().Before(chat.readUntil)) && chat.ctx != nil && chat.ctx.Err() == nil && !chat.stopped && !chat.stopPending
+}
+
 func claudeChatPoll(chat claudeChatModel) tea.Cmd {
 	generation := chat.generation
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return claudeChatPollMsg{generation} })
@@ -238,7 +243,7 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 		if v.err != nil {
 			m.chat.ready = false
 			m.chat.notice = v.err.Error()
-			if !errors.Is(v.err, errClaudeChatScope) && time.Now().Before(m.chat.readUntil) && m.chat.ctx.Err() == nil && !m.chat.stopped {
+			if !errors.Is(v.err, errClaudeChatScope) && m.chat.shouldPoll() {
 				return m, claudeChatPoll(m.chat), true
 			}
 			return m, nil, true
@@ -248,26 +253,43 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 		m.chat.ready = v.session.Capabilities.NativeComposer && !m.chat.stopped && !m.chat.stopPending && m.chat.operation == ""
 		m.chat.notice = "Dev fixture; workflow custody remains incomplete · ctrl+x Stop · esc back"
 		if v.session.Agent == "claude" {
-			m.chat.notice = "Claude chat · ctrl+x Stop · esc back"
+			m.chat.notice = "Claude chat (experimental) · ctrl+x Stop · esc back"
+			if m.chat.receiptReason != "" {
+				m.chat.notice = m.chat.receiptReason + " · ctrl+x Stop"
+			}
 		}
 		if m.chat.operation != "" {
 			m.chat.receiptState = v.receipt.State
 			if v.receipt.Reason != "" {
+				m.chat.receiptReason = v.receipt.Reason
 				m.chat.notice = v.receipt.Reason + " · ctrl+x Stop"
 			}
-			if (v.receipt.State == "admitted" || v.receipt.State == "completed") && fixtureEchoVisible(v.page, v.receipt, m.chat.pendingText) && m.chat.view.draft.text == m.chat.pendingText {
+			echoed := (v.receipt.State == "admitted" || v.receipt.State == "completed") && fixtureEchoVisible(v.page, v.receipt, m.chat.pendingText)
+			if echoed && m.chat.view.draft.text == m.chat.pendingText {
 				m.chat.view.draft.set("")
 			}
 			if v.receipt.State == "completed" || v.receipt.State == "rejected" {
 				m.chat.busy = false
+				if v.session.Agent == "claude" {
+					if v.receipt.State == "rejected" || echoed {
+						m.chat.operation = ""
+						m.chat.ready = v.session.Capabilities.NativeComposer && !m.chat.stopped && !m.chat.stopPending
+					}
+					if m.chat.shouldPoll() && !m.chat.ready {
+						return m, claudeChatPoll(m.chat), true
+					}
+				}
 				return m, nil, true
 			}
-			if time.Now().Before(m.chat.readUntil) {
+			if m.chat.shouldPoll() {
 				return m, claudeChatPoll(m.chat), true
 			}
 			if v.receipt.Reason == "" {
 				m.chat.notice = "Receipt pending; no resend · ctrl+x Stop"
 			}
+		}
+		if v.session.Agent == "claude" && !m.chat.ready && m.chat.shouldPoll() {
+			return m, claudeChatPoll(m.chat), true
 		}
 		return m, nil, true
 	case claudeChatSentMsg:
@@ -282,7 +304,7 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 				m.chat.receiptState = "rejected"
 			}
 			m.chat.notice = v.err.Error()
-			if m.chat.receiptState == "uncertain" {
+			if m.chat.receiptState == "uncertain" || m.chat.session.Agent == "claude" {
 				m.chat.readUntil = time.Now().Add(5 * time.Second)
 				return m, m.readClaudeChat(), true
 			}
@@ -326,6 +348,7 @@ func (m rootModel) updateClaudeChatMessage(msg tea.Msg) (tea.Model, tea.Cmd, boo
 				m.chat.notice = err.Error()
 				return m, nil, true
 			}
+			m.chat.receiptReason = ""
 			m.chat.operation, m.chat.pendingText, m.chat.busy, m.chat.ready, m.chat.receiptState = op, intent.Text, true, false, "prepared"
 			client := m.chat.send.Client.(claudeChatClient)
 			generation := m.chat.generation
@@ -373,14 +396,18 @@ func (m rootModel) updateClaudeChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func validClaudeChatRead(session protocol.SessionView, page schema.NativeHistoryPage) bool {
+	return validClaudeChatSession(session) && page.Version == session.Capabilities.NativeInteractionVersion
+}
+
+func validClaudeChatSession(session protocol.SessionView) bool {
 	c := session.Capabilities
 	if session.RequiredRuntime != "claude-chat" || c == nil || c.Validate() != nil {
 		return false
 	}
 	if session.Agent == "fake" {
-		return c.Provider == "fake" && c.NativeInteractionVersion == 1 && page.Version == 1
+		return c.Provider == "fake" && c.NativeInteractionVersion == 1
 	}
-	return session.Agent == "claude" && c.Provider == "claude" && c.ProviderVersion == "2.1.310" && c.NativeInteractionVersion == 2 && page.Version == 2 && !c.StructuredChat && !c.TerminalFallback && !c.TerminalControl && !c.Interrupt
+	return session.Agent == "claude" && c.Provider == "claude" && c.ProviderVersion == "2.1.310" && c.NativeInteractionVersion == 2 && !c.StructuredChat && !c.TerminalFallback && !c.TerminalControl && !c.Interrupt
 }
 
 func claudeChatText(raw json.RawMessage, native bool) (string, bool) {

@@ -113,6 +113,11 @@ func (d *Daemon) startHookDrainsForRunning() {
 	}
 	for _, m := range d.core.List() {
 		if d.rememberClaudeChatRuntime(m) {
+			if m.AgentType == "claude" && m.Status.Process == status.ProcessRunning {
+				if err := d.registerClaudeNativeChat(m); err == nil {
+					d.startHookDrain(m.ID)
+				}
+			}
 			d.authorSessionCapabilitiesWhenDecided(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
 			continue
 		}

@@ -26,7 +26,7 @@ const (
 )
 
 // runSpawn is `swarm spawn --cli <agent> [--dir d] [--model m] [--worktree]
-// [--name n] (--prompt <text> | --handoff <file> | --delegate <file>)`. On success
+// [--name n] [--interface swarm-chat] (--prompt <text> | --handoff <file> | --delegate <file>)`. On success
 // the new session id goes to stdout ALONE, so an agent can pipe it straight into
 // `swarm watch`; the human-facing name goes to stderr. Argument refusals exit 2 (the
 // runLS convention) before any file I/O; everything else exits 1.
@@ -36,6 +36,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	cli := fs.String("cli", "", "agent CLI to launch (required)")
 	dir := fs.String("dir", "", "working directory (default: the caller's cwd)")
 	model := fs.String("model", "", "model to launch the agent with")
+	interfaceName := fs.String("interface", "", "Claude interface: native or swarm-chat")
 	isolate := fs.Bool("worktree", false, "run the session in an isolated git worktree (default for --handoff and --delegate in a git checkout)")
 	name := fs.String("name", "", "session label (default: the daemon's)")
 	prompt := fs.String("prompt", "", "inline instructions for the new session")
@@ -48,13 +49,28 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "spawn: --cli is required: swarm spawn --cli <agent> (--prompt t | --handoff f | --delegate f)")
 		return 2
 	}
+	interfaceSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "interface" {
+			interfaceSet = true
+		}
+	})
+	if interfaceSet && (*cli != "claude" || *interfaceName != "native" && *interfaceName != "swarm-chat") {
+		_, _ = fmt.Fprintln(stderr, "spawn: --interface requires Claude native or swarm-chat")
+		return 2
+	}
+	chat := *interfaceName == "swarm-chat"
+	if chat && (*handoff != "" || *delegate != "" || os.Getenv(hookclient.EnvSessionID) != "") {
+		_, _ = fmt.Fprintln(stderr, "spawn: Swarm chat requires a fresh local owner launch without handoff or delegation")
+		return 2
+	}
 	sources := 0
 	for _, src := range []string{*prompt, *handoff, *delegate} {
 		if src != "" {
 			sources++
 		}
 	}
-	if sources != 1 {
+	if !chat && sources != 1 || chat && sources > 1 {
 		_, _ = fmt.Fprintln(stderr, "spawn: need exactly one of --prompt, --handoff or --delegate")
 		return 2
 	}
@@ -118,8 +134,14 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		InitialPrompt: initial,
 		Worktree:      *isolate,
 	}
-	if *model != "" {
-		req.Options = map[string]string{"model": *model}
+	if *model != "" || *interfaceName != "" {
+		req.Options = map[string]string{}
+		if *model != "" {
+			req.Options["model"] = *model
+		}
+		if *interfaceName != "" {
+			req.Options["claude_interface"] = *interfaceName
+		}
 	}
 	// The daemon injects SWARM_SESSION_ID into every agent it launches, so it is set
 	// exactly when the caller IS a session. A human at a plain terminal has no parent,

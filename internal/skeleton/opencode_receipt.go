@@ -16,6 +16,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/opencodebridge"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
@@ -204,6 +205,23 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 		result.State = "rejected"
 	case idempotency.PhaseCompleted:
 		result.State = "submitted"
+	}
+	if strings.HasPrefix(operationID, "claude-initial:") {
+		meta, exists := d.core.Get(local)
+		if !exists || meta.AgentType != "claude" || meta.RequiredRuntime != persist.RequiredRuntimeClaudeChat {
+			return result, errors.New("initial receipt has no native Claude session")
+		}
+		result.Agent = "claude"
+		if rec.Phase == idempotency.PhaseFailed {
+			var outcome struct {
+				OK      bool               `json:"ok"`
+				Code    protocol.ErrorCode `json:"code"`
+				Message string             `json:"message"`
+			}
+			if json.Unmarshal(rec.Outcome, &outcome) == nil && !outcome.OK {
+				result.Reason = outcome.Message
+			}
+		}
 	}
 	if len(rec.Request) == 0 {
 		return result, nil

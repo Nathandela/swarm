@@ -136,12 +136,13 @@ func validateClaudeChatLaunchJSON(raw []byte) error {
 					return fmt.Errorf("ambiguous Claude chat config key")
 				}
 				seen[name] = true
+				canonical := []string{"provider", "epoch", "identity", "home", "external_auth", "path", "version", "fingerprint"}
 				if depth == 0 {
-					switch strings.ToLower(name) {
-					case "required_runtime", "conversation_id", "claude_chat_fixture", "session_id", "argv", "cwd", "env", "session_dir", "socket_path", "hook_socket_path", "hook_drain_token", "login_runtime", "login_state_root", "login_switch_id", "login_switch_source", "native_provider", "cli_identity", "input_embargo", "input_embargo_token", "opencode", "opencode_env", "opencode_initial_prompt", "backend_program", "backend_socket_path", "backend_cwd", "backend_args", "backend_env", "backend_agent_args", "backend_agent_command_args", "hermes_input", "agy_input", "claude_input":
-						if name != strings.ToLower(name) {
-							return fmt.Errorf("noncanonical Claude chat config key")
-						}
+					canonical = []string{"required_runtime", "conversation_id", "claude_chat_fixture", "session_id", "argv", "cwd", "env", "session_dir", "socket_path", "hook_socket_path", "hook_drain_token", "login_runtime", "login_state_root", "login_switch_id", "login_switch_source", "native_provider", "cli_identity", "input_embargo", "input_embargo_token", "opencode", "opencode_env", "opencode_initial_prompt", "backend_program", "backend_socket_path", "backend_cwd", "backend_args", "backend_env", "backend_agent_args", "backend_agent_command_args", "hermes_input", "agy_input", "claude_input"}
+				}
+				for _, exact := range canonical {
+					if name != exact && strings.EqualFold(name, exact) {
+						return fmt.Errorf("noncanonical Claude chat custody config key")
 					}
 				}
 				if err := value(depth + 1); err != nil {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -232,8 +233,16 @@ func TestClaudeChatFixtureRejectsOriginWithoutEffects(t *testing.T) {
 	m := launchClaudeMessageFixture(t, d)
 	client := dialClient(t, d, protocol.CapSemanticSend, protocol.CapJournal)
 	id := protocol.NamespacedID(d.api.endpointID, m.ID)
-	if _, err := client.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: id, Limit: 200}); err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := client.NativeInteractionHistory(schema.InteractionHistoryReq{Native: true, Session: id, Limit: 200})
+		if err == nil {
+			break
+		}
+		if !strings.Contains(err.Error(), errClaudeFixturePending.Error()) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 	instance, ok := d.sessionInstance(m.ID)
 	if !ok {
@@ -355,4 +364,41 @@ func TestClaudeChatMessageConnectedEchoResultHistory(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("owner Stop did not positively end both identities before the fixture's 12s autoexit")
+}
+
+func TestClaudeChatFixtureInitPublicationLagStaysPending(t *testing.T) {
+	identity := claudeEvidenceIntent().Identity
+	for _, kind := range []string{"exact", "durable-lag", "observed-lag", "partial", "foreign", "ahead", "unhealthy", "owner"} {
+		t.Run(kind, func(t *testing.T) {
+			snapshot := shimwire.ClaudePrimarySnapshot{Identity: identity, Healthy: true, ObservedSequence: 1, DurableSequence: 1}
+			switch kind {
+			case "durable-lag":
+				snapshot.DurableSequence = 0
+			case "observed-lag":
+				snapshot.ObservedSequence = 0
+			case "partial":
+				snapshot.PendingPartial = true
+			case "foreign":
+				snapshot.Identity.ShimPID++
+			case "ahead":
+				snapshot.ObservedSequence = 2
+				snapshot.DurableSequence = 2
+			case "unhealthy":
+				snapshot.Healthy = false
+			case "owner":
+				snapshot.OwnerRevision = 1
+			}
+			err := claudeFixtureInitPublication(snapshot, identity, 1)
+			if kind == "exact" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			pending := kind == "durable-lag" || kind == "observed-lag" || kind == "partial"
+			if pending != errors.Is(err, errClaudeFixturePending) || !pending && !errors.Is(err, errClaudeFixtureMessage) {
+				t.Fatal("fixture publication classification changed authority", kind, err)
+			}
+		})
+	}
 }

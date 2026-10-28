@@ -4,9 +4,9 @@ import (
 	"slices"
 	"strings"
 
-	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -426,11 +426,15 @@ func (m rootModel) boardOpenLabel() string {
 	if m.general.focusSection != "" {
 		return "Expand"
 	}
-	if _, ok := m.general.selected(); !ok {
+	s, ok := m.general.selected()
+	if !ok {
 		return "—"
 	}
 	if !m.general.focusVisible() {
 		return "Show"
+	}
+	if s.Status.Process != status.ProcessRunning && !sessionAllowsSuccessor(s) {
+		return "—"
 	}
 	return "Open"
 }

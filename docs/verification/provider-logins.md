@@ -74,6 +74,15 @@ results with 34 skips. These checks do not qualify the installed Claude CLI.
 Public launch, cold Stop hydration, long history, complete actors and automatic
 recovery remain open; automatic effects stay disabled.
 
+The [explicit native caller checkpoint](provider-logins/claude-native-chat-caller-2026-10-28.json)
+adds fresh local launch, semantic initial-once input, cold Stop/read-only custody
+and continued native UI observation. Linux race checks pass 529 results across
+seven packages with one explicit installed-image qualification skip. A direct-
+package test-oracle correction was independently verified against the original
+retained log; the original false result is unchanged. Build, vet and lint pass.
+Actual native trust/image, decisions, complete actors and automatic recovery
+remain open; no live deployment or release is claimed.
+
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and
 managed schema 5/6. Saved `fake6` mode is immutable; malformed or mixed rows are

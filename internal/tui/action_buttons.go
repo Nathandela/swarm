@@ -29,12 +29,16 @@ func (b actionButton) text() string {
 	return "[" + b.label + " (" + shortcut + ")]"
 }
 
+func sessionAllowsSuccessor(s protocol.SessionView) bool { return s.RequiredRuntime != "claude-chat" }
+
 func sessionButtons(s protocol.SessionView) []actionButton {
 	buttons := []actionButton{{label: "Rename", key: "e"}, {label: "Tag", key: "t"}}
-	if s.Status.Process != status.ProcessRunning {
+	if s.Status.Process != status.ProcessRunning && sessionAllowsSuccessor(s) {
 		buttons = append(buttons, actionButton{label: "Resume", key: "r"})
 	}
-	buttons = append(buttons, actionButton{label: "Handoff", key: "h"})
+	if sessionAllowsSuccessor(s) {
+		buttons = append(buttons, actionButton{label: "Handoff", key: "h"})
+	}
 	label := "Delete"
 	if s.Status.Process == status.ProcessRunning {
 		label = "Kill"
@@ -47,7 +51,7 @@ func (m rootModel) boardButtons() []actionButton {
 	buttons := []actionButton{{label: "New", key: "n"}}
 	if label := m.boardOpenLabel(); label != "—" {
 		key := "enter"
-		if s, ok := m.general.selected(); ok && m.general.focusVisible() && s.Status.Process != status.ProcessRunning {
+		if s, ok := m.general.selected(); ok && m.general.focusVisible() && s.Status.Process != status.ProcessRunning && sessionAllowsSuccessor(s) {
 			label, key = "Resume", "r"
 		}
 		buttons = append(buttons, actionButton{label: label, key: key})

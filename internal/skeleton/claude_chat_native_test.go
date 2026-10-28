@@ -185,6 +185,9 @@ func newNativeA2Fixture(t *testing.T, mode, initMode string) *nativeA2Fixture {
 		t.Fatal(f.registrationErr)
 	}
 	if f.registrationErr == nil {
+		// Explicit synthetic fresh-birth event exercises the production admission latch.
+		// This supplies no native process-birth or restart-input qualification.
+		f.d.noteClaudeNativeLiveLaunch(m)
 		f.d.startHookDrain(m.ID)
 	}
 	return f
@@ -310,6 +313,9 @@ func (f *nativeA2Fixture) serve(t *testing.T, path string) {
 				f.delivered = req.OwnerRevision
 				f.mu.Unlock()
 				result := shimwire.ClaudeMessageResult{Version: 1, OperationID: req.OperationID, NativeUserUUID: req.NativeUserUUID, Identity: f.identity, OwnerRevision: req.OwnerRevision, Status: "written"}
+				if f.mode == "outcome-unknown" {
+					result.Status = "uncertain"
+				}
 				encoded, _ := shimwire.Encode(shimwire.Control{Type: shimwire.TypeClaudeMessageResult, ClaudeMessageResult: &result})
 				_ = wire.WriteFrame(c, wire.TControl, encoded)
 			}()

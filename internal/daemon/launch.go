@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/claudeinput"
@@ -490,6 +492,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 		uuid[6], uuid[8] = uuid[6]&0x0f|0x40, uuid[8]&0x3f|0x80
 		spec.ConversationID = fmt.Sprintf("%x-%x-%x-%x-%x", uuid[:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
 		m.ConversationID = spec.ConversationID
+		m.SchemaVersion = persist.ClaudeChatSchemaVersion
 		spec.Argv = append(append([]string(nil), spec.Argv...), "--session-id="+spec.ConversationID)
 	}
 
@@ -715,6 +718,12 @@ func (d *Daemon) prepareLaunchRuntime(spec *LaunchSpec, m *persist.Meta, dir str
 		}
 		return d.prepareOpenCodeLaunch(spec, m, dir)
 	case persist.RequiredRuntimeClaudeChat:
+		if spec.AgentType == "claude" {
+			if m.AgentType != "claude" || m.RequiredRuntime != spec.RequiredRuntime || m.ConversationID != spec.ConversationID || m.ProviderCwd() != spec.Cwd || spec.LoginRuntime == nil || m.LoginRuntime == nil || *spec.LoginRuntime != *m.LoginRuntime || spec.CLIIdentity == nil || m.CLIIdentity == nil || *spec.CLIIdentity != *m.CLIIdentity || spec.LoginStateRoot != d.cfg.StateDir || spec.Backend != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil || m.ClaudeRetirement != nil || m.OpenCodeBinding != nil || m.InputEmbargo != "" {
+				return errors.New("daemon: invalid managed Claude chat binding")
+			}
+			return shim.ValidateClaudeChatConfig(shim.Config{RequiredRuntime: spec.RequiredRuntime, ConversationID: spec.ConversationID, SessionID: m.ID, SessionDir: dir, LoginStateRoot: d.cfg.StateDir, Cwd: spec.Cwd, Argv: spec.Argv, LoginRuntime: spec.LoginRuntime, CLIIdentity: spec.CLIIdentity, NativeProvider: "claude"})
+		}
 		if spec.AgentType != "fake" || m.AgentType != "fake" || m.RequiredRuntime != spec.RequiredRuntime || m.ConversationID != spec.ConversationID || m.ProviderCwd() != spec.Cwd || spec.Backend != nil || spec.LoginStateRoot != "" || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil || m.LoginRuntime != nil || m.CLIIdentity != nil || m.ClaudeRetirement != nil || m.OpenCodeBinding != nil || m.InputEmbargo != "" {
 			return errors.New("daemon: incompatible Claude chat launch binding")
 		}
@@ -737,7 +746,21 @@ func validateClaudeChatLaunchSpec(spec LaunchSpec) error {
 		return errors.New("daemon: unknown required runtime")
 	}
 	mode, present := spec.Options["claude_interface"]
+	if present && mode == "native" && spec.AgentType == "claude" && spec.RequiredRuntime == "" && spec.ClaudeChatFixture == "" {
+		return nil
+	}
 	if !present && spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat && spec.ClaudeChatFixture == "" {
+		return nil
+	}
+	if present && mode == "swarm-chat" && spec.AgentType == "claude" && spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		if runtime.GOOS != "linux" || !utf8.ValidString(spec.InitialPrompt) || len(spec.InitialPrompt) > shimwire.MaxClaudeFixtureTextBytes || spec.ClaudeChatFixture != "" || spec.ClientEnv == nil || len(spec.Argv) == 0 || spec.ConversationID != "" || spec.ResumedFrom != "" || spec.SpawnedFrom != "" || spec.SpawnIntent != "" || spec.Supervision != "" || spec.LoginRuntime == nil || spec.LoginSwitchID != "" || spec.LoginSwitchSource != "" || spec.InputEmbargo != "" || spec.CLIIdentity == nil || spec.CLIIdentity.Version != "2.1.310" || spec.Backend != nil || spec.OpenCodeLaunch != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil {
+			return errors.New("daemon: invalid managed Claude chat launch")
+		}
+		for _, key := range []string{"resume_from", "resume_conversation_id", "resume_relocate", "handoff_from"} {
+			if _, exists := spec.Options[key]; exists {
+				return errors.New("daemon: Claude chat requires a fresh launch")
+			}
+		}
 		return nil
 	}
 	if !present || mode != "swarm-chat" || spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat || spec.AgentType != "fake" || !filepath.IsAbs(spec.ClaudeChatFixture) || filepath.Clean(spec.ClaudeChatFixture) != spec.ClaudeChatFixture || spec.ConversationID != "" || len(spec.Argv) != 2 || spec.Argv[0] != spec.ClaudeChatFixture || spec.Argv[1] != "--claude-primary-fixture" || spec.ClientEnv == nil || spec.InitialPrompt != "" || spec.ResumedFrom != "" || spec.SpawnedFrom != "" || spec.SpawnIntent != "" || spec.Supervision != "" || spec.LoginRuntime != nil || spec.LoginStateRoot != "" || spec.LoginSwitchID != "" || spec.LoginSwitchSource != "" || spec.InputEmbargo != "" || spec.CLIIdentity != nil || spec.ExpectedCLIIdentity != nil || spec.AuthIdentity != "" || spec.Backend != nil || spec.OpenCodeLaunch != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil {
@@ -1185,6 +1208,9 @@ func (d *Daemon) resolveStaleLaunches() {
 
 // prepareClaudePlugins retains the existing per-session install/argv seam.
 func (d *Daemon) prepareClaudePlugins(dir string, spec LaunchSpec, lc *shimSpawnConfig) error {
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		return nil
+	}
 	sender := d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled()
 	control := spec.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl
 	if spec.AgentType != "claude" || (!sender && !control) {

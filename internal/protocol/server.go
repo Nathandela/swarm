@@ -3493,10 +3493,14 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
-	if m.SchemaVersion == 6 && m.AgentType == "fake" && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+	if m.SchemaVersion == 6 && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
 		if source, ok := s.d.(SessionCapabilityLookup); ok {
-			if capabilities, present := source.SessionCapabilities(m.ID); present {
-				view.Capabilities = &capabilities
+			if capabilities, present := source.SessionCapabilities(m.ID); present && capabilities.Validate() == nil {
+				fixture := m.AgentType == "fake" && capabilities.Provider == "fake" && capabilities.NativeInteractionVersion == 1
+				native := m.AgentType == "claude" && m.CLIIdentity != nil && m.CLIIdentity.Version == "2.1.310" && capabilities.Provider == "claude" && capabilities.ProviderVersion == "2.1.310" && capabilities.NativeInteractionVersion == 2 && !capabilities.StructuredChat && !capabilities.TerminalFallback && !capabilities.TerminalControl && !capabilities.Interrupt
+				if fixture || native {
+					view.Capabilities = &capabilities
+				}
 			}
 		}
 	}

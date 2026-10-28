@@ -285,6 +285,10 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 			s.mu.Lock()
 			if s.healthy && s.initialized {
 				c.NativeInteractionVersion = 2
+				if retained, ok := d.claudeNativeStops.Load(sessionID); ok {
+					binding := retained.(claudeNativeStopHandle).binding
+					c.NativeComposer = s.liveInput && s.ready && !s.busy && !s.inputFault && s.reason == "" && s.folded == s.sequence && binding.SessionID == sessionID && binding.ShimPID == s.meta.ShimPID && binding.ShimStartTime == s.meta.ShimStartTime && binding.ScopeGeneration == s.nativeScope.Generation && binding.Runtime == *s.meta.LoginRuntime && binding.CLIIdentity == *s.meta.CLIIdentity && binding.Cwd == s.meta.ProviderCwd() && binding.NativeSessionID == s.meta.ConversationID && c.Provider == "claude" && c.ProviderVersion == "2.1.310"
+				}
 			}
 			s.mu.Unlock()
 			return c, true

@@ -1,13 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"charm.land/lipgloss/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	edlib "github.com/hbollon/go-edlib"
 
@@ -564,7 +565,24 @@ func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {
 		if name == "" {
 			name = req.Name // skew fallback: an older daemon's reply carries no canonical name
 		}
-		return launchResultMsg{id: id, agent: req.Agent, name: name, err: err}
+		result := launchResultMsg{id: id, agent: req.Agent, name: name, err: err, chat: req.Options["claude_interface"] == "swarm-chat"}
+		if err != nil || !result.chat {
+			return result
+		}
+		result.initialPrompt = req.InitialPrompt
+		rows, err := c.List()
+		if err != nil {
+			result.err = err
+			return result
+		}
+		for _, row := range rows {
+			if row.ID == id && row.Agent == req.Agent && validClaudeChatSession(row) {
+				result.session = &row
+				return result
+			}
+		}
+		result.err = errors.New("exact chat runtime/capability proof is unavailable")
+		return result
 	}
 }
 

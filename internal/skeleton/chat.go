@@ -157,6 +157,7 @@ type composerLane struct {
 	claudeAdmitMu          sync.Mutex
 	pendingClaudeAdmission uint64
 	claudeNative           *claudeNativeState
+	claudeNativeLive       bool
 	claudeFixture          *claudeFixtureState
 	mu                     sync.Mutex
 	ready                  *sync.Cond
