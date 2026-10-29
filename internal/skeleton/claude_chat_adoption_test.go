@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,32 @@ func a2SurvivingQuarantine(t *testing.T) (*Daemon, persist.Meta, []string) {
 	initial := assemble(t)
 	ordinary := launchFake(t, initial, "ask retained-fixture\n")
 	root := initial.stateDir
+	channel, ok := initial.core.SessionHookChannel(ordinary.ID)
+	if !ok {
+		t.Fatal("fixture has no hook channel")
+	}
+	// Launch confirms control readiness; this fixture also needs the later hook listener.
+	func() {
+		ready := false
+		defer func() {
+			if ready {
+				return
+			}
+			log, err := os.Open(filepath.Join(root, "d.log"))
+			if err != nil {
+				t.Logf("hook readiness log: %v", err)
+				return
+			}
+			defer func() { _ = log.Close() }()
+			if info, err := log.Stat(); err == nil && info.Size() > 4096 {
+				_, _ = log.Seek(-4096, io.SeekEnd)
+			}
+			tail, err := io.ReadAll(io.LimitReader(log, 4096))
+			t.Logf("hook readiness daemon/shim log tail: %s (read error: %v)", tail, err)
+		}()
+		waitForSocket(t, channel.SocketPath)
+		ready = true
+	}()
 	if err := initial.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +133,6 @@ func a2SurvivingQuarantine(t *testing.T) (*Daemon, persist.Meta, []string) {
 	paths := []string{filepath.Join(root, m.ID, "hooks.spool"), filepath.Join(root, m.ID, "hooks.spool.floor"), filepath.Join(root, m.ID, "hook.fold"), filepath.Join(root, m.ID, "hook.fold.cert"), filepath.Join(root, m.ID, "hook.fold.gap")}
 	// Existing producer accepts the hook while no daemon reader is running.
 	// No test overwrites the producer's spool or takes its lock.
-	channel, ok := initial.core.SessionHookChannel(m.ID)
-	if !ok {
-		t.Fatal("fixture has no hook channel")
-	}
 	if ack, err := hookclient.PostToShim(channel.SocketPath, engine.Callback{SessionID: m.ID, Token: "a2-unmapped-token", Sequence: 123, Event: "PostToolUse"}); err != nil || !ack {
 		t.Fatal("retained hook was not accepted", err)
 	}
