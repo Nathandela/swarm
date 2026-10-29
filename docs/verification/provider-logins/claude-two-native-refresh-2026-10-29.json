@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "tracking": "agents-tracker-h6sc.36",
+  "status": "TWO_NATIVE_GATE_OPEN_RETAINED_PREARM_FAILURE",
+  "native_version": "2.1.310",
+  "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+  "packet": "swarm-claude-refresh-slot-canary-20261029-r16",
+  "archive_sha256": "a016611248cc7caa4db3e357db2d443c67455182e219ad731fd072c12cb1404f",
+  "manifest_sha256": "0fb03aeffd50c9bfff0293f5cc91dbd54f5b6db89fa0ca6a494e3ec125dd895b",
+  "binary_sha256": "4a6ecb34a57d88a67d7c5c2e967b57d906cc03e714a82999028387f691df1819",
+  "remote_root": "/dev/shm/swarm-raw-adoption.83i24ucx",
+  "source_checks": {
+    "go_race_pass": 168,
+    "go_race_fail": 0,
+    "go_race_skip": 0,
+    "python_pure_pass": 10,
+    "vet": "PASS",
+    "lint": "PASS",
+    "linux_build": "PASS",
+    "review": "Root, Sol and Astra scoped source GREEN after three test-oracle corrections.",
+    "meaningful_RED": "Previous source failed case-alias and native-emission-window negative cases at runtime."
+  },
+  "actual": {
+    "armed_ready": false,
+    "clients": {
+      "c1": {
+        "accepted_MAIN": 0,
+        "connects": 32,
+        "error_buffer_capacity": 16,
+        "first_refused_model_body_bytes": null,
+        "first_refused_model_class": "OTHER_OR_ABSENT",
+        "model_route_attempts": 1,
+        "native_birth_retired": true,
+        "native_cgroup_gone": true,
+        "native_unit_absent": true,
+        "retained_error_count": 16,
+        "telemetry_batches": 1
+      },
+      "c2": {
+        "accepted_MAIN": 0,
+        "connects": 32,
+        "error_buffer_capacity": 16,
+        "first_refused_model_body_bytes": null,
+        "first_refused_model_class": "OTHER_OR_ABSENT",
+        "model_route_attempts": 1,
+        "native_birth_retired": true,
+        "native_cgroup_gone": true,
+        "native_unit_absent": true,
+        "retained_error_count": 16,
+        "telemetry_batches": 1
+      }
+    },
+    "packet": "r16",
+    "proxy_birth_retired": true,
+    "proxy_cgroup_gone": true,
+    "proxy_unit_absent": true,
+    "root_submitted_owner_inputs": 0,
+    "status": "FAIL_BEFORE_ARM"
+  },
+  "safe_projection_sha256": "02fafd24a1efaa88399d2adf58690876b75df6744c013fadcfdeb5248a3393dd",
+  "finding": "Enabling first-party telemetry also enabled unsupported native startup traffic. Both clients sent one refused model-route request and exhausted their retained16-error buffers before ARM. This prevented the closed fixture from reaching the refresh episode.",
+  "next_boundary": "The harmless exact-path tracing setup passes. A separately reviewed two-native instrumented attempt must retain nonessential-traffic disable and original provider routes, and positively bind a fresh C2 lock attempt to the held C1 refresh. Telemetry observation is abandoned.",
+  "limits": [
+    "No owner input was submitted; composer text was pretyped but never admitted.",
+    "No accepted MAIN, credential expiry, refresh overlap, switch or paired-task completion was qualified.",
+    "The16 retained errors per client fill the buffers and are not a complete error census.",
+    "All native/proxy births, cgroups and units were positively retired. Live accounts and discussions were untouched.",
+    "A later traced result would be instrumented capability evidence; no production, real-account, policy or quota-recovery claim."
+  ],
+  "native_free_observation_probe": {
+    "status": "PASS_OBSERVATION_SETUP_ONLY",
+    "script_sha256": "02c9efdcb37c146ca1c322fa581053747f4a0f33d551b39f8f30858af3eca8da",
+    "result_sha256": "ceb40d0aaefbc363ef2a9c05342d4435cfdfa610567ba8936a97fba4cc827e33",
+    "actual": {
+      "MainPID_is_tracee": true,
+      "all_captured_births_retired": true,
+      "cgroup_gone": true,
+      "exact_path_EEXIST": true,
+      "final_trace_sha256": "5366604b5213b97fce864d5ca8aa2a425a5cac4c8525c94af65f3ac7d75449e3",
+      "instrumented": true,
+      "native_free": true,
+      "observed_trace_prefix_sha256": "5366604b5213b97fce864d5ca8aa2a425a5cac4c8525c94af65f3ac7d75449e3",
+      "observed_trace_prefix_unchanged": true,
+      "privilege_or_host_policy_change": false,
+      "root": "/dev/shm/swarm-strace-nativefree.ck91_ut_",
+      "status": "PASS",
+      "stop_exit": 0,
+      "strace_sha256": "38a5c75cb29dd85ddd7780d54f5bf595554d7a1b5c42524b23065f5dc4c4b01d",
+      "tracer_same_owned_cgroup": true,
+      "unit_absent": true,
+      "unrelated_path_absent": true
+    },
+    "controls": "Actual final-evidence branch extraction shows missing/oversized files were not refused in source R1 and are refused in reviewed R2. The runtime probe asserts intended tracee PID, exact path/errno and owned tracer/cgroup lifecycle.",
+    "review": "Sol and Astra scoped source GREEN before Root executed one harmless Python-only VM unit.",
+    "reference": "https://raw.githubusercontent.com/strace/strace/v5.16/doc/strace.1.in",
+    "limits": [
+      "No Claude, provider request, login or native refresh was run in this probe.",
+      "No privilege or host ptrace-policy change; the tracer was confined to its owned unit.",
+      "Runtime assertions establish this setup only; reviewers did not independently inspect remote raw trace evidence.",
+      "Tracing can perturb scheduling. Any subsequent native result is instrumented capability evidence."
+    ]
+  }
+}

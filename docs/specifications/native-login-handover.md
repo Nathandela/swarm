@@ -712,6 +712,17 @@ unknown provider field; the writer preserved what native actually wrote. This
 synthetic experiment uses minimal granted scopes and does not qualify MCP APIs,
 two-client refresh overlap, production refresh ownership, account/policy coherence
 or automatic quota recovery.
+The first [two-native attempt](../verification/provider-logins/claude-two-native-refresh-2026-10-29.json)
+fails before ARM: enabling first-party telemetry also activates unsupported
+startup traffic, including one refused model-route request per client. Neither
+owner task is submitted. Both native processes and the proxy are positively
+retired. The overlap gate remains open; observing actual lock acquisition without
+enabling telemetry is a separate proposed experiment.
+A harmless Python-only tracing probe then passes exact-path `EEXIST`, intended
+tracee PID, tracer containment and whole-unit retirement checks. It runs no Claude
+or provider operation. This qualifies the observation setup only; the proposed
+native experiment would provide instrumented capability evidence, with scheduling
+affected by tracing.
 
 #### Lean stable-slot integration boundary
 
