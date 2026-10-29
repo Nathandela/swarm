@@ -670,10 +670,12 @@ records terminal teardown fixes and passing race suites for all five affected
 packages. The original full-run failure is retained; native qualification remains open.
 
 The [installed-native preflight](../verification/provider-logins/claude-native-host-preflight-2026-10-28.json)
-passes synthetic AUTH and observed workspace trust, but public launch is blocked:
-native setup under umask `0002` created shared settings with mode `0664`, which
-the unchanged private-file validators refuse. Native write-mode preservation
-must be measured before choosing the prospective fix.
+passes synthetic AUTH and observed workspace trust. Native setup under umask
+`0002` created absent settings with mode `0664`; three subsequent native writes
+preserved a precreated `0600` file. Provisioning now creates only missing private
+settings, preserving existing preferences and the strict validators. A separate
+initial-instance ordering fix passes Linux component race checks. The combined
+public native flow and same-process account adoption remain open.
 
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their

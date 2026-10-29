@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "NATIVE_PUBLIC_LAUNCH_BLOCKED_BEFORE_BIRTH_BY_SHARED_SETTINGS_MODE",
+  "status": "SOURCE_FIXES_PUSHED_NATIVE_PUBLIC_FLOW_STILL_OPEN",
   "native": {
     "version": "2.1.310",
     "platform": "linux-amd64",
@@ -94,12 +94,151 @@
     "validators_unchanged": true,
     "tracking": "agents-tracker-h6sc.34"
   },
-  "next_gate": "Measure native preservation of precreated private settings across actual writes before selecting provisioning or managed-Claude umask fix; restrictive umask also affects project tool writes.",
+  "next_gate": "Run combined Linux regressions and a fresh instrumented public native flow; direct same-process A-B-A experiment remains separate and unproven.",
   "limits": [
     "No live accounts or installed Swarm changed.",
     "No offline, kernel-egress or whole-host filesystem isolation claim.",
     "Unknown CONNECT remains blocked; no route guesses or allowlist expansion.",
     "First PTY attempt failed because local heredoc stdin did not forward input; exact native birth and cgroup cleanup recorded separately.",
     "Public flow, account adoption, quota recovery, workflow completeness and release remain open."
-  ]
+  ],
+  "native_settings_probe": {
+    "version": "2.1.310",
+    "platform": "linux-amd64",
+    "umask": "0002",
+    "all_commands_exit_zero": true,
+    "runtime_probe": "PASS after seed and after each native write",
+    "seed": {
+      "mode": "0600",
+      "inode": 746568,
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "empty_settings": true
+    },
+    "writes": [
+      {
+        "action": "Native /config theme set dark",
+        "mode": "0o600",
+        "inode": 749058,
+        "sha256": "27dafb2742d0da69a49cc8d206fc9cc429feff09cc3738addcf590d9c4358f97"
+      },
+      {
+        "action": "Native /config theme set light",
+        "mode": "0o600",
+        "inode": 750769,
+        "sha256": "5de76a0f404fde5bb03dedfab7534bb801282f68e31b842c1bf04b8db9d75d54"
+      },
+      {
+        "action": "Native /config theme restored to dark, then stop observed",
+        "mode": "0o600",
+        "inode": 751204,
+        "sha256": "27dafb2742d0da69a49cc8d206fc9cc429feff09cc3738addcf590d9c4358f97"
+      }
+    ],
+    "replacement_inodes_observed": [
+      746568,
+      749058,
+      750769,
+      751204
+    ],
+    "stop_proof": {
+      "native_stopped_observed": true,
+      "native_written_trust_observed": true,
+      "scope_unit": "swarm-a4-trust-g9678bp3.service",
+      "separate_writer_retirement_receipt": false
+    },
+    "evidence": {
+      "seed-checks.json": "23273b00e0418058ba8c71d53714c6f67c84fd3a01f5944256f83d06743f0b44",
+      "native-write1.json": "0a913d66f2d5b0accaf67b4995ba0c26997e50a557aebb0fa69b1fc21c1d3138",
+      "native-write2.json": "24e09137cf420aadc84f97a2b7151f9442c5a7ddff7155874b0ec137db09977e",
+      "native-write3-and-stop.json": "4c50388aad9d67e5c912c88c8af60bab606b54b0180bf0275102676ad09b51ec"
+    },
+    "interpretation": "Actual native replacement rewrites retained preprovisioned mode 0600 under umask 0002 while replacing the inode. This does not establish preservation of mode 0664; the native starting file in the original preflight was created as 0664 and rejected by Swarm Runtime.",
+    "original_native_theme_hash_restored": true
+  },
+  "public_attempt_latest": {
+    "result": "FAIL",
+    "exit_code": 1,
+    "test": "TestClaudeChatActualNativePublicLaunchWiresDeterministicInitialOnce",
+    "subcases": [
+      "owner-no-launch-operation",
+      "winning-launch-replay"
+    ],
+    "failure": "fixture chat input custody is unavailable; public launch never wired initial prompt to durable semantic dispatch",
+    "initial_operations": {
+      "hkztokajcd24zij6": 0,
+      "ltpwfbbhdawudcrl": 0
+    },
+    "native_and_shim_births_gone": true,
+    "native_writers_stopped_receipts_present": false,
+    "retirement_qualified": false,
+    "evidence": {
+      "public_outer": "/private/tmp/swarm-native-settings-probe-run-20261028-r1/PUBLIC-outer.json",
+      "operations_cleanup": "/private/tmp/swarm-native-settings-probe-run-20261028-r1/public-operation-and-cleanup.json",
+      "session_evidence": "/private/tmp/swarm-native-settings-probe-run-20261028-r1/public-session-evidence.json",
+      "process_evidence": "/private/tmp/swarm-native-settings-probe-run-20261028-r1/public-process-evidence.json"
+    }
+  },
+  "latest_proxy_cleanup": {
+    "status": "CONFIRMED_KERNEL_CLEANUP_ONLY",
+    "proxy_cgroup_gone": true,
+    "public_test_cgroup_gone": true,
+    "models": 0,
+    "errors": [
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority",
+      "unknown qualification route/authority"
+    ],
+    "writer_retirement_receipts_absent": true
+  },
+  "claim_boundaries": {
+    "no_production_fix_or_rotation_claim": true,
+    "native_flow_full_ready": false,
+    "public_launch_gate": "BLOCKED; both latest subcases lacked input custody and produced zero initial semantic operations",
+    "native_stop_or_retirement_qualification": "OPEN; observed native/shim births are gone, but native-writers-stopped receipts are absent",
+    "original_auth_trust_and_0664_failure": "Preserved in original auth_preflight/native_trust/confirmed_root_cause sections above"
+  },
+  "source_checkpoints": {
+    "settings_fix": "069d9176",
+    "initial_instance_fix": "d28a88f3",
+    "initial_instance_linux_component_red": "/private/tmp/swarm-initial-instance-linux-red-run-20261029-r1/RESULT.json",
+    "initial_instance_linux_component_green": "/private/tmp/swarm-initial-instance-linux-green-run-20261029-r1/RESULT.json",
+    "initial_instance_green_failures": 0,
+    "initial_instance_green_skips": 0,
+    "full_native_public_flow": "OPEN_AFTER_COMBINED_FIXES",
+    "shipping_or_live_deployment": false,
+    "combined_static_gates": {
+      "head": "d28a88f3",
+      "results": [
+        {
+          "name": "build",
+          "exit_code": 0,
+          "seconds": 24.14
+        },
+        {
+          "name": "vet",
+          "exit_code": 0,
+          "seconds": 16.33
+        },
+        {
+          "name": "lint",
+          "exit_code": 0,
+          "seconds": 97.14
+        }
+      ],
+      "scope": "repository-wide build,vet,lint; no native runtime claim"
+    }
+  }
 }
