@@ -1,0 +1,216 @@
+{
+  "schema": 1,
+  "status": "BOUNDED_NATIVE_PUBLIC_FLOW_PASS_WITH_TRANSPORT_ERRORS",
+  "tracking": "agents-tracker-h6sc.25.13",
+  "native": {
+    "version": "2.1.310",
+    "platform": "linux-amd64",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "root": "/dev/shm/swarm-auth-prep.oldchni1"
+  },
+  "history_observation": {
+    "reader_refusal": {
+      "type": "atis-latch",
+      "line": 12
+    },
+    "projection_runs": {
+      "r3": {
+        "sessions": 2,
+        "accepted_rows_before_refusal": 11,
+        "transcript_bytes": [
+          148250,
+          147988
+        ]
+      },
+      "r4": {
+        "sessions": 2,
+        "parse_failures": 0,
+        "total_rows": [
+          29,
+          27
+        ],
+        "uuidless_rows": [
+          12,
+          10
+        ]
+      }
+    },
+    "owner_message": "String content, byte count, and hash match the fixed prompt; session and owner role are correct.",
+    "classification": "Pinned-source review identifies these as six internal non-message metadata types, distinct from transcript messages."
+  },
+  "pinned_source_types": {
+    "atis-latch": {
+      "offset": 247067337,
+      "meaning": "Native printable-ASCII latch cache"
+    },
+    "api-request": {
+      "offset": 246911108,
+      "meaning": "Request replay projection"
+    },
+    "api-request-shape": {
+      "offset": 247085964,
+      "meaning": "Shared system/tools shape"
+    },
+    "api-request-blob": {
+      "offset": 247086428,
+      "meaning": "Hash-addressed replay message, not canonical message"
+    },
+    "last-prompt": {
+      "offsets": [
+        247065396,
+        247096551
+      ],
+      "meaning": "Checkpoint/navigation"
+    },
+    "cost-state": {
+      "offset": 247631999,
+      "meaning": "Accounting snapshot"
+    },
+    "classifier": {
+      "offset": 246982584,
+      "meaning": "Separates these records from transcript messages"
+    }
+  },
+  "approved_design": {
+    "filter": "Display-only filter for six exact source-qualified internal types, after strict JSON, exact session, absent UUID and nil parent checks; their private values supply no display or authority.",
+    "preservation": "Retain the original canonical history file unchanged.",
+    "unknown_uuidless_record": "Refuse",
+    "scan_limit_records": 4096
+  },
+  "limits": [
+    "Native histories were processed only inside bounded remote fixed-field projections; no raw history contents were exported.",
+    "The functional flow passes only these two fresh Linux synthetic discussions; real subscription acceptance and conflicting account policies are not qualified.",
+    "The proxy error buffer contains16 errors and is full; clean transport and absence of later errors are not established.",
+    "Native decisions, long history, reconnect, complete actors/workflows, automatic recovery, provider-wide rotation, migration and release remain open."
+  ],
+  "component_verification": {
+    "red": {
+      "phase": "INTERNAL_METADATA_RED",
+      "exit_code": 1,
+      "test_ran": true,
+      "mixed_known_metadata_failed": true,
+      "scanned_4096_failed": true,
+      "canonical_uuid_negative_failed_count": 6,
+      "scanned_4097_rejected": true,
+      "known_positive_failure_label": true,
+      "known_scanned_failure_label": true,
+      "known_uuid_failure_label": true,
+      "skip_count": 0,
+      "race_reported": false,
+      "source_and_payload_pins_unchanged": true,
+      "actual_TMPDIR": "/dev/shm/c.75p7iscg",
+      "pid": 3923255,
+      "pid_start": 12175001,
+      "unit": "swarm-native-internal-history-red-20261029-r1.service",
+      "recorded_main_birth_gone": true,
+      "cgroup_gone": true,
+      "unit_not_found": true,
+      "go_log_sha256": "33e2ee4c13bc6cccebd34ca54363072aa28942aac6c2cf570aa7d377c4d6114a",
+      "baton_returned": true
+    },
+    "green": {
+      "phase": "INTERNAL_METADATA_GREEN",
+      "exit_code": 0,
+      "metadata_parent_pass": true,
+      "mixed_known_metadata_pass": true,
+      "metadata_scope_parent_uuid_guard_pass_count": 24,
+      "other_strict_guard_pass_count": 5,
+      "scanned_4096_pass": true,
+      "scanned_4097_pass": true,
+      "large_initialize_pass": true,
+      "house_subcase_pass_count": 4,
+      "cap_family_parent_pass_count": 3,
+      "pass_count": 82,
+      "failure_count": 0,
+      "skip_count": 0,
+      "race_reported": false,
+      "source_and_payload_pins_unchanged": true,
+      "actual_TMPDIR": "/dev/shm/c.tbq2mmjv",
+      "pid": 4025249,
+      "pid_start": 12223885,
+      "unit": "swarm-native-internal-history-green-20261029-r1.service",
+      "recorded_main_birth_gone": true,
+      "cgroup_gone": true,
+      "unit_not_found": true,
+      "go_log_sha256": "5e1ff4ee1c9343143a07b266b7812ec85f0489b51436697011a4891c502dfa42",
+      "baton_returned": true
+    },
+    "static": {
+      "build": "PASS ./...",
+      "vet": "PASS ./...",
+      "lint": "PASS 0 issues; existing unknown gomnd directive warning",
+      "gofmt": "empty diff"
+    },
+    "reviews": "Sol implementation/tests; independent Astra and Root source/design GREEN"
+  },
+  "previous_public_flow": {
+    "accepted_checks": [
+      "Two MAIN requests",
+      "Owner echo",
+      "Completed receipt",
+      "Assistant and correlated result"
+    ],
+    "open": [
+      "History",
+      "Stop"
+    ],
+    "prior_transport": "DENIED_HTTP: buffer full; no clean transport claim"
+  },
+  "public_flow": {
+    "root": "/dev/shm/swarm-auth-prep.sey981_h",
+    "fixed_test": "TestClaudeChatActualNativePublicLaunchWiresDeterministicInitialOnce",
+    "subcases": [
+      "owner-no-launch-operation",
+      "winning-launch-replay"
+    ],
+    "launcher_sha256": "eb7a026918049cd96326a5ef4dd4098ccd3ef1528f338996f259751aec1daa74",
+    "overlay_pins_sha256": "d36cbbdb531c20efdd666161ec5d5c896f6a654c9330b616a56276d20fc6955e",
+    "safe_result_path": "/private/tmp/swarm-native-public-flow-pass-20261029-r1/SAFE-RESULT.json",
+    "safe_result_sha256": "33476a0bb1de3d737ceee62e43e7a33cf643e2184a1182c36dd29f20e79a2d04",
+    "result": {
+      "public_test_started": true,
+      "cleanup_unknown": false,
+      "exit_code": 0,
+      "daemon_log_checked": true,
+      "test_pass_count": 3,
+      "test_fail_count": 0,
+      "skip_count": 0,
+      "first_safe_refusal": null,
+      "public_retired": true,
+      "proxy_retired": true,
+      "all_recorded_births_gone": true,
+      "stopped_proof_file_count": 2,
+      "session_count": 2,
+      "proxy_census": {
+        "accepted": 20,
+        "connects": 20,
+        "models": 2,
+        "profiles": 0,
+        "error_count": 16
+      },
+      "source_and_payload_pins_unchanged": true
+    },
+    "verified_assertions": [
+      "Public launch and deterministic single initial owner intent",
+      "Exact native owner echo, completed receipt and correlated assistant/result",
+      "Native history with original owner/assistant identities",
+      "Winning-launch replay does not create or submit twice",
+      "Authenticated owner Stop and existing positive native-writers-stopped verifier for both discussions"
+    ],
+    "clean_transport_qualified": false
+  },
+  "operator_evidence_finalization": {
+    "prior_preflight_started_public_test": false,
+    "cause": "Recorder appended only its68byte standard exit143 footer after checkpoint hash capture.",
+    "old_checkpoint_preserved": true,
+    "exact_old_transcript_hash_prefix_verified": true,
+    "native_trust_witness_hash_unchanged": true,
+    "native_birth_cgroup_unit_retirement_rechecked": true,
+    "change": "Operator transcript hash and recorder provenance only; no native/config/auth/transcript mutation.",
+    "independent_review": "Root and Astra scoped GREEN"
+  },
+  "source_hashes": {
+    "internal/skeleton/claude_chat_native.go": "9b6e1ff5c7bcf85fd8ecca84e0bfff7c6705adc2f3a9059be3c61843671afc01",
+    "internal/skeleton/claude_chat_native_test.go": "815aedebeb56d8e6dd8eeb4425f646e62e1fc45b401cb8115697c3d7a01c1ceb"
+  }
+}

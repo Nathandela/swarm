@@ -654,6 +654,7 @@ func (d *Daemon) readClaudeNativeHistory(s *claudeNativeState) ([]json.RawMessag
 	}
 	var rows []json.RawMessage
 	seen := map[string]bool{}
+	scanned := 0
 	s.mu.Lock()
 	intent := s.intent
 	s.mu.Unlock()
@@ -661,6 +662,10 @@ func (d *Daemon) readClaudeNativeHistory(s *claudeNativeState) ([]json.RawMessag
 	for _, line := range bytes.Split(raw, []byte{'\n'}) {
 		if len(line) == 0 {
 			continue
+		}
+		scanned++
+		if scanned > 4096 {
+			return nil, errClaudeFixtureMessage
 		}
 		var row struct {
 			Type, UUID string
@@ -670,13 +675,17 @@ func (d *Daemon) readClaudeNativeHistory(s *claudeNativeState) ([]json.RawMessag
 		if !strictClaudeNativeJSON(line, "history", 0) || json.Unmarshal(line, &row) != nil || row.Session != "" && row.Session != s.meta.ConversationID {
 			return nil, errClaudeFixtureMessage
 		}
+		switch row.Type {
+		case "atis-latch", "api-request", "api-request-blob", "api-request-shape", "last-prompt", "cost-state":
+			if row.Session != s.meta.ConversationID || row.UUID != "" || row.Parent != nil {
+				return nil, errClaudeFixtureMessage
+			}
+			continue
+		}
 		if row.UUID == "" {
 			switch row.Type {
 			case "file-history-snapshot", "queue-operation", "summary":
 				if row.Parent != nil {
-					return nil, errClaudeFixtureMessage
-				}
-				if len(rows) >= 4096 {
 					return nil, errClaudeFixtureMessage
 				}
 				rows = append(rows, append(json.RawMessage(nil), line...))
@@ -686,9 +695,6 @@ func (d *Daemon) readClaudeNativeHistory(s *claudeNativeState) ([]json.RawMessag
 			}
 		}
 		if row.Session != s.meta.ConversationID || !adapter.IsCanonicalConversationID(row.UUID) || seen[row.UUID] || row.Parent != nil && !seen[*row.Parent] {
-			return nil, errClaudeFixtureMessage
-		}
-		if len(rows) >= 4096 {
 			return nil, errClaudeFixtureMessage
 		}
 		if row.UUID == intent.NativeUserUUID {

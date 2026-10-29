@@ -1191,3 +1191,141 @@ func TestClaudeNativeChatConsumerLargeInitializeRetainsFullDetail(t *testing.T) 
 		t.Fatal("initialize metadata acquired provider input authority")
 	}
 }
+
+func TestClaudeNativeChatConsumerHistoryFiltersInternalMetadata(t *testing.T) {
+	f := newNativeA2Fixture(t, "success", "idle")
+	if err := f.drain(t); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.send(t, "preserve bound native history"); err != nil {
+		t.Fatal(err)
+	}
+	req := f.emitTurn(t)
+	if err := f.drain(t); err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.ReadFile(f.history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Split(bytes.TrimSuffix(base, []byte{'\n'}), []byte{'\n'})
+	types := []string{"atis-latch", "api-request", "api-request-blob", "api-request-shape", "last-prompt", "cost-state"}
+	encode := func(value any) []byte {
+		t.Helper()
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	write := func(body []byte) {
+		t.Helper()
+		if len(body) > schema.MaxNativeHistoryPageBytes {
+			t.Fatal("history fixture exceeded byte bound")
+		}
+		if err := os.WriteFile(f.history, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := schema.InteractionHistoryReq{Native: true, Session: protocol.NamespacedID(f.d.machineID(), f.meta.ID), Limit: 200}
+	t.Run("mixed-known-metadata", func(t *testing.T) {
+		var body []byte
+		for i, kind := range types {
+			row := map[string]any{"type": kind, "sessionId": nativeA2Session, "parentUuid": nil}
+			if kind == "api-request-blob" {
+				row["blob"] = strings.Repeat("private diagnostic", 2048)
+			}
+			body = append(body, encode(row)...)
+			body = append(body, '\n')
+			if i < len(original) {
+				body = append(body, original[i]...)
+				body = append(body, '\n')
+			}
+		}
+		expected := append([][]byte(nil), original...)
+		for _, kind := range []string{"file-history-snapshot", "queue-operation", "summary"} {
+			legacy := encode(map[string]any{"type": kind})
+			body = append(body, legacy...)
+			body = append(body, '\n')
+			expected = append(expected, legacy)
+		}
+		write(body)
+		page, _, err := f.d.nativeInteractionHistory(request)
+		if err != nil || page.Version != 2 || len(page.Items) != len(expected) {
+			t.Fatal("internal native metadata blocked or polluted display history", err)
+		}
+		for i := range expected {
+			if !bytes.Equal(page.Items[i], expected[i]) {
+				t.Fatal("native history changed retained message or legacy metadata bytes")
+			}
+		}
+		unchanged, err := os.ReadFile(f.history)
+		if err != nil || !bytes.Equal(unchanged, body) {
+			t.Fatal("history filtering changed native file", err)
+		}
+	})
+	for _, kind := range types {
+		for _, guard := range []string{"foreign-session", "missing-session", "parent", "uuid"} {
+			t.Run(kind+"/"+guard, func(t *testing.T) {
+				row := map[string]any{"type": kind, "sessionId": nativeA2Session}
+				switch guard {
+				case "foreign-session":
+					row["sessionId"] = "2f700d8f-d3e3-42c1-9ab0-dcdb22f27772"
+				case "missing-session":
+					delete(row, "sessionId")
+				case "parent":
+					row["parentUuid"] = req.NativeUserUUID
+				case "uuid":
+					row["uuid"] = "5389ef09-4c19-4d50-8fdd-1fc95bdcfd4a"
+				}
+				body := append(append([]byte(nil), base...), encode(row)...)
+				write(append(body, '\n'))
+				if _, _, err := f.d.nativeInteractionHistory(request); err == nil {
+					t.Fatal("internal metadata bypassed history identity guard")
+				}
+			})
+		}
+	}
+	for _, guard := range []string{"unknown-type", "duplicate-json", "case-alias", "duplicate-uuid", "unseen-parent"} {
+		t.Run(guard, func(t *testing.T) {
+			var row []byte
+			switch guard {
+			case "unknown-type":
+				row = encode(map[string]any{"type": "future-internal", "sessionId": nativeA2Session})
+			case "duplicate-json":
+				row = []byte(fmt.Sprintf(`{"type":"atis-latch","type":"atis-latch","sessionId":%q}`, nativeA2Session))
+			case "case-alias":
+				row = encode(map[string]any{"type": "atis-latch", "sessionId": nativeA2Session, "SESSIONID": nativeA2Session})
+			case "duplicate-uuid":
+				row = original[0]
+			case "unseen-parent":
+				row = encode(map[string]any{"type": "assistant", "uuid": "6389ef09-4c19-4d50-8fdd-1fc95bdcfd4a", "parentUuid": "7389ef09-4c19-4d50-8fdd-1fc95bdcfd4a", "sessionId": nativeA2Session})
+			}
+			body := append(append([]byte(nil), base...), row...)
+			write(append(body, '\n'))
+			if _, _, err := f.d.nativeInteractionHistory(request); err == nil {
+				t.Fatal("metadata filtering weakened strict history validation")
+			}
+		})
+	}
+	for _, count := range []int{4096, 4097} {
+		t.Run(fmt.Sprintf("scanned-%d", count), func(t *testing.T) {
+			metadata := append(encode(map[string]any{"type": "atis-latch", "sessionId": nativeA2Session}), '\n')
+			body := append(append([]byte(nil), base...), bytes.Repeat(metadata, count-len(original))...)
+			write(body)
+			page, _, err := f.d.nativeInteractionHistory(request)
+			if count == 4096 {
+				if err != nil || len(page.Items) != len(original) {
+					t.Fatal("in-bound scanned metadata history was refused", err)
+				}
+			} else if err == nil {
+				t.Fatal("filtered metadata bypassed scanned history record bound")
+			}
+		})
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.writes) != 1 || f.answers != 0 || f.unexpected != 0 || len(f.d.core.SemanticRequestOperations(f.meta.ID)) != 1 {
+		t.Fatal("history metadata gained owner input or operation authority")
+	}
+}

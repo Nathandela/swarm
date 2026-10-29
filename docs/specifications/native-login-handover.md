@@ -685,7 +685,13 @@ keeps oversized native JSON in the existing full-detail store while fitting its
 compact projection. It passes 49 Linux race checks. A fresh native follow-up
 accepts both MAIN requests and verifies owner echoes, completed receipts and
 correlated results, then fails native-history retrieval. History and positive
-writer retirement remain unqualified.
+writer retirement pass in the subsequent
+[metadata compatibility check](../verification/provider-logins/claude-native-history-metadata-2026-10-29.json).
+That check filters six source-qualified internal record types from displayed
+history while retaining file contents, message identities and scan limits. Both
+fresh Linux synthetic launch cases pass through history, replay protection and
+verified native-writer Stop. Transport denials remain, so this finite flow does
+not qualify clean transport, real subscriptions or broader workflows.
 A separate
 [same-process synthetic probe](../verification/provider-logins/claude-same-process-token-adoption-2026-10-29.json)
 demonstrates A1→B1→fresh A2 bearer adoption across three model requests in one
