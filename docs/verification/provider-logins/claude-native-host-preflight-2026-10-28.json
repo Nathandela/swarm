@@ -371,5 +371,85 @@
     "collection_scope": "Broad state/log/spool archive export rejected by automatic approval review. No retry of archive; separately approved fixed-field projections only, excluding raw bodies, environments, grants and transcripts.",
     "projection_reproducibility_limit": "The author revised the local projection in place after its first handoff. First and saved second projections have equivalent initialization observations but different schemas. The saved second source was reviewed after execution and passed its sensitive-field selfcheck; its final hash is recorded. No native test was rerun.",
     "next": "Both consumers persist fold cursor2: initialization-specific consumer/snapshot check refuses third frame despite valid projected response. Diagnose before any new native retry."
+  },
+  "refusal_diagnostics": {
+    "status": "DIAGNOSTICS_ONLY_ROOT_CAUSE_STILL_OPEN",
+    "source_files": [
+      "internal/skeleton/claude_chat_native.go",
+      "internal/skeleton/claude_chat_native_test.go"
+    ],
+    "behavior": "Three fixed labels and booleans preserve refusal conditions and wrapped error identity; no native values or underlying JSON errors emitted.",
+    "review": "Independent Astra and Root scoped source GREEN",
+    "local": {
+      "go": "1.26.10 darwin-arm64",
+      "build": "PASS ./...",
+      "vet": "PASS ./...",
+      "lint": "PASS 0 issues; existing unknown gomnd directive warning",
+      "targeted_test": "Compile PASS; Linux-only behavior fixtures skipped",
+      "gofmt_diff": "empty",
+      "diff_check": "PASS"
+    },
+    "linux_component_checks": {
+      "RED": {
+        "exit_code": 1,
+        "expected_three_failures": true,
+        "boundary_label_failure_count": 3,
+        "skip_count": 0,
+        "race_reported": false,
+        "source_and_payload_pins_unchanged": true,
+        "pid": 1696209,
+        "pid_start": 11625953,
+        "unit": "swarm-native-diagnostic-red-20261029-r1.service",
+        "invocation_id": "85f52a24d4404500b1eea2c67f111fab",
+        "cgroup_gone": true,
+        "unit_load_state": "not-found",
+        "go_log_sha256": "a70fd82b152b9d2a394f91d9fc750190d0e4dfb3d24d228d060aaf36dc9fe524"
+      },
+      "GREEN": {
+        "exit_code": 1,
+        "test_run_count": 0,
+        "pass_count": 0,
+        "skip_count": 0,
+        "race_reported": false,
+        "source_and_payload_pins_unchanged": true,
+        "pid": 1699412,
+        "pid_start": 11634308,
+        "unit": "swarm-native-diagnostic-green-20261029-r1.service",
+        "invocation_id": "8d0c9594095340dfb4c2cabf7e8e96c5",
+        "cgroup_gone": true,
+        "unit_load_state": "not-found",
+        "go_log_sha256": "75c78a3fb9c98616066bc69c81135afd9e0dcbe1584e4ae8d9d42c302875ecf8",
+        "failure_class": "setup_no_space_left_on_device",
+        "sanitized_failure_line": "write <path>: no space left on device"
+      },
+      "GREEN_AFTER_CACHE_CLEANUP": {
+        "exit_code": 0,
+        "expected_three_passes": true,
+        "existing_wrong_initialize_group_pass": true,
+        "pass_count": 14,
+        "failure_count": 0,
+        "skip_count": 0,
+        "race_reported": false,
+        "source_and_payload_pins_unchanged": true,
+        "pid": 1717084,
+        "pid_start": 11658206,
+        "unit": "swarm-native-diagnostic-green-after-cache-cleanup-20261029-r1.service",
+        "invocation_id": "414d1a0f3a554c11b50592103f2dfcff",
+        "cgroup_gone": true,
+        "unit_load_state": "not-found",
+        "go_log_sha256": "f3df7ce36f81c2e07affc70b0191c7428e9d0f5b475b7dc86c2e7f075c04f71c",
+        "TMPDIR_class": "short_owned_tmp_under_tmp"
+      }
+    },
+    "cache_cleanup": {
+      "authorization": "Owner previously authorized stale temporary/cache cleanup on tf_nathan",
+      "root": "/home/ubuntu/data/runtime/cache/go-build",
+      "criteria": "Known Go hash entries, regular owned single-link files, access/modify/change times all older than24h; inode and timestamps rechecked immediately before unlink",
+      "removed_files": 20792,
+      "removed_bytes": 5717895222,
+      "available_bytes_after": 5795037184,
+      "preserved": "Recent build cache, module cache, toolchains, sessions and user files"
+    },
+    "next": "One fresh public native diagnostic attempt using the reviewed green overlay; no native root-cause fix or qualification established by component tests."
   }
 }

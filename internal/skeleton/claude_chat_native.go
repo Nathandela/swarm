@@ -376,7 +376,7 @@ func (d *Daemon) consumeClaudeNative(s *claudeNativeState, body []byte) error {
 	s.ready = false
 	s.mu.Unlock()
 	if !valid || snap.Identity != env.Identity || !snap.Healthy || snap.StdoutEOF || snap.StderrEOF {
-		return errClaudeFixtureMessage
+		return fmt.Errorf("%w: native snapshot refused (consumer_valid=%t identity_equal=%t healthy=%t stdout_eof=%t stderr_eof=%t)", errClaudeFixtureMessage, valid, snap.Identity == env.Identity, snap.Healthy, snap.StdoutEOF, snap.StderrEOF)
 	}
 	if snap.DurableSequence < env.Seq || snap.ObservedSequence < env.Seq {
 		return errClaudeFixturePending
@@ -417,7 +417,7 @@ func (d *Daemon) consumeClaudeNative(s *claudeNativeState, body []byte) error {
 		}
 	}
 	if json.Unmarshal(env.Raw, &f) != nil {
-		return errClaudeFixtureMessage
+		return fmt.Errorf("%w: native frame decode refused", errClaudeFixtureMessage)
 	}
 	if f.Type != "control_response" && f.Type != "control_request" && f.Session != s.meta.ConversationID {
 		return errClaudeFixtureMessage
@@ -429,7 +429,7 @@ func (d *Daemon) consumeClaudeNative(s *claudeNativeState, body []byte) error {
 		initialized := s.initialized
 		s.mu.Unlock()
 		if initialized || !snap.Initialized || snap.InitializeResponseSequence != env.Seq || snap.InitializeRequestID == "" || f.Response.ID != snap.InitializeRequestID || f.Response.Subtype != "success" || f.Response.Response.PID != env.Identity.PrimaryPID || f.Response.Response.Version != "2.1.310" {
-			return errClaudeFixtureMessage
+			return fmt.Errorf("%w: native initialize refused (consumer_initialized=%t snapshot_initialized=%t sequence_equal=%t request_present=%t request_equal=%t success=%t pid_equal=%t version_equal=%t)", errClaudeFixtureMessage, initialized, snap.Initialized, snap.InitializeResponseSequence == env.Seq, snap.InitializeRequestID != "", f.Response.ID == snap.InitializeRequestID, f.Response.Subtype == "success", f.Response.Response.PID == env.Identity.PrimaryPID, f.Response.Response.Version == "2.1.310")
 		}
 		s.mu.Lock()
 		s.initialized = true

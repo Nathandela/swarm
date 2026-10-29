@@ -131,10 +131,11 @@
   },
   "next_decisive_storage_gate": {
     "tracking": "agents-tracker-h6sc.35",
-    "hypothesis": "A genuine native A refresh held across atomic installation of B cannot overwrite B when late A2 arrives.",
-    "architecture": "Prioritize a stable shared credential store candidate; neither process restart nor structured chat is mechanically required for the demonstrated hot-token path. Retain current production profiles until writer races and relevant policy behavior are qualified.",
+    "hypothesis": "A cooperating switch waits for the outgoing native refresh, retains the actual refreshed A2 access and refresh tokens, publishes B under compatible native locks, then restores the retained A2 successfully.",
+    "architecture": "Prioritize a stable shared credential store candidate. Source identifies native OAuth -> legacy OAuth -> storage-write lease order; a storage-only writer neither excludes an in-flight refresh nor preserves late outgoing credentials. Current immutable profiles remain until that writer contract is qualified.",
     "separate_gates": [
-      "Two-client writer behavior",
+      "Native lease compatibility, contention, compromise and crash behavior",
+      "Other credential writers and multiple clients",
       "Real account acceptance and policy/model/connector behavior",
       "Exact terminal-quota recovery and actor completeness"
     ]

@@ -1087,3 +1087,44 @@ func TestClaudeNativeChatConsumerRegistrationRequiresRetainedStopBeforeInput(t *
 		t.Fatal("failed Stop registration caused provider effects")
 	}
 }
+
+func TestClaudeNativeChatConsumerRefusalDiagnosticsDoNotExposeFrames(t *testing.T) {
+	for _, boundary := range []string{"snapshot", "decode", "initialize"} {
+		t.Run(boundary, func(t *testing.T) {
+			f := newNativeA2Fixture(t, "success", "wrong-id")
+			const secret = "DO_NOT_EXPOSE_NATIVE_FIELD"
+			frame := map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": "native-initialize", "response": map[string]any{"pid": f.identity.PrimaryPID, "claude_code_version": "2.1.310", "session_state": "idle"}}}
+			s := &claudeNativeState{claudeFixtureState: claudeFixtureState{meta: f.meta, identity: f.identity, healthy: true, sequence: 2}}
+			expected := "native " + boundary + " refused"
+			switch boundary {
+			case "snapshot":
+				s.healthy = false
+			case "decode":
+				frame["message"] = secret // A known but unused field still participates in Go decoding.
+				expected = "native frame decode refused"
+			case "initialize":
+				frame["response"].(map[string]any)["request_id"] = secret
+			}
+			raw, err := json.Marshal(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{"v": 1, "origin": "claude_primary", "native_session_id": nativeA2Session, "primary": f.identity, "read_monotonic_ns": 1, "stream_sequence": 3, "raw": raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = f.d.consumeClaudeNative(s, body)
+			if !errors.Is(err, errClaudeFixtureMessage) || !strings.Contains(err.Error(), expected) {
+				t.Fatal("refusal lost its error identity or boundary")
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "native-initialize") || strings.Contains(err.Error(), nativeA2Session) {
+				t.Fatal("diagnostic exposed native frame values")
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if len(f.writes) != 0 || f.answers != 0 || f.unexpected != 0 {
+				t.Fatal("diagnostic refusal acquired provider effects")
+			}
+		})
+	}
+}
