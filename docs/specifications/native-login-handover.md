@@ -764,6 +764,16 @@ processes. This plan grants neither production activation nor automatic quota
 continuation; account/policy coherence and safe interrupted-turn recovery remain
 separate release gates.
 
+The [pinned native login propagation study](../verification/provider-logins/claude-native-login-propagation-source-2026-10-29.json)
+finds that normal login separately writes credentials and account configuration.
+Siblings watch shared configuration and request identity reads that cache. The
+credential-only canary did not exercise this path. Config installation is not
+proof of every local-login cache invalidation or quota-wait effect, and the two
+files are not one atomic native transaction. Qualification must use genuinely
+native-written incoming account state and observe healthy siblings, policies and
+waits; this source result does not authorize copying account fields or bypassing
+the existing account-state migration rule.
+
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their
 existing behavior. Retained running or ended chat discussions are fenced from

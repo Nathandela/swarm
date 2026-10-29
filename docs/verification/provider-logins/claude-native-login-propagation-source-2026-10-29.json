@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "status": "PINNED_SOURCE_CONTRACT_NOT_NATIVE_QUALIFICATION",
+  "native_version": "2.1.310",
+  "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+  "method": "Independent Astra bounded read of retained native image; Root synthesis; no native execution or code changes.",
+  "finding": "Normal native login writes account configuration and credentials separately. Native siblings watch shared configuration; credential-only adoption evidence does not exercise this complete path.",
+  "source_offsets": {
+    "native_login_profile_Kto": 265231833,
+    "account_config_update_t_n": 240653534,
+    "credential_sign_in_e6e": 265230505,
+    "queued_config_update_Re": 240444582,
+    "locked_config_write_ii": 240457952,
+    "proper_lockfile_wrapper_vl": 237941734,
+    "config_watch__d": 240448089,
+    "newer_mtime_install_ih": 240449259,
+    "installDiskRead": 240423155,
+    "config_reader_ue": 240452059,
+    "account_reader_gn": 240911058,
+    "request_metadata_zWe": 244893936,
+    "sibling_account_identity_aUe": 273097141,
+    "credentials_recheck": 272919141,
+    "local_login_invalidation_i7t": 261287370,
+    "quota_switch_cancellation_classifier": 254200500
+  },
+  "contracts": [
+    "The login profile path writes native account/organization, billing/seat/onboarding fields and fresh profileFetchedAt. Credentials persist separately through a refresh-lock wrapper with conditional unlocked/fallback paths.",
+    "Native global config writes take configPath.lock, reread and merge. Credential and config writes are not one atomic transaction; config writer fallback paths exist.",
+    "The normal config watcher polls at one-second intervals (or an optional native watcher), accepts newer mtime, defers local pending writes and installs parsed config into cache.",
+    "Request account metadata reads oauthAccount through the shared config cache, so common config reload is a plausible sibling propagation mechanism.",
+    "The healthy sibling auth recheck returns without broad reauthentication unless auth state is missing or invalid. Config reload alone does not prove the full local-login invalidation path.",
+    "Local native login clears additional provider/model/tool caches and can cancel an armed quota episode as account_switch; sibling equivalence was not established."
+  ],
+  "next_native_question": "Does a healthy sibling sharing genuinely native-written B configuration adopt B request identity and relevant policy state, and what happens to active, idle, permission and quota waits?",
+  "limits": [
+    "No live/synthetic native execution in this source study.",
+    "No copied account fields, cache forcing, policy bypass or account-state migration approval.",
+    "No complete sibling cache/policy/wait coherence, automatic continuation or production hot-switch claim.",
+    "The separate R14 token/refresh capability experiment changed credentials only."
+  ]
+}
