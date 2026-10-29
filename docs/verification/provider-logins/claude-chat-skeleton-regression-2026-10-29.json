@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "FOCUSED_FIX_GREEN_FULL_RERUN_PENDING",
+  "status": "FULL_CHANGED_PACKAGE_RACE_PASS",
   "tracking": "agents-tracker-h6sc.25.14",
   "original_full_race": {
     "source_commit": "884d4222",
@@ -32,7 +32,25 @@
   "review": "Independent Sol source diagnosis, Luna test-only implementation, Astra and Root scoped GREEN",
   "source_hash": "c1f9eb5a84f9010f2bf9eb9b3783df5acb1c0e65305e2d1d8f877ca6cb5fc436",
   "limits": [
-    "Original full command remains failed; the targeted followup does not retroactively qualify it.",
-    "Complete changed-package race rerun remains required."
-  ]
+    "The original failed full command is retained; the bounded fixture correction does not change production custody checks.",
+    "82 platform/native-image/explicit skips remain outside this macOS package run.",
+    "This changed-package check does not qualify the complete feature or release."
+  ],
+  "full_rerun": {
+    "source_commit": "4ae4d9ec",
+    "counts": {
+      "pass": 2253,
+      "skip": 82
+    },
+    "race_reported": false,
+    "final": {
+      "Time": "2026-10-29T11:27:09.295709+01:00",
+      "Action": "pass",
+      "Package": "github.com/Nathandela/swarm/internal/skeleton",
+      "Elapsed": 823.698
+    },
+    "go_log_sha256": "2eb4d758c343b35948f4e71fbdefacf7e64ab53ae758d7ee62dc800b076fcc57",
+    "status": "PASS",
+    "command": "go test -mod=readonly -race -count=1 -timeout=20m -json ./internal/skeleton"
+  }
 }

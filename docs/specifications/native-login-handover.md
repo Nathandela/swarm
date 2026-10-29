@@ -682,16 +682,17 @@ matching process identity, but the host input-readiness check refuses; no model
 request or positive writer-stopped receipt follows. The later
 [large-metadata fix](../verification/provider-logins/claude-native-large-metadata-2026-10-29.json)
 keeps oversized native JSON in the existing full-detail store while fitting its
-compact projection. It passes 49 Linux race checks. A fresh native follow-up
-accepts both MAIN requests and verifies owner echoes, completed receipts and
-correlated results, then fails native-history retrieval. History and positive
-writer retirement pass in the subsequent
-[metadata compatibility check](../verification/provider-logins/claude-native-history-metadata-2026-10-29.json).
-That check filters six source-qualified internal record types from displayed
+compact projection. It passes 49 Linux race checks. The subsequent
+[metadata compatibility check](../verification/provider-logins/claude-native-history-metadata-2026-10-29.json)
+filters six source-qualified internal record types from displayed
 history while retaining file contents, message identities and scan limits. Both
-fresh Linux synthetic launch cases pass through history, replay protection and
-verified native-writer Stop. Transport denials remain, so this finite flow does
-not qualify clean transport, real subscriptions or broader workflows.
+fresh Linux synthetic launch subcases now pass,
+including owner echoes, completed receipts, correlated results, history, replay
+protection and verified native-writer Stop. The proxy's 16-error buffer is full;
+this finite flow does not qualify clean transport, kernel-level egress isolation,
+real subscriptions or broader workflows. The complete changed-package
+[race rerun](../verification/provider-logins/claude-chat-skeleton-regression-2026-10-29.json)
+passes 2,253 tests, with 82 explicit skips and no race report.
 A separate
 [same-process synthetic probe](../verification/provider-logins/claude-same-process-token-adoption-2026-10-29.json)
 demonstrates A1→B1→fresh A2 bearer adoption across three model requests in one
@@ -701,6 +702,16 @@ connections. During B1, native account metadata still identifies A and no B
 profile fetch is observed. Coherent account/policy handover, refresh races and
 real subscription acceptance remain unqualified; the result does not activate
 hot rebinding or automatic recovery.
+
+The private [native refresh-slot canary](../verification/provider-logins/claude-native-refresh-slot-2026-10-29.json)
+then passes one native refresh and A2→B1→saved A2 within one native process and task.
+It proves a busy refusal while native refresh owns the locks, positive native
+storage contention, byte-exact parking of the actual refreshed grant, preservation
+of unrelated credential keys and positive cleanup. Native removed the seeded
+unknown provider field; the writer preserved what native actually wrote. This
+synthetic experiment uses minimal granted scopes and does not qualify MCP APIs,
+two-client refresh overlap, production refresh ownership, account/policy coherence
+or automatic quota recovery.
 
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their
