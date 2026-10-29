@@ -146,8 +146,8 @@ installed native refresh locks/CAS. Every future owned identity, including the
 currently selected account, gets its own deterministic account-and-organization
 profile. Existing live processes keep their original account and common profile
 until that specific incarnation reaches a separately qualified safe transition;
-there is no hot rebinding. A healthy old-A process may finish under A while new
-work uses B. No fleet-wide idle barrier is allowed. A transition needs durable
+the current implementation has no hot rebinding. A healthy old-A process may
+finish under A while new work uses B. No fleet-wide idle barrier is allowed. A transition needs durable
 source ownership, proof its native writers stopped, one launch claim and an exact
 successor binding before readiness or continuation. Do not restart a healthy
 process merely to make adoption counts uniform.
@@ -636,7 +636,8 @@ both credentials and account metadata in macOS SDK mode: the next request used
 B's bearer but retained A metadata. It did not exercise native login and its
 post-login resets or interactive sibling adoption. Those results justify retaining
 immutable account profiles as the current candidate; they do not disprove every
-native login transition.
+native login transition. The later Linux same-process probe below confirms
+bearer reload from credentials alone while again observing stale A metadata.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It
@@ -675,7 +676,15 @@ passes synthetic AUTH and observed workspace trust. Native setup under umask
 preserved a precreated `0600` file. Provisioning now creates only missing private
 settings, preserving existing preferences and the strict validators. A separate
 initial-instance ordering fix passes Linux component race checks. The combined
-public native flow and same-process account adoption remain open.
+public native flow remains open. A separate
+[same-process synthetic probe](../verification/provider-logins/claude-same-process-token-adoption-2026-10-29.json)
+demonstrates A1→B1→fresh A2 bearer adoption across three model requests in one
+native task, preserving both Read results without a restart or another owner
+message. It synthesizes one auxiliary title response and blocks two ancillary
+connections. During B1, native account metadata still identifies A and no B
+profile fetch is observed. Coherent account/policy handover, refresh races and
+real subscription acceptance remain unqualified; the result does not activate
+hot rebinding or automatic recovery.
 
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their

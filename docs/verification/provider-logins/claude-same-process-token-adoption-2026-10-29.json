@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "status": "PASS_TITLE_SYNTHESIZED_WITH_EXPECTED_ANCILLARY_BLOCKED",
+  "scope": "Synthetic Linux native credential-reload hypothesis; no production activation",
+  "native": {
+    "version": "2.1.310",
+    "platform": "linux-amd64",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "pid": 1598828,
+    "start": "11468468",
+    "session": "5809224d-6dad-40a6-809c-d8e5806f2791"
+  },
+  "reviewed_packet": {
+    "sha256": "f4e1c5139acceda50883c93eef7661596330f18134991f9d2993bbafddcc82a8",
+    "manifest_sha256": "4821c472b46c6e470bcaaccf16f01940d3ee2937ac7b922d3ef3117fe5f1646a"
+  },
+  "observations": {
+    "owner_prompts": 1,
+    "main_requests": 3,
+    "tokens": [
+      "A1",
+      "B1",
+      "A2"
+    ],
+    "native_read_results": 2,
+    "native_restart": false,
+    "owner_resubmission": false,
+    "credential_path": "Same private .credentials.json pathname atomically replaced after MAIN1 and MAIN2, before each mocked Read response",
+    "title_requests_synthesized": 1,
+    "model_posts": 4,
+    "profile_fetches": [
+      {
+        "account": "A",
+        "at_unix_nano": 1793252678668282236,
+        "model_phase": 0,
+        "token_label": "A1"
+      },
+      {
+        "account": "A",
+        "at_unix_nano": 1793252687859628614,
+        "model_phase": 0,
+        "token_label": "A1"
+      }
+    ],
+    "expected_blocked_ancillary": {
+      "downloads.claude.ai:443": 1,
+      "github.com:443": 1
+    },
+    "unexpected_transport_errors": []
+  },
+  "account_coherence": {
+    "status": "NOT_ESTABLISHED",
+    "observed_cached_account_at_B1": "synthetic-A",
+    "B_profile_fetch_observed": false,
+    "main2_metadata_account": "synthetic-A",
+    "policy_coherence": "NOT_ESTABLISHED"
+  },
+  "cleanup": {
+    "native": {
+      "birth_retired": true,
+      "cgroup_gone": true,
+      "native_sha": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "pid": 1598828,
+      "start": "11468468",
+      "unit_after": {
+        "ActiveState": "inactive",
+        "ControlGroup": "",
+        "LoadState": "not-found",
+        "MainPID": "0"
+      }
+    },
+    "proxy": {
+      "ActiveState": "inactive",
+      "ControlGroup": "",
+      "LoadState": "not-found",
+      "MainPID": "0"
+    },
+    "joined": true
+  },
+  "evidence": {
+    "root": "/private/tmp/swarm-native-raw-adoption-authorized-20261029-r1/swarm-raw-adoption.3re7qtvw",
+    "hashes": {
+      "verdict.json": "1d20d4539b81229116c6c5c07774e3f862dbf3ce986a40a2ef475772c2f30511",
+      "network/joined.json": "1c63ed2353a619d7314abc8989171bc2b0211a9de865826c55a17ed201465543",
+      "cleanup-native.json": "ab6a2a4949463f89fdef91a8b30b564d453f76ea11e59e40eed2f1b94ac50745",
+      "evidence/main-1.json": "634d834a622310a21e0258b1f2bfc163913823354cfe84eaba071dbc4a7a50b2",
+      "evidence/main-2.json": "aaa8be2ccefce32b488832452ebbe986f7aad0cec50e915e646a85add56795ab",
+      "evidence/main-3.json": "2ae95ab314f3e572c5e02924a0a8d1b0fc4092b59fbc92b8997910b5c9458035",
+      "evidence/transition-1.json": "b149ae232875fc003fde391c2594d6cf638f35c2898bc61cb7fd9f6cb6da811a",
+      "evidence/transition-2.json": "963220768aa0b2b28a133137bcca1f0cf613de001122139f36b72f27baa260b6",
+      "evidence/transition-3.json": "ff940a175d86dfafb621d1fe35b4b029b3f189206793a109d1f86ce356677312",
+      "evidence/title.json": "569cf1afd3477f26df3c9130b49c4d8b8cddec9308d6356ebabd28ba477c8c02",
+      "native-account-final.json": "6d6f0bd92a9534b3906b09f05edf1bf727a3b75983bd65e9933220be290b38c1"
+    },
+    "history_sha256": "87be692814aba3e25491453090348105f0310147b2a2b00d9455ef2ff5b012a7"
+  },
+  "limitations": [
+    "Invalid synthetic grants and mocked model/profile responses; real provider acceptance and billing are untested.",
+    "One exact native auxiliary title response synthesized; two known ancillary CONNECTs blocked.",
+    "Observed proxy traffic only; no kernel-egress or whole-host filesystem isolation claim.",
+    "Token reload does not establish coherent account, organization, policy, quota attribution or refresh ownership.",
+    "Single native process and finite foreground task; actor completeness, multi-session behavior, expiry, refresh races and endurance remain open.",
+    "This does not qualify Swarm public chat launch, automatic recovery, migration or release.",
+    "Prior failed attempts remain failed; the oracle initially failed to import under Python -I before executing, then ran with adjacent-module imports enabled."
+  ]
+}

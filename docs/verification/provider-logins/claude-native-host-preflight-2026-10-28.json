@@ -94,7 +94,7 @@
     "validators_unchanged": true,
     "tracking": "agents-tracker-h6sc.34"
   },
-  "next_gate": "Fresh combined public native flow remains open. Separate raw same-process A-B-A hypothesis execution delegated as one bounded reviewed synthetic attempt; no runtime verdict yet.",
+  "next_gate": "Fresh combined public native flow remains open. The separate raw same-process synthetic probe now passes request-token adoption only; see claude-same-process-token-adoption-2026-10-29.json. Account/policy coherence and real subscription acceptance remain open.",
   "limits": [
     "No live accounts or installed Swarm changed.",
     "No offline, kernel-egress or whole-host filesystem isolation claim.",
