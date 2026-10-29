@@ -94,7 +94,7 @@
     "validators_unchanged": true,
     "tracking": "agents-tracker-h6sc.34"
   },
-  "next_gate": "Run combined Linux regressions and a fresh instrumented public native flow; direct same-process A-B-A experiment remains separate and unproven.",
+  "next_gate": "Fresh combined public native flow remains open. Separate raw same-process A-B-A hypothesis execution delegated as one bounded reviewed synthetic attempt; no runtime verdict yet.",
   "limits": [
     "No live accounts or installed Swarm changed.",
     "No offline, kernel-egress or whole-host filesystem isolation claim.",
@@ -239,6 +239,27 @@
         }
       ],
       "scope": "repository-wide build,vet,lint; no native runtime claim"
+    },
+    "hook_fixture_readiness_fix": "3ef06608",
+    "combined_linux_selected_run": {
+      "status": "ORIGINAL_FAIL_RETAINED",
+      "receipt": "/private/tmp/swarm-combined-linux-checks-20261029-r1/RESULT.json",
+      "test_pass": 1032,
+      "test_skip": 6,
+      "test_fail_actions": 10,
+      "findings": [
+        "Hook-readiness fixture contract gap",
+        "Runner TMPDIR exceeded Unix socket pathname limit"
+      ]
+    },
+    "linux_targeted_followup": {
+      "status": "PASS_RACE_THREE_REPETITIONS",
+      "receipt": "/private/tmp/swarm-linux-failed-groups-rerun-20261029-r1/RESULT.json",
+      "test_pass": 36,
+      "test_skip": 0,
+      "test_fail": 0,
+      "cgroup_gone": true,
+      "does_not_rewrite_original_result": true
     }
   }
 }
