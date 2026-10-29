@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "status": "FOCUSED_FIX_GREEN_FULL_RERUN_PENDING",
+  "tracking": "agents-tracker-h6sc.25.14",
+  "original_full_race": {
+    "source_commit": "884d4222",
+    "status": "FAIL_RETAINED",
+    "counts": {
+      "pass": 2252,
+      "skip": 82,
+      "fail": 1
+    },
+    "failed_tests": [
+      "TestFinalSolCanceledReloginDoesNotReplayCompletedEnrollment"
+    ],
+    "race_reported": false,
+    "go_log_sha256": "28f957dcbcd8b54eefa0c361cd9b487b610c875ea46205aa2b919c5f5e32cf75",
+    "failure_class": "Transient stopped-writer custody unavailable during expected-success fixture cleanup; cancellation consumption receipt already durable.",
+    "implementation_fix_required": false,
+    "followup": "Existing bounded fixture completion helper, receipt assertions, targeted and full rerun."
+  },
+  "diagnosis": "Owner cancellation durably consumed the enrollment before the failure. The completion retry reached stopped-writer cleanup; the success-path test assumed inventory custody was immediately available.",
+  "change": "Use existing bounded completeLoginFixture for both expected-success completion calls, retain real Stopped checks, and assert durable Completed/Cleaned receipts. Production behavior is unchanged.",
+  "focused_race": {
+    "count": 20,
+    "test_pass_count": 40,
+    "fail_count": 0,
+    "skip_count": 0,
+    "race_reported": false,
+    "go_log_sha256": "766ce80e40e32e23ff8b9edbcb096aa38c543d0df7e42c7a8b517988e1af683b"
+  },
+  "review": "Independent Sol source diagnosis, Luna test-only implementation, Astra and Root scoped GREEN",
+  "source_hash": "c1f9eb5a84f9010f2bf9eb9b3783df5acb1c0e65305e2d1d8f877ca6cb5fc436",
+  "limits": [
+    "Original full command remains failed; the targeted followup does not retroactively qualify it.",
+    "Complete changed-package race rerun remains required."
+  ]
+}

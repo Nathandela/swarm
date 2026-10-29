@@ -54,8 +54,12 @@ func TestFinalSolCanceledReloginDoesNotReplayCompletedEnrollment(t *testing.T) {
 	if e != nil || len(r.Switches) != 0 {
 		t.Fatalf("cancel failed: %v %+v", e, r.Switches)
 	}
-	if e = a.completeLoginJob(c); e != nil {
-		t.Fatal(e)
+	if done, err := loginworker.Completed(c); err != nil || !done {
+		t.Fatalf("cancel did not preserve durable completion receipt: %v %v", done, err)
+	}
+	completeLoginFixture(t, a, c)
+	if cleaned, err := loginworker.Cleaned(c); err != nil || !cleaned {
+		t.Fatalf("canceled enrollment was not cleaned up: %v %v", cleaned, err)
 	}
 	r, e = f.m.store.Snapshot()
 	if e != nil {
@@ -95,9 +99,7 @@ func TestFinalSolRemovedEnrollmentDoesNotReappear(t *testing.T) {
 	if _, e = a.Logins(protocol.LoginsReq{Action: "remove", ExpectedRevision: r.Revision, LoginID: c.JobID}); e != nil {
 		t.Fatal(e)
 	}
-	if e = a.completeLoginJob(c); e != nil {
-		t.Fatal(e)
-	}
+	completeLoginFixture(t, a, c)
 	r, e = a.logins.store.Snapshot()
 	if e != nil {
 		t.Fatal(e)
