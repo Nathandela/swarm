@@ -723,6 +723,9 @@ tracee PID, tracer containment and whole-unit retirement checks. It runs no Clau
 or provider operation. This qualifies the observation setup only; the proposed
 native experiment would provide instrumented capability evidence, with scheduling
 affected by tracing.
+Preparation of the subsequent native-tracing packet was stopped by a platform
+security filter before validation or execution. That path remains stopped; partial
+source is unreviewed and does not qualify the two-native gate or production use.
 
 #### Lean stable-slot integration boundary
 

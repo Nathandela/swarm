@@ -59,7 +59,7 @@
   },
   "safe_projection_sha256": "02fafd24a1efaa88399d2adf58690876b75df6744c013fadcfdeb5248a3393dd",
   "finding": "Enabling first-party telemetry also enabled unsupported native startup traffic. Both clients sent one refused model-route request and exhausted their retained16-error buffers before ARM. This prevented the closed fixture from reaching the refresh episode.",
-  "next_boundary": "The harmless exact-path tracing setup passes. A separately reviewed two-native instrumented attempt must retain nonessential-traffic disable and original provider routes, and positively bind a fresh C2 lock attempt to the held C1 refresh. Telemetry observation is abandoned.",
+  "next_boundary": "Two-native qualification remains open. The telemetry route was abandoned after the retained failed attempt; preparation of the replacement native-tracing attempt was stopped by a platform filter. No retry through another agent or tool and no deployment/release.",
   "limits": [
     "No owner input was submitted; composer text was pretyped but never admitted.",
     "No accepted MAIN, credential expiry, refresh overlap, switch or paired-task completion was qualified.",
@@ -99,5 +99,13 @@
       "Runtime assertions establish this setup only; reviewers did not independently inspect remote raw trace evidence.",
       "Tracing can perturb scheduling. Any subsequent native result is instrumented capability evidence."
     ]
+  },
+  "next_instrumented_attempt": {
+    "packet": "r17",
+    "status": "STOPPED_PLATFORM_SECURITY_FILTER_BEFORE_VALIDATION",
+    "reason": "The source author subagent was halted by a platform filter reporting possible cybersecurity risk. Root stopped this path and did not retry it through another agent or tool.",
+    "native_execution": false,
+    "validation": "No completed reviewed implementation, Go gate, final binary or execution qualification. Any partial packet is unreviewed and must not execute.",
+    "production_change": false
   }
 }
