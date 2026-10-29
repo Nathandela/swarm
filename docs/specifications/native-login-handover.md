@@ -675,8 +675,11 @@ passes synthetic AUTH and observed workspace trust. Native setup under umask
 `0002` created absent settings with mode `0664`; three subsequent native writes
 preserved a precreated `0600` file. Provisioning now creates only missing private
 settings, preserving existing preferences and the strict validators. A separate
-initial-instance ordering fix passes Linux component race checks. The combined
-public native flow remains open. A separate
+initial-instance ordering fix passes Linux component race checks. The fresh
+combined public native attempt still fails before initial-message delivery in
+both subcases. Fixed-field diagnostics show successful idle initialization and
+matching process identity, but the host input-readiness check refuses; no model
+request or positive writer-stopped receipt follows. A separate
 [same-process synthetic probe](../verification/provider-logins/claude-same-process-token-adoption-2026-10-29.json)
 demonstrates A1→B1→fresh A2 bearer adoption across three model requests in one
 native task, preserving both Read results without a restart or another owner

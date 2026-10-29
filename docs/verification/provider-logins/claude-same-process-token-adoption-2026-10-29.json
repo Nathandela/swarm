@@ -102,5 +102,41 @@
     "Single native process and finite foreground task; actor completeness, multi-session behavior, expiry, refresh races and endurance remain open.",
     "This does not qualify Swarm public chat launch, automatic recovery, migration or release.",
     "Prior failed attempts remain failed; the oracle initially failed to import under Python -I before executing, then ran with adjacent-module imports enabled."
-  ]
+  ],
+  "bounded_pinned_source_review": {
+    "reviewer": "Independent Astra plus Root refresh-CAS excerpt inspection",
+    "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "byte_offset_anchors": {
+      "refresh_save_CAS_wqr": 240884553,
+      "mtime_reload_dA_approximate": 240893300,
+      "refresh_admission_Eue_Ru": 240903977,
+      "cached_billing_role_and_current_grant_tier": 240911027,
+      "token_bound_organization_pin_validation": 240927650,
+      "request_client_construction": 242211535,
+      "request_account_metadata_zWe_approximate": 244893936,
+      "organization_keyed_model_bootstrap_cache": 256151300,
+      "browser_bridge_token_account_mismatch_approximate": 259277836,
+      "missing_invalid_only_sibling_recheck": 272919141,
+      "broader_login_refresh_callback": 273115315
+    },
+    "findings": [
+      "Credential mtime reload invalidates caches before the unexpired-token early return, consistent with actual bearer adoption.",
+      "Refresh-save mutation preserves stored credentials when the posted refresh token differs from the current nonempty token; the designated empty-token case permits saving. Actual multiprocess race remains untested.",
+      "Sibling credentials-change recheck declines while authentication is already valid; broader managed-settings/login refresh is therefore not guaranteed on bearer replacement.",
+      "Cached organization/model/bootstrap and billing/role fields have behavioral consumers; some subscription getters instead read current grants.",
+      "Inspected organization validators bind cached organization to the access token or resolve the presented token; this does not prove every invocation boundary.",
+      "No direct cached-A organization header found in inspected client construction, but composed headers and complete enforcement were not exhaustively traced."
+    ],
+    "limits": "Bounded embedded-source slices, not complete call-graph, live provider acceptance, refresh-race or production qualification."
+  },
+  "next_decisive_storage_gate": {
+    "tracking": "agents-tracker-h6sc.35",
+    "hypothesis": "A genuine native A refresh held across atomic installation of B cannot overwrite B when late A2 arrives.",
+    "architecture": "Prioritize a stable shared credential store candidate; neither process restart nor structured chat is mechanically required for the demonstrated hot-token path. Retain current production profiles until writer races and relevant policy behavior are qualified.",
+    "separate_gates": [
+      "Two-client writer behavior",
+      "Real account acceptance and policy/model/connector behavior",
+      "Exact terminal-quota recovery and actor completeness"
+    ]
+  }
 }

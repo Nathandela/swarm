@@ -261,5 +261,115 @@
       "cgroup_gone": true,
       "does_not_rewrite_original_result": true
     }
+  },
+  "authorized_combined_public_attempt_2026_10_29": {
+    "status": "FAIL_INITIAL_MESSAGE_UNSENT",
+    "root": "/dev/shm/swarm-auth-prep.fcfokixh",
+    "code_basis": "d28a88f3 with exact reviewed private transport instrumentation; not a current feature HEAD qualification",
+    "auth": {
+      "fresh": true,
+      "recovered": true,
+      "unit_retired": true,
+      "profiles": 1,
+      "models": 0,
+      "errors": [],
+      "settings_production_created_mode": "0600",
+      "manually_seeded": false
+    },
+    "native_trust": {
+      "observed_ui": true,
+      "task_input": false,
+      "native_written_witness": true,
+      "exact_birth_cgroup_unit_retired": true,
+      "trust_proxy_models": 0,
+      "trust_proxy_clean": false,
+      "denied_route": "downloads.claude.ai:443",
+      "trust_proxy_archived_before_fresh_test_proxy": true
+    },
+    "public": {
+      "subcases_failed": 2,
+      "models": 0,
+      "profiles": 0,
+      "accepted": 28,
+      "connects": 28,
+      "source_pin_mismatches": [],
+      "fixed_failure": "native Claude chat started; initial message remains unsent: fixture chat input custody is unavailable",
+      "writer_retirement_authority": false
+    },
+    "minimal_diagnostics": {
+      "path": "/private/tmp/swarm-public-native-attempt-20261029-r2/field-projection.json",
+      "sha256": "f9235de2fe8bf53d58e70795ab4e2cd1db533e43a079dc3649f89ad479f209cb",
+      "projection_script_sha256": "f5f16bae99910e9a93d6f328ebb5b30e16ce504f4b3df553ce25d03b2eebdde3",
+      "sessions": {
+        "gj3yxtjuhloc44jn": {
+          "frame_types": [
+            "hook_started",
+            "hook_response",
+            "control_response"
+          ],
+          "record_count": 3,
+          "initialize": {
+            "control_subtype": "success",
+            "initialize_pid": 1618504,
+            "initialize_pid_equal": true,
+            "initialize_version": "2.1.310",
+            "initialize_state": "idle",
+            "identity_birth_equal": true,
+            "identity_session_equal": true
+          },
+          "operation": {
+            "present": true,
+            "request_present": false,
+            "state": "failed"
+          },
+          "recorded_all_births_gone": true,
+          "recorded_stopped_proof_file_present": false
+        },
+        "pmruxsdenwqquydc": {
+          "frame_types": [
+            "hook_started",
+            "hook_response",
+            "control_response"
+          ],
+          "record_count": 3,
+          "initialize": {
+            "control_subtype": "success",
+            "initialize_pid": 1617219,
+            "initialize_pid_equal": true,
+            "initialize_version": "2.1.310",
+            "initialize_state": "idle",
+            "identity_birth_equal": true,
+            "identity_session_equal": true
+          },
+          "operation": {
+            "present": true,
+            "request_present": false,
+            "state": "failed"
+          },
+          "recorded_all_births_gone": true,
+          "recorded_stopped_proof_file_present": false
+        }
+      },
+      "parser_projection": {
+        "path": "/private/tmp/swarm-public-native-attempt-20261029-r2/parser-projection.json",
+        "sha256": "cfa69ef2f2f4c4c65fbeb341f30d0a24814361884050ddff112723839efa5a0e",
+        "source_sha256": "986b548ba16c7174af28bde9e5a9bf4e976341f20e177ff9516c50414f5e3d99",
+        "sessions": {
+          "gj3yxtjuhloc44jn": {
+            "fold_cursor": 2,
+            "cursor_file_missing": false,
+            "all_three_envelope_sequence_read_and_alias_checks_pass": true
+          },
+          "pmruxsdenwqquydc": {
+            "fold_cursor": 2,
+            "cursor_file_missing": false,
+            "all_three_envelope_sequence_read_and_alias_checks_pass": true
+          }
+        }
+      }
+    },
+    "collection_scope": "Broad state/log/spool archive export rejected by automatic approval review. No retry of archive; separately approved fixed-field projections only, excluding raw bodies, environments, grants and transcripts.",
+    "projection_reproducibility_limit": "The author revised the local projection in place after its first handoff. First and saved second projections have equivalent initialization observations but different schemas. The saved second source was reviewed after execution and passed its sensitive-field selfcheck; its final hash is recorded. No native test was rerun.",
+    "next": "Both consumers persist fold cursor2: initialization-specific consumer/snapshot check refuses third frame despite valid projected response. Diagnose before any new native retry."
   }
 }
