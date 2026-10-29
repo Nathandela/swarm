@@ -17,6 +17,9 @@ package skeleton
 // missing from the phone.
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -198,5 +201,52 @@ func TestInteractionCap_TheItemCapAdmitsEveryDocumentedFieldMaximum(t *testing.T
 	if daemon.MaxItemBytes < worstMergeUnion {
 		t.Errorf("MaxItemBytes = %d, under the %d-byte union of two MaxTextBytes increments; IS-DELTA-2's "+
 			"merge is lossless, so an item cap below it drops the agent's text", daemon.MaxItemBytes, worstMergeUnion)
+	}
+}
+
+func TestFitItemOpaqueNativePayloadRetainsFullDetail(t *testing.T) {
+	for _, size := range []int{16, daemon.MaxItemBytes + 1024} {
+		for _, kind := range []string{"raw-json", "raw-bytes"} {
+			t.Run(fmt.Sprintf("%s-%d", kind, size), func(t *testing.T) {
+				body, err := json.Marshal(map[string]string{"metadata": strings.Repeat("m", size)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var opaque any = json.RawMessage(body)
+				if kind == "raw-bytes" {
+					opaque = body
+				}
+				raw, full, err := fitItem(daemon.InteractionItem{V: 1, ItemID: "native-metadata", Kind: "agent_message", TS: time.Now()}, map[string]any{"role": "system", "native": opaque})
+				if err != nil {
+					t.Fatal("opaque native metadata did not fit through full detail", err)
+				}
+				var compact struct {
+					Truncated, Detail bool
+					FullBytes         int `json:"full_bytes"`
+					Native            json.RawMessage
+				}
+				if err := json.Unmarshal(raw, &compact); err != nil || len(raw) > daemon.MaxItemBytes {
+					t.Fatal("opaque native metadata exceeded compact item bound", err)
+				}
+				if size == 16 {
+					expected, err := json.Marshal(opaque)
+					if err != nil || full != nil || compact.Truncated || compact.Detail || !bytes.Equal(compact.Native, expected) {
+						t.Fatal("small native metadata changed representation")
+					}
+					return
+				}
+				if !compact.Truncated || !compact.Detail || compact.FullBytes != len(full) || len(compact.Native) != 0 {
+					t.Fatal("opaque metadata lost full-detail contract")
+				}
+				var detail struct{ Native json.RawMessage }
+				if err := json.Unmarshal(full, &detail); err != nil {
+					t.Fatal(err)
+				}
+				expected, err := json.Marshal(opaque)
+				if err != nil || !bytes.Equal(detail.Native, expected) {
+					t.Fatal("opaque native metadata changed in full detail", err)
+				}
+			})
+		}
 	}
 }

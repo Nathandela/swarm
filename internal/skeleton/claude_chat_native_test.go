@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -161,7 +163,11 @@ func newNativeA2Fixture(t *testing.T, mode, initMode string) *nativeA2Fixture {
 	case "duplicate-response":
 		f.append(t, json.RawMessage(fmt.Sprintf(`{"type":"control_response","response":{"subtype":"success","request_id":"native-initialize","response":{"pid":%d,"pid":%d,"claude_code_version":"2.1.310","session_state":"idle"}}}`, pid+1, pid)))
 	default:
-		f.append(t, map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": rid, "response": map[string]any{"pid": pid, "claude_code_version": version, "session_state": state, "commands": []any{}, "agents": []any{}}}})
+		detail := map[string]any{"pid": pid, "claude_code_version": version, "session_state": state, "commands": []any{}, "agents": []any{}}
+		if initMode == "large-idle" {
+			detail["commands"] = []any{map[string]string{"description": strings.Repeat("metadata", daemon.MaxItemBytes/8+256)}}
+		}
+		f.append(t, map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": rid, "response": detail}})
 	}
 	f.serve(t, filepath.Join(root, m.ID, "shim.sock"))
 	launch, _ := json.Marshal(map[string]any{"session_id": m.ID, "required_runtime": m.RequiredRuntime, "conversation_id": m.ConversationID, "hook_socket_path": filepath.Join(root, m.ID, "hooks.sock"), "hook_drain_token": "native-drain-token", "env": []string{}})
@@ -1126,5 +1132,62 @@ func TestClaudeNativeChatConsumerRefusalDiagnosticsDoNotExposeFrames(t *testing.
 				t.Fatal("diagnostic refusal acquired provider effects")
 			}
 		})
+	}
+}
+
+func TestClaudeNativeChatConsumerLargeInitializeRetainsFullDetail(t *testing.T) {
+	f := newNativeA2Fixture(t, "success", "large-idle")
+	if f.registrationErr != nil {
+		t.Fatal(f.registrationErr)
+	}
+	if err := f.drain(t); err != nil {
+		t.Fatal("large valid initialize metadata did not fold", err)
+	}
+	s := f.d.claudeNativeState(f.meta.ID)
+	if err := f.d.proveClaudeNativeReady(f.meta.ID, s); err != nil {
+		t.Fatal("large valid initialize metadata did not become ready", err)
+	}
+	spool, err := shim.ReadHookSpoolFileResponse(filepath.Join(f.d.stateDir, f.meta.ID, shim.HookSpoolFile), 0)
+	if err != nil || len(spool.Records) != 3 {
+		t.Fatal("initialize provenance changed", err)
+	}
+	var envelope struct{ Raw []byte }
+	if err := json.Unmarshal(spool.Records[2].Body, &envelope); err != nil || len(envelope.Raw) <= daemon.MaxItemBytes {
+		t.Fatal("fixture did not exercise an over-cap native frame", err)
+	}
+	itemID := fmt.Sprintf("claude-native:%s:3", f.meta.ID)
+	full, _, err := f.d.interactionDetail(protocol.NamespacedID(f.d.machineID(), f.meta.ID), itemID)
+	if err != nil {
+		t.Fatal("large initialize lost full detail", err)
+	}
+	var detail struct{ Native json.RawMessage }
+	if err := json.Unmarshal(full, &detail); err != nil || !bytes.Equal(detail.Native, envelope.Raw) {
+		t.Fatal("full native initialize evidence changed", err)
+	}
+	found := false
+	for _, item := range awaitItems(t, f.d, f.meta.ID, 3) {
+		if item["item_id"] != itemID {
+			continue
+		}
+		found = true
+		raw, err := json.Marshal(item)
+		if err != nil || len(raw) > daemon.MaxItemBytes || item["detail"] != true || item["truncated"] != true || item["full_bytes"] != float64(len(full)) {
+			t.Fatal("large initialize journal item lost bounded detail contract", err)
+		}
+	}
+	if !found {
+		t.Fatal("large initialize journal item missing")
+	}
+	hash := sha256.Sum256(envelope.Raw)
+	s.mu.Lock()
+	ready := s.healthy && s.initialized && s.ready && s.sequence == 3 && s.folded == 3 && s.initHash == hex.EncodeToString(hash[:])
+	s.mu.Unlock()
+	if !ready || len(f.d.core.SemanticRequestOperations(f.meta.ID)) != 0 {
+		t.Fatal("display shaping changed initialization authority or minted owner intent")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.writes) != 0 || f.answers != 0 || f.unexpected != 0 {
+		t.Fatal("initialize metadata acquired provider input authority")
 	}
 }

@@ -774,6 +774,8 @@ func clipStrings(f map[string]any, ceiling int) {
 		switch t := v.(type) {
 		case string:
 			f[k] = clampBytes(t, ceiling)
+		case json.RawMessage, []byte:
+			delete(f, k) // Opaque payloads cannot be clipped safely; full detail was captured above.
 		case []string:
 			for i, s := range t {
 				t[i] = clampBytes(s, ceiling)

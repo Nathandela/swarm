@@ -679,7 +679,14 @@ initial-instance ordering fix passes Linux component race checks. The fresh
 combined public native attempt still fails before initial-message delivery in
 both subcases. Fixed-field diagnostics show successful idle initialization and
 matching process identity, but the host input-readiness check refuses; no model
-request or positive writer-stopped receipt follows. A separate
+request or positive writer-stopped receipt follows. The later
+[large-metadata fix](../verification/provider-logins/claude-native-large-metadata-2026-10-29.json)
+keeps oversized native JSON in the existing full-detail store while fitting its
+compact projection. It passes 49 Linux race checks. A fresh native follow-up
+accepts both MAIN requests and verifies owner echoes, completed receipts and
+correlated results, then fails native-history retrieval. History and positive
+writer retirement remain unqualified.
+A separate
 [same-process synthetic probe](../verification/provider-logins/claude-same-process-token-adoption-2026-10-29.json)
 demonstrates A1→B1→fresh A2 bearer adoption across three model requests in one
 native task, preserving both Read results without a restart or another owner

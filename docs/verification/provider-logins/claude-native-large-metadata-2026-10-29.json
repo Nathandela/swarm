@@ -1,0 +1,156 @@
+{
+  "schema": 1,
+  "status": "COMPONENT_FIX_GREEN_NATIVE_PUBLIC_FLOW_STILL_OPEN",
+  "tracking": "agents-tracker-h6sc.25.12",
+  "native": {
+    "version": "2.1.310",
+    "platform": "linux-amd64",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56"
+  },
+  "observed_failure": {
+    "root": "/dev/shm/swarm-auth-prep.vaqwdqb6",
+    "startup_frame_bytes": [
+      252,
+      383,
+      18148
+    ],
+    "interaction_cap_bytes": 16384,
+    "sessions": 2,
+    "fold_cursor_before_fix": 2,
+    "model_requests_before_fix": 0,
+    "later_diagnostic": "consumer_valid=false while shim healthy, identity matching and no EOF",
+    "source_cause": "Opaque json.RawMessage cannot be shortened by the old fitter. Initialization state changes before fitting; oversized projection failure prevents stream-sequence advancement and poisons the consumer."
+  },
+  "change": {
+    "code": "Existing clipStrings omits json.RawMessage and []byte only while shrinking an oversized projection. fitItem returns the original serialized full detail for existing caller retention.",
+    "source_hashes": {
+      "internal/skeleton/interaction.go": "16caea21149c318cd095b516a35bec3a1f92113c94772ac0c1a2e0542ca86e0a",
+      "internal/skeleton/interaction_cap_test.go": "f6a640cfd5660cac5b21b74c5f2b74c65bf7d259b1165bb435d10646d2b65dbe",
+      "internal/skeleton/claude_chat_native_test.go": "f10a9a8c855950098021b8e032403599bc02c2c90bc9f187d05435c7a1cd9650"
+    },
+    "authority": "Native spool bytes and initialization hashes remain the source of authority; item-cap and identity checks are retained.",
+    "review": "Luna implementation, Sol connected regressions, independent Astra and Root source GREEN"
+  },
+  "red": {
+    "darwin_house": {
+      "counts": {
+        "pass": 2,
+        "fail": 3
+      },
+      "small_cases_pass": true,
+      "large_json_and_bytes_cases_fail_cap": true,
+      "log_sha256": "5274acf40e48b92fc75ff26b8e017897c7b1b8b525727006a5a4a5344b91e5cf"
+    },
+    "linux_connected": {
+      "phase": "CONNECTED_RED",
+      "exit_code": 1,
+      "connected_test_ran": true,
+      "connected_test_failed": true,
+      "intended_did_not_fold_marker": true,
+      "cap_failure_marker": true,
+      "skip_count": 0,
+      "race_reported": false,
+      "source_and_payload_pins_unchanged": true,
+      "actual_TMPDIR": "/dev/shm/c._8ioy7x6",
+      "pid": 2162424,
+      "pid_start": 11868670,
+      "unit": "swarm-native-large-initialize-red-20261029-r1.service",
+      "invocation_id": "b0d2e3de8460487cb24799a7ea0b4bf9",
+      "recorded_main_birth_gone": true,
+      "cgroup_gone": true,
+      "unit_load_state": "not-found",
+      "go_log_sha256": "962aa45240bcacfa8301cd3a1858c632eadec1b2b7f4e8f508c9fc927a7d6b1e",
+      "baton_returned": true
+    }
+  },
+  "green": {
+    "darwin_race": {
+      "counts": {
+        "skip": 35,
+        "pass": 14
+      },
+      "linux_only_skips_explicit": true,
+      "log_sha256": "cbbc7efb8ed48f1b3c82ac87a39cf930093fb1b4f55d32a6a9ce4963686c2f8e"
+    },
+    "linux_race": {
+      "pass_count": 49,
+      "failure_count": 0,
+      "skip_count": 0,
+      "race_reported": false,
+      "large_initialize_pass": true,
+      "house_opaque_cases_pass": 4,
+      "native_consumer_parent_tests_pass": 18,
+      "interaction_cap_family_pass": 3,
+      "source_and_payload_pins_unchanged": true,
+      "recorded_birth_cgroup_unit_retired": true,
+      "main_pid": 2451444,
+      "main_start": 11917565,
+      "go_log_sha256": "113d50a1469dee50fd5f3c01f266987f61d24fcc220a7cd136a53df98ab7711e",
+      "evidence_basis": "Successful executor tool outputs; corrected test uses namespaced detail API and existing asynchronous journal wait."
+    },
+    "static": {
+      "build": "PASS ./...",
+      "vet": "PASS ./...",
+      "lint": "PASS 0 issues; existing unknown gomnd directive warning",
+      "gofmt": "empty diff"
+    }
+  },
+  "retained_failed_green": {
+    "exit_code": 1,
+    "large_initialize_pass": false,
+    "house_subcase_pass_count": 4,
+    "house_parent_pass": true,
+    "native_consumer_parent_pass_count": 17,
+    "cap_family_parent_pass_count": 3,
+    "pass_count": 48,
+    "failure_count": 2,
+    "skip_count": 0,
+    "race_reported": false,
+    "source_and_payload_pins_unchanged": true,
+    "actual_TMPDIR": "/dev/shm/c.y_6e7n9y",
+    "pid": 2311349,
+    "pid_start": 11893396,
+    "unit": "swarm-native-large-initialize-green-20261029-r1.service",
+    "recorded_main_birth_gone": true,
+    "cgroup_gone": true,
+    "unit_load_state": "not-found",
+    "go_log_sha256": "46007e0bd155493b351cc1adda37be2d2f58c5e6070c3eaababed68df00fc530",
+    "failed_tests": [
+      "TestClaudeNativeChatConsumerLargeInitializeRetainsFullDetail"
+    ],
+    "known_assertion_label": "large initialize lost full detail",
+    "source_diagnosis": "test passed unnamespaced session ID to interactionDetail; fix test caller with existing protocol.NamespacedID",
+    "baton_returned": true
+  },
+  "post_fix_native_followup": {
+    "root": "/dev/shm/swarm-auth-prep.oldchni1",
+    "launcher_sha256": "d271a7f75d8243d686d3cbea124b0edb08bc83956ad1ff1443346f590c27923b",
+    "fresh_auth_and_root_observed_trust": true,
+    "trust_ui_runtime_limit_seconds": 180,
+    "trust_native_birth_cgroup_retired": true,
+    "trust_proxy_birth_cgroup_retired": true,
+    "public_test_exit": 1,
+    "model_posts": 2,
+    "sessions": 2,
+    "first_safe_parser_refusal": null,
+    "full_public_flow_qualified": false,
+    "writer_stopped_proofs": 0,
+    "all_recorded_births_retired": true,
+    "proxy_and_public_units_retired": true,
+    "source_and_payload_pins_unchanged": true,
+    "next": "Read-only classify native history reader failure from anchored physical transcript; later history/Stop gates remain open.",
+    "accepted_main_requests": 2,
+    "own_user_echo_and_completed_receipt": true,
+    "assistant_and_owner_correlated_result": true,
+    "failure_phase": "actual native history did not flush",
+    "failure_phase_source_line": 251,
+    "transport_denial_class": "DENIED_HTTP",
+    "transport_error_buffer_full": true
+  },
+  "limits": [
+    "Synthetic model/profile responses and invalid grants only; no real subscription validation.",
+    "The prior failed command and failed test-API run remain failed.",
+    "An expired temporary UI setup was preserved without fabricating its missing checkpoint; Root performed fresh observed trust with a reviewed180s UI limit.",
+    "This does not qualify native decisions, full actors, automatic recovery, migration or release."
+  ]
+}
