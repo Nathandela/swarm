@@ -713,6 +713,57 @@ synthetic experiment uses minimal granted scopes and does not qualify MCP APIs,
 two-client refresh overlap, production refresh ownership, account/policy coherence
 or automatic quota recovery.
 
+#### Lean stable-slot integration boundary
+
+The single-client proof removes account-specific profiles and a chat interface
+as mechanical prerequisites for healthy token adoption. After the two-native-client
+overlap gate, the proposed Claude path uses one stable secure directory for all
+new managed native births. Saved logins keep their own parked grants. This is one
+provider-level selection and publication operation, without a per-discussion
+account ledger. The existing opt-in chat work remains independent.
+
+Reuse the login store's anchored readers, registry lock, durable replacement and
+uncertain-write handling. Desired selection and actual slot ownership are distinct
+durable facts. Fence both auth admission and delayed worker claim: the actual
+slot owner cannot also be refreshed as a parked login, and an incoming login's
+helper must settle and remain excluded throughout promotion. Record a bounded
+publication intent before mutation. Legacy native processes are refresh writers
+too: an account cannot enter the stable slot while any unresolved process can
+refresh its inherited saved authority. Require positive retirement or a separately
+qualified authority transfer for that account before promotion; unknown custody
+refuses promotion without stopping unrelated healthy discussions. Under native
+OAuth, legacy OAuth and storage
+leases, recheck desired generation, ownership, grant hash and the two-second
+budget; durably park the actual outgoing provider subtree before merging the
+incoming subtree. Preserve unrelated native credentials. A crash between slot
+publication and the registry receipt requires hash-based reconciliation with
+refresh authority still fenced, never blind rollback or republishing.
+
+Current-grant identity evidence is a separate proposed boundary from the native
+helper auth receipt above. One read-only GET to the fixed native profile endpoint
+can identify the snapshotted access token without granting another process refresh
+authority. Use bounded normal HTTPS, no redirects, cookies, refresh, retries or
+environment-selected proxy; do not log credentials, response bodies or provider
+error text. Parse the exact account and organization fields and return only their
+identity digest, the snapshot's grant hash and observation time. Obtain this
+evidence outside registry/native locks and recheck its freshness and grant hash
+under those locks before parking. A changed token, foreign identity or failed
+lookup means unknown/refusal. This evidence does not replace enrollment, native
+auth readiness, native policy enforcement or the existing helper receipt. Its
+response interpretation and negative cases still require qualification.
+
+New births need stable authority custody rather than the selected account's
+identity/epoch as their immutable binding. Preserve final birth admission, CLI
+identity, private settings, native history and exact Stop custody. Only after
+publication, crash recovery and migration pass may the stable path delete
+account-specific config projections and selection-epoch invalidation used solely
+for isolation. Existing processes retain their inherited secure-storage paths;
+keep their history aliases, writer inventory and retirement checks until migration
+has positively retired them. No symlink or metadata edit can rebind those live
+processes. This plan grants neither production activation nor automatic quota
+continuation; account/policy coherence and safe interrupted-turn recovery remain
+separate release gates.
+
 A2 adds passive quarantine for the exact managed metadata schema 6 plus
 `claude-chat` discriminator pair; ordinary schema 5 sessions retain their
 existing behavior. Retained running or ended chat discussions are fenced from
