@@ -259,7 +259,7 @@ func (m *loginManager) refuseNativeBound(provider string) error {
 	}
 	var names []string
 	for _, meta := range m.list() {
-		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && meta.LoginRuntime == nil {
+		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && !loginmigration.ManagedBound(m.d.stateDir, meta) {
 			names = append(names, strconv.Quote(meta.Name))
 		}
 	}
@@ -536,16 +536,20 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 	}
 }
 
-// finishDeactivation ends every stopped discussion; replay after a crash finds
-// the already cancelled rows and only completes.
+// finishDeactivation ends every stopped discussion in one step and completes on
+// the next; replay after a crash finds the already cancelled rows and only
+// completes.
 func (m *loginManager) finishDeactivation(op logins.Switch) {
+	ended := false
 	for i := range op.Sessions {
 		if row := &op.Sessions[i]; row.Phase != "cancelled" {
 			row.Phase = "cancelled"
 			row.LastError = "ended by return to native sign-in"
+			ended = true
 		}
 	}
-	if err := m.store.SaveSwitch(op); err != nil {
+	if ended {
+		_ = m.store.SaveSwitch(op)
 		return
 	}
 	if err := m.store.CompleteSwitch(op.ID); err != nil {

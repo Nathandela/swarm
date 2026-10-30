@@ -44,6 +44,28 @@ var uuidRE = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 func providerHome(state, provider string) string {
 	return filepath.Join(state, "logins", "provider", provider, "native")
 }
+
+// ManagedBound reports whether a discussion's history lives in the provider's
+// managed home: it ran under a saved login, or the v0.25 migration pointed its
+// environment there without recording a login runtime.
+func ManagedBound(state string, meta persist.Meta) bool {
+	if meta.LoginRuntime != nil {
+		return true
+	}
+	key := "CODEX_HOME"
+	if meta.AgentType == "claude" {
+		key = "CLAUDE_CONFIG_DIR"
+	} else if meta.AgentType != "codex" {
+		return false
+	}
+	home := ""
+	for _, entry := range meta.Env {
+		if v, ok := strings.CutPrefix(entry, key+"="); ok {
+			home = v
+		}
+	}
+	return home != "" && filepath.Clean(home) == filepath.Clean(providerHome(state, meta.AgentType))
+}
 func sourceHome(provider string, env []string) (string, error) {
 	values := map[string]string{}
 	for _, entry := range env {
@@ -124,6 +146,8 @@ func contextSources(state, provider string, sources []persist.Meta) ([]contextSo
 		}
 		if m.LoginRuntime != nil {
 			source = contextSource{Home: m.LoginRuntime.Home, Managed: true}
+		} else if ManagedBound(state, m) {
+			source.Managed = true
 		}
 		source.Conversation, source.Cwd = m.ConversationID, m.ProviderCwd()
 		out = append(out, source)

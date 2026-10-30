@@ -1,11 +1,13 @@
 package skeleton
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/logins"
@@ -72,7 +74,7 @@ func (r *resumeHomeRig) resumeSpec() daemon.LaunchSpec {
 }
 
 // writeNativeTranscript files the source's conversation in the ordinary ~/.codex.
-func (r *resumeHomeRig) writeNativeTranscript(t *testing.T) {
+func (r *resumeHomeRig) writeNativeTranscript(t *testing.T) string {
 	t.Helper()
 	rel, err := filepath.Rel(r.runtime.Home, r.managedTranscript)
 	if err != nil {
@@ -87,6 +89,47 @@ func (r *resumeHomeRig) writeNativeTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// migrate rewrites the source as v0.25's offline migration left it on disk:
+// bound to the managed home through its environment, with no login runtime.
+// The migration wrote meta.json directly, past Save's environment allowlist.
+func (r *resumeHomeRig) migrate(t *testing.T) {
+	t.Helper()
+	r.source.LoginRuntime = nil
+	resolver := r.api.historyResolver
+	r.api = continuityAPIWithConfig(t, func(cfg *daemon.Config) {
+		path := filepath.Join(cfg.StateDir, r.source.ID, "meta.json")
+		var meta map[string]any
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			err = json.Unmarshal(raw, &meta)
+		}
+		if err == nil {
+			meta["env"] = []string{"HOME=/ordinary", "CODEX_HOME=" + r.runtime.Home}
+			raw, err = json.Marshal(meta)
+		}
+		if err == nil {
+			err = os.WriteFile(path, raw, 0600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}, r.source)
+	r.api.logins, r.api.historyResolver = r.m, resolver
+}
+
+// touch sets path's modification time to the given offset from the managed copy's.
+func (r *resumeHomeRig) touch(t *testing.T, path string, offset time.Duration) {
+	t.Helper()
+	info, err := os.Stat(r.managedTranscript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chtimes(path, info.ModTime().Add(offset), info.ModTime().Add(offset)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -140,6 +183,86 @@ func TestResumeNativeDiscussionWhileLoginActiveAllowedWhenTranscriptPresent(t *t
 	}
 	if spec.LoginRuntime == nil || spec.LoginRuntime.Home != r.runtime.Home {
 		t.Fatalf("resume not bound to the managed home: %+v", spec.LoginRuntime)
+	}
+}
+
+// The one-time import copies history and leaves the native original behind, so a
+// native copy of a managed discussion is a stale snapshot, never its history.
+func TestResumeManagedDiscussionWithoutActiveLoginRefusedDespitePreImportNativeCopy(t *testing.T) {
+	r := newResumeHomeRig(t, true, false)
+	r.writeNativeTranscript(t)
+	spec := r.resumeSpec()
+	err := r.api.bindLoginLaunch(&spec)
+	if !errors.Is(err, errResumeHomeMismatch) || !strings.Contains(err.Error(), "activate a saved login") {
+		t.Fatalf("managed discussion resumed from its pre-import native copy: %v", err)
+	}
+}
+
+// A native discussion may continue natively after its history was imported, so a
+// managed copy older than the native transcript is stale.
+func TestResumeNativeDiscussionWhileLoginActiveRequiresCurrentManagedCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		offset time.Duration
+		grow   bool
+		allow  bool
+	}{
+		{"native newer", time.Hour, false, false},
+		{"same time, native larger", 0, true, false},
+		{"same time and size", 0, false, true},
+		{"native older", -time.Hour, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newResumeHomeRig(t, false, true)
+			native := r.writeNativeTranscript(t)
+			if tc.grow {
+				f, err := os.OpenFile(native, os.O_APPEND|os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = f.WriteString("{}\n")
+				if e := f.Close(); err == nil {
+					err = e
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.touch(t, native, tc.offset)
+			spec := r.resumeSpec()
+			err := r.api.bindLoginLaunch(&spec)
+			if tc.allow && err != nil {
+				t.Fatalf("resume refused although the managed copy is current: %v", err)
+			}
+			if !tc.allow && (!errors.Is(err, errResumeHomeMismatch) || !strings.Contains(err.Error(), "return to native sign-in")) {
+				t.Fatalf("resume admitted from a stale managed copy: %v", err)
+			}
+		})
+	}
+}
+
+// v0.25 migrated discussions carry the managed home in their environment only.
+func TestResumeMigratedDiscussionWithoutActiveLoginRefused(t *testing.T) {
+	r := newResumeHomeRig(t, false, false)
+	r.migrate(t)
+	r.writeNativeTranscript(t)
+	spec := r.resumeSpec()
+	err := r.api.bindLoginLaunch(&spec)
+	if !errors.Is(err, errResumeHomeMismatch) || !strings.Contains(err.Error(), "activate a saved login") {
+		t.Fatalf("migrated discussion resumed in the ordinary native home: %v", err)
+	}
+}
+
+func TestResumeMigratedDiscussionWithActiveLoginIsSameHome(t *testing.T) {
+	r := newResumeHomeRig(t, false, true)
+	r.migrate(t)
+	r.api.historyResolver = unusedHistoryResolver{t}
+	spec := r.resumeSpec()
+	if err := r.api.bindLoginLaunch(&spec); err != nil {
+		t.Fatalf("migrated discussion refused in its managed home: %v", err)
+	}
+	if spec.LoginRuntime == nil || spec.LoginRuntime.Home != r.runtime.Home {
+		t.Fatalf("migrated discussion not bound to the managed home: %+v", spec.LoginRuntime)
 	}
 }
 

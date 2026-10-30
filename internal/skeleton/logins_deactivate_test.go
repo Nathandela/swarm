@@ -65,8 +65,14 @@ func TestDeactivateStopsRunningDiscussionsWithoutResume(t *testing.T) {
 		f.m.step()
 		after, _ := f.m.store.Snapshot()
 		if _, ok := after.Switches[logins.ProviderCodex]; !ok {
-			if before.Switches[logins.ProviderCodex].Phase != "committed" {
-				t.Fatalf("completed from phase %q", before.Switches[logins.ProviderCodex].Phase)
+			last := before.Switches[logins.ProviderCodex]
+			if last.Phase != "committed" {
+				t.Fatalf("completed from phase %q", last.Phase)
+			}
+			for _, row := range last.Sessions {
+				if row.Phase != "cancelled" || row.LastError != "ended by return to native sign-in" {
+					t.Fatalf("row not durably ended before completion: %+v", row)
+				}
 			}
 			break
 		}
@@ -355,6 +361,24 @@ func TestActivateFromNativeRefusesRunningNativeBoundDiscussionsAfterImport(t *te
 	native("native-a1", status.ProcessRunning)
 	if _, err = f.m.BeginSwitch(logins.ProviderCodex, f.first.ID, "owner"); err != nil {
 		t.Fatalf("first activation refused: %v", err)
+	}
+}
+
+// v0.25 migrated discussions are bound to the managed home by their environment,
+// so they are not named as native sign-in discussions.
+func TestActivateFromNativeDoesNotNameMigratedDiscussions(t *testing.T) {
+	f := newLoginFixture(t)
+	home := filepath.Join(f.m.d.stateDir, "logins", "provider", logins.ProviderCodex, "native")
+	if err := os.WriteFile(filepath.Join(home, ".swarm-provider-context.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deactivateFixture(t, f)
+	for id, env := range map[string][]string{"native-a1": {"HOME=/ordinary"}, "migrated-b2": {"HOME=/ordinary", "CODEX_HOME=" + home}} {
+		f.rows[id] = persist.Meta{ID: id, Name: id, AgentType: logins.ProviderCodex, ConversationID: "019a0000-0000-7000-8000-0000000000" + id[len(id)-2:], Cwd: t.TempDir(), Env: env, Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone}}
+	}
+	_, err := f.m.BeginSwitch(logins.ProviderCodex, f.first.ID, "owner")
+	if want := `login switch: end or hand off these native sign-in discussions before activating a login: "native-a1"`; err == nil || err.Error() != want {
+		t.Fatalf("activation from native sign-in: %v", err)
 	}
 }
 
