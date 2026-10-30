@@ -252,7 +252,7 @@ func (m rootModel) composeActiveForm() string {
 			confirmation = "Confirm · y / ctrl+x"
 		}
 		if m.screen == screenLogins && m.logins.mode == "" && m.logins.job.ID == "" {
-			confirmation = "Actions · enter / c/d/s"
+			confirmation = "Actions · enter / n/c/d/s"
 		}
 		if stop == len(lines) {
 			confirmation = "▌ " + confirmation

@@ -288,3 +288,135 @@ func TestLogins_UnknownOrStaleUsageShowsEmDash(t *testing.T) {
 		t.Fatal("expired reset or out-of-range usage was shown")
 	}
 }
+
+func TestLoginsNativeSignInKeyOpensConfirmation(t *testing.T) {
+	m := rootModel{screen: screenLogins, client: newLoginsTestClient(), logins: loginsModel{available: true, loaded: true, focus: 1, err: "old error", reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "codex", ActiveID: "codex-work", State: "active"}}, Logins: []protocol.LoginView{{ID: "codex-work", Provider: "codex", Label: "Work Codex", Active: true}}}}}
+	next, cmd := m.Update(keyRune('n'))
+	got := next.(rootModel).logins
+	if cmd != nil || got.mode != "deactivate" || got.provider != "codex" || got.err != "" {
+		t.Fatalf("n did not open native sign-in confirmation: mode=%q provider=%q err=%q cmd=%v", got.mode, got.provider, got.err, cmd != nil)
+	}
+}
+
+func TestLoginsDeactivateConfirmSendsRequest(t *testing.T) {
+	providers := []protocol.ProviderLoginView{{Provider: "claude", ActiveID: "claude-work", State: "active"}, {Provider: "codex", ActiveID: "codex-work", State: "active"}}
+	saved := []protocol.LoginView{{ID: "claude-work", Provider: "claude", Label: "Work Claude", Active: true}, {ID: "codex-work", Provider: "codex", Label: "Work Codex", Active: true}}
+	for _, tt := range []struct {
+		name     string
+		focus    int
+		provider string
+	}{
+		{"provider row", 0, "claude"},
+		{"login row", 3, "codex"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newLoginsTestClient()
+			m := rootModel{screen: screenLogins, client: c, logins: loginsModel{available: true, loaded: true, focus: tt.focus, reply: protocol.LoginsReply{Revision: 3, Providers: providers, Logins: saved}}}
+			confirming, _ := m.Update(keyRune('n'))
+			next, cmd := confirming.Update(keyEnter)
+			if cmd == nil || next.(rootModel).logins.mode != "" {
+				t.Fatal("Enter did not confirm native sign-in")
+			}
+			cmd()
+			if req := c.lastRequest(); req.Action != "deactivate" || req.Provider != tt.provider || req.ExpectedRevision != 3 {
+				t.Fatalf("deactivate request = %#v", req)
+			}
+		})
+	}
+}
+
+func TestLoginsDeactivateEscCancels(t *testing.T) {
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, logins: loginsModel{available: true, loaded: true, reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", ActiveID: "claude-work", State: "active"}}, Logins: []protocol.LoginView{{ID: "claude-work", Provider: "claude", Label: "Work Claude", Active: true}}}}}
+	confirming, _ := m.Update(keyRune('n'))
+	next, cmd := confirming.Update(keyEsc)
+	if cmd != nil || next.(rootModel).logins.mode != "" || next.(rootModel).screen != screenLogins {
+		t.Fatalf("Esc did not cancel native sign-in confirmation: %#v", next.(rootModel).logins)
+	}
+	if req := c.request("deactivate"); req.Action != "" {
+		t.Fatalf("Esc sent deactivate request: %#v", req)
+	}
+}
+
+func TestLoginsNativeSignInWhenAlreadyNativeShowsNotice(t *testing.T) {
+	m := rootModel{screen: screenLogins, client: newLoginsTestClient(), logins: loginsModel{available: true, loaded: true, reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", State: "native"}, {Provider: "codex", State: "native"}}}}}
+	for _, tt := range []struct {
+		focus  int
+		notice string
+	}{
+		{0, "Claude Code already uses native sign-in"},
+		{1, "Codex already uses native sign-in"},
+	} {
+		m.logins.focus = tt.focus
+		next, cmd := m.Update(keyRune('n'))
+		if got := next.(rootModel).logins; cmd != nil || got.mode != "" || got.notice != tt.notice {
+			t.Fatalf("n on native provider row: mode=%q notice=%q cmd=%v", got.mode, got.notice, cmd != nil)
+		}
+	}
+}
+
+func TestLoginsDeactivateConfirmationView(t *testing.T) {
+	m := loginsModel{available: true, loaded: true, mode: "deactivate", provider: "claude"}
+	text := m.view(30, 20, false, false)
+	compact := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"Return Claude Code to native sign-in?",
+		"Running Claude Code discussions stop at their next safe point and end.",
+		"Continue them later with hand-off.",
+		"The saved login stays parked and can be activated again.",
+		"Enter to confirm · Esc to cancel",
+	} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("confirmation missing %q:\n%s", want, text)
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if lipgloss.Width(line) > 30 {
+			t.Fatalf("confirmation line overflows 30 cells: %q", line)
+		}
+	}
+}
+
+func TestLoginsHintMentionsNativeSignIn(t *testing.T) {
+	list := loginsModel{available: true, loaded: true}
+	if hint := list.hint(false, false, 120); !strings.Contains(hint, "enter make active · n native sign-in") {
+		t.Fatalf("list hint omits native sign-in: %s", hint)
+	}
+	confirming := loginsModel{available: true, loaded: true, mode: "deactivate", provider: "claude"}
+	if hint := confirming.hint(false, false, 120); hint != "enter return to native sign-in · esc cancel" {
+		t.Fatalf("confirmation hint = %q", hint)
+	}
+}
+
+func TestLoginsRemoveActiveLoginExplainsNativeSignIn(t *testing.T) {
+	m := rootModel{screen: screenLogins, loginsClientGeneration: 2, logins: loginsModel{available: true, loaded: true, busy: true, generation: 7}}
+	next, _ := m.applyLoginsReply(loginsReplyMsg{generation: 7, clientGeneration: 2, action: "remove", err: errors.New("login is active or owned by a switch")})
+	if got := next.(rootModel).logins.err; got != "Return to native sign-in (n) or activate another login before removing the active one." {
+		t.Fatalf("active remove error = %q", got)
+	}
+	next, _ = m.applyLoginsReply(loginsReplyMsg{generation: 7, clientGeneration: 2, action: "activate", err: errors.New("login is active or owned by a switch")})
+	if got := next.(rootModel).logins.err; got != "Login request failed; press r to retry or reconnect." {
+		t.Fatalf("non-remove error changed = %q", got)
+	}
+}
+
+func TestLoginsDeactivateConfirmIsSizeGuarded(t *testing.T) {
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, width: 31, height: 8, logins: loginsModel{available: true, loaded: true, mode: "deactivate", provider: "claude", reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", ActiveID: "claude-work", State: "active"}}}}}
+	next, cmd := m.Update(keyEnter)
+	if cmd != nil || next.(rootModel).screen != screenLogins {
+		t.Fatal("size guard let native sign-in confirmation through")
+	}
+	if req := c.request("deactivate"); req.Action != "" {
+		t.Fatalf("below minimum sent deactivate request: %#v", req)
+	}
+}
+
+func TestLoginsActionsFooterListsNativeSignIn(t *testing.T) {
+	m := rootModel{screen: screenLogins, client: newLoginsTestClient(), width: 40, height: 8, logins: loginsModel{available: true, loaded: true, focus: 1, err: strings.Repeat("sign-in needs attention. ", 8), reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", ActiveID: "claude-work", State: "active"}}, Logins: []protocol.LoginView{{ID: "claude-work", Provider: "claude", Label: "Work Claude", Active: true}}}}}
+	// The actions line sits after the context, so page the reader to its end first.
+	pageDown := tea.KeyPressMsg{Code: tea.KeyPgDown}
+	if text := view(send(send(m, pageDown), pageDown)); !strings.Contains(text, "Actions · enter / n/c/d/s") {
+		t.Fatalf("short-screen actions footer omits native sign-in:\n%s", text)
+	}
+}
