@@ -478,3 +478,15 @@ func TestLoginsStopOnlyConfirmation(t *testing.T) {
 		t.Fatalf("deactivate request = %#v", req)
 	}
 }
+
+func TestLoginsDeactivateEnterWhileBusyKeepsConfirmation(t *testing.T) {
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, logins: loginsModel{available: true, loaded: true, busy: true, mode: "deactivate", provider: "claude", reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", ActiveID: "claude-work", State: "active"}}}}}
+	next, cmd := m.Update(keyEnter)
+	if got := next.(rootModel).logins; cmd != nil || got.mode != "deactivate" {
+		t.Fatalf("busy Enter: mode=%q cmd=%v", got.mode, cmd != nil)
+	}
+	if req := c.request("deactivate"); req.Action != "" {
+		t.Fatalf("busy Enter sent a request: %#v", req)
+	}
+}
