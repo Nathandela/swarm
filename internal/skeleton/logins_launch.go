@@ -11,7 +11,12 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol"
 )
+
+// errResumeHomeMismatch refuses an exact resume into a native home that does
+// not hold the discussion's conversation.
+var errResumeHomeMismatch = errors.New("launch: resume-home-mismatch")
 
 func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 	if !managedLoginProvider(spec.AgentType) {
@@ -43,7 +48,7 @@ func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 		}
 		if r.Providers[spec.AgentType].ActiveID == "" {
 			spec.LoginRuntime = nil
-			return nil
+			return a.checkResumeHome(*spec, nil)
 		}
 		for _, login := range r.Logins {
 			if login.ID == r.Providers[spec.AgentType].ActiveID && login.LimitKnown && (login.ExhaustedUntil.IsZero() || time.Now().Before(login.ExhaustedUntil)) {
@@ -51,6 +56,9 @@ func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 			}
 		}
 		runtime, err = a.logins.store.Runtime(spec.AgentType)
+		if err == nil {
+			err = a.checkResumeHome(*spec, &runtime)
+		}
 	}
 	if err != nil {
 		return err
@@ -64,6 +72,41 @@ func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 		spec.ClientEnv, err = a.logins.store.PrepareEnvironment(runtime, spec.ClientEnv)
 	}
 	return err
+}
+
+// checkResumeHome refuses an exact resume into a home without the source's
+// conversation; target nil is the ordinary native home. Launch recovers the
+// conversation id before binding, so only a cross-home resume reads history.
+func (a *coreAPI) checkResumeHome(spec daemon.LaunchSpec, target *logins.Runtime) error {
+	src := spec.Options[protocol.OptionResumeFrom]
+	if src == "" {
+		return nil
+	}
+	local, source, err := validateResumeSource(src, spec.AgentType, a.endpointID, a.core.Get)
+	if err != nil {
+		return err
+	}
+	if (source.LoginRuntime == nil && target == nil) || (source.LoginRuntime != nil && target != nil && source.LoginRuntime.Home == target.Home) {
+		return nil
+	}
+	probe := source
+	probe.LoginRuntime = target
+	if a.historyResolver != nil {
+		if _, outcome := a.historyResolver.LocateTranscript(probe, source.ConversationID); outcome == resumeHistoryFound {
+			return nil
+		}
+	}
+	name, label := source.Name, "Claude Code"
+	if name == "" {
+		name = local
+	}
+	if spec.AgentType == logins.ProviderCodex {
+		label = "Codex"
+	}
+	if target == nil {
+		return fmt.Errorf("%w: discussion %q keeps its history in Swarm's managed %s home; activate a saved login to resume it exactly, or hand it off to continue with native sign-in", errResumeHomeMismatch, name, label)
+	}
+	return fmt.Errorf("%w: discussion %q keeps its history in the native %s home; return to native sign-in to resume it exactly, or hand it off", errResumeHomeMismatch, name, label)
 }
 func (d *Daemon) prepareLoginLaunch(_ string, spec daemon.LaunchSpec) (daemon.LaunchSpec, error) {
 	if spec.LoginRuntime == nil {
