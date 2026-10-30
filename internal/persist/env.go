@@ -1,6 +1,9 @@
 package persist
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Normative launch-environment allowlist (E1.8, ADR-004 item 6). The launch
 // environment is allowlist-filtered before it is persisted into meta.json, so a
@@ -87,6 +90,24 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// MetaEnv is FilterEnv plus the managed-home binding v0.25's offline login
+// migration wrote into meta.json: the agent's CODEX_HOME or CLAUDE_CONFIG_DIR,
+// kept only when it names that provider's managed home under this store. A
+// launch filters the client's environment before any Meta exists, so a
+// client-chosen home never reaches here.
+func (s *Store) MetaEnv(m Meta) []string {
+	bind := map[string]string{"codex": "CODEX_HOME", "claude": "CLAUDE_CONFIG_DIR"}[m.AgentType]
+	home := filepath.Join(s.root, "logins", "provider", m.AgentType, "native")
+	out := make([]string, 0, len(m.Env))
+	for _, kv := range m.Env {
+		key, value, _ := strings.Cut(kv, "=")
+		if envAllowKey(key) || bind != "" && key == bind && filepath.Clean(value) == home {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // FilterEnv returns the allowlisted subset of env in input order, each entry

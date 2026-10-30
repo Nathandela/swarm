@@ -244,7 +244,7 @@ func (s *Store) Save(m Meta) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	m.Env = FilterEnv(m.Env)
+	m.Env = s.MetaEnv(m)
 	m.SchemaVersion = SchemaVersion
 	if m.HermesNative {
 		if !validHermesMeta(m) {
