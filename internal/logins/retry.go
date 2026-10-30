@@ -24,6 +24,10 @@ func (s *Store) BeginSwitchRetryAtRevision(expected uint64, id, nextID, reason s
 }
 func (s *Store) beginSwitchRetry(expected *uint64, id, nextID, reason string) error {
 	return s.switchMutationAt(expected, id, func(r *Registry, op *Switch) error {
+		// A deactivation has no destination to retry, renew or retarget.
+		if op.Deactivate {
+			return ErrPending
+		}
 		if !currentSwitch(r, op) {
 			return ErrConflict
 		}
@@ -71,6 +75,9 @@ func (s *Store) BeginSwitchReloginJobAtRevision(expected uint64, id string, c Cr
 }
 func (s *Store) beginSwitchRelogin(expected *uint64, id string, c Credential, reason, jobID string) error {
 	return s.switchMutationAt(expected, id, func(r *Registry, op *Switch) error {
+		if op.Deactivate {
+			return ErrPending
+		}
 		if !currentSwitch(r, op) {
 			return ErrConflict
 		}
@@ -145,6 +152,9 @@ func (s *Store) RetargetSwitch(id string) error {
 		}
 		if provider == "" {
 			return ErrConflict
+		}
+		if op.Deactivate {
+			return ErrPending
 		}
 		if op.Phase != "retry-stopping" || op.NextID == "" {
 			return ErrInUse
