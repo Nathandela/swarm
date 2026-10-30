@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/loginmigration"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -86,13 +88,18 @@ func (a *coreAPI) checkResumeHome(spec daemon.LaunchSpec, target *logins.Runtime
 	if err != nil {
 		return err
 	}
-	if (source.LoginRuntime == nil && target == nil) || (source.LoginRuntime != nil && target != nil && source.LoginRuntime.Home == target.Home) {
+	// A migrated discussion is bound to the managed home by its environment alone.
+	managed := loginmigration.ManagedBound(a.logins.d.stateDir, source)
+	if !managed && target == nil || managed && target != nil && (source.LoginRuntime == nil || source.LoginRuntime.Home == target.Home) {
 		return nil
 	}
-	probe := source
-	probe.LoginRuntime = target
-	if a.historyResolver != nil {
-		if _, outcome := a.historyResolver.LocateTranscript(probe, source.ConversationID); outcome == resumeHistoryFound {
+	// A managed-bound source never resumes natively: the native home holds at
+	// most the pre-import snapshot the one-time import left behind. A native
+	// source may have continued after the import, so its managed copy must be current.
+	if a.historyResolver != nil && target != nil {
+		probe := source
+		probe.LoginRuntime = target
+		if path, outcome := a.historyResolver.LocateTranscript(probe, source.ConversationID); outcome == resumeHistoryFound && (managed || a.currentCopy(path, source)) {
 			return nil
 		}
 	}
@@ -107,6 +114,24 @@ func (a *coreAPI) checkResumeHome(spec daemon.LaunchSpec, target *logins.Runtime
 		return fmt.Errorf("%w: discussion %q keeps its history in Swarm's managed %s home; activate a saved login to resume it exactly, or hand it off to continue with native sign-in", errResumeHomeMismatch, name, label)
 	}
 	return fmt.Errorf("%w: discussion %q keeps its history in the native %s home; return to native sign-in to resume it exactly, or hand it off", errResumeHomeMismatch, name, label)
+}
+
+// currentCopy reports whether path is not older than the source home's own
+// transcript, which may have continued natively after the import copied it.
+func (a *coreAPI) currentCopy(path string, source persist.Meta) bool {
+	own, outcome := a.historyResolver.LocateTranscript(source, source.ConversationID)
+	if outcome != resumeHistoryFound {
+		return true
+	}
+	copied, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	orig, err := os.Stat(own)
+	if err != nil {
+		return false
+	}
+	return copied.ModTime().After(orig.ModTime()) || copied.ModTime().Equal(orig.ModTime()) && copied.Size() >= orig.Size()
 }
 func (d *Daemon) prepareLoginLaunch(_ string, spec daemon.LaunchSpec) (daemon.LaunchSpec, error) {
 	if spec.LoginRuntime == nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -68,5 +69,39 @@ func TestContextImportedReportsMarker(t *testing.T) {
 	}
 	if ok, err := ContextImported("relative-state", "codex"); ok || !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("relative state reported %v, %v", ok, err)
+	}
+}
+
+func TestManagedBoundRecognisesMigratedEnvironment(t *testing.T) {
+	state := t.TempDir()
+	codex := providerHome(state, "codex")
+	for _, tc := range []struct {
+		name string
+		meta persist.Meta
+		want bool
+	}{
+		{"login runtime", persist.Meta{AgentType: "codex", LoginRuntime: &logins.Runtime{Provider: "codex", Home: codex}}, true},
+		{"migrated codex", persist.Meta{AgentType: "codex", Env: []string{"CODEX_HOME=" + codex + "/"}}, true},
+		{"migrated claude", persist.Meta{AgentType: "claude", Env: commonEnvironment("claude", providerHome(state, "claude"), nil)}, true},
+		{"native", persist.Meta{AgentType: "codex", Env: []string{"HOME=/home/u"}}, false},
+		{"other codex home", persist.Meta{AgentType: "codex", Env: []string{"CODEX_HOME=/home/u/.codex"}}, false},
+		{"other provider's key", persist.Meta{AgentType: "codex", Env: []string{"CLAUDE_CONFIG_DIR=" + codex}}, false},
+		{"overridden", persist.Meta{AgentType: "codex", Env: []string{"CODEX_HOME=" + codex, "CODEX_HOME=/home/u/.codex"}}, false},
+	} {
+		if got := ManagedBound(state, tc.meta); got != tc.want {
+			t.Errorf("%s: ManagedBound = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// v0.25's migration pointed legacy discussions' environment at the managed home
+// without a login runtime; their only full history is there.
+func TestPlanContextWithMarkerVerifiesMigratedConversations(t *testing.T) {
+	f := newFixture(t)
+	managed := providerHome(f.state, "codex")
+	put(t, filepath.Join(managed, contextMarker), "{}")
+	put(t, filepath.Join(f.state, f.id, "meta.json"), map[string]any{"schema_version": 1, "id": f.id, "agent_type": "codex", "conversation_id": conversation, "cwd": f.project, "env": commonEnvironment("codex", managed, nil)})
+	if err := PreflightProviderContext(f.state, "codex", nil); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("migrated conversation missing from the managed home was accepted: %v", err)
 	}
 }
