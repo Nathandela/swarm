@@ -325,13 +325,13 @@ func validateRegistry(r Registry) error {
 		}
 		if op.Deactivate {
 			// Returning to native sign-in has no destination and resumes nothing.
-			if op.ToID != "" || op.FromID == "" || op.Relogin || op.NextID != "" || op.LoginJobID != "" || len(op.AttemptedIDs) != 0 || op.Phase == "resuming" || op.Phase == "retry-stopping" {
+			if op.ToID != "" || op.Relogin || op.NextID != "" || op.LoginJobID != "" || len(op.AttemptedIDs) != 0 || op.Phase == "resuming" || op.Phase == "retry-stopping" {
 				return ErrIneligible
 			}
 		} else if find(&r, op.ToID) == nil || find(&r, op.ToID).Provider != p {
 			return ErrIneligible
 		}
-		if p != op.Provider || !validProvider(p) || !validID(op.ID) || op.ToEpoch == 0 || op.ToEpoch != op.FromEpoch+1 || op.Relogin != (op.FromID == op.ToID) {
+		if p != op.Provider || !validProvider(p) || !validID(op.ID) || op.ToEpoch == 0 || op.ToEpoch != op.FromEpoch+1 || (!op.Deactivate && op.Relogin != (op.FromID == op.ToID)) {
 			return ErrIneligible
 		}
 		if op.FromID != "" && (find(&r, op.FromID) == nil || find(&r, op.FromID).Provider != p) {

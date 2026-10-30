@@ -34,7 +34,7 @@ func eraseNativeCredential(provider, home string, keychain credentialKeychain) e
 		return ErrUnsafePath
 	}
 	if provider == ProviderCodex {
-		return eraseNativeFields(root, "auth.json", "auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY", "api_key", "access_token", "refresh_token", "id_token")
+		return eraseNativeFields(root, "auth.json", codexGrantKeys...)
 	}
 	if keychain != nil {
 		raw, e := keychain.Read(home)

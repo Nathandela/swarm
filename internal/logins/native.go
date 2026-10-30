@@ -51,6 +51,10 @@ func ReadNativeCredential(provider, home string) (Credential, error) {
 	return c, e
 }
 
+// codexGrantKeys are every auth.json field that can carry a Codex grant,
+// legacy top-level tokens included. Installing or erasing a grant drops all.
+var codexGrantKeys = []string{"auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY", "api_key", "access_token", "refresh_token", "id_token"}
+
 func mergeFields(current, fields []byte, keys ...string) ([]byte, error) {
 	m := map[string]json.RawMessage{}
 	if len(current) > 0 && (validateJSON(current) != nil || json.Unmarshal(current, &m) != nil || m == nil) {
@@ -98,7 +102,7 @@ func (s *Store) installCredential(provider string, c Credential) error {
 		if e != nil {
 			return e
 		}
-		b, e := mergeFields(current, c.Auth, "auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY")
+		b, e := mergeFields(current, c.Auth, codexGrantKeys...)
 		if e != nil {
 			return e
 		}

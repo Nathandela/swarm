@@ -187,7 +187,11 @@ func TestDeactivateJournalValidation(t *testing.T) {
 	check("committed", true, committed)
 	check("fresh-row", true, func(op *Switch, _ *ProviderState) { op.Sessions[0].ConversationID = "" })
 	check("destination", false, func(op *Switch, _ *ProviderState) { op.ToID = b.ID })
-	check("no-outgoing", false, func(op *Switch, p *ProviderState) { op.FromID = ""; p.ActiveID = "" })
+	noOutgoing := func(op *Switch, p *ProviderState) { op.FromID = ""; p.ActiveID = "" }
+	check("no-outgoing", true, noOutgoing)
+	check("no-outgoing-committed", true, func(op *Switch, p *ProviderState) { noOutgoing(op, p); committed(op, p) })
+	check("no-outgoing-without-marker", false, func(op *Switch, p *ProviderState) { noOutgoing(op, p); op.Deactivate = false })
+	check("no-outgoing-relogin", false, func(op *Switch, p *ProviderState) { noOutgoing(op, p); op.Relogin = true })
 	check("relogin", false, func(op *Switch, _ *ProviderState) { op.Relogin = true })
 	check("next", false, func(op *Switch, _ *ProviderState) { op.NextID = b.ID })
 	check("login-job", false, func(op *Switch, _ *ProviderState) { op.LoginJobID = strings.Repeat("c", 32) })
@@ -291,10 +295,12 @@ func TestDeactivateClaudeCapturesSecureStorage(t *testing.T) {
 	if e != nil || !strings.Contains(string(saved.Auth), "refresh-latest") {
 		t.Fatalf("lost active refresh: %s %v", saved.Auth, e)
 	}
-	for name, body := range files {
+	// Only the account identity leaves the common Claude home.
+	want := map[string]string{".claude.json": `{"projects":{"project":{"trust":true}}}`, ".credentials.json": files[".credentials.json"]}
+	for name, body := range want {
 		raw, e := os.ReadFile(filepath.Join(rt.Home, name))
 		if e != nil || string(raw) != body {
-			t.Fatalf("deactivation changed Claude native %s: %s %v", name, raw, e)
+			t.Fatalf("deactivation left wrong Claude native %s: %s %v", name, raw, e)
 		}
 	}
 	again := activate(t, s, a)
@@ -629,5 +635,185 @@ func TestDeactivateRowsMayOmitConversationID(t *testing.T) {
 	finishDeactivation(t, s, stopDeactivation(t, s, op))
 	if r = snapshot(t, s); len(r.Switches) != 0 || r.Providers[ProviderCodex].ActiveID != "" {
 		t.Fatalf("deactivation did not complete: %+v", r)
+	}
+}
+
+func TestDeactivateCodexReplacesUnparseableNativeAuth(t *testing.T) {
+	for name, body := range map[string]string{
+		"truncated": `{"auth_mode":"chatgpt","tokens":{"account_id":"a","access_token":"live-token","refresh_token":"live-refresh"`,
+		"duplicate": `{"tokens":{"account_id":"a","access_token":"live-token","refresh_token":"live-refresh"},"tokens":{}}`,
+		"array":     `[{"tokens":{"account_id":"a","access_token":"live-token","refresh_token":"live-refresh"}}]`,
+		"empty":     ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := testStore(t)
+			a := add(t, s, ProviderCodex, "A", codexCredential("a", "a"))
+			rt := activate(t, s, a)
+			if _, e := durableReplace(s.root, "provider/codex/native/auth.json", []byte(body), writeOps{}); e != nil {
+				t.Fatal(e)
+			}
+			deactivate(t, s, ProviderCodex, nil)
+			r := snapshot(t, s)
+			if r.Providers[ProviderCodex].ActiveID != "" || len(r.Switches) != 0 || find(&r, a.ID).AuthState != AuthNeedsLogin {
+				t.Fatalf("deactivation did not complete: %+v", r)
+			}
+			raw, e := os.ReadFile(filepath.Join(rt.Home, "auth.json"))
+			if e != nil || string(raw) != "{}" {
+				t.Fatalf("unparseable native auth kept: %s %v", raw, e)
+			}
+		})
+	}
+}
+
+func TestCodexLegacyTopLevelTokensRemoved(t *testing.T) {
+	s := testStore(t)
+	a := add(t, s, ProviderCodex, "A", codexCredential("a", "a"))
+	rt := activate(t, s, a)
+	plant := func() {
+		t.Helper()
+		doc := map[string]json.RawMessage{"unrelated": json.RawMessage(`"keep"`)}
+		if e := json.Unmarshal(codexCredential("a", "a").Auth, &doc); e != nil {
+			t.Fatal(e)
+		}
+		for _, key := range []string{"api_key", "access_token", "refresh_token", "id_token"} {
+			doc[key] = json.RawMessage(`"legacy-secret"`)
+		}
+		b, _ := json.Marshal(doc)
+		if _, e := durableReplace(s.root, "provider/codex/native/auth.json", b, writeOps{}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	check := func(step string) {
+		t.Helper()
+		raw, e := os.ReadFile(filepath.Join(rt.Home, "auth.json"))
+		if e != nil || strings.Contains(string(raw), "legacy-secret") || !strings.Contains(string(raw), "keep") {
+			t.Fatalf("%s: legacy token keys survived or unrelated state lost: %s %v", step, raw, e)
+		}
+	}
+	plant()
+	deactivate(t, s, ProviderCodex, nil)
+	check("deactivation")
+	plant()
+	activate(t, s, a)
+	check("install")
+}
+
+func TestDeactivateClaudeUnreadableIdentityChecksSavedGrant(t *testing.T) {
+	for _, kind := range []string{"missing", "empty", "unparseable", "saved-invalid"} {
+		t.Run(kind, func(t *testing.T) {
+			s := testStore(t)
+			kc := s.keychain.(*fakeKeychain)
+			a := add(t, s, ProviderClaude, "A", claudeCredential("a", "a"))
+			rt := activate(t, s, a)
+			name := "provider/claude/native/.claude.json"
+			if kind == "missing" {
+				if e := s.root.Remove(name); e != nil {
+					t.Fatal(e)
+				}
+			} else if kind == "empty" {
+				if _, e := durableReplace(s.root, name, nil, writeOps{}); e != nil {
+					t.Fatal(e)
+				}
+			} else if _, e := durableReplace(s.root, name, []byte(`{"oauthAccount":{"accountUuid":"a"`), writeOps{}); e != nil {
+				t.Fatal(e)
+			}
+			if kind == "saved-invalid" {
+				if e := kc.Write(s.savedNativeHome(a.ID), []byte(`{"claudeAiOauth":{}}`)); e != nil {
+					t.Fatal(e)
+				}
+			}
+			meta, e := readPrivate(s.root, s.savedPath(a), maxCredentialBytes*2)
+			if e != nil {
+				t.Fatal(e)
+			}
+			op := deactivateStopped(t, s, ProviderClaude, nil)
+			if e = s.CaptureOutgoing(op.ID); e != nil {
+				t.Fatalf("unreadable identity blocked deactivation: %v", e)
+			}
+			r := snapshot(t, s)
+			want := AuthReady
+			if kind == "saved-invalid" {
+				want = AuthNeedsLogin
+			}
+			if l := find(&r, a.ID); l.AuthState != want || l.CredentialRevision != a.CredentialRevision || r.Switches[ProviderClaude].Phase != "captured" {
+				t.Fatalf("want %s: %+v %+v", want, l, r.Switches[ProviderClaude])
+			}
+			finishDeactivation(t, s, op)
+			if after, e := readPrivate(s.root, s.savedPath(a), maxCredentialBytes*2); e != nil || string(after) != string(meta) {
+				t.Fatalf("saved metadata rewritten: %s %v", after, e)
+			}
+			if kind == "unparseable" {
+				if raw, e := os.ReadFile(filepath.Join(rt.Home, ".claude.json")); e != nil || string(raw) != "{}" {
+					t.Fatalf("unparseable identity kept: %s %v", raw, e)
+				}
+			}
+			if kind != "saved-invalid" {
+				if e := s.ValidateRuntime(activate(t, s, a)); e != nil {
+					t.Fatalf("kept login does not reactivate: %v", e)
+				}
+			}
+		})
+	}
+}
+
+// handClear drops the selection without a journal, as an owner editing the
+// registry did before deactivation existed. The managed grant copy remains.
+func handClear(t *testing.T, s *Store, provider string) ProviderState {
+	t.Helper()
+	r, e := s.mutate(snapshot(t, s).Revision, func(r *Registry) error {
+		p := r.Providers[provider]
+		p.ActiveID = ""
+		r.Providers[provider] = p
+		return nil
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	return r.Providers[provider]
+}
+
+func TestDeactivateStopOnlyWithoutSelection(t *testing.T) {
+	for _, p := range []string{ProviderCodex, ProviderClaude} {
+		t.Run(p, func(t *testing.T) {
+			s := testStore(t)
+			c, name, identity := codexCredential("a", "a"), "auth.json", "account_id"
+			if p == ProviderClaude {
+				c, name, identity = claudeCredential("a", "a"), ".claude.json", "oauthAccount"
+			}
+			a := add(t, s, p, "A", c)
+			rt := activate(t, s, a)
+			state := handClear(t, s, p)
+			r := snapshot(t, s)
+			login := *find(&r, a.ID)
+			meta, e := readPrivate(s.root, s.savedPath(a), maxCredentialBytes*2)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if _, e = s.BeginDeactivate(r.Revision, p, "manual", nil); !errors.Is(e, ErrIneligible) {
+				t.Fatalf("stop-only admitted without discussions: %v", e)
+			}
+			op, e := s.BeginDeactivate(r.Revision, p, "manual", []Restart{{SourceID: "source"}})
+			if e != nil {
+				t.Fatal(e)
+			}
+			if !op.Deactivate || op.FromID != "" || op.ToID != "" || op.FromEpoch != state.Epoch || op.ToEpoch != state.Epoch+1 {
+				t.Fatalf("bad stop-only journal %+v", op)
+			}
+			finishDeactivation(t, s, stopDeactivation(t, s, op))
+			r = snapshot(t, s)
+			if st := r.Providers[p]; st.ActiveID != "" || st.Epoch != state.Epoch+1 || len(r.Switches) != 0 {
+				t.Fatalf("stop-only did not commit: %+v %+v", st, r.Switches)
+			}
+			if l := find(&r, a.ID); !reflect.DeepEqual(*l, login) {
+				t.Fatalf("saved login modified: %+v", l)
+			}
+			if after, e := readPrivate(s.root, s.savedPath(a), maxCredentialBytes*2); e != nil || string(after) != string(meta) {
+				t.Fatalf("saved metadata rewritten: %s %v", after, e)
+			}
+			raw, e := os.ReadFile(filepath.Join(rt.Home, name))
+			if e != nil || strings.Contains(string(raw), identity) || strings.Contains(string(raw), `"a"`) {
+				t.Fatalf("hand-cleared grant copy left: %s %v", raw, e)
+			}
+		})
 	}
 }
