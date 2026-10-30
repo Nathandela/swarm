@@ -132,8 +132,10 @@ func (s *Store) BeginDeactivate(expected uint64, provider, reason string, sessio
 		if _, ok := r.Switches[provider]; ok {
 			return ErrPending
 		}
+		// With no selection only the stop remains: discussions can still run in
+		// the managed home after the owner cleared the selection by hand.
 		p := r.Providers[provider]
-		if p.ActiveID == "" || p.Epoch == ^uint64(0) {
+		if (p.ActiveID == "" && len(sessions) == 0) || p.Epoch == ^uint64(0) {
 			return ErrIneligible
 		}
 		id, e := newID()
@@ -256,6 +258,14 @@ func (s *Store) CaptureOutgoing(id string) error {
 			// Returning to native sign-in must not wait for a grant it cannot
 			// save: the login needs sign-in instead. Storage faults still retry.
 			if op.Deactivate && (errors.Is(e, ErrIdentityChanged) || errors.Is(e, ErrInvalidCredentials)) {
+				// Claude's grant lives in its saved home, which capture does not
+				// overwrite: an unreadable common identity does not spoil it.
+				if errors.Is(e, ErrInvalidCredentials) && op.Provider == ProviderClaude && s.claudeIdentityUnreadable() {
+					if _, err := s.readSaved(*l); err == nil {
+						op.Phase = "captured"
+						return nil
+					}
+				}
 				unavailable, e = true, nil
 			}
 			if e != nil {
@@ -285,6 +295,14 @@ func (s *Store) CaptureOutgoing(id string) error {
 	})
 }
 
+// claudeIdentityUnreadable reports a missing, empty or unparseable common
+// .claude.json. A parseable but incomplete identity stays suspect.
+func (s *Store) claudeIdentityUnreadable() bool {
+	raw, e := s.readOptional("provider/claude/native/.claude.json")
+	_, err := mergeFields(raw, []byte("{}"))
+	return e == nil && (len(raw) == 0 || err != nil)
+}
+
 func (s *Store) InstallIncoming(id string) error {
 	// Commit the intent separately before touching either native auth store.
 	if e := s.switchMutation(id, func(_ *Registry, op *Switch) error {
@@ -307,11 +325,14 @@ func (s *Store) InstallIncoming(id string) error {
 			return ErrInUse
 		}
 		if op.Deactivate {
-			// Nothing is installed. Claude's grant stays in its saved home.
-			if op.Provider == ProviderCodex {
-				if e := s.scrubCodexGrant(); e != nil {
-					return e
-				}
+			// Nothing is installed. Claude's grant stays in its saved home; only
+			// the account identity leaves its common home.
+			name, keys := "provider/codex/native/auth.json", codexGrantKeys
+			if op.Provider == ProviderClaude {
+				name, keys = "provider/claude/native/.claude.json", []string{"oauthAccount", "userID"}
+			}
+			if e := s.scrubNative(name, keys...); e != nil {
+				return e
 			}
 			op.Phase = "installed"
 			return nil
@@ -358,15 +379,18 @@ func (s *Store) InstallIncoming(id string) error {
 	})
 }
 
-// scrubCodexGrant leaves no usable token copy in the common Codex home once the
-// provider returns to native sign-in; unrelated auth.json fields remain.
-func (s *Store) scrubCodexGrant() error {
-	name := "provider/codex/native/auth.json"
+// scrubNative leaves no account copy in a common native home once the provider
+// returns to native sign-in; unrelated fields remain. An unparseable file is
+// replaced: nothing in it is worth keeping, and it may still hold a live grant.
+func (s *Store) scrubNative(name string, keys ...string) error {
 	current, e := s.readOptional(name)
 	if e != nil || current == nil {
 		return e
 	}
-	b, e := mergeFields(current, []byte("{}"), "auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY")
+	b, e := mergeFields(current, []byte("{}"), keys...)
+	if errors.Is(e, ErrInvalidCredentials) {
+		b, e = []byte("{}"), nil
+	}
 	if e != nil {
 		return e
 	}
