@@ -43,14 +43,18 @@ the provider issue is resolved.
 
 To stop using saved logins for a provider, open Logins, select the provider row or
 one of its logins, and press `n`. Press Enter to confirm or Esc to cancel. If the
-provider has no active login, Swarm says that it already uses native sign-in.
+provider has no active login but discussions still run in Swarm's managed home
+(for example after the selection was cleared by hand), `n` offers to stop only
+those, and it also removes a leftover Codex grant. Otherwise Swarm says that it
+already uses native sign-in.
 
 Return uses the same switch journal as a login switch, with no destination. Swarm
 stops new launches and messages for that provider and waits until each running
 discussion is idle, has no pending permission request and is detached. It then
 stops them. The active login's latest native credentials are saved back to that
 login. For Codex, the login's tokens are removed from the managed native auth
-file. Then the selection is cleared.
+file, and an unparseable one is replaced. For Claude, the account identity is
+removed from the managed `.claude.json`. Then the selection is cleared.
 
 Stopped discussions end. They are not resumed, and a failed prompt is never
 replayed. While the change is pending, the provider row shows **Switching** and
@@ -65,7 +69,10 @@ New discussions use ordinary native authentication from your own `~/.claude` and
 `~/.codex`. Swarm does not switch logins automatically for that provider. The
 saved login stays parked. Remove it, or activate it again later to install the
 credentials saved at deactivation. Each discussion stays with the home that holds
-its history. Swarm refuses to resume a discussion into a home that lacks its
+its history; discussions moved there by the v0.25 migration count as managed. A
+managed discussion never resumes on native sign-in. A native one resumes into the
+managed home only when the managed copy of its conversation is current; a stale
+copy is refused. Swarm refuses to resume a discussion into a home that lacks its
 conversation and says whether to activate a saved login, return to native sign-in,
 or hand the discussion off. After the managed home has been imported once,
 activation is refused while native sign-in discussions of that provider are
@@ -92,8 +99,8 @@ native sign-in stay on native sign-in and are not imported when a login is
 activated again.
 
 Removing a parked login erases its saved authentication. It preserves discussion
-history and does not revoke the account at the provider. Switch away, or return to
-native sign-in, before removing the selected login.
+history and does not revoke the account at the provider. Logins refuses `d` on the
+selected login; switch away, or return to native sign-in, first.
 
 ## Upgrade and recovery
 

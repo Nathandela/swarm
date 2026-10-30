@@ -94,14 +94,23 @@ and there was no way back to ordinary native sign-in.
 Return to native sign-in is a deactivation journal with no destination. It reuses
 the provider switch journal, so writers stop through the same safe-stop path. Once
 they have stopped, Swarm saves the outgoing login's latest native credentials,
-scrubs the Codex token fields from the managed `auth.json`, and clears the
-selection. A credential-content capture failure marks that login needs sign-in and
-the change still completes; storage faults are retried. Discussions end rather
-than resume, so the journal needs no exact conversation for them. Each discussion
-stays bound to the home that holds its history, and a resume into a home without
-that history is refused. After the managed home has been imported once,
-reactivation verifies only managed-bound history, and it is refused while
-native-bound discussions of that provider are running.
+scrubs the Codex token fields from the managed `auth.json` (replacing an
+unparseable one), removes the Claude account identity from the managed
+`.claude.json`, and clears the selection. A credential-content capture failure
+marks that login needs sign-in and the change still completes; storage faults are
+retried. Discussions end rather than resume, so the journal needs no exact
+conversation for them. With no active login but managed-bound discussions still
+running, the journal is stop-only: capture is skipped, only those discussions
+stop, and the scrub still runs.
+
+Each discussion stays bound to the home that holds its history. A v0.25-migrated
+discussion, bound by its environment alone, counts as managed-bound, and that
+binding survives later meta writes. A managed-bound discussion never resumes
+natively; a native-bound one resumes into the managed home only when the managed
+copy is current, and a stale copy is refused. After the managed home has been
+imported once, reactivation verifies only managed-bound history, and it is refused
+while native-bound discussions of that provider are running. The TUI refuses
+removing the active login locally.
 
 Discussions end when the provider returns to native sign-in. Exact continuation
 across homes is not provided. Hand-off, which still reads the old transcript, is
