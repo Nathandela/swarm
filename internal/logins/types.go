@@ -82,6 +82,7 @@ type Switch struct {
 	LastError       string    `json:"last_error,omitempty"`
 	CancelRequested bool      `json:"cancel_requested,omitempty"`
 	Relogin         bool      `json:"relogin,omitempty"`
+	Deactivate      bool      `json:"deactivate,omitempty"`
 	Sessions        []Restart `json:"sessions,omitempty"`
 }
 

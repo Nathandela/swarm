@@ -103,17 +103,8 @@ func (s *Store) beginSwitch(expected uint64, provider, toID, reason string, sess
 		if e != nil {
 			return e
 		}
-		seen := map[string]bool{}
-		for i := range sessions {
-			row := &sessions[i]
-			if row.SourceID == "" || row.ConversationID == "" || seen[row.SourceID] {
-				return ErrIneligible
-			}
-			seen[row.SourceID] = true
-			row.Phase = "waiting"
-			row.ChildID = ""
-			row.ChildStopClaimed = false
-			row.LastError = ""
+		if e = waitingRows(sessions, true); e != nil {
+			return e
 		}
 		attempted := []string{toID}
 		out = Switch{ID: id, Provider: provider, FromID: p.ActiveID, ToID: toID, FromEpoch: p.Epoch, ToEpoch: p.Epoch + 1, Phase: "waiting", Reason: reason, Sessions: sessions, AttemptedIDs: attempted, LoginJobID: jobID}
@@ -127,6 +118,51 @@ func (s *Store) beginSwitch(expected uint64, provider, toID, reason string, sess
 		return nil
 	})
 	return out, e
+}
+
+// BeginDeactivate returns a provider to ordinary native sign-in. The journal has
+// no destination: it stops writers, saves the outgoing grant and clears the
+// selection. Nothing is resumed, so rows need no exact conversation.
+func (s *Store) BeginDeactivate(expected uint64, provider, reason string, sessions []Restart) (Switch, error) {
+	var out Switch
+	_, e := s.mutate(expected, func(r *Registry) error {
+		if !validProvider(provider) {
+			return ErrIneligible
+		}
+		if _, ok := r.Switches[provider]; ok {
+			return ErrPending
+		}
+		p := r.Providers[provider]
+		if p.ActiveID == "" || p.Epoch == ^uint64(0) {
+			return ErrIneligible
+		}
+		id, e := newID()
+		if e != nil {
+			return e
+		}
+		if e = waitingRows(sessions, false); e != nil {
+			return e
+		}
+		out = Switch{ID: id, Provider: provider, FromID: p.ActiveID, FromEpoch: p.Epoch, ToEpoch: p.Epoch + 1, Phase: "waiting", Reason: reason, Sessions: sessions, Deactivate: true}
+		r.Switches[provider] = out
+		return nil
+	})
+	return out, e
+}
+func waitingRows(sessions []Restart, conversation bool) error {
+	seen := map[string]bool{}
+	for i := range sessions {
+		row := &sessions[i]
+		if row.SourceID == "" || (conversation && row.ConversationID == "") || seen[row.SourceID] {
+			return ErrIneligible
+		}
+		seen[row.SourceID] = true
+		row.Phase = "waiting"
+		row.ChildID = ""
+		row.ChildStopClaimed = false
+		row.LastError = ""
+	}
+	return nil
 }
 func (s *Store) switchMutation(id string, fn func(*Registry, *Switch) error) error {
 	return s.switchMutationAt(nil, id, fn)
@@ -174,7 +210,7 @@ func (s *Store) switchMutationAt(expected *uint64, id string, fn func(*Registry,
 }
 func (s *Store) SaveSwitch(in Switch) error {
 	return s.switchMutation(in.ID, func(_ *Registry, op *Switch) error {
-		if in.Provider != op.Provider || in.FromID != op.FromID || in.ToID != op.ToID || in.FromEpoch != op.FromEpoch || in.ToEpoch != op.ToEpoch || in.Relogin != op.Relogin || in.NextID != op.NextID || in.LoginJobID != op.LoginJobID || !reflect.DeepEqual(in.AttemptedIDs, op.AttemptedIDs) || len(in.Sessions) != len(op.Sessions) {
+		if in.Provider != op.Provider || in.FromID != op.FromID || in.ToID != op.ToID || in.FromEpoch != op.FromEpoch || in.ToEpoch != op.ToEpoch || in.Relogin != op.Relogin || in.Deactivate != op.Deactivate || in.NextID != op.NextID || in.LoginJobID != op.LoginJobID || !reflect.DeepEqual(in.AttemptedIDs, op.AttemptedIDs) || len(in.Sessions) != len(op.Sessions) {
 			return ErrConflict
 		}
 		transition := in.Phase == op.Phase || (op.Phase == "waiting" && in.Phase == "stopping") || (op.Phase == "stopping" && in.Phase == "stopped") || (op.Phase == "committed" && in.Phase == "resuming")
@@ -217,6 +253,11 @@ func (s *Store) CaptureOutgoing(id string) error {
 				return ErrIneligible
 			}
 			c, unavailable, e := s.captureCredential(*l)
+			// Returning to native sign-in must not wait for a grant it cannot
+			// save: the login needs sign-in instead. Storage faults still retry.
+			if op.Deactivate && (errors.Is(e, ErrIdentityChanged) || errors.Is(e, ErrInvalidCredentials)) {
+				unavailable, e = true, nil
+			}
 			if e != nil {
 				return e
 			}
@@ -265,6 +306,16 @@ func (s *Store) InstallIncoming(id string) error {
 		if op.Phase != "installing" {
 			return ErrInUse
 		}
+		if op.Deactivate {
+			// Nothing is installed. Claude's grant stays in its saved home.
+			if op.Provider == ProviderCodex {
+				if e := s.scrubCodexGrant(); e != nil {
+					return e
+				}
+			}
+			op.Phase = "installed"
+			return nil
+		}
 		l := find(r, op.ToID)
 		if l == nil {
 			return ErrIneligible
@@ -305,6 +356,22 @@ func (s *Store) InstallIncoming(id string) error {
 		op.Phase = "installed"
 		return nil
 	})
+}
+
+// scrubCodexGrant leaves no usable token copy in the common Codex home once the
+// provider returns to native sign-in; unrelated auth.json fields remain.
+func (s *Store) scrubCodexGrant() error {
+	name := "provider/codex/native/auth.json"
+	current, e := s.readOptional(name)
+	if e != nil || current == nil {
+		return e
+	}
+	b, e := mergeFields(current, []byte("{}"), "auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY")
+	if e != nil {
+		return e
+	}
+	_, e = durableReplace(s.root, name, b, s.writeOps)
+	return e
 }
 
 func (s *Store) readPending(op Switch, l Login) (Credential, error) {
@@ -368,6 +435,9 @@ func (s *Store) VerifyInstalled(id string) error {
 	}
 	for _, op := range r.Switches {
 		if op.ID == id && (op.Phase == "installed" || op.Phase == "committed" || op.Phase == "resuming") {
+			if op.Deactivate {
+				return nil
+			}
 			l := find(&r, op.ToID)
 			return s.validateNative(op.Provider, l.Identity, l.ID)
 		}
@@ -380,12 +450,16 @@ func (s *Store) CommitSwitch(id string) (Runtime, error) {
 		if op.Phase != "installed" && op.Phase != "committed" && op.Phase != "resuming" {
 			return ErrInUse
 		}
+		// A deactivation commits its empty ToID: the selection is cleared and
+		// there is no replacement runtime.
 		l := find(r, op.ToID)
-		if l == nil {
-			return ErrIneligible
-		}
-		if e := s.validateNative(op.Provider, l.Identity, l.ID); e != nil {
-			return e
+		if !op.Deactivate {
+			if l == nil {
+				return ErrIneligible
+			}
+			if e := s.validateNative(op.Provider, l.Identity, l.ID); e != nil {
+				return e
+			}
 		}
 		p := r.Providers[op.Provider]
 		if p.Epoch != op.FromEpoch && (p.Epoch != op.ToEpoch || p.ActiveID != op.ToID) {
@@ -398,7 +472,9 @@ func (s *Store) CommitSwitch(id string) (Runtime, error) {
 		if op.Phase == "installed" {
 			op.Phase = "committed"
 		}
-		rt = Runtime{Provider: op.Provider, Epoch: op.ToEpoch, Identity: l.Identity, Home: s.Home(op.Provider)}
+		if !op.Deactivate {
+			rt = Runtime{Provider: op.Provider, Epoch: op.ToEpoch, Identity: l.Identity, Home: s.Home(op.Provider)}
+		}
 		return nil
 	})
 	return rt, e
@@ -412,7 +488,7 @@ func (s *Store) CompleteSwitch(id string) error {
 			if !terminalRow(row.Phase) {
 				return ErrInUse
 			}
-			if row.Phase != "cancelled" {
+			if row.Phase != "cancelled" && !op.Deactivate {
 				l := find(r, op.ToID)
 				if l == nil || !eligible(*l, time.Now()) {
 					return ErrIneligible
@@ -459,7 +535,8 @@ func (s *Store) RuntimeForSwitch(id, source string) (Runtime, error) {
 		return Runtime{}, ErrPending
 	}
 	for _, op := range r.Switches {
-		if op.ID != id || (op.Phase != "committed" && op.Phase != "resuming") {
+		// A deactivation has no replacement runtime to restart into.
+		if op.ID != id || op.Deactivate || (op.Phase != "committed" && op.Phase != "resuming") {
 			continue
 		}
 		for _, row := range op.Sessions {
