@@ -25,6 +25,7 @@ type contextSource struct {
 	Cwd               string
 	HistoryOnly       bool
 	ParentPreferences bool
+	Managed           bool
 }
 type contextFile struct {
 	Source, Target, SHA256 string
@@ -122,7 +123,7 @@ func contextSources(state, provider string, sources []persist.Meta) ([]contextSo
 			return nil, e
 		}
 		if m.LoginRuntime != nil {
-			source = contextSource{Home: m.LoginRuntime.Home}
+			source = contextSource{Home: m.LoginRuntime.Home, Managed: true}
 		}
 		source.Conversation, source.Cwd = m.ConversationID, m.ProviderCwd()
 		out = append(out, source)
@@ -158,6 +159,16 @@ func PrepareProviderContext(state, provider string, sources []persist.Meta) erro
 	return prepareContext(state, provider, inputs)
 }
 
+// ContextImported reports whether the provider's managed home has completed
+// its one-time native context import.
+func ContextImported(state, provider string) (bool, error) {
+	e := safePath(filepath.Join(providerHome(state, provider), contextMarker))
+	if errors.Is(e, os.ErrNotExist) {
+		return false, nil
+	}
+	return e == nil, e
+}
+
 func planContext(state, provider string, sources []contextSource) (contextPlan, error) {
 	plan := contextPlan{Provider: provider, Conversations: sources}
 	if provider != "codex" && provider != "claude" {
@@ -165,7 +176,14 @@ func planContext(state, provider string, sources []contextSource) (contextPlan, 
 	}
 	target := providerHome(state, provider)
 	if _, e := os.Lstat(filepath.Join(target, contextMarker)); e == nil {
-		return plan, verifyConversations(target, provider, sources)
+		// Native-bound discussions keep their history in the native home.
+		var managed []contextSource
+		for _, source := range sources {
+			if source.Managed {
+				managed = append(managed, source)
+			}
+		}
+		return plan, verifyConversations(target, provider, managed)
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return plan, e
 	}
