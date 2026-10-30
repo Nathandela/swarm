@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/loginmigration"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -87,7 +90,10 @@ func (m *loginManager) inputGate(local string) error {
 	if err != nil {
 		return err
 	}
-	_, pending := r.Switches[meta.AgentType]
+	op, pending := r.Switches[meta.AgentType]
+	if pending && op.Deactivate {
+		return fmt.Errorf("%w: %s is returning to native sign-in; this message was not sent", logins.ErrPending, meta.AgentType)
+	}
 	if r.MigrationPending || pending {
 		return fmt.Errorf("%w: %s is waiting to change its login; this message was not sent", logins.ErrPending, meta.AgentType)
 	}
@@ -135,6 +141,9 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		return logins.Switch{}, logins.ErrConflict
 	}
 	if op, ok := r.Switches[provider]; ok {
+		if op.Deactivate {
+			return logins.Switch{}, logins.ErrPending
+		}
 		if op.ToID == toID && op.NextID == "" {
 			return op, nil
 		}
@@ -154,6 +163,11 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 	}
 	if r.Providers[provider].ActiveID == toID {
 		return logins.Switch{}, nil
+	}
+	if r.Providers[provider].ActiveID == "" {
+		if err = m.refuseNativeBound(provider); err != nil {
+			return logins.Switch{}, err
+		}
 	}
 	var sources []persist.Meta
 	var rows []logins.Restart
@@ -181,6 +195,79 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		return logins.Switch{}, err
 	}
 	return m.store.BeginSwitch(r.Revision, provider, toID, reason, rows)
+}
+
+func (m *loginManager) BeginDeactivate(provider string) (logins.Switch, error) {
+	return m.beginDeactivateAt(nil, provider)
+}
+func (m *loginManager) BeginDeactivateAtRevision(expected uint64, provider string) (logins.Switch, error) {
+	return m.beginDeactivateAt(&expected, provider)
+}
+func (m *loginManager) beginDeactivateAt(expected *uint64, provider string) (out logins.Switch, err error) {
+	if m == nil || !managedLoginProvider(provider) {
+		return out, logins.ErrIneligible
+	}
+	err = m.operation(func() error {
+		m.stepMu.Lock()
+		defer m.stepMu.Unlock()
+		var e error
+		out, e = m.beginDeactivate(provider, expected)
+		return e
+	})
+	return
+}
+
+// beginDeactivate returns the provider to native sign-in. Nothing is resumed or
+// imported, so rows need no exact conversation and only an earlier unsettled
+// native restart blocks it.
+func (m *loginManager) beginDeactivate(provider string, expected *uint64) (logins.Switch, error) {
+	gate := &m.admission[loginProviderIndex(provider)]
+	gate.Lock()
+	defer gate.Unlock()
+	r, err := m.store.Snapshot()
+	if err != nil {
+		return logins.Switch{}, err
+	}
+	if expected != nil && r.Revision != *expected {
+		return logins.Switch{}, logins.ErrConflict
+	}
+	if _, ok := r.Switches[provider]; ok {
+		return logins.Switch{}, logins.ErrPending
+	}
+	if r.Providers[provider].ActiveID == "" {
+		return logins.Switch{}, nil
+	}
+	var rows []logins.Restart
+	for _, meta := range m.list() {
+		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden {
+			rows = append(rows, logins.Restart{SourceID: meta.ID, ConversationID: meta.ConversationID, Phase: "waiting"})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].SourceID < rows[j].SourceID })
+	if err = m.preflightRestarts(provider); err != nil {
+		return logins.Switch{}, err
+	}
+	return m.store.BeginDeactivate(r.Revision, provider, "owner returned to native sign-in", rows)
+}
+
+// refuseNativeBound keeps native sign-in discussions out of a managed home that
+// was imported once already: that home has no history for them to resume.
+func (m *loginManager) refuseNativeBound(provider string) error {
+	imported, err := loginmigration.ContextImported(m.d.stateDir, provider)
+	if err != nil || !imported {
+		return err
+	}
+	var names []string
+	for _, meta := range m.list() {
+		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && meta.LoginRuntime == nil {
+			names = append(names, strconv.Quote(meta.Name))
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return fmt.Errorf("login switch: end or hand off these native sign-in discussions before activating a login: %s", strings.Join(names, ", "))
 }
 
 func (m *loginManager) CancelSwitch(provider string) error {
@@ -301,7 +388,8 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 				m.d.clearAuthRecycle(row.SourceID)
 				continue
 			}
-			if source.ConversationID != row.ConversationID {
+			// A deactivation resumes nothing, so its rows track no exact conversation.
+			if !op.Deactivate && source.ConversationID != row.ConversationID {
 				m.saveError(op, errors.New("login switch: source conversation changed"))
 				return
 			}
@@ -363,7 +451,7 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 			m.saveError(op, err)
 			return
 		}
-		if m.prepareContext != nil {
+		if m.prepareContext != nil && !op.Deactivate {
 			if err := m.prepareContext(op.Provider, m.sourceRows(op)); err != nil {
 				m.saveError(op, err)
 				return
@@ -397,6 +485,10 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 	case "retry-stopping":
 		m.stepRetryStopping(op)
 	case "committed", "resuming":
+		if op.Deactivate {
+			m.finishDeactivation(op)
+			return
+		}
 		if m.retryRejectedDestination(op) {
 			return
 		}
@@ -444,6 +536,29 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 	}
 }
 
+// finishDeactivation ends every stopped discussion; replay after a crash finds
+// the already cancelled rows and only completes.
+func (m *loginManager) finishDeactivation(op logins.Switch) {
+	for i := range op.Sessions {
+		if row := &op.Sessions[i]; row.Phase != "cancelled" {
+			row.Phase = "cancelled"
+			row.LastError = "ended by return to native sign-in"
+		}
+	}
+	if err := m.store.SaveSwitch(op); err != nil {
+		return
+	}
+	if err := m.store.CompleteSwitch(op.ID); err != nil {
+		return
+	}
+	for _, row := range op.Sessions {
+		m.d.clearAuthRecycle(row.SourceID)
+		if row.ChildID != "" {
+			m.d.clearAuthRecycle(row.ChildID)
+		}
+	}
+}
+
 func (m *loginManager) stopClaimedSession(op *logins.Switch, index int, source persist.Meta) error {
 	row := &op.Sessions[index]
 	claimed := row.Phase == "claimed"
@@ -459,7 +574,7 @@ func (m *loginManager) stopClaimedSession(op *logins.Switch, index int, source p
 		if current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || m.d.anyControlled(source.ID) || m.d.contextGuardCompactionInFlight(source.ID) || m.d.composerOutcomeUnresolved(source.ID) || m.d.directInputUnresolved(source.ID) {
 			return fmt.Errorf("login switch: waiting for discussion %q to finish or detach", current.Name)
 		}
-		if current.ConversationID != row.ConversationID {
+		if !op.Deactivate && current.ConversationID != row.ConversationID {
 			return errors.New("login switch: exact source conversation unavailable")
 		}
 		row.Phase = "claimed"
@@ -637,6 +752,9 @@ func (m *loginManager) beginReloginExpected(loginID string, credential logins.Cr
 	gate.Lock()
 	defer gate.Unlock()
 	if op, ok := r.Switches[provider]; ok {
+		if op.Deactivate {
+			return logins.Switch{}, logins.ErrPending
+		}
 		if op.ToID != loginID {
 			return logins.Switch{}, logins.ErrInUse
 		}
@@ -710,16 +828,27 @@ func (m *loginManager) verifyStopped(meta persist.Meta) error {
 	return verifyLoginWritersStopped(m.d.stateDir, meta)
 }
 
+func (m *loginManager) preflightRestarts(provider string) error {
+	if m.d.authw == nil {
+		return nil
+	}
+	if m.d.authw.stateErr != nil {
+		return errors.New("login switch: earlier native restart state is unreadable")
+	}
+	for id, claimed := range m.d.authw.state.Killed {
+		if meta, ok := m.get(id); claimed && ok && provider != "" && meta.AgentType == provider {
+			return errors.New("login switch: an earlier native CLI restart is still being reconciled; retry after it settles")
+		}
+	}
+	return nil
+}
 func (m *loginManager) preflightSources(sources []persist.Meta) error {
-	if m.d.authw != nil {
-		if m.d.authw.stateErr != nil {
-			return errors.New("login switch: earlier native restart state is unreadable")
-		}
-		for id, claimed := range m.d.authw.state.Killed {
-			if meta, ok := m.get(id); claimed && ok && len(sources) > 0 && meta.AgentType == sources[0].AgentType {
-				return errors.New("login switch: an earlier native CLI restart is still being reconciled; retry after it settles")
-			}
-		}
+	provider := ""
+	if len(sources) > 0 {
+		provider = sources[0].AgentType
+	}
+	if err := m.preflightRestarts(provider); err != nil {
+		return err
 	}
 	for _, source := range sources {
 		if source.Status.Process != status.ProcessRunning {
