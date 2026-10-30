@@ -268,7 +268,7 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 		v := protocol.ProviderLoginView{Provider: provider, ActiveID: r.Providers[provider].ActiveID, State: "native"}
 		if v.ActiveID != "" {
 			v.State = "active"
-		} else {
+		} else if a.logins.d != nil {
 			for _, meta := range a.logins.list() {
 				if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && loginmigration.ManagedBound(a.logins.d.stateDir, meta) {
 					v.ManagedRunning++
