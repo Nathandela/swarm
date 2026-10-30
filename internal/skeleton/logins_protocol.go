@@ -14,10 +14,12 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/loginmigration"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/loginworker"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 func (a *coreAPI) Logins(req protocol.LoginsReq) (reply protocol.LoginsReply, err error) {
@@ -266,6 +268,12 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 		v := protocol.ProviderLoginView{Provider: provider, ActiveID: r.Providers[provider].ActiveID, State: "native"}
 		if v.ActiveID != "" {
 			v.State = "active"
+		} else {
+			for _, meta := range a.logins.list() {
+				if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && loginmigration.ManagedBound(a.logins.d.stateDir, meta) {
+					v.ManagedRunning++
+				}
+			}
 		}
 		if op, ok := r.Switches[provider]; ok {
 			v.State = "switching"

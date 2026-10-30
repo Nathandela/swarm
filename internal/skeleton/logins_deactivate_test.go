@@ -477,3 +477,113 @@ func TestLoginsDeactivateProtocol(t *testing.T) {
 		}
 	}
 }
+
+// stopOnlyFixture clears the selection the way an owner did by hand before
+// deactivation existed: discussions keep running in the managed home and the
+// Codex grant copy stays there.
+func stopOnlyFixture(t *testing.T) (*loginFixture, string) {
+	t.Helper()
+	f := newLoginFixture(t)
+	deactivateFixture(t, f)
+	home := filepath.Join(f.m.d.stateDir, "logins", "provider", logins.ProviderCodex, "native")
+	running := status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone}
+	source := f.rows["source-1"]
+	source.Status = running
+	f.rows[source.ID] = source
+	for id, env := range map[string][]string{"migrated-1": {"HOME=/ordinary", "CODEX_HOME=" + home}, "native-1": {"HOME=/ordinary"}} {
+		f.rows[id] = persist.Meta{ID: id, Name: id, AgentType: logins.ProviderCodex, Cwd: t.TempDir(), Env: env, Status: running}
+	}
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"leftover-grant"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return f, home
+}
+
+func TestDeactivateStopOnlyStopsManagedBoundDiscussions(t *testing.T) {
+	f, home := stopOnlyFixture(t)
+	before, _ := f.m.store.Snapshot()
+	op, err := f.m.BeginDeactivate(logins.ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !op.Deactivate || op.FromID != "" || len(op.Sessions) != 2 || op.Sessions[0].SourceID != "migrated-1" || op.Sessions[1].SourceID != "source-1" {
+		t.Fatalf("bad stop-only journal: %+v", op)
+	}
+	driveLoginSwitch(t, f)
+	assertDeactivated(t, f, "migrated-1", "source-1")
+	if f.rows["native-1"].Status.Process != status.ProcessRunning {
+		t.Fatal("stop-only deactivation stopped a native-bound discussion")
+	}
+	after, _ := f.m.store.Snapshot()
+	if after.Providers[logins.ProviderCodex].Epoch != before.Providers[logins.ProviderCodex].Epoch+1 {
+		t.Fatalf("epoch not advanced: %+v -> %+v", before.Providers, after.Providers)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "auth.json"))
+	if err != nil || strings.Contains(string(raw), "leftover-grant") || strings.Contains(string(raw), "tokens") {
+		t.Fatalf("leftover Codex grant not scrubbed: %s %v", raw, err)
+	}
+}
+
+func TestDeactivateStopOnlyNoopWithOnlyNativeBound(t *testing.T) {
+	f, _ := stopOnlyFixture(t)
+	delete(f.rows, "migrated-1")
+	delete(f.rows, "source-1")
+	before, _ := f.m.store.Snapshot()
+	op, err := f.m.BeginDeactivate(logins.ProviderCodex)
+	if err != nil || op.ID != "" {
+		t.Fatalf("native-bound discussions started a deactivation: %+v %v", op, err)
+	}
+	if after, _ := f.m.store.Snapshot(); after.Revision != before.Revision || len(after.Switches) != 0 {
+		t.Fatal("no-op deactivation changed the registry")
+	}
+}
+
+// Native-bound discussions never write the managed home, so a deactivation does
+// not wait for them; managed-bound ones and normal switches stay strict.
+func TestVerifyProviderWritersIgnoresNativeBoundOnDeactivation(t *testing.T) {
+	f, home := stopOnlyFixture(t)
+	delete(f.rows, "migrated-1")
+	delete(f.rows, "source-1")
+	delete(f.rows, "source-2")
+	f.m.stopProof = nil
+	deactivation := logins.Switch{Provider: logins.ProviderCodex, Deactivate: true}
+	if err := f.m.verifyProviderWriters(deactivation); err != nil {
+		t.Fatalf("native-bound discussion blocked deactivation: %v", err)
+	}
+	if err := f.m.verifyProviderWriters(logins.Switch{Provider: logins.ProviderCodex, ToID: f.second.ID}); !errors.Is(err, logins.ErrInUse) {
+		t.Fatalf("normal switch ignored a running discussion: %v", err)
+	}
+	f.rows["migrated-1"] = persist.Meta{ID: "migrated-1", Name: "migrated-1", AgentType: logins.ProviderCodex, Env: []string{"CODEX_HOME=" + home}, Status: status.Status{Process: status.ProcessRunning}}
+	if err := f.m.verifyProviderWriters(deactivation); !errors.Is(err, logins.ErrInUse) {
+		t.Fatalf("deactivation ignored a managed-bound writer: %v", err)
+	}
+}
+
+func TestLoginListCountsManagedRunningWithoutActiveLogin(t *testing.T) {
+	f := newLoginFixture(t)
+	count := func() (claude, codex int) {
+		t.Helper()
+		reply, err := f.m.d.api.Logins(protocol.LoginsReq{Action: "list"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range reply.Providers {
+			if v.Provider == logins.ProviderCodex {
+				codex = v.ManagedRunning
+			} else {
+				claude = v.ManagedRunning
+			}
+		}
+		return
+	}
+	if claude, codex := count(); claude != 0 || codex != 0 {
+		t.Fatalf("active login reported managed running: %d %d", claude, codex)
+	}
+	f, _ = stopOnlyFixture(t)
+	hidden := f.rows["migrated-1"]
+	hidden.ID, hidden.RosterHidden = "hidden-1", true
+	f.rows[hidden.ID] = hidden
+	if claude, codex := count(); claude != 0 || codex != 2 {
+		t.Fatalf("managed running = %d %d, want 0 2", claude, codex)
+	}
+}
