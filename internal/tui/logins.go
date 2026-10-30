@@ -230,7 +230,7 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if l.mode == "deactivate" {
-		if k.Code == tea.KeyEnter {
+		if k.Code == tea.KeyEnter && !l.busy {
 			l.mode, l.err = "", ""
 			return m.beginLoginsRequest(protocol.LoginsReq{Action: "deactivate", Provider: l.provider})
 		}
