@@ -91,6 +91,10 @@ func (m *loginManager) inputGate(local string) error {
 		return err
 	}
 	op, pending := r.Switches[meta.AgentType]
+	// A native-bound discussion is never a stop-only row and writes no managed home.
+	if pending && op.Deactivate && op.FromID == "" && !loginmigration.ManagedBound(m.d.stateDir, meta) {
+		return nil
+	}
 	if pending && op.Deactivate {
 		return fmt.Errorf("%w: %s is returning to native sign-in; this message was not sent", logins.ErrPending, meta.AgentType)
 	}
