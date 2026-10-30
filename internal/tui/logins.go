@@ -271,7 +271,10 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.beginLoginsRequest(protocol.LoginsReq{Action: "cancel_switch", Provider: provider})
 	}
 	if k.Text == "n" {
-		if providerLogin(l.reply.Providers, provider).ActiveID == "" {
+		if !l.loaded {
+			return m, nil
+		}
+		if p := providerLogin(l.reply.Providers, provider); p.ActiveID == "" && p.ManagedRunning == 0 {
 			l.notice = providerLabel(provider) + " already uses native sign-in"
 			return m, nil
 		}
@@ -339,6 +342,12 @@ func (l loginsModel) view(width, height int, connectionLost, canAttach bool) str
 	}
 	if l.mode == "deactivate" {
 		label := providerLabel(l.provider)
+		if p := providerLogin(l.reply.Providers, l.provider); p.ActiveID == "" && p.ManagedRunning > 0 {
+			b.WriteString(wrapLoginText("Stop "+strconv.Itoa(p.ManagedRunning)+" "+label+" discussions still running in Swarm's managed home?", width) + "\n\n" +
+				wrapLoginText("They stop at their next safe point and end. Continue them later with hand-off. "+label+" already uses native sign-in for new discussions.", width) + "\n\n" +
+				wrapLoginText("Enter to confirm · Esc to cancel", width))
+			return b.String()
+		}
 		b.WriteString(wrapLoginText("Return "+label+" to native sign-in?", width) + "\n\n" +
 			wrapLoginText("Running "+label+" discussions stop at their next safe point and end. Continue them later with hand-off. The saved login stays parked and can be activated again.", width) + "\n\n" +
 			wrapLoginText("Enter to confirm · Esc to cancel", width))

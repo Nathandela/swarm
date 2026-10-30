@@ -431,3 +431,50 @@ func TestLoginsActionsFooterListsNativeSignIn(t *testing.T) {
 		t.Fatalf("short-screen actions footer omits native sign-in:\n%s", text)
 	}
 }
+
+func TestLoginsNativeSignInIgnoredUntilLoaded(t *testing.T) {
+	m := rootModel{screen: screenLogins, client: newLoginsTestClient(), logins: loginsModel{available: true}}
+	next, cmd := m.Update(keyRune('n'))
+	if got := next.(rootModel).logins; cmd != nil || got.mode != "" || got.notice != "" {
+		t.Fatalf("n before the first list: mode=%q notice=%q cmd=%v", got.mode, got.notice, cmd != nil)
+	}
+}
+
+// With no active login but managed discussions still running, n offers to stop
+// only those and sends the same deactivate request.
+func TestLoginsStopOnlyConfirmation(t *testing.T) {
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, logins: loginsModel{available: true, loaded: true, focus: 1, reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", State: "native"}, {Provider: "codex", State: "native", ManagedRunning: 2}}}}}
+	confirming, cmd := m.Update(keyRune('n'))
+	got := confirming.(rootModel).logins
+	if cmd != nil || got.mode != "deactivate" || got.provider != "codex" || got.notice != "" {
+		t.Fatalf("n did not open stop-only confirmation: mode=%q provider=%q notice=%q", got.mode, got.provider, got.notice)
+	}
+	text := got.view(30, 20, false, false)
+	compact := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"Stop 2 Codex discussions still running in Swarm's managed home?",
+		"They stop at their next safe point and end. Continue them later with hand-off. Codex already uses native sign-in for new discussions.",
+		"Enter to confirm · Esc to cancel",
+	} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("stop-only confirmation missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(compact, "Return Codex to native sign-in?") {
+		t.Fatalf("stop-only confirmation kept the return text:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if lipgloss.Width(line) > 30 {
+			t.Fatalf("confirmation line overflows 30 cells: %q", line)
+		}
+	}
+	_, cmd = confirming.Update(keyEnter)
+	if cmd == nil {
+		t.Fatal("Enter did not confirm stop-only return")
+	}
+	cmd()
+	if req := c.lastRequest(); req.Action != "deactivate" || req.Provider != "codex" || req.ExpectedRevision != 3 {
+		t.Fatalf("deactivate request = %#v", req)
+	}
+}
