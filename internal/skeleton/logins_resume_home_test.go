@@ -330,3 +330,19 @@ func TestHandoffFromManagedSourceWithoutActiveLoginLocatesTranscript(t *testing.
 		t.Fatalf("hand-off successor not launched with native sign-in: %+v %v", composed.LoginRuntime, err)
 	}
 }
+
+// A migrated discussion's only full history is in the managed home; the native
+// copy the import left behind is a stale snapshot hand-off must not read.
+func TestHandoffFromMigratedSourceReadsManagedTranscript(t *testing.T) {
+	r := newResumeHomeRig(t, false, false)
+	r.migrate(t)
+	stale := r.writeNativeTranscript(t)
+	spec := daemon.LaunchSpec{AgentType: logins.ProviderCodex, Options: map[string]string{protocol.OptionHandoffFrom: protocol.NamespacedID(testEndpoint, r.source.ID)}}
+	composed, err := composeHandsOffLaunch(spec, testEndpoint, r.api.core.Get, r.api.historyResolver)
+	if err != nil {
+		t.Fatalf("hand-off could not read the migrated history: %v", err)
+	}
+	if !strings.Contains(composed.InitialPrompt, r.managedTranscript) || strings.Contains(composed.InitialPrompt, stale) {
+		t.Fatalf("hand-off prompt does not point at the managed transcript %q:\n%s", r.managedTranscript, composed.InitialPrompt)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -225,10 +226,14 @@ type loginResumeHistoryResolver struct {
 }
 
 func (r *loginResumeHistoryResolver) selected(meta persist.Meta) resumeHistoryResolver {
-	if meta.LoginRuntime == nil {
+	// A v0.25-migrated discussion has no runtime but its history is managed.
+	home := filepath.Join(r.stateDir, "logins", "provider", meta.AgentType, "native")
+	if meta.LoginRuntime != nil {
+		home = meta.LoginRuntime.Home
+	} else if !loginmigration.ManagedBound(r.stateDir, meta) {
 		return r.fallback
 	}
-	resolver := newFilesystemResumeHistoryResolver(meta.LoginRuntime.Home, defaultResumeHistoryLimits)
+	resolver := newFilesystemResumeHistoryResolver(home, defaultResumeHistoryLimits)
 	resolver.privateProvider = meta.AgentType
 	resolver.stateDir = r.stateDir
 	return resolver
