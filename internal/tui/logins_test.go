@@ -388,15 +388,26 @@ func TestLoginsHintMentionsNativeSignIn(t *testing.T) {
 	}
 }
 
+// The daemon's in-use text never crosses the wire, so the client explains an
+// active-login removal itself and sends nothing.
 func TestLoginsRemoveActiveLoginExplainsNativeSignIn(t *testing.T) {
-	m := rootModel{screen: screenLogins, loginsClientGeneration: 2, logins: loginsModel{available: true, loaded: true, busy: true, generation: 7}}
-	next, _ := m.applyLoginsReply(loginsReplyMsg{generation: 7, clientGeneration: 2, action: "remove", err: errors.New("login is active or owned by a switch")})
-	if got := next.(rootModel).logins.err; got != "Return to native sign-in (n) or activate another login before removing the active one." {
-		t.Fatalf("active remove error = %q", got)
+	saved := []protocol.LoginView{{ID: "claude-work", Provider: "claude", Label: "Work Claude", Active: true}, {ID: "claude-spare", Provider: "claude", Label: "Spare Claude"}}
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, logins: loginsModel{available: true, loaded: true, focus: 1, reply: protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", ActiveID: "claude-work", State: "active"}}, Logins: saved}}}
+	next, cmd := m.Update(keyRune('d'))
+	if got := next.(rootModel).logins.err; cmd != nil || got != "Return to native sign-in (n) or activate another login before removing the active one." {
+		t.Fatalf("active remove: err=%q cmd=%v", got, cmd != nil)
 	}
-	next, _ = m.applyLoginsReply(loginsReplyMsg{generation: 7, clientGeneration: 2, action: "activate", err: errors.New("login is active or owned by a switch")})
-	if got := next.(rootModel).logins.err; got != "Login request failed; press r to retry or reconnect." {
-		t.Fatalf("non-remove error changed = %q", got)
+	if req := c.request("remove"); req.Action != "" {
+		t.Fatalf("active remove sent a request: %#v", req)
+	}
+	m.logins.focus = 2
+	if _, cmd = m.Update(keyRune('d')); cmd == nil {
+		t.Fatal("inactive remove sent nothing")
+	}
+	cmd()
+	if req := c.lastRequest(); req.Action != "remove" || req.LoginID != "claude-spare" {
+		t.Fatalf("inactive remove request = %#v", req)
 	}
 }
 

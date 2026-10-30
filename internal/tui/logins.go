@@ -94,9 +94,6 @@ func (m rootModel) applyLoginsReply(msg loginsReplyMsg) (tea.Model, tea.Cmd) {
 	l.busy = false
 	if msg.err != nil {
 		l.err = "Login request failed; press r to retry or reconnect."
-		if msg.action == "remove" && strings.Contains(msg.err.Error(), "login is active or owned by a switch") {
-			l.err = "Return to native sign-in (n) or activate another login before removing the active one."
-		}
 		if errors.Is(msg.err, protocol.ErrLoginsUnsafeNativeCLI) {
 			l.err = "Provider CLI permissions are unsafe. Reinstall it or ask its owner to remove group/other write access, then try signing in again."
 			l.cancelAfterStart = false
@@ -295,6 +292,10 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		return m.beginLoginsRequest(protocol.LoginsReq{Action: "relogin", LoginID: login.ID})
 	case "d":
+		if login.Active {
+			l.err = "Return to native sign-in (n) or activate another login before removing the active one."
+			return m, nil
+		}
 		return m.beginLoginsRequest(protocol.LoginsReq{Action: "remove", LoginID: login.ID})
 	}
 	return m, nil
