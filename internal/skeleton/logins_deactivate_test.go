@@ -587,3 +587,16 @@ func TestLoginListCountsManagedRunningWithoutActiveLogin(t *testing.T) {
 		t.Fatalf("managed running = %d %d, want 0 2", claude, codex)
 	}
 }
+
+func TestInputGateSparesNativeBoundDuringStopOnlyDeactivation(t *testing.T) {
+	f, _ := stopOnlyFixture(t)
+	if _, err := f.m.BeginDeactivate(logins.ProviderCodex); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.inputGate("native-1"); err != nil {
+		t.Fatalf("native-bound discussion refused input during stop-only deactivation: %v", err)
+	}
+	if err := f.m.inputGate("migrated-1"); !errors.Is(err, logins.ErrPending) {
+		t.Fatalf("managed-bound discussion accepted input during deactivation: %v", err)
+	}
+}
