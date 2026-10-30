@@ -114,6 +114,13 @@ func (a *coreAPI) Logins(req protocol.LoginsReq) (reply protocol.LoginsReply, er
 		if _, err := m.BeginSwitchAtRevision(req.ExpectedRevision, l.Provider, l.ID, "owner selected login"); err != nil {
 			return reply, err
 		}
+	case "deactivate":
+		if !managedLoginProvider(req.Provider) {
+			return reply, logins.ErrIneligible
+		}
+		if _, err := m.BeginDeactivateAtRevision(req.ExpectedRevision, req.Provider); err != nil {
+			return reply, err
+		}
 	case "remove":
 		if err := a.receiptAcceptedLoginJobs(r, req.LoginID, ""); err != nil {
 			return reply, err
@@ -263,7 +270,9 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 		if op, ok := r.Switches[provider]; ok {
 			v.State = "switching"
 			v.Message = loginMessage(op.LastError)
-			if v.Message == "" {
+			if v.Message == "" && op.Deactivate {
+				v.Message = "Returning to native sign-in: waiting for discussions to reach a safe point and detach; they will then end."
+			} else if v.Message == "" {
 				v.Message = "Waiting for discussions to finish their current work and detach."
 			}
 		}

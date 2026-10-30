@@ -57,6 +57,8 @@ func validateLoginsReq(r LoginsReq) bool {
 	switch r.Action {
 	case "list", "start", "status", "cancel_login", "complete", "activate", "relogin", "remove", "cancel_switch":
 		return true
+	case "deactivate":
+		return r.Provider != ""
 	}
 	return false
 }

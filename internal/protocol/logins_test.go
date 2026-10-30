@@ -107,3 +107,40 @@ func TestLoginsUnknownWireErrorCannotInjectActionableMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginsDeactivateRequiresProvider(t *testing.T) {
+	for _, tc := range []struct {
+		req  LoginsReq
+		want bool
+	}{
+		{LoginsReq{Action: "deactivate", Provider: "codex"}, true},
+		{LoginsReq{Action: "deactivate", Provider: "claude"}, true},
+		{LoginsReq{Action: "deactivate"}, false},
+		{LoginsReq{Action: "deactivate", Provider: "opencode"}, false},
+		{LoginsReq{Action: "deactivated", Provider: "codex"}, false},
+	} {
+		if got := validateLoginsReq(tc.req); got != tc.want {
+			t.Errorf("%+v: valid=%v", tc.req, got)
+		}
+	}
+	s := &loginsStub{stubDaemon: newStubDaemon()}
+	r := rawDial(t, serveContextGuardAPI(t, s))
+	hello := r.hello(Version, []string{CapLoginsManage})
+	body := LoginsReq{Action: "deactivate"}
+	r.writeControl(Control{Op: OpLoginsManage, EndpointID: hello.EndpointID, LoginsRequest: &body})
+	if got := r.readControl(); got.ErrorCode != CodeInvalidField || s.calls != 0 {
+		t.Fatalf("providerless deactivate reply=%#v calls=%d", got, s.calls)
+	}
+	body.Provider = "codex"
+	r.writeControl(Control{Op: OpLoginsManage, EndpointID: hello.EndpointID, LoginsRequest: &body})
+	if got := r.readControl(); got.Op != OpLoginsManage || s.calls != 1 {
+		t.Fatalf("deactivate reply=%#v calls=%d", got, s.calls)
+	}
+	remote := &loginsStub{stubDaemon: newStubDaemon()}
+	rr := rawDial(t, serveRemoteAPI(t, remote))
+	hello = rr.hello(Version, []string{CapLoginsManage})
+	rr.writeControl(Control{Op: OpLoginsManage, EndpointID: hello.EndpointID, LoginsRequest: &body})
+	if got := rr.readControl(); got.ErrorCode != CodeNotAuthorized || remote.calls != 0 {
+		t.Fatalf("remote deactivate reply=%#v calls=%d", got, remote.calls)
+	}
+}
