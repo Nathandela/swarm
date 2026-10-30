@@ -84,3 +84,27 @@ additional evidence. Sources: [Codex auth](https://developers.openai.com/codex/a
 
 Request proxies, active copies of the same grant, per-discussion account routing,
 automatic model changes and prompt replay were rejected as unnecessary or unsafe.
+
+## Amendment 1 (2026-10-30): owner return to native sign-in
+
+The owner could activate, remove and cancel a switch, but could not clear a
+provider's selected login. Automatic switching therefore could not be turned off,
+and there was no way back to ordinary native sign-in.
+
+Return to native sign-in is a deactivation journal with no destination. It reuses
+the provider switch journal, so writers stop through the same safe-stop path. Once
+they have stopped, Swarm saves the outgoing login's latest native credentials,
+scrubs the Codex token fields from the managed `auth.json`, and clears the
+selection. A credential-content capture failure marks that login needs sign-in and
+the change still completes; storage faults are retried. Discussions end rather
+than resume, so the journal needs no exact conversation for them. Each discussion
+stays bound to the home that holds its history, and a resume into a home without
+that history is refused. After the managed home has been imported once,
+reactivation verifies only managed-bound history, and it is refused while
+native-bound discussions of that provider are running.
+
+Discussions end when the provider returns to native sign-in. Exact continuation
+across homes is not provided. Hand-off, which still reads the old transcript, is
+the supported path. While a deactivation is pending, a binary without this feature
+refuses to load login state and fails closed. Once it completes, the remaining
+state is ordinary login state.

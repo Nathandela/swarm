@@ -1240,13 +1240,13 @@ Remote-tier callers are refused before body or backend access. A stale CAS is
 The owner-tier `login_manage` operation requires the negotiated `logins.manage.v1`
 capability. Its request and reply bodies are `logins_request` (`LoginsReq`) and
 `logins_result` (`LoginsReply`). The closed action vocabulary is `list`, `start`,
-`status`, `cancel_login`, `complete`, `activate`, `relogin`, `remove`, and
-`cancel_switch`. Provider values are `claude` and `codex`. Mutations carry
-`expected_revision` where applicable; a stale registry compare-and-swap is
-`stale_revision`. Invalid fields are `invalid_field`; an unavailable backend or
-unnegotiated operation is `unavailable` or `capability_refused`. The server
-refuses remote-tier calls as `not_authorized` before inspecting the body or
-invoking the backend.
+`status`, `cancel_login`, `complete`, `activate`, `relogin`, `remove`,
+`cancel_switch`, and `deactivate`. Provider values are `claude` and `codex`.
+Mutations carry `expected_revision` where applicable; a stale registry
+compare-and-swap is `stale_revision`. Invalid fields are `invalid_field`; an
+unavailable backend or unnegotiated operation is `unavailable` or
+`capability_refused`. The server refuses remote-tier calls as `not_authorized`
+before inspecting the body or invoking the backend.
 
 `LoginsReq` carries the action and optional provider, login ID, label, job ID, and
 expected registry revision. It carries no credentials, import path, discussion
@@ -1257,7 +1257,10 @@ provider, label, active flag, and state (`ready`, `needs-login`, or `limited`).
 waiting. Provider switching fences new work, waits for safe boundaries and
 terminal detachment, then resumes exact native conversations without replaying a
 failed prompt or tool operation. `cancel_switch` cancels the pending provider
-switch.
+switch. `deactivate` requires `provider` and returns that provider to native
+sign-in through a switch journal with no destination. Its discussions end rather
+than resume. While it is pending, the provider state is `switching` with a
+safe-to-display reason.
 
 `LoginJobView` is live owner-local sign-in status. Its states include `starting`,
 `authenticating`, `verifying`, `ready`, `failed`, `cancelled`, `complete`, and

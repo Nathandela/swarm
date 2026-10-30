@@ -39,6 +39,38 @@ logins become eligible again after a known native reset time.
 Credit/spending rejections and unknown resets require an explicit sign-in after
 the provider issue is resolved.
 
+## Return to native sign-in
+
+To stop using saved logins for a provider, open Logins, select the provider row or
+one of its logins, and press `n`. Press Enter to confirm or Esc to cancel. If the
+provider has no active login, Swarm says that it already uses native sign-in.
+
+Return uses the same switch journal as a login switch, with no destination. Swarm
+stops new launches and messages for that provider and waits until each running
+discussion is idle, has no pending permission request and is detached. It then
+stops them. The active login's latest native credentials are saved back to that
+login. For Codex, the login's tokens are removed from the managed native auth
+file. Then the selection is cleared.
+
+Stopped discussions end. They are not resumed, and a failed prompt is never
+replayed. While the change is pending, the provider row shows **Switching** and
+**Waiting** with the reason "Returning to native sign-in". Messages to that
+provider's discussions are refused. Activation and **Sign in again** wait until
+the change finishes. **Cancel switch** works only until the first discussion has
+been stopped; after that the change completes. If the credentials cannot be saved
+because the native store holds another account or unreadable credentials, the
+login is marked **Needs sign-in** and the change still completes.
+
+New discussions use ordinary native authentication from your own `~/.claude` and
+`~/.codex`. Swarm does not switch logins automatically for that provider. The
+saved login stays parked. Remove it, or activate it again later to install the
+credentials saved at deactivation. Each discussion stays with the home that holds
+its history. Swarm refuses to resume a discussion into a home that lacks its
+conversation and says whether to activate a saved login, return to native sign-in,
+or hand the discussion off. After the managed home has been imported once,
+activation is refused while native sign-in discussions of that provider are
+running. End them or hand them off first.
+
 Native clients renew their own credentials. Claude keeps each saved login in its
 own secure-storage directory (Keychain on macOS). Codex's current auth file lives
 in the common native home while selected; Swarm captures its latest state before
@@ -55,11 +87,13 @@ Initial activation imports the required native context once. Stop external nativ
 clients if Swarm reports that this import is waiting for a writer. After import,
 edit managed native settings in these directories. Changing the ordinary owner
 home does not continually overwrite the managed context. Project settings still
-apply; competing API-key/auth routing is refused.
+apply; competing API-key/auth routing is refused. Discussions started with
+native sign-in stay on native sign-in and are not imported when a login is
+activated again.
 
 Removing a parked login erases its saved authentication. It preserves discussion
-history and does not revoke the account at the provider. Switch away before
-removing the selected login.
+history and does not revoke the account at the provider. Switch away, or return to
+native sign-in, before removing the selected login.
 
 ## Upgrade and recovery
 
