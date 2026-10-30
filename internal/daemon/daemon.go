@@ -633,7 +633,7 @@ func (d *Daemon) RenameAt(id, name string, at time.Time) error {
 	m.Name = name
 	m.NameSetAt = at
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
+	m.Env = d.store.MetaEnv(m)
 	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
@@ -666,7 +666,7 @@ func (d *Daemon) SetTag(id, tag string) error {
 	}
 	m.Tag = tag
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
+	m.Env = d.store.MetaEnv(m)
 	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
@@ -702,7 +702,7 @@ func (d *Daemon) SetRosterHidden(id string, hidden bool) error {
 	}
 	m.RosterHidden = hidden
 	m.SchemaVersion = persist.SchemaVersion
-	m.Env = persist.FilterEnv(m.Env)
+	m.Env = d.store.MetaEnv(m)
 	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
