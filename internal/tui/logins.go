@@ -94,6 +94,9 @@ func (m rootModel) applyLoginsReply(msg loginsReplyMsg) (tea.Model, tea.Cmd) {
 	l.busy = false
 	if msg.err != nil {
 		l.err = "Login request failed; press r to retry or reconnect."
+		if msg.action == "remove" && strings.Contains(msg.err.Error(), "login is active or owned by a switch") {
+			l.err = "Return to native sign-in (n) or activate another login before removing the active one."
+		}
 		if errors.Is(msg.err, protocol.ErrLoginsUnsafeNativeCLI) {
 			l.err = "Provider CLI permissions are unsafe. Reinstall it or ask its owner to remove group/other write access, then try signing in again."
 			l.cancelAfterStart = false
@@ -173,7 +176,7 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			l.mode, l.label = "provider", lineEditor{}
 			return m, nil
 		}
-		if l.mode == "provider" {
+		if l.mode == "provider" || l.mode == "deactivate" {
 			l.mode = ""
 			return m, nil
 		}
@@ -229,6 +232,13 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		l.label.update(k)
 		return m, nil
 	}
+	if l.mode == "deactivate" {
+		if k.Code == tea.KeyEnter {
+			l.mode, l.err = "", ""
+			return m.beginLoginsRequest(protocol.LoginsReq{Action: "deactivate", Provider: l.provider})
+		}
+		return m, nil
+	}
 	if l.job.ID != "" {
 		if k.Code == tea.KeyEnter && !l.busy && m.loginRunner != nil && l.job.LoginSocket != "" {
 			l.attached = true
@@ -262,6 +272,14 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if k.Text == "c" {
 		return m.beginLoginsRequest(protocol.LoginsReq{Action: "cancel_switch", Provider: provider})
+	}
+	if k.Text == "n" {
+		if providerLogin(l.reply.Providers, provider).ActiveID == "" {
+			l.notice = providerLabel(provider) + " already uses native sign-in"
+			return m, nil
+		}
+		l.mode, l.provider, l.err = "deactivate", provider, ""
+		return m, nil
 	}
 	if loginIndex < 0 || loginIndex >= len(l.reply.Logins) {
 		return m, nil
@@ -316,6 +334,13 @@ func (l loginsModel) view(width, height int, connectionLost, canAttach bool) str
 	}
 	if l.mode == "label" {
 		b.WriteString("Label  " + l.label.cursorView() + "\n\nEnter to start sign-in · Esc to cancel")
+		return b.String()
+	}
+	if l.mode == "deactivate" {
+		label := providerLabel(l.provider)
+		b.WriteString(wrapLoginText("Return "+label+" to native sign-in?", width) + "\n\n" +
+			wrapLoginText("Running "+label+" discussions stop at their next safe point and end. Continue them later with hand-off. The saved login stays parked and can be activated again.", width) + "\n\n" +
+			wrapLoginText("Enter to confirm · Esc to cancel", width))
 		return b.String()
 	}
 	if l.job.ID != "" {
@@ -402,13 +427,16 @@ func (l loginsModel) hint(connectionLost, canAttach bool, width int) string {
 	if l.mode == "label" {
 		return "type label · enter start native sign-in · esc cancel"
 	}
+	if l.mode == "deactivate" {
+		return "enter return to native sign-in · esc cancel"
+	}
 	if l.job.ID != "" {
 		if canAttach && l.job.LoginSocket != "" {
 			return "enter attach · esc return to provider logins"
 		}
 		return "esc return to provider logins"
 	}
-	return "↑↓ select · enter make active · a add login · s sign in again · d remove · c cancel switch · r reload · esc back"
+	return "↑↓ select · enter make active · n native sign-in · a add login · s sign in again · d remove · c cancel switch · r reload · esc back"
 }
 
 func providerLogin(providers []protocol.ProviderLoginView, provider string) protocol.ProviderLoginView {
