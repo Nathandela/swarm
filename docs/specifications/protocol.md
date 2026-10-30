@@ -1254,7 +1254,8 @@ assignment, or per-session login selector. `LoginView` reports a saved login's
 provider, label, active flag, and state (`ready`, `needs-login`, or `limited`).
 `ProviderLoginView` reports the provider's selected login and state (`native`,
 `active`, `switching`, or `waiting`), with a short safe-to-display reason while
-waiting. Provider switching fences new work, waits for safe boundaries and
+waiting. With no selected login, its optional `managed_running` counts the
+running discussions still bound to Swarm's managed home. Provider switching fences new work, waits for safe boundaries and
 terminal detachment, then resumes exact native conversations without replaying a
 failed prompt or tool operation. `cancel_switch` cancels the pending provider
 switch. `deactivate` requires `provider` and returns that provider to native

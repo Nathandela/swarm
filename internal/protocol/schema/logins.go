@@ -52,6 +52,9 @@ type ProviderLoginView struct {
 	ActiveID string `json:"active_id,omitempty"`
 	State    string `json:"state"`
 	Message  string `json:"message,omitempty"`
+	// ManagedRunning counts running discussions still bound to Swarm's managed
+	// home while the provider has no active login.
+	ManagedRunning int `json:"managed_running,omitempty"`
 }
 
 // Sign-in presentation is live owner-local data, never journal content.

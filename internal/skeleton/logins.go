@@ -234,14 +234,17 @@ func (m *loginManager) beginDeactivate(provider string, expected *uint64) (login
 	if _, ok := r.Switches[provider]; ok {
 		return logins.Switch{}, logins.ErrPending
 	}
-	if r.Providers[provider].ActiveID == "" {
-		return logins.Switch{}, nil
-	}
+	// With no selection only managed-bound discussions remain to stop; native
+	// ones never ran in the managed home.
+	stopOnly := r.Providers[provider].ActiveID == ""
 	var rows []logins.Restart
 	for _, meta := range m.list() {
-		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden {
+		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && (!stopOnly || loginmigration.ManagedBound(m.d.stateDir, meta)) {
 			rows = append(rows, logins.Restart{SourceID: meta.ID, ConversationID: meta.ConversationID, Phase: "waiting"})
 		}
+	}
+	if stopOnly && len(rows) == 0 {
+		return logins.Switch{}, nil
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].SourceID < rows[j].SourceID })
 	if err = m.preflightRestarts(provider); err != nil {
@@ -435,7 +438,7 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 		// Failed/retained attempts can still have descendants after their main row
 		// ended. No credential writer is allowed to escape the fleet snapshot.
 		for _, meta := range m.list() {
-			if meta.AgentType != op.Provider {
+			if !m.providerWriter(op, meta) {
 				continue
 			}
 			if meta.Status.Process == status.ProcessRunning {
@@ -892,7 +895,7 @@ func (m *loginManager) verifyProviderWriters(op logins.Switch) error {
 		}
 	}
 	for _, meta := range m.list() {
-		if meta.AgentType == op.Provider {
+		if m.providerWriter(op, meta) {
 			ids = append(ids, meta.ID)
 			if err = m.verifyStopped(meta); err != nil {
 				return err
@@ -900,6 +903,12 @@ func (m *loginManager) verifyProviderWriters(op logins.Switch) error {
 		}
 	}
 	return verifyProviderNativeWritersStopped(homes, ids)
+}
+
+// providerWriter reports whether meta may write op's managed home. A
+// deactivation ignores native-bound discussions: they keep their own home.
+func (m *loginManager) providerWriter(op logins.Switch, meta persist.Meta) bool {
+	return meta.AgentType == op.Provider && (!op.Deactivate || loginmigration.ManagedBound(m.d.stateDir, meta))
 }
 
 func (m *loginManager) operation(apply func() error) error {
