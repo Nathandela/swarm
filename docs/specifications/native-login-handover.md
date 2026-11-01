@@ -2,6 +2,13 @@
 
 Implementation contract reviewed by Sol and Astra · 2026-10-24 · `agents-tracker-h6sc`
 
+The [2026-11-01 full integration plan](provider-login-integration-plan.md) is the
+current target for provider authority, parked maintenance, native readiness,
+continuation, migration and conditional release. It supersedes this document's
+earlier future account-profile direction for new Claude births. Existing profile
+code and its custody contracts remain migration inputs until positively retired;
+historical receipts below do not qualify the replacement.
+
 Work is isolated on `feat/native-login-handover`, based on `179073ab`. Beads owns
 task status; this document defines the implementation and acceptance contract.
 The end-to-end behavior below is an unreleased target. Retained-account and
@@ -78,10 +85,11 @@ remain historical; they cannot qualify the eventual merged source.
 
 Keep the existing common native directory as the history and shared user-asset
 source, and as the location of legacy incarnations. Create no new history, plugin
-or transcript copies. Future owned Claude incarnations use a deterministic native
-profile path derived from account and organization identity. Their saved native
-secure-storage authority remains in its existing saved-login location; do not
-copy grants into profiles. Retain old virtual profile aliases while referenced
+or transcript copies. The existing branch's Claude isolation path uses a native
+profile derived from account and organization identity, with secure-storage
+authority in the saved-login location. This remains a legacy migration contract,
+not the target for new stable-authority births; do not copy grants into these
+profiles. Retain old virtual profile aliases while referenced
 histories need them. Profiles are mutable and may contain secrets, so retire an
 alias only after exact history and live-process references end. Saved-login
 refresh helpers use an empty private config and native auth authority. Helpers
@@ -103,8 +111,9 @@ headroom; ENOSPC before durable intent causes zero external effects.
 
 Retain the saved-login registry and revision CAS in `internal/logins`. Codex's
 versioned handover record remains separate from the stopped-writer migration
-journal. Claude's new-profile birth path uses the existing provider selection
-and epoch, without another handover or per-session adoption ledger. Do not
+journal. The existing Claude profile birth path uses provider selection and epoch;
+that account binding is a legacy contract, superseded for new stable-authority
+births by the full integration plan. It has no separate per-session adoption ledger. Do not
 reinterpret an old pending switch as a hot handover. A schema change must be
 rejected by old binaries rather than silently downgraded.
 
@@ -141,10 +150,11 @@ transport preferences remain native inputs. Validation does not lock the file
 against a later owner edit. API-key-dependent realtime/Guardian behavior is not
 qualified for subscription-managed sessions.
 
-For Claude, bind native refresh to the selected saved authority using the
-installed native refresh locks/CAS. Every future owned identity, including the
-currently selected account, gets its own deterministic account-and-organization
-profile. Existing live processes keep their original account and common profile
+The existing Claude profile path binds native refresh to a saved authority using
+the installed native refresh locks/CAS. Its owned identities have deterministic
+account-and-organization profiles. Preserve this path for existing references
+while the new stable-authority integration is qualified. Existing live processes
+keep their original account and common profile
 until that specific incarnation reaches a separately qualified safe transition;
 the current implementation has no hot rebinding. A healthy old-A process may
 finish under A while new work uses B. No fleet-wide idle barrier is allowed. A transition needs durable
@@ -249,7 +259,8 @@ attempt. Failed replacement retains the previous receipt. Explicit removal/
 relogin owns retirement through its existing durable transaction. Bounded enumeration reads the existing
 intent directory, including issuing selection and partial cleanup evidence.
 
-The implementation dependency cuts are:
+The existing profile implementation's dependency cuts are retained below as
+migration and regression contracts, not the new stable-authority target:
 
 | Cut | Existing seams | Required evidence |
 |---|---|---|
@@ -937,4 +948,6 @@ silently changing configuration or losing the continuation obligation.
 Root and independent Sol/Astra final reviews assess the integrated implementation
 against this contract. Record native version/platform and remaining limitations
 explicitly. Work is committed and pushed on the feature branch; main integration,
-release tagging and live fleet migration are not performed by this branch task.
+release tagging and live fleet migration were outside that earlier checkpoint.
+The current full integration plan defines their conditional final acceptance;
+none has been qualified or performed by this document.

@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "status": "IMPLEMENTATION_PLAN_REVIEW_GREEN_NOT_FEATURE_QUALIFICATION",
+  "date": "2026-11-01",
+  "tracking": "agents-tracker-h6sc.38",
+  "plan": "docs/specifications/provider-login-integration-plan.md",
+  "plan_sha256": "6c27f484c71c6e805f782ce7ed7346942055ea980696edd6c40c6dead31a67cc",
+  "source_head": "81e8d0ff",
+  "main_ancestor": "b609dfa6",
+  "reviews": [
+    {
+      "role": "independent architecture and safety",
+      "model": "gpt-6-astra",
+      "result": "GREEN after rereading final behavioral clauses"
+    },
+    {
+      "role": "implementation and caller contracts",
+      "model": "gpt-6.1-sol",
+      "result": "GREEN after rereading complete revised plan"
+    },
+    {
+      "role": "mechanical deletion/path/documentation review",
+      "model": "gpt-6-luna",
+      "result": "Final references and target/legacy distinctions clean"
+    }
+  ],
+  "corrections": [
+    "Explicit source ANY low window and target EVERY required fresh capacity window.",
+    "Durable automatic episode/attempt/cooldown and consumed-evidence state; no rearm on restart/token renewal/cancel.",
+    "Default native-TUI exact recovery remains a full-delivery gate; opt-in chat cannot substitute.",
+    "Reachable native unlocked fallback is a correctness gap requiring exclusion or proven no-lost-generation protocol.",
+    "Actual outgoing grant bytes and actual encoded publication hashes remain distinct.",
+    "Nonexistent setup source reference removed; earlier profile clauses marked legacy; actual handover anchor verified."
+  ],
+  "verification": {
+    "documentation_links_and_anchors": "PASS",
+    "git_diff_check": "PASS",
+    "current_main_already_ancestor": true,
+    "new_native_tests_run": false,
+    "feature_activated": false,
+    "release_qualified": false
+  },
+  "implementation_records": {
+    "store": "agents-tracker-h6sc.39",
+    "maintenance": "agents-tracker-h6sc.40",
+    "claude": "agents-tracker-h6sc.41",
+    "selection": "agents-tracker-h6sc.42",
+    "continuation": "agents-tracker-h6sc.43",
+    "migration": "agents-tracker-h6sc.44",
+    "release": "agents-tracker-h6sc.45"
+  },
+  "existing_codex_record": "agents-tracker-h6sc.19",
+  "open_native_gates": [
+    "agents-tracker-h6sc.36",
+    "agents-tracker-h6sc.37"
+  ],
+  "limits": [
+    "This approves the implementation design and sequencing only.",
+    "No stopped native-tracing work is retried; no private timing claim is silently marked proved.",
+    "Work-item references were added by Root after behavioral review; they do not change the reviewed contracts.",
+    "Implementation, native account/policy behavior, exact task recovery, migration and full release gates remain open."
+  ]
+}

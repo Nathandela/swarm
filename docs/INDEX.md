@@ -27,6 +27,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
+- [Provider login full integration plan](specifications/provider-login-integration-plan.md) — current unreleased target for shared Claude authority, Codex native account adoption, fair parked renewal, exact quota recovery, legacy removal and release gates; [existing contracts and evidence](specifications/native-login-handover.md)
+
 - [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — SSH-terminal viewport, compact layout, folding and touch actions, plus the opt-in attached `[swarm]` return-button integration contract; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
   - [Combined action-button verification](verification/mobile-terminal-touch/action-buttons.md) — `[Name (shortcut)]` labels, responsive selected-agent controls, complete affected-package tests and independent review; source follow-up, not a new release
 

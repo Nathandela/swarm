@@ -3,6 +3,8 @@
 This page documents released rotation behavior. The [native handover
 redesign](../specifications/native-login-handover.md) is being qualified on a
 feature branch and has no supported upgrade procedure yet.
+The [full integration plan](../specifications/provider-login-integration-plan.md)
+defines the replacement and the remaining qualification and migration gates.
 
 Press `o`, select **Provider logins →** in Options, and press Enter. Add a Claude
 or Codex login and finish the native sign-in. Codex displays its device URL and
