@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -621,14 +622,46 @@ func (m *loginManager) maintainClaudeAuth(parent context.Context) (err error) {
 			return recoverErr
 		}
 	}
-	var candidates []logins.Login
-	if selected, ok := loginByID(r, r.Providers[logins.ProviderClaude].ActiveID); ok && selected.AuthState == logins.AuthReady {
-		candidates = append(candidates, selected)
+	var selected logins.Login
+	var parked []logins.Login
+	for _, login := range r.Logins {
+		if login.Provider != logins.ProviderClaude || login.AuthState != logins.AuthReady {
+			continue
+		}
+		if login.ID == r.Providers[logins.ProviderClaude].ActiveID {
+			selected = login
+		} else if login.Renewable {
+			parked = append(parked, login)
+		}
 	}
-	if warm, nextErr := m.store.NextEligible(logins.ProviderClaude, nil, time.Now()); nextErr == nil {
-		candidates = append(candidates, warm)
-	} else if !errors.Is(nextErr, logins.ErrNoEligible) {
-		return nextErr
+	turn := m.claudeAuthCandidateCursor
+	m.claudeAuthCandidateCursor = (turn + 1) % (2 * max(1, len(parked)))
+	selectedFirst := turn%2 == 0
+	if len(parked) > 0 {
+		offset := (turn / 2) % len(parked)
+		parked = append(parked[offset:], parked[:offset]...)
+		if selectedFirst {
+			expiry := func(login logins.Login) time.Time {
+				for _, job := range jobs {
+					if job.Phase == "ready" && job.Ref.LoginID == login.ID && job.Ref.Identity == login.Identity && job.Ref.CredentialRevision == login.CredentialRevision {
+						return job.ExpiresAt
+					}
+				}
+				return login.ExpiresAt
+			}
+			sort.SliceStable(parked, func(i, j int) bool {
+				a, b := expiry(parked[i]), expiry(parked[j])
+				return !a.IsZero() && (b.IsZero() || a.Before(b))
+			})
+		}
+	}
+	candidates := parked
+	if selected.ID != "" {
+		if selectedFirst {
+			candidates = append([]logins.Login{selected}, parked...)
+		} else {
+			candidates = append(candidates, selected)
+		}
 	}
 	var cli *persist.CLIIdentity
 	var cliErr error
@@ -642,6 +675,9 @@ func (m *loginManager) maintainClaudeAuth(parent context.Context) (err error) {
 			}
 		}
 		if previous != nil && previous.Phase != "ready" && previous.Phase != "failed" {
+			continue
+		}
+		if previous != nil && previous.Phase == "failed" && (candidate.ID != selected.ID || r.Providers[logins.ProviderClaude].Epoch <= previous.Selection.Epoch) {
 			continue
 		}
 		if !probed {
@@ -750,7 +786,7 @@ func (m *loginManager) claudeAuthInstallation(ctx context.Context) (*persist.CLI
 	return cli, nil
 }
 
-func (m *loginManager) claudeProviderView(r logins.Registry, v protocol.ProviderLoginView) protocol.ProviderLoginView {
+func (m *loginManager) claudeProviderView(r logins.Registry, v protocol.ProviderLoginView) (out protocol.ProviderLoginView) {
 	if r.MigrationPending || r.Providers[logins.ProviderClaude].AuthOwnerMode != logins.ClaudeNativeProfileMode {
 		return v
 	}
@@ -770,6 +806,22 @@ func (m *loginManager) claudeProviderView(r logins.Registry, v protocol.Provider
 	if err != nil {
 		v.State, v.Message = "unavailable", "Saved authentication evidence could not be read."
 		return v
+	}
+	if len(results) >= logins.MaxHandoverGrantRefs {
+		referenced := make(map[string]bool, len(results))
+		for _, result := range results {
+			referenced[result.Ref.LoginID] = true
+		}
+		for _, login := range r.Logins {
+			if login.Provider == logins.ProviderClaude && login.AuthState == logins.AuthReady && (login.Renewable || login.ID == r.Providers[logins.ProviderClaude].ActiveID) && !referenced[login.ID] {
+				defer func() {
+					if out.State == "ready" || out.State == "waiting" {
+						out.Message += " Authentication maintenance is at capacity; some saved logins are waiting to be prepared or renewed."
+					}
+				}()
+				break
+			}
+		}
 	}
 	selected, ok := loginByID(r, v.ActiveID)
 	if !ok {

@@ -4,7 +4,7 @@
   "date": "2026-11-01",
   "tracking": "agents-tracker-h6sc.38",
   "plan": "docs/specifications/provider-login-integration-plan.md",
-  "plan_sha256": "18a4625b12647287ae4b339a9620494046de207fb9926d9aefc78dae29d060da",
+  "plan_sha256": "f6cfbd07dc1d7a1e9462d42d6dcf1d7cec7dd99c9153ebef4a0dc1253f80b645",
   "source_head": "81e8d0ff",
   "main_ancestor": "b609dfa6",
   "reviews": [
@@ -60,6 +60,6 @@
     "No stopped native-tracing work is retried; no private timing claim is silently marked proved.",
     "Work-item references were added by Root after behavioral review; they do not change the reviewed contracts.",
     "Implementation, native account/policy behavior, exact task recovery, migration and full release gates remain open.",
-    "Root added bounded implementation/source-disposition evidence links after review. Those records do not change the reviewed behavioral contracts or qualify native activation."
+    "Root added bounded implementation/source-disposition evidence links after review, including the profile-mode fair-maintenance caller receipt. Those records do not change the reviewed behavioral contracts, qualify hot rotation or native account adoption, or close the default-native continuation gate."
   ]
 }

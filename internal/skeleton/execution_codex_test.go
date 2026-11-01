@@ -36,7 +36,6 @@ import (
 )
 
 type codexExecutionTestConn struct {
-	loaded string
 	native *appserver.Client
 }
 

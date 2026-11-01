@@ -656,6 +656,9 @@ func TestClaudeRepeatedSupportTimeoutCannotStarveRetainedRecovery(t *testing.T) 
 	if _, err = f.m.store.SettleClaudeAuth(refs[0]); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = f.m.store.SelectClaudeProfile(mustLoginSnapshot(t, f.m.store).Revision, f.first.ID); err != nil {
+		t.Fatal(err)
+	}
 	probes := 0
 	f.m.claudeAuthCLI = func(ctx context.Context) (*persist.CLIIdentity, error) { probes++; <-ctx.Done(); return nil, ctx.Err() }
 	f.m.claudeAuthCursor = 1

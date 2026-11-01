@@ -25,26 +25,27 @@ import (
 // The journal owns provider stops exclusively. Generic auth/CLI recovery never
 // acquires a second claim for these sessions, including after daemon restart.
 type loginManager struct {
-	d                     *Daemon
-	store                 *logins.Store
-	claudeAuthCLI         func(context.Context) (*persist.CLIIdentity, error)
-	claudeAuthStart       func(context.Context, string, loginworker.ClaudeAuthConfig) (logins.ClaudeAuthResult, error)
-	claudeAuthRecover     func(context.Context, loginworker.ClaudeAuthConfig) (loginworker.ClaudeAuthRecovery, error)
-	claudeAuthCursor      int
-	claudeAuthMu          sync.Mutex
-	claudeAuthPin         *persist.CLIIdentity
-	stepMu                sync.Mutex
-	admission             [2]sync.Mutex
-	usageMu               sync.Mutex
-	usage                 [2]loginUsageSnapshot
-	codexAccess           *codexAccessBroker
-	codexHandover         *codexHandoverCoordinator
-	qualifyCodexOwnership func([]persist.Meta) (bool, error)
-	preflight             func(string, []persist.Meta) error
-	prepareContext        func(string, []persist.Meta) error
-	stopProof             func(persist.Meta) error
-	release               func(string, string) error
-	recordResumeError     func(string, string) error
+	d                         *Daemon
+	store                     *logins.Store
+	claudeAuthCLI             func(context.Context) (*persist.CLIIdentity, error)
+	claudeAuthStart           func(context.Context, string, loginworker.ClaudeAuthConfig) (logins.ClaudeAuthResult, error)
+	claudeAuthRecover         func(context.Context, loginworker.ClaudeAuthConfig) (loginworker.ClaudeAuthRecovery, error)
+	claudeAuthCursor          int
+	claudeAuthCandidateCursor int
+	claudeAuthMu              sync.Mutex
+	claudeAuthPin             *persist.CLIIdentity
+	stepMu                    sync.Mutex
+	admission                 [2]sync.Mutex
+	usageMu                   sync.Mutex
+	usage                     [2]loginUsageSnapshot
+	codexAccess               *codexAccessBroker
+	codexHandover             *codexHandoverCoordinator
+	qualifyCodexOwnership     func([]persist.Meta) (bool, error)
+	preflight                 func(string, []persist.Meta) error
+	prepareContext            func(string, []persist.Meta) error
+	stopProof                 func(persist.Meta) error
+	release                   func(string, string) error
+	recordResumeError         func(string, string) error
 }
 
 func loginProviderIndex(provider string) int {

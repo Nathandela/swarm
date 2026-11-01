@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "status": "PROFILE_MODE_FAIR_AUTH_MAINTENANCE_GREEN_NOT_HOT_ROTATION_QUALIFICATION",
+  "tracking": "agents-tracker-h6sc.40",
+  "source_base": "01fb9a64",
+  "scope": "Existing completion worker now visits renewable parked Claude accounts independent of inference quota. Alternating selected/parked priority and rotating parked order prevent selected or urgent work monopolizing every pass. Matching retained Ready expiry informs urgency; the Store still validates actual grants. Selected authentication remains eligible without a refresh token.",
+  "source_sha256": {
+    "internal/skeleton/claude_chat_message_test.go": "53403cbf8abf41d9bd083efc97078bd03dfead3716c1709aa7c53f917f819670",
+    "internal/skeleton/execution_codex_test.go": "f56b5405d9badb0f9b32026e7e536d61a37bb4d219421ce99d93ab996d5a8333",
+    "internal/skeleton/logins.go": "737b4932952f10e0f04cb3629ec7b22c7d275fa87f98de1ded5a7feed550ab9f",
+    "internal/skeleton/logins_claude_caller_test.go": "22a62b341c86022616584fac2b5e0cc8090a7536f7404d3c856cef640f13ea73",
+    "internal/skeleton/logins_protocol.go": "71aeadfb3f454940ecbf2e3d0d1803b1cba06c7ae4a4f35cbd8b9da81213a473",
+    "internal/skeleton/logins_claude_maintenance_test.go": "f5470bf4d9b185d7cbc381520af4e1d2abcfb5d01b21198f2f88c0261b4d8d6e"
+  },
+  "behavior": [
+    "One external action per pass; existing two unresolved-helper and 32 retained-ref limits remain.",
+    "Existing failed receipts do not cause repeated CLI probes or fresh launch authority on ordinary ticks.",
+    "Capacity is visible for renewable parked and selected AuthReady accounts, including a selected nonrenewable grant without a receipt.",
+    "Capacity notice appends to readiness/startup/earlier-login reasons; it does not change selected readiness or reject Add login.",
+    "Existing-ref renewal continues at capacity; no failed/unresolved receipt or grant is evicted."
+  ],
+  "verification": {
+    "toolchain": "go1.26.10; Mac arm64 connected race and native Linux amd64 caller race",
+    "root_connected_race": {
+      "pass": 673,
+      "fail": 0,
+      "skip": 74,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/loginworker",
+          "elapsed_seconds": 28.75
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/skeleton",
+          "elapsed_seconds": 161.162
+        }
+      ],
+      "log_sha256": "bfbc5f9b892de896ba137d9f5bd560c527f2d0e093853746bb7b9f5b3bdc4241"
+    },
+    "linux_public_callers": {
+      "pass": 5,
+      "fail": 0,
+      "skip": 0,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/skeleton",
+          "elapsed_seconds": 21.386
+        }
+      ],
+      "log_sha256": "427b4ab472346d6e9a9a0719099587c7d83f93458d3e4350f17ea60488bbc785"
+    },
+    "shared_fixture_stress": {
+      "pass": 40,
+      "fail": 0,
+      "skip": 0,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/skeleton",
+          "elapsed_seconds": 40.595
+        }
+      ],
+      "log_sha256": "f79dbf8fbbf300f2a74450f278503834c473dc0cab019fc62bb0a513d43c76f4"
+    },
+    "build_all": "PASS",
+    "vet_all": "PASS",
+    "lint_connected_packages": "PASS_0_ISSUES_USING_FRESH_ANALYZER_FACTS",
+    "regressions_RED": [
+      "Old actual Linux caller excluded quota-limited B and could starve later accounts; capacity notice was absent.",
+      "Selected nonrenewable login at 32 retained refs waited without a capacity reason."
+    ],
+    "isolated_controls": {
+      "linux-control-parked-turn": {
+        "log_sha256": "3ffd9df05da7c707f59deecb1b5e775a2658a84ec49c477bb4310aa9ea17f32f",
+        "runtime_failed_test": "TestClaudeMaintenanceCallerNoisySelectedCannotStarveParked"
+      },
+      "linux-control-preserved-reason": {
+        "log_sha256": "f134f000827f1dd1cb7bc78fe48cd3aa15b494ca633dd98ba66690e19dc13f91",
+        "runtime_failed_test": "TestClaudeMaintenanceCallerCapacityKeepsReadinessAndExistingRenewal"
+      },
+      "linux-control-quota-independent": {
+        "log_sha256": "c70055081c4db1309ea61706ebc0faae5be4da99ec5248b6b21752c892dc6c4a",
+        "runtime_failed_test": "TestClaudeMaintenanceCallerVisitsQuotaLimitedAndLaterParkedLogins"
+      },
+      "linux-control-selected-capacity": {
+        "log_sha256": "357478fb879b2c04eeff6037003c81fe0796ab0bdcebb1146bae1c469eb22e32",
+        "runtime_failed_test": "TestClaudeMaintenanceCallerSelectedNonrenewableCapacityIsVisible"
+      }
+    },
+    "control_method": "Ignored source copies and Go overlays only. Each omission compiled and failed its intended named caller test on Linux.",
+    "connected_followups": [
+      "The existing timeout-cleanup fixture now explicitly reselects once to authorize the selected failed receipt retry; original cleanup and Attempt1 assertions remain.",
+      "The shared dev-chat launch fixture now waits for exact init primary-read publication before returning. This fixes two initial race-run precondition failures; the two adversarial tests passed 20 repetitions each. No production chat behavior changed.",
+      "Removed an unused Codex test fixture field."
+    ],
+    "lint_note": "The installed global analyzer cache produced inconsistent SA5011 diagnostics after Fatal guards. A fresh lint-only cache returned 0 issues with original guards; no suppression or unnecessary guard edits retained. Go/Gradle caches remain shared.",
+    "VM_scope": "Finite private source/test workspace; public Store APIs, synthetic grants and injected Start/Recover boundaries. No installed provider, live login, live discussion, daemon migration or privileged action."
+  },
+  "review": {
+    "author": "Sol 6.1 tests first; Root caught invalid DEL label before baseline execution and required noisy-selected and readiness-reason regressions.",
+    "independent": "Astra actual final scheduler/edge-case/fixture review GREEN.",
+    "root": "Connected source review, actual Linux RED/GREEN and four omission controls, full affected Mac/worker race suite, repeated fixture race checks, build/vet/lint."
+  },
+  "limits": [
+    "This is profile-mode maintenance, not common-slot activation or exact quota continuation.",
+    "The 74 Mac/opt-in skips remain unqualified; the five new Linux callers have 0 skips.",
+    "Codex parked renewal still needs durable grant-bound admission/backoff before scheduling.",
+    "Actual Claude idle authority renewal and account/config coherence remain open.",
+    "Saved accounts beyond the 32 retained-ref capacity receive a visible notice; no claim that all of them are being renewed.",
+    "Whole-feature main merge, migration and release gates remain open."
+  ]
+}

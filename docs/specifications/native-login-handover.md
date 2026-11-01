@@ -226,9 +226,14 @@ subject to the native constructor gate below. The
 cover the owner API, completion worker, usage readers, typed-input gates and
 final working-directory preparation with synthetic Linux processes.
 
+**Superseded pick policy:** the prior selected-plus-first-`NextEligible` warm
+account selection is replaced by the canonical [maintenance plan](provider-login-integration-plan.md#2-keep-every-parked-login-fresh).
+Its [bounded profile-mode caller evidence](../verification/provider-logins/claude-fair-maintenance-2026-11-01.json)
+covers quota-independent fairness and capacity visibility, not common-slot
+publication, hot rotation or native account adoption.
+
 Reuse the one-second auth watcher for confirmed-exhaustion selection. The existing
-two-second login-completion worker chooses the selected and at most one warm
-login and owns slow Start/Recover calls,
+two-second login-completion worker owns slow Start/Recover calls,
 outside the login, admission and discussion lifecycle locks. Only the successful
 creator of PREPARED receives start authority. Reopen, a missing PID and a timeout
 never recreate it. A locked bounded census in the shared Begin/Replace creation
@@ -267,7 +272,7 @@ migration and regression contracts, not the new stable-authority target:
 | Retained helper lifecycle | `logins/claude_auth*`, `loginworker/claude_auth*` | Retained ready/failed outcomes across reopen; no repeated budget; exact new-epoch replacement; cleanup races and ENOSPC preserve the prior authority. |
 | Birth and mutation custody | Store registry lock, shim native start/record, session replay/delete, saved credential/relogin operations | Selection-first admits zero old births; birth-first publishes exact ownership before selection; lost/unpublished reservations cannot be deleted or replayed; old nonselected accounts retain their grants until exact writer-stop proof. |
 | Desired selection and runtime | Existing login switch entry point, exact-CWD profile provisioning, runtime/environment and both usage readers | One pending selection survives restart, C supersedes B, receipt/config gate every birth, owned-profile usage is accepted and old-account usage rejected. |
-| Daemon caller and projection | Existing auth tick/completion worker and relogin completion | Slow auth leaves PTY/hooks/list responsive; current and one warm job coalesce; selected relogin avoids legacy fleet restart; desired/auth/config/startup/old-account pending remain distinct. |
+| Daemon caller and projection | Existing auth tick/completion worker and relogin completion | The selected-plus-one-warm pick is a superseded baseline; preserve responsive auth, selected relogin's no-fleet-restart path, and distinct desired/auth/config/startup/old-account pending states. |
 | Native integration | Actual daemon and command constructor | Normal trust/policy, native history/config and an ordinary operation work through the real caller. Helper-only evidence cannot enable this path. |
 
 The shim first claims the existing exclusive zero-PID native record under a

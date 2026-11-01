@@ -55,7 +55,7 @@
   ],
   "limits": [
     "Scheduler fairness and capacity presentation are the next separate slice; this alone does not maintain every account.",
-    "The32 retained-ref cap and failed/unresolved budgets remain; no eviction or new Add-login restriction.",
+    "The 32 retained-ref cap and failed/unresolved budgets remain; no eviction or new Add-login restriction.",
     "Actual common-slot idle renewal, Codex parked maintenance and native account coherence remain open.",
     "Broader connected build/vet/lint gates follow the frozen scheduler checkpoint."
   ]

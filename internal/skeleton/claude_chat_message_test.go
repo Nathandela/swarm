@@ -39,11 +39,22 @@ func launchClaudeMessageFixture(t *testing.T, d *Daemon) persist.Meta {
 		if e == nil {
 			for _, rec := range r.Records {
 				var env struct {
-					Raw []byte `json:"raw"`
+					Raw      []byte                         `json:"raw"`
+					Identity shimwire.ClaudePrimaryIdentity `json:"primary"`
+					Sequence uint64                         `json:"stream_sequence"`
 				}
 				var frame struct{ Type, Subtype string }
 				if json.Unmarshal(rec.Body, &env) == nil && json.Unmarshal(env.Raw, &frame) == nil && frame.Type == "system" && frame.Subtype == "init" {
-					return m
+					current, err := d.core.ClaudeFixtureSnapshot(m.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					// Spool visibility can precede the primary read's publication.
+					if err := claudeFixtureInitPublication(current, env.Identity, env.Sequence); err == nil {
+						return m
+					} else if !errors.Is(err, errClaudeFixturePending) {
+						t.Fatal(err)
+					}
 				}
 			}
 		}

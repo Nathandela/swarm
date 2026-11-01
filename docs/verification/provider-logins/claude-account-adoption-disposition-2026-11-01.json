@@ -18,7 +18,7 @@
         240642298,
         254463103
       ],
-      "result": "JSON/text status reads cached oauthAccount. Recent complete profiles may skip initialization for24h; initialization is asynchronous. No ordinary force-refresh option or acknowledgment was established."
+      "result": "JSON/text status reads cached oauthAccount. Recent complete profiles may skip initialization for 24 hours; initialization is asynchronous. No ordinary force-refresh option or acknowledgment was established."
     },
     {
       "contract": "existing helper is not auth status",
