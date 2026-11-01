@@ -264,8 +264,11 @@ func (s *Store) ObserveClaudeAuthProfile(ref ClaudeAuthRef, attempt int) error {
 		if err != nil {
 			return err
 		}
-		if intent.Ref != ref || intent.Attempt != attempt || intent.Phase != "running" || intent.Worker.PID != os.Getpid() || !intent.Worker.Alive() || claudeAuthTarget(r, ref) != nil || intent.Selection != r.Providers[ProviderClaude] {
+		if intent.Ref != ref || intent.Attempt != attempt || intent.Phase != "running" || intent.Worker.PID != os.Getpid() || !intent.Worker.Alive() {
 			return ErrConflict
+		}
+		if err := s.claudeAuthCurrent(r, intent); err != nil {
+			return err
 		}
 		now := time.Now()
 		if !now.Before(intent.Deadline) {

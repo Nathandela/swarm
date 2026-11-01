@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "status": "PARKED_AUTH_LIFECYCLE_INDEPENDENT_OF_DESIRED_SELECTION_GREEN",
+  "tracking": "agents-tracker-h6sc.40",
+  "source_base": "7750c350",
+  "scope": "First maintenance slice: exact parked grant lifecycle survives unrelated desired-account changes in recognized ownership modes. New parked helper creation and delayed claim require the existing writer census. Selected shared-authority behavior is retained.",
+  "source_sha256": {
+    "internal/logins/claude_auth.go": "b1d5017cc34ef9d561a000757c1799faeaff3511dbc345b674fc2af482748cdc",
+    "internal/logins/claude_auth_scope.go": "3ebcfa538bdc5f038ed61e709752ac94879942a45849ce2a11f06264a8118955",
+    "internal/logins/claude_auth_maintenance_test.go": "bd8360147d90a1967b689c8e68b73bcb9b20cef0bcef197249642b9d0983df0f"
+  },
+  "verification": {
+    "toolchain": "go1.26.10 darwin/arm64",
+    "focused_race": {
+      "pass": 115,
+      "fail": 0,
+      "skip": 0,
+      "elapsed_seconds": 46.668,
+      "log_sha256": "de88ec3aca16a83d419902bf510d6ef47208c2d024f84b2f5bf0a1b1df210ba3"
+    },
+    "final_maintenance_race": {
+      "pass": 10,
+      "fail": 0,
+      "skip": 0,
+      "elapsed_seconds": 5.765,
+      "log_sha256": "85051ce4ec3815a358c82492beeacffc73de2a6c4002e4ad1714143e3675c829"
+    },
+    "root_complete_logins_race": {
+      "pass": 823,
+      "fail": 0,
+      "skip": 0,
+      "elapsed_seconds": 271.146,
+      "race_reported": false,
+      "log_sha256": "81f3978840f7f525b408c0b3294285c8afc2e72264465355a482063f343e655b"
+    },
+    "regression_RED": "Actual Store operations: select C while parked B renews; legacy comparison cancels profile/finish/claim. Unknown parked writers and pending public relogin were also admitted before the fix.",
+    "negative_controls": [
+      "Unrelated selection equality restored: runtime RED.",
+      "Parked creation census omitted: runtime RED.",
+      "Parked delayed Claim census omitted: runtime RED.",
+      "Pending relogin lifecycle guard omitted: runtime RED.",
+      "Ownership mode guard omitted: runtime RED."
+    ],
+    "control_method": "Ignored source copies and Go overlays; no shared-source perturbation. Bounded synthetic process/credential fixtures, not native-provider qualification.",
+    "review": "Sol authored tests first and implementation; Astra reviewed actual frozen connected code GREEN; Luna independently inspected remaining selection gates; Root connected source review and full Store race.",
+    "native_provider_or_VM_execution": false
+  },
+  "preserved": [
+    "Exact ref, identity, credential revision, owner mode and authority custody remain mandatory.",
+    "Migration, pending switch, re-login, actual/source/target holds refuse helper validity.",
+    "Historical Selection remains in the receipt; failed-receipt rearm still requires explicit newer selection of that login.",
+    "Native retry remains bounded to its original attempt count and deadline.",
+    "Ready receipt consumption at birth/activation still requires current selected account and epoch."
+  ],
+  "limits": [
+    "Scheduler fairness and capacity presentation are the next separate slice; this alone does not maintain every account.",
+    "The32 retained-ref cap and failed/unresolved budgets remain; no eviction or new Add-login restriction.",
+    "Actual common-slot idle renewal, Codex parked maintenance and native account coherence remain open.",
+    "Broader connected build/vet/lint gates follow the frozen scheduler checkpoint."
+  ]
+}

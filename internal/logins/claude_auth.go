@@ -364,6 +364,33 @@ func claudeAuthTarget(r Registry, ref ClaudeAuthRef) error {
 	return nil
 }
 
+func (s *Store) claudeAuthCurrent(r Registry, intent claudeAuthIntent) error {
+	if err := claudeAuthTarget(r, intent.Ref); err != nil {
+		return err
+	}
+	selected := r.Providers[ProviderClaude]
+	mode := selected.AuthOwnerMode
+	if mode != intent.Selection.AuthOwnerMode || mode != ClaudeNativeProfileMode && mode != claudeNativeSlotMode && intent.Selection != selected {
+		return ErrConflict
+	}
+	if r.MigrationPending {
+		return ErrPending
+	}
+	if _, pending := r.Switches[ProviderClaude]; pending {
+		return ErrPending
+	}
+	login := find(&r, intent.Ref.LoginID)
+	if login.AuthState != AuthReady {
+		return ErrIneligible
+	}
+	if _, err := s.readRelogin(*login); err == nil {
+		return ErrPending
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return claudeParkedAuthAllowed(r, login.ID)
+}
+
 // claudeAuthIDs bounds discovery before reading any intent or payload.
 func (s *Store) claudeAuthIDs() ([]string, error) {
 	if _, err := s.root.Lstat("claude-auth"); errors.Is(err, os.ErrNotExist) {
@@ -608,6 +635,11 @@ func (s *Store) createClaudeAuth(r Registry, loginID string) (ClaudeAuthRef, err
 	if _, err := s.readSaved(*l); err != nil {
 		return ClaudeAuthRef{}, err
 	}
+	if r.Providers[ProviderClaude].ActiveID != loginID {
+		if err := s.claudeAuthorityMutationAllowed(r, *l); err != nil {
+			return ClaudeAuthRef{}, err
+		}
+	}
 	if err := s.claudeAuthAdmissionAllowed(); err != nil {
 		return ClaudeAuthRef{}, err
 	}
@@ -724,11 +756,16 @@ func (s *Store) ClaimClaudeAuthAttempt(ref ClaudeAuthRef, worker processcontain.
 		if err != nil {
 			return err
 		}
-		if intent.Ref != ref || claudeAuthTarget(r, ref) != nil || intent.Selection != r.Providers[ProviderClaude] {
+		if intent.Ref != ref {
 			return ErrConflict
 		}
-		if r.MigrationPending || find(&r, ref.LoginID).AuthState != AuthReady {
-			return ErrIneligible
+		if err := s.claudeAuthCurrent(r, intent); err != nil {
+			return err
+		}
+		if r.Providers[ProviderClaude].ActiveID != ref.LoginID {
+			if err := s.claudeAuthorityMutationAllowed(r, *find(&r, ref.LoginID)); err != nil {
+				return err
+			}
 		}
 		if intent.UnitRetired || !validClaudeAuthScope(ref, intent.Scope) || intent.Scope.Worker != worker {
 			return ErrInUse
@@ -924,8 +961,8 @@ func (s *Store) FinishClaudeAuthAttempt(ref ClaudeAuthRef, attempt int) (ClaudeA
 		now := time.Now().UTC()
 		if intent.Scope != (ClaudeAuthScope{}) && s.checkClaudeAuthScratch(intent) != nil {
 			receiptErr = ErrCapacity
-		} else if claudeAuthTarget(r, ref) != nil || intent.Selection != r.Providers[ProviderClaude] {
-			receiptErr = ErrConflict
+		} else if currentErr := s.claudeAuthCurrent(r, intent); currentErr != nil {
+			receiptErr = currentErr
 		} else if !now.Before(intent.Deadline) {
 			receiptErr = ErrPending
 		} else {

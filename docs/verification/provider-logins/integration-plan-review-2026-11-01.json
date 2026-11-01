@@ -4,7 +4,7 @@
   "date": "2026-11-01",
   "tracking": "agents-tracker-h6sc.38",
   "plan": "docs/specifications/provider-login-integration-plan.md",
-  "plan_sha256": "77cd143e4025f645b421e6ad47f65f70f15c045a197fc530953af212fd1cd61e",
+  "plan_sha256": "18a4625b12647287ae4b339a9620494046de207fb9926d9aefc78dae29d060da",
   "source_head": "81e8d0ff",
   "main_ancestor": "b609dfa6",
   "reviews": [
@@ -60,8 +60,6 @@
     "No stopped native-tracing work is retried; no private timing claim is silently marked proved.",
     "Work-item references were added by Root after behavioral review; they do not change the reviewed contracts.",
     "Implementation, native account/policy behavior, exact task recovery, migration and full release gates remain open.",
-    "Root added the linked inactive Store-foundation evidence after review; it is not a native qualification or activation claim.",
-    "Root added the linked settled-target reservation evidence after review; the behavioral plan is unchanged.",
-    "Root added the linked Gate 37 Claude account-adoption source disposition after review; it records an unresolved gate and does not revise the plan or authorize common-slot activation."
+    "Root added bounded implementation/source-disposition evidence links after review. Those records do not change the reviewed behavioral contracts or qualify native activation."
   ]
 }

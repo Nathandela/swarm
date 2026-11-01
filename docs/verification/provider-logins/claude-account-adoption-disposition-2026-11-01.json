@@ -64,5 +64,22 @@
     "Source leads are specific to the retained binary and are not a stable public provider API.",
     "This is an explicit unresolved disposition, not a new native test or passing qualification.",
     "No bypass, cache forcing, config copier, credential environment exception or tracing retry is authorized or implemented by this record."
-  ]
+  ],
+  "upstream_check": {
+    "checked_at": "2026-11-01",
+    "sources": [
+      {
+        "url": "https://code.claude.com/docs/en/errors#not-logged-in",
+        "result": "Official docs confirm a logged-out interactive sibling using the same config can adopt a new native login without restart. This narrower condition does not establish unattended saved-account publication or policy coherence."
+      },
+      {
+        "url": "https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts",
+        "result": "Official multi-account guidance assigns separate configuration directories. It does not supply an automatic whole-provider switch operation."
+      },
+      {
+        "url": "https://code.claude.com/docs/en/cli-reference",
+        "result": "The public auth command reference lists login, logout and status; no saved-login adoption acknowledgment is documented there."
+      }
+    ]
+  }
 }

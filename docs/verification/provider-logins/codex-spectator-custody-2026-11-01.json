@@ -37,5 +37,11 @@
     "The existing automatic thread/resume observer path has separate mutating behavior and capability obligations; it remains unresolved.",
     "No native provider test or exact TUI continuation qualification follows from this local synthetic result.",
     "Broader connected package gates follow the next frozen maintenance checkpoint."
-  ]
+  ],
+  "upstream_check": {
+    "checked_at": "2026-11-01",
+    "url": "https://github.com/openai/codex/issues/58423",
+    "status": "OPEN at check",
+    "result": "An October30 upstream issue requests atomic loaded-only listener attachment for0.165.0 because client-side discovery plus resume can race unload and cold-load a thread. This corroborates the integration concern, not a maintainer guarantee or qualification of our pinned0.163.0 runtime."
+  }
 }
