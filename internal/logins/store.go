@@ -181,6 +181,12 @@ func (s *Store) ProtectedHomes(provider string) ([]string, error) {
 	if op, ok := r.Switches[provider]; ok {
 		ids = append(ids, op.FromID, op.ToID, op.NextID)
 	}
+	if provider == ProviderClaude && r.ClaudeSlot != nil {
+		ids = append(ids, r.ClaudeSlot.Actual.LoginID)
+		if promotion := r.ClaudeSlot.Promotion; promotion != nil {
+			ids = append(ids, promotion.Source.LoginID, promotion.Target.LoginID)
+		}
+	}
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if id == "" || seen[id] {

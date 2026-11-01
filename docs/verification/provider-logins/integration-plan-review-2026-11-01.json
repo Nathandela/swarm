@@ -4,7 +4,7 @@
   "date": "2026-11-01",
   "tracking": "agents-tracker-h6sc.38",
   "plan": "docs/specifications/provider-login-integration-plan.md",
-  "plan_sha256": "62ae97bccf05a387b33624590696d2ed9e6bd44754596021eb8925584637e48b",
+  "plan_sha256": "0c91afa0877a53796a957dac8da3edbe474dc7edbedbb3bcf7823b2de3875b7f",
   "source_head": "81e8d0ff",
   "main_ancestor": "b609dfa6",
   "reviews": [

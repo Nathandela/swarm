@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "status": "INACTIVE_SLOT_PROTECTED_HOMES_GREEN",
+  "tracking": "agents-tracker-h6sc.39",
+  "source_base": "e8daf072",
+  "scope": "Existing ProtectedHomes inventory adds actual and unresolved source/target saved homes before existing deduplication. Common native home, historical profiles, desired and legacy switch references remain.",
+  "source_sha256": {
+    "internal/logins/store.go": "b0669ae6b21127455a6b6d8696f64549d6ce3e494d169985e868d88c939ef251",
+    "internal/logins/claude_slot_homes_test.go": "2453d71ac480da7fb6f41475ea42c61616a8031d04778b4bc65e857ba809ec83"
+  },
+  "tests": {
+    "author": "Luna; behavioral RED then focused race GREEN",
+    "root_connected_race_counts": {
+      "pass": 9
+    },
+    "root_log_sha256": "87f2070ea4a3b8b1484650bedd201ed3f413b6be3ed26cd1be1105f19542e0c3",
+    "race_reported": false,
+    "existing_regression": "TestProtectedHomesRemainAvailableWhileSwitchPending",
+    "toolchain": "go1.26.10 darwin/arm64"
+  },
+  "review": "Astra reviewed actual code/tests and scoped GREEN; Root read method/call contracts and ran connected tests.",
+  "limits": [
+    "Address inventory is not proof that any writer retired.",
+    "This adds no actual-authority bootstrap, credential publication, account adoption, migration or activation.",
+    "The eventual stable secure path must also be represented if it differs from the existing common native home.",
+    "The earlier764-case complete logins race receipt applies to the preceding ownership-foundation snapshot; this followup has9 connected race passes."
+  ]
+}
