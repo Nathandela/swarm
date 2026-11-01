@@ -1133,6 +1133,13 @@ func (s *Store) RetireClaudeAuth(ref ClaudeAuthRef) error {
 	s.mu.Lock()
 	absent := false
 	err := s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		if claudePromotionPinsAuth(r, ref) {
+			return ErrInUse
+		}
 		intent, err := s.readClaudeAuthIntent(ref.LoginID)
 		if errors.Is(err, os.ErrNotExist) {
 			absent = true
@@ -1162,6 +1169,13 @@ func (s *Store) RetireClaudeAuth(ref ClaudeAuthRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		if claudePromotionPinsAuth(r, ref) {
+			return ErrInUse
+		}
 		intent, err := s.readClaudeAuthIntent(ref.LoginID)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil

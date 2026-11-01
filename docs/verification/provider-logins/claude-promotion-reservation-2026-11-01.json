@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "status": "INACTIVE_SETTLED_TARGET_RESERVATION_GREEN",
+  "date": "2026-11-01",
+  "tracking": "agents-tracker-h6sc.39",
+  "source_base": "ae7d4440",
+  "scope": "One registry-lock/CAS reservation of an exact settled ready Claude helper. Pins its nonce, current desired target, source and raw provider subtree; does not publish credentials or change actual authority.",
+  "source_sha256": {
+    "internal/logins/claude_slot.go": "a2cd60b0e7ae6b391889d8580dd786fd48a36e4cbe1108ad312f71663572fbb6",
+    "internal/logins/claude_slot_promotion.go": "3eb386273973378ae56fc40aaf884647ca2132ee762e828453a0e262cf920559",
+    "internal/logins/claude_auth.go": "0e45a04a848f9c933827f895fe3db10a395b0035928dd2efe1aee0166f54909c",
+    "internal/logins/claude_slot_promotion_test.go": "80f20614ecba8d6a686d9febb29b1037afaeeaa79bd2ef1683a1ae1d5841a977"
+  },
+  "tests": {
+    "toolchain": "go1.26.10 darwin/arm64",
+    "focused_race": {
+      "pass": 105,
+      "fail": 0,
+      "skip": 0,
+      "elapsed_seconds": 38.358,
+      "log_sha256": "b05fa682a3826947717c2267a0c07baa3cb51618ce4820e553c6711d5864e108"
+    },
+    "complete_logins_race": {
+      "pass": 813,
+      "fail": 0,
+      "skip": 0,
+      "elapsed_seconds": 265.403,
+      "race_reported": false,
+      "log_sha256": "b5af341408a5c731faa36d10a63044fa7831fd9f3bc3150ae358f84ae432ab1c"
+    },
+    "build_all": "PASS",
+    "vet_logins_loginworker_loginmigration": "PASS",
+    "lint_logins": "PASS_0_ISSUES",
+    "negative_controls": [
+      "Ready identity/expiry/scopes validation omitted: runtime RED.",
+      "First Retire pin omitted: runtime RED before ready-intent mutation.",
+      "Second Retire pin omitted: runtime RED in defensive recovered-pin fixture before intent deletion.",
+      "Provider bytes remarshaled: runtime RED on preserved whitespace/unknown fields.",
+      "Legacy writer exclusion omitted: runtime RED.",
+      "Pending-relogin guard omitted: runtime RED after public Relogin write failure left old grant plus ready receipt."
+    ],
+    "method": "Ignored source copies and Go overlays only; bounded local sleep stand-ins for process custody, not native/systemd qualification."
+  },
+  "review": {
+    "author": "Sol 6.1; TDD and omission controls",
+    "independent": "Astra scoped GREEN after final pending-relogin fix and actual failed-public-Relogin regression.",
+    "root": "Connected code review, complete logins race, all-package build, connected vet and logins lint.",
+    "native_or_VM_execution": false
+  },
+  "limits": [
+    "No production bootstrap, publication, client adoption, migration or activation exists in this slice.",
+    "Current-revision cross-account reservation only; staged same-account replacement needs its separate reviewed custody representation.",
+    "Legacy unbound holds remain held and are never upgraded using a current helper nonce.",
+    "A ready receipt may outlive its original attempt deadline and historical selection; its current grant, exact ref, identity, scope and expiry are revalidated.",
+    "This does not complete issue39 or any native coherence gate."
+  ]
+}

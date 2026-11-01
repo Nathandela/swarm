@@ -19,12 +19,15 @@ type claudeSlotAuthority struct {
 	LoginID            string `json:"login_id"`
 	Identity           string `json:"identity"`
 	CredentialRevision uint64 `json:"credential_revision"`
-	// GrantHash is an observed snapshot; native renewal can change the grant.
+	// GrantHash hashes raw claudeAiOauth value bytes, not the native document or a later encoded publication.
+	// It is historical: native renewal can change the grant.
 	GrantHash string `json:"grant_hash"`
 }
 
 type claudeSlotPromotion struct {
-	ID           string              `json:"id"`
+	ID string `json:"id"`
+	// Empty only on retained unbound holds, never inferred from today's helper.
+	AuthNonce    string              `json:"auth_nonce,omitempty"`
 	DesiredEpoch uint64              `json:"desired_epoch"`
 	Source       claudeSlotAuthority `json:"source"`
 	Target       claudeSlotAuthority `json:"target"`
@@ -46,9 +49,15 @@ func (slot *claudeSlotState) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	if raw, present := doc["promotion"]; present {
-		promotion, err := claudeAuthObject(raw, "id", "desired_epoch", "source", "target")
+		promotion, err := claudeAuthObject(raw, "id", "auth_nonce", "desired_epoch", "source", "target")
 		if err != nil {
 			return err
+		}
+		if nonce, present := promotion["auth_nonce"]; present {
+			var value string
+			if json.Unmarshal(nonce, &value) != nil || !validID(value) {
+				return ErrIneligible
+			}
 		}
 		for _, name := range []string{"source", "target"} {
 			if err := authority(promotion[name]); err != nil {
@@ -90,7 +99,8 @@ func validClaudeSlot(r Registry) bool {
 	}
 	if promotion := r.ClaudeSlot.Promotion; promotion != nil {
 		// A newer desired C cannot release unresolved A→B ownership.
-		if !validID(promotion.ID) || promotion.DesiredEpoch == 0 || promotion.DesiredEpoch > selected.Epoch || !validAuthority(promotion.Source) || !validAuthority(promotion.Target) || promotion.Source.LoginID == promotion.Target.LoginID || actual.LoginID != promotion.Source.LoginID && actual.LoginID != promotion.Target.LoginID {
+		// Cross-account current-revision custody only; staged same-account relogin needs a separate representation.
+		if !validID(promotion.ID) || promotion.AuthNonce != "" && !validID(promotion.AuthNonce) || promotion.DesiredEpoch == 0 || promotion.DesiredEpoch > selected.Epoch || !validAuthority(promotion.Source) || !validAuthority(promotion.Target) || promotion.Source.LoginID == promotion.Target.LoginID || actual.LoginID != promotion.Source.LoginID && actual.LoginID != promotion.Target.LoginID {
 			return false
 		}
 	}
