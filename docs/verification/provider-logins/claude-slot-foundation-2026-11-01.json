@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "status": "INACTIVE_AUTHORITY_RECORDS_AND_FENCES_GREEN",
+  "tracking": "agents-tracker-h6sc.39",
+  "scope": "First Store subslice only. New private actual-authority and cross-account reservation records, strict schema11, parked-refresh/mutation exclusions and refusal of legacy native entrypoints. No public producer or activation path.",
+  "source_base": "78c49f41",
+  "source_sha256": {
+    "internal/logins/claude_auth.go": "c20d6a02e734afdb2dc624ff6604f71aa55a9681eb70c6e44cb30cfc2ba3a5d3",
+    "internal/logins/claude_birth.go": "831b856abd3818112af744d12ec6dff62aa4a7fe60b24cf3b448c216030ad835",
+    "internal/logins/claude_custody.go": "fa02a6ddf01b7f7f055a724ba8977c9870db3e3744be57e3ebcb64d87657f183",
+    "internal/logins/claude_profiles.go": "415b4c519944361861eae6a0dde9c88115378b7221074502b7be27646f520a0e",
+    "internal/logins/claude_selection.go": "343bf57b516ac8ad2e130b35ba442c5aeb7b7ffd12788be3f4fdcf506a5e708e",
+    "internal/logins/credentials.go": "3410e9f9216c859fd6d468a5e98419de5617fcd8e80e267630f5393155701191",
+    "internal/logins/native.go": "6ac6e9ae00f9106187b0f3161e455024250c76cfdcb5b5ad51c7cde549e79054",
+    "internal/logins/store.go": "9f0a4f598ffa676eb490c9bebb751ca4f97452c2d8d87657052a4941a5530cd4",
+    "internal/logins/types.go": "683ede2190fd2d83ad3105f459c03b00f77ec9192ab595570524b79dc4aa6d18",
+    "internal/logins/claude_slot.go": "1b20404683268e1630a29c9436805595233dad7d2519689ee9970b631c63bd2a",
+    "internal/logins/claude_slot_test.go": "a2b07b1ac10fd01c0e4afff192042de77b6a56e4cd821f32fc34ff29a61365f2"
+  },
+  "tests": {
+    "toolchain": "go1.26.10 darwin/arm64",
+    "focused_race": {
+      "pass": 56,
+      "fail": 0,
+      "skip": 0,
+      "race_reported": false,
+      "log_sha256": "8dac75d89b44447d984f50703d84023a5cba8976bd5a6bfab65dcb49e9ca4634"
+    },
+    "complete_logins_race": {
+      "counts": {
+        "pass": 764
+      },
+      "package_elapsed_seconds": 280.142,
+      "race_reported": false,
+      "log_sha256": "3e355b4452b3ef49cfe6eaf8e3d7438d798e1480af78bb74fdf33a292d93111e"
+    },
+    "build_all": "PASS",
+    "vet_logins_loginworker_loginmigration": "PASS",
+    "lint_logins": "PASS_0_ISSUES",
+    "negative_controls": {
+      "initial_schema_RED": "Current Store refused the proposed format before implementation.",
+      "fence_RED": "Intermediate implementation admitted held helpers, legacy installation and saved writes.",
+      "isolated_claim_omission": "Removing delayed-claim guard admitted actual A and reserved B with unchanged selection.",
+      "isolated_custody_omission": "Removing central custody exclusion allowed held saved credential erasure.",
+      "isolated_exclusion_omission": "Removing the hold predicate allowed begin/reuse/claim.",
+      "method": "Only ignored source copies and Go overlays; no shared-source mutations for negative controls."
+    }
+  },
+  "review": {
+    "author": "Sol 6.1",
+    "independent": "Astra reviewed actual frozen code, connected callers, tests and reported controls; scoped GREEN.",
+    "root": "Read connected Store/helper/mutation and registry paths, then ran full package race, build, vet and lint.",
+    "native_or_VM_execution": false
+  },
+  "limits": [
+    "This does not complete issue39 or qualify publication, bootstrap, native coherence, migration or hot activation.",
+    "Records cover cross-account holds with current Login revisions; staged same-account relogin needs a reviewed representation before a publisher exists.",
+    "ProtectedHomes and other inventory consumers must include actual/source/target authorities before activation.",
+    "Current records do not establish observed real native authority by themselves; tests seed private persisted fixtures because production has no setter.",
+    "Mac local Store tests do not qualify Linux native behavior or macOS Keychain switching.",
+    "Ordinary legacy/profile behavior is retained; new-mode Runtime and legacy read/install/profile-birth/selection paths refuse."
+  ]
+}

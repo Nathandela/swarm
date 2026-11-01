@@ -260,7 +260,7 @@ func (s *Store) load() (Registry, error) {
 	if e != nil {
 		return r, e
 	}
-	if validateJSON(b) != nil || json.Unmarshal(b, &r) != nil || validateRegistry(r) != nil {
+	if validateJSON(b) != nil || json.Unmarshal(b, &r) != nil || validateRegistry(r) != nil || validateClaudeSlotEncoding(b, r) != nil {
 		return Registry{}, ErrIneligible
 	}
 	return r, nil
@@ -330,10 +330,13 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion && r.SchemaVersion != claudeAuthScopeSchemaVersion && r.SchemaVersion != ClaudeProfileCustodySchemaVersion) || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion && r.SchemaVersion != claudeAuthScopeSchemaVersion && r.SchemaVersion != ClaudeProfileCustodySchemaVersion && r.SchemaVersion != claudeSlotSchemaVersion) || r.Providers == nil || r.Switches == nil {
 		return ErrIneligible
 	}
 	if !validClaudeProfiles(r) {
+		return ErrIneligible
+	}
+	if !validClaudeSlot(r) {
 		return ErrIneligible
 	}
 	if r.SchemaVersion < 3 && len(r.Handovers) != 0 {

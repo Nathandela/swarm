@@ -21,7 +21,7 @@ func (s *Store) SelectClaudeProfile(expected uint64, loginID string) (Registry, 
 		if r.Revision != expected {
 			return ErrConflict
 		}
-		if r.MigrationPending {
+		if r.MigrationPending || claudeSlotOwned(r, ProviderClaude) {
 			return ErrPending
 		}
 		if _, pending := r.Switches[ProviderClaude]; pending {

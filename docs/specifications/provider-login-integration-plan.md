@@ -51,6 +51,7 @@ that interface. No Codex UI replacement is included.
 
 | Finding | What is established | What integration must still establish |
 |---|---|---|
+| [Store ownership foundation](../verification/provider-logins/claude-slot-foundation-2026-11-01.json) | Inactive schema/hold records and helper/mutation fences pass focused and complete Store race checks. | Actual publication/reconciliation, staged same-account relogin, complete authority inventory and every native activation gate. |
 | [Claude token adoption](../verification/provider-logins/claude-same-process-token-adoption-2026-10-29.json) | One pinned Linux native process retained its task and Reads across synthetic A→B→A request tokens. | Multiple clients, real account acceptance, policy/cache coherence and quota waits. |
 | [Claude refresh slot](../verification/provider-logins/claude-native-refresh-slot-2026-10-29.json) | Native A refreshed to A2; a compatible candidate writer refused busy refresh; actual A2 was parked and restored without losing unrelated native credentials. | Production Store transaction, helper exclusion, reconciliation, platforms and migration. |
 | [Native login propagation source](../verification/provider-logins/claude-native-login-propagation-source-2026-10-29.json) | Native login separately writes credentials and shared account config; siblings have a config-watch path. | A qualified unattended operation from a parked login and healthy-sibling account, policy, model/tool and wait behavior. |
@@ -105,10 +106,16 @@ journals, logs, phone protocol or review evidence.
 For Claude, there is one native refresh authority for the actual slot. Multiple
 native processes may participate through its qualified native serialization.
 The same account must not also refresh through a parked copy or a legacy saved
-directory. Incoming B is reserved before its helper settles and stays reserved
-through promotion. Enforce this at job admission, delayed claim, relogin, capture,
-removal and crash recovery. Pending desired B does not forbid native A's legitimate
-refresh while A is still actual.
+directory. Desired B may persist while its helper completes every allowed attempt
+and fully settles. Under one registry lock, revalidate the exact current ready
+ref, generation, usable identity/expiry and already-recorded native/unit/worker
+retirement, then durably reserve B before unlocking. A changed ref, remaining
+launch authority or live legacy writer refuses reservation. Later admission,
+Replace and delayed Claim see that reservation and refuse. This lets B finish a
+legitimate refresh-driven retry without an exception after reservation. No stop,
+network operation or wait runs under that lock. Keep B reserved through promotion;
+apply the same custody to relogin, capture, removal and crash recovery. Pending
+desired B does not forbid native A's legitimate refresh while A is still actual.
 
 Account identity includes organization. Obtain current-grant identity outside
 registry/native locks, bound to the captured grant hash and freshness. Recheck it
@@ -192,6 +199,10 @@ and deterministic fault seams; mock the network/native boundary, not business
 state. Concurrent packages receive race checks. Verify current input/paste,
 failed-turn manual input, journal failure, handoff deletion and bootstrap custody
 regressions; main is already integrated, so do not redo historical merges.
+Test both Claim/Replace-first and reservation-first race orders, stale ready-ref
+refusal, and a genuine helper retry→ready→retired sequence before reservation.
+Before activation, actual/source/target holds must also reach `ProtectedHomes`
+and every writer-inventory/deletion consumer, not just direct mutation methods.
 
 **Exit:** newest grant and publication facts survive every tested cut; no external
 publication before durable intent; no stale helper can claim either authority.

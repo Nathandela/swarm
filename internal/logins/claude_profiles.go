@@ -654,5 +654,8 @@ func validAuthOwnerMode(r Registry, provider, mode string) bool {
 	if provider == ProviderCodex {
 		return mode == CodexNativeGrantMode && r.SchemaVersion >= 2
 	}
+	if provider == ProviderClaude && mode == claudeNativeSlotMode {
+		return r.SchemaVersion >= claudeSlotSchemaVersion
+	}
 	return provider == ProviderClaude && mode == ClaudeNativeProfileMode && r.SchemaVersion >= claudeProfileSchemaVersion
 }

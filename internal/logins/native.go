@@ -83,7 +83,7 @@ func (s *Store) readOptional(name string) ([]byte, error) {
 func (s *Store) nativeCredential(provider, loginID string) (Credential, error) {
 	if r, e := s.load(); e != nil {
 		return Credential{}, e
-	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) {
+	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) || claudeSlotOwned(r, provider) {
 		return Credential{}, ErrPending
 	}
 	base := filepath.Join("provider", provider, "native")
@@ -101,7 +101,7 @@ func (s *Store) nativeCredential(provider, loginID string) (Credential, error) {
 func (s *Store) installCredential(provider string, c Credential) error {
 	if r, e := s.load(); e != nil {
 		return e
-	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) {
+	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) || claudeSlotOwned(r, provider) {
 		return ErrPending
 	} else if provider == ProviderClaude {
 		if err := s.claudeCommonMutationAllowed(r); err != nil {
@@ -336,6 +336,9 @@ func (s *Store) Runtime(provider string) (Runtime, error) {
 	return s.runtime(r, provider)
 }
 func (s *Store) runtime(r Registry, provider string) (Runtime, error) {
+	if claudeSlotOwned(r, provider) {
+		return Runtime{}, ErrPending
+	}
 	if claudeProfilesOwned(r, provider) {
 		if r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
 			return Runtime{}, ErrPending

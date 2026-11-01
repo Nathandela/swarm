@@ -187,6 +187,9 @@ func (s *Store) Import(expected uint64, l Login, c Credential) (Registry, Login,
 	return r, l, e
 }
 func owned(r Registry, id string) bool {
+	if claudeSlotHolds(r, id) {
+		return true
+	}
 	for _, p := range r.Providers {
 		if p.ActiveID == id {
 			return true

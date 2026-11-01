@@ -198,7 +198,15 @@ func (s *Store) readClaudeAuthIntent(id string) (claudeAuthIntent, error) {
 	if json.Unmarshal(raw, &intent) != nil || (intent.Version != 1 && intent.Version != 2) || !validClaudeAuthRef(intent.Ref) || intent.Ref.LoginID != id || intent.Deadline.IsZero() || intent.Attempt < 1 || intent.Attempt > 2 {
 		return intent, ErrIneligible
 	}
-	if intent.Selection.Provider != "" && intent.Selection.Provider != ProviderClaude || intent.Selection.Provider == "" && intent.Selection != (ProviderState{}) || !validAuthOwnerMode(Registry{SchemaVersion: claudeAuthSchemaVersion}, ProviderClaude, intent.Selection.AuthOwnerMode) {
+	selectionSchema := claudeAuthSchemaVersion
+	if intent.Selection.AuthOwnerMode == claudeNativeSlotMode {
+		registry, err := s.load()
+		if err != nil || !claudeSlotOwned(registry, ProviderClaude) {
+			return intent, ErrIneligible
+		}
+		selectionSchema = registry.SchemaVersion
+	}
+	if intent.Selection.Provider != "" && intent.Selection.Provider != ProviderClaude || intent.Selection.Provider == "" && intent.Selection != (ProviderState{}) || !validAuthOwnerMode(Registry{SchemaVersion: selectionSchema}, ProviderClaude, intent.Selection.AuthOwnerMode) {
 		return intent, ErrIneligible
 	}
 	if intent.Version == 1 && intent.Scope != (ClaudeAuthScope{}) || intent.Version == 2 && !validClaudeAuthScope(intent.Ref, intent.Scope) {
@@ -305,6 +313,13 @@ func (s *Store) writeClaudeAuthIntent(intent claudeAuthIntent) error {
 }
 
 func (s *Store) claudeAuthMutationAllowed(id string) error {
+	r, err := s.load()
+	if err != nil {
+		return err
+	}
+	if err := claudeParkedAuthAllowed(r, id); err != nil {
+		return err
+	}
 	intent, err := s.readClaudeAuthIntent(id)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -452,6 +467,9 @@ func (s *Store) BeginClaudeAuth(expected uint64, loginID string) (ClaudeAuthRef,
 		if err != nil {
 			return err
 		}
+		if err := claudeParkedAuthAllowed(r, loginID); err != nil {
+			return err
+		}
 		if previous, err := s.readClaudeAuthIntent(loginID); err == nil {
 			ref = previous.Ref
 			return claudeAuthTarget(r, ref)
@@ -489,6 +507,9 @@ func (s *Store) ReplaceClaudeAuth(expected uint64, previous ClaudeAuthRef) (Clau
 		}
 		if r.Revision != expected {
 			return ErrConflict
+		}
+		if err := claudeParkedAuthAllowed(r, previous.LoginID); err != nil {
+			return err
 		}
 		intent, err := s.readClaudeAuthIntent(previous.LoginID)
 		if err != nil {
@@ -566,6 +587,9 @@ func (s *Store) claudeAuthAdmissionAllowed() error {
 }
 
 func (s *Store) createClaudeAuth(r Registry, loginID string) (ClaudeAuthRef, error) {
+	if err := claudeParkedAuthAllowed(r, loginID); err != nil {
+		return ClaudeAuthRef{}, err
+	}
 	if r.MigrationPending || r.Revision == ^uint64(0) {
 		return ClaudeAuthRef{}, ErrPending
 	}
@@ -691,6 +715,9 @@ func (s *Store) ClaimClaudeAuthAttempt(ref ClaudeAuthRef, worker processcontain.
 	err := s.locked(func() (claimErr error) {
 		r, err := s.load()
 		if err != nil {
+			return err
+		}
+		if err := claudeParkedAuthAllowed(r, ref.LoginID); err != nil {
 			return err
 		}
 		intent, err := s.readClaudeAuthIntent(ref.LoginID)

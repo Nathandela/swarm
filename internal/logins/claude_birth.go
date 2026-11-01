@@ -65,7 +65,7 @@ func (s *Store) AdmitClaudeProfileBirth(rt Runtime, cwd string, startAndPublish 
 		if err != nil {
 			return err
 		}
-		if r.MigrationPending || r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
+		if r.MigrationPending || claudeSlotOwned(r, ProviderClaude) || r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
 			return ErrPending
 		}
 		if _, pending := r.Switches[ProviderClaude]; pending {

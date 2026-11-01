@@ -4,7 +4,7 @@
   "date": "2026-11-01",
   "tracking": "agents-tracker-h6sc.38",
   "plan": "docs/specifications/provider-login-integration-plan.md",
-  "plan_sha256": "6c27f484c71c6e805f782ce7ed7346942055ea980696edd6c40c6dead31a67cc",
+  "plan_sha256": "62ae97bccf05a387b33624590696d2ed9e6bd44754596021eb8925584637e48b",
   "source_head": "81e8d0ff",
   "main_ancestor": "b609dfa6",
   "reviews": [
@@ -30,7 +30,8 @@
     "Default native-TUI exact recovery remains a full-delivery gate; opt-in chat cannot substitute.",
     "Reachable native unlocked fallback is a correctness gap requiring exclusion or proven no-lost-generation protocol.",
     "Actual outgoing grant bytes and actual encoded publication hashes remain distinct.",
-    "Nonexistent setup source reference removed; earlier profile clauses marked legacy; actual handover anchor verified."
+    "Nonexistent setup source reference removed; earlier profile clauses marked legacy; actual handover anchor verified.",
+    "Promotion now atomically validates fully settled exact helper readiness and reserves under one registry lock; reserve-before-retry could block legitimate native renewal. Sol and Astra independently approved the revised ordering."
   ],
   "verification": {
     "documentation_links_and_anchors": "PASS",
@@ -58,6 +59,7 @@
     "This approves the implementation design and sequencing only.",
     "No stopped native-tracing work is retried; no private timing claim is silently marked proved.",
     "Work-item references were added by Root after behavioral review; they do not change the reviewed contracts.",
-    "Implementation, native account/policy behavior, exact task recovery, migration and full release gates remain open."
+    "Implementation, native account/policy behavior, exact task recovery, migration and full release gates remain open.",
+    "Root added the linked inactive Store-foundation evidence after review; it is not a native qualification or activation claim."
   ]
 }

@@ -439,6 +439,9 @@ func (s *Store) claudeAuthorityMutationAllowed(r Registry, login Login) error {
 	if login.Provider != ProviderClaude {
 		return nil
 	}
+	if err := claudeParkedAuthAllowed(r, login.ID); err != nil {
+		return err
+	}
 	return s.claudeMutationAllowed(r, &login)
 }
 
