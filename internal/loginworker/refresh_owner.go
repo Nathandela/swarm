@@ -62,6 +62,9 @@ type RefreshProgress struct {
 	// NoNativeStarted is an exact bound worker refusal before any native child.
 	NoNativeStarted bool   `json:"no_native_started,omitempty"`
 	ErrorCode       string `json:"error_code,omitempty"`
+	// Failures saturates at the 15-minute delay; a zero RetryAfter retains a held budget.
+	Failures   uint8     `json:"failures,omitempty"`
+	RetryAfter time.Time `json:"retry_after,omitzero"`
 }
 
 func validateRefresh(c RefreshConfig) error {
@@ -262,6 +265,9 @@ func readRefreshProgress(f *jobFiles) (RefreshProgress, error) {
 	if p.Generation == 0 || !p.Grant.Valid() || !validID(p.LaunchNonce) || p.Creator.PID <= 0 || p.Creator.StartTime <= 0 || p.Worker.PID < 0 || p.Worker.StartTime < 0 || (p.Worker.PID == 0) != (p.Worker.StartTime == 0) || p.Native.PID < 0 || p.Native.StartTime < 0 || (p.Native.PID == 0) != (p.Native.StartTime == 0) {
 		return p, ErrInvalid
 	}
+	if p.Failures > 5 || (p.Failures == 0 && !p.RetryAfter.IsZero()) || (p.Phase == PhaseReady && p.Failures != 0) {
+		return p, ErrInvalid
+	}
 	if p.NoNativeStarted && (p.Phase != PhaseFailed || p.Native != (ProcessIdentity{})) {
 		return p, ErrInvalid
 	}
@@ -352,6 +358,7 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 		return ErrStale
 	}
 	p.Creator = published.Creator
+	p.Failures, p.RetryAfter = published.Failures, published.RetryAfter
 	p.Phase = refreshClaimed
 	if e = f.write(refreshProgressFile, p); e != nil {
 		return e
@@ -359,6 +366,20 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 	refuseBeforeNative := func(cause error) error {
 		p.Phase, p.NoNativeStarted, p.ErrorCode = PhaseFailed, true, classifyError(cause)
 		p.WritersStopped = true // This worker's native scope is positively empty.
+		p.RetryAfter = time.Time{}
+		// Empty native scope alone does not establish the current grant's custody.
+		if retryableRefreshFailure(p.ErrorCode) {
+			if store, err := logins.OpenExisting(c.StateRoot); err == nil {
+				if grant, err := acquireRefreshGrant(store, c); err == nil {
+					stopped := grant.ProveStopped()
+					closed := grant.Close()
+					if stopped == nil && closed == nil {
+						recordRefreshFailure(&p, c.Grant)
+					}
+				}
+				_ = store.Close()
+			}
+		}
 		if err := f.write(refreshProgressFile, p); err != nil {
 			return err
 		}
@@ -392,6 +413,7 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 		return refuseBeforeNative(e)
 	}
 	syscall.Umask(0077)
+	var failedRef logins.CodexRefreshRef
 	{
 		e = refreshCodexNative(ctx, c, f, lease, processcontain.EnvironmentWriters, func(native ProcessIdentity) error { p.Native = native; return f.write(refreshProgressFile, p) })
 		stopErr := containDescendants(os.Getpid())
@@ -400,6 +422,9 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 			stopErr = lease.ProveStopped()
 		}
 		if stopErr == nil {
+			if e != nil {
+				failedRef, _ = lease.RefreshRef()
+			}
 			if e == nil {
 				output, refErr := lease.RefreshRef()
 				access, accessErr := lease.Access(time.Now())
@@ -422,7 +447,9 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 		p.Phase = PhaseFailed
 		p.Output, p.ExpiresAt = nil, time.Time{}
 		p.ErrorCode = classifyError(e)
+		recordRefreshFailure(&p, failedRef)
 	} else {
+		p.Failures, p.RetryAfter = 0, time.Time{}
 		p.Phase = PhaseReady
 	}
 	if writeErr := f.write(refreshProgressFile, p); writeErr != nil {

@@ -127,6 +127,11 @@ func refreshBoundStore(t *testing.T) (*logins.Store, RefreshConfig) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return refreshBoundStoreAt(t, root)
+}
+
+func refreshBoundStoreAt(t *testing.T, root string) (*logins.Store, RefreshConfig) {
+	t.Helper()
 	s, err := logins.Open(root)
 	if err != nil {
 		t.Fatal(err)

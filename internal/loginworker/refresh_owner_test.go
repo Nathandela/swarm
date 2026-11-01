@@ -90,6 +90,13 @@ func TestCodexRefreshNativeFixture(t *testing.T) {
 					return
 				}
 				mode, _ := os.ReadFile("fixture-mode")
+				if string(mode) == "rpc-error" {
+					reply, _ := json.Marshal(map[string]any{"id": req.ID, "error": map[string]any{"code": -32000, "message": "synthetic account failure"}})
+					if conn.Write(context.Background(), websocket.MessageText, reply) != nil {
+						return
+					}
+					continue
+				}
 				if string(mode) == "hang" {
 					_ = os.WriteFile("fixture-account-read-entered", nil, 0600)
 					<-r.Context().Done()

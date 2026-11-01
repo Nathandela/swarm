@@ -102,7 +102,12 @@ func (l *GrantLease) PrepareAuxiliary(version string) error {
 
 // CheckAuxiliary bounds logical scratch bytes and entries without following
 // native helper symlinks. Polling allows temporary overshoot between checks; filesystem quotas are optional isolation.
-func (l *GrantLease) CheckAuxiliary() error { return l.checkAuxiliary(true) }
+func (l *GrantLease) CheckAuxiliary() error {
+	// Do not observe the Store's temporary inode while publishing native ownership.
+	l.store.mu.Lock()
+	defer l.store.mu.Unlock()
+	return l.checkAuxiliary(true)
+}
 func (l *GrantLease) checkAuxiliary(quota bool) error {
 	if e := l.validate(); e != nil {
 		return e

@@ -535,6 +535,8 @@ func (l *GrantLease) ProveStopped() error {
 // RecordNative publishes the process creation identity before any initialization
 // RPC; startup-gap recovery additionally checks the exact home environment.
 func (l *GrantLease) RecordNative(identity processcontain.Identity) error {
+	l.store.mu.Lock()
+	defer l.store.mu.Unlock()
 	if e := l.tokensAllowed(); e != nil {
 		return e
 	}

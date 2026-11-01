@@ -1,0 +1,183 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "status": "CODEX_DURABLE_SETTLED_FAILURE_BACKOFF_AND_OWNED_PUBLICATION_RACE_GREEN",
+  "tracking": "agents-tracker-h6sc.40.1",
+  "source_base": "494a10f5",
+  "scope": "Two fields in the existing native refresh progress record persist settled-failure retry delay. Existing ID-specific worker lock and GrantLease remain admission owners. Includes the independently reviewed actual Store ownership-write versus auxiliary-inventory race fix. No parked scheduler or native hot-rotation activation.",
+  "source_sha256": {
+    "internal/loginworker/refresh_admission.go": "5323a36d6295f9e195f1f02348b63bc5da200a71027b7f16edbdc2cd29a94475",
+    "internal/loginworker/refresh_owner.go": "cca6ca49393ba3783369f8f173d775437f93dc803b0708fe7d429c009c22c979",
+    "internal/loginworker/refresh_backoff_test.go": "2b90f0298b881d65640c54fa51b24f611c0eafa395e8e1b652a8ef1e0b98c995",
+    "internal/loginworker/refresh_admission_test.go": "0d672a1d577fb83912770469076033d4d1408f034abacc63605b042ab6dee727",
+    "internal/loginworker/refresh_owner_test.go": "3d91a9b800ee0e73203daa6ea328887c6bcfbb8802c68fb064eec70fe2cf86b3",
+    "internal/logins/codex_ownership.go": "74202c0e550e22ff153dc443f531b7a8069e29ad7e075fca80525ed658c2473f",
+    "internal/logins/codex_aux.go": "007d46c7c6ede3553f99f581380d714f9aba88905f523f04c643fccf463ab6a8",
+    "internal/logins/codex_aux_publication_test.go": "1edce567a9f0df6222766a808fb07050625219d6ec0a1a9c51db74204fe9c7d0"
+  },
+  "contracts": [
+    "Failures and RetryAfter survive prepared, starting, claimed and restart; delay sequence 60,120,240,480,900 seconds saturates without a total attempt cap.",
+    "Only exact positively settled unchanged login/identity/native owner/credential revision/token generation and explicitly eligible failure codes can retry after the persisted gate. Unknown, unsafe, schema, stale, unsupported and stop/census/cleanup failures remain held.",
+    "Generic RPC failure is a settled failure safe to rate-limit, not proof that its cause was transient or that credentials were revoked. AuthState is not fabricated.",
+    "Validated native success or a newer same-account/owner committed relogin may reset after old custody settles. Selection, PID, caller launch generation, cancellation and restart cannot reset.",
+    "An unqualified completion clears any older retry permission while preserving the saturated count. Missing/uncertain creator or completion publication remains held.",
+    "The bound worker performs current-ref and grant custody checks before recording an eligible empty-scope retry. Post-native completion captures exact reference while the grant lease remains held."
+  ],
+  "owned_publication_race": {
+    "cause": "The 100ms monitor could inventory the actual Store .login-tmp-* created while RecordNative atomically publishes .grant-owner, latching unsafe_profile for an authorized temporary inode.",
+    "proof": "A deterministic rename seam held the real owner publication; auxiliary inspection returned unrecognized-data before synchronization.",
+    "fix": "Only public RecordNative and public CheckAuxiliary share existing Store.mu. Private cleanup inspection remains unlocked for callers already holding Store.mu. No prefix whitelist, image relaxation or monitoring removal.",
+    "positive_race": {
+      "pass": 10,
+      "fail": 0,
+      "skip": 0,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/logins",
+          "elapsed_seconds": 8.231
+        }
+      ],
+      "log_sha256": "6d5d6a0c6a80d29f530b7a7a2b51fff2778ff9e42f359d61108b0117bb6d7d73"
+    },
+    "unknown_temp_refusal": "The regression leaves an unrelated .login-tmp-* and still requires rejection."
+  },
+  "verification": {
+    "toolchain": "go1.26.10 darwin/arm64",
+    "focused_race": {
+      "pass": 101,
+      "fail": 0,
+      "skip": 0,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/logins",
+          "elapsed_seconds": 14.497
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/loginworker",
+          "elapsed_seconds": 27.354
+        }
+      ],
+      "log_sha256": "21a397e8a262e2f4efe40fde4a957b9d86a391ea4e85dee02b67ca15507cff7d"
+    },
+    "complete_store_worker_race": {
+      "pass": 981,
+      "fail": 0,
+      "skip": 2,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/loginworker",
+          "elapsed_seconds": 111.461
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/logins",
+          "elapsed_seconds": 399.974
+        }
+      ],
+      "log_sha256": "0a7ab72e413b16628f70332dee876ccfdb5c51f33348ad1dc40c3e619bdeef0c"
+    },
+    "connected_codex_callers_race": {
+      "pass": 227,
+      "fail": 0,
+      "skip": 4,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/skeleton",
+          "elapsed_seconds": 220.417
+        }
+      ],
+      "log_sha256": "a3d8a28a7a7040b80a11810853b0b825ffe40e67a0a4c3f47622d29cc6b32dcc"
+    },
+    "actual_worker_completion_stress": {
+      "pass": 30,
+      "fail": 0,
+      "skip": 0,
+      "race_reported": false,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/loginworker",
+          "elapsed_seconds": 47.856
+        }
+      ],
+      "log_sha256": "e91af0e32c8b5eb2a3926f69d9cd62abe5970be7768188688f82b58ca45e52cc"
+    },
+    "build_all": "PASS",
+    "vet_all": "PASS",
+    "lint_connected_packages": "PASS_0_ISSUES_FRESH_ANALYZER_FACTS",
+    "runtime_omission_controls": {
+      "root-control-carry": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshBackoffBoundWorkerCompletion/rpc-error",
+          "TestCodexRefreshBackoffBoundWorkerCompletion"
+        ],
+        "log_sha256": "6c12a0d7d0d9f1f73235833395a445f71aee0e2930a31603448a305171c0482e"
+      },
+      "root-control-completion": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshBackoffBoundWorkerCompletion/rpc-error",
+          "TestCodexRefreshBackoffBoundWorkerCompletion"
+        ],
+        "log_sha256": "00745fce80bf90085939189b16308e26f1d9f2fc80a28c54b942ac0c30418ded"
+      },
+      "root-control-consume": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate/changed-generation",
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate/unknown-ref",
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate/unsafe",
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate/unstopped",
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate"
+        ],
+        "log_sha256": "cea110ef3253f99625ee14997d89406ce287ae246c709c3fb1bc55f1faafca8e"
+      },
+      "root-control-elapsed": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshBackoffAdmissionDurableGate"
+        ],
+        "log_sha256": "ba6ee9c1d161c6d1b07dfe6ddacafcb8a0e580b48ffbb5daf38accdc4d4f1725"
+      },
+      "root-control-owned-publication": {
+        "runtime_failed_tests": [
+          "TestCodexAuxiliaryWaitsForOwnedNativePublication"
+        ],
+        "log_sha256": "c2fa95c8a6ff8cb292204563509660950d10892f7037d1245631c6fa0a19f245"
+      },
+      "root-control-success-reset": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshBackoffBoundWorkerCompletion/renew",
+          "TestCodexRefreshBackoffBoundWorkerCompletion"
+        ],
+        "log_sha256": "4eb6070c05bc5582670f94a8a576866f3cd2e98dd59cc17d2c887f70569ba1c7"
+      },
+      "root-control-unchanged": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate/changed-generation",
+          "TestCodexRefreshBackoffUnqualifiedCompletionConsumesOldGate"
+        ],
+        "log_sha256": "81df5ba326d61897d9bb4f94e9d24f20c0cbe5de33d0edb7a96f4e704606fad8"
+      }
+    },
+    "method": "Ignored source copies and Go overlays; no shared-source mutation for negative controls.",
+    "retained_failed_attempts": [
+      "Initial new retry-gate tests were runtime RED.",
+      "The shell post-native fixture changed executable identity and was superseded by the existing stable Go RPC fixture; native validation was preserved.",
+      "Combined stable-Go completion still exposed unsafe_profile; the actual Store-owned temporary race was reproduced and fixed, then all positive and omission checks rerun."
+    ],
+    "native_provider_or_VM_execution": false,
+    "fixture_scope": "Synthetic Go worker native-account protocol only; no real account, installed provider, user home, live discussion or daemon was used."
+  },
+  "review": {
+    "author": "Sol 6.1 tests first and durable retry implementation; Root actual completion proof, deterministic race reproduction/fix and final gates.",
+    "independent": "Astra actual D2 and mutex/callgraph/regression review GREEN.",
+    "root": "Read connected admission, ownership, worker, auxiliary and error-code paths; complete affected suites plus seven runtime omission controls."
+  },
+  "limits": [
+    "Task 40.1 retains public creator/crash/durability-fault qualification and legacy migration gates; do not close required follow-up solely from these results.",
+    "No periodic parked Codex refresh caller is connected by this checkpoint.",
+    "Legacy/unbound and ambiguous custody stay held pending explicit migration/reconciliation, without a forced sign-in claim.",
+    "Mac synthetic tests do not qualify installed native Linux/macOS behavior or a deployed old binary downgrade.",
+    "Claude coherent account/config adoption and default-native exact task recovery remain unqualified. Main merge, live migration and release remain closed."
+  ]
+}
