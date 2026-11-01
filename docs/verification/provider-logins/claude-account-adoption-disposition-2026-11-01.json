@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "status": "SOURCE_REVIEW_COMMON_SLOT_ACTIVATION_CLOSED",
+  "tracking": "agents-tracker-h6sc.37",
+  "native_cli": "Claude Code 2.1.310 linux",
+  "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+  "method": "Read-only retained version-pinned source and existing evidence. No native execution, syscall observation, VM or live account action. The stopped native-tracing path remains stopped.",
+  "findings": [
+    {
+      "contract": "auth status is not account adoption",
+      "source_offsets": [
+        257625988,
+        265701996,
+        265702154,
+        240911027,
+        240651158,
+        240642298,
+        254463103
+      ],
+      "result": "JSON/text status reads cached oauthAccount. Recent complete profiles may skip initialization for24h; initialization is asynchronous. No ordinary force-refresh option or acknowledgment was established."
+    },
+    {
+      "contract": "existing helper is not auth status",
+      "source_file": "internal/loginworker/claude_auth.go",
+      "result": "The helper starts the normal safe-mode stream-json initialize control flow in a private config with no tools or MCP servers. Historical conditional auth-status artifacts do not prove that account profile was fetched."
+    },
+    {
+      "contract": "native account configuration",
+      "source_offsets": [
+        240653534,
+        240457952,
+        240444582,
+        240455495,
+        240448089,
+        261287370
+      ],
+      "result": "Native login writes oauthAccount separately from credentials, may merge sparse profile fields, and clears additional local caches/waits. A config writer can fall back outside its acquired lock; file watching is not an atomic account/policy acknowledgment."
+    },
+    {
+      "contract": "unattended saved-login operation",
+      "source_offsets": [
+        265696592
+      ],
+      "result": "The identified noninteractive login path requires a refresh secret through environment, which does not meet the reviewed no-token-environment contract. No such exception or replacement operation is implemented."
+    }
+  ],
+  "operational_requirements": [
+    "Actual request account and organization",
+    "Effective policy, available model/tool behavior",
+    "Native credential renewal without lost generation",
+    "Permission, question and quota wait behavior across adoption"
+  ],
+  "cosmetic_non_requirement": "A stale displayed label alone does not require universal internal cache equivalence.",
+  "independent_review": "Astra: existing evidence cannot establish exclusive config publication in the presence of native fallback writers. Exact native profile capture would establish provenance, not writer exclusion or account/policy coherence. Atomic rename plus readback cannot exclude a later stale native write.",
+  "disposition": {
+    "common_slot_publisher": "DISABLED; no production bootstrap or publisher",
+    "native_file_candidate": "UNQUALIFIED; requires supported writer exclusion or proven no-lost-generation protocol plus ordinary relevant outcome qualification",
+    "legacy_profile_behavior": "May preserve healthy old incarnations and use selected identity for qualified new births; this is not seamless provider-wide convergence.",
+    "independent_implementation": "Continue parked maintenance, Store custody/recovery and Codex integration behind their respective gates.",
+    "exact_native_TUI_quota_recovery": "Separate full-delivery gate remains open."
+  },
+  "limits": [
+    "Source leads are specific to the retained binary and are not a stable public provider API.",
+    "This is an explicit unresolved disposition, not a new native test or passing qualification.",
+    "No bypass, cache forcing, config copier, credential environment exception or tracing retry is authorized or implemented by this record."
+  ]
+}
