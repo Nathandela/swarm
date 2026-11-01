@@ -31,27 +31,37 @@ const maxRefreshDeadline = 30 * time.Second
 // RefreshConfig is nonsecret. One fixed worker directory per saved login keeps
 // refresh receipts bounded; the dedicated worker owns the full native lifetime.
 type RefreshConfig struct {
-	LaunchNonce       string    `json:"launch_nonce"`
-	StateRoot         string    `json:"state_root"`
-	LoginID           string    `json:"login_id"`
-	Generation        uint64    `json:"generation"`
-	NativePath        string    `json:"native_path"`
-	NativeVersion     string    `json:"native_version"`
-	NativeFingerprint string    `json:"native_fingerprint"`
-	Deadline          time.Time `json:"deadline"`
+	Version           int                    `json:"version"`
+	Grant             logins.CodexRefreshRef `json:"grant"`
+	LaunchNonce       string                 `json:"launch_nonce"`
+	StateRoot         string                 `json:"state_root"`
+	LoginID           string                 `json:"login_id"`
+	Generation        uint64                 `json:"generation"`
+	NativePath        string                 `json:"native_path"`
+	NativeVersion     string                 `json:"native_version"`
+	NativeFingerprint string                 `json:"native_fingerprint"`
+	Deadline          time.Time              `json:"deadline"`
 }
 type RefreshRef struct {
 	Config RefreshConfig
 	Worker ProcessIdentity
 }
 type RefreshProgress struct {
-	LaunchNonce    string          `json:"launch_nonce"`
-	Generation     uint64          `json:"generation"`
-	Worker         ProcessIdentity `json:"worker"`
-	Native         ProcessIdentity `json:"native,omitempty"`
-	Phase          string          `json:"phase"`
-	WritersStopped bool            `json:"writers_stopped"`
-	ErrorCode      string          `json:"error_code,omitempty"`
+	Version     int                     `json:"version"`
+	Grant       logins.CodexRefreshRef  `json:"grant"`
+	Output      *logins.CodexRefreshRef `json:"output,omitempty"`
+	ExpiresAt   time.Time               `json:"expires_at,omitempty"`
+	Creator     ProcessIdentity         `json:"creator"`
+	LaunchNonce string                  `json:"launch_nonce"`
+	Generation  uint64                  `json:"generation"`
+	Worker      ProcessIdentity         `json:"worker_ref"`
+	Native      ProcessIdentity         `json:"native,omitempty"`
+	Phase       string                  `json:"phase"`
+	// WritersStopped covers this attempt; admission separately rechecks grant custody.
+	WritersStopped bool `json:"writers_stopped"`
+	// NoNativeStarted is an exact bound worker refusal before any native child.
+	NoNativeStarted bool   `json:"no_native_started,omitempty"`
+	ErrorCode       string `json:"error_code,omitempty"`
 }
 
 func validateRefresh(c RefreshConfig) error {
@@ -185,12 +195,36 @@ func StartCodexRefresh(ctx context.Context, executable string, c RefreshConfig) 
 		return RefreshRef{}, e
 	}
 	defer func() { _ = lock.Close() }()
-	if old, e := readRefreshProgress(f); e == nil && old.Worker.Alive() {
-		return RefreshRef{}, ErrUnavailable
-	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
+	if _, e := readRefreshProgress(f); e != nil && !errors.Is(e, os.ErrNotExist) {
 		return RefreshRef{}, e
 	}
-	if e = f.write(refreshConfigFile, c); e != nil {
+	s, e := logins.OpenExisting(c.StateRoot)
+	if e != nil {
+		return RefreshRef{}, e
+	}
+	defer func() { _ = s.Close() }()
+	lease, e := s.AcquireCodexGrant(c.LoginID)
+	if e != nil {
+		return RefreshRef{}, e
+	}
+	defer func() { _ = lease.Close() }()
+	c.Version = refreshRecordVersion
+	c.Grant, e = lease.RefreshRef()
+	if e != nil {
+		return RefreshRef{}, e
+	}
+	if e = lease.ProveStopped(); e != nil {
+		return RefreshRef{}, e
+	}
+	creatorStart, e := procstart.StartTime(os.Getpid())
+	if e != nil {
+		return RefreshRef{}, e
+	}
+	p, e := prepareCodexRefresh(f, c, ProcessIdentity{PID: os.Getpid(), StartTime: creatorStart})
+	if e != nil {
+		return RefreshRef{}, e
+	}
+	if e = lease.Close(); e != nil {
 		return RefreshRef{}, e
 	}
 	cmd := exec.Command(executable, "internal", "login-refresh", filepath.Join(f.path, refreshConfigFile))
@@ -207,7 +241,8 @@ func StartCodexRefresh(ctx context.Context, executable string, c RefreshConfig) 
 		return RefreshRef{}, ErrUnavailable
 	}
 	ref := RefreshRef{Config: c, Worker: ProcessIdentity{PID: cmd.Process.Pid, StartTime: start}}
-	if e = f.write(refreshProgressFile, RefreshProgress{LaunchNonce: c.LaunchNonce, Generation: c.Generation, Worker: ref.Worker, Phase: PhaseStarting}); e != nil {
+	p.Worker, p.Phase = ref.Worker, PhaseStarting
+	if e = f.write(refreshProgressFile, p); e != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		return RefreshRef{}, e
@@ -221,7 +256,33 @@ func readRefreshProgress(f *jobFiles) (RefreshProgress, error) {
 	if e != nil {
 		return p, e
 	}
-	if json.Unmarshal(raw, &p) != nil || p.Generation == 0 || p.Worker.PID <= 0 || p.Worker.StartTime <= 0 {
+	if e = decodeRefreshRecord(raw, &p); e != nil {
+		return p, e
+	}
+	if p.Generation == 0 || !p.Grant.Valid() || !validID(p.LaunchNonce) || p.Creator.PID <= 0 || p.Creator.StartTime <= 0 || p.Worker.PID < 0 || p.Worker.StartTime < 0 || (p.Worker.PID == 0) != (p.Worker.StartTime == 0) || p.Native.PID < 0 || p.Native.StartTime < 0 || (p.Native.PID == 0) != (p.Native.StartTime == 0) {
+		return p, ErrInvalid
+	}
+	if p.NoNativeStarted && (p.Phase != PhaseFailed || p.Native != (ProcessIdentity{})) {
+		return p, ErrInvalid
+	}
+	switch p.Phase {
+	case refreshPrepared:
+		if p.Worker != (ProcessIdentity{}) || p.Native != (ProcessIdentity{}) || p.WritersStopped || p.Output != nil {
+			return p, ErrInvalid
+		}
+	case PhaseStarting:
+		if p.Worker.PID <= 0 || p.Native != (ProcessIdentity{}) || p.WritersStopped || p.NoNativeStarted || p.Output != nil {
+			return p, ErrInvalid
+		}
+	case refreshClaimed, PhaseFailed:
+		if p.Worker.PID <= 0 || p.Output != nil {
+			return p, ErrInvalid
+		}
+	case PhaseReady:
+		if p.Worker.PID <= 0 || p.Native.PID <= 0 || !p.WritersStopped || p.Output == nil || !p.Output.Valid() || p.Output.LoginID != p.Grant.LoginID || p.Output.Identity != p.Grant.Identity || p.Output.Owner != p.Grant.Owner || p.Output.CredentialRevision != p.Grant.CredentialRevision || p.Output.Generation == p.Grant.Generation || p.ExpiresAt.IsZero() {
+			return p, ErrInvalid
+		}
+	default:
 		return p, ErrInvalid
 	}
 	return p, nil
@@ -238,7 +299,7 @@ func ReadCodexRefresh(ref RefreshRef) (RefreshProgress, error) {
 	if e != nil {
 		return p, e
 	}
-	if p.Generation != ref.Config.Generation || p.Worker != ref.Worker || p.LaunchNonce != ref.Config.LaunchNonce {
+	if p.Generation != ref.Config.Generation || p.Worker != ref.Worker || p.LaunchNonce != ref.Config.LaunchNonce || p.Grant != ref.Config.Grant {
 		return p, ErrStale
 	}
 	return p, nil
@@ -272,42 +333,66 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 		return e
 	}
 	var c RefreshConfig
-	if json.Unmarshal(raw, &c) != nil || c.StateRoot != stateRoot || c.LoginID != id {
+	if e = decodeRefreshRecord(raw, &c); e != nil {
+		return e
+	}
+	if c.StateRoot != stateRoot || c.LoginID != id || !c.Grant.Valid() || c.Grant.LoginID != id {
 		return ErrInvalid
 	}
 	if c.LaunchNonce == "" || os.Getenv(refreshLaunchEnv) != c.LaunchNonce {
 		return ErrStale
 	}
-	if e = validateRefresh(c); e != nil {
+	start, e := procstart.StartTime(os.Getpid())
+	if e != nil {
+		return ErrUnavailable
+	}
+	p := RefreshProgress{Version: refreshRecordVersion, Grant: c.Grant, LaunchNonce: c.LaunchNonce, Generation: c.Generation, Worker: ProcessIdentity{PID: os.Getpid(), StartTime: start}, Phase: PhaseStarting}
+	published, e := readRefreshProgress(f)
+	if e != nil || published.Worker != p.Worker || published.Generation != p.Generation || published.LaunchNonce != p.LaunchNonce || published.Phase != PhaseStarting || published.Grant != c.Grant {
+		return ErrStale
+	}
+	p.Creator = published.Creator
+	p.Phase = refreshClaimed
+	if e = f.write(refreshProgressFile, p); e != nil {
 		return e
+	}
+	refuseBeforeNative := func(cause error) error {
+		p.Phase, p.NoNativeStarted, p.ErrorCode = PhaseFailed, true, classifyError(cause)
+		p.WritersStopped = true // This worker's native scope is positively empty.
+		if err := f.write(refreshProgressFile, p); err != nil {
+			return err
+		}
+		return cause
+	}
+	if !c.Deadline.IsZero() && !time.Now().Before(c.Deadline) {
+		return refuseBeforeNative(context.DeadlineExceeded)
+	}
+	if e = validateRefresh(c); e != nil {
+		return refuseBeforeNative(e)
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	ctx, cancel := context.WithDeadline(ctx, c.Deadline)
 	defer cancel()
-	start, e := procstart.StartTime(os.Getpid())
+	s, e := logins.OpenExisting(c.StateRoot)
 	if e != nil {
-		return ErrUnavailable
-	}
-	p := RefreshProgress{LaunchNonce: c.LaunchNonce, Generation: c.Generation, Worker: ProcessIdentity{PID: os.Getpid(), StartTime: start}, Phase: PhaseStarting}
-	published, e := readRefreshProgress(f)
-	if e != nil || published.Worker != p.Worker || published.Generation != p.Generation || published.LaunchNonce != p.LaunchNonce || published.Phase != PhaseStarting {
-		return ErrStale
-	}
-	if e = enableSubreaper(); e != nil {
-		return e
-	}
-	syscall.Umask(0077)
-	if e = f.write(refreshProgressFile, p); e != nil {
-		return e
-	}
-	s, e := logins.Open(c.StateRoot)
-	if e != nil {
-		return e
+		return refuseBeforeNative(e)
 	}
 	defer func() { _ = s.Close() }()
-	lease, e := s.AcquireCodexGrant(c.LoginID)
-	if e == nil {
+	lease, e := acquireRefreshGrant(s, c)
+	if e != nil {
+		return refuseBeforeNative(e)
+	}
+	if e = enableSubreaper(); e != nil {
+		_ = lease.Close()
+		return refuseBeforeNative(e)
+	}
+	if e = ctx.Err(); e != nil {
+		_ = lease.Close()
+		return refuseBeforeNative(e)
+	}
+	syscall.Umask(0077)
+	{
 		e = refreshCodexNative(ctx, c, f, lease, processcontain.EnvironmentWriters, func(native ProcessIdentity) error { p.Native = native; return f.write(refreshProgressFile, p) })
 		stopErr := containDescendants(os.Getpid())
 		reapOrphans()
@@ -315,6 +400,17 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 			stopErr = lease.ProveStopped()
 		}
 		if stopErr == nil {
+			if e == nil {
+				output, refErr := lease.RefreshRef()
+				access, accessErr := lease.Access(time.Now())
+				if refErr != nil {
+					e = refErr
+				} else if accessErr != nil {
+					e = accessErr
+				} else {
+					p.Output, p.ExpiresAt = &output, access.ExpiresAt
+				}
+			}
 			stopErr = lease.Close()
 		}
 		p.WritersStopped = stopErr == nil
@@ -324,6 +420,7 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 	}
 	if e != nil {
 		p.Phase = PhaseFailed
+		p.Output, p.ExpiresAt = nil, time.Time{}
 		p.ErrorCode = classifyError(e)
 	} else {
 		p.Phase = PhaseReady

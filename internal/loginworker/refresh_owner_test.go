@@ -288,7 +288,7 @@ func TestCodexRefreshRejectsUnpublishedOrReboundLaunch(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer f.Close()
-	c := RefreshConfig{StateRoot: root, LoginID: id, Generation: 1, LaunchNonce: nonce, NativePath: executable, NativeVersion: "0.163.0", NativeFingerprint: fingerprint, Deadline: time.Now().Add(5 * time.Second)}
+	c := RefreshConfig{Version: refreshRecordVersion, Grant: logins.CodexRefreshRef{LoginID: id, Identity: strings.Repeat("a", 64), Owner: strings.Repeat("b", 64), CredentialRevision: 1, Generation: strings.Repeat("c", 64)}, StateRoot: root, LoginID: id, Generation: 1, LaunchNonce: nonce, NativePath: executable, NativeVersion: "0.163.0", NativeFingerprint: fingerprint, Deadline: time.Now().Add(5 * time.Second)}
 	if e = f.write(refreshConfigFile, c); e != nil {
 		t.Fatal(e)
 	}

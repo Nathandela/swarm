@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "status": "CODEX_BOUND_REFRESH_AUTHORITY_V2_GREEN_RETRY_STILL_HELD",
+  "tracking": "agents-tracker-h6sc.40.1",
+  "source_base": "2c25f51e",
+  "scope": "First Codex refresh-admission slice. Exact lease-derived input authority, strict v2 records, incompatible old-reader worker wire key, creator intent before config/fork, worker revalidation and owned pre-native refusals. No retry backoff, parked cadence, migration or release activation is completed by this receipt.",
+  "source_sha256": {
+    "internal/logins/codex_refresh_ref.go": "421919f59cd8ac3aed91f731e7603459e1135dd003ac5425851a844ed1327e6f",
+    "internal/logins/codex_refresh_ref_test.go": "310f249960aaa7d6146a27e3a3833d0965e9bc9765960b3c6241711f438468cc",
+    "internal/loginworker/refresh_owner.go": "1efaba8a06e028f2097cfdd4363806e3de89f1086410d9fd503ca854df8b961f",
+    "internal/loginworker/refresh_owner_test.go": "35cdaba2c382046b58a09c3a65897f4e96a1849d98139c0bc2a8fab523eae565",
+    "internal/loginworker/refresh_admission.go": "70aed3360d54cea8e619505aabb8551a495649c96a9385a7c2f79299d3a0f7a6",
+    "internal/loginworker/refresh_admission_test.go": "738c9dd0fa9542b60fed32ef29602053d239dd41f367e0ef00881d3de6a19273"
+  },
+  "contracts": [
+    "Refresh reference binds login ID, login identity, native owner digest, credential revision and canonical credential generation; no tokens are serialized.",
+    "Credential generation is the existing canonical access/id/refresh-token tuple hash after owner validation; formatting and last_refresh do not create new authority.",
+    "Current auth state, migration, mode, nonterminal switches, metadata revision/identity, relogin and grant owner remain fenced; unrelated desired selection does not invalidate parked authority.",
+    "A v2 prepared progress fence is durably written before config and fork; only its creator performs the initial spawn. Existing config-only, legacy, failed, prepared or uncertain state is retained rather than overwritten.",
+    "The frozen old progress reader cannot find its required nonzero top-level worker field in v2 records, including bound starting records. This is wire/source qualification, not an old-deployed-binary canary.",
+    "The exact published worker/ref/nonce is claimed before owned refusal reporting. Late or stale legitimate workers can retain positive empty-own-scope evidence; unauthorized workers cannot change another attempt.",
+    "Starting records cannot carry native/stopped evidence into a fresh claim. Ready requires a native process and changed validated output and cannot claim NoNativeStarted.",
+    "Only positively settled success whose exact output matches the next input can create a later attempt in this slice. Failed/uncertain retries remain held until the separately reviewed backoff/recovery policy is implemented."
+  ],
+  "verification": {
+    "toolchain": "go1.26.10 darwin/arm64",
+    "focused_race": {
+      "pass": 36,
+      "fail": 0,
+      "skip": 0,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/logins",
+          "elapsed_seconds": 9.325
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/loginworker",
+          "elapsed_seconds": 10.29
+        }
+      ],
+      "log_sha256": "be93f0fa619871c3343e09d438cbd507351811715b4916c50e8c4eae74abf354",
+      "race_reported": false
+    },
+    "complete_logins_and_loginworker_race": {
+      "pass": 922,
+      "fail": 0,
+      "skip": 2,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/loginworker",
+          "elapsed_seconds": 80.167
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/logins",
+          "elapsed_seconds": 378.897
+        }
+      ],
+      "log_sha256": "888ed62fd3cb1a4baf9432f7eaf4d709e6335eea5f0785eda01faa5ee393f083",
+      "race_reported": false
+    },
+    "connected_codex_callers_race": {
+      "pass": 227,
+      "fail": 0,
+      "skip": 4,
+      "packages": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/skeleton",
+          "elapsed_seconds": 215.49
+        }
+      ],
+      "log_sha256": "e64f41fa68fb9d4457e2578579b19c01c4d0971ddd123c28228cea66b09d9a35",
+      "race_reported": false
+    },
+    "build_all": "PASS",
+    "vet_all": "PASS",
+    "lint_connected_packages": "PASS_0_ISSUES_FRESH_ANALYZER_FACTS",
+    "negative_controls": {
+      "control-current-metadata": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata/revision",
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata/identity",
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata/mode",
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata/paused",
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata/needs-login",
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata/switch",
+          "TestCodexRefreshRefRefusesClosedOrChangedMetadata"
+        ],
+        "log_sha256": "fce7cee026b5f81e4b056b6d4eb3394e79c9814b09d3ba60c94ec187edf003d3"
+      },
+      "control-legacy-wire": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshAdmissionPersistsBoundIntentBeforeWorker"
+        ],
+        "log_sha256": "8bee1744c5ca3643536c0c511443c536f517f2c1dae0ed467802a1596989c60c"
+      },
+      "control-starting-shape": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshAdmissionBoundWorkerRefusals/starting-native",
+          "TestCodexRefreshAdmissionBoundWorkerRefusals/starting-stopped",
+          "TestCodexRefreshAdmissionBoundWorkerRefusals"
+        ],
+        "log_sha256": "10fabd3a324f41045daae635a3fbd5d3a7fc035e8dd1423d1740702eff48ace3"
+      },
+      "control-strict-record": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshAdmissionReaderRejectsAliasesUnknownAndTrailingData/,\"unknown\":true}",
+          "TestCodexRefreshAdmissionReaderRejectsAliasesUnknownAndTrailingData/,\"Version\":2}",
+          "TestCodexRefreshAdmissionReaderRejectsAliasesUnknownAndTrailingData"
+        ],
+        "log_sha256": "fb2f7aac367a75bbcde59d6c918a389090e7eeb90bdab5e9cf9fbf5a8670dc29"
+      },
+      "control-worker-binding": {
+        "runtime_failed_tests": [
+          "TestCodexRefreshAdmissionBoundWorkerRefusals/stale-grant",
+          "TestCodexRefreshAdmissionBoundWorkerRefusals"
+        ],
+        "log_sha256": "e7fd3f249bad51c8dd28bb2ff29f3515a8f43021aa853d8d7927815d3230404a"
+      }
+    },
+    "negative_control_method": "Ignored Go source copies and overlays only; each control compiled and failed named runtime tests. No shared-source perturbation.",
+    "TDD_corrections": [
+      "Sol first exact-ref and admission tests were runtime RED before implementation.",
+      "Root corrected a shell-path fixture that failed version admission too early, wrapping it in the existing ELF/Mach-O test transport. The actual worker stale-grant test then reached its intended boundary.",
+      "Starting-native and starting-stopped records reached the synthetic native/version program before the added state guard; both now refuse without changing the retained record."
+    ],
+    "native_provider_or_VM_execution": false,
+    "fixture_scope": "Owned Go test transports and synthetic credentials; script-backed native counter is enclosed by the existing copied test executable. No real account or installed Codex is used."
+  },
+  "review": {
+    "author": "Sol 6.1 authored first tests and implementation; Root reviewed connected code, fixed meaningful entry fixture and Starting-state laundering case.",
+    "independent": "Astra actual corrected frozen source GREEN.",
+    "root": "Complete affected Store/worker race, connected Codex race, five runtime omission controls, build/vet/lint and frozen source verification."
+  },
+  "limits": [
+    "Task 40.1 remains in progress. Durable 60s to 15m settled-failure backoff and its recovery/migration cases are not implemented yet.",
+    "Legacy/unbound records are held pending an explicit migration; no forced sign-in or automatic budget reset is inferred.",
+    "No periodic parked Codex refresh loop is connected.",
+    "Real installed-provider refresh, old deployed-binary upgrade/downgrade, creator crash/fault cuts and full public constructor qualification remain separate gates.",
+    "This adds no exact automatic task continuation, common Claude publisher, main merge, live migration or release."
+  ]
+}
