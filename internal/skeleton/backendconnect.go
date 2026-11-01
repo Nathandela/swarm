@@ -205,7 +205,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		return
 	}
 	expectedInstance, _ := d.sessionInstance(id)
-	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch, true)
+	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch)
 	if err != nil {
 		if d.claudeChatQuarantined(id) {
 			return
@@ -699,7 +699,7 @@ func selectOnlyLoadedThread(loaded []string) (string, error) {
 // JSON-RPC endpoint and completes the boot handshake. IT STARTS NO THREAD: which thread this
 // session is on is the AGENT's to decide, and the two callers above learn it in the two ways
 // their situations allow.
-func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.BackendChannel, freshCapture ...bool) (*appserver.Client, *backendFeed, error) {
+func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.BackendChannel) (*appserver.Client, *backendFeed, error) {
 	if d.claudeChatQuarantined(id) {
 		return nil, nil, errClaudeChatQuarantined
 	}
@@ -807,7 +807,7 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 			return nil, nil, errBackendAuthUnavailable
 		}
 	}
-	d.finishCodexExecutionPreparation(ctx, id, expectedInstance, ch, conn, feed, initRes, len(freshCapture) == 1 && freshCapture[0])
+	d.finishCodexExecutionPreparation(id, expectedInstance, ch, conn, feed, initRes)
 	joined = true
 	return conn, feed, nil
 }

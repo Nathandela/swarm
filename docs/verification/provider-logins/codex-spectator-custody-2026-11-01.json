@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "status": "SPECTATOR_CONSTRUCTOR_FALSE_LIFECYCLE_AUTHORITY_REMOVED",
+  "tracking": "agents-tracker-h6sc.19",
+  "source_base": "1bdc1988",
+  "scope": "The actual managed account-connection constructor keeps native identity/peer/handshake checks and account bootstrap, but no longer treats an empty prelaunch loaded-thread inventory as creator-stream ownership. It no longer performs that inventory RPC. No execution continuation is added.",
+  "source_sha256": {
+    "internal/skeleton/execution_codex.go": "756e709b5664e9118b4311d9d11d5e2ff16f71c3b99abf3b8ef1916d2064e47e",
+    "internal/skeleton/backendconnect.go": "40c3f440e656ec46355a4019cf9e90c79034bbd655c36050a851b8de445015fa",
+    "internal/skeleton/execution_codex_test.go": "928e2076cade3fe1484c8df6b7b6e97567aab6e1038eb45aac1b58c5cc54f3c7"
+  },
+  "verification": {
+    "toolchain": "go1.26.10 darwin/arm64",
+    "regression_RED": "Existing constructor produced an exact quota candidate from socket-before-TUI timing plus plausible quota frames.",
+    "red_sha256": "1899e3bc5708d79dbdf333f7bb6bc8586a1de2aa3f2fc0de6f45b0eb4bf0766a",
+    "focused_race": {
+      "pass": 70,
+      "skip": 1
+    },
+    "expected_skip": "Owned endpoint subprocess entrypoint is skipped in the parent; bounded child copies run it explicitly.",
+    "package_elapsed_seconds": 40.89,
+    "race_reported": false,
+    "green_sha256": "22abad4f4b1ff7c51450a6291e4e275c30777fb76f81cf26a2c006bdc46fb0fa",
+    "native_provider_or_VM_execution": false,
+    "review": "Root authored TDD correction; Astra reviewed actual code and scoped GREEN. Luna independently inventoried the false inference and connected consumers."
+  },
+  "preserved": [
+    "Actual authenticated account transport and bootstrap still operate for verified peers.",
+    "Foreign native peer/image/endpoint still refuses before access delivery.",
+    "Unknown creator custody remains unknown after plausible turn/tool/quota frames.",
+    "Explicitly qualified synthetic lifecycle feed assumptions remain only in downstream fence tests; they are not proof for the production constructor.",
+    "Thread inventory used elsewhere to identify a running thread remains; inventory is not execution ownership."
+  ],
+  "limits": [
+    "This removes false authority; it does not complete Codex account/continuation integration.",
+    "The existing automatic thread/resume observer path has separate mutating behavior and capability obligations; it remains unresolved.",
+    "No native provider test or exact TUI continuation qualification follows from this local synthetic result.",
+    "Broader connected package gates follow the next frozen maintenance checkpoint."
+  ]
+}

@@ -42,11 +42,7 @@ type codexExecutionTestConn struct {
 
 func (c *codexExecutionTestConn) PeerProcess() (int, uint32, bool) { return c.native.PeerProcess() }
 
-func (c *codexExecutionTestConn) Call(_ context.Context, method string, _, out any) error {
-	if method == "thread/loaded/list" {
-		*(out.(*json.RawMessage)) = json.RawMessage(c.loaded)
-		return nil
-	}
+func (c *codexExecutionTestConn) Call(_ context.Context, method string, _, _ any) error {
 	return fmt.Errorf("unexpected fixture RPC %s", method)
 }
 func (*codexExecutionTestConn) Respond(context.Context, json.RawMessage, any) error { return nil }
@@ -66,7 +62,7 @@ type codexExecutionRig struct {
 
 // Synthetic shim/backend identities exercise the production FIFO and private
 // metadata proof; this fixture does not claim native provider qualification.
-func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexExecutionRig {
+func newCodexExecutionRig(t *testing.T, conversation string, qualifiedFeed bool) *codexExecutionRig {
 	t.Helper()
 	root, err := os.MkdirTemp("", "swce-")
 	if err != nil {
@@ -211,9 +207,14 @@ func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexE
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = peer.Close() })
-	r.conn = &codexExecutionTestConn{loaded: `{"data":[],"nextCursor":null}`, native: peer}
+	r.conn = &codexExecutionTestConn{native: peer}
 	d.prepareCodexExecutionNative(context.Background(), local, instance, r.channel, feed)
-	d.finishCodexExecutionPreparation(context.Background(), local, instance, r.channel, r.conn, feed, json.RawMessage(`{"userAgent":"codex_cli_rs/0.163.0"}`), fresh)
+	d.finishCodexExecutionPreparation(local, instance, r.channel, r.conn, feed, json.RawMessage(`{"userAgent":"codex_cli_rs/0.163.0"}`))
+	// Downstream fence tests assume an independently qualified lifecycle feed;
+	// the real managed spectator constructor never supplies this proof.
+	if qualifiedFeed {
+		feed.codexExecution.born = true
+	}
 	if conversation != "" && !d.registerBackendFeedForInstance(local, instance, conversation, r.conn, feed) {
 		t.Fatal("exact backend feed not registered")
 	}
@@ -299,6 +300,22 @@ func codexExecutionNativeFrames(t *testing.T, scenario string) (string, []struct
 	return "", nil
 }
 
+func TestCodexExecutionPrelaunchSocketDoesNotOwnTUILifecycle(t *testing.T) {
+	r := newCodexExecutionRig(t, resumeIdentityCodexID, false)
+	r.d.finishCodexExecutionPreparation(r.local, r.instance, r.channel, r.conn, r.feed, json.RawMessage(`{"userAgent":"codex_cli_rs/0.163.0"}`))
+	if !r.feed.codexExecution.prepared {
+		t.Fatal("verified account connection lost native identity preparation")
+	}
+	r.quotaTrace(t, false)
+	if candidate, ok := r.d.codexQuotaCandidate(r.local); ok {
+		t.Fatalf("socket-before-TUI timing granted lifecycle ownership: %+v", candidate)
+	}
+	snapshot, err := r.d.eng.ExecutionSnapshot(r.local)
+	if err != nil || snapshot.Codex == nil || !snapshot.Codex.UnknownCustody {
+		t.Fatalf("plausible quota frames erased unknown creator custody: %+v %v", snapshot, err)
+	}
+}
+
 func TestCodexExecutionCandidateRequiresProductionIngress(t *testing.T) {
 	d := &Daemon{}
 	if _, ok := d.codexQuotaCandidate("missing"); ok {
@@ -349,31 +366,23 @@ func (r *codexExecutionRig) quotaTrace(t *testing.T, omitTerminal bool) []struct
 	return frames
 }
 
-func TestCodexExecutionBirthProofSeparatesResumeAndRejoin(t *testing.T) {
-	for _, scenario := range []string{"fresh-resume", "rejoin", "preloaded", "malformed-list", "wrong-handshake", "early-control"} {
+func TestCodexExecutionPreparationRefusesWrongHandshakeAndEarlyControl(t *testing.T) {
+	for _, scenario := range []string{"wrong-handshake", "early-control"} {
 		t.Run(scenario, func(t *testing.T) {
-			r := newCodexExecutionRig(t, resumeIdentityCodexID, scenario != "rejoin")
-			if scenario == "preloaded" || scenario == "malformed-list" || scenario == "wrong-handshake" {
-				r.conn.loaded = `{"data":["` + resumeIdentityCodexID + `"]}`
-				handshake := json.RawMessage(`{"userAgent":"codex_cli_rs/0.163.0"}`)
-				if scenario == "malformed-list" {
-					r.conn.loaded = `{}`
+			r := newCodexExecutionRig(t, resumeIdentityCodexID, false)
+			if scenario == "wrong-handshake" {
+				r.d.finishCodexExecutionPreparation(r.local, r.instance, r.channel, r.conn, r.feed, json.RawMessage(`{"userAgent":"codex_cli_rs/0.162.0"}`))
+				if r.feed.codexExecution.prepared {
+					t.Fatal("wrong handshake prepared native feed")
 				}
-				if scenario == "wrong-handshake" {
-					r.conn.loaded = `{"data":[]}`
-					handshake = json.RawMessage(`{"userAgent":"codex_cli_rs/0.162.0"}`)
-				}
-				r.d.finishCodexExecutionPreparation(context.Background(), r.local, r.instance, r.channel, r.conn, r.feed, handshake, true)
-			}
-			if scenario == "early-control" {
+			} else {
 				r.feed.codexExecution.mu.Lock()
 				r.feed.codexExecution.preparedAt = time.Now().Add(time.Hour)
 				r.feed.codexExecution.mu.Unlock()
 			}
 			r.quotaTrace(t, false)
-			candidate, ok := r.d.codexQuotaCandidate(r.local)
-			if ok != (scenario == "fresh-resume") {
-				t.Fatalf("%s candidate=%+v eligible=%v", scenario, candidate, ok)
+			if candidate, ok := r.d.codexQuotaCandidate(r.local); ok {
+				t.Fatalf("%s candidate=%+v", scenario, candidate)
 			}
 		})
 	}
@@ -530,8 +539,8 @@ func TestCodexExecutionProductionPersistenceFailureCannotQualify(t *testing.T) {
 	}
 }
 
-func TestCodexExecutionDialCapturesBeforeInitializeAndDistinguishesRejoin(t *testing.T) {
-	for _, scenario := range []string{"fresh-resume", "rejoin", "early-native-work", "native-replaced-during-init", "wrong-native-peer", "missing-proof", "unqualified-cli", "ambiguous-handshake"} {
+func TestCodexExecutionDialAuthenticatesWithoutLifecycleOwnership(t *testing.T) {
+	for _, scenario := range []string{"verified-spectator", "early-native-work", "native-replaced-during-init", "wrong-native-peer", "missing-proof", "unqualified-cli", "ambiguous-handshake"} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newCodexExecutionRig(t, resumeIdentityCodexID, false)
 			replacement := r.feed.codexExecution.native
@@ -577,7 +586,7 @@ func TestCodexExecutionDialCapturesBeforeInitializeAndDistinguishesRejoin(t *tes
 				accesses.Add(1)
 				return backendAuthTokens{AccessToken: "SYNTHETIC-PRIVATE", AccountID: "fixture"}, nil
 			}
-			conn, feed, err := r.d.dialSessionBackend(r.local, r.instance, r.channel, scenario != "rejoin")
+			conn, feed, err := r.d.dialSessionBackend(r.local, r.instance, r.channel)
 			if scenario == "wrong-native-peer" || scenario == "missing-proof" || scenario == "unqualified-cli" {
 				if accesses.Load() != 0 {
 					t.Fatal("unverified peer retrieved private authentication material")
@@ -601,23 +610,16 @@ func TestCodexExecutionDialCapturesBeforeInitializeAndDistinguishesRejoin(t *tes
 			}
 			r.quotaTrace(t, false)
 			candidate, ok := r.d.codexQuotaCandidate(r.local)
-			if ok != (scenario == "fresh-resume") {
-				t.Fatalf("%s candidate=%+v qualified=%v", scenario, candidate, ok)
+			if ok {
+				t.Fatalf("%s spectator connection granted lifecycle ownership: %+v", scenario, candidate)
+			}
+			if accesses.Load() == 0 {
+				t.Fatal("lifecycle refusal disabled account authentication")
+			}
+			if _, e := os.Stat(r.channel.SocketPath + ".loaded"); !os.IsNotExist(e) {
+				t.Fatal("constructor queried thread inventory as lifecycle proof")
 			}
 		})
-	}
-}
-
-func TestCodexExecutionEmptyLoadedProofIsUnambiguous(t *testing.T) {
-	for _, raw := range []string{`{"data":[],"Data":["unobserved-thread"]}`, `{"data":[],"data":["unobserved-thread"]}`, `{"data":null}`, `{}`, `{"data":["thread"]}`, `{"data":[],"nextCursor":"more"}`, `{"data":[],"nextCursor":""}`, `{"data":[],"NextCursor":null}`, `{"data":[],"other":null}`, `{"data":[],"nextCursor":null,"nextCursor":"more"}`} {
-		if qualifiedEmptyCodexThreads(json.RawMessage(raw)) {
-			t.Fatal("ambiguous or nonempty native thread list qualified")
-		}
-	}
-	for _, raw := range []string{`{"data":[]}`, `{"data":[],"nextCursor":null}`} {
-		if !qualifiedEmptyCodexThreads(json.RawMessage(raw)) {
-			t.Fatal("explicit empty native list denied")
-		}
 	}
 }
 
@@ -714,6 +716,9 @@ func TestCodexExecutionOwnedEndpointProcess(t *testing.T) {
 				}
 				result = map[string]any{"type": "chatgptAuthTokens"}
 			case "thread/loaded/list":
+				if err := os.WriteFile(socket+".loaded", []byte("thread inventory requested"), 0600); err != nil {
+					return
+				}
 				result = map[string]any{"data": []string{}, "nextCursor": nil}
 			case "fixture/emit":
 				var frames []struct {

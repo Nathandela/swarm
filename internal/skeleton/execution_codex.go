@@ -146,34 +146,6 @@ func (d *Daemon) prepareCodexExecutionNative(ctx context.Context, local, instanc
 	}
 }
 
-func qualifiedEmptyCodexThreads(raw json.RawMessage) bool {
-	if len(raw) > 64<<10 {
-		return false
-	}
-	object, ok := decodeStrictObject(raw)
-	if !ok {
-		return false
-	}
-	for key, raw := range object {
-		switch key {
-		case "data":
-		case "nextCursor":
-			var cursor *string
-			if json.Unmarshal(raw, &cursor) != nil || cursor != nil {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	data, present := object["data"]
-	if !present {
-		return false
-	}
-	var threads []json.RawMessage
-	return len(data) > 0 && data[0] == '[' && json.Unmarshal(data, &threads) == nil && len(threads) == 0
-}
-
 func qualifiedCodexExecutionHandshake(raw json.RawMessage, userAgent string) bool {
 	if len(raw) > 64<<10 {
 		return false
@@ -195,7 +167,7 @@ func qualifiedCodexExecutionHandshake(raw json.RawMessage, userAgent string) boo
 	return ok && version == qualifiedCodexExecutionVersion
 }
 
-func (d *Daemon) finishCodexExecutionPreparation(ctx context.Context, local, instance string, ch daemon.BackendChannel, conn backendConn, feed *backendFeed, initialized json.RawMessage, fresh bool) {
+func (d *Daemon) finishCodexExecutionPreparation(local, instance string, ch daemon.BackendChannel, conn backendConn, feed *backendFeed, initialized json.RawMessage) {
 	state := &feed.codexExecution
 	state.mu.Lock()
 	captured := state.captured
@@ -207,23 +179,7 @@ func (d *Daemon) finishCodexExecutionPreparation(ctx context.Context, local, ins
 	}
 	meta, current, err := d.readCodexExecutionNative(local, instance, ch.SocketPath)
 	valid := codexExecutionPeerMatches(conn, native.PID, endpoint) && err == nil && current == native && meta.ShimPID == shimPID && meta.ShimStartTime == shimStart && *meta.CLIIdentity == cli && qualifiedCodexExecutionHandshake(initialized, feed.userAgent)
-	born := false
-	if valid && fresh && meta.LoginRuntime != nil && meta.LoginRuntime.ExternalAuth {
-		// Only this managed shim mode refuses to start a standalone TUI on timeout.
-		// Old conversation history does not imply this new process missed live work.
-		root, openErr := openRecoveryRoot(filepath.Join(d.stateDir, local))
-		if openErr == nil {
-			_, nativeErr := root.Lstat(shim.NativeProcessFile)
-			_ = root.Close()
-			if errors.Is(nativeErr, os.ErrNotExist) {
-				var loaded json.RawMessage
-				if conn.Call(ctx, "thread/loaded/list", map[string]any{}, &loaded) == nil {
-					born = qualifiedEmptyCodexThreads(loaded)
-				}
-			}
-		}
-	}
-	// Recheck after the RPC and before go-ahead, not merely before initialize.
+	// A verified socket does not own the TUI creator's lifecycle stream.
 	finalMeta, current, err := d.readCodexExecutionNative(local, instance, ch.SocketPath)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -231,7 +187,7 @@ func (d *Daemon) finishCodexExecutionPreparation(ctx context.Context, local, ins
 	if !state.prepared {
 		state.unsafe = true
 	}
-	state.born = born && !state.unsafe
+	state.born = false
 	state.preparedAt = time.Now()
 }
 
