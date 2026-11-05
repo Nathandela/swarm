@@ -1356,10 +1356,9 @@ func lineageBadge(s protocol.SessionView, sessions []protocol.SessionView) strin
 	if s.SpawnedFrom != "" {
 		badge = "from " + lineageLabel(s.SpawnedFrom, sessions)
 	}
-	local := localID(s.ID)
 	children := 0
 	for _, o := range sessions {
-		if o.SpawnedFrom == local {
+		if o.SpawnedFrom != "" && isAttemptOf(s, o.SpawnedFrom) {
 			children++
 		}
 	}
@@ -1373,15 +1372,36 @@ func lineageBadge(s protocol.SessionView, sessions []protocol.SessionView) strin
 }
 
 // lineageLabel names a parent session: its display label while it is still on the
-// roster, else the raw local id — the source session stays alive only until the user
-// closes it (D4), and a child must still say where it came from afterwards.
+// roster, else the label of the discussion that continued it under a new id (a resume
+// hides the old attempt and lists it in the new row's Supersedes), else the raw local
+// id — the source session stays alive only until the user closes it (D4), and a child
+// must still say where it came from afterwards.
 func lineageLabel(parent string, sessions []protocol.SessionView) string {
 	for _, s := range sessions {
 		if localID(s.ID) == parent && s.Name != "" {
 			return s.Name
 		}
 	}
+	for _, s := range sessions {
+		if s.Name != "" && isAttemptOf(s, parent) {
+			return s.Name
+		}
+	}
 	return parent
+}
+
+// isAttemptOf reports whether the local id names row s or one of the earlier attempts
+// it superseded, i.e. whether a child spawned from that id belongs to s's discussion.
+func isAttemptOf(s protocol.SessionView, local string) bool {
+	if localID(s.ID) == local {
+		return true
+	}
+	for _, id := range s.Supersedes {
+		if localID(id) == local {
+			return true
+		}
+	}
+	return false
 }
 
 // localID is the local half of a namespaced row id, or the id itself when it is not
