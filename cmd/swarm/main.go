@@ -150,6 +150,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runRemote(args[1:], stdout, stderr)
 	case "discord":
 		return dispatchDiscord(args[1:], stdout, stderr)
+	case "voice":
+		return dispatchVoice(args[1:], stdout, stderr)
 	case "relay":
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
