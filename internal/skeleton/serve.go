@@ -224,7 +224,8 @@ type Daemon struct {
 
 	// capStore is the daemon-authored per-session capability record store (ADR-017 T2 /
 	// playbook §6.2; capability.go).
-	capStore sessionCapabilityStore
+	capStore        sessionCapabilityStore
+	ownerInputHints *ownerInputHints
 	// sessionStatePublisher is the exact-incarnation daemon transaction used by
 	// capability authoring. nil selects core.RecordSessionStateForIncarnation;
 	// tests inject append failures without corrupting the durable journal.
@@ -452,6 +453,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// exactly one place that decides a bare coreAPI authors nothing.
 	d.api.onLaunched = d.authorLaunchedSessionCapabilities
 	d.api.sessionCaps = d.sessionCapabilities
+	d.api.ownerSessionCaps = d.ownerSessionCapabilities
 	// Freeze capability instance authors and chat-plane transitions outside the
 	// daemon's writeMu boundary. This follows the existing author -> transition ->
 	// writeMu order used by RecordSessionStateForIncarnation, so a roster snapshot
@@ -545,6 +547,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.composerTransactional = d.composerSendTransactional
 	d.api.semanticComposer = d.semanticSendTransactional
 	d.api.semanticStatus = d.semanticOperation
+	d.api.managerInputStatus = d.managerInputStatus
+	d.api.managerRuntime = d.managerRuntime
+	d.api.managerCall = d.resolveManagerCall
 	d.api.nativeDecision = d.ApplyNativeDecision
 	d.api.nativeRequestRead = d.NativeRequests
 	d.api.nativeDecisionStatus = d.NativeDecisionStatus
@@ -709,6 +714,7 @@ func Serve(cfg Config) (*Daemon, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
+	d.startNativeOwnerHints(ctx)
 	d.loginJobsWG.Add(1)
 	go func() { defer d.loginJobsWG.Done(); d.api.watchLoginJobs(ctx) }()
 	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0
@@ -912,6 +918,7 @@ func (d *Daemon) anyControlled(local string) bool {
 // engine registration and token (S6). Ending an unregistered session (e.g. one
 // adopted by reconcile, never registered) is a harmless no-op.
 func (d *Daemon) endSession(id string) {
+	d.ownerInputHints.invalidate(id)
 	d.stopOpenCodeObservation(id)
 	// A final conversation-id capture before the engine retires the session: a
 	// session attached-until-exit (the grid tap never sampled it) or a very
@@ -1314,6 +1321,7 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
+		d.ownerInputHints.close()
 		d.stopOpenCodeObservations()
 		if d.authw != nil {
 			// FIRST (codex finding 7): the watcher's recycle launches sessions

@@ -19,12 +19,14 @@ def probe():
    reply=peer.getresponse();raw=reply.read();assert reply.status==200,(reply.status,raw.decode());return json.loads(raw)
   finally:peer.close()
  root=pathlib.Path(tempfile.mkdtemp(prefix='swnative-',dir=str(pathlib.Path(sys.argv[2]).parent))).resolve();home=root/'home';cfg=home/'.claude';cfg.mkdir(parents=True);(home/'tmp').mkdir()
- requests=[];done=threading.Event();pause_entered=threading.Event();pause_release=threading.Event();clear_completed=threading.Event();clear_native_ids=[];late_entered=threading.Event();late_release=threading.Event()
+ requests=[];native_events=[];done=threading.Event();pause_entered=threading.Event();pause_release=threading.Event();clear_completed=threading.Event();clear_native_ids=[];late_entered=threading.Event();late_release=threading.Event();interrupt_entered=threading.Event();interrupt_release=threading.Event()
  class API(http.server.BaseHTTPRequestHandler):
   def log_message(self,*args):pass
   def do_GET(self):self.send_response(404);self.end_headers()
   def do_POST(self):
    body=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))))
+   if self.path=='/lifecycle/event':
+    native_events.append(body);self.send_response(200);self.end_headers();self.wfile.write(b'{}');return
    if self.path=='/lifecycle/late-gate':
     late_entered.set();late_release.wait(20);self.send_response(200);self.end_headers();self.wfile.write(b'{}');return
    if self.path=='/lifecycle/cleared':
@@ -43,6 +45,8 @@ def probe():
    if not body.get('stream'):
     data=json.dumps({'id':'msg_aux','type':'message','role':'assistant','model':body.get('model'),'content':[{'type':'text','text':'complete'}],'stop_reason':'end_turn','usage':{'input_tokens':1,'output_tokens':1}}).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(data);return
    self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
+   if primary and 'INTERRUPT_NATIVE_MARKER' in text and not interrupt_entered.is_set():
+    interrupt_entered.set();interrupt_release.wait(15)
    try:
     for event,obj in events:self.wfile.write(('event: '+event+'\ndata: '+json.dumps(obj)+'\n\n').encode());self.wfile.flush()
    except (BrokenPipeError,ConnectionResetError):pass
@@ -61,14 +65,18 @@ def probe():
 
  race=root/'race-plugin';(race/'.claude-plugin').mkdir(parents=True);(race/'hooks').mkdir();(race/'types').mkdir()
  (race/'.claude-plugin/plugin.json').write_text(json.dumps({'name':'swarm-native-race-probe','version':'1.0.0','types':'./types/index.d.ts'}))
- (race/'hooks/hooks.json').write_text('{"modules":["./pause.js"]}');(race/'types/index.d.ts').write_text('export {};')
- (race/'hooks/pause.js').write_text("export function register(on) { on('prompt.submit', async ($, event, next) => { if (event.text.includes('QUEUED_BEFORE_CLEAR_MARKER')) await $.http.fetch('http://127.0.0.1:"+str(api.server_port)+"/lifecycle/pause', {method:'POST',body:'{}'}); return next(event); }); on('command.run', async ($, event, next) => { const result=await next(event); if(event.command==='clear') await $.http.fetch('http://127.0.0.1:"+str(api.server_port)+"/lifecycle/cleared', {method:'POST',body:JSON.stringify({id:await $.session.id()})});return result; }); }")
+ (race/'hooks/hooks.json').write_text('{"modules":["./pause.js"]}');(race/'types/index.d.ts').write_text('export interface PluginState {}')
+ (race/'hooks/pause.js').write_text("export function register(on) { on('prompt.submit', async ($, event, next) => { await record($,{event:'prompt.submit',...event}); if (event.text.includes('QUEUED_BEFORE_CLEAR_MARKER')) await $.http.fetch('http://127.0.0.1:"+str(api.server_port)+"/lifecycle/pause', {method:'POST',body:'{}'}); return next(event); }); on('command.run', async ($, event, next) => { const result=await next(event); if(event.command==='clear') await $.http.fetch('http://127.0.0.1:"+str(api.server_port)+"/lifecycle/cleared', {method:'POST',body:JSON.stringify({id:await $.session.id()})});return result; }); }")
+ observer="const record = ($, body) => $.http.fetch('http://127.0.0.1:"+str(api.server_port)+"/lifecycle/event', {method:'POST',body:JSON.stringify(body)}); export function register(on) { on('classic.UserPromptSubmit',async ($,e,n)=>{await record($,{event:'classic.UserPromptSubmit',...e});return n(e)}); on('turn.start',async ($,e,n)=>{await record($,{event:'turn.start',...e});return n(e)}); on('turn.complete',async ($,e,n)=>{await record($,{event:'turn.complete',turnId:e.turnId,agentId:e.agentId,reason:e.reason}); await record($,{event:'session.read',turnId:e.turnId,turns:await $.session.turns(),messages:await $.session.messages()});return n(e)}); on('session.append',async ($,e,n)=>{if(e.message.type==='user') await record($,{event:'session.append',uuid:e.uuid,origin:e.origin,door:e.door,agentId:e.agentId,content:e.message.content});return n(e)}); }"
+ declarations,observations=observer.split('export function register(on) {',1)
+ source=(race/'hooks/pause.js').read_text().replace("export function register(on) {", declarations+"export function register(on) {"+observations.rsplit('}',1)[0])
+ (race/'hooks/pause.js').write_text(source)
  at=cmd.index('--plugin-dir');cmd[at+2:at+2]=['--plugin-dir',str(race)]
  sender=plugin/'hooks/input.js';production=sender.read_text()
  boundary="        const pending = $.prompt.submit({ text: message.text });"
  held="        if (message.text === 'LATE_OLD_RPC_MARKER') await $.http.fetch('http://127.0.0.1:"+str(api.server_port)+"/lifecycle/late-gate', {method:'POST',body:'{}'});\n"
  assert boundary in production;sender.write_text(production.replace(boundary,held+boundary,1))
- master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',45,160,0,0));guard_root=pathlib.Path(sys.argv[2]).parent.resolve();check_guards(guard_root,[api.server_port]);proc=subprocess.Popen(guarded(cmd,guard_root,[api.server_port]),cwd=root,env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave)
+ master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',45,160,0,0));guard_root=pathlib.Path(sys.argv[2]).parent.resolve();check_guards(guard_root,[api.server_port]);validation=subprocess.run(guarded([binary,"plugin","validate",str(race),"--json"],guard_root,[api.server_port]),env=env,cwd=root,capture_output=True,text=True,timeout=8);assert validation.returncode==0,validation.stdout+validation.stderr;proc=subprocess.Popen(guarded(cmd,guard_root,[api.server_port]),cwd=root,env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave)
  output=bytearray();raw=root/'terminal.log';deadline=time.monotonic()+55;channel_sent=False;dialog=False;last_input=0
  try:
   while time.monotonic()<deadline and proc.poll() is None:
@@ -102,6 +110,71 @@ def probe():
   result={'version':descriptor['provider_version'],'native_permission_dialog_seen':dialog,'broker_submitted':channel_sent,'tool_ran':(root/'must-not-run').exists(),'native_receipt':broker('/operation',{'worker':worker,'operation_id':'native-message'}) if channel_sent else None,'message_in_model_context':any(r['primary'] and r['marker_present'] for r in requests),'requests':requests,'root':str(root)}
   (root/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
   assert dialog and channel_sent and result['message_in_model_context'] and not result['tool_ran']
+  def drain():
+   readable,_,_=select.select([master],[],[],.05)
+   if readable:
+    try:output.extend(os.read(master,65536))
+    except OSError:pass
+  def await_turn(state,reason=None):
+   until=time.monotonic()+8
+   while time.monotonic()<until:
+    drain();turn=broker('/turn-status',{'worker':worker})
+    if turn['state']==state and (reason is None or turn.get('reason')==reason):return turn
+   raise AssertionError(('main native lifecycle not observed',state,reason,turn))
+  answered=await_turn('completed','answer')
+  assert answered['turn_id']
+  broker('/submit',{'worker':worker,'operation_id':'native-interrupt-turn','text':'INTERRUPT_NATIVE_MARKER'})
+  until=time.monotonic()+5
+  while not interrupt_entered.is_set() and time.monotonic()<until:drain()
+  assert interrupt_entered.is_set(),'native interrupt turn did not start'
+  running=await_turn('running')
+  assert running['turn_id']!=answered['turn_id']
+  try:
+   broker('/interrupt',{'worker':worker,'operation_id':'stale-stop','turn_id':answered['turn_id']})
+   raise RuntimeError('stale native turn accepted for interrupt')
+  except AssertionError as error:assert error.args[0][0]==409,error
+  stop=broker('/interrupt',{'worker':worker,'operation_id':'exact-stop','turn_id':running['turn_id']})
+  assert stop['state']=='prepared'
+  aborted=await_turn('completed','aborted')
+  assert aborted['turn_id']==running['turn_id']
+  interrupt_release.set()
+  stop=broker('/interrupt',{'worker':worker,'operation_id':'exact-stop','turn_id':running['turn_id']})
+  assert stop['state']=='accepted',stop
+  os.write(master,b'OWNER_AFTER_ABORT_MARKER');time.sleep(.2);os.write(master,b'\r')
+  resumed=await_turn('completed','answer')
+  assert resumed['turn_id']!=aborted['turn_id'] and resumed['external_input']>aborted['external_input']
+  print(json.dumps({'native_turns':{'version':descriptor['provider_version'],'answer':answered,'interrupted':aborted,'interrupt_receipt':stop,'owner_after_abort':resumed,'stale_interrupt_refused':True,'input_to_turn_attribution':'unsupported: no input identity in native turn.start'}},indent=2))
+  completed_before=sum(e['event']=='turn.complete' for e in native_events)
+  activity_before=resumed['external_input']
+  broker('/submit',{'worker':worker,'operation_id':'identical-race','text':'IDENTICAL_RACE_MARKER'})
+  os.write(master,b'IDENTICAL_RACE_MARKER');time.sleep(.2);os.write(master,b'\r')
+  until=time.monotonic()+8
+  while time.monotonic()<until:
+   drain()
+   if sum(e['event']=='turn.complete' for e in native_events)>=completed_before+2:break
+  raced=[e for e in native_events if e['event']=='prompt.submit' and e.get('text')=='IDENTICAL_RACE_MARKER']
+  assert len(raced)==2 and {e['origin']['kind'] for e in raced}=={'composer','plugin'},raced
+  race_turn=await_turn('completed','answer')
+  assert race_turn['external_input']==activity_before+1,race_turn
+  print(json.dumps({'identical_text_race':{'observed_prompts':raced,'final_turn':race_turn,'input_to_turn_authority_inferred':False}},indent=2))
+  print(json.dumps({'native_event_characterization':native_events},indent=2))
+  native_rows=[];native_turn_occurrences=[]
+  observed_turn_ids={e['turnId'] for e in native_events if e['event']=='turn.start'}
+  for transcript in (cfg/'projects').rglob('*.jsonl'):
+   for line in transcript.read_text(errors='replace').splitlines():
+    try:row=json.loads(line)
+    except json.JSONDecodeError:continue
+    for native_turn_id in observed_turn_ids:
+     if native_turn_id in line:native_turn_occurrences.append({'type':row.get('type'),'native_turn_id':native_turn_id,'keys':list(row)})
+    if row.get('type') in ['user','assistant']:
+     native_rows.append({k:v for k,v in row.items() if re.search(r'(id|uuid|source|origin|type)',k,re.I) and isinstance(v,(str,int,bool,type(None)))})
+  print(json.dumps({'native_history_coordinates':native_rows,'native_history_turn_id_occurrences':native_turn_occurrences},indent=2))
+  types=race/'.claude-plugin/types/claude-code/index.d.ts'
+  assert types.exists(),'installed native mods types not emitted'
+  declared=types.read_text()
+  excerpts={name:re.search(r'(?:export )?type '+name+r' = [\s\S]*?\n  };',declared).group(0) for name in ['BaseHookInput','UserPromptSubmitHookInput','TurnStartInput','SessionAppendInput','SessionMessage']}
+  excerpts['session_api']=declared[declared.index('session: {'):declared.index('session: {')+5000]
+  print(json.dumps({'installed_type_declarations':excerpts},indent=2))
   # Native drain reservation must keep an already-running prompt in its original conversation.
   time.sleep(1)
   broker('/submit',{'worker':worker,'operation_id':'before-clear','text':'QUEUED_BEFORE_CLEAR_MARKER'})
@@ -190,7 +263,7 @@ def probe():
   print(json.dumps({'lifecycle':lifecycle},indent=2))
 
  finally:
-  pause_release.set();late_release.set()
+  pause_release.set();late_release.set();interrupt_release.set()
   try:os.killpg(proc.pid,signal.SIGTERM)
   except ProcessLookupError:pass
   try:proc.wait(timeout=2)

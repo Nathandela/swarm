@@ -63,6 +63,16 @@ func wireJSONTags() []string {
 		reflect.TypeOf(Control{}),
 		reflect.TypeOf(SessionView{}),
 		reflect.TypeOf(LaunchReq{}),
+		reflect.TypeOf(ManagerLaunchReq{}),
+		reflect.TypeOf(ManagerRuntimeBinding{}),
+		reflect.TypeOf(ManagerAdmission{}),
+		reflect.TypeOf(ManagerNativeTurn{}),
+		reflect.TypeOf(ManagerRuntimeReq{}),
+		reflect.TypeOf(ManagerRuntimeStatus{}),
+		reflect.TypeOf(ManagerCallReq{}),
+		reflect.TypeOf(ManagerCallProof{}),
+		reflect.TypeOf(ComposerSendReq{}),
+		reflect.TypeOf(SemanticMessageReceipt{}),
 		reflect.TypeOf(TerminalSnapshot{}),
 		// WAVE R8 CLOSING ROUND: the versioned view is on the wire, so it is reflected here.
 		// GG-7's field-table obligation is not a rule about which structs someone remembered
@@ -96,6 +106,7 @@ func allOps() []string {
 		OpLoginsManage,
 		OpSemanticSend, OpSemanticStatus,
 		OpOwnerLaunch, OpOwnerLaunchStatus,
+		OpManagerRuntime, OpManagerResolveCall, OpManagerInputStatus,
 	}
 }
 

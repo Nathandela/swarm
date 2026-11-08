@@ -76,12 +76,28 @@ var remoteForbiddenOptions = map[string]string{
 // entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
+	var manager *daemon.ManagerLaunchSpec
+	if req.Manager != nil {
+		manager = &daemon.ManagerLaunchSpec{ConversationID: req.Manager.ConversationID, BridgeSocket: req.Manager.BridgeSocket, AuthFile: req.Manager.AuthFile}
+		if req.Agent == "claude" && req.Env != nil {
+			config := ""
+			for _, entry := range req.Env {
+				if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
+					config = value
+				}
+			}
+			manager.ClaudeConfigDir = &config
+		}
+	}
 	var clientEnv, openCodeEnv []string
 	var hermesOrigins []string
 	if !remote && req.Env != nil {
 		// Capture owner configuration origins before the launch allowlist removes
 		// them. Nil still requests daemon policy; an explicit empty env stays empty.
 		clientEnv = persist.FilterEnv(req.Env)
+		if req.Manager != nil {
+			clientEnv = daemon.ManagerLaunchEnvironment(req.Agent, req.Env)
+		}
 		if req.Agent == "hermes" {
 			hermesOrigins = daemon.HermesConfigurationEnvironment(req.Env)
 		}
@@ -96,6 +112,7 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		}
 	}
 	return daemon.LaunchSpec{
+		Manager:       manager,
 		HermesOrigins: hermesOrigins,
 		AgentType:     req.Agent,
 		Name:          SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
@@ -268,7 +285,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapManagerLaunch, CapManagerProvenance,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1395,6 +1412,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleNativeDecide(c)
 	case OpNativeRequests:
 		cc.handleNativeRequests(c)
+	case OpManagerRuntime, OpManagerResolveCall, OpManagerInputStatus:
+		cc.handleManagerRuntime(c)
 	case OpNativeDecisionStatus:
 		cc.handleNativeDecisionStatus(c)
 	case OpOperationStatus:
@@ -1473,6 +1492,7 @@ func (cc *clientConn) handleHello(c Control) {
 // DaemonAPI may still satisfy JournalBackend and serve the legacy read+subscribe path; advertising
 // subscribe-from to it would make a new gateway select an operation the server must then refuse.
 func (s *Server) supportedCaps() []string {
+	managerSource, managerLaunch := s.d.(ManagerLaunchSource)
 	_, ownerLaunch := s.d.(OwnerLaunchSource)
 	_, journalFrom := s.d.(JournalSubscribeFromBackend)
 	_, durable := s.d.(ComposerOperationExecutor)
@@ -1481,8 +1501,15 @@ func (s *Server) supportedCaps() []string {
 	_, semantic := s.d.(SemanticComposerSender)
 	_, nativeObservation := s.d.(OpenCodeObservationBackend)
 	_, nativeDecisions := s.d.(NativeDecisionApplier)
+	_, managerProvenance := s.d.(ManagerRuntimeSource)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
+		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {
+			continue
+		}
+		if cap == CapManagerLaunch && (s.remoteTier || !ownerLaunch || !managerLaunch || !managerSource.ManagerLaunchSupported()) {
+			continue
+		}
 		if cap == CapOwnerLaunch && (s.remoteTier || !ownerLaunch) {
 			continue
 		}
@@ -1518,6 +1545,20 @@ func (cc *clientConn) handleList() {
 }
 
 func (cc *clientConn) handleLaunch(c Control) {
+	if c.Launch != nil && c.Launch.Manager != nil {
+		if cc.srv.remoteTier || c.Op != OpOwnerLaunch {
+			cc.replyErrorCode("manager launch is owner-only and requires owner_launch", CodePolicy)
+			return
+		}
+		if !cc.hasCap(CapManagerLaunch) {
+			cc.replyErrorCode("manager-launch capability was not negotiated", CodeNotImplemented)
+			return
+		}
+		if err := validateManagerLaunch(*c.Launch); err != nil {
+			cc.replyErrorCode("manager launch: "+err.Error(), CodeInvalidField)
+			return
+		}
+	}
 	if !cc.srv.remoteTier && c.Op != OpOwnerLaunch && c.OperationID != "" {
 		cc.replyErrorCode("launch operation IDs require the owner_launch capability and operation", CodeInvalidField)
 		return
@@ -3487,6 +3528,14 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
+	if source, ok := s.d.(OwnerSessionCapabilitySource); ok {
+		if caps, present := source.OwnerSessionCapabilities(m.ID, m.ShimPID, m.ShimStartTime); present && caps.Validate() == nil {
+			if m.Status.Process != status.ProcessRunning || m.ResumeError != "" || caps.Provider != m.AgentType {
+				caps.NativeOwnerInput = false
+			}
+			view.Capabilities = &caps
+		}
+	}
 	if source, ok := s.d.(OpenCodeObservationBackend); ok {
 		if native, present := source.OpenCodeObservation(m.ID); present {
 			view.OpenCode = &native
@@ -3514,6 +3563,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		sentAt = &at
 	}
 	return &SessionView{
+		Role: m.Role, ManagerConversationID: m.ManagerConversationID,
 		RosterHidden:   m.RosterHidden,
 		EndpointID:     endpointID,
 		ID:             NamespacedID(endpointID, m.ID),

@@ -584,6 +584,20 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
 	}
+	if req.ManagerAdmission != nil {
+		if source != adapter.SourceOwner || meta.Role != "manager" {
+			return protocol.CodeStructuredUnsupported, errors.New("manager admission requires the owner manager source")
+		}
+		if _, err := d.checkedManagerBinding(local, req.ManagerAdmission.Binding); err != nil {
+			return protocol.CodeStaleInstance, errors.New("manager runtime binding changed; nothing was submitted")
+		}
+		if meta.AgentType == "codex" {
+			return d.sendCodexManager(local, operationID, req, begin, lane, admittedBarrier)
+		}
+		if meta.AgentType != "claude" {
+			return protocol.CodeStructuredUnsupported, errors.New("manager native runtime unsupported")
+		}
+	}
 	if meta.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		if source == adapter.SourcePhone {
 			cap, ok := d.sessionCapabilities(local)
@@ -606,8 +620,14 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
 	}
-	if req.Origin != nil && meta.AgentType == "claude" {
-		return d.sendClaudeNative(local, operationID, req, begin, lane, admittedBarrier)
+	if meta.AgentType == "claude" {
+		enrolled, err := d.core.SessionClaudeInputEnrollment(local)
+		if err != nil {
+			return protocol.CodeStructuredUnsupported, err
+		}
+		if enrolled || req.Origin != nil {
+			return d.sendClaudeNative(local, operationID, req, begin, lane, admittedBarrier)
+		}
 	}
 	// Resolve the sink only after this request reaches the queue head. A backend may be
 	// replaced or disappear while earlier messages are in provider I/O.

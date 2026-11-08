@@ -84,7 +84,29 @@ func (m *loginManager) inputGate(local string) error {
 		return nil
 	}
 	if meta.ResumeError != "" {
+		if meta.Role == "manager" {
+			return errors.New(managerRestartRecovery)
+		}
 		return errors.New("native continuation failed; end this attempt and resume the discussion before sending another message")
+	}
+	if meta.Role == "manager" {
+		if meta.LoginRuntime != nil {
+			if err := m.store.ValidateRuntime(*meta.LoginRuntime); err != nil {
+				return errors.Join(m.quarantineManager(meta), err)
+			}
+		} else {
+			current := ""
+			if meta.AgentType == "claude" {
+				current = ManagerNativeIdentity(meta)
+			} else if m.d.authw != nil && m.d.authw.sessionIdentity != nil {
+				current = m.d.authw.sessionIdentity(meta.AgentType, meta.Env)
+			} else {
+				current = AuthIdentityForEnv(meta.AgentType, meta.Env)
+			}
+			if meta.AuthIdentity == "" || current == "" || current != meta.AuthIdentity {
+				return m.quarantineManager(meta)
+			}
+		}
 	}
 	r, err := m.store.Snapshot()
 	if err != nil {
@@ -145,6 +167,9 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		return logins.Switch{}, logins.ErrConflict
 	}
 	if op, ok := r.Switches[provider]; ok {
+		if err := m.preflightManagerSwitch(op); err != nil {
+			return logins.Switch{}, err
+		}
 		if op.Deactivate {
 			return logins.Switch{}, logins.ErrPending
 		}
@@ -167,6 +192,9 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 	}
 	if r.Providers[provider].ActiveID == toID {
 		return logins.Switch{}, nil
+	}
+	if err := m.preflightManagerSwitch(logins.Switch{Provider: provider}); err != nil {
+		return logins.Switch{}, err
 	}
 	if r.Providers[provider].ActiveID == "" {
 		if err = m.refuseNativeBound(provider); err != nil {
@@ -241,9 +269,15 @@ func (m *loginManager) beginDeactivate(provider string, expected *uint64) (login
 	// With no selection only managed-bound discussions remain to stop; native
 	// ones never ran in the managed home.
 	stopOnly := r.Providers[provider].ActiveID == ""
+	if err := m.preflightManagerSwitch(logins.Switch{Provider: provider, Deactivate: true}); err != nil {
+		return logins.Switch{}, err
+	}
 	var rows []logins.Restart
 	for _, meta := range m.list() {
 		if meta.AgentType == provider && meta.Status.Process == status.ProcessRunning && !meta.RosterHidden && (!stopOnly || loginmigration.ManagedBound(m.d.stateDir, meta)) {
+			if err := managerRestartPreflight(meta); err != nil {
+				return logins.Switch{}, err
+			}
 			rows = append(rows, logins.Restart{SourceID: meta.ID, ConversationID: meta.ConversationID, Phase: "waiting"})
 		}
 	}
@@ -375,6 +409,10 @@ func (m *loginManager) sourceRows(op logins.Switch) []persist.Meta {
 }
 
 func (m *loginManager) stepSwitch(op logins.Switch) {
+	if err := m.preflightManagerSwitch(op); err != nil {
+		m.saveError(op, err)
+		return
+	}
 	switch op.Phase {
 	case "waiting", "stopping":
 		op.Phase = "stopping"
@@ -582,6 +620,9 @@ func (m *loginManager) stopClaimedSession(op *logins.Switch, index int, source p
 		if !ok || current.RosterHidden {
 			return errAuthOwnerEnding
 		}
+		if err := managerRestartPreflight(current); err != nil {
+			return err
+		}
 		if current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || m.d.anyControlled(source.ID) || m.d.contextGuardCompactionInFlight(source.ID) || m.d.composerOutcomeUnresolved(source.ID) || m.d.directInputUnresolved(source.ID) {
 			return fmt.Errorf("login switch: waiting for discussion %q to finish or detach", current.Name)
 		}
@@ -615,6 +656,10 @@ func (m *loginManager) resumeSwitchSession(op *logins.Switch, index int) {
 	if !exists || source.RosterHidden {
 		row.Phase = "cancelled"
 		_ = m.store.SaveSwitch(*op)
+		return
+	}
+	if err := managerRestartPreflight(source); err != nil {
+		m.saveError(*op, err)
 		return
 	}
 	// Recover launch-before-journal crashes from durable lineage, never launch a
@@ -762,6 +807,11 @@ func (m *loginManager) beginReloginExpected(loginID string, credential logins.Cr
 	gate := &m.admission[loginProviderIndex(provider)]
 	gate.Lock()
 	defer gate.Unlock()
+	planned := r.Switches[provider]
+	planned.Provider = provider
+	if err := m.preflightManagerSwitch(planned); err != nil {
+		return logins.Switch{}, err
+	}
 	if op, ok := r.Switches[provider]; ok {
 		if op.Deactivate {
 			return logins.Switch{}, logins.ErrPending
@@ -864,6 +914,9 @@ func (m *loginManager) preflightSources(sources []persist.Meta) error {
 	for _, source := range sources {
 		if source.Status.Process != status.ProcessRunning {
 			continue
+		}
+		if err := managerRestartPreflight(source); err != nil {
+			return err
 		}
 		if source.LaunchOptions[protocol.OptionWorktree] == "true" && source.AgentCwd == "" {
 			return errors.New("login switch: isolated discussion has no saved checkout")

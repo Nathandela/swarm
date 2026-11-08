@@ -15,7 +15,9 @@ var pluginSource string
 var guardSource string
 
 // Install writes only session-owned, per-invocation plugin artifacts.
-func Install(dir string) (string, error) {
+func Install(dir string) (string, error) { return install(dir, "swarm-native-input") }
+
+func install(dir, senderName string) (string, error) {
 	config, _ := json.Marshal(filepath.Join(dir, DescriptorFile))
 	for name, source := range map[string]string{"claude-input-plugin": pluginSource, "claude-input-guard-plugin": guardSource} {
 		root := filepath.Join(dir, name)
@@ -24,15 +26,19 @@ func Install(dir string) (string, error) {
 				return "", err
 			}
 		}
-		pluginName := "swarm-native-input"
+		pluginName := senderName
 		if name == "claude-input-guard-plugin" {
 			pluginName += "-guard"
 		}
 		manifest, _ := json.Marshal(map[string]string{"name": pluginName, "version": "1.1.0", "description": "Swarm native message ingress", "types": "./types/index.d.ts"})
+		types := "export {};\n"
+		if senderName != "swarm-native-input" {
+			types = "export interface PluginState {}\n"
+		}
 		files := map[string]string{
 			".claude-plugin/plugin.json": string(manifest),
 			"hooks/hooks.json":           `{"modules":["./input.js"]}`,
-			"types/index.d.ts":           "export {};\n",
+			"types/index.d.ts":           types,
 			"hooks/input.js":             strings.ReplaceAll(source, "__CONFIG_PATH__", string(config)),
 		}
 		for name, body := range files {

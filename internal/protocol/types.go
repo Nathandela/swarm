@@ -248,6 +248,7 @@ type (
 	PolicyView                 = schema.PolicyView
 	PairingControl             = schema.PairingControl
 	LaunchReq                  = schema.LaunchReq
+	ManagerLaunchReq           = schema.ManagerLaunchReq
 	ReconcileRecord            = schema.ReconcileRecord
 	SendInputReq               = schema.SendInputReq
 	RemoteProfileV1            = schema.RemoteProfileV1

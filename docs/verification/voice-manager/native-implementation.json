@@ -1,0 +1,135 @@
+{
+  "version": "2.1.319",
+  "sender_name": "swarm-manager-input-845b0c88ad281f1088fe6acfb5f20f97",
+  "real_account_used": false,
+  "production_sessions_used": false,
+  "microphone_used": false,
+  "production_guard_sha256": "7c77ae66d98a8fa51181bbf623f7b579c545874ed3596237123c30125b7bb4f3",
+  "results": [
+    {
+      "case": "startup",
+      "ready": true,
+      "startup_dialogs": []
+    },
+    {
+      "case": "native-call",
+      "proof": {
+        "native_input_id": "71c26457a95546aea3f5fbb6bbf4eb765f22be65827a4ee3a2f852d1f50230c5",
+        "native_turn_id": "ee3784a9-9b14-44e4-abc1-d2b6d16c54aa",
+        "native_call_id": "native_call_1",
+        "main": true
+      },
+      "meta": {
+        "claudecode/toolUseId": "native_call_1",
+        "progressToken": 2
+      },
+      "completed": {
+        "native_input_id": "71c26457a95546aea3f5fbb6bbf4eb765f22be65827a4ee3a2f852d1f50230c5",
+        "native_turn_id": "ee3784a9-9b14-44e4-abc1-d2b6d16c54aa",
+        "state": "completed",
+        "reason": "answer",
+        "external_input": 0
+      }
+    },
+    {
+      "case": "abort-recovery",
+      "old": {
+        "native_input_id": "1217c2a7d54e46ea885bdc170d5d4b9ba7aa521e2af44ac7b147c29c77369aa3",
+        "native_turn_id": "fb2b7461-ab2a-4de7-b41b-3948ec81883a",
+        "state": "completed",
+        "reason": "aborted",
+        "external_input": 0
+      },
+      "fresh": {
+        "native_input_id": "cebb03ed3b5c4eaeb8e1144d8d22ab388426e29d35fe42ca8a54ed8e59a89126",
+        "native_turn_id": "7655bcb2-4303-4f0f-a425-4592fa8fdc74",
+        "state": "completed",
+        "reason": "answer",
+        "external_input": 0
+      }
+    },
+    {
+      "case": "error-recovery",
+      "old": {
+        "native_input_id": "9424e214e1cc4fb584d3cd8763892dc37c5f5dce8d36499f824cd2c880e7048f",
+        "native_turn_id": "169e048f-3989-4f2f-8630-29b07fc43962",
+        "state": "completed",
+        "reason": "error",
+        "external_input": 0
+      },
+      "fresh": {
+        "native_input_id": "b858b54ac7b54fb4a3075a7b444c3cf3306b4d58169b4f2896d02890ea32634c",
+        "native_turn_id": "96fa3185-643f-49ec-a71e-0137b04e4fff",
+        "state": "completed",
+        "reason": "answer",
+        "external_input": 0
+      }
+    },
+    {
+      "case": "refusal-recovery",
+      "old": {
+        "native_input_id": "dbaafeebbdb84673ba48d5040ad04172114c23843f6545b3a4b76a26c014042c",
+        "native_turn_id": "17e49b05-78d6-4293-9669-3ac4567f9a47",
+        "state": "completed",
+        "reason": "refusal",
+        "external_input": 0
+      },
+      "fresh": {
+        "native_input_id": "6641a7c179fa48a1820339896aa1a36924534a8413124c118a2a55f920d65608",
+        "native_turn_id": "79fe5849-e01d-4c67-8b70-09b5c681b615",
+        "state": "completed",
+        "reason": "answer",
+        "external_input": 0
+      }
+    },
+    {
+      "case": "permission-modal",
+      "ready": false,
+      "held_seconds": 3.5,
+      "no_host_call": true,
+      "outcome": {
+        "native_input_id": "f9df53fded2546b4b9199c39f3f293099d3da2e9e3a7482aa8ea8d3c757d545c",
+        "native_turn_id": "5b368988-18a0-4885-8fc7-c845cf83009c",
+        "state": "completed",
+        "reason": "answer",
+        "external_input": 0
+      }
+    },
+    {
+      "case": "manual-steer",
+      "before": {
+        "ready_for_input": false,
+        "native_input_id": "94e7c12e21e94c57bf2d297f46e8fb110ebb8f975dcc4512995dc690c94bcbdb",
+        "native_message_id": "b16488cc-eec3-46c5-a921-3c0f55818960",
+        "turn_id": "a1b53c85-4613-492b-a288-92aab21c32f5",
+        "state": "running",
+        "external_input": 0
+      },
+      "after": {
+        "ready_for_input": false,
+        "externally_steered": true,
+        "native_input_id": "94e7c12e21e94c57bf2d297f46e8fb110ebb8f975dcc4512995dc690c94bcbdb",
+        "native_message_id": "b16488cc-eec3-46c5-a921-3c0f55818960",
+        "turn_id": "a1b53c85-4613-492b-a288-92aab21c32f5",
+        "state": "running",
+        "external_input": 1
+      },
+      "proof_refused": true
+    },
+    {
+      "case": "historical-input",
+      "outcome": {
+        "externally_steered": true,
+        "native_input_id": "94e7c12e21e94c57bf2d297f46e8fb110ebb8f975dcc4512995dc690c94bcbdb",
+        "native_turn_id": "a1b53c85-4613-492b-a288-92aab21c32f5",
+        "state": "completed",
+        "reason": "answer",
+        "external_input": 1
+      }
+    }
+  ],
+  "qualification_date": "2026-11-08",
+  "cli_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+  "production_guard_source_sha256": "82e9bcff66dbe861c684a0b4ecb594271b60bb4518c8e8b15a434cd017cfe646",
+  "synthetic_fixture_scope": "Actual privately copied installed CLI, production InstallManager sender and guard, synthetic account/model and loopback stdio MCP peer; no external provider calls or live sessions."
+}

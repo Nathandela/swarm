@@ -176,6 +176,7 @@ func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.Sessio
 // registerSessionCapabilitiesTransitionLocked is the store half for a caller
 // already serializing capability state with its ordered journal publication.
 func (d *Daemon) registerSessionCapabilitiesTransitionLocked(sessionID string, c protocol.SessionCapabilities) {
+	d.ownerInputHints.invalidate(sessionID)
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
 	recovered := false
@@ -278,6 +279,7 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 	}
 	c.NativeInteractionVersion = 0
 	c.NativeComposer = false
+	c.NativeOwnerInput = false
 	if proof := d.capStore.nativeProof[sessionID]; proof.observation != nil && proof.instance == c.SessionInstance && c.Provider == "opencode" {
 		c.NativeInteractionVersion = 2
 		c.NativeComposer = proof.composer && !c.StructuredChat

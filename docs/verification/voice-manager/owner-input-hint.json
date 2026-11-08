@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-08",
+  "baseline_hung_broker_hint_latency": "152.39175ms",
+  "race_metrics": {
+    "hung_broker_hint_latency": "32.541\u00b5s",
+    "cold_512_lookup_latency": "605.042\u00b5s",
+    "no_subscriber_fanout_latency": "88.291\u00b5s"
+  },
+  "bounds": {
+    "workers_per_daemon": 1,
+    "queued_refreshes": 64,
+    "active_refreshes": 1,
+    "hint_entries": 256,
+    "hint_ttl_ms": 1000,
+    "claude_probe_timeout_ms": 150
+  },
+  "independent_overlay": "native-cap-review-kkzd7amk",
+  "checks": [
+    "actual_loopback_unix_stalled_broker",
+    "single_event_drain_without_subscribers",
+    "cold_queue_bound",
+    "cancel_hung_refresh_at_shutdown",
+    "wrong_physical_incarnation_refused",
+    "old_base_instance_not_retagged",
+    "ended_worker_instance_retained_without_native_input",
+    "invalidated_late_success_discarded",
+    "ordinary_claude_owner_send_compatibility"
+  ],
+  "effect_authority": "Uncached native semantic send revalidates current sink; hint eviction never removes admission/operation guards.",
+  "fixture_scope": "Supervised synthetic sessions and private loopback Unix HTTP fixture; no real credentials or production sessions."
+}

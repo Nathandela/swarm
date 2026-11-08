@@ -47,9 +47,12 @@ const (
 // here (not FromDaemon) so its poller is stopped deterministically on Close — the
 // daemon owns the socket, so the Server never runs FromDaemon's own stop path.
 type coreAPI struct {
-	core         *daemon.Daemon
-	fakeAgentBin string
-	endpointID   string // this daemon's stable federation id (resume source validation)
+	managerInputStatus func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
+	managerRuntime     func(string, string) (protocol.ManagerRuntimeStatus, error)
+	managerCall        func(context.Context, string, protocol.ManagerCallReq) (protocol.ManagerCallProof, error)
+	core               *daemon.Daemon
+	fakeAgentBin       string
+	endpointID         string // this daemon's stable federation id (resume source validation)
 	// killFn/deleteFn let the assembly place owner lifecycle operations behind
 	// the same per-session end fence as automatic auth recycling. Bare coreAPI
 	// tests retain the raw daemon fallback.
@@ -205,8 +208,9 @@ type coreAPI struct {
 	// (ADR-017 T2-a): the first authors a record the instant a launch succeeds, the
 	// second is the PURE READ the remote-tier gate consults. Both nil until Serve wires
 	// them, and nil is fail-closed -- no record authored, no record found.
-	onLaunched  func(persist.Meta)
-	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
+	onLaunched       func(persist.Meta)
+	sessionCaps      func(local string) (protocol.SessionCapabilities, bool)
+	ownerSessionCaps func(local string, shimPID int, shimStart int64) (protocol.SessionCapabilities, bool)
 	// withSessionStateSnapshot, when wired by the full assembly, runs a journal
 	// roster boundary and its capability lookups under one shared state fence.
 	withSessionStateSnapshot func(func())
@@ -1026,6 +1030,25 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return m, err
 		}
 	}
+	if spec.Manager != nil {
+		manager := *spec.Manager
+		manager.Command = a.core.ManagerBridgeCommand()
+		nativeEnv := a.core.ManagerEnvironment(spec.AgentType, spec.ClientEnv)
+		manager.UnsupportedOrigin = !daemon.ManagerNativeEnvironmentSupported(spec.AgentType, nativeEnv)
+		if spec.AgentType == "claude" && manager.ClaudeConfigDir == nil {
+			config := ""
+			for _, entry := range nativeEnv {
+				if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
+					config = value
+				}
+			}
+			manager.ClaudeConfigDir = &config
+		}
+		spec.Manager = &manager
+	}
+	if err := validateManagerSource(spec, a.endpointID, a.core.Get); err != nil {
+		return persist.Meta{}, err
+	}
 	var handoff *handoffHistoryResolver
 	coreAttempted := false
 	resolver := a.historyResolver
@@ -1096,6 +1119,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 	// agent runs. THIS is the one point every launch entry passes through; resolving
 	// here is what makes the daemon-side seam real (R1 audit H1).
 	spec.ClientEnv = a.core.LaunchPolicyEnv(spec.ClientEnv)
+	if spec.Manager != nil {
+		spec.ClientEnv = daemon.ManagerLaunchEnvironment(spec.AgentType, spec.ClientEnv)
+	}
 	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
 	// because it is the ONLY point every launch entry passes through. handleLaunch has
 	// the same presence check, but `session_launch` (the signed remote-preset path) does
@@ -1161,6 +1187,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 		defer a.externalResumeMu.Unlock()
 		for _, existing := range a.core.List() {
 			if existing.AgentType == spec.AgentType && existing.ConversationID == conversationID {
+				if err := validateManagerSelection(spec, existing); err != nil {
+					return persist.Meta{}, err
+				}
 				return a.core.RecordOwnerLaunch(spec, existing)
 			}
 		}
@@ -1191,6 +1220,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return persist.Meta{}, fmt.Errorf("resume: source discussion was deleted or archived")
 		}
 		if existing, ok := runningConversation(a.core.List(), source); ok {
+			if err := validateManagerSelection(spec, existing); err != nil {
+				return persist.Meta{}, err
+			}
 			return a.core.RecordOwnerLaunch(spec, existing)
 		}
 		if managedLoginProvider(source.AgentType) {
@@ -1233,12 +1265,18 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAttempted *bool) (persist.Meta, error) {
 	a.workspaceMu.RLock()
 	defer a.workspaceMu.RUnlock()
+	if err := qualifyManagerLaunchCLI(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
 	if a.logins != nil && managedLoginProvider(resolved.AgentType) {
 		gate := &a.logins.admission[loginProviderIndex(resolved.AgentType)]
 		gate.Lock()
 		defer gate.Unlock()
 	}
 	if err := a.bindLoginLaunch(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
+	if err := prepareManagerNativeIdentity(&resolved); err != nil {
 		return persist.Meta{}, err
 	}
 
@@ -1378,6 +1416,9 @@ var _ protocol.SessionCapabilityLookup = (*coreAPI)(nil)
 // lookPath (a stub in tests, the real PATH search in production). A missing binary
 // is a clear launch error.
 func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, getSource func(local string) (persist.Meta, bool), lookPath func(name string, env []string) (string, error)) (daemon.LaunchSpec, error) {
+	if err := validateManagerSource(spec, endpointID, getSource); err != nil {
+		return daemon.LaunchSpec{}, err
+	}
 	if err := validateResumeRelocation(spec); err != nil {
 		return daemon.LaunchSpec{}, err
 	}
@@ -1424,6 +1465,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
 		}
 		argv, err := ad.Resume(adapter.ResumeSpec{
+			Manager:        managerAdapterSpec(spec.Manager),
 			Cwd:            spec.Cwd,
 			ConversationID: conversationID,
 			Options:        spec.Options,
@@ -1474,6 +1516,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: saved conversation identity is invalid")
 		}
 		argv, rerr := ad.Resume(adapter.ResumeSpec{
+			Manager:        managerAdapterSpec(spec.Manager),
 			Cwd:            spec.Cwd,
 			Relocate:       spec.Options[protocol.OptionResumeRelocate] == "true",
 			ConversationID: srcMeta.ConversationID,
@@ -1513,6 +1556,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		default:
 			if ad, ok := registry.New(spec.AgentType); ok {
 				argv, err := ad.Command(adapter.LaunchSpec{
+					Manager:       managerAdapterSpec(spec.Manager),
 					Cwd:           spec.Cwd,
 					Name:          spec.Name,
 					Options:       spec.Options,

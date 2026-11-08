@@ -202,6 +202,20 @@ func (cc *clientConn) handleComposerSend(c Control) {
 		cc.replyErrorCode("composer_send: missing session_instance; refresh the session and upgrade the phone before retrying", CodeInvalidField)
 		return
 	}
+	if body.ManagerAdmission != nil {
+		if cc.srv.remoteTier || c.Op != OpSemanticSend {
+			cc.replyErrorCode("manager admission is owner semantic input only", CodeNotAuthorized)
+			return
+		}
+		if !cc.hasCap(CapManagerProvenance) {
+			cc.replyErrorCode("manager provenance was not negotiated", CodeNotImplemented)
+			return
+		}
+		if body.ManagerAdmission.Validate() != nil || body.ManagerAdmission.Binding.Session != body.Session || body.ManagerAdmission.Binding.SessionInstance != body.SessionInstance {
+			cc.replyErrorCode("invalid manager admission binding", CodeInvalidField)
+			return
+		}
+	}
 	if body.Origin != nil {
 		if !cc.hasCap(CapMessageOrigin) {
 			cc.replyErrorCode("composer_send: message-origin capability was not negotiated", CodeNotImplemented)

@@ -694,6 +694,7 @@ type shimLaunchConfig struct {
 	// BackendProgram is the RESOLVED absolute path the daemon obtained through the adapter
 	// contract's LookPath discipline, so the shim never searches PATH itself.
 	BackendCwd        string   `json:"backend_cwd,omitempty"`
+	BackendRequired   bool     `json:"backend_required,omitempty"`
 	BackendProgram    string   `json:"backend_program"`
 	BackendArgs       []string `json:"backend_args"`
 	BackendAgentArgs  []string `json:"backend_agent_args"`
@@ -745,7 +746,7 @@ func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 // socket has no endpoint for the agent to be pointed at. Either alone is a malformed config
 // and nil -- the pre-R7 session -- is the safe reading of it.
 func backendConfigFromLaunch(lc shimLaunchConfig) *shim.BackendConfig {
-	if lc.BackendSocketPath == "" || lc.BackendProgram == "" {
+	if (lc.BackendSocketPath == "" || lc.BackendProgram == "") && !lc.BackendRequired {
 		return nil
 	}
 	env := lc.BackendEnv
@@ -756,6 +757,7 @@ func backendConfigFromLaunch(lc shimLaunchConfig) *shim.BackendConfig {
 		env = lc.Env
 	}
 	return &shim.BackendConfig{
+		Required:   lc.BackendRequired,
 		Program:    lc.BackendProgram,
 		Cwd:        lc.BackendCwd,
 		Args:       lc.BackendArgs,
@@ -772,6 +774,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to the JSON launch config")
 	requireOpenCode := fs.Bool("require-opencode-tui", false, "require a managed OpenCode TUI launch")
+	requireManager := fs.Bool("require-manager", false, "require native manager runtime configuration")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
@@ -792,6 +795,10 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return 2
 	}
 	if err := validateShimRuntime(lc, *requireOpenCode); err != nil {
+		_, _ = fmt.Fprintln(stderr, "shim:", err)
+		return 2
+	}
+	if err := validateManagerShimRuntime(lc, *requireManager); err != nil {
 		_, _ = fmt.Fprintln(stderr, "shim:", err)
 		return 2
 	}

@@ -1,0 +1,14 @@
+package claudeinput
+import("testing";"context";"time";"os";"os/exec";"path/filepath";"github.com/Nathandela/swarm/internal/testbin")
+func TestNativeClaudeCausalProbe(t *testing.T){
+ artifact:=os.Getenv("SWARM_CAUSAL_PROBE_ARTIFACT");if artifact==""{t.Skip("explicit isolated provenance probe only")}
+ binary,version,dir:=privateNativeClaude(t)
+ if version!="2.1.319"{t.Fatal("wrong installed version",version)}
+ if err:=testbin.RegisterExecutable(binary);err!=nil{t.Fatal(err)}
+ broker,err:=Start(dir,"causal-probe",version,os.Getpid(),1);if err!=nil{t.Fatal(err)};defer broker.Close()
+ plugin,err:=Install(dir);if err!=nil{t.Fatal(err)}
+ ctx,cancel:=context.WithTimeout(context.Background(),95*time.Second);defer cancel()
+ command:=exec.CommandContext(ctx,"python3",filepath.Join(artifact,"probe.py"),binary,filepath.Join(dir,DescriptorFile),plugin,artifact,filepath.Join(artifact,"recorder.py"))
+ command.Env=append(os.Environ(),"PYTHONDONTWRITEBYTECODE=1")
+ out,err:=command.CombinedOutput();if err!=nil{t.Fatalf("causal probe: %v\n%s",err,out)};t.Log(string(out))
+}

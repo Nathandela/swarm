@@ -117,6 +117,7 @@ type sessionBackend struct {
 // The callback captures this object before the connection is published, so a late
 // callback from a replaced connection can never borrow the replacement's identity.
 type backendFeed struct {
+	manager   codexManagerFeed
 	epoch     string
 	userAgent string
 	seq       atomic.Uint64
@@ -302,6 +303,7 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 		}
 		d.backend.mu.Unlock()
 		d.discardContextGuardFeed(entry.feed)
+		discardCodexManagerFeed(entry.feed)
 	}
 	// A rejoined backend already has its thread id. Bring a durable Swarm label
 	// across immediately; a fresh backend with no id is handled by adoptBackendThread.
@@ -374,6 +376,7 @@ func (d *Daemon) retireBackendRegistration(local string, displaced *sessionBacke
 	}
 	d.unregisterContextGuardBackend(local, displaced)
 	d.discardContextGuardFeed(displaced.feed)
+	discardCodexManagerFeed(displaced.feed)
 }
 
 func (d *Daemon) retryBackendSinkProof(local, expectedInstance string, entry *sessionBackend) {
@@ -566,6 +569,7 @@ func (d *Daemon) removeBackendForFeed(local, expectedEpoch string) (*sessionBack
 	d.unregisterContextGuardBackend(local, b)
 	if b != nil {
 		d.discardContextGuardFeed(b.feed)
+		discardCodexManagerFeed(b.feed)
 	}
 	return b, b != nil
 }
@@ -912,6 +916,7 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 		guardFrame = guardProjection[0]
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, guardFrame, at)
+	d.captureCodexManagerFrame(local, feed, method, frame)
 	if d.logins != nil {
 		d.logins.observeCodexUsage(local, method, frame, at)
 		d.logins.observeNativeFailure(local, expectedInstance, feed, method, frame)

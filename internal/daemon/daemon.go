@@ -158,6 +158,8 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
+	managerLogin      *managerLoginBinding
+	Manager           *ManagerLaunchSpec
 	HermesOrigins     []string                   `json:"-"`
 	HermesInput       *hermesinput.SessionConfig `json:"-"`
 	RequiredRuntime   string                     `json:"-"`

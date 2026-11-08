@@ -30,6 +30,9 @@ func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
 	if !slices.Contains(c.caps, CapSemanticSend) {
 		return errors.New("protocol: semantic messages require an updated daemon; run swarm daemon restart")
 	}
+	if req.ManagerAdmission != nil && !slices.Contains(c.caps, CapManagerProvenance) {
+		return errors.New("protocol: manager admission requires native provenance capability")
+	}
 	if req.Origin != nil && !slices.Contains(c.caps, CapMessageOrigin) {
 		return errors.New("protocol: message origin requires an updated daemon; run swarm daemon restart")
 	}

@@ -51,6 +51,16 @@ func TestClaudeOriginRequiresNativeIngressWithoutTypingOrBegin(t *testing.T) {
 	}
 }
 
+func TestClaudeOwnerSemanticInputRequiresNativeIngressWithoutOrigin(t *testing.T) {
+	r := newClaudeReceiptRig(t, false)
+	r.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
+	began := false
+	code, err := r.sk.api.SemanticSendTransactional(r.sk.api.endpointID, "owner-native-unproven", protocol.ComposerSendReq{Session: r.session, SessionInstance: r.instance, Text: "owner manager input"}, func() error { began = true; return nil })
+	if err == nil || code != protocol.CodeStructuredUnsupported || began {
+		t.Fatalf("owner native input bypassed proof: code=%s err=%v began=%v", code, err, began)
+	}
+}
+
 type claudeReceiptRig struct {
 	sk                       *Daemon
 	local, session, instance string
@@ -75,6 +85,23 @@ func newClaudeReceiptRig(t *testing.T, withGuard ...bool) *claudeReceiptRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(meta.ShimPID, syscall.SIGTERM) })
+	launchPath := filepath.Join(sk.stateDir, meta.ID, "shim-launch.json")
+	launchRaw, err := os.ReadFile(launchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launch map[string]any
+	if err := json.Unmarshal(launchRaw, &launch); err != nil {
+		t.Fatal(err)
+	}
+	launch["claude_input"] = true
+	launchRaw, err = json.Marshal(launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launchPath, launchRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
 	b, err := claudeinput.Start(filepath.Join(sk.stateDir, meta.ID), meta.ID, "2.1.296", meta.ShimPID, meta.ShimStartTime)
 	if err != nil {
 		t.Fatal(err)
@@ -93,16 +120,23 @@ func newClaudeReceiptRig(t *testing.T, withGuard ...bool) *claudeReceiptRig {
 		t.Fatal(err)
 	}
 	instance, _ := sk.sessionInstance(meta.ID)
-	return &claudeReceiptRig{sk: sk, local: meta.ID, session: protocol.NamespacedID(sk.api.endpointID, meta.ID), instance: instance, broker: b, client: client, worker: worker}
+	rig := &claudeReceiptRig{sk: sk, local: meta.ID, session: protocol.NamespacedID(sk.api.endpointID, meta.ID), instance: instance, broker: b, client: client, worker: worker}
+	if len(withGuard) == 0 || withGuard[0] {
+		awaitNativeOwnerHint(t, sk, meta.ID, instance, true)
+	}
+	return rig
 }
 
-func (r *claudeReceiptRig) prepare(t *testing.T, id, text string) composerOriginIntent {
+func (r *claudeReceiptRig) prepare(t *testing.T, id, text string, owner ...bool) composerOriginIntent {
 	t.Helper()
 	if _, _, err := r.sk.core.ClaimComposerOperation(id, protocol.OpSemanticSend, r.local, r.instance, "hash:"+id); err != nil {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(text))
 	intent := composerOriginIntent{Version: 1, Origin: &protocol.MessageOrigin{Kind: "external", InstallationID: "install", RequestID: id, ActorID: "actor"}, ClaudeInput: &claudeInputIntent{Generation: r.broker.Descriptor().Generation, Worker: r.worker, Hash: hex.EncodeToString(hash[:])}}
+	if len(owner) > 0 && owner[0] {
+		intent.Origin = nil
+	}
 	raw, _ := json.Marshal(intent)
 	if err := r.sk.core.BindSemanticRequest(id, raw); err != nil {
 		t.Fatal(err)
@@ -118,6 +152,19 @@ func (r *claudeReceiptRig) prepare(t *testing.T, id, text string) composerOrigin
 		t.Fatalf("native claim: %+v %v", msg, err)
 	}
 	return intent
+}
+
+func TestClaudeNativeOwnerReceiptWithoutOrigin(t *testing.T) {
+	r := newClaudeReceiptRig(t)
+	const id = "native-owner"
+	r.prepare(t, id, "owner input", true)
+	if _, err := r.client.Exchange(context.Background(), r.worker, id, "started", ""); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := r.sk.semanticOperation(r.local, id)
+	if err != nil || receipt.State != "admitted" || receipt.NativeSessionID != r.worker.NativeSessionID || receipt.Origin != nil {
+		t.Fatalf("owner native receipt lost: %+v %v", receipt, err)
+	}
 }
 
 func TestClaudeNativeRejectedUnknownSettlesFailureAndUnfencesNextMessage(t *testing.T) {

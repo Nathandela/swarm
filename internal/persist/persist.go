@@ -44,10 +44,15 @@ var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
 type Meta struct {
-	SchemaVersion int    `json:"schema_version"`
-	ID            string `json:"id"`
-	AgentType     string `json:"agent_type"`
-	Name          string `json:"name"` // user-provided session label; "" falls back to AgentType at display time
+	Role                   string `json:"role,omitempty"`
+	ManagerConversationID  string `json:"manager_conversation_id,omitempty"`
+	ManagerBridgeSocket    string `json:"manager_bridge_socket,omitempty"`
+	ManagerAuthFile        string `json:"manager_auth_file,omitempty"`
+	ManagerClaudeConfigDir string `json:"manager_claude_config_dir,omitempty"`
+	SchemaVersion          int    `json:"schema_version"`
+	ID                     string `json:"id"`
+	AgentType              string `json:"agent_type"`
+	Name                   string `json:"name"` // user-provided session label; "" falls back to AgentType at display time
 	// NameSetAt is when Name was last stamped, by a swarm rename or by adopting the name
 	// the CLI itself shows for the session (ADR-022, newest wins). Additive without a
 	// schema-version bump for the same rollback reason as AgentCwd below; a zero value

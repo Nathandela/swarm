@@ -91,6 +91,11 @@ func (m *loginManager) stopSwitchChild(op *logins.Switch, index int, child persi
 	}
 	return fence(child.ID, func() error {
 		current, ok := m.get(child.ID)
+		if ok {
+			if err := managerRestartPreflight(current); err != nil {
+				return err
+			}
+		}
 		if !ok || current.Status.Process != status.ProcessRunning {
 			return nil
 		}

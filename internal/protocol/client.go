@@ -169,6 +169,9 @@ func (c *Client) InteractionHistory(id string, limit int) ([]JournalRecord, erro
 // chrome uses the canonical name so the label matches what the daemon persisted (an
 // older daemon whose reply predates naming returns an empty name).
 func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
+	if req.Manager != nil {
+		return "", "", errors.New("manager launch requires the owner LaunchOperation route")
+	}
 	if _, relocate := req.Options[OptionResumeRelocate]; relocate && !slices.Contains(c.caps, CapResumeRelocate) {
 		return "", "", errors.New("resume relocation requires an updated daemon; run swarm daemon restart")
 	}

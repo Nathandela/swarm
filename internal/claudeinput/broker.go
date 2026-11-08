@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/managerproof"
 )
 
 const DescriptorFile = "claude-input.json"
@@ -25,18 +27,24 @@ const maxOperations = 128
 
 // SupportedVersion names actual native runtime qualification, not an optimistic range.
 func SupportedVersion(version string) bool {
-	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311"
+	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311" || version == "2.1.319"
 }
 
+// SupportsNativeTurns requires separately qualified exact turn lifecycle events.
+func SupportsNativeTurns(version string) bool { return version == "2.1.319" }
+
 type Descriptor struct {
-	SessionID       string `json:"session_id"`
-	Generation      string `json:"generation"`
-	Token           string `json:"token"`
-	SocketPath      string `json:"socket_path"`
-	ProviderVersion string `json:"provider_version"`
-	ShimPID         int    `json:"shim_pid"`
-	ShimStartTime   int64  `json:"shim_start_time"`
-	LifecycleFence  bool   `json:"lifecycle_fence"`
+	SenderName            string `json:"sender_name,omitempty"`
+	ManagerConversationID string `json:"manager_conversation_id,omitempty"`
+	SessionID             string `json:"session_id"`
+	Generation            string `json:"generation"`
+	Token                 string `json:"token"`
+	SocketPath            string `json:"socket_path"`
+	ProviderVersion       string `json:"provider_version"`
+	ShimPID               int    `json:"shim_pid"`
+	ShimStartTime         int64  `json:"shim_start_time"`
+	LifecycleFence        bool   `json:"lifecycle_fence"`
+	NativeTurns           bool   `json:"native_turns,omitempty"`
 }
 
 type Worker struct {
@@ -46,34 +54,52 @@ type Worker struct {
 }
 
 type Message struct {
-	OperationID string `json:"operation_id"`
-	Text        string `json:"text,omitempty"`
-	Hash        string `json:"hash"`
-	State       string `json:"state"`
-	Reason      string `json:"reason,omitempty"`
-	Worker      Worker `json:"worker"`
+	NativeInputID   string `json:"native_input_id,omitempty"`
+	NativeTurnID    string `json:"native_turn_id,omitempty"`
+	NativeMessageID string `json:"native_message_id,omitempty"`
+	OperationID     string `json:"operation_id"`
+	Text            string `json:"text,omitempty"`
+	Hash            string `json:"hash"`
+	State           string `json:"state"`
+	Reason          string `json:"reason,omitempty"`
+	Worker          Worker `json:"worker"`
 }
 
 type request struct {
-	Generation  string `json:"generation"`
-	Worker      Worker `json:"worker"`
-	OperationID string `json:"operation_id,omitempty"`
-	Text        string `json:"text,omitempty"`
-	State       string `json:"state,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	Binding       *managerproof.Binding     `json:"binding,omitempty"`
+	Admission     *managerproof.Admission   `json:"admission,omitempty"`
+	NativeInputID string                    `json:"native_input_id,omitempty"`
+	MessageID     string                    `json:"message_id,omitempty"`
+	Projection    string                    `json:"projection,omitempty"`
+	Call          *managerTool              `json:"call,omitempty"`
+	ProofRequest  *managerproof.CallRequest `json:"proof_request,omitempty"`
+	Generation    string                    `json:"generation"`
+	Worker        Worker                    `json:"worker"`
+	OperationID   string                    `json:"operation_id,omitempty"`
+	Text          string                    `json:"text,omitempty"`
+	State         string                    `json:"state,omitempty"`
+	Reason        string                    `json:"reason,omitempty"`
+	Turn          *Turn                     `json:"turn,omitempty"`
+	TurnID        string                    `json:"turn_id,omitempty"`
+	ExternalInput uint64                    `json:"external_input,omitempty"`
 }
 
 type Broker struct {
-	descriptor Descriptor
-	server     *http.Server
-	mu         sync.Mutex
-	worker     Worker
-	seen       time.Time
-	revoked    bool
-	guard      Worker
-	guardSeen  time.Time
-	operations map[string]Message
-	order      []string
+	manager          *managerproof.Registry
+	managerInputs    map[string]managerInput
+	nativeInputReady bool
+	descriptor       Descriptor
+	server           *http.Server
+	mu               sync.Mutex
+	worker           Worker
+	seen             time.Time
+	revoked          bool
+	guard            Worker
+	guardSeen        time.Time
+	operations       map[string]Message
+	order            []string
+	turn             Turn
+	interrupts       map[string]Interrupt
 }
 
 func Start(dir, session, version string, pid int, started int64) (*Broker, error) {
@@ -85,6 +111,17 @@ func Start(dir, session, version string, pid int, started int64) (*Broker, error
 		return nil, err
 	}
 	desc := Descriptor{SessionID: session, Generation: hex.EncodeToString(nonce[:16]), Token: hex.EncodeToString(nonce[16:]), SocketPath: filepath.Join(dir, "claude-input.sock"), ProviderVersion: version, ShimPID: pid, ShimStartTime: started, LifecycleFence: true}
+	desc.NativeTurns = SupportsNativeTurns(version)
+	desc.SenderName = "swarm-native-input"
+	if setup, err := readManagerSetup(dir); err == nil {
+		if !desc.NativeTurns {
+			return nil, errors.New("manager native runtime is not qualified")
+		}
+		desc.SenderName = setup.SenderName
+		desc.ManagerConversationID = setup.ConversationID
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("manager native setup is invalid")
+	}
 	listener, err := net.Listen("unix", desc.SocketPath)
 	if err != nil {
 		return nil, err
@@ -115,8 +152,12 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req request
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil || req.Generation != b.descriptor.Generation {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 128<<10)).Decode(&req); err != nil || req.Generation != b.descriptor.Generation {
 		http.Error(w, "invalid generation", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Path == "/manager-resolve" {
+		b.resolveManager(w, r, req)
 		return
 	}
 	b.mu.Lock()
@@ -127,7 +168,7 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	refuse := func(reason string) { http.Error(w, reason, http.StatusConflict) }
 	live := func() bool {
-		return !b.revoked && b.worker.Generation != "" && b.guard.Generation != "" && b.guard.NativeSessionID == b.worker.NativeSessionID && b.guard.Version == b.worker.Version && time.Since(b.seen) < 3*time.Second && time.Since(b.guardSeen) < 3*time.Second
+		return b.liveLocked()
 	}
 	switch r.URL.Path {
 	case "/guard":
@@ -148,7 +189,22 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		b.guard = guard
 		b.guardSeen = time.Now()
-		respond(nil)
+		var pending *Interrupt
+		for id, command := range b.interrupts {
+			if command.State != "prepared" {
+				continue
+			}
+			if b.turn.State != "running" || b.turn.TurnID != command.TurnID {
+				command.State = "rejected"
+			} else {
+				command.State = "dispatched"
+				copy := command
+				pending = &copy
+			}
+			b.interrupts[id] = command
+			break
+		}
+		respond(pending)
 
 	case "/exchange", "/revoke":
 		worker := req.Worker
@@ -263,7 +319,9 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		msg.Text = ""
 		respond(msg)
 	default:
-		http.NotFound(w, r)
+		if !b.serveManagerLocked(r.URL.Path, req, respond, refuse) && !b.serveRuntimeLocked(r.URL.Path, req, live(), respond, refuse) {
+			http.NotFound(w, r)
+		}
 	}
 }
 
@@ -340,6 +398,15 @@ func (c *Client) Guard(ctx context.Context, worker Worker, revoked bool) error {
 
 func (b *Broker) revokeLocked() {
 	b.revoked = true
+	if b.manager != nil {
+		b.manager.Retire()
+	}
+	for id, command := range b.interrupts {
+		if command.State == "prepared" {
+			command.State = "rejected"
+			b.interrupts[id] = command
+		}
+	}
 	for id, msg := range b.operations {
 		switch msg.State {
 		case "prepared":

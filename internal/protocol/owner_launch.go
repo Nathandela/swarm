@@ -69,6 +69,9 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 	if !slices.Contains(c.caps, CapOwnerLaunch) {
 		return "", "", errors.New("protocol: reliable launch requires an updated daemon; run swarm daemon restart")
 	}
+	if req.Manager != nil && !slices.Contains(c.caps, CapManagerLaunch) {
+		return "", "", errors.New("protocol: manager launch requires an updated daemon and manager-launch capability")
+	}
 	if !validLaunchOperationID(operationID, time.Now()) {
 		return "", "", errors.New("protocol: invalid or expired launch operation ID; an earlier attempt may still have an effect")
 	}
@@ -127,6 +130,10 @@ func (cc *clientConn) ownerLaunchSource() (OwnerLaunchSource, bool) {
 func (cc *clientConn) handleOwnerLaunch(c Control) {
 	src, ok := cc.ownerLaunchSource()
 	if !ok {
+		return
+	}
+	if c.Launch != nil && c.Launch.Manager != nil && !cc.hasCap(CapManagerLaunch) {
+		cc.replyErrorCode("manager-launch capability was not negotiated", CodeNotImplemented)
 		return
 	}
 	if c.Launch == nil || !validLaunchOperationID(c.OperationID, cc.srv.now()) {

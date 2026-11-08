@@ -464,6 +464,10 @@ func (w *authWatcher) workCLIRefresh(allowNewKills bool) {
 			w.blockCLIRefresh(source, "source session was deleted or archived before refresh completed")
 			continue
 		}
+		if err := managerRestartPreflight(m); err != nil {
+			w.blockCLIRefresh(source, err.Error())
+			continue
+		}
 		if m.AgentType == "opencode" || rec.AgentType == "opencode" {
 			w.blockCLIRefresh(source, openCodeRefreshRefusal)
 			continue
@@ -587,6 +591,9 @@ const openCodeRefreshRefusal = "OpenCode automatic refresh is blocked: native wo
 // validateCLIRefreshTarget is called inside the composer/direct-input fence,
 // immediately before the durable claim and kill.
 func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
+	if err := managerRestartPreflight(m); err != nil {
+		return err
+	}
 	if m.AgentType == "opencode" || w.state.CLI[m.ID].AgentType == "opencode" {
 		return errors.New(openCodeRefreshRefusal)
 	}
@@ -606,6 +613,10 @@ func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
 }
 
 func (w *authWatcher) resumeCLIEnded(agent string, source persist.Meta) bool {
+	if err := managerRestartPreflight(source); err != nil {
+		w.blockCLIRefresh(source.ID, err.Error())
+		return false
+	}
 	current, exists := w.get(source.ID)
 	if !exists || current.RosterHidden {
 		w.blockCLIRefresh(source.ID, "source session was deleted or archived before its owed replacement launched")

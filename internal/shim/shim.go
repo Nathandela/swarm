@@ -430,15 +430,23 @@ func Run(cfg Config) (agentExit int, err error) {
 			Stderr:      tty,
 			SysProcAttr: &syscall.SysProcAttr{Setsid: true, Setctty: true},
 		}
-		startErr := cmd.Start()
+		var startErr error
+		if cfg.Backend.Required && (backendWatch == nil || len(attach.AgentArgs) != 2 || attach.AgentArgs[0] != "--remote" || attach.AgentArgs[1] != "unix://"+cfg.Backend.SocketPath) {
+			startErr = errors.New("required native backend unavailable; standalone fallback refused")
+		} else {
+			startErr = cmd.Start()
+		}
 		_ = tty.Close() // the child holds its own dup; the master is ours
 		if startErr != nil {
 			sigStop()
+			close(sigDone)
+			sigWG.Wait()
 			_ = ptmx.Close()
 			_ = listener.Close()
 			closeTranscript(tr)
 			<-acceptDone
 			<-drainDone
+			replies.close()
 			// THE BACKEND IS ALREADY RUNNING ON THIS PATH, and this is the only exit from
 			// Run that does not pass through finalization. Review BLOCKING 5, PROBED: with
 			// cfg.Argv naming a nonexistent program the backend was still alive 5 s after

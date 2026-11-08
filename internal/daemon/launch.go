@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/hermesinput"
@@ -159,6 +160,7 @@ type shimSpawnConfig struct {
 	// in particular is the RESOLVED absolute path, so a restart never re-resolves a bare
 	// name through a PATH that may now point at a different CLI version.
 	BackendCwd              string   `json:"backend_cwd,omitempty"`
+	BackendRequired         bool     `json:"backend_required,omitempty"`
 	BackendProgram          string   `json:"backend_program,omitempty"`
 	BackendArgs             []string `json:"backend_args,omitempty"`
 	BackendAgentArgs        []string `json:"backend_agent_args,omitempty"`
@@ -338,6 +340,22 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			return m, err
 		}
 	}
+	if spec.Manager != nil {
+		if spec.AgentType != "codex" && spec.AgentType != "claude" || spec.Manager.ConversationID == "" || spec.Manager.Command != d.cfg.ShimBinary {
+			return persist.Meta{}, errors.New("manager requires an exact native runtime and trusted bridge command")
+		}
+		managerEnv, err := d.checkedManagerLaunchEnvironment(spec)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+		spec.ClientEnv = managerEnv
+		if spec.AgentType == "claude" && (spec.CLIIdentity == nil || !claudeinput.SupportsNativeTurns(spec.CLIIdentity.Version)) {
+			return persist.Meta{}, errors.New("manager requires a qualified Claude native-turn runtime")
+		}
+		if spec.AgentType == "codex" && (spec.CLIIdentity == nil || !codex.SupportsNativeTurns(spec.CLIIdentity.Version)) {
+			return persist.Meta{}, errors.New("manager requires a qualified codex native-turn runtime")
+		}
+	}
 	hermes, hermesErr := d.hermesLaunchConfig(spec)
 	if hermesErr != nil {
 		return persist.Meta{}, hermesErr
@@ -357,6 +375,9 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// the shim actually execs the agent with cannot disagree (ADR-007 D8's daemon-policy
 	// half; see PolicyEnv). spec is a value copy, so this is local to this launch.
 	spec.ClientEnv = d.LaunchPolicyEnv(spec.ClientEnv)
+	if spec.Manager != nil {
+		spec.ClientEnv = ManagerLaunchEnvironment(spec.AgentType, spec.ClientEnv)
+	}
 
 	// Cap check + id reservation, atomically, BEFORE any spawn (S-7): the rejected
 	// launch must grow nothing and spawn nothing.
@@ -396,6 +417,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		SpawnIntent:     spec.SpawnIntent,
 		Supervision:     spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
 		Status:          status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
+	}
+	if spec.Manager != nil {
+		m.Role = "manager"
+		m.ManagerConversationID = spec.Manager.ConversationID
+		m.ManagerBridgeSocket = spec.Manager.BridgeSocket
+		m.ManagerAuthFile = spec.Manager.AuthFile
+		if spec.Manager.ClaudeConfigDir != nil {
+			m.ManagerClaudeConfigDir = *spec.Manager.ClaudeConfigDir
+		}
 	}
 	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
@@ -687,6 +717,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 	agentEnv := PolicyEnv(spec.ClientEnv)
+	if spec.Manager != nil && spec.AgentType == "claude" && spec.Manager.ClaudeConfigDir != nil && *spec.Manager.ClaudeConfigDir != "" {
+		agentEnv = append(agentEnv, "CLAUDE_CONFIG_DIR="+*spec.Manager.ClaudeConfigDir)
+	}
 	if spec.OpenCodeLaunch != nil {
 		agentEnv = mergeOpenCodeEnv(agentEnv, spec.OpenCodeEnv)
 		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(filepath.Dir(spec.OpenCodeLaunch.BindingFile), "opencode-tui.json"))
@@ -717,8 +750,14 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.AgyInput = &agyinput.Config{SessionID: id, Executable: spec.CLIIdentity.Path, Version: spec.CLIIdentity.Version, Fingerprint: spec.CLIIdentity.Fingerprint, Cwd: spec.Cwd, BootstrapCommand: command}
 		lc.Argv = agyinput.LaunchArgs(lc.Argv, command)
 	}
-	if d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled() && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
-		plugin, err := claudeinput.Install(dir)
+	if (spec.Manager != nil || d.NativeInputEnabled()) && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
+		var plugin string
+		var err error
+		if spec.Manager != nil {
+			plugin, err = claudeinput.InstallManager(dir, spec.Manager.ConversationID)
+		} else {
+			plugin, err = claudeinput.Install(dir)
+		}
 		if err != nil {
 			return nil, "", err
 		}
@@ -760,6 +799,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		}
 	}
 	if spec.Backend != nil {
+		lc.BackendRequired = spec.Manager != nil && spec.AgentType == "codex"
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
 		// Codex records the app-server's cwd as the thread's and roots its sandbox there, so
@@ -769,6 +809,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock
 		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
+	}
+	if spec.Manager != nil && spec.AgentType == "codex" && (spec.Backend == nil || spec.Backend.Program == "") {
+		return nil, "", errors.New("manager requires its native app-server backend; standalone fallback refused")
 	}
 	data, err := json.Marshal(lc)
 	if err != nil {
@@ -780,6 +823,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	}
 
 	shimArgs := []string{"shim"}
+	if spec.Manager != nil {
+		shimArgs = append(shimArgs, "--require-manager")
+	}
 	if spec.OpenCodeLaunch != nil {
 		shimArgs = append(shimArgs, "--require-opencode-tui")
 	}

@@ -51,7 +51,11 @@ func pilotLaunch(path, kind string, args []string, c agentClient, build func() (
 		if err != nil {
 			return pending, "", "", err
 		}
-		req.Env = daemon.OwnerLaunchEnvironment(req.Agent, req.Env)
+		if req.Manager != nil {
+			req.Env = daemon.ManagerLaunchEnvironment(req.Agent, req.Env)
+		} else {
+			req.Env = daemon.OwnerLaunchEnvironment(req.Agent, req.Env)
+		}
 		id, err := protocol.NewLaunchOperationID()
 		if err != nil {
 			return pending, "", "", err
