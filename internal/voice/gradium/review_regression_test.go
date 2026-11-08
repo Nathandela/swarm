@@ -27,7 +27,7 @@ func TestProviderReviewClosePurgesAlreadyCompletedAudio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if err = s.SendPhrase(context.Background(), "done", false); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestProviderReviewInvalidUnicodeTranscriptRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	e, ok := <-s.Events()
 	if ok {
 		t.Fatalf("invalid Unicode became accepted transcript %q", e.Text)
@@ -74,7 +74,7 @@ func TestProviderReviewInlineFlushRejectedBeforeEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if err = s.SendPhrase(context.Background(), "The tag is <flush>.", false); errors.Is(err, ErrInvalid) {
 		return
 	}
@@ -107,7 +107,7 @@ func TestProviderReviewUnicodePreserved(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 			e, ok := <-s.Events()
 			if tc.valid {
 				if !ok || e.Text != tc.want {
@@ -130,7 +130,7 @@ func TestProviderReviewReservedFlushRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	for _, text := range []string{"The tag is <flush>.", "one <flush> two <flush>"} {
 		for _, flush := range []bool{false, true} {
 			if !errors.Is(s.SendPhrase(context.Background(), text, flush), ErrInvalid) {
@@ -164,7 +164,7 @@ func TestProviderReviewReadFailureBlockedWriteConcurrentClose(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.CloseNow()
+		defer func() { _ = c.CloseNow() }()
 		raw := r.Context().Value(connectionKey{}).(*net.TCPConn)
 		_ = raw.SetReadBuffer(1024)
 		_ = readFrame(ctx, c)
@@ -196,7 +196,7 @@ func TestProviderReviewReadFailureBlockedWriteConcurrentClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	written := make(chan error, 1)
 	go func() {
 		for i := 0; i < 256; i++ {

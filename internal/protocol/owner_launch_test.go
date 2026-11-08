@@ -54,7 +54,7 @@ func TestOwnerLaunchClientRefusesUnnegotiatedMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	id, err := NewLaunchOperationID()
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestOwnerLaunchStatusReadsExpiredIDWithoutLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	id := "launch:1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	out, err := c.LaunchOperationStatus(id)
 	if err != nil || out.State != schema.OutcomeUnknown || b.reads.Load() != 1 {

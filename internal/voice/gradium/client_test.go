@@ -33,7 +33,7 @@ func TestBlockedSocketWriterTimesOutAndStops(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.CloseNow()
+		defer func() { _ = c.CloseNow() }()
 		_ = readFrame(ctx, c)
 		_ = sendFrame(ctx, c, readyFrame())
 		<-ctx.Done()
@@ -58,7 +58,7 @@ func TestBlockedSocketWriterTimesOutAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	for i := 0; i < 256; i++ {
 		write, stop := context.WithTimeout(ctx, 50*time.Millisecond)
 		err = s.SendAudio(write, make([]byte, MaxAudioBytes))
@@ -88,7 +88,7 @@ func socketFixture(t *testing.T, serve func(context.Context, *websocket.Conn)) d
 		if err != nil {
 			return
 		}
-		defer c.CloseNow()
+		defer func() { _ = c.CloseNow() }()
 		serve(ctx, c)
 	}))
 	t.Cleanup(func() { cancel(); server.Close() })
@@ -178,7 +178,7 @@ func TestSTTExactFlushAndLateText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	r := s.Ready()
 	if r.SampleRate != 24000 || r.ConfiguredSampleRate != 44100 || r.Residency != "best-effort; zone=eu" {
 		t.Fatalf("ready rates collapsed: %+v", r)
@@ -251,7 +251,7 @@ func TestTTSWholePhraseAndPCM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if s.Ready().OutputFormat != "pcm_48000" || s.Ready().ConfiguredSampleRate != 24000 {
 		t.Fatal("actual output rate not exposed")
 	}
@@ -308,7 +308,7 @@ func TestProviderRejectsMalformedAndUncorrelatedFrames(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 			awaitDone(t, s)
 			if !errors.Is(s.Err(), ErrProtocol) {
 				t.Fatalf("frame accepted: %v", s.Err())
@@ -365,7 +365,7 @@ func TestSlowConsumerEOFAndCancellation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 			if kind == "cancel" {
 				cancel()
 			}
@@ -448,7 +448,7 @@ func TestConfigurationAndFrameBoundsBeforeEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	for _, audio := range [][]byte{nil, {1}, make([]byte, MaxAudioBytes+2)} {
 		if !errors.Is(s.SendAudio(context.Background(), audio), ErrInvalid) {
 			t.Fatal("malformed audio accepted")
@@ -499,7 +499,7 @@ func TestEOSQueueOverflowIsNotSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if err := s.End(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +519,7 @@ func TestCancelledWriterAndInputSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if !errors.Is(s.SendPhrase(context.Background(), strings.Repeat("x", MaxPhraseBytes+1), false), ErrInvalid) {
 		t.Fatal("unbounded phrase accepted")
 	}

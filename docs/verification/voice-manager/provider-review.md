@@ -21,3 +21,6 @@ Post-review source SHA256 internal/voice/gradium/client.go: 4224a2123693552cc66b
 Post-review source SHA256 internal/voice/gradium/client_test.go: 7866a74872e6195c114c94b5e4898820ca6c32a330bad3fa9066dbb2117fce78
 Post-review source SHA256 internal/voice/gradium/review_regression_test.go: abef4acff5749184f980c550f191d0c4f7e09ddeb44e70838d8829ed9f206c06
 Post-review source SHA256 internal/voice/gradium/characterization_test.go: ca13914d10d2c7b71b993df7eb3f7de460d7fe092be9955341b3623800f92dc2
+
+Broad foundation lint subsequently identified unchecked deferred cleanup returns in the test fixtures and an overwritten initial boolean value in the provider reader. Cleanup returns are now explicitly ignored and the unused initialization is removed; every switch branch still assigns the validation result. The complete provider race suite passed again in 2.779 seconds. No paid provider request was made for this mechanical correction.
+Current client.go SHA-256: f8924ec0e3dd8b55deedb16b6ea9faeaf3f9bf337f33b1262302f31534178757

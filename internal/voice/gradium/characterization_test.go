@@ -26,7 +26,7 @@ func TestLiveWireCharacterization(t *testing.T) {
 	if err != nil {
 		t.Fatal("dial failed")
 	}
-	defer c.CloseNow()
+	defer func() { _ = c.CloseNow() }()
 	c.SetReadLimit(MaxMessageBytes)
 	if err := sendFrame(ctx, c, map[string]any{"type": "setup", "model_name": "default", "voice_id": "vjFyp2BcCyTlUmYb", "output_format": "pcm_24000"}); err != nil {
 		t.Fatal("setup failed")

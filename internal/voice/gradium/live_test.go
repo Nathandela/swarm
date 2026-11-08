@@ -31,7 +31,7 @@ func TestLiveSyntheticRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer speech.Close()
+	defer func() { _ = speech.Close() }()
 	started := time.Now()
 	if err := speech.SendPhrase(ctx, "Hello Swarm.", true); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestLiveSyntheticRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listen.Close()
+	defer func() { _ = listen.Close() }()
 	written := make(chan error, 1)
 	go func() {
 		data := audio.Bytes()

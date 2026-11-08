@@ -357,7 +357,7 @@ func (s *Session) readLoop() {
 		}
 		event := frame.Event
 		s.mu.Lock()
-		valid := true
+		var valid bool
 		switch event.Type {
 		case "text", "end_text":
 			valid = event.Type != "end_text" || s.kind == stt
