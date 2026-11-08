@@ -27,6 +27,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
+- [Voice manager architecture and roadmap](research/gradium-voice-manager-2026-11-08.md) — Gradium speech, persistent CLI manager, local/SSH/phone routes, owner decisions and production gates; research proposal only. [Landscape survey](research/gradium-voice-landscape-2026-11-08.md) and [reproducible evidence](research/gradium-voice-evidence-2026-11-08/README.md) distinguish new browser/SSH/control tests and prior authenticated synthetic spikes from pending fresh live-speech and physical-phone qualification.
+
 - [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — SSH-terminal viewport, compact layout, folding and touch actions, plus the opt-in attached `[swarm]` return-button integration contract; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
   - [Combined action-button verification](verification/mobile-terminal-touch/action-buttons.md) — `[Name (shortcut)]` labels, responsive selected-agent controls, complete affected-package tests and independent review; source follow-up, not a new release
 

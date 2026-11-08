@@ -1,0 +1,14 @@
+{
+  "result": "PASS",
+  "checks": [
+    "STT setup serializes json_config as string and retains explicit sample-rate format",
+    "80 ms PCM48k mono int16: 7680 raw bytes -> 10240 base64 bytes round-trips",
+    "STT flush emits correlation ID; exact receive body preserves text/end_text/flushed ordering",
+    "STT ready metadata preserves server-reported model delay and residency",
+    "STT EOS is graceful end_of_stream; provider errors raise terminal RuntimeError",
+    "TTS multiplex setup/text/EOS propagate client_req_id independently",
+    "TTS receive decodes variable-length first audio chunk and preserves timing/correlation",
+    "TTS context exit closes socket and HTTP session"
+  ],
+  "scope": "Exact upstream class bodies with stubs; not a live service or complete SDK import"
+}

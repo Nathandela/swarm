@@ -1,0 +1,65 @@
+{
+  "evidence_kind": "owner-identified prior experiment, inspected read-only; not rerun",
+  "provider": "Gradium EU, default model alias, free tier",
+  "observed_date": "2026-11-08",
+  "raw_private_artifacts_committed": false,
+  "new_authenticated_calls_in_this_investigation": false,
+  "source_sha256": {
+    "01b_token_semantics.mjs": "6fb551ce96222d14f5a566be6254b462aab581d3d3bef2808055eaea6b6b80f6",
+    "02_tts_stt.mjs": "04f839308bdde32e26f185dde54ee47b17bc991fbe2581f7a20045b90bf07d2d",
+    "03_followups.mjs": "e8eec19a49e87e03e9bb1b1ce800d2343559f27f089e492909dea90ed6b98890",
+    "lib.mjs": "5300ca7666b1b5103e86902d2ef8241610b9c718c314b2331dc413ac2f7bf583",
+    "browser/run.mjs": "cd9dde805a47bab949dda0ed64e7e56fca50055f4324ae022c2d05f3461ee1c7"
+  },
+  "token_observations": {
+    "recorded_at_utc": "2026-11-08T13:43:46Z",
+    "reported_expiry_approximately_seconds_after_mint": 4,
+    "same_token_two_tts_setups": ["ready", "ready"],
+    "fresh_token_delayed_2_seconds": "ready",
+    "fresh_token_delayed_6_seconds": "1008 Invalid or expired token",
+    "bogus_token": "WebSocket opened; setup returned 1008 Invalid or expired token",
+    "established_session_after_10_seconds_idle": "audio message received",
+    "inference": "Documented single-use was not enforced in this observed run. Neither TTL nor reuse is a stable provider guarantee."
+  },
+  "synthetic_tts": {
+    "runs": 3,
+    "first_network_audio_after_first_text_ms": [169, 177, 181],
+    "output_format": "pcm_24000",
+    "excludes": ["manager inference", "human endpointing", "device audible onset", "phone path"],
+    "not_an_sla_or_end_to_end_latency_measurement": true
+  },
+  "prior_browser": {
+    "browser": "installed Chrome; version not retained in examined output",
+    "capture": "fake WAV, synthetic TTS fixture",
+    "permission_and_autoplay_bypassed": true,
+    "stt_and_tts": "sequential, not duplex",
+    "reported_audio_context_hz": 44100,
+    "declared_stt_input_format": "pcm_44100",
+    "provider_ready_sample_rate": 24000,
+    "observed": "STT text received and TTS buffers scheduled; not acoustic playback or physical permission qualification"
+  },
+  "new_readonly_synthetic_tail_analysis": [
+    {
+      "fixture": "audio_h3_fr_answer.wav",
+      "sample_rate": 24000,
+      "duration_ms": 12760.0,
+      "trailing_ms_at_abs_pcm16_threshold": {"0": 0.1, "32": 455.3, "128": 527.2}
+    },
+    {
+      "fixture": "audio_h4_en_91.wav",
+      "sample_rate": 24000,
+      "duration_ms": 11560.0,
+      "trailing_ms_at_abs_pcm16_threshold": {"0": 0.3, "32": 437.4, "128": 459.0}
+    }
+  ],
+  "methodological_limits": [
+    "Synthetic buffer-end timing differs from true human speech end; thresholds do not define semantic endpointing.",
+    "TTS-to-STT roundtrip errors cannot identify which model erred without independent listening/ground truth.",
+    "Four concurrent idle-tolerance sessions exceeded the free tier's two-slot limit; rejected longer sessions do not establish idle timeout.",
+    "The reported next-socket readiness helper accepts a first message without checking its type; those timings are excluded from confirmed readiness claims.",
+    "A 600 ms tail rounds to eight frames while the helper flush branch requires offset eight; that case never reaches the branch. It does not test native flush.",
+    "The 3000 ms tail experiment did flush, but aggregate timing does not establish text/end_text ordering around the acknowledgement.",
+    "Mixed concurrent credit deltas do not establish silence, rounding, minimum or idle-socket billing.",
+    "No handset, full duplex, human microphone, production manager or current paid-account gate passed."
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "kind": "desktop-chromium-fake-device",
+  "real_microphone": false,
+  "browser": "145.0.7632.6",
+  "127.0.0.1": {
+    "secure": true,
+    "media": true,
+    "microphone": true,
+    "worklet": true,
+    "audio": {
+      "contextRate": 24000,
+      "trackRate": 48000,
+      "samples": 24064,
+      "blocks": 188,
+      "workletRate": 24000
+    }
+  },
+  "localhost": {
+    "secure": true,
+    "media": true,
+    "microphone": true,
+    "worklet": true,
+    "audio": {
+      "contextRate": 24000,
+      "trackRate": 48000,
+      "samples": 24064,
+      "blocks": 188,
+      "workletRate": 24000
+    }
+  },
+  "nonloopback_http_control": {
+    "secure": false,
+    "media": false,
+    "microphone": false,
+    "worklet": true
+  }
+}

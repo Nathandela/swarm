@@ -1,0 +1,25 @@
+{
+  "kind": "actual-ssh-local-forward",
+  "host_alias": "tf_nathan",
+  "local_bind": "127.0.0.1",
+  "remote_bind": "127.0.0.1",
+  "nonce_match": true,
+  "remote_fixture_exit": 0,
+  "startup_and_request_ms": 769.0,
+  "browser_through_forward": {
+    "secure": true,
+    "media": true,
+    "microphone": true,
+    "worklet": true
+  },
+  "browser_fake_audio": {
+    "contextRate": 24000,
+    "trackRate": 48000,
+    "samples": 24064,
+    "blocks": 188,
+    "workletRate": 24000
+  },
+  "audio_transported": false,
+  "real_microphone": false,
+  "persistent_remote_files": false
+}

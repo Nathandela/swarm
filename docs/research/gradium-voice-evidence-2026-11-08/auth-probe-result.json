@@ -1,0 +1,20 @@
+[
+  {
+    "url": "https://api.gradium.ai/api/api-keys/token",
+    "status": 401,
+    "body": "{\"detail\":\"No authentication provided.\"}",
+    "elapsed_ms": 85
+  },
+  {
+    "url": "https://eu.api.gradium.ai/api/speech/asr",
+    "status": 401,
+    "body": "{\"detail\":\"No authentication provided.\"}",
+    "elapsed_ms": 91
+  },
+  {
+    "url": "https://eu.api.gradium.ai/api/speech/tts",
+    "status": 401,
+    "body": "{\"detail\":\"No authentication provided.\"}",
+    "elapsed_ms": 76
+  }
+]
