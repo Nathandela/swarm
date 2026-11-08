@@ -1,0 +1,12 @@
+go test -race -overlay /private/tmp/gradium-review-s7adqb7i/overlay.json ./internal/jsontext ./internal/voicewire ./internal/voice/gradium -count=1
+ok  	github.com/Nathandela/swarm/internal/jsontext	1.662s
+ok  	github.com/Nathandela/swarm/internal/voicewire	1.737s
+ok  	github.com/Nathandela/swarm/internal/voice/gradium	4.317s
+
+Targeted causal/teardown regressions -race -count=10
+ok  	github.com/Nathandela/swarm/internal/voice/gradium	5.361s
+
+go vet ./internal/jsontext ./internal/voicewire ./internal/voice/gradium
+PASS
+git diff --check
+PASS
