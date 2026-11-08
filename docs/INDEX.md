@@ -27,6 +27,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
+- [Voice manager implementation plan](specifications/voice-manager-plan.md) — owner-selected locked-screen Android/iOS voice, SSH first, both native managers, unrestricted tools, BYO Gradium and existing app design reuse; requirements, interfaces, ordered epics and physical/release gates. [Proposed ADR-038](adr/ADR-038-voice-manager.md) and [independent review](verification/voice-manager-plan-review.md). Planning only; no new implementation is claimed.
+
 - [Voice manager architecture and roadmap](research/gradium-voice-manager-2026-11-08.md) — Gradium speech, persistent CLI manager, local/SSH/phone routes, owner decisions and production gates; research proposal only. [Landscape survey](research/gradium-voice-landscape-2026-11-08.md) and [reproducible evidence](research/gradium-voice-evidence-2026-11-08/README.md) distinguish new browser/SSH/control tests and prior authenticated synthetic spikes from pending fresh live-speech and physical-phone qualification.
 
 - [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — SSH-terminal viewport, compact layout, folding and touch actions, plus the opt-in attached `[swarm]` return-button integration contract; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open

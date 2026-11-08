@@ -2,6 +2,8 @@
 
 *2026-11-08 · Proposal, not an accepted ADR or shipped feature. Research bead: agents-tracker-1wxi.*
 
+**Superseded recommendations:** the owner subsequently selected locked-screen phone voice, SSH-first connectivity, both Codex and Claude at setup, unrestricted manager tools and BYO Gradium. The [implementation plan](../specifications/voice-manager-plan.md) now governs planning. This research's browser-only/foreground, Codex-first and restricted-manager suggestions are historical alternatives; its measured evidence is unchanged.
+
 The useful product is a persistent Swarm manager that can listen, delegate, follow work and report results while the human moves between terminal and phone. Gradium can supply its ears and voice. Its current speech-to-speech product is live translation, not the conversational tool-using brain; the manager still needs a coding-agent runtime and Swarm's existing control contracts. The microphone and speaker belong on the user's device; the manager and workers belong on the selected Swarm machine. [Gradium S2S](https://docs.gradium.ai/guides/speech-to-speech-overview)
 
 The proposed direction is **one optional manager service per Swarm place, one browser companion across devices, and existing Swarm workers**. Start with server-proxied Gradium STT/TTS over WebSockets and a dedicated Codex app-server manager with narrow tools. Qualify Claude as a manager alternative separately. Use loopback locally, SSH forwarding on desktop, and an independently reachable private HTTPS origin for the strongest phone workflow. This is a recommendation to decide, not permission to provision networking or implement the product.

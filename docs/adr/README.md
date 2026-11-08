@@ -42,6 +42,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [035](ADR-035-mobile-terminal-navigation.md) | Responsive SSH-terminal viewport, folding and explicit touch input ownership | Implemented; local gates verified; handset gate open | 2026-10-25 |
 | [036](ADR-036-whole-swarm-discord.md) | Independent local Discord connection for the whole Swarm, attributed requests and deliberate publication | Accepted; integrated release gates open | 2026-10-27 |
 | [037](ADR-037-hermes-shared-native-owner.md) | Modern Hermes shares its provider owner and retains unknown native work after viewer loss | Accepted; native source and release gates open | 2026-10-27 |
+| [038](ADR-038-voice-manager.md) | Optional per-place unrestricted native manager and locked-screen Android/iOS voice over SSH | Proposed implementation; owner product requirements settled | 2026-11-08 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -55,7 +56,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number: ADR-038 (037 records modern Hermes shared native ownership).
+1. Next sequential number: ADR-039 (038 proposes native voice management).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.
