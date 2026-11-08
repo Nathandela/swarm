@@ -330,6 +330,14 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+	if spec.OwnerLaunchHash != "" {
+		if spec.OperationID == "" {
+			return persist.Meta{}, errors.New("daemon: owner launch requires operation ID")
+		}
+		if m, known, err := d.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash); known {
+			return m, err
+		}
+	}
 	hermes, hermesErr := d.hermesLaunchConfig(spec)
 	if hermesErr != nil {
 		return persist.Meta{}, hermesErr
@@ -393,19 +401,32 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
 
-	// Remote launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
+	// Launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
 	// the reservation so a replayed launch reuses the reserved session and spawns
 	// nothing. Prepare is mutex-guarded, so a concurrent double-launch has exactly one
 	// winner; the loser drops its fresh reservation and returns the cached session. The
 	// reservation has touched only d.sessions (no disk yet), so dropReserved is a clean
 	// abort here.
 	if spec.OperationID != "" {
-		_, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
+		action := "launch"
+		if spec.OwnerLaunchHash != "" {
+			action = "owner_launch"
+		}
+		record, existed, perr := d.idem.PrepareBound(spec.OperationID, action, id, "", spec.OwnerLaunchHash)
 		if perr != nil {
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
 		}
 		if existed {
+			if record.Action != action || record.RequestHash != spec.OwnerLaunchHash {
+				d.dropReserved(id)
+				return persist.Meta{}, ErrOwnerLaunchConflict
+			}
+			if spec.OwnerLaunchHash != "" {
+				d.dropReserved(id)
+				m, _, err := d.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash)
+				return m, err
+			}
 			// Replay of a known operation_id. The signal is LIVENESS, not phase: return
 			// the recorded session only if it is still usable; a MISSING (W1) or LOST
 			// (W3) session means the prior attempt crashed mid-launch and left no usable

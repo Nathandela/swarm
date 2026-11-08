@@ -1021,6 +1021,11 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	if spec.OwnerLaunchHash != "" {
+		if m, known, err := a.core.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash); known {
+			return m, err
+		}
+	}
 	var handoff *handoffHistoryResolver
 	coreAttempted := false
 	resolver := a.historyResolver
@@ -1156,7 +1161,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 		defer a.externalResumeMu.Unlock()
 		for _, existing := range a.core.List() {
 			if existing.AgentType == spec.AgentType && existing.ConversationID == conversationID {
-				return existing, nil
+				return a.core.RecordOwnerLaunch(spec, existing)
 			}
 		}
 	}
@@ -1186,7 +1191,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return persist.Meta{}, fmt.Errorf("resume: source discussion was deleted or archived")
 		}
 		if existing, ok := runningConversation(a.core.List(), source); ok {
-			return existing, nil
+			return a.core.RecordOwnerLaunch(spec, existing)
 		}
 		if managedLoginProvider(source.AgentType) {
 			for _, attempt := range a.core.List() {

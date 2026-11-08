@@ -62,7 +62,7 @@ type Control struct {
 	// Every field is omitempty so an existing-shape Control serializes
 	// byte-identically (GG-7); the daemon-authoritative times are pointers so a zero
 	// Control emits no new key (a zero time.Time is NOT omitted by encoding/json).
-	OperationID     string          `json:"operation_id,omitempty"`      // idempotency key of a remote mutating op
+	OperationID     string          `json:"operation_id,omitempty"`      // idempotency key of a remote mutation or capability-gated owner operation
 	InteractionID   string          `json:"interaction_id,omitempty"`    // the agent interaction being approved (A6)
 	DeviceID        string          `json:"device_id,omitempty"`         // pairing device id (never trusted alone, A1)
 	DeviceSig       string          `json:"device_sig,omitempty"`        // detached Ed25519 over the canonical op tuple (D4)

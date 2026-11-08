@@ -95,6 +95,7 @@ func allOps() []string {
 		OpContextGuardGet, OpContextGuardSet,
 		OpLoginsManage,
 		OpSemanticSend, OpSemanticStatus,
+		OpOwnerLaunch, OpOwnerLaunchStatus,
 	}
 }
 

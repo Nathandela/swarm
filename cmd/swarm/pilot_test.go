@@ -177,9 +177,10 @@ func TestPilotSendReceiptMatchesParsedFlagAndMisuseHasNoReceipt(t *testing.T) {
 func TestPilotCreateAndResumeKeepGuidanceOutOfWorkerLaunch(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("SWARM_PILOT_ROLE", "pilot-only-canary")
-	c := newFakeSpawnClient()
+	c := &fakePilotLauncher{fakeSpawnClient: newFakeSpawnClient()}
 	c.sessions = []protocol.SessionView{view("local/old", "codex", "AMI", status.GroupCompleted)}
 	context := enterPilotForTest(t, c)
+	c.path = context
 	prompt := "Investigate the AMI report; report what you find."
 	if code, out, errs := pilotCall(c, "--context", context, "create", "--cli", "codex", "--prompt", prompt); code != 0 {
 		t.Fatalf("create exit=%d out=%q err=%q", code, out, errs)
@@ -187,7 +188,7 @@ func TestPilotCreateAndResumeKeepGuidanceOutOfWorkerLaunch(t *testing.T) {
 	if code, out, errs := pilotCall(c, "--context", context, "resume", "local/old"); code != 0 {
 		t.Fatalf("resume exit=%d out=%q err=%q", code, out, errs)
 	}
-	reqs := c.reqs()
+	reqs := c.requests
 	if len(reqs) != 2 {
 		t.Fatalf("Launch called %d times, want create and resume", len(reqs))
 	}

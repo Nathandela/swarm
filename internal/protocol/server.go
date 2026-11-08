@@ -108,10 +108,8 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		Cols:        req.Cols,
 		Rows:        req.Rows,
 		Options:     launchOptions(req),
-		// OperationID carries the signed launch operation_id to the daemon so its launch
-		// idempotency engages — a replayed signed remote launch reuses the reserved session
-		// instead of double-spawning (C3). Owner-tier launches carry no operation_id (""), so
-		// they take no idempotency reservation, unchanged.
+		// Remote signed launches and capability-gated owner launches carry their
+		// operation ID into durable reservation. Legacy owner launches leave it empty.
 		OperationID:   operationID,
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
 		// ADR-010 D4: the spawn lineage is carried VERBATIM — the server validates the
@@ -270,7 +268,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1387,6 +1385,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleComposerSend(c)
 	case OpSemanticSend:
 		cc.handleSemanticSend(c)
+	case OpOwnerLaunch:
+		cc.handleOwnerLaunch(c)
+	case OpOwnerLaunchStatus:
+		cc.handleOwnerLaunchStatus(c)
 	case OpSemanticStatus:
 		cc.handleSemanticStatus(c)
 	case OpNativeDecide:
@@ -1471,6 +1473,7 @@ func (cc *clientConn) handleHello(c Control) {
 // DaemonAPI may still satisfy JournalBackend and serve the legacy read+subscribe path; advertising
 // subscribe-from to it would make a new gateway select an operation the server must then refuse.
 func (s *Server) supportedCaps() []string {
+	_, ownerLaunch := s.d.(OwnerLaunchSource)
 	_, journalFrom := s.d.(JournalSubscribeFromBackend)
 	_, durable := s.d.(ComposerOperationExecutor)
 	_, sender := s.d.(ComposerSender)
@@ -1480,6 +1483,9 @@ func (s *Server) supportedCaps() []string {
 	_, nativeDecisions := s.d.(NativeDecisionApplier)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
+		if cap == CapOwnerLaunch && (s.remoteTier || !ownerLaunch) {
+			continue
+		}
 		if cap == CapNativeRequests && !nativeDecisions {
 			continue
 		}
@@ -1512,6 +1518,10 @@ func (cc *clientConn) handleList() {
 }
 
 func (cc *clientConn) handleLaunch(c Control) {
+	if !cc.srv.remoteTier && c.Op != OpOwnerLaunch && c.OperationID != "" {
+		cc.replyErrorCode("launch operation IDs require the owner_launch capability and operation", CodeInvalidField)
+		return
+	}
 	req := c.Launch
 	if req == nil {
 		cc.replyError("launch: missing request")
@@ -1689,11 +1699,18 @@ func (cc *clientConn) handleLaunch(c Control) {
 		return
 	}
 	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
+	if c.Op == OpOwnerLaunch {
+		spec.OwnerLaunchHash = ownerLaunchHash(req)
+	}
 	if resolvedCwd != "" {
 		spec.Cwd = resolvedCwd // ADR-007 D8 (finding D): use the RESOLVED path the policy validated
 	}
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
+		if c.Op == OpOwnerLaunch {
+			cc.ownerLaunchError(err)
+			return
+		}
 		cc.replyError("launch: " + err.Error())
 		return
 	}

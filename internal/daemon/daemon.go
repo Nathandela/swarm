@@ -217,11 +217,13 @@ type LaunchSpec struct {
 	// LookPath and session-dir containment checks -- exactly as it resolves Argv and
 	// CaptureEvents, because this package resolves no adapter.
 	Backend *BackendSpec
-	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
-	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
-	// session — the replay reuses the reserved session and spawns nothing. Local
-	// launches leave it "" (no idempotency reservation).
+	// OperationID is the durable launch identity. Signed remote launches use
+	// `<device_id>:<client-ULID>`; reliable owner launches also set OwnerLaunchHash.
+	// Legacy local launches leave it empty (no idempotency reservation).
 	OperationID string
+	// OwnerLaunchHash binds an owner operation to its exact wire request. Unlike
+	// signed remote launches, uncertain owner launches must never be re-driven.
+	OwnerLaunchHash string
 	// AuthIdentity is the provider-account identity the agent is being launched
 	// under (ADR-024). The assembly resolves it from the adapter's AuthProbe and
 	// the credentials on disk — exactly as it resolves Argv — and the daemon only

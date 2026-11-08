@@ -453,6 +453,10 @@ func (s *Store) compactLocked(now time.Time) error {
 }
 
 func (s *Store) expired(rec Record, now time.Time) bool {
+	// A launch reservation without a settled outcome must retain its replay guard.
+	if rec.Action == "owner_launch" && rec.Phase != PhaseCompleted && rec.Phase != PhaseFailed {
+		return false
+	}
 	// An unresolved native write must never age into another fresh input or decision.
 	if (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && unresolvedPhase(rec.Phase) {
 		return false
