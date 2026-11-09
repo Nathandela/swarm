@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/vt"
@@ -68,6 +69,11 @@ type Config struct {
 	TouchBack bool   // opt-in mouse return button on the existing reserved footer
 	Chrome    bool   // reserve the real bottom row for the return hint (ADR-006 v0.3); off = full passthrough (A-5)
 	Name      string // session label rendered in the reserved-row hint
+	// PrevKey and NextKey, when non-zero, also end the attach -- with ReasonPrev and
+	// ReasonNext -- so the caller can attach the neighbouring session without returning to
+	// its board (ADR-006 Amendment: session cycling keys). Zero leaves the byte to the agent.
+	PrevKey byte
+	NextKey byte
 }
 
 // chromeReassertInterval throttles the reserved-row re-assert on benign live frames to
@@ -90,6 +96,8 @@ const (
 	ReasonDetached   Reason = iota // the user pressed the detach key (or a signal tore down)
 	ReasonSessionEnd               // the live stream closed (session ended / superseded)
 	ReasonError                    // a fault was recovered; the terminal was still restored
+	ReasonNext                     // the user pressed Config.NextKey: attach the next session
+	ReasonPrev                     // the user pressed Config.PrevKey: attach the previous session
 )
 
 // DefaultDetachKey is Ctrl+q (0x11) — the DC1 control byte. It is layout-friendly
@@ -306,7 +314,7 @@ func Run(cfg Config) (reason Reason, err error) {
 		}
 		mouseOwned = active
 		mousePending = false
-		painted := writeAll(out, chromeHint(cfg.Name, detachKey, c, r, active))
+		painted := writeAll(out, chromeHintNav(cfg.Name, detachKey, navHint(cfg.PrevKey, cfg.NextKey), c, r, active))
 		if !written || !painted {
 			touchLatchedOff = true
 			mousePending = true
@@ -338,6 +346,9 @@ func Run(cfg Config) (reason Reason, err error) {
 	// recognition inside bracketed paste. Every other byte is forwarded unchanged.
 	// In read-only mode nothing is forwarded (G3), but the detach key still detaches.
 	detachCh := make(chan struct{})
+	// firedKey is the key that ended the attach, published by the input pump before it
+	// closes detachCh; zero (a timed-out ESC detach key, a signal) means a plain detach.
+	var firedKey atomic.Uint32
 	var detachOnce sync.Once
 	signalDetach := func() { detachOnce.Do(func() { close(detachCh) }) }
 	go func() {
@@ -353,6 +364,11 @@ func Run(cfg Config) (reason Reason, err error) {
 				_ = cfg.Session.Input(append([]byte(nil), p...))
 			}
 		}, signalDetach)
+		for _, k := range []byte{cfg.PrevKey, cfg.NextKey} {
+			if k != 0 && k != detachKey {
+				filter.cycle = append(filter.cycle, k)
+			}
+		}
 		if cfg.TouchBack {
 			filter.mouse = touch.input
 			filter.activity = touch.cancelPress
@@ -363,6 +379,7 @@ func Run(cfg Config) (reason Reason, err error) {
 		for {
 			n, e := in.Read(buf)
 			if n > 0 && filter.Feed(buf[:n]) {
+				firedKey.Store(uint32(filter.Fired()))
 				signalDetach() // the timeout path signals through the filter callback
 				return
 			}
@@ -620,6 +637,12 @@ func Run(cfg Config) (reason Reason, err error) {
 				armHeal()
 			}
 		case <-detachCh:
+			switch k := byte(firedKey.Load()); {
+			case k != 0 && k == cfg.NextKey:
+				return finish(ReasonNext)
+			case k != 0 && k == cfg.PrevKey:
+				return finish(ReasonPrev)
+			}
 			return finish(ReasonDetached)
 		case <-sigCh:
 			return finish(ReasonDetached)
@@ -671,6 +694,11 @@ func writeAll(w io.Writer, p []byte) bool {
 // guarantees rows > 2. It is re-emitted by the output pump to self-heal damage (a bare
 // CSI r region reset from the agent is repaired by the next re-assert).
 func chromeHint(name string, detachKey byte, cols, rows int, touch ...bool) []byte {
+	return chromeHintNav(name, detachKey, "", cols, rows, touch...)
+}
+
+// chromeHintNav is chromeHint with the session-cycling hint (navHint) after the return key.
+func chromeHintNav(name string, detachKey byte, nav string, cols, rows int, touch ...bool) []byte {
 	var b strings.Builder
 	b.WriteString("\x1b7")    // DECSC: save cursor + pen + origin mode
 	b.WriteString("\x1b[?6l") // DECOM off: make the reserved-row CUP absolute even if the agent enabled origin mode; DECRC below restores the agent's DECOM
@@ -683,7 +711,7 @@ func chromeHint(name string, detachKey byte, cols, rows int, touch ...bool) []by
 	// v0.4 P2 (dim not reverse): a faint default-colored hint, not the harsh full-width
 	// reverse-video bar that read as a white strip on dark terminals.
 	b.WriteString("\x1b[2m") // faint/dim
-	b.WriteString(hintText(name, detachKey, cols, touch...))
+	b.WriteString(hintTextNav(name, detachKey, nav, cols, touch...))
 	b.WriteString("\x1b[0m") // reset pen
 	b.WriteString("\x1b[K")  // clear to end of the reserved row
 	b.WriteString("\x1b8")   // DECRC: restore cursor + pen
@@ -696,6 +724,20 @@ func chromeHint(name string, detachKey byte, cols, rows int, touch ...bool) []by
 // does not exist yet.
 //
 
+// navHint names the session-cycling keys for the reserved row, or "" when neither is set.
+func navHint(prev, next byte) string {
+	var keys []string
+	for _, k := range []byte{prev, next} {
+		if k != 0 {
+			keys = append(keys, strings.ToLower(keyLabel(k)))
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	return strings.Join(keys, "/") + " switch"
+}
+
 func touchLabel(detachKey byte) string {
 	return "[swarm (" + strings.ToLower(keyLabel(detachKey)) + ")]"
 }
@@ -703,9 +745,17 @@ func touchLabel(detachKey byte) string {
 // hintText gives a complete active button priority over the session name. When
 // the button cannot fit, retain the plain keyboard hint; cols<=0 is unbounded.
 func hintText(name string, detachKey byte, cols int, touch ...bool) string {
+	return hintTextNav(name, detachKey, "", cols, touch...)
+}
+
+// hintTextNav is hintText followed by nav, the session-cycling hint, when it is set.
+func hintTextNav(name string, detachKey byte, nav string, cols int, touch ...bool) string {
 	s := name + "  " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm"
 	if len(touch) > 0 && touch[0] && (cols <= 0 || cols >= ansi.StringWidth(touchLabel(detachKey))) {
 		s = touchLabel(detachKey) + "  " + name
+	}
+	if nav != "" {
+		s += "  " + nav
 	}
 	if cols > 0 {
 		s = ansi.Truncate(s, cols, "")
