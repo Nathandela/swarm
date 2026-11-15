@@ -33,6 +33,9 @@ type NativeProcessInfo struct {
 	Provider         string         `json:"provider"`
 	Runtime          logins.Runtime `json:"runtime"`
 	IncidentID       string         `json:"incident_id,omitempty"`
+	// BootID is the boot the record was written in. A record from another boot
+	// proves its writers ended even when a reboot prevented the stop proof.
+	BootID string `json:"boot_id,omitempty"`
 }
 
 // NativeStoppedInfo proves the recorded native process groups stopped. Linux
@@ -107,7 +110,8 @@ func beginManagedNativeScope(cfg Config) (*managedNativeScope, error) {
 	if err != nil {
 		return nil, errors.New("shim: native writer record unavailable")
 	}
-	scope := &managedNativeScope{subreaper: subreaper, root: root, info: NativeProcessInfo{SchemaVersion: NativeWriterSchemaVersion, Generation: hex.EncodeToString(generation[:]), ShimPID: os.Getpid(), ShimStartTime: start, Provider: cfg.NativeProvider, IncidentID: cfg.InputEmbargo}}
+	bootID, _ := procstart.BootID() // unreadable: no reboot proof, the stop proof alone decides
+	scope := &managedNativeScope{subreaper: subreaper, root: root, info: NativeProcessInfo{SchemaVersion: NativeWriterSchemaVersion, Generation: hex.EncodeToString(generation[:]), ShimPID: os.Getpid(), ShimStartTime: start, Provider: cfg.NativeProvider, IncidentID: cfg.InputEmbargo, BootID: bootID}}
 	if cfg.LoginRuntime != nil {
 		scope.info.Runtime = *cfg.LoginRuntime
 	}

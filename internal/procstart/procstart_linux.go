@@ -43,3 +43,10 @@ func StartTime(pid int) (int64, error) {
 	}
 	return v, nil
 }
+
+// BootID returns the kernel's random per-boot UUID. Every process recorded under
+// a different boot ID has ended, whatever process its pid names now.
+func BootID() (string, error) {
+	raw, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	return strings.TrimSpace(string(raw)), err
+}

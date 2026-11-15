@@ -89,6 +89,11 @@ func verifyLoginWritersStopped(stateRoot string, meta persist.Meta) error {
 	if err != nil || len(generation) != 16 {
 		return logins.ErrInUse
 	}
+	if current, err := procstart.BootID(); err == nil && current != "" && native.BootID != "" && native.BootID != current {
+		// A reboot ended every recorded writer before the shim could publish the
+		// stop proof; the recorded pids and groups now name unrelated processes.
+		return nil
+	}
 	var stopped shim.NativeStoppedInfo
 	if readNativeProof(stateRoot, meta.ID, shim.NativeStoppedFile, &stopped) != nil || stopped.SchemaVersion != shim.NativeWriterSchemaVersion || !stopped.WritersStopped || stopped.Native != native {
 		return logins.ErrInUse

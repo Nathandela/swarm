@@ -17,3 +17,9 @@ func StartTime(pid int) (int64, error) {
 	tv := kp.Proc.P_starttime
 	return int64(tv.Sec)*1_000_000 + int64(tv.Usec), nil
 }
+
+// BootID returns the kernel's random per-boot UUID. Every process recorded under
+// a different boot ID has ended, whatever process its pid names now.
+func BootID() (string, error) {
+	return unix.Sysctl("kern.bootsessionuuid")
+}

@@ -117,3 +117,19 @@ across homes is not provided. Hand-off, which still reads the old transcript, is
 the supported path. While a deactivation is pending, a binary without this feature
 refuses to load login state and fails closed. Once it completes, the remaining
 state is ordinary login state.
+
+## Amendment 2 (2026-11-15): a reboot proves native writers stopped
+
+Resume and login changes require proof that a discussion's native writers stopped.
+The shim publishes `native-writers-stopped.json` only on its own clean exit, so a
+host reboot left every managed discussion without it. Resume then refused with
+"native writer death is unconfirmed" until the proof was written by hand.
+
+The native process record now carries the kernel boot ID (Linux
+`/proc/sys/kernel/random/boot_id`, Darwin `kern.bootsessionuuid`). A record from a
+different boot proves its writers ended: no process survives a reboot, and the
+recorded pids and process groups now name unrelated processes, so they are not
+probed. The record's other checks (schema, provider, shim identity, runtime,
+generation) still apply. Records without a boot ID, or written in the current boot,
+still need the stop proof. An unreadable boot ID only disables this path. The
+schema version is unchanged: the field is optional, and older binaries ignore it.
