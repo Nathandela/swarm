@@ -323,3 +323,36 @@ type shellAsLaterArgCommand struct{ baseAdapter }
 func (shellAsLaterArgCommand) Command(LaunchSpec) ([]string, error) {
 	return []string{"stub-cli", "bash", "-lc", "x"}, nil
 }
+
+type goodDirectLayout struct{ baseAdapter }
+
+func (goodDirectLayout) TranscriptProviderRoot() string { return ".stub" }
+
+func (goodDirectLayout) TranscriptSubpath(convID string) []string {
+	return []string{"brain", convID, "transcript.jsonl"}
+}
+
+type badDirectRootLayout struct{ goodDirectLayout }
+
+func (badDirectRootLayout) TranscriptProviderRoot() string { return "../evil" }
+
+type badDirectSubpathLayout struct{ goodDirectLayout }
+
+func (badDirectSubpathLayout) TranscriptSubpath(convID string) []string {
+	return []string{"..", convID}
+}
+
+type missingIDDirectSubpathLayout struct{ goodDirectLayout }
+
+func (missingIDDirectSubpathLayout) TranscriptSubpath(string) []string {
+	return []string{"brain", "transcript.jsonl"}
+}
+
+type panicDirectSubpathLayout struct{ goodDirectLayout }
+
+func (panicDirectSubpathLayout) TranscriptSubpath(convID string) []string {
+	if convID == "" {
+		panic("empty convID")
+	}
+	return []string{"brain", convID, "transcript.jsonl"}
+}
