@@ -177,14 +177,14 @@ func TestLocateTranscript_CodexIgnoresStrayEntriesButHonoursTheBudget(t *testing
 }
 
 // TestLocateTranscript_UncharacterizedProvidersStayUnsupported: absence is the signal.
-// agy and opencode implement neither layout and are refused by name, even with a
+// opencode implements no direct/cwd/dated layout and is refused by name, even with a
 // perfectly good codex tree on disk.
 func TestLocateTranscript_UncharacterizedProvidersStayUnsupported(t *testing.T) {
 	home := t.TempDir()
 	id := uuidv7At(codexThreadStart)
 	cwd := filepath.Join(home, "work")
 	writeCodexHistory(t, home, id, cwd, codexThreadStart, "", "cli", "")
-	for _, agent := range []string{"agy", "opencode"} {
+	for _, agent := range []string{"opencode"} {
 		src := codexSource("srclocal", cwd, id, codexThreadStart)
 		src.AgentType = agent
 		got, outcome := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits()).LocateTranscript(src, id)
