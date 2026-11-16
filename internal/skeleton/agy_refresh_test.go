@@ -85,9 +85,8 @@ func TestCLIRefreshInstalledUpgradeAgyRealResume(t *testing.T) {
 		SpawnIntent: "delegate",
 		Supervision: "passive",
 		Options: map[string]string{
-			"model":  "Gemini 4 Carbon (Medium)",
-			"mode":   "auto",
-			"effort": "high",
+			"model": "Gemini 4 Carbon (Medium)",
+			"mode":  "auto",
 		},
 	})
 	if err != nil {
@@ -196,9 +195,6 @@ func TestCLIRefreshInstalledUpgradeAgyRealResume(t *testing.T) {
 	}
 	if !hasArgPair("--mode", "auto") {
 		t.Errorf("replacement argv missing --mode auto: %v", gotArgs)
-	}
-	if !hasArgPair("--effort", "high") {
-		t.Errorf("replacement argv missing --effort high: %v", gotArgs)
 	}
 	if !hasArgPair("--conversation", convID) {
 		t.Errorf("replacement argv missing --conversation %s: %v", convID, gotArgs)

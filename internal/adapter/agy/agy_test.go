@@ -157,8 +157,8 @@ func TestCommand_NoOptions(t *testing.T) {
 }
 
 // TestCommand_AllOptions — R-D2: Command composes the FIXED flag order
-// --model, --mode, --effort, --agent, --sandbox, --dangerously-skip-permissions,
-// --prompt-interactive regardless of map iteration order (pure/deterministic).
+// --model, --mode, --dangerously-skip-permissions, --prompt-interactive
+// regardless of map iteration order (pure/deterministic).
 func TestCommand_AllOptions(t *testing.T) {
 	a := newAdapter()
 	argv, err := a.Command(adapter.LaunchSpec{
@@ -166,9 +166,6 @@ func TestCommand_AllOptions(t *testing.T) {
 		Options: map[string]string{
 			"model":                        "Gemini 4 Carbon (Medium)",
 			"mode":                         "auto",
-			"effort":                       "high",
-			"agent":                        "reviewer",
-			"sandbox":                      "true",
 			"dangerously-skip-permissions": "true",
 		},
 		InitialPrompt: "Say OK and nothing else.",
@@ -180,9 +177,6 @@ func TestCommand_AllOptions(t *testing.T) {
 		"agy",
 		"--model", "Gemini 4 Carbon (Medium)",
 		"--mode", "auto",
-		"--effort", "high",
-		"--agent", "reviewer",
-		"--sandbox",
 		"--dangerously-skip-permissions",
 		"--prompt-interactive", "Say OK and nothing else.",
 	}
@@ -193,19 +187,18 @@ func TestCommand_AllOptions(t *testing.T) {
 
 func TestCommand_RejectsFlagShapedFreeTextOptions(t *testing.T) {
 	a := newAdapter()
-	argv, err := a.Command(adapter.LaunchSpec{
-		Cwd: "/work/proj",
-		Options: map[string]string{
-			"model": "--remote-control",
-			"agent": "-danger",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Command: %v", err)
-	}
-	want := []string{"agy"}
-	if !equalArgv(argv, want) {
-		t.Errorf("Command(flag-shaped free text) = %v; want %v", argv, want)
+	for _, val := range []string{"--remote-control", "-danger"} {
+		argv, err := a.Command(adapter.LaunchSpec{
+			Cwd:     "/work/proj",
+			Options: map[string]string{"model": val},
+		})
+		if err != nil {
+			t.Fatalf("Command(%q): %v", val, err)
+		}
+		want := []string{"agy"}
+		if !equalArgv(argv, want) {
+			t.Errorf("Command(flag-shaped free text %q) = %v; want %v", val, argv, want)
+		}
 	}
 }
 
@@ -233,12 +226,12 @@ func TestCommand_InitialPrompt(t *testing.T) {
 	}
 }
 
-// TestOptions_Schema — R-D3: model, mode, effort, agent, sandbox, dangerously-skip-permissions.
+// TestOptions_Schema — R-D3: model, mode, dangerously-skip-permissions.
 func TestOptions_Schema(t *testing.T) {
 	a := newAdapter()
 	opts := a.Options()
-	if len(opts) != 6 {
-		t.Fatalf("Options() has %d entries; want 6 (model, mode, effort, agent, sandbox, dangerously-skip-permissions)", len(opts))
+	if len(opts) != 3 {
+		t.Fatalf("Options() has %d entries; want 3 (model, mode, dangerously-skip-permissions)", len(opts))
 	}
 	byKey := make(map[string]adapter.OptionSpec, len(opts))
 	for _, o := range opts {
@@ -268,36 +261,6 @@ func TestOptions_Schema(t *testing.T) {
 	}
 	if mode.Default != "" {
 		t.Errorf("mode.Default = %q; want \"\" (R-D3: no default)", mode.Default)
-	}
-
-	effort, ok := byKey["effort"]
-	if !ok {
-		t.Fatal("Options() missing \"effort\"")
-	}
-	if effort.Type != "choice" {
-		t.Errorf("effort.Type = %q; want \"choice\"", effort.Type)
-	}
-	if !equalArgv(effort.Choices, []string{"low", "medium", "high", "xhigh", "max"}) {
-		t.Errorf("effort.Choices = %v; want [low medium high xhigh max]", effort.Choices)
-	}
-	if effort.Default != "" {
-		t.Errorf("effort.Default = %q; want \"\"", effort.Default)
-	}
-
-	agentOpt, ok := byKey["agent"]
-	if !ok {
-		t.Fatal("Options() missing \"agent\"")
-	}
-	if agentOpt.Type != "string" {
-		t.Errorf("agent.Type = %q; want \"string\"", agentOpt.Type)
-	}
-
-	sandbox, ok := byKey["sandbox"]
-	if !ok {
-		t.Fatal("Options() missing \"sandbox\"")
-	}
-	if sandbox.Type != "bool" || sandbox.Default != "false" {
-		t.Errorf("sandbox = %+v; want Type \"bool\", Default \"false\"", sandbox)
 	}
 
 	skip, ok := byKey["dangerously-skip-permissions"]
@@ -369,11 +332,9 @@ func TestResume_CarriesConversationID(t *testing.T) {
 		Cwd:            "/work",
 		ConversationID: fixtureConversationID,
 		Options: map[string]string{
-			"model":   "Orchestrator (Carbon)",
-			"mode":    "plan",
-			"effort":  "xhigh",
-			"agent":   "reviewer",
-			"sandbox": "true",
+			"model":                        "Orchestrator (Carbon)",
+			"mode":                         "plan",
+			"dangerously-skip-permissions": "true",
 		},
 	})
 	if err != nil {
@@ -383,9 +344,7 @@ func TestResume_CarriesConversationID(t *testing.T) {
 		"agy",
 		"--model", "Orchestrator (Carbon)",
 		"--mode", "plan",
-		"--effort", "xhigh",
-		"--agent", "reviewer",
-		"--sandbox",
+		"--dangerously-skip-permissions",
 		"--conversation", fixtureConversationID,
 	}
 	if !equalArgv(withOpts, wantWithOpts) {
@@ -534,7 +493,7 @@ func TestExtractConversationID_FromFixture(t *testing.T) {
 
 // TestCapability_FromFixture — R-D7: the T-6 acceptance baseline derived from
 // the REAL adapter + REAL fixture: Resume:true, ConversationID:true,
-// Hooks:false (SignalSources declares heuristic baseline only), Options:6,
+// Hooks:false (SignalSources declares heuristic baseline only), Options:3,
 // Signals:["heuristic"].
 func TestCapability_FromFixture(t *testing.T) {
 	a := newAdapter()
@@ -551,8 +510,8 @@ func TestCapability_FromFixture(t *testing.T) {
 	if !entry.ConversationID {
 		t.Errorf("capability ConversationID=false; the fixture capture carries an extractable conversation id")
 	}
-	if entry.Options != 6 {
-		t.Errorf("capability Options=%d; want 6", entry.Options)
+	if entry.Options != 3 {
+		t.Errorf("capability Options=%d; want 3", entry.Options)
 	}
 	if !equalArgv(entry.Signals, []string{"heuristic"}) {
 		t.Errorf("capability Signals=%v; want [\"heuristic\"]", entry.Signals)

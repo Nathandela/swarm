@@ -78,8 +78,8 @@ func (agyAdapter) SupportedVersions() adapter.VersionConstraint {
 }
 
 // Command composes the launch argv: `agy` + [--model M] + [--mode M] +
-// [--effort E] + [--agent A] + [--sandbox] + [--dangerously-skip-permissions] +
-// [--prompt-interactive P], in that FIXED order (R-D2). It is pure and deterministic.
+// [--dangerously-skip-permissions] + [--prompt-interactive P], in that FIXED
+// order (R-D2). It is pure and deterministic.
 func (agyAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 	argv := []string{binary}
 	argv = append(argv, optionFlags(spec.Options)...)
@@ -90,7 +90,7 @@ func (agyAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 }
 
 // Options is the declarative launch-option schema the launch form renders
-// (R-D3): model, mode, effort, agent, sandbox, and dangerously-skip-permissions.
+// (R-D3): model, mode, and dangerously-skip-permissions.
 func (agyAdapter) Options() []adapter.OptionSpec {
 	return []adapter.OptionSpec{
 		{Key: "model", Label: "Model", Type: "string", Suggest: []string{
@@ -102,9 +102,6 @@ func (agyAdapter) Options() []adapter.OptionSpec {
 			"Claude Sonnet 5.5 (Medium)", "Claude Opus 5.5 (Medium)", "GPT-OSS 120B (Medium)",
 		}},
 		{Key: "mode", Label: "Execution mode", Type: "choice", Choices: []string{"accept-edits", "auto", "plan"}},
-		{Key: "effort", Label: "Reasoning effort", Type: "choice", Choices: []string{"low", "medium", "high", "xhigh", "max"}},
-		{Key: "agent", Label: "Agent", Type: "string"},
-		{Key: "sandbox", Label: "Terminal sandbox", Type: "bool", Default: "false"},
 		{Key: "dangerously-skip-permissions", Label: "Skip permission prompts", Type: "bool", Default: "false"},
 	}
 }
@@ -196,8 +193,8 @@ func uuidTokenAt(rest string) (string, bool) {
 }
 
 // optionFlags translates resolved option values into agy flags in the FIXED
-// order model, mode, effort, agent, sandbox, dangerously-skip-permissions, so
-// Command stays deterministic (R-D2). Flag-shaped free-text values are ignored.
+// order model, mode, dangerously-skip-permissions, so Command stays
+// deterministic (R-D2). Flag-shaped free-text values are ignored.
 func optionFlags(opts map[string]string) []string {
 	var flags []string
 	if m := opts["model"]; m != "" && !strings.HasPrefix(m, "-") {
@@ -205,15 +202,6 @@ func optionFlags(opts map[string]string) []string {
 	}
 	if m := opts["mode"]; m != "" {
 		flags = append(flags, "--mode", m)
-	}
-	if e := opts["effort"]; e != "" {
-		flags = append(flags, "--effort", e)
-	}
-	if a := opts["agent"]; a != "" && !strings.HasPrefix(a, "-") {
-		flags = append(flags, "--agent", a)
-	}
-	if opts["sandbox"] == "true" {
-		flags = append(flags, "--sandbox")
 	}
 	if opts["dangerously-skip-permissions"] == "true" {
 		flags = append(flags, "--dangerously-skip-permissions")
