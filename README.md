@@ -24,11 +24,11 @@ Inspired by Claude Code's Agent View, but agent-agnostic and open source.
 ## Why swarm
 
 - **One view for every agent.** Watch supported CLIs from a single board instead of a wall of terminal tabs.
-- **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious. Codex waits show `approval`, `question`, or `error` so you can see what needs attention.
+- **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious. Codex waits show `approval`, `question`, or `error` so you can see what needs attention, and agy (`>= 1.4.0`) reports structured state, native conversation IDs, and titles via its `statusLine` hook.
 - **Automatic reconnection.** The board reconnects after daemon connection loss, retaining your selection and unsent edits while marking cached data stale.
 - **Background by default.** Each session owns a real PTY through its own shim process and continues after the TUI exits.
 - **Safe daemon upgrades.** Restart or upgrade swarm while agents are running; the replacement daemon finds and reconnects to them.
-- **Agent CLI refresh.** Resume eligible idle Claude and Codex sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
+- **Agent CLI refresh.** Resume eligible idle Claude, Codex, and agy sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
 - **Provider logins.** Save native Claude Code and Codex logins in Options → Logins; one selected login is shared by that provider's Swarm sessions. See the [provider login guide](docs/operations/provider-logins.md).
 - **Team discussions in Discord.** Connect the whole local Swarm through your own named bot. Teammates can ask existing agents, owners can endorse a message, and agents publish deliberate replies. Each computer or VM keeps its own integration. See the [Discord guide](docs/ops/discord.md).
 - **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
@@ -174,7 +174,7 @@ Permission requests are never approved by handoff automation; they remain explic
 |---|---|
 | Claude Code | Supported |
 | Codex | Supported |
-| agy / Antigravity CLI | Supported |
+| agy / Antigravity CLI | Supported (options, statusLine hook, handoff, CLI refresh) |
 | OpenCode | Supported |
 | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation) | Supported on Apple Silicon macOS and Linux |
 
