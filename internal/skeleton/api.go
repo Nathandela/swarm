@@ -1237,7 +1237,7 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		return persist.Meta{}, err
 	}
 
-	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" && a.core.NativeInputEnabled() || a.core.HermesNativeRequested(resolved)) {
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" || a.core.HermesNativeRequested(resolved)) {
 		probeEnv := resolved.ClientEnv
 		if a.core.HermesNativeRequested(resolved) {
 			for _, origin := range resolved.HermesOrigins {
@@ -1263,6 +1263,9 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 			}
 			resolved.ExpectedCLIIdentity = observed
 		}
+	}
+	if len(resolved.Argv) > 0 && resolved.AgentType == "agy" && resolved.CLIIdentity != nil && agySupportsStatusLine(resolved.CLIIdentity.Version) {
+		resolved.Argv = agyStatusLineArgs(resolved.Argv, resolved.ClientEnv)
 	}
 
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {

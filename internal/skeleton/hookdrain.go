@@ -89,6 +89,13 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 		}
 		return nil // Advisory readings never touch hook sequences, status or the journal.
 	}
+	if cb.Event == "AgyStatusLine" {
+		if err := d.eng.AuthenticateCallback(cb); err != nil {
+			return errors.Join(errHookIngestRejected, err)
+		}
+		d.observeAgyStatusLine(cb)
+		return nil
+	}
 	if d.hookSeqDuplicate(cb.SessionID, cb.Sequence) {
 		// LOGGED, not silent (R6 review fix-pack round 2): both callers discard this
 		// error -- conn.go's serveHook by design, and DrainOnce by folding it into its

@@ -273,6 +273,9 @@ type Daemon struct {
 	tapFailures atomic.Uint64
 	tapLastLog  atomic.Int64
 
+	agyTitlesMu sync.Mutex
+	agyTitles   map[string]string
+
 	closeOnce sync.Once
 }
 
@@ -942,6 +945,9 @@ func (d *Daemon) endSession(id string) {
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
 	d.convScanMu.Unlock()
+	d.agyTitlesMu.Lock()
+	delete(d.agyTitles, id)
+	d.agyTitlesMu.Unlock()
 	d.gateMu.Lock()
 	delete(d.gateDone, id)
 	d.gateMu.Unlock()

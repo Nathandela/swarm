@@ -899,6 +899,9 @@ func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 	if args[0] == "SwarmUsage" {
 		return runUsageHook(args[1:], stdin, os.Stdout, stderr)
 	}
+	if args[0] == "AgyStatusLine" {
+		return runAgyStatusLineHook(args[1:], stdin, os.Stdout, stderr)
+	}
 	body := readHookBody(stdin)
 	payload := parseHookStdin(bytes.NewReader(body))
 	for k, v := range parseHookPayload(args[1:]) {
