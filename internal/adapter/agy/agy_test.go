@@ -38,13 +38,14 @@ const realVersionBanner = "1.1.4\n"
 // exactly this id.
 const fixtureConversationID = "fb5e3e02-e5ef-4d25-b398-aead20366441"
 
-// agyModelSuggestions are the 8 `agy models` display names (design doc section
-// 3, verified live against agy 1.1.4 during the exploration phase —
-// docs/verification/cli-trio-exploration/).
+// agyModelSuggestions are the curated modern `agy models` display names.
 var agyModelSuggestions = []string{
-	"Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Low)",
-	"Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (High)",
-	"Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)",
+	"Orchestrator (Carbon)", "Orchestrator (Argon)",
+	"Gemini 4 Carbon (Medium)", "Gemini 4 Carbon (High)",
+	"Gemini 4 Argon (Medium)",
+	"Gemini 4 Hydrogen (Medium)", "Gemini 4 Hydrogen (High)",
+	"Gemini 3.8 Flash (Medium)",
+	"Claude Sonnet 5.5 (Medium)", "Claude Opus 5.5 (Medium)", "GPT-OSS 120B (Medium)",
 }
 
 // Frozen R-B4 marker table values (docs/verification/cli-duo-adapters-
@@ -163,8 +164,8 @@ func TestCommand_AllOptions(t *testing.T) {
 	argv, err := a.Command(adapter.LaunchSpec{
 		Cwd: "/work/proj",
 		Options: map[string]string{
-			"model":                        "Gemini 3.5 Flash (Low)",
-			"mode":                         "accept-edits",
+			"model":                        "Gemini 4 Carbon (Medium)",
+			"mode":                         "auto",
 			"dangerously-skip-permissions": "true",
 		},
 		InitialPrompt: "Say OK and nothing else.",
@@ -174,13 +175,30 @@ func TestCommand_AllOptions(t *testing.T) {
 	}
 	want := []string{
 		"agy",
-		"--model", "Gemini 3.5 Flash (Low)",
-		"--mode", "accept-edits",
+		"--model", "Gemini 4 Carbon (Medium)",
+		"--mode", "auto",
 		"--dangerously-skip-permissions",
 		"--prompt-interactive", "Say OK and nothing else.",
 	}
 	if !equalArgv(argv, want) {
 		t.Errorf("Command(all options) = %v; want %v", argv, want)
+	}
+}
+
+func TestCommand_RejectsFlagShapedFreeTextOptions(t *testing.T) {
+	a := newAdapter()
+	for _, val := range []string{"--remote-control", "-danger"} {
+		argv, err := a.Command(adapter.LaunchSpec{
+			Cwd:     "/work/proj",
+			Options: map[string]string{"model": val},
+		})
+		if err != nil {
+			t.Fatalf("Command(%q): %v", val, err)
+		}
+		want := []string{"agy"}
+		if !equalArgv(argv, want) {
+			t.Errorf("Command(flag-shaped free text %q) = %v; want %v", val, argv, want)
+		}
 	}
 }
 
@@ -208,9 +226,7 @@ func TestCommand_InitialPrompt(t *testing.T) {
 	}
 }
 
-// TestOptions_Schema — R-D3: model (string, Suggest = the 8 display names),
-// mode (choice accept-edits|plan, no default), dangerously-skip-permissions
-// (bool, default "false").
+// TestOptions_Schema — R-D3: model, mode, dangerously-skip-permissions.
 func TestOptions_Schema(t *testing.T) {
 	a := newAdapter()
 	opts := a.Options()
@@ -240,8 +256,8 @@ func TestOptions_Schema(t *testing.T) {
 	if mode.Type != "choice" {
 		t.Errorf("mode.Type = %q; want \"choice\"", mode.Type)
 	}
-	if !equalArgv(mode.Choices, []string{"accept-edits", "plan"}) {
-		t.Errorf("mode.Choices = %v; want [accept-edits plan]", mode.Choices)
+	if !equalArgv(mode.Choices, []string{"accept-edits", "auto", "plan"}) {
+		t.Errorf("mode.Choices = %v; want [accept-edits auto plan]", mode.Choices)
 	}
 	if mode.Default != "" {
 		t.Errorf("mode.Default = %q; want \"\" (R-D3: no default)", mode.Default)
@@ -310,6 +326,60 @@ func TestResume_CarriesConversationID(t *testing.T) {
 	want := []string{"agy", "--conversation", fixtureConversationID}
 	if !equalArgv(argv, want) {
 		t.Errorf("Resume(id) = %v; want %v", argv, want)
+	}
+
+	withOpts, err := a.Resume(adapter.ResumeSpec{
+		Cwd:            "/work",
+		ConversationID: fixtureConversationID,
+		Options: map[string]string{
+			"model":                        "Orchestrator (Carbon)",
+			"mode":                         "plan",
+			"dangerously-skip-permissions": "true",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Resume(id+options): %v", err)
+	}
+	wantWithOpts := []string{
+		"agy",
+		"--model", "Orchestrator (Carbon)",
+		"--mode", "plan",
+		"--dangerously-skip-permissions",
+		"--conversation", fixtureConversationID,
+	}
+	if !equalArgv(withOpts, wantWithOpts) {
+		t.Errorf("Resume(id+options) = %v; want %v", withOpts, wantWithOpts)
+	}
+}
+
+func TestConversationIDValidator(t *testing.T) {
+	a := newAdapter()
+	validator, ok := adapter.AsConversationIDValidator(a)
+	if !ok {
+		t.Fatal("agy must implement ConversationIDValidator")
+	}
+	if !validator.IsValidConversationID(fixtureConversationID) {
+		t.Errorf("IsValidConversationID(%q) = false; want true", fixtureConversationID)
+	}
+	for _, bad := range []string{"", "./cmd/swarm/", "FB5E3E02-E5EF-4D25-B398-AEAD20366441", "not-a-uuid"} {
+		if validator.IsValidConversationID(bad) {
+			t.Errorf("IsValidConversationID(%q) = true; want false", bad)
+		}
+	}
+}
+
+func TestDirectTranscriptLayout(t *testing.T) {
+	a := newAdapter()
+	layout, ok := adapter.AsDirectTranscriptLayout(a)
+	if !ok {
+		t.Fatal("agy must implement DirectTranscriptLayout")
+	}
+	if got := layout.TranscriptProviderRoot(); got != ".gemini" {
+		t.Errorf("TranscriptProviderRoot() = %q; want \".gemini\"", got)
+	}
+	want := []string{"antigravity-cli", "brain", fixtureConversationID, ".system_generated", "logs", "transcript.jsonl"}
+	if got := layout.TranscriptSubpath(fixtureConversationID); !equalArgv(got, want) {
+		t.Errorf("TranscriptSubpath() = %v; want %v", got, want)
 	}
 }
 
@@ -423,8 +493,8 @@ func TestExtractConversationID_FromFixture(t *testing.T) {
 
 // TestCapability_FromFixture — R-D7: the T-6 acceptance baseline derived from
 // the REAL adapter + REAL fixture: Resume:true, ConversationID:true,
-// Hooks:false (agy has no argv-injectable hook mechanism, design doc section
-// 4), Options:3, Signals:["heuristic"] (agy is heuristic-only, v1).
+// Hooks:false (SignalSources declares heuristic baseline only), Options:3,
+// Signals:["heuristic"].
 func TestCapability_FromFixture(t *testing.T) {
 	a := newAdapter()
 	fx := loadFixture(t)

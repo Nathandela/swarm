@@ -85,6 +85,7 @@ func CheckConformance(a Adapter) []error {
 	errs = append(errs, checkExtract(a)...)
 	errs = append(errs, checkConversationIdentitySource(a)...)
 	errs = append(errs, checkInteractionSource(a)...)
+	errs = append(errs, checkDirectTranscriptLayout(a)...)
 	return errs
 }
 
@@ -350,6 +351,10 @@ func checkParallelDeterministic(t *testing.T, a Adapter) {
 			_, _ = a.ExtractConversationID(nil, []byte("conv-id=zzz"))
 			if src, ok := AsConversationIdentitySource(a); ok {
 				_, _ = src.ConversationIDFromEvent(HookPayload{Raw: json.RawMessage(`{}`)})
+			}
+			if layout, ok := AsDirectTranscriptLayout(a); ok {
+				_ = layout.TranscriptProviderRoot()
+				_ = layout.TranscriptSubpath(probeConversationID)
 			}
 			_ = a.Options()
 			_ = a.SignalSources()
@@ -634,4 +639,82 @@ func decisionSafe(src InteractionSource, ref, decisionID string) (act DecisionAc
 	}()
 	act, ok = src.Decision(ref, decisionID)
 	return
+}
+
+func checkDirectTranscriptLayout(a Adapter) []error {
+	layout, ok := AsDirectTranscriptLayout(a)
+	if !ok {
+		return nil
+	}
+	var errs []error
+	root, panicked := directRootSafe(layout)
+	if panicked {
+		return []error{fmt.Errorf("TranscriptProviderRoot() panicked; it must be pure and total")}
+	}
+	root2, panicked2 := directRootSafe(layout)
+	if panicked2 {
+		return []error{fmt.Errorf("TranscriptProviderRoot() panicked on recheck")}
+	}
+	if root != root2 {
+		errs = append(errs, fmt.Errorf("TranscriptProviderRoot() is not deterministic: %q then %q", root, root2))
+	}
+	if !validDirectSegment(root) {
+		errs = append(errs, fmt.Errorf("TranscriptProviderRoot() = %q must be a single clean relative directory component", root))
+	}
+
+	sub, subPanicked := directSubpathSafe(layout, probeConversationID)
+	if subPanicked {
+		return append(errs, fmt.Errorf("TranscriptSubpath(%q) panicked; it must be total", probeConversationID))
+	}
+	sub2, subPanicked2 := directSubpathSafe(layout, probeConversationID)
+	if subPanicked2 {
+		return append(errs, fmt.Errorf("TranscriptSubpath(%q) panicked on recheck", probeConversationID))
+	}
+	if !reflect.DeepEqual(sub, sub2) {
+		errs = append(errs, fmt.Errorf("TranscriptSubpath(%q) is not deterministic: %v then %v", probeConversationID, sub, sub2))
+	}
+	if len(sub) < 2 {
+		errs = append(errs, fmt.Errorf("TranscriptSubpath(%q) returned %d segments; want at least 2 (dir + file)", probeConversationID, len(sub)))
+	}
+	hasID := false
+	for i, seg := range sub {
+		if !validDirectSegment(seg) {
+			errs = append(errs, fmt.Errorf("TranscriptSubpath(%q)[%d] = %q must be a clean relative path segment", probeConversationID, i, seg))
+		}
+		if seg == probeConversationID {
+			hasID = true
+		}
+	}
+	if !hasID {
+		errs = append(errs, fmt.Errorf("TranscriptSubpath(%q) = %v omits the conversation id segment", probeConversationID, sub))
+	}
+
+	for _, probe := range []string{"", "\x00/.."} {
+		if _, badPanicked := directSubpathSafe(layout, probe); badPanicked {
+			errs = append(errs, fmt.Errorf("TranscriptSubpath(%q) panicked; it must be total on any input", probe))
+		}
+	}
+	return errs
+}
+
+func validDirectSegment(seg string) bool {
+	return seg != "" && seg != "." && seg != ".." && !strings.ContainsAny(seg, "/\\\x00")
+}
+
+func directRootSafe(layout DirectTranscriptLayout) (root string, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	return layout.TranscriptProviderRoot(), false
+}
+
+func directSubpathSafe(layout DirectTranscriptLayout, convID string) (sub []string, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	return layout.TranscriptSubpath(convID), false
 }

@@ -224,6 +224,40 @@ func TestProbeModels_UnknownName(t *testing.T) {
 	}
 }
 
+func TestProbeModels_Agy(t *testing.T) {
+	t.Run("reads the configured default from HOME/.gemini/antigravity-cli/settings.json", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		writeFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), readTestdata(t, "agy_settings.json"))
+
+		configured, models := ProbeModels("agy")
+		if configured != "Gemini 4 Carbon (Medium)" {
+			t.Errorf("configured = %q, want %q", configured, "Gemini 4 Carbon (Medium)")
+		}
+		if models != nil {
+			t.Errorf("agy model choices must be nil, got %+v", models)
+		}
+	})
+
+	t.Run("absent settings yields empty", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		configured, models := ProbeModels("agy")
+		if configured != "" || models != nil {
+			t.Errorf("absent settings: got (%q, %+v), want (\"\", nil)", configured, models)
+		}
+	})
+
+	t.Run("corrupt settings yields empty", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		writeFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), []byte("{ not json"))
+		configured, _ := ProbeModels("agy")
+		if configured != "" {
+			t.Errorf("corrupt settings must yield \"\", got %q", configured)
+		}
+	})
+}
+
 // codex v0.5 M5 / Fable LOW-4 (consensus): a non-regular file (FIFO/device) planted
 // at a config path must not block the detection goroutine - readCapped rejects
 // anything that is not a regular file.

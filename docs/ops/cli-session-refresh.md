@@ -1,6 +1,6 @@
 # Agent CLI refresh
 
-Swarm observes installed Claude Code and Codex updates and resumes eligible idle
+Swarm observes installed Claude Code, Codex, and agy (Antigravity CLI) updates and resumes eligible idle
 sessions using the updated installation. Swarm does not install the provider
 update. The refreshed session has a new swarm ID and the same provider conversation
 ID. Its name, tag, environment, launch options and supervision lineage carry over.

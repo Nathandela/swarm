@@ -1237,7 +1237,7 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		return persist.Meta{}, err
 	}
 
-	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" && a.core.NativeInputEnabled() || a.core.HermesNativeRequested(resolved)) {
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" || a.core.HermesNativeRequested(resolved)) {
 		probeEnv := resolved.ClientEnv
 		if a.core.HermesNativeRequested(resolved) {
 			for _, origin := range resolved.HermesOrigins {
@@ -1263,6 +1263,9 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 			}
 			resolved.ExpectedCLIIdentity = observed
 		}
+	}
+	if len(resolved.Argv) > 0 && resolved.AgentType == "agy" && resolved.CLIIdentity != nil && agySupportsStatusLine(resolved.CLIIdentity.Version) {
+		resolved.Argv = agyStatusLineArgs(resolved.Argv, resolved.ClientEnv)
 	}
 
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
@@ -1623,9 +1626,10 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 	ad, _ := registry.New(source.AgentType)
 	_, byCwd := adapter.AsTranscriptLayout(ad)
 	_, byDay := adapter.AsDatedTranscriptLayout(ad)
+	_, byDirect := adapter.AsDirectTranscriptLayout(ad)
 	managedOpenCode := source.AgentType == "opencode" && source.RequiredRuntime == persist.RequiredRuntimeOpenCode && source.OpenCodeBinding != nil && source.OpenCodeBinding.NativeCreatedAtMS > 0
-	if !byCwd && !byDay && !managedOpenCode {
-		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude and codex sources", source.AgentType)
+	if !byCwd && !byDay && !byDirect && !managedOpenCode {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude, codex, and agy sources", source.AgentType)
 	}
 	if resolver == nil {
 		return daemon.LaunchSpec{}, fmt.Errorf("handoff: no provider history resolver is configured")

@@ -258,7 +258,7 @@ func validCLIIdentity(id *persist.CLIIdentity) bool {
 }
 
 func refreshProvider(agent string) bool {
-	return agent == "codex" || agent == "claude" || agent == "opencode"
+	return agent == "codex" || agent == "claude" || agent == "opencode" || agent == "agy"
 }
 
 func (w *authWatcher) clock() time.Time {
