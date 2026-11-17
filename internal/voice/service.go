@@ -322,6 +322,8 @@ func serviceAttention(err error) string {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, protocol.ErrManagerLaunchPrerequisite):
+		return protocol.ErrManagerLaunchPrerequisite.Error()
 	case errors.Is(err, ErrControllerPaused):
 		return "direct terminal activity needs reconciliation"
 	case errors.Is(err, ErrControllerUncertain):

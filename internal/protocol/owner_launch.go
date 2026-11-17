@@ -28,6 +28,9 @@ const (
 // ErrOwnerResumeStaleSource proves the exact resume source was refused before launch.
 var ErrOwnerResumeStaleSource = errors.New("protocol: resume source instance or status changed")
 
+// ErrManagerLaunchPrerequisite is a correlated, known-unsent manager runtime refusal.
+var ErrManagerLaunchPrerequisite = daemon.ErrManagerLaunchPrerequisite
+
 type OwnerBoundResumeSource interface{ OwnerBoundResumeSupported() bool }
 
 type OwnerLaunchSource interface {
@@ -98,6 +101,10 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 		return "", "", err
 	}
 	if resp.Op == OpError {
+		if req.Manager != nil && resp.ErrorCode == schema.CodeManagerLaunchPrerequisite &&
+			resp.OperationID == operationID && resp.EndpointID == c.endpointID {
+			return "", "", ErrManagerLaunchPrerequisite
+		}
 		if req.ResumeSourceInstance != "" && resp.ErrorCode == CodeStaleInstance {
 			return "", "", ErrOwnerResumeStaleSource
 		}
@@ -197,6 +204,9 @@ func (cc *clientConn) ownerLaunchError(err error) {
 		if src, ok := cc.srv.d.(OwnerLaunchSource); ok {
 			if _, known := src.OwnerLaunchOutcome(cc.opID); known {
 				code = schema.CodeOutcomeUnknown
+			} else if code == CodeInvalidField && errors.Is(err, daemon.ErrManagerLaunchPrerequisite) {
+				cc.replyErrorCode(daemon.ErrManagerLaunchPrerequisite.Error(), schema.CodeManagerLaunchPrerequisite)
+				return
 			}
 		}
 	}

@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -16,6 +19,7 @@ type bootstrapFixture struct {
 	runtime      protocol.ManagerRuntimeStatus
 	launches     int
 	lost         bool
+	refusal      error
 	outcome      schema.OperationOutcomeView
 	beforeLaunch func(string, protocol.LaunchReq)
 }
@@ -27,6 +31,9 @@ func (f *bootstrapFixture) LaunchOperation(op string, req protocol.LaunchReq) (s
 	f.launches++
 	if f.beforeLaunch != nil {
 		f.beforeLaunch(op, req)
+	}
+	if f.refusal != nil {
+		return "", "", f.refusal
 	}
 	f.rows = []protocol.SessionView{{ID: "endpoint/manager", EndpointID: "endpoint", Role: "manager", ManagerConversationID: req.Manager.ConversationID, Agent: req.Agent, Cwd: req.Cwd, Status: status.Status{Process: status.ProcessRunning}, Capabilities: &protocol.SessionCapabilities{SessionInstance: "instance"}}}
 	if f.lost {
@@ -113,5 +120,49 @@ func TestBootstrapDoesNotReplaceStoppedOrAmbiguousManager(t *testing.T) {
 	f.rows = []protocol.SessionView{row, row}
 	if _, err := bootstrapManager(context.Background(), dir, cfg, refs, "endpoint", nil, f); err == nil || f.launches != 1 {
 		t.Fatal("ambiguous manager selected")
+	}
+}
+
+func TestBootstrapRetryRequiresCorrelatedPreEffectPrerequisite(t *testing.T) {
+	for _, known := range []bool{true, false} {
+		name := "typed pre-effect refusal"
+		if !known {
+			name = "older wire generic refusal"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := privateConfigDir(t)
+			cfg := testConfig()
+			refs := ManagerBridgeRefs{Socket: "/private/bridge.sock", AuthFile: "/private/bridge.key"}
+			f := bootstrapNativeFixture(cfg, refs)
+			f.refusal = errors.New(protocol.ErrManagerLaunchPrerequisite.Error())
+			if known {
+				f.refusal = protocol.ErrManagerLaunchPrerequisite
+			}
+			expired := fmt.Sprintf("launch:%d:%s", time.Now().Add(-2*time.Hour).UnixMilli(), strings.Repeat("a", 32))
+			file := managerIntentName(cfg.ConversationID)
+			intent := managerLaunchIntent{Version: 1, ConversationID: cfg.ConversationID, OperationID: expired,
+				Phase: "prepared", Request: managerLaunchRequest(cfg, refs)}
+			if err := saveManagerIntent(dir, file, intent); err != nil {
+				t.Fatal(err)
+			}
+			ctx := t.Context()
+			_, err := bootstrapManager(ctx, dir, cfg, refs, "endpoint", nil, f)
+			if known && !errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || !known && !errors.Is(err, ErrControllerUncertain) {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+			raw, err := readVoiceFile(dir, file, MaxControlFrameBytes)
+			var saved managerLaunchIntent
+			if err != nil || json.Unmarshal(raw, &saved) != nil || saved.OperationID == expired {
+				t.Fatalf("expired proven-unsent operation did not renew: %+v %v", saved, err)
+			}
+			if known && saved.Phase != "prepared" || !known && saved.Phase != "executing" {
+				t.Fatalf("wrong custody after refusal: %+v", saved)
+			}
+			f.refusal = nil
+			_, err = bootstrapManager(ctx, dir, cfg, refs, "endpoint", nil, f)
+			if known && (err != nil || f.launches != 2) || !known && (!errors.Is(err, ErrControllerUncertain) || f.launches != 1) {
+				t.Fatalf("wrong retry behavior: launches=%d, %v", f.launches, err)
+			}
+		})
 	}
 }

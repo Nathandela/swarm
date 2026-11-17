@@ -17,13 +17,12 @@ func qualifyManagerLaunchCLI(spec *daemon.LaunchSpec) error {
 	if spec.Manager.UnsupportedOrigin || !daemon.ManagerNativeEnvironmentSupported(spec.AgentType, spec.ClientEnv) {
 		return errors.New("manager native account configuration is unsupported; select its native CLI account without credential or backend overrides")
 	}
-	refuse := errors.New("manager requires a qualified native-turn runtime before native account preparation")
 	if len(spec.Argv) == 0 {
-		return refuse
+		return daemon.ErrManagerLaunchPrerequisite
 	}
 	observed, err := probeCLIIdentity(spec.AgentType, spec.Argv[0], spec.ClientEnv, spec.Cwd)
 	if err != nil || observed == nil {
-		return refuse
+		return daemon.ErrManagerLaunchPrerequisite
 	}
 	qualified := false
 	switch spec.AgentType {
@@ -33,7 +32,7 @@ func qualifyManagerLaunchCLI(spec *daemon.LaunchSpec) error {
 		qualified = claudeinput.SupportsNativeTurns(observed.Version)
 	}
 	if !qualified {
-		return refuse
+		return daemon.ErrManagerLaunchPrerequisite
 	}
 	if expected := spec.ExpectedCLIIdentity; expected != nil && *expected != *observed {
 		return errors.New("launch: CLI installation changed before refresh")

@@ -138,13 +138,22 @@ func bootstrapManager(ctx context.Context, dir string, cfg Config, refs ManagerB
 	if err := ctx.Err(); err != nil {
 		return none, err
 	}
+	if !managerLaunchReplayable(intent.OperationID) {
+		// Only a prepared intent reaches dispatch. Executing intents reconcile above.
+		intent.OperationID, err = protocol.NewLaunchOperationID()
+		if err != nil {
+			return none, err
+		}
+		if err := saveManagerIntent(dir, file, intent); err != nil {
+			return none, err
+		}
+	}
 	intent.Phase = "executing"
 	if err := saveManagerIntent(dir, file, intent); err != nil {
 		return none, err
 	}
 	id, _, err := client.LaunchOperation(intent.OperationID, intent.Request)
-	if errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrStale) {
-		// The protocol client's capability and endpoint checks run before dispatch.
+	if knownUnsentManagerLaunch(err) {
 		intent.Phase = "prepared"
 		if saveErr := saveManagerIntent(dir, file, intent); saveErr != nil {
 			return none, errors.Join(err, saveErr)
@@ -160,6 +169,15 @@ func bootstrapManager(ctx context.Context, dir string, cfg Config, refs ManagerB
 		return none, err
 	}
 	return findBootstrapManager(ctx, cfg, refs, endpoint, id, nil, client)
+}
+
+func knownUnsentManagerLaunch(err error) bool {
+	return errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrStale)
+}
+
+func managerLaunchReplayable(id string) bool {
+	// Leave time for private dispatch and daemon-side validation.
+	return protocol.LaunchOperationReplayable(id, time.Now().Add(time.Minute))
 }
 
 func managerLaunchRequest(cfg Config, refs ManagerBridgeRefs) protocol.LaunchReq {

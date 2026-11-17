@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -94,11 +93,6 @@ func (r *managerReplacement) write(intent replacementIntent) error {
 	return writeVoiceFile(r.dir, r.file(), payload)
 }
 
-func replacementLaunchReplayable(id string) bool {
-	// Leave time for the private dispatch boundary and daemon-side validation.
-	return protocol.LaunchOperationReplayable(id, time.Now().Add(time.Minute))
-}
-
 func (r *managerReplacement) begin(intent replacementIntent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -109,7 +103,7 @@ func (r *managerReplacement) begin(intent replacementIntent) error {
 	if current.Receipt != intent.Receipt {
 		return ErrStale
 	}
-	if !replacementLaunchReplayable(intent.Receipt.OperationID) {
+	if !managerLaunchReplayable(intent.Receipt.OperationID) {
 		return ErrExpired
 	}
 	if err = writeVoiceFile(r.dir, r.file()+".initialized", []byte("replacement-v1\n")); err != nil {
@@ -198,7 +192,7 @@ func (c *managerControl) queueReplacement(ctx context.Context, expected ManagerB
 		}
 		if identity(prior.Receipt.Previous) == identity(expected) {
 			receipt := prior.Receipt
-			if receipt.Phase != "prepared" || replacementLaunchReplayable(receipt.OperationID) {
+			if receipt.Phase != "prepared" || managerLaunchReplayable(receipt.OperationID) {
 				receipt.Attention = r.attention
 				return receipt, nil
 			}
@@ -251,7 +245,7 @@ func (c *managerControl) progressReplacement(ctx context.Context) (bool, error) 
 	}
 	receipt := &intent.Receipt
 	if receipt.Phase == "prepared" {
-		if !replacementLaunchReplayable(receipt.OperationID) {
+		if !managerLaunchReplayable(receipt.OperationID) {
 			return false, ErrExpired
 		}
 		if err = r.checkRoster(c.binding, ""); err != nil {
@@ -265,8 +259,7 @@ func (c *managerControl) progressReplacement(ctx context.Context) (bool, error) 
 		}
 		receipt.Phase = "executing"
 		id, _, launchErr := r.runtime.LaunchOperation(receipt.OperationID, intent.Request)
-		if errors.Is(launchErr, ErrControllerUnsupported) || errors.Is(launchErr, ErrStale) {
-			// The controller client's capability and endpoint checks precede dispatch.
+		if knownUnsentManagerLaunch(launchErr) {
 			receipt.Phase = "prepared"
 			return false, errors.Join(launchErr, r.write(intent))
 		}

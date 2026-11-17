@@ -161,6 +161,12 @@ under the launch reservation lock. A changed precondition returns
 capability before sending the field. The old owner and signed remote launch
 routes cannot use it. Reliable launch status remains available by operation ID.
 
+A correlated `manager_launch_prerequisite` refusal means native manager runtime
+qualification failed before account preparation and no reservation exists.
+The client can retry the same prepared intent after selecting a supported CLI.
+An absent response, generic refusal or known reservation grants no permission
+to retry an executing intent.
+
 The owner-only `owner_launch_status` read requires the same capability. It accepts `subject_operation_id` without a mutation age limit and echoes that exact subject with `operation_outcome`: `applied` plus original namespaced session ID, `outcome_unknown`, or `unknown_operation`. The read launches nothing. Existing signed remote `operation_status` also excludes owner-launch custody and returns `unknown_operation` for an owner launch ID. An unknown/expired result never proves an earlier effect did not happen and never authorizes a new operation ID. Legacy owner `launch` remains available without a durable operation ID; nonempty owner operation IDs require the new route. No wire fields or protocol-major change are required.
 
 Manager launch is an additive owner-only extension to `owner_launch`, requiring both `owner-launch` and `manager-launch` capabilities. A manager-bearing request on legacy `launch`, an unnegotiated connection, or the signed remote socket is refused before launch; existing remote launch hashes intentionally remain unchanged. The manager object and every exact reference participate in the owner launch hash. An older owner-launch server cannot silently create an ordinary worker because the client refuses without the new capability.

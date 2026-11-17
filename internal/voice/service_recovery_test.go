@@ -95,6 +95,7 @@ type replacementServiceFixture struct {
 	rows         []protocol.SessionView
 	native       protocol.ManagerRuntimeStatus
 	outcome      schema.OperationOutcomeView
+	refusal      error
 	beforeLaunch func(string, protocol.LaunchReq)
 	calls        []string
 }
@@ -108,6 +109,9 @@ func (f *replacementServiceFixture) List() ([]protocol.SessionView, error) {
 func (f *replacementServiceFixture) LaunchOperation(op string, req protocol.LaunchReq) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refusal != nil {
+		return "", "", f.refusal
+	}
 	f.beforeLaunch(op, req)
 	f.calls = append(f.calls, op)
 	f.rows = append(f.rows, protocol.SessionView{ID: "endpoint/fresh", EndpointID: "endpoint", Role: "manager", Agent: req.Agent,
@@ -371,5 +375,39 @@ func TestManagerReplacementRenewsOnlyUndispatchedExpiredIntent(t *testing.T) {
 	retry, err = control.queueReplacement(ctx, binding)
 	if err != nil || retry.OperationID != expired || retry.Phase != "executing" {
 		t.Fatalf("expired uncertain intent was replaced: %+v %v", retry, err)
+	}
+}
+
+func TestManagerReplacementPrerequisiteRetainsPreparedIntent(t *testing.T) {
+	_, store, _, binding := newControllerFixture(t)
+	if err := store.noteControllerCustodyLost(binding); err != nil {
+		t.Fatal(err)
+	}
+	dir := privateServerDir(t)
+	cfg := testConfig()
+	cfg.ConversationID = binding.ConversationID
+	runtime := &replacementServiceFixture{
+		refusal: protocol.ErrManagerLaunchPrerequisite,
+		rows: []protocol.SessionView{{
+			ID: binding.SessionID, Role: "manager", Agent: binding.Provider, ManagerConversationID: binding.ConversationID,
+			Capabilities: &protocol.SessionCapabilities{SessionInstance: binding.SessionInstance},
+			Status:       status.Status{Process: status.ProcessExited},
+		}},
+	}
+	r := &managerReplacement{dir: dir, endpoint: "machine", config: cfg, runtime: runtime,
+		refs: ManagerBridgeRefs{Socket: filepath.Join(dir, "bridge.sock"), AuthFile: filepath.Join(dir, managerBridgeAuth)}}
+	control := &managerControl{store: store, binding: binding, replacement: r}
+	ctx := t.Context()
+	queued, err := control.queueReplacement(ctx, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted, err := control.progressReplacement(ctx); adopted || !errors.Is(err, protocol.ErrManagerLaunchPrerequisite) ||
+		serviceAttention(err) != protocol.ErrManagerLaunchPrerequisite.Error() {
+		t.Fatalf("known-unsent replacement had the wrong outcome: adopted=%v %v", adopted, err)
+	}
+	intent, err := r.read()
+	if err != nil || intent.Receipt.Phase != "prepared" || intent.Receipt.OperationID != queued.OperationID {
+		t.Fatalf("replacement lost its prepared operation: %+v %v", intent, err)
 	}
 }

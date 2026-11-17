@@ -31,6 +31,9 @@ import (
 // concurrent-session cap; the message names the cap value (S-7).
 var ErrMaxSessions = errors.New("daemon: max sessions reached")
 
+// ErrManagerLaunchPrerequisite is raised by native runtime qualification before account preparation or reservation.
+var ErrManagerLaunchPrerequisite = errors.New("manager requires a qualified native-turn runtime; install or select a supported CLI version")
+
 // ErrResumeSourceChanged refuses an owner resume before reserving an effect.
 var ErrResumeSourceChanged = errors.New("resume source instance or status changed")
 

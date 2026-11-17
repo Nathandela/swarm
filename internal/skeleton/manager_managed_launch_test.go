@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 func TestManagerManagedAccountEnvironmentReachesPreflight(t *testing.T) {
@@ -100,5 +103,49 @@ func TestManagerManagedBindingCannotEraseRawUnsupportedOwnerOrigin(t *testing.T)
 				t.Fatal("managed binding erased unsupported raw owner origin")
 			}
 		})
+	}
+}
+
+func TestManagerLaunchUnqualifiedClaudeReturnsKnownPreEffectWireRefusal(t *testing.T) {
+	sk := assemble(t)
+	client := dialClient(t, sk, protocol.CapOwnerLaunch, protocol.CapManagerLaunch)
+	dir, err := os.MkdirTemp("", "mp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "b.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	if err := os.Chmod(socket, 0600); err != nil {
+		t.Fatal(err)
+	}
+	auth := filepath.Join(dir, "auth")
+	if err := os.WriteFile(auth, []byte("fixture-only"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cli := filepath.Join(dir, "claude")
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\nif test x$1 = x--version; then printf '2.1.320 (Claude Code)\\n'; fi\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	op, err := protocol.NewLaunchOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := protocol.LaunchReq{Agent: "claude", Cwd: dir, Env: []string{"PATH=" + dir, "HOME=" + dir}, Cols: 80, Rows: 24,
+		Manager: &protocol.ManagerLaunchReq{ConversationID: "fixture", BridgeSocket: socket, AuthFile: auth}}
+	if _, _, err = client.LaunchOperation(op, req); !errors.Is(err, protocol.ErrManagerLaunchPrerequisite) {
+		t.Fatalf("unqualified CLI lost its typed wire refusal: %v", err)
+	}
+	out, err := client.LaunchOperationStatus(op)
+	if err != nil || out.State != schema.OutcomeUnknownOperation || len(sk.Core().List()) != 0 {
+		t.Fatalf("version refusal reserved a launch: %+v %v", out, err)
 	}
 }
