@@ -136,7 +136,7 @@ Structured events are preferred when a CLI exposes them—Claude Code uses confi
 
 `o` opens the board options: group by status, repository, or tag, and order by arrival, activity, creation, or name. Repository and tag cells stay blocked by status internally — Needs input first, Completed last — so the ordering you pick applies within each status block rather than shuffling an idle session above one waiting on you.
 
-## Bring existing Claude sessions into swarm
+## Bring existing sessions into swarm
 
 Inspect Claude Agent View background sessions that can be adopted:
 
@@ -151,6 +151,22 @@ swarm reattach --cli claude --take-over
 ```
 
 Add `--all` to include completed and stopped sessions. Interactive sessions are never imported. The operation is idempotent: swarm reuses a row with the same native Claude session ID instead of creating a duplicate.
+
+Codex CLI conversations can also be discovered from their native history:
+
+```sh
+swarm reattach --cli codex --dry-run
+```
+
+Stop the original Codex CLI before importing a selected conversation:
+
+```sh
+swarm reattach --cli codex --session <conversation-uuid> --take-over
+```
+
+For Codex, `--take-over` confirms that you already stopped the original CLI; swarm does not stop Codex automatically. Omitting `--session` imports every discovered unarchived CLI conversation. Discovery reads native rollout metadata, so it cannot tell whether a conversation is currently running. Repeated imports reuse the existing Swarm row.
+
+Use `--all --dry-run` to also inspect archived Codex conversations. Archived imports are refused before launching anything: run `codex unarchive <conversation-uuid>` first. Codex import currently supports uncompressed CLI rollout files in the default `~/.codex` home, including physical rollout UUID suffixes. Compressed-only and index-only histories are not discovered. Custom `CODEX_HOME` can be inspected with `--dry-run`; imports with a custom home, `CODEX_PROFILE`, or an active managed Codex login are refused to avoid resuming in a different native history store. Return to native sign-in before importing. See [verification and limits](docs/verification/codex-reattach.md).
 
 ## Supervised handoff
 
