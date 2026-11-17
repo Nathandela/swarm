@@ -942,16 +942,13 @@ func deleteCmd(c Client, id string) tea.Cmd {
 type boardLineKind int
 
 const (
-	lineHeader  boardLineKind = iota // the "swarm" title row
-	lineSpacer                       // an empty row
-	lineBanner                       // the transient V-5 notification
+	lineSpacer  boardLineKind = iota // an empty row
 	lineSection                      // a section header (status group, repo, or tag)
 	lineSession                      // one session row
 )
 
 // boardLine is one line of the board. section is set on a section header; session
-// and idx (its flat display index, the selection's coordinate) on a session row; idx
-// on a banner line is its row within the wrapped banner.
+// and idx (its flat display index, the selection's coordinate) on a session row.
 type boardLine struct {
 	kind    boardLineKind
 	section string
@@ -959,19 +956,8 @@ type boardLine struct {
 	idx     int
 }
 
-// layout visits the board's lines top to bottom, one per screen row. It is the one
-// description of the board's shape: view renders from it and rowAt hit-tests
-// against it (ADR-029), so a click can never land on a different row than the one
-// drawn there. banner is how many notification lines are showing.
-func (m generalModel) layout(banner int, visit func(boardLine)) {
-	visit(boardLine{kind: lineHeader})
-	visit(boardLine{kind: lineSpacer})
-	if banner > 0 {
-		for i := 0; i < banner; i++ {
-			visit(boardLine{kind: lineBanner, idx: i})
-		}
-		visit(boardLine{kind: lineSpacer})
-	}
+// content visits the scrollable board rows in their display and hit-test order.
+func (m generalModel) content(visit func(boardLine)) {
 	// idx walks the flat display order so it lines up with the selection index.
 	idx := 0
 	for _, section := range m.sectionOrder() {
@@ -987,43 +973,10 @@ func (m generalModel) layout(banner int, visit func(boardLine)) {
 			visit(boardLine{kind: lineSession, session: s, idx: idx})
 			idx++
 		}
-		visit(boardLine{kind: lineSpacer})
-	}
-}
-
-func (m generalModel) view() string {
-	var b strings.Builder
-	banner := m.bannerLines()
-	m.layout(len(banner), func(l boardLine) {
-		switch l.kind {
-		case lineHeader:
-			b.WriteString(m.header())
-		case lineBanner:
-			b.WriteString(banner[l.idx])
-		case lineSection:
-			b.WriteString("  " + m.sectionHeader(l.section))
-		case lineSession:
-			b.WriteString(m.renderRow(l.session, l.session.Group, l.idx == m.sel))
+		if !m.compactRows() {
+			visit(boardLine{kind: lineSpacer})
 		}
-		b.WriteByte('\n')
-	})
-	// The context-key footer is promoted to the router's persistent bottom bar
-	// (generalStatus / composeBoard), so it is no longer rendered inline here.
-	return b.String()
-}
-
-// sectionHeader renders one section's title: the status group's own header, or the
-// repo/tag key in capitals.
-func (m generalModel) sectionHeader(section string) string {
-	header, style := strings.ToUpper(section), styleTitle
-	if m.grouping == groupByStatus {
-		g := status.Group(section)
-		header, style = groupHeader(g), groupHeaderStyle(g)
 	}
-	if m.width > 0 {
-		header = clampCells(header, m.width-2)
-	}
-	return style.Render(header)
 }
 
 // scroll moves the selection by delta WITHOUT wrapping: the mouse wheel's motion
@@ -1031,32 +984,6 @@ func (m generalModel) sectionHeader(section string) string {
 func (m *generalModel) scroll(delta int) {
 	m.top += delta
 	m.clampTop()
-}
-
-func (m generalModel) header() string {
-	running, needs := 0, 0
-	for _, s := range m.sessions {
-		if s.Group != status.GroupCompleted {
-			running++
-		}
-		if s.Group == status.GroupNeedsInput {
-			needs++
-		}
-	}
-	left := styleTitle.Render("swarm")
-	rightText := itoa(running) + " running · " + itoa(needs) + " needs you"
-	if m.grouping != groupByStatus || m.ordering != orderByArrival {
-		rightText = m.layoutLabel() + " · " + rightText
-	}
-	if m.width > 0 {
-		rightText = clampCells(rightText, m.width-lipgloss.Width(left)-3)
-	}
-	right := styleDim.Render(rightText)
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 3 {
-		gap = 3
-	}
-	return left + strings.Repeat(" ", gap) + right
 }
 
 // rowColumnsFor allocates the available row cells. At 120 columns the existing

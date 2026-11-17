@@ -113,11 +113,11 @@ func TestSessionLayoutRemoveDropsEmptySection(t *testing.T) {
 		sCompleted("endpoint/c", "codex", "/code/c", "exit 0", time.Minute),
 	})
 	m.remove("endpoint/c")
-	if got := stripANSI(m.view()); strings.Contains(got, "COMPLETED") {
+	if got := stripANSI((rootModel{general: m, width: testCols, height: testRows}).boardView()); strings.Contains(got, "COMPLETED") {
 		t.Fatalf("empty COMPLETED section still rendered after remove:\n%s", got)
 	}
 	m.remove("endpoint/w")
-	if got := stripANSI(m.view()); strings.Contains(got, "WORKING") {
+	if got := stripANSI((rootModel{general: m, width: testCols, height: testRows}).boardView()); strings.Contains(got, "WORKING") {
 		t.Fatalf("empty WORKING section still rendered on an empty board:\n%s", got)
 	}
 }

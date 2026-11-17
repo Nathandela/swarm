@@ -86,7 +86,7 @@ func TestRoster_LineageBadgesRenderInTheView(t *testing.T) {
 	child := lineageRow("endpoint/child9", "child-work", "parent1", "handoff")
 
 	gm := generalModel{sessions: []protocol.SessionView{parent, child}, width: testCols}
-	out := stripANSI(gm.view())
+	out := stripANSI((rootModel{general: gm, width: testCols, height: testRows}).boardView())
 	if !strings.Contains(out, "from") || !strings.Contains(out, "spawned") {
 		t.Errorf("the rendered roster shows no lineage badges:\n%s", out)
 	}

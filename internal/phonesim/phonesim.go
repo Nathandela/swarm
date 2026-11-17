@@ -323,64 +323,6 @@ func (p *Phone) appendWatch(ctx context.Context, action, session string) error {
 	return nil
 }
 
-// DriveKill signs a kill for the session with the phone command-signing key, seals it
-// under the epoch content key, and appends it to the machine's relay mailbox. The
-// gateway opens the envelope, the daemon verifies the device signature + capability and
-// executes. seq is an internal monotonic counter (unique per epoch, as SealCommandEnvelope
-// requires).
-func (p *Phone) DriveKill(ctx context.Context, session, operationID string) error {
-	cmd, err := phonecore.SignCommand(p.ks, phonecore.CommandInput{
-		Action:      protocol.ActionKill,
-		Machine:     p.machine,
-		Session:     session,
-		OperationID: operationID,
-		ExpiresAt:   time.Now().Add(time.Minute),
-	})
-	if err != nil {
-		return err
-	}
-
-	env, err := phonecore.SealCommandEnvelope(p.content, p.epochID, p.seq.Next(), cmd)
-	if err != nil {
-		return err
-	}
-	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
-		return err
-	}
-	return nil
-}
-
-// DriveLaunch signs a launch with the phone command-signing key over the reserved
-// LaunchSessionSentinel (a launch has no target session yet), binding the LaunchReq spec
-// into the signature via ContentHash = LaunchContentHash(req) so a relay/gateway cannot
-// alter the agent/cwd/options/prompt of a validly-signed launch. It seals command AND spec
-// into one envelope under the epoch content key with the SHARED sequencer and appends it to
-// the machine mailbox, where the gateway forwards it (OpLaunch) and the daemon verifies the
-// signature + capability + launch policy and spawns the session. It mirrors DriveKill; seq
-// is the shared per-epoch counter SealLaunchEnvelope requires to be unique.
-func (p *Phone) DriveLaunch(ctx context.Context, req *protocol.LaunchReq, operationID string) error {
-	cmd, err := phonecore.SignCommand(p.ks, phonecore.CommandInput{
-		Action:      protocol.ActionLaunch,
-		Machine:     p.machine,
-		Session:     protocol.LaunchSessionSentinel,
-		OperationID: operationID,
-		ExpiresAt:   time.Now().Add(time.Minute),
-		ContentHash: protocol.LaunchContentHash(req),
-	})
-	if err != nil {
-		return err
-	}
-
-	env, err := phonecore.SealLaunchEnvelope(p.content, p.epochID, p.seq.Next(), cmd, req)
-	if err != nil {
-		return err
-	}
-	if _, err := p.relay.MailboxAppend(ctx, p.machineTarget, env); err != nil {
-		return err
-	}
-	return nil
-}
-
 // ReadReply returns the sealed control reply the gateway returns after executing a command.
 // It drains the mailbox through the SHARED drain -- routing every item through the router
 // exactly once, so a journal frame that arrives alongside the reply lands in the session

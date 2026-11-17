@@ -43,7 +43,7 @@ func TestOptionsWindowAppliesGroupingAndOrderingOnEnter(t *testing.T) {
 	if rm.general.grouping != groupByRepo || rm.general.ordering != orderByActivity {
 		t.Fatalf("applied grouping=%v ordering=%v, want repo/activity", rm.general.grouping, rm.general.ordering)
 	}
-	if got := stripANSI(rm.general.header()); !strings.Contains(got, "group: repo · order: activity") {
+	if got := stripANSI(rm.boardHeader()); !strings.Contains(got, "group: repo · order: activity") {
 		t.Fatalf("active layout is not visible in header: %q", got)
 	}
 

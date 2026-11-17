@@ -18,17 +18,6 @@ type foldKey struct {
 func (m generalModel) isCollapsed(section string) bool {
 	return m.collapsed[foldKey{m.grouping, section}]
 }
-func (m generalModel) content(visit func(boardLine)) {
-	started := false
-	m.layout(0, func(l boardLine) {
-		if l.kind == lineSection {
-			started = true
-		}
-		if started && (l.kind == lineSection || l.kind == lineSession || l.kind == lineSpacer && !m.compactRows()) {
-			visit(l)
-		}
-	})
-}
 func (m generalModel) navigation(visit func(boardLine, int)) {
 	i := 0
 	m.content(func(l boardLine) {

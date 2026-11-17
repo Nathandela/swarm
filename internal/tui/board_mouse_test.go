@@ -478,7 +478,7 @@ func TestMouse_SectionHeadersFitTheTerminal(t *testing.T) {
 		}
 		rm.general.setLayout(grouping, orderByArrival)
 		for _, section := range rm.general.sectionOrder() {
-			if got := lipgloss.Width("  " + rm.general.sectionHeader(section)); got > rm.width {
+			if got := lipgloss.Width(rm.boardSection(section)); got > rm.width {
 				t.Fatalf("section header is %d cells wide, terminal is %d", got, rm.width)
 			}
 		}

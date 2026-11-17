@@ -469,3 +469,16 @@ func TestR7Interrupt_ANoBackendCodexSessionREFUSESRatherThanTypingACancelKey(t *
 	}
 	r.assertPTYUntouched(t)
 }
+
+func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
+	instance, _ := d.sessionInstance(local)
+	_ = d.registerBackendForInstance(local, instance, threadID, conn)
+}
+
+func (d *Daemon) registerBackendForInstance(local, expectedInstance, threadID string, conn backendConn) bool {
+	return d.registerBackendFeedForInstance(local, expectedInstance, threadID, conn, newBackendFeed())
+}
+
+func (d *Daemon) noteBackendRejoined(local, threadID string, conn backendConn) {
+	d.registerBackend(local, threadID, conn)
+}
