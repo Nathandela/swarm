@@ -22,8 +22,8 @@ type formContent struct {
 
 func formFocusedLine(body string) string {
 	for _, line := range strings.Split(body, "\n") {
-		plain := ansi.Strip(line)
-		if strings.HasPrefix(plain, "▌ ") || strings.HasPrefix(plain, "> ") {
+		trimmed := strings.TrimLeft(ansi.Strip(line), " ")
+		if strings.HasPrefix(trimmed, "▌ ") || strings.HasPrefix(trimmed, "> ") {
 			return line
 		}
 	}
@@ -46,14 +46,22 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		}
 	case m.screen == screenResume:
 		r := m.resume
-		f = formContent{body: r.view(), target: "Relocate: " + displayName(r.source), context: sessionFormContext(r.source.ID, displayName(r.source), r.source.Agent, r.source.Cwd) + "\n" + r.reason + "\n" + r.directory.errMsg, hint: r.hint()}
+		resumeCtx := r.reason + "\n" + r.directory.errMsg
+		if m.compactMobileForm() {
+			resumeCtx = sessionFormContext(r.source.ID, displayName(r.source), r.source.Agent, r.source.Cwd) + "\n" + resumeCtx
+		}
+		f = formContent{body: r.view(), target: "Relocate: " + displayName(r.source), context: resumeCtx, hint: r.hint()}
 	case m.screen == screenHandoff:
 		h := m.handoff
 		name := h.sourceID
 		if s, exists := m.general.sessionByID(h.sourceID); exists {
 			name = displayName(s)
 		}
-		f = formContent{body: h.view(), target: "Handoff: " + name + " → " + h.targetName(), context: sessionFormContext(h.sourceID, name, h.sourceAgent, h.sourceCwd), hint: h.hint(), decision: h.confirmPending()}
+		handoffCtx := ""
+		if m.compactMobileForm() {
+			handoffCtx = sessionFormContext(h.sourceID, name, h.sourceAgent, h.sourceCwd)
+		}
+		f = formContent{body: h.view(), target: "Handoff: " + name + " → " + h.targetName(), context: handoffCtx, hint: h.hint(), decision: h.confirmPending()}
 		if h.method == handoffMethodHandsOff && h.sourceRunning {
 			f.context += "\n" + handoffRunningWarning
 		}
@@ -73,7 +81,7 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		}
 	case m.screen == screenLogins:
 		l := m.logins
-		f = formContent{body: l.view(m.width, m.boardBodyRows(), m.connectionLost, m.loginRunner != nil), target: "Provider logins", hint: l.hint(m.connectionLost, m.loginRunner != nil, m.width), context: l.err}
+		f = formContent{body: m.loginsBody(), target: "Provider logins", hint: l.hint(m.connectionLost, m.loginRunner != nil, m.width), context: l.err}
 		if l.mode == "label" {
 			f.field = "Label  " + editViewport(l.label.text, l.label.cursor, max(1, m.width-7))
 			f.target = "Sign in: " + providerLabel(l.provider)
@@ -81,7 +89,7 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		if l.mode == "provider" {
 			f.field = "Provider  " + picker([]string{"Claude Code", "Codex"}, boolIndex(l.provider == "codex"), m.width-10)
 		}
-		if i := renderedLoginIndex(l.reply.Logins, l.focus); i >= 0 && l.mode == "" && l.job.ID == "" {
+		if i := renderedLoginIndex(l.reply.Logins, l.focus); m.compactMobileForm() && i >= 0 && l.mode == "" && l.job.ID == "" {
 			login := l.reply.Logins[i]
 			f.target = providerLabel(login.Provider) + ": " + login.Label
 			f.context = "Login: " + login.Label + "\nID: " + login.ID + "\nState: " + login.State + "\n" + f.context
@@ -90,7 +98,7 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 			f.target = "Sign in: " + providerLabel(l.job.Provider)
 			f.context = l.job.VerificationURL + "\n" + l.job.UserCode + "\n" + l.job.Message + "\n" + loginJobStatus(l.job.State) + "\n" + f.context
 		}
-	case m.screen == screenGeneral && (m.general.editing || m.general.confirm):
+	case m.screen == screenGeneral && (m.general.editing || m.general.confirm) && !m.inlineBoardOverlay():
 		id, action := m.general.editID, "Rename"
 		if m.general.editTag {
 			action = "Tag"
@@ -110,10 +118,11 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		if m.general.confirm {
 			f.context += "\n" + action + " this session?"
 			f.hint = "y / ctrl+x confirm · n / esc cancel"
+			f.body = f.target + "\n" + f.context
 		} else {
 			f.field = "▌ " + action + "  " + editViewport(m.general.edit.text, m.general.edit.cursor, max(1, m.width-len(action)-4))
+			f.body = f.target + "\n" + f.field + "\n" + f.context
 		}
-		f.body = m.general.view() + "\n" + f.context
 	default:
 		return f, false
 	}
@@ -272,9 +281,16 @@ func (m rootModel) composeActiveForm() string {
 		}
 		return m.boundForm(m.composeBoard(body, m.formHint(hint)))
 	}
-	// Preserve the established wide form when it already fits. On a short screen,
-	// pin the active field and required context before spending rows on neighbors.
+	// Preserve the established layout when not on a tiny mobile SSH viewport,
+	// scrolling overflowing forms in strict top-to-bottom field order instead of
+	// hoisting fields and reshuffling neighbors.
 	raw := strings.Split(strings.TrimRight(f.body, "\n"), "\n")
+	if !m.compactMobileForm() {
+		if len(raw) <= m.boardBodyRows() {
+			return m.boundForm(m.composeBoard(f.body, m.formHint(f.hint)))
+		}
+		return m.boundForm(m.composeBoard(m.scrollFormInOrder(raw), m.formHint(f.hint)))
+	}
 	fitsWidth := true
 	for _, line := range raw {
 		if m.width > 0 && ansi.StringWidth(line) > m.width {
@@ -302,6 +318,119 @@ func (m rootModel) composeActiveForm() string {
 		remaining--
 	}
 	return m.boundForm(m.composeBoard(strings.Join(body, "\n"), m.formHint(f.hint)))
+}
+
+// compactMobileForm identifies the small phone SSH viewports (such as 32x8 and
+// 40x8) that use the field-hoisting compact summary layout from ADR-035.
+func (m rootModel) compactMobileForm() bool {
+	return m.width > 0 && m.width < 64 && m.height > 0 && m.height <= 10
+}
+
+func (m rootModel) loginsBody() string {
+	if m.compactMobileForm() {
+		return m.logins.view(m.width, m.boardBodyRows(), m.connectionLost, m.loginRunner != nil)
+	}
+	width, height := m.width, m.boardBodyRows()
+	if width > 4 {
+		width -= 4
+	}
+	top := ""
+	if m.height >= 12 {
+		top = "\n"
+		height--
+	}
+	if m.height > 0 {
+		height = max(1, height)
+	}
+	body := m.logins.view(width, height, m.connectionLost, m.loginRunner != nil)
+	if m.width > 4 {
+		body = "  " + strings.ReplaceAll(body, "\n", "\n  ")
+	}
+	return top + body
+}
+
+func (m rootModel) formHasPinnedTail() bool {
+	switch m.screen {
+	case screenLaunch:
+		return m.launch.errMsg != "" || m.launch.agentNote() != ""
+	case screenHandoff:
+		return m.handoff.confirmPending() || m.handoff.errMsg != "" || (m.handoff.method == handoffMethodHandsOff && m.handoff.sourceRunning)
+	case screenResume:
+		return m.resume.reason != "" || m.resume.directory.errMsg != ""
+	}
+	return false
+}
+
+func (m rootModel) scrollFormInOrder(raw []string) string {
+	bodyRows := max(1, m.boardBodyRows())
+	lines := append([]string(nil), raw...)
+	for len(lines) > bodyRows && len(lines) > 1 && strings.TrimSpace(ansi.Strip(lines[0])) == "" {
+		lines = lines[1:]
+	}
+	if len(lines) <= bodyRows || bodyRows <= 1 {
+		return strings.Join(lines[:min(len(lines), bodyRows)], "\n")
+	}
+
+	header := lines[0]
+	rest := lines[1:]
+	for len(rest) > bodyRows-1 && len(rest) > 1 && strings.TrimSpace(ansi.Strip(rest[0])) == "" {
+		rest = rest[1:]
+	}
+	if len(rest) <= bodyRows-1 {
+		return strings.Join(append([]string{header}, rest...), "\n")
+	}
+
+	focusIdx := 0
+	if focused := formFocusedLine(strings.Join(rest, "\n")); focused != "" {
+		for i, line := range rest {
+			if line == focused {
+				focusIdx = i
+				break
+			}
+		}
+	}
+
+	var tail []string
+	if m.formHasPinnedTail() {
+		for i := focusIdx + 1; i < len(rest); i++ {
+			if strings.TrimSpace(ansi.Strip(rest[i])) != "" {
+				continue
+			}
+			candidate := rest[i:]
+			for len(candidate) > 0 && strings.TrimSpace(ansi.Strip(candidate[0])) == "" {
+				candidate = candidate[1:]
+			}
+			if len(candidate) > 0 && len(candidate) <= bodyRows-2 {
+				if len(rest[i:]) <= bodyRows-2 {
+					tail = rest[i:]
+				} else {
+					tail = candidate
+				}
+				rest = rest[:i]
+			}
+			break
+		}
+	}
+
+	win := max(1, bodyRows-1-len(tail))
+	endWant := focusIdx
+	if focusIdx+1 < len(rest) && strings.TrimSpace(ansi.Strip(rest[focusIdx+1])) != "" && win > 1 {
+		endWant = focusIdx + 1
+	}
+	start := 0
+	if endWant >= win {
+		start = endWant - win + 1
+	}
+	if start > focusIdx {
+		start = focusIdx
+	}
+	start = max(0, min(start, max(0, len(rest)-win)))
+
+	out := make([]string, 0, bodyRows)
+	out = append(out, header)
+	out = append(out, rest[start:min(len(rest), start+win)]...)
+	out = append(out, tail...)
+	return strings.Join(out, "\n")
 }
 
 // Keep submit/cancel visible before editing shortcuts consume a narrow footer.
@@ -342,5 +471,5 @@ func (m rootModel) boundForm(body string) string {
 }
 
 func (m rootModel) hasActiveForm() bool {
-	return m.pairing != nil || m.screen == screenLaunch || m.screen == screenResume || m.screen == screenHandoff || m.screen == screenOptions || m.screen == screenLogins || m.screen == screenGeneral && (m.general.editing || m.general.confirm)
+	return m.pairing != nil || m.screen == screenLaunch || m.screen == screenResume || m.screen == screenHandoff || m.screen == screenOptions || m.screen == screenLogins || m.screen == screenGeneral && (m.general.editing || m.general.confirm) && !m.inlineBoardOverlay()
 }
