@@ -128,6 +128,15 @@ func (c *Client) LaunchOperationStatus(operationID string) (schema.OperationOutc
 	return *resp.OperationOutcome, nil
 }
 
+// AppliedOwnerLaunchSession accepts only the endpoint-qualified session ID on a reliable owner receipt.
+func AppliedOwnerLaunchSession(endpoint string, outcome schema.OperationOutcomeView) (string, bool) {
+	source, local, valid := ParseID(outcome.SessionID)
+	if outcome.State != schema.OutcomeApplied || !valid || source != endpoint || !validLocalID(local) {
+		return "", false
+	}
+	return outcome.SessionID, true
+}
+
 func (cc *clientConn) ownerLaunchSource() (OwnerLaunchSource, bool) {
 	if cc.srv.remoteTier {
 		cc.replyErrorCode("owner launch is available only on the owner socket", CodeNotAuthorized)

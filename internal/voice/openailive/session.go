@@ -3,6 +3,7 @@ package openailive
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -55,10 +56,11 @@ type sessionConfig struct {
 }
 
 type serverEvent struct {
-	Type    string `json:"type"`
-	Delta   string `json:"delta"`
-	Reason  string `json:"reason"`
-	Session struct {
+	Type          string `json:"type"`
+	ClientEventID string `json:"client_event_id"`
+	Delta         string `json:"delta"`
+	Reason        string `json:"reason"`
+	Session       struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 		sessionConfig
@@ -67,9 +69,10 @@ type serverEvent struct {
 
 // Event carries an output PCM chunk, a transcript fragment, or session lifecycle metadata.
 type Event struct {
-	Type  string
-	Text  string
-	Audio []byte
+	Type          string
+	ClientEventID string
+	Text          string
+	Audio         []byte
 }
 
 // Session supports one Next reader and concurrent writes. A canceled read or
@@ -88,6 +91,18 @@ func Open(ctx context.Context, key, voice string) (*Session, error) {
 }
 
 func open(ctx context.Context, url, key, voice string) (*Session, error) {
+	return openSeeded(ctx, url, key, voice, "")
+}
+
+// OpenPreview seeds a developer greeting for a single owner's speech preview.
+func OpenPreview(ctx context.Context, key, voice, greeting string) (*Session, error) {
+	if !validCommentary(greeting) {
+		return nil, errors.New("OpenAI Live requires valid UTF-8 commentary of 1–500 bytes")
+	}
+	return openSeeded(ctx, endpoint, key, voice, greeting)
+}
+
+func openSeeded(ctx context.Context, url, key, voice, greeting string) (*Session, error) {
 	if key == "" || strings.IndexFunc(key, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
 		return nil, errors.New("OpenAI Live requires a valid API key")
 	}
@@ -124,7 +139,17 @@ func open(ctx context.Context, url, key, voice string) (*Session, error) {
 	config.Audio.Format.Rate = sampleRate
 	config.Audio.Output.Voice = voice
 	config.Delegation.Type = "client"
-	if err := session.write(ctx, map[string]any{"type": "session.start", "session": config}, false); err != nil {
+	startup := struct {
+		sessionConfig
+		Input []map[string]any `json:"input,omitempty"`
+	}{sessionConfig: config}
+	if greeting != "" {
+		startup.Input = []map[string]any{{
+			"type": "message", "role": "developer",
+			"content": []map[string]string{{"type": "input_text", "text": greeting}},
+		}}
+	}
+	if err := session.write(ctx, map[string]any{"type": "session.start", "session": startup}, false); err != nil {
 		_ = session.Close()
 		return nil, err
 	}
@@ -153,12 +178,28 @@ func (s *Session) SendAudio(ctx context.Context, pcm []byte) error {
 // Speak supplies manager-authored commentary as speech context. Live controls
 // whether and when to speak it, and can paraphrase.
 func (s *Session) Speak(ctx context.Context, text string) error {
-	if strings.TrimSpace(text) == "" || len(text) > MaxCommentaryBytes || !utf8.ValidString(text) {
+	return s.writeCommentary(ctx, text, "")
+}
+
+// Greet repeats a seeded greeting and returns the unique acknowledgement ID.
+func (s *Session) Greet(ctx context.Context, greeting string) (string, error) {
+	id := rand.Text()
+	return id, s.writeCommentary(ctx, greeting, id)
+}
+
+func validCommentary(text string) bool {
+	return strings.TrimSpace(text) != "" && len(text) <= MaxCommentaryBytes && utf8.ValidString(text)
+}
+
+func (s *Session) writeCommentary(ctx context.Context, text, id string) error {
+	if !validCommentary(text) {
 		return errors.New("OpenAI Live requires valid UTF-8 commentary of 1–500 bytes")
 	}
-	return s.write(ctx, map[string]any{
-		"type": "session.commentary.append", "content": text, "delegation_id": nil,
-	}, false)
+	event := map[string]any{"type": "session.commentary.append", "content": text, "delegation_id": nil}
+	if id != "" {
+		event["event_id"] = id
+	}
+	return s.write(ctx, event, false)
 }
 
 // Finish requests finalization. Read through session.closed to confirm it.
@@ -236,7 +277,7 @@ func (s *Session) Next(ctx context.Context) (Event, error) {
 		case "session.input_transcript.delta", "session.output_transcript.delta":
 			return Event{Type: event.Type, Text: event.Delta}, nil
 		case "session.commentary.appended", "session.delegation.created":
-			return Event{Type: event.Type}, nil
+			return Event{Type: event.Type, ClientEventID: event.ClientEventID}, nil
 		case "session.closed":
 			_ = s.Close()
 			switch event.Reason {

@@ -32,6 +32,7 @@ type Config struct {
 	Language       string `json:"language"`
 	VoiceID        string `json:"voice_id"`
 	Mode           string `json:"mode"`
+	DeviceListen   string `json:"device_listen,omitempty"`
 }
 
 func (c Config) Validate() error {
@@ -62,6 +63,9 @@ func (c Config) Validate() error {
 	}
 	if c.Language != "en" && c.Language != "fr" && c.Language != "es" && c.Language != "pt" && c.Language != "de" && c.Language != "any" {
 		return ErrInvalid
+	}
+	if c.DeviceListen != "" && !validDeviceEndpoint(c.DeviceListen, true) {
+		return errors.New("voice: device listener requires 127.0.0.1 or [::1] with a port")
 	}
 	if c.Mode != "conversation" && c.Mode != "push_to_talk" {
 		return ErrInvalid
@@ -114,7 +118,7 @@ func readConfig(dir string) (Config, error) {
 }
 
 func validateConfigJSON(raw []byte) error {
-	return validateObjectMembers(raw, "version", "place_id", "name", "provider", "conversation_id", "work_dir", "model", "daemon_socket", "region", "language", "voice_id", "mode")
+	return validateObjectMembers(raw, "version", "place_id", "name", "provider", "conversation_id", "work_dir", "model", "daemon_socket", "region", "language", "voice_id", "mode", "device_listen")
 }
 
 func validateObjectMembers(raw []byte, allowed ...string) error {

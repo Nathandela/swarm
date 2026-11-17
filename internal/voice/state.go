@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	MaxReadCursorBytes   = 16 << 10
 	MaxRecords           = 10000
 	MaxStoreBytes        = 64 << 20
 	MaxUtteranceBytes    = 64 << 10
@@ -27,23 +28,30 @@ var (
 )
 
 type ManagerBinding struct {
-	ConversationID   string `json:"conversation_id"`
-	Provider         string `json:"provider"`
-	SessionID        string `json:"session_id"`
-	SessionInstance  string `json:"session_instance"`
-	NativeSessionID  string `json:"native_session_id"`
-	NativeGeneration string `json:"native_generation"`
-	LoginEpoch       string `json:"login_epoch"`
-	Generation       uint64 `json:"generation"`
+	ConversationID        string `json:"conversation_id"`
+	Provider              string `json:"provider"`
+	SessionID             string `json:"session_id"`
+	SessionInstance       string `json:"session_instance"`
+	NativeSessionID       string `json:"native_session_id"`
+	NativeGeneration      string `json:"native_generation"`
+	ObservationGeneration string `json:"observation_generation"`
+	LoginEpoch            string `json:"login_epoch"`
+	Generation            uint64 `json:"generation"`
 }
 
 type Conversation struct {
-	Binding        ManagerBinding `json:"binding"`
-	LastAdmission  uint64         `json:"last_admission"`
-	RetiredThrough uint64         `json:"retired_through"`
+	CustodyLost      bool           `json:"custody_lost,omitempty"`
+	LastSpeechEpoch  uint64         `json:"last_speech_epoch,omitempty"`
+	SchedulerPaused  bool           `json:"scheduler_paused,omitempty"`
+	ExternalObserved bool           `json:"external_observed,omitempty"`
+	ExternalInput    uint64         `json:"external_input,omitempty"`
+	Binding          ManagerBinding `json:"binding"`
+	LastAdmission    uint64         `json:"last_admission"`
+	RetiredThrough   uint64         `json:"retired_through"`
 }
 
 type Utterance struct {
+	RecoveryOnly   bool   `json:"recovery_only,omitempty"`
 	ID             string `json:"id"`
 	ConversationID string `json:"conversation_id"`
 	DeviceID       string `json:"device_id"`
@@ -52,15 +60,26 @@ type Utterance struct {
 	Phase          string `json:"phase"`
 	Text           string `json:"text,omitempty"`
 	TextHash       string `json:"text_hash,omitempty"`
+	AudioHash      string `json:"audio_hash,omitempty"`
 	Admission      uint64 `json:"admission,omitempty"`
 }
 
 type Admission struct {
-	ConversationID string    `json:"conversation_id"`
-	Sequence       uint64    `json:"sequence"`
-	SourceID       string    `json:"source_id"`
-	NativeInputID  string    `json:"native_input_id,omitempty"`
-	SettledAt      time.Time `json:"settled_at,omitempty"`
+	NativeBindingRetired bool            `json:"native_binding_retired,omitempty"`
+	RecoveryOnly         bool            `json:"recovery_only,omitempty"`
+	RecoveryAcknowledged bool            `json:"recovery_acknowledged,omitempty"`
+	OperationID          string          `json:"operation_id,omitempty"`
+	Request              json.RawMessage `json:"request,omitempty"`
+	Phase                string          `json:"phase,omitempty"`
+	NativeTurnID         string          `json:"native_turn_id,omitempty"`
+	Reason               string          `json:"reason,omitempty"`
+	ExternalInput        uint64          `json:"external_input,omitempty"`
+	InputText            string          `json:"input_text,omitempty"`
+	ConversationID       string          `json:"conversation_id"`
+	Sequence             uint64          `json:"sequence"`
+	SourceID             string          `json:"source_id"`
+	NativeInputID        string          `json:"native_input_id,omitempty"`
+	SettledAt            time.Time       `json:"settled_at,omitempty"`
 }
 
 type Action struct {
@@ -78,18 +97,19 @@ type Action struct {
 }
 
 type Request struct {
-	ID             string          `json:"id"`
-	ConversationID string          `json:"conversation_id"`
-	Kind           string          `json:"kind"` // manager or native
-	NativeInputID  string          `json:"native_input_id"`
-	NativeTurnID   string          `json:"native_turn_id"`
-	TaskID         string          `json:"task_id"`
-	Payload        json.RawMessage `json:"payload"`
-	Hash           string          `json:"hash"`
-	ExpiresAt      time.Time       `json:"expires_at"`
-	State          string          `json:"state"`
-	AnswerID       string          `json:"answer_id,omitempty"`
-	Answer         json.RawMessage `json:"answer,omitempty"`
+	RecoveryContext bool            `json:"recovery_context,omitempty"`
+	ID              string          `json:"id"`
+	ConversationID  string          `json:"conversation_id"`
+	Kind            string          `json:"kind"` // manager or native
+	NativeInputID   string          `json:"native_input_id"`
+	NativeTurnID    string          `json:"native_turn_id"`
+	TaskID          string          `json:"task_id"`
+	Payload         json.RawMessage `json:"payload"`
+	Hash            string          `json:"hash"`
+	ExpiresAt       time.Time       `json:"expires_at"`
+	State           string          `json:"state"`
+	AnswerID        string          `json:"answer_id,omitempty"`
+	Answer          json.RawMessage `json:"answer,omitempty"`
 }
 
 type SpeechPermit struct {
@@ -102,6 +122,8 @@ type SpeechPermit struct {
 }
 
 type Publication struct {
+	Admission      uint64 `json:"admission"`
+	SpeechEpoch    uint64 `json:"speech_epoch"`
 	ID             string `json:"id"`
 	ConversationID string `json:"conversation_id"`
 	NativeTurnID   string `json:"native_turn_id"`
@@ -126,6 +148,7 @@ type JournalSnapshot struct {
 }
 
 type Event struct {
+	RecoveryOnly    bool            `json:"recovery_only,omitempty"`
 	ID              string          `json:"id"`
 	ConversationID  string          `json:"conversation_id"`
 	Cursor          JournalCursor   `json:"cursor"`
@@ -135,6 +158,7 @@ type Event struct {
 }
 
 type Wake struct {
+	RecoveryOnly   bool            `json:"recovery_only,omitempty"`
 	ID             string          `json:"id"`
 	ConversationID string          `json:"conversation_id"`
 	EventID        string          `json:"event_id"`
@@ -146,22 +170,34 @@ type Wake struct {
 	NativeInputID  string          `json:"native_input_id,omitempty"`
 }
 
+type WorkerAssociation struct {
+	RecoveryRequired bool   `json:"recovery_required,omitempty"`
+	Reserved         bool   `json:"reserved,omitempty"`
+	ConversationID   string `json:"conversation_id"`
+	Session          string `json:"session"`
+	SessionInstance  string `json:"session_instance"`
+	Admission        uint64 `json:"admission"`
+	SourceID         string `json:"source_id"`
+	ActionID         string `json:"action_id"`
+}
+
 type State struct {
 	changes             *stateChanges
-	Version             int                        `json:"version"`
-	Generation          uint64                     `json:"generation"`
-	CurrentConversation string                     `json:"current_conversation"`
-	Conversations       map[string]Conversation    `json:"conversations"`
-	Utterances          map[string]Utterance       `json:"utterances"`
-	Admissions          map[string]Admission       `json:"admissions"`
-	Actions             map[string]Action          `json:"actions"`
-	ClosedTurns         map[string]bool            `json:"closed_turns"`
-	CancelledTasks      map[string]bool            `json:"cancelled_tasks"`
-	Requests            map[string]Request         `json:"requests"`
-	Permits             map[string]SpeechPermit    `json:"permits"`
-	Publications        map[string]Publication     `json:"publications"`
-	Journal             map[string]JournalCursor   `json:"journal"`
-	JournalSnapshots    map[string]JournalSnapshot `json:"journal_snapshots"`
-	Events              map[string]Event           `json:"events"`
-	Wakes               map[string]Wake            `json:"wakes"`
+	Version             int                          `json:"version"`
+	Generation          uint64                       `json:"generation"`
+	CurrentConversation string                       `json:"current_conversation"`
+	Workers             map[string]WorkerAssociation `json:"workers"`
+	Conversations       map[string]Conversation      `json:"conversations"`
+	Utterances          map[string]Utterance         `json:"utterances"`
+	Admissions          map[string]Admission         `json:"admissions"`
+	Actions             map[string]Action            `json:"actions"`
+	ClosedTurns         map[string]bool              `json:"closed_turns"`
+	CancelledTasks      map[string]bool              `json:"cancelled_tasks"`
+	Requests            map[string]Request           `json:"requests"`
+	Permits             map[string]SpeechPermit      `json:"permits"`
+	Publications        map[string]Publication       `json:"publications"`
+	Journal             map[string]JournalCursor     `json:"journal"`
+	JournalSnapshots    map[string]JournalSnapshot   `json:"journal_snapshots"`
+	Events              map[string]Event             `json:"events"`
+	Wakes               map[string]Wake              `json:"wakes"`
 }

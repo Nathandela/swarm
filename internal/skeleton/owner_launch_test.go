@@ -95,6 +95,14 @@ func TestOwnerLaunchDisconnectedReceiptReconcilesOriginal(t *testing.T) {
 	if out.State != schema.OutcomeApplied {
 		t.Fatalf("lost launch never reconciled: %+v", out)
 	}
+	rows := sk.Core().List()
+	session, ok := protocol.AppliedOwnerLaunchSession(hello.EndpointID, out)
+	if !ok || len(rows) != 1 || session != protocol.NamespacedID(hello.EndpointID, rows[0].ID) {
+		t.Fatalf("wire receipt did not identify exactly one local worker: %+v, rows=%d", out, len(rows))
+	}
+	if _, ok := protocol.AppliedOwnerLaunchSession("different-endpoint", out); ok {
+		t.Fatal("owner receipt authorized a different endpoint")
+	}
 	for _, m := range sk.Core().List() {
 		local := m.ID
 		t.Cleanup(func() { _ = sk.Core().Kill(local) })

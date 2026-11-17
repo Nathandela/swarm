@@ -218,3 +218,43 @@ func emit(t *testing.T, ctx context.Context, ws *websocket.Conn, event string) {
 		t.Error(err)
 	}
 }
+
+func TestSeededGreetingMatchesOneCorrelatedCommentary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	const greeting = "Say the synthetic line now, then pause."
+	url := fixture(t, func(ws *websocket.Conn) {
+		checkCommand(t, ctx, ws, `{"type":"session.start","session":{"model":"gpt-live-1","instructions":"`+instructions+`","audio":{"format":{"type":"audio/pcm","rate":24000},"output":{"voice":"marin"}},"delegation":{"type":"client"},"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"`+greeting+`"}]}]}}`)
+		emit(t, ctx, ws, started)
+		_, raw, err := ws.Read(ctx)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var command struct {
+			Type       string          `json:"type"`
+			Content    string          `json:"content"`
+			EventID    string          `json:"event_id"`
+			Delegation json.RawMessage `json:"delegation_id"`
+		}
+		if json.Unmarshal(raw, &command) != nil || command.Type != "session.commentary.append" ||
+			command.Content != greeting || command.EventID == "" || string(command.Delegation) != "null" {
+			t.Error("seeded greeting was not repeated with a unique correlation ID and null delegation")
+			return
+		}
+		emit(t, ctx, ws, `{"type":"session.commentary.appended","client_event_id":"`+command.EventID+`"}`)
+	})
+	session, err := openSeeded(ctx, url, testKey, "marin", greeting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close() }()
+	id, err := session.Greet(ctx, greeting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := session.Next(ctx)
+	if err != nil || event.Type != "session.commentary.appended" || event.ClientEventID != id {
+		t.Fatalf("event = %+v, %v", event, err)
+	}
+}

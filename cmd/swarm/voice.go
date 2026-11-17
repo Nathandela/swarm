@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -32,7 +33,29 @@ var voiceMCPRun = func(ctx context.Context, socket, auth, conversation, session 
 }
 
 func dispatchVoice(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "mcp" {
+	if len(args) == 0 {
+		return dispatchVoicePanel(nil, stdout, stderr)
+	}
+	if args[0] == "--host" || strings.HasPrefix(args[0], "--host=") {
+		return dispatchVoiceSSH(args, stdout, stderr)
+	}
+	switch args[0] {
+	case "enroll", "revoke", "device-endpoint", "devices":
+		return dispatchVoiceDevice(args[0], args[1:], stdout, stderr)
+	case "start", "stop":
+		return dispatchVoiceUnit(args[0], args[1:], stdout, stderr)
+	case "panel":
+		return dispatchVoicePanel(args[1:], stdout, stderr)
+	case "question", "answer", "resume", "ack", "replace", "replacement":
+		return dispatchVoiceRecovery(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "serve", "status", "text", "ptt", "read", "receipt", "publications":
+		return dispatchVoiceManager(args, os.Stdin, stdout, stderr)
+	case "setup":
+		if len(args) > 1 {
+			return dispatchVoiceManager(args, os.Stdin, stdout, stderr)
+		}
+	}
+	if args[0] != "mcp" {
 		return dispatchSpeech(args, os.Stdin, stdout, stderr)
 	}
 	fs := flag.NewFlagSet("voice mcp", flag.ContinueOnError)

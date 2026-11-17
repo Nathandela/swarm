@@ -1,6 +1,50 @@
-# OpenAI speech in Swarm
+# Swarm voice manager
 
-The voice-manager feature branch includes a standalone speech client. `swarm voice live` carries a two-way audio conversation through GPT-Live-1. `swarm voice transcribe` returns the final text for one recorded utterance using GPT-Transcribe. The native Codex and Claude managers still own worker actions. Connecting these speech commands to their scheduler and to the desktop and phone interfaces is a separate integration gate. [Implementation plan](../specifications/voice-manager-plan.md)
+The manager runs on the machine that owns your Swarm sessions. Choose Codex or Claude using its native login. The desktop panel accepts typed requests and push-to-talk audio. The controller records each request before dispatch, and the panel shows the verified publications tied to its native turn. GPT-Transcribe finalizes spoken input. GPT-Live provides optional speech output. [Implementation plan](../specifications/voice-manager-plan.md) · [Integration evidence](../verification/voice-manager/controller-integration.md)
+
+The desktop manager's **Read aloud** action requests a bounded preview of one selected, retained publication after its native manager turn completes. It uses the place's OpenAI key and sends that publication's canonical text as GPT-Live commentary. The preview is limited to six seconds of audio and can omit or paraphrase text. The canonical text remains visible. Playback requires an explicit request each time, including for a publication from a turn whose speech was stopped. Cancel stops the request and clears local audio. Automatic speech when a manager publishes remains a separate integration gate.
+
+## Start a local manager
+
+From a workspace you intend the selected native manager to operate in, configure the manager and its per-user service.
+
+```sh
+swarm voice setup --manager codex --dir "$PWD"
+swarm voice start
+swarm voice status
+swarm voice
+```
+
+Choose `--manager claude` for Claude Code. Text works without an OpenAI project key. Configure speech separately with `swarm voice setup` when you want push-to-talk or Read aloud. The local panel starts on an ephemeral loopback port. `swarm voice panel --print-url` prints a private URL for manual opening. Its fragment authorizes this panel and should stay with your browser.
+
+`swarm voice serve` runs the controller in the foreground. `swarm voice stop` stops the installed voice unit. Existing native sessions and workers have their own shim lifetime. A changed workspace or manager choice needs an explicit conversation transition. Repeating the original setup preserves its conversation identity.
+
+## Submit, reconcile and read a reply
+
+```sh
+printf '%s' 'List the work in progress and publish a short update.' | swarm voice text --id daily-review
+swarm voice receipt --id daily-review
+swarm voice publications --id daily-review
+```
+
+Use a fresh ID for a new request. Repeat the original ID and exact text after a lost response. A completed admission records the end of the native turn. Published phrases are the canonical manager reply. If there are none, inspect the native session for authentication, permissions or model errors.
+
+`swarm voice ptt --id ID` reads one utterance of mono 24 kHz PCM16LE from stdin and submits the final transcript to the manager. It reserves the ID before capture and pins the submitted audio digest before sending it to OpenAI. Reusing the same ID with different audio fails. If a paid request may have been sent but its result was lost, the service reports uncertainty. `swarm voice read --id ID --publication PUBLICATION_ID` returns a bounded PCM preview of a verified phrase.
+
+Use `swarm voice question` to inspect pending manager clarifications. `voice answer` accepts a reply on stdin and requires the displayed request ID, hash, stable answer ID, manager instance and generation. `voice resume`, `voice ack`, and `voice replace` act only against the expected manager binding. Check each command's `--help` for its coordinates. `voice replacement` reads the durable replacement receipt. Replacement requires positive evidence the previous session has exited. Native permission prompts retain their own provider workflow.
+
+## Connect over SSH
+
+On the manager machine, repeat its original setup command with `--device-listen 127.0.0.1:0`, then restart the voice service to load the new setting. `swarm voice device-endpoint` reports the bound loopback address. Remote access is opt-in. On your desktop, use an OpenSSH alias whose host key you have verified.
+
+```sh
+swarm voice --host my-workstation --enroll
+swarm voice --host my-workstation
+```
+
+The first command enrolls this desktop and opens the local browser. Subsequent launches reuse its private grant. The remote CLI must be available to the SSH session. The client supports verified direct and jump-host routes. It checks the selected destination before reusing a grant. Device requests are signed and scoped to their own receipt and publication history. Read aloud currently uses the local owner route.
+
+For phones, use a fixed nonzero loopback port such as `127.0.0.1:32100`. The phone retains the pinned profile between connections. See the [Android setup guide](../../android/voice-device.md). For a phone with its own SSH key and device signing key, install its SSH public key through a trusted terminal. On the manager machine run `swarm voice enroll --device-key PUBLIC_KEY` with the phone's base64url Ed25519 **device** public key. The returned invitation expires after ten minutes and can be consumed once. `swarm voice devices` lists retained device IDs, public signing-key fingerprints, and grant status. Use it to identify and revoke a lost phone. A device can reconnect with its grant until `swarm voice revoke --id DEVICE_ID`. Revocation blocks further voice operations. An SSH account key installed separately must be managed through the account's own SSH controls.
 
 ## Configure a machine
 

@@ -18,9 +18,24 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-const voiceUsage = `usage: swarm voice setup | live | transcribe
+const voiceUsage = `usage: swarm voice setup | start | stop | serve | status | text | ptt | receipt | publications | live | transcribe
+  --host ALIAS   open an enrolled remote manager through OpenSSH (--enroll for first use)
+  panel       open the local browser panel (default); --print-url for manual opening
   setup       use the global OpenAI speech endpoint; enter the key privately or pipe it to stdin
               existing Gradium settings switch to the marin voice
+  setup --manager codex|claude --dir PATH   configure the native manager workspace
+  start / stop   install or stop the per-user voice service
+  serve       run the foreground manager service
+  text        submit text from stdin (use --id to retry the same request)
+  ptt         submit one finalized PCM utterance to the native manager (accepts --id)
+  read        read aloud one selected publication (--id and --publication), PCM to stdout
+  status      show the manager binding and attention state
+  receipt     read an admission by --id
+  publications  read the manager's canonical reply phrases by --id
+  enroll / devices / revoke / device-endpoint   manage scoped device grants over SSH
+  question / answer   inspect or answer an exact manager clarification
+  resume / ack        reconcile manual input or an uncertain admission
+  replace / replacement   replace a quarantined manager or inspect its receipt
   live        stream mono 24 kHz PCM16LE from stdin and write reply audio to stdout
   transcribe  read one utterance of the same format from stdin and print its final text
 `

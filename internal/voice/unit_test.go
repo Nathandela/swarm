@@ -43,6 +43,7 @@ func TestRenderVoiceLaunchdArguments(t *testing.T) {
 		"<key>StandardErrorPath</key><string>/logs/voice &amp; work.log</string>",
 		"<key>RunAtLoad</key><true/>",
 		"<key>KeepAlive</key><true/>",
+		"<key>AbandonProcessGroup</key><true/>",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("launchd unit missing %q:\n%s", want, unit)
@@ -68,6 +69,7 @@ func TestRenderVoiceSystemdEscapesAndLiteralExpansion(t *testing.T) {
 		"StandardOutput=append:/logs/voice output %% \"today\"\\run.log",
 		"StandardError=append:/logs/voice output %% \"today\"\\run.log",
 		"Restart=always",
+		"KillMode=process",
 		"RestartSec=10",
 		"WantedBy=default.target",
 	} {

@@ -21,7 +21,7 @@ func testStore(t *testing.T) (*Store, ManagerBinding, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	b, err := s.BindManager(ManagerBinding{ConversationID: "conversation", Provider: "codex", SessionID: "machine/session", SessionInstance: "incarnation", NativeSessionID: "thread", NativeGeneration: "native-epoch", LoginEpoch: "login-1"})
+	b, err := s.BindManager(ManagerBinding{ConversationID: "conversation", Provider: "codex", SessionID: "machine/session", SessionInstance: "incarnation", NativeSessionID: "thread", NativeGeneration: "native-epoch", ObservationGeneration: "observation", LoginEpoch: "login-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,7 +17,7 @@ func benchmarkStore(b *testing.B, records int) (*Store, ManagerBinding) {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = s.Close() })
-	binding, err := s.BindManager(ManagerBinding{ConversationID: "bench", Provider: "codex", SessionID: "machine/manager", SessionInstance: "instance", NativeSessionID: "thread", NativeGeneration: "native-epoch", LoginEpoch: "login"})
+	binding, err := s.BindManager(ManagerBinding{ConversationID: "bench", Provider: "codex", SessionID: "machine/manager", SessionInstance: "instance", NativeSessionID: "thread", NativeGeneration: "native-epoch", ObservationGeneration: "observation", LoginEpoch: "login"})
 	if err != nil {
 		b.Fatal(err)
 	}

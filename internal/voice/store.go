@@ -19,6 +19,11 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+const (
+	legacyStoreSchemaVersion = 2
+	storeSchemaVersion       = 3
+)
+
 type Store struct {
 	mu           sync.Mutex
 	cached       State
@@ -108,6 +113,13 @@ func OpenStore(dir string) (*Store, error) {
 			state, err = readState(tx)
 			if err != nil {
 				return err
+			}
+			header, err := readHeader(tx)
+			if err != nil {
+				return err
+			}
+			if header.Version == legacyStoreSchemaVersion {
+				fenceLegacyStore(&state)
 			}
 		}
 		if state.Generation == ^uint64(0) {
@@ -199,7 +211,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 func emptyState() State {
-	return State{Version: 1, Conversations: map[string]Conversation{}, Utterances: map[string]Utterance{}, Admissions: map[string]Admission{}, Actions: map[string]Action{}, Requests: map[string]Request{}, ClosedTurns: map[string]bool{}, CancelledTasks: map[string]bool{}, Permits: map[string]SpeechPermit{}, Publications: map[string]Publication{}, Journal: map[string]JournalCursor{}, JournalSnapshots: map[string]JournalSnapshot{}, Events: map[string]Event{}, Wakes: map[string]Wake{}}
+	return State{Version: 1, Workers: map[string]WorkerAssociation{}, Conversations: map[string]Conversation{}, Utterances: map[string]Utterance{}, Admissions: map[string]Admission{}, Actions: map[string]Action{}, Requests: map[string]Request{}, ClosedTurns: map[string]bool{}, CancelledTasks: map[string]bool{}, Permits: map[string]SpeechPermit{}, Publications: map[string]Publication{}, Journal: map[string]JournalCursor{}, JournalSnapshots: map[string]JournalSnapshot{}, Events: map[string]Event{}, Wakes: map[string]Wake{}}
 }
 
 // The root checksum covers the keyed record set, including deletion or substitution.
@@ -252,7 +264,7 @@ func readHeader(tx *bolt.Tx) (storeHeader, error) {
 		return header, ErrCorrupt
 	}
 	raw := b.Get([]byte("state"))
-	if string(b.Get([]byte("digest"))) != hashBytes(raw) || json.Unmarshal(raw, &header) != nil || header.Version != 2 || header.Generation == 0 || header.LogicalBytes > MaxStoreBytes || header.Records > MaxRecords {
+	if string(b.Get([]byte("digest"))) != hashBytes(raw) || json.Unmarshal(raw, &header) != nil || (header.Version != storeSchemaVersion && header.Version != legacyStoreSchemaVersion) || header.Generation == 0 || header.LogicalBytes > MaxStoreBytes || header.Records > MaxRecords {
 		return header, ErrCorrupt
 	}
 	return header, nil
@@ -276,6 +288,11 @@ func readState(tx *bolt.Tx) (State, error) {
 		}
 		xorRecord(&sum, k, raw)
 		switch table {
+		case "workers":
+			if header.Version == legacyStoreSchemaVersion {
+				return ErrCorrupt
+			}
+			return decodeRecord(st.Workers, id, raw)
 		case "conversations":
 			return decodeRecord(st.Conversations, id, raw)
 		case "utterances":
@@ -310,10 +327,55 @@ func readState(tx *bolt.Tx) (State, error) {
 		return State{}, err
 	}
 	raw, err := json.Marshal(st)
-	if err != nil || len(raw) != header.LogicalBytes || countRecords(st) != header.Records || sum != header.RecordHash {
+	if err != nil || countRecords(st) != header.Records || sum != header.RecordHash {
+		return State{}, ErrCorrupt
+	}
+	logicalBytes := len(raw)
+	if header.Version == legacyStoreSchemaVersion {
+		// v2 omitted these empty fields from its full-state serialization.
+		logicalBytes -= len(`,"workers":{}`)
+		for _, c := range st.Conversations {
+			if c.Binding.ObservationGeneration != "" {
+				return State{}, ErrCorrupt
+			}
+			logicalBytes -= len(`,"observation_generation":""`)
+		}
+		for _, p := range st.Publications {
+			if p.Admission != 0 || p.SpeechEpoch != 0 {
+				return State{}, ErrCorrupt
+			}
+			logicalBytes -= len(`"admission":0,"speech_epoch":0,`)
+		}
+	}
+	if logicalBytes != header.LogicalBytes {
 		return State{}, ErrCorrupt
 	}
 	return st, nil
+}
+
+// A v2 binding never recorded a native observer identity. Keep the original
+// bindings and effect ledger available for explicit fresh-manager replacement.
+func fenceLegacyStore(st *State) {
+	for k, c := range st.Conversations {
+		c.CustodyLost = true
+		c.SchedulerPaused = true
+		st.Conversations[k] = c
+	}
+	for k, p := range st.Permits {
+		p.Revoked = true
+		st.Permits[k] = p
+		if c, ok := st.Conversations[p.ConversationID]; ok && p.Epoch > c.LastSpeechEpoch {
+			c.LastSpeechEpoch = p.Epoch
+			st.Conversations[p.ConversationID] = c
+		}
+	}
+	for k, a := range st.Admissions {
+		if a.SettledAt.IsZero() && a.NativeInputID != "" && a.Phase == "" {
+			a.Phase = "uncertain"
+			a.Reason = "legacy admission has no recorded native observer"
+			st.Admissions[k] = a
+		}
+	}
 }
 func decodeRecord[T any](records map[string]T, k string, raw []byte) error {
 	var value T
@@ -351,7 +413,10 @@ func writeStateRecord(tx *bolt.Tx, raw []byte) error {
 	if err != nil {
 		return err
 	}
-	header := storeHeader{Version: 2, Generation: st.Generation, CurrentConversation: st.CurrentConversation, LogicalBytes: len(raw), Records: countRecords(st)}
+	header := storeHeader{Version: storeSchemaVersion, Generation: st.Generation, CurrentConversation: st.CurrentConversation, LogicalBytes: len(raw), Records: countRecords(st)}
+	if err = writeRecords(records, "workers", st.Workers, &header.RecordHash); err != nil {
+		return err
+	}
 	if err = writeRecords(records, "conversations", st.Conversations, &header.RecordHash); err != nil {
 		return err
 	}
@@ -408,7 +473,7 @@ func writeRecords[T any](b *bolt.Bucket, table string, records map[string]T, sum
 	return nil
 }
 func countRecords(st State) int {
-	return len(st.Conversations) + len(st.Utterances) + len(st.Admissions) + len(st.Actions) + len(st.Requests) + len(st.ClosedTurns) + len(st.CancelledTasks) + len(st.Permits) + len(st.Publications) + len(st.Journal) + len(st.JournalSnapshots) + len(st.Events) + len(st.Wakes)
+	return len(st.Workers) + len(st.Conversations) + len(st.Utterances) + len(st.Admissions) + len(st.Actions) + len(st.Requests) + len(st.ClosedTurns) + len(st.CancelledTasks) + len(st.Permits) + len(st.Publications) + len(st.Journal) + len(st.JournalSnapshots) + len(st.Events) + len(st.Wakes)
 }
 func (s *Store) load(tx *bolt.Tx) error {
 	if tx.ID() == s.transaction && s.cached.Generation != 0 {
@@ -421,6 +486,9 @@ func (s *Store) load(tx *bolt.Tx) error {
 	header, err := readHeader(tx)
 	if err != nil {
 		return err
+	}
+	if header.Version != storeSchemaVersion {
+		return ErrCorrupt
 	}
 	s.cached, s.header, s.transaction = st, header, tx.ID()
 	return nil
@@ -552,9 +620,13 @@ func (s *Store) Snapshot() (State, error) {
 	return st, err
 }
 func cloneState(st State) State {
+	st.Workers = maps.Clone(st.Workers)
 	st.Conversations = maps.Clone(st.Conversations)
 	st.Utterances = maps.Clone(st.Utterances)
 	st.Admissions = maps.Clone(st.Admissions)
+	for k, v := range st.Admissions {
+		st.Admissions[k] = cloneAdmission(v)
+	}
 	st.Actions = maps.Clone(st.Actions)
 	st.ClosedTurns = maps.Clone(st.ClosedTurns)
 	st.CancelledTasks = maps.Clone(st.CancelledTasks)
@@ -584,6 +656,7 @@ func cloneState(st State) State {
 	}
 	return st
 }
+func cloneAdmission(a Admission) Admission { a.Request = bytes.Clone(a.Request); return a }
 func cloneAction(a Action) Action {
 	a.Request = bytes.Clone(a.Request)
 	a.Receipt = bytes.Clone(a.Receipt)
@@ -620,7 +693,7 @@ func hashBytes(raw []byte) string              { h := sha256.Sum256(raw); return
 func hashValue(v any) string                   { raw, _ := json.Marshal(v); return hashBytes(raw) }
 func identity(b ManagerBinding) ManagerBinding { b.Generation = 0; return b }
 func validBinding(b ManagerBinding) bool {
-	return b.ConversationID != "" && (b.Provider == "codex" || b.Provider == "claude") && b.SessionID != "" && b.SessionInstance != "" && b.NativeSessionID != "" && b.NativeGeneration != "" && b.LoginEpoch != ""
+	return b.ConversationID != "" && (b.Provider == "codex" || b.Provider == "claude") && b.SessionID != "" && b.SessionInstance != "" && b.NativeSessionID != "" && b.NativeGeneration != "" && b.ObservationGeneration != "" && b.LoginEpoch != ""
 }
 func checkBinding(st *State, b ManagerBinding) error {
 	c, ok := st.Conversations[b.ConversationID]
@@ -719,6 +792,7 @@ func (s *Store) BeginUtterance(b ManagerBinding, u Utterance) (Utterance, error)
 				return ErrInvalid
 			}
 		}
+		u.RecoveryOnly = false
 		putRecord(st, "utterances", &st.Utterances, k, u)
 		result = u
 		return nil
@@ -824,13 +898,15 @@ func (s *Store) AdmitUtterance(b ManagerBinding, id string) (Admission, error) {
 		if err != nil {
 			return err
 		}
+		a.RecoveryOnly = u.RecoveryOnly
+		putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
 		u.Admission = a.Sequence
 		u.Phase = "admitted"
 		putRecord(st, "utterances", &st.Utterances, k, u)
 		result = a
 		return nil
 	})
-	return result, err
+	return cloneAdmission(result), err
 }
 func (s *Store) BindNativeInput(b ManagerBinding, seq uint64, nativeInput string) error {
 	return s.update(func(st *State) error {
@@ -948,7 +1024,8 @@ func settleAdmission(st *State, b ManagerBinding, seq uint64) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if a.NativeInputID == "" {
+	// Unsent cancellations retire without inventing a native input.
+	if a.NativeInputID == "" && (a.Phase != "rejected" || a.OperationID != "" || len(a.Request) != 0) {
 		return ErrInvalid
 	}
 	for _, action := range st.Actions {
@@ -1163,6 +1240,12 @@ func (s *Store) GrantSpeech(b ManagerBinding, seq uint64, input, turn string, ep
 			result = old
 			return nil
 		}
+		c := st.Conversations[b.ConversationID]
+		if epoch <= c.LastSpeechEpoch {
+			return ErrStale
+		}
+		c.LastSpeechEpoch = epoch
+		putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
 		putRecord(st, "permits", &st.Permits, k, p)
 		result = p
 		return nil
@@ -1205,6 +1288,12 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 			return ErrInvalid
 		}
 		p.ConversationID = b.ConversationID
+		if p.Admission == 0 {
+			p.Admission = permit.Admission
+		} else if permit.Admission != 0 && p.Admission != permit.Admission {
+			return ErrStale
+		}
+		p.SpeechEpoch = permit.Epoch
 		p.TextHash = hashBytes([]byte(p.Text))
 		p.Speak = !revoked
 		k := key(b.ConversationID, p.ID)
@@ -1230,81 +1319,85 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 
 func (s *Store) AcceptEvent(b ManagerBinding, e Event, w Wake) (Wake, error) {
 	var result Wake
-	err := s.update(func(st *State) error {
-		if err := checkBinding(st, b); err != nil {
-			return err
-		}
-		if e.ID == "" || e.Cursor.Binding == "" || e.Cursor.Sequence == 0 || !json.Valid(e.Metadata) || len(e.Metadata) > 128<<10 || e.WakeID == "" || e.WakeID != w.ID || w.OperationID == "" || !json.Valid(w.Request) || len(w.Request) > 128<<10 || (e.ConversationID != "" && e.ConversationID != b.ConversationID) || (w.ConversationID != "" && w.ConversationID != b.ConversationID) {
-			return ErrInvalid
-		}
-		var err error
-		e.Metadata, err = canonicalJSON(e.Metadata)
-		if err != nil {
-			return err
-		}
-		w.Request, err = canonicalJSON(w.Request)
-		if err != nil {
-			return err
-		}
-		e.ConversationID = b.ConversationID
-		w.ConversationID = b.ConversationID
-		w.EventID = e.ID
-		w.State = "prepared"
-		w.Admission = 0
-		w.NativeInputID = ""
-		w.RequestHash = hashBytes(w.Request)
-		cursor, exists := st.Journal[b.ConversationID]
-		if exists && cursor.Binding != e.Cursor.Binding {
-			return ErrStale
-		}
-		ek := key(b.ConversationID, e.ID)
-		wk := key(b.ConversationID, w.ID)
-		if old, ok := st.Events[ek]; ok {
-			if hashValue(old) != hashValue(e) {
-				return ErrConflict
-			}
-			prior, ok := st.Wakes[wk]
-			if !ok {
-				return ErrCorrupt
-			}
-			candidate := prior
-			candidate.State = "prepared"
-			candidate.Admission = 0
-			candidate.NativeInputID = ""
-			if hashValue(candidate) != hashValue(w) {
-				return ErrConflict
-			}
-			result = prior
-			return nil
-		}
-		if e.ExaminedThrough != (JournalCursor{}) {
-			if e.ExaminedThrough.Binding != e.Cursor.Binding || e.ExaminedThrough.Sequence < cursor.Sequence || e.ExaminedThrough.Sequence != e.Cursor.Sequence-1 {
-				return fmt.Errorf("%w: invalid examined journal checkpoint", ErrStale)
-			}
-		} else if e.Cursor.Sequence != cursor.Sequence+1 {
-			return fmt.Errorf("%w: daemon journal gap requires reconciliation", ErrStale)
-		}
-		if _, exists := st.Wakes[wk]; exists {
-			return ErrConflict
-		}
-		for _, old := range st.Wakes {
-			if old.OperationID == w.OperationID {
-				return ErrConflict
-			}
-		}
-		for _, old := range st.Actions {
-			if old.OperationID == w.OperationID {
-				return ErrConflict
-			}
-		}
-		putRecord(st, "events", &st.Events, ek, e)
-		putRecord(st, "wakes", &st.Wakes, wk, w)
-		putRecord(st, "journal", &st.Journal, b.ConversationID, e.Cursor)
-		result = w
-		return nil
-	})
+	err := s.update(func(st *State) error { return acceptEventState(st, b, e, w, &result) })
 	return cloneWake(result), err
 }
+func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake) error {
+	if err := checkBinding(st, b); err != nil {
+		return err
+	}
+	if e.ID == "" || e.Cursor.Binding == "" || e.Cursor.Sequence == 0 || !json.Valid(e.Metadata) || len(e.Metadata) > 128<<10 || e.WakeID == "" || e.WakeID != w.ID || w.OperationID == "" || !json.Valid(w.Request) || len(w.Request) > 128<<10 || (e.ConversationID != "" && e.ConversationID != b.ConversationID) || (w.ConversationID != "" && w.ConversationID != b.ConversationID) {
+		return ErrInvalid
+	}
+	var err error
+	e.Metadata, err = canonicalJSON(e.Metadata)
+	if err != nil {
+		return err
+	}
+	w.Request, err = canonicalJSON(w.Request)
+	if err != nil {
+		return err
+	}
+	e.ConversationID = b.ConversationID
+	w.ConversationID = b.ConversationID
+	w.RecoveryOnly = e.RecoveryOnly
+	w.EventID = e.ID
+	w.State = "prepared"
+	w.Admission = 0
+	w.NativeInputID = ""
+	w.RequestHash = hashBytes(w.Request)
+	cursor, exists := st.Journal[b.ConversationID]
+	if exists && cursor.Binding != e.Cursor.Binding {
+		return ErrStale
+	}
+	ek := key(b.ConversationID, e.ID)
+	wk := key(b.ConversationID, w.ID)
+	if old, ok := st.Events[ek]; ok {
+		if hashValue(old) != hashValue(e) {
+			return ErrConflict
+		}
+		prior, ok := st.Wakes[wk]
+		if !ok {
+			return ErrCorrupt
+		}
+		candidate := prior
+		candidate.State = "prepared"
+		candidate.RecoveryOnly = w.RecoveryOnly
+		candidate.Admission = 0
+		candidate.NativeInputID = ""
+		if hashValue(candidate) != hashValue(w) {
+			return ErrConflict
+		}
+		*result = prior
+		return nil
+	}
+	if e.ExaminedThrough != (JournalCursor{}) {
+		if e.ExaminedThrough.Binding != e.Cursor.Binding || e.ExaminedThrough.Sequence < cursor.Sequence || e.ExaminedThrough.Sequence != e.Cursor.Sequence-1 {
+			return fmt.Errorf("%w: invalid examined journal checkpoint", ErrStale)
+		}
+	} else if e.Cursor.Sequence != cursor.Sequence+1 {
+		return fmt.Errorf("%w: daemon journal gap requires reconciliation", ErrStale)
+	}
+	if _, exists := st.Wakes[wk]; exists {
+		return ErrConflict
+	}
+	for _, old := range st.Wakes {
+		if old.OperationID == w.OperationID {
+			return ErrConflict
+		}
+	}
+	for _, old := range st.Actions {
+		if old.OperationID == w.OperationID {
+			return ErrConflict
+		}
+	}
+	putRecord(st, "events", &st.Events, ek, e)
+	putRecord(st, "wakes", &st.Wakes, wk, w)
+	putRecord(st, "journal", &st.Journal, b.ConversationID, e.Cursor)
+	*result = w
+	return nil
+}
+
 func (s *Store) AdvanceWake(b ManagerBinding, id, state, nativeInput string) (Wake, error) {
 	var result Wake
 	err := s.update(func(st *State) error {
@@ -1332,6 +1425,8 @@ func (s *Store) AdvanceWake(b ManagerBinding, id, state, nativeInput string) (Wa
 			if err != nil {
 				return err
 			}
+			a.RecoveryOnly = w.RecoveryOnly
+			putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
 			w.Admission = a.Sequence
 		case "native_input":
 			if w.State != "admitted" || nativeInput == "" {
@@ -1373,28 +1468,29 @@ func (s *Store) AdvanceWake(b ManagerBinding, id, state, nativeInput string) (Wa
 // ReconcileJournal accepts a source-verified snapshot, never a device stream cursor.
 // Reconciliation records observations without settling any native input or effect.
 func (s *Store) ReconcileJournal(b ManagerBinding, cursor JournalCursor, snapshot JournalSnapshot) error {
-	return s.update(func(st *State) error {
-		if err := checkBinding(st, b); err != nil {
-			return err
-		}
-		if cursor.Binding == "" || !json.Valid(snapshot.Metadata) || len(snapshot.Metadata) > 128<<10 || (snapshot.Cursor != (JournalCursor{}) && snapshot.Cursor != cursor) {
-			return ErrInvalid
-		}
-		var err error
-		snapshot.Metadata, err = canonicalJSON(snapshot.Metadata)
-		if err != nil {
-			return err
-		}
-		previous, exists := st.Journal[b.ConversationID]
-		if snapshot.Previous != previous {
-			return ErrStale
-		}
-		if exists && previous.Binding == cursor.Binding && cursor.Sequence < previous.Sequence {
-			return ErrStale
-		}
-		snapshot.Cursor = cursor
-		putRecord(st, "journal_snapshots", &st.JournalSnapshots, b.ConversationID, snapshot)
-		putRecord(st, "journal", &st.Journal, b.ConversationID, cursor)
-		return nil
-	})
+	return s.update(func(st *State) error { return reconcileJournalState(st, b, cursor, snapshot) })
+}
+func reconcileJournalState(st *State, b ManagerBinding, cursor JournalCursor, snapshot JournalSnapshot) error {
+	if err := checkBinding(st, b); err != nil {
+		return err
+	}
+	if cursor.Binding == "" || !json.Valid(snapshot.Metadata) || len(snapshot.Metadata) > 128<<10 || (snapshot.Cursor != (JournalCursor{}) && snapshot.Cursor != cursor) {
+		return ErrInvalid
+	}
+	var err error
+	snapshot.Metadata, err = canonicalJSON(snapshot.Metadata)
+	if err != nil {
+		return err
+	}
+	previous, exists := st.Journal[b.ConversationID]
+	if snapshot.Previous != previous {
+		return ErrStale
+	}
+	if exists && previous.Binding == cursor.Binding && cursor.Sequence < previous.Sequence {
+		return ErrStale
+	}
+	snapshot.Cursor = cursor
+	putRecord(st, "journal_snapshots", &st.JournalSnapshots, b.ConversationID, snapshot)
+	putRecord(st, "journal", &st.Journal, b.ConversationID, cursor)
+	return nil
 }
