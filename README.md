@@ -24,11 +24,11 @@ Inspired by Claude Code's Agent View, but agent-agnostic and open source.
 ## Why swarm
 
 - **One view for every agent.** Watch supported CLIs from a single board instead of a wall of terminal tabs.
-- **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious. Codex waits show `approval`, `question`, or `error` so you can see what needs attention.
+- **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious. Codex waits show `approval`, `question`, or `error` so you can see what needs attention, and agy (`>= 1.4.0`) reports structured state, native conversation IDs, and titles via its `statusLine` hook.
 - **Automatic reconnection.** The board reconnects after daemon connection loss, retaining your selection and unsent edits while marking cached data stale.
 - **Background by default.** Each session owns a real PTY through its own shim process and continues after the TUI exits.
 - **Safe daemon upgrades.** Restart or upgrade swarm while agents are running; the replacement daemon finds and reconnects to them.
-- **Agent CLI refresh.** Resume eligible idle Claude and Codex sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
+- **Agent CLI refresh.** Resume eligible idle Claude, Codex, and agy sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
 - **Provider logins.** Save native Claude Code and Codex logins in Options → Logins; one selected login is shared by that provider's Swarm sessions. See the [provider login guide](docs/operations/provider-logins.md).
 - **Team discussions in Discord.** Connect the whole local Swarm through your own named bot. Teammates can ask existing agents, owners can endorse a message, and agents publish deliberate replies. Each computer or VM keeps its own integration. See the [Discord guide](docs/ops/discord.md).
 - **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
@@ -107,7 +107,7 @@ For phone terminals over SSH, layout follows the available columns and rows, inc
 
 The board/menu minimum is 24×4 cells; text and decision screens require 32×8. Smaller screens preserve drafts and allow cancel/back while pausing new actions. Swarm stops board mouse capture before handing the terminal to an attached agent. See the [mobile terminal interaction contract](docs/specifications/mobile-terminal-touch-plan.md) and [qualification evidence](docs/verification/mobile-terminal-touch/implementation.md).
 
-Attach mode shows the agent's native interface with a reserved bottom return hint. Ctrl+Q returns to the board while the session keeps running. Enable **Options → CLI button** for `[swarm (ctrl+q)]` in that same row. The complete button must fit before it becomes active. It defaults off: enabling it captures mouse input across the terminal and can affect native selection/scrolling. Supported mouse modes use the button; older live shims without mouse-state metadata and unsupported modes retain Ctrl+Q. Unknown mode transitions can safely return you to the board with an explanation; turn the option off to continue raw attach. Actual Termux/iOS touch qualification remains open.
+Attach mode shows the agent's native interface with a reserved bottom return hint. Ctrl+Q returns to the board while the session keeps running. Ctrl+P and Ctrl+N switch straight to the previous and next running session in board order, without going back to the board. Enable **Options → CLI button** for `[swarm (ctrl+q)]` in that same row. The complete button must fit before it becomes active. It defaults off: enabling it captures mouse input across the terminal and can affect native selection/scrolling. Supported mouse modes use the button; older live shims without mouse-state metadata and unsupported modes retain Ctrl+Q. Unknown mode transitions can safely return you to the board with an explanation; turn the option off to continue raw attach. Actual Termux/iOS touch qualification remains open.
 
 Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it. If the saved directory is unavailable, choose an existing directory to relocate and resume the same conversation, or press <kbd>esc</kbd> to cancel.
 
@@ -136,7 +136,7 @@ Structured events are preferred when a CLI exposes them—Claude Code uses confi
 
 `o` opens the board options: group by status, repository, or tag, and order by arrival, activity, creation, or name. Repository and tag cells stay blocked by status internally — Needs input first, Completed last — so the ordering you pick applies within each status block rather than shuffling an idle session above one waiting on you.
 
-## Bring existing Claude sessions into swarm
+## Bring existing sessions into swarm
 
 Inspect Claude Agent View background sessions that can be adopted:
 
@@ -151,6 +151,22 @@ swarm reattach --cli claude --take-over
 ```
 
 Add `--all` to include completed and stopped sessions. Interactive sessions are never imported. The operation is idempotent: swarm reuses a row with the same native Claude session ID instead of creating a duplicate.
+
+Codex CLI conversations can also be discovered from their native history:
+
+```sh
+swarm reattach --cli codex --dry-run
+```
+
+Stop the original Codex CLI before importing a selected conversation:
+
+```sh
+swarm reattach --cli codex --session <conversation-uuid> --take-over
+```
+
+For Codex, `--take-over` confirms that you already stopped the original CLI; swarm does not stop Codex automatically. Omitting `--session` imports every discovered unarchived CLI conversation. Discovery reads native rollout metadata, so it cannot tell whether a conversation is currently running. Repeated imports reuse the existing Swarm row.
+
+Use `--all --dry-run` to also inspect archived Codex conversations. Archived imports are refused before launching anything: run `codex unarchive <conversation-uuid>` first. Codex import currently supports uncompressed CLI rollout files in the default `~/.codex` home, including physical rollout UUID suffixes. Compressed-only and index-only histories are not discovered. Custom `CODEX_HOME` can be inspected with `--dry-run`; imports with a custom home, `CODEX_PROFILE`, or an active managed Codex login are refused to avoid resuming in a different native history store. Return to native sign-in before importing. See [verification and limits](docs/verification/codex-reattach.md).
 
 ## Supervised handoff
 
@@ -174,7 +190,7 @@ Permission requests are never approved by handoff automation; they remain explic
 |---|---|
 | Claude Code | Supported |
 | Codex | Supported |
-| agy / Antigravity CLI | Supported |
+| agy / Antigravity CLI | Supported (options, statusLine hook, handoff, CLI refresh) |
 | OpenCode | Supported |
 | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation) | Supported on Apple Silicon macOS and Linux |
 

@@ -219,6 +219,7 @@ type Journal struct {
 	suppressed    map[string]struct{}
 	cacheDisabled map[string]bool
 	storageErr    error
+	exhausted     bool
 }
 
 // subscriberBuffer bounds each live subscriber's per-channel buffer. Append does a
@@ -359,6 +360,7 @@ func (j *Journal) Append(r Record) (Record, error) {
 	}
 
 	if j.cursor == math.MaxUint64 {
+		j.exhausted = true
 		return Record{}, j.failStorageLocked(errors.New("journal: cursor space exhausted"))
 	}
 	r.Cursor = j.cursor + 1
@@ -554,6 +556,112 @@ func (j *Journal) Close() error {
 	if j.activeF != nil {
 		return j.activeF.Close()
 	}
+	return nil
+}
+
+// NeedsRecovery reports whether Append is latched on a recoverable storage error.
+func (j *Journal) NeedsRecovery() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return !j.closed && j.storageErr != nil && !j.exhausted
+}
+
+// Recover re-scans on-disk segments after a latched storage failure, starts a fresh
+// clean segment so torn trailing bytes are never extended, preserves live subscribers
+// and monotonic cursors, and clears the storage latch once the new segment is durable.
+func (j *Journal) Recover() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.closed {
+		return errors.New("journal: closed")
+	}
+	if j.storageErr == nil {
+		return nil
+	}
+	if j.exhausted {
+		return j.storageErr
+	}
+	if j.opts.LiveBytes > 0 {
+		return j.recoverLiveLocked()
+	}
+	return j.recoverLegacyLocked()
+}
+
+func (j *Journal) recoverLegacyLocked() error {
+	entries, err := os.ReadDir(j.dir)
+	if err != nil {
+		return err
+	}
+	type found struct {
+		seq  uint64
+		path string
+	}
+	var segs []found
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if seq, ok := parseSegName(e.Name()); ok {
+			segs = append(segs, found{seq, filepath.Join(j.dir, e.Name())})
+		}
+	}
+	sort.Slice(segs, func(a, b int) bool { return segs[a].seq < segs[b].seq })
+
+	var maxSeq uint64
+	var diskCursor uint64
+	var diskRecords []Record
+	var diskSegs []*segment
+	for _, f := range segs {
+		maxSeq = max(maxSeq, f.seq)
+		recs := loadSegment(f.path)
+		if len(recs) == 0 {
+			continue
+		}
+		seg := &segment{seq: f.seq, path: f.path, count: len(recs)}
+		if fi, statErr := os.Stat(f.path); statErr == nil {
+			seg.bytes = fi.Size()
+		}
+		for _, r := range recs {
+			diskRecords = append(diskRecords, r)
+			if r.Cursor > diskCursor {
+				diskCursor = r.Cursor
+			}
+		}
+		diskSegs = append(diskSegs, seg)
+	}
+	if maxSeq == math.MaxUint64 {
+		j.exhausted = true
+		return errors.New("journal: segment sequence exhausted")
+	}
+
+	nextSeq := maxSeq + 1
+	nextSeg := &segment{seq: nextSeq, path: filepath.Join(j.dir, segName(nextSeq))}
+	newF, err := os.OpenFile(nextSeg.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := syncLiveDir(j.dir); err != nil {
+		_ = newF.Close()
+		_ = os.Remove(nextSeg.path)
+		return err
+	}
+
+	if j.activeF != nil {
+		_ = j.activeF.Close()
+	}
+	for i, f := range segs {
+		if i < len(segs)-1 && len(loadSegment(f.path)) == 0 {
+			_ = os.Remove(f.path)
+		}
+	}
+	j.cursor = max(j.cursor, diskCursor)
+	j.records = diskRecords
+	j.segments = append(diskSegs, nextSeg)
+	j.active = nextSeg
+	j.activeF = newF
+	j.nextSeq = nextSeq + 1
+	j.storageErr = nil
+	j.enforceRetentionLocked()
 	return nil
 }
 

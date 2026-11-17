@@ -51,6 +51,9 @@ func TestConformance_AcceptsConformantAdapter(t *testing.T) {
 	if errs := CheckConformance(baseAdapter{}); len(errs) != 0 {
 		t.Fatalf("conformant adapter reported %d violation(s): %v", len(errs), errs)
 	}
+	if errs := CheckConformance(goodDirectLayout{}); len(errs) != 0 {
+		t.Fatalf("conformant direct layout reported %d violation(s): %v", len(errs), errs)
+	}
 }
 
 // TestConformance_Wrapper_PassesForGoodAdapter — Conformance(t, good) must not
@@ -94,6 +97,10 @@ func TestConformance_RejectsViolations(t *testing.T) {
 		{"extract-panics", panicExtract{}, "extract"},
 		{"extract-panics-non-nil-grid", panicOnNonNilGrid{}, "extract"},
 		{"extract-ok-empty", okButEmptyExtract{}, "extract"},
+		{"direct-layout-bad-root", badDirectRootLayout{}, "transcriptproviderroot"},
+		{"direct-layout-bad-subpath", badDirectSubpathLayout{}, "transcriptsubpath"},
+		{"direct-layout-missing-id", missingIDDirectSubpathLayout{}, "transcriptsubpath"},
+		{"direct-layout-panics", panicDirectSubpathLayout{}, "transcriptsubpath"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

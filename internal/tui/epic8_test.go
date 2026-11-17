@@ -49,7 +49,7 @@ type attachCall struct {
 	touchBack bool
 }
 
-func (r *recordingRunner) run(s protocol.SessionView, readOnly, touchBack bool) error {
+func (r *recordingRunner) run(s protocol.SessionView, readOnly, touchBack bool, _ SessionRing) error {
 	r.mu.Lock()
 	r.calls = append(r.calls, attachCall{s, readOnly, touchBack})
 	r.mu.Unlock()

@@ -179,7 +179,8 @@ func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convI
 	ad, _ := registry.New(m.AgentType)
 	layout, byCwd := adapter.AsTranscriptLayout(ad)
 	dated, byDay := adapter.AsDatedTranscriptLayout(ad)
-	if !byCwd && !byDay {
+	direct, byDirect := adapter.AsDirectTranscriptLayout(ad)
+	if !byCwd && !byDay && !byDirect {
 		return "", resumeHistoryUnsupported
 	}
 	cwd := m.ProviderCwd() // the directory the AGENT ran in; see Resolve
@@ -204,6 +205,9 @@ func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convI
 			return "", resumeHistoryNoMatch // a canonical id that names no day names no file
 		}
 		return r.locateCodexTranscript(home, budget, day, convID)
+	}
+	if byDirect {
+		return r.locateDirectTranscript(home, budget, direct, convID)
 	}
 	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".claude")
 	if !ok {
@@ -296,6 +300,83 @@ func claudeTranscriptNamesItsConversation(f *os.File, budget *historyBudget, wan
 		// A complete record naming a DIFFERENT conversation means this file is not the
 		// one the name promises. Refuse rather than keep hunting.
 		return resumeHistoryNoMatch
+	}
+	return resumeHistoryNoMatch
+}
+
+func (r *filesystemResumeHistoryResolver) locateDirectTranscript(home *os.Root, budget *historyBudget, layout adapter.DirectTranscriptLayout, convID string) (string, resumeHistoryOutcome) {
+	providerRoot := layout.TranscriptProviderRoot()
+	sub := layout.TranscriptSubpath(convID)
+	if providerRoot == "" || len(sub) < 2 {
+		return "", resumeHistoryUnsafe
+	}
+	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, providerRoot)
+	if !ok {
+		return "", outcome
+	}
+	defer closeProvider()
+	dirRoot, absDir, closeDir, outcome, ok := r.openProviderChild(provider, providerAbs, sub[:len(sub)-1]...)
+	if !ok {
+		return "", outcome
+	}
+	defer closeDir()
+	name := sub[len(sub)-1]
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return "", resumeHistoryUnsafe
+	}
+	if _, err := dirRoot.Lstat(name); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", resumeHistoryNoMatch
+		}
+		return "", resumeHistoryUnreadable
+	}
+	f, outcome := r.openCandidate(dirRoot, absDir, name, budget)
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	defer func() { _ = f.Close() }()
+	if outcome := agyTranscriptHasValidStep(f, budget); outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	return filepath.Join(absDir, name), resumeHistoryFound
+}
+
+func agyTranscriptHasValidStep(f *os.File, budget *historyBudget) resumeHistoryOutcome {
+	if budget.limits.MaxRecordBytes > int64(int(^uint(0)>>1)-1) {
+		return resumeHistoryUnsafe
+	}
+	reader := bufio.NewReaderSize(f, int(budget.limits.MaxRecordBytes)+1)
+	for records := 0; records < locateIdentityMaxRecords; records++ {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if !budget.addBytes(len(line)) {
+					return resumeHistoryUnsafe
+				}
+				return resumeHistoryNoMatch
+			}
+			return resumeHistoryUnsafe
+		}
+		if int64(len(line)) > budget.limits.MaxRecordBytes || !budget.addBytes(len(line)) {
+			return resumeHistoryUnsafe
+		}
+		top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line[:len(line)-1]))))
+		if !ok {
+			continue
+		}
+		rawStep, hasStep := top["step_index"]
+		if !hasStep {
+			continue
+		}
+		var stepIdx int
+		if json.Unmarshal(rawStep, &stepIdx) != nil || stepIdx < 0 {
+			continue
+		}
+		typ, typOK := strictJSONString(top["type"])
+		createdAt, stampOK := strictJSONString(top["created_at"])
+		if typOK && typ != "" && stampOK && createdAt != "" {
+			return resumeHistoryFound
+		}
 	}
 	return resumeHistoryNoMatch
 }
@@ -461,7 +542,7 @@ func (r *filesystemResumeHistoryResolver) openProviderRoot(home *os.Root, provid
 		root, closeRoot, outcome, ok := r.openDirPath(home, homeAbs, provider)
 		return root, aliasAbs, closeRoot, outcome, ok
 	}
-	if provider != ".codex" && provider != ".claude" {
+	if provider != ".codex" && provider != ".claude" && provider != ".gemini" {
 		return nil, "", func() {}, resumeHistoryUnsafe, false
 	}
 	if r.beforeAliasReadlink != nil {

@@ -87,6 +87,12 @@ func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 // conversation; target nil is the ordinary native home. Launch recovers the
 // conversation id before binding, so only a cross-home resume reads history.
 func (a *coreAPI) checkResumeHome(spec daemon.LaunchSpec, target *logins.Runtime) error {
+	// External Codex discovery names a thread in the caller's native home.
+	// Managed admission would select a different history directory; unlike a
+	// saved Swarm resume there is no source binding proving a current copy.
+	if spec.AgentType == "codex" && spec.Options[protocol.OptionResumeConversationID] != "" && target != nil {
+		return fmt.Errorf("%w: external Codex discussions use the native home; return to native sign-in before importing", errResumeHomeMismatch)
+	}
 	src := spec.Options[protocol.OptionResumeFrom]
 	if src == "" {
 		return nil

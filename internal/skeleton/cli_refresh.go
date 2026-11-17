@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -258,7 +259,7 @@ func validCLIIdentity(id *persist.CLIIdentity) bool {
 }
 
 func refreshProvider(agent string) bool {
-	return agent == "codex" || agent == "claude" || agent == "opencode"
+	return agent == "codex" || agent == "claude" || agent == "opencode" || agent == "agy"
 }
 
 func (w *authWatcher) clock() time.Time {
@@ -349,6 +350,12 @@ func (w *authWatcher) discoverCLIRefreshes() {
 		if m.AgentType != "opencode" && m.LaunchOptions[protocol.OptionWorktree] == "true" {
 			w.once("cli-worktree:"+m.ID, "cli-refresh: %s session %s (%s) is worktree-isolated; refresh it manually", m.AgentType, m.ID, m.Name)
 			continue
+		}
+		if m.AgentType == "agy" && w.stateDir != "" {
+			if _, statErr := os.Stat(filepath.Join(w.stateDir, m.ID, agyinput.DescriptorFile)); statErr == nil {
+				w.once("cli-agyinput:"+m.ID, "cli-refresh: agy session %s (%s) owns a registered native-input broker; refresh it manually", m.ID, m.Name)
+				continue
+			}
 		}
 		if !validCLIIdentity(m.CLIIdentity) {
 			w.once("cli-unknown:"+m.ID, "cli-refresh: %s session %s (%s) has no complete launch CLI identity; leaving it untouched", m.AgentType, m.ID, m.Name)

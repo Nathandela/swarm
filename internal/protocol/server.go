@@ -3535,6 +3535,12 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 			}
 			view.Capabilities = &caps
 		}
+	} else if source, ok := s.d.(SessionCapabilityLookup); ok {
+		if caps, present := source.SessionCapabilities(m.ID); present && caps.Validate() == nil {
+			// Only the instance-bound owner lookup can qualify a native input hint.
+			caps.NativeOwnerInput = false
+			view.Capabilities = &caps
+		}
 	}
 	if source, ok := s.d.(OpenCodeObservationBackend); ok {
 		if native, present := source.OpenCodeObservation(m.ID); present {

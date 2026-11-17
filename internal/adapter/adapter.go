@@ -330,3 +330,28 @@ func AsDatedTranscriptLayout(a Adapter) (DatedTranscriptLayout, bool) {
 	layout, ok := a.(DatedTranscriptLayout)
 	return layout, ok
 }
+
+// DirectTranscriptLayout is the OPTIONAL extension a CLI implements when swarm has
+// CHARACTERIZED a fixed, deterministic subpath beneath a provider root directory where
+// each conversation id's transcript lives (e.g. ~/.gemini/antigravity-cli/brain/<id>/...).
+// Like TranscriptLayout and DatedTranscriptLayout, it names pure path components only
+// and performs NO I/O; the core's anchored os.Root resolver performs every open and
+// traversal check. Absence is the signal.
+type DirectTranscriptLayout interface {
+	// TranscriptProviderRoot returns the single top-level provider directory name
+	// beneath the daemon user's home (e.g. ".gemini"). It must be a bare single
+	// path component with no separators or traversal segments.
+	TranscriptProviderRoot() string
+
+	// TranscriptSubpath returns the relative path segments beneath that provider
+	// root leading to convID's transcript file (at least two segments, ending
+	// with the transcript filename). Callers owe IsCanonicalConversationID before
+	// calling and an anchored os.Root traversal after.
+	TranscriptSubpath(convID string) []string
+}
+
+// AsDirectTranscriptLayout reports whether a has a characterized direct transcript layout.
+func AsDirectTranscriptLayout(a Adapter) (DirectTranscriptLayout, bool) {
+	layout, ok := a.(DirectTranscriptLayout)
+	return layout, ok
+}

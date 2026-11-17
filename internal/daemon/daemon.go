@@ -853,7 +853,7 @@ func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
 	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
 	// journal record without meta (tolerable) but never meta without journal (A7).
 	if rec, ok := journalRecordFor(prev, prevExists, *m); ok {
-		if _, jerr := d.journal.Append(rec); jerr != nil {
+		if _, jerr := d.appendJournal(rec); jerr != nil {
 			return false, jerr
 		}
 	}
@@ -895,7 +895,7 @@ func processRank(p status.Process) int {
 // running), so a late lost can never overwrite an authoritative exited+code and no
 // finalizer regresses a more-terminal state. Fires the onMetaSave observer on a
 // write (mirrors saveMeta).
-func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) {
+func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) persist.Meta) bool {
 	d.writeMu.Lock()
 	d.mu.Lock()
 	sess, ok := d.sessions[id]
@@ -906,7 +906,7 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 	d.mu.Unlock()
 	if !ok {
 		d.writeMu.Unlock()
-		return
+		return true
 	}
 	next := compute(cur)
 	if next.HermesNative {
@@ -914,18 +914,19 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 	}
 	if processRank(next.Status.Process) <= processRank(cur.Status.Process) {
 		d.writeMu.Unlock()
-		return // would not advance the terminal state: refuse (S1)
+		return true // would not advance the terminal state: refuse (S1)
 	}
 	next.SchemaVersion = persist.SchemaVersion
 	written, err := d.saveMetaLocked(&next)
 	d.writeMu.Unlock()
 	if err != nil {
 		d.logf("finalize: persist terminal meta for %s: %v", id, err)
-		return
+		return false
 	}
 	if written && d.cfg.onMetaSave != nil {
 		d.cfg.onMetaSave(next)
 	}
+	return true
 }
 
 // isDeleted reports whether id has been tombstoned by Delete (F3).

@@ -42,6 +42,10 @@ func ProbeModels(name string) (configured string, models []adapter.ModelChoice) 
 		if data, ok := readCapped(filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")); ok {
 			configured = claudeModelFromJSON(data)
 		}
+	case "agy":
+		if data, ok := readCapped(filepath.Join(os.Getenv("HOME"), ".gemini", "antigravity-cli", "settings.json")); ok {
+			configured = claudeModelFromJSON(data)
+		}
 	case "opencode":
 		models = probeOpenCodeModels()
 	}

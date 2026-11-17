@@ -179,11 +179,12 @@ func TestHandsOff_RefusesBeingCombinedWithAResume(t *testing.T) {
 	}
 }
 
-// TestHandsOff_RefusesAnUnsupportedSourceAgentByName pins E7 as amended (Amendment 5
-// F1): claude and codex sources are characterized, and the other two are refused BY
-// NAME rather than served a launch with a transcript path this daemon cannot compute.
+// TestHandsOff_RefusesAnUnsupportedSourceAgentByName pins E7 as amended:
+// claude, codex, and agy sources are characterized, and opencode without a
+// native managed binding is refused BY NAME rather than served a launch with a
+// transcript path this daemon cannot compute.
 func TestHandsOff_RefusesAnUnsupportedSourceAgentByName(t *testing.T) {
-	for _, agent := range []string{"agy", "opencode"} {
+	for _, agent := range []string{"opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			home := t.TempDir()
 			rig := newResumeAPIRigWithProcess(t, agent, legacyClaudeID, status.ProcessRunning,

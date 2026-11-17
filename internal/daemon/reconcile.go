@@ -189,8 +189,28 @@ func (d *Daemon) pollMonitor(id string, pid int, start int64, stop chan struct{}
 					continue // still our shim
 				}
 			}
-			d.handleShimExit(id)
+			d.handleShimExitWithRetry(id, stop)
 			return
+		}
+	}
+}
+
+func (d *Daemon) handleShimExitWithRetry(id string, stop chan struct{}) {
+	if d.handleShimExit(id) {
+		return
+	}
+	t := time.NewTicker(monitorPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-d.stopCh:
+			return
+		case <-stop:
+			return
+		case <-t.C:
+			if d.handleShimExit(id) {
+				return
+			}
 		}
 	}
 }
@@ -199,7 +219,7 @@ func (d *Daemon) pollMonitor(id string, pid int, start int64, stop chan struct{}
 // from exit.json when the shim reported, else LOST. It re-checks membership and
 // running-ness under the lock, so a Delete that already removed the session, or a
 // double-fire, is a no-op.
-func (d *Daemon) handleShimExit(id string) {
+func (d *Daemon) handleShimExit(id string) bool {
 	// Fast-path: skip the side-file read for an already-terminal session with no
 	// exit report. The AUTHORITATIVE refuse (and the exited>lost precedence against a
 	// concurrent markLost) happens in finalizeTerminal under writeMu (S1).
@@ -207,12 +227,12 @@ func (d *Daemon) handleShimExit(id string) {
 	s, ok := d.sessions[id]
 	terminalAlready := ok && s.meta.Status.Process != status.ProcessRunning
 	d.mu.Unlock()
-	if !ok {
-		return
+	if !ok || d.isDeleted(id) {
+		return true
 	}
 	ei, hasExit := readExitSideFile(d.sessionDir(id))
 	if !hasExit && terminalAlready {
-		return // no exit report and already terminal: nothing to advance
+		return true // no exit report and already terminal: nothing to advance
 	}
 	// THE SESSION BACKEND, on the path that is REACHED WHILE THIS DAEMON IS UP (Wave R7,
 	// ADR-013 §R7.2c; review round 3 BLOCKING 2). reconcile's orphan arm closes the residual
@@ -225,7 +245,7 @@ func (d *Daemon) handleShimExit(id string) {
 	// backend is already reaped and reapOrphanBackend finds a dead pid and merely removes the
 	// stale record. It kills only in the case the shim could not act on: an uncatchable signal.
 	d.reapOrphanBackend(id)
-	d.finalizeTerminal(id, func(cur persist.Meta) persist.Meta {
+	persisted := d.finalizeTerminal(id, func(cur persist.Meta) persist.Meta {
 		if hasExit {
 			return mergeExit(cur, ei) // exited+code (rank 2): wins over a racing lost
 		}
@@ -237,6 +257,7 @@ func (d *Daemon) handleShimExit(id string) {
 	if d.cfg.OnSessionEnd != nil {
 		d.cfg.OnSessionEnd(id)
 	}
+	return persisted
 }
 
 // putMem inserts or updates a session in the registry without writing to disk,

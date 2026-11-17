@@ -210,7 +210,7 @@ func (d *Daemon) RecordInteractionRaw(sessionID string, item json.RawMessage) er
 		// would produce the partial item IS-ENV-3 forbids.
 		return fmt.Errorf("interaction: item is %d bytes, over the %d-byte cap (interaction-schema.md §5)", len(item), MaxItemBytes)
 	}
-	_, err := d.journal.Append(journal.Record{
+	_, err := d.appendJournal(journal.Record{
 		SessionID: sessionID,
 		Type:      journal.TypeInteraction,
 		Payload:   item,

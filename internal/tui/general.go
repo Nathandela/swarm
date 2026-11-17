@@ -588,6 +588,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editing = true
 			m.general.editID = s.ID
 			m.general.edit = newLineEditor(s.Name)
+			m.general.revealSession(s.ID)
 		}
 	case k.Text == "t":
 		if s, ok := m.boardCommandSession(); ok {
@@ -595,6 +596,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editTag = true
 			m.general.editID = s.ID
 			m.general.edit = newLineEditor(s.Tag)
+			m.general.revealSession(s.ID)
 		}
 	case k.Text == "o":
 		// Open the options window seeded with the live layout (owner decision
@@ -624,6 +626,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.confirm = true
 			m.general.confirmID = s.ID
 			m.general.confirmKill = s.Status.Process == status.ProcessRunning
+			m.general.revealSession(s.ID)
 		}
 	case k.Code == tea.KeyEsc:
 		return m, tea.Quit
@@ -651,7 +654,7 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	if m.attachRunner != nil {
 		m.screen = screenAttach
 		// Only running rows reach here, so the passthrough is always read-write.
-		return m, runAttach(m.attachRunner, s, false, m.touchBack)
+		return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing(s))
 	}
 	m.attach = attachModel{session: s, hasSession: true, width: m.width}
 	m.screen = screenAttach
@@ -1137,7 +1140,7 @@ func minInt(a, b int) int {
 // renderRow renders one session row: a 2-cell selection prefix (or the confirm
 // prompt), the group icon, then the five V-4 fields on one line.
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
-	if m.compactRows() && !m.editing && !m.confirm {
+	if m.compactRows() {
 		return m.compactRow(s, selected)
 	}
 	gs := groupStyle(g)
@@ -1356,10 +1359,9 @@ func lineageBadge(s protocol.SessionView, sessions []protocol.SessionView) strin
 	if s.SpawnedFrom != "" {
 		badge = "from " + lineageLabel(s.SpawnedFrom, sessions)
 	}
-	local := localID(s.ID)
 	children := 0
 	for _, o := range sessions {
-		if o.SpawnedFrom == local {
+		if o.SpawnedFrom != "" && isAttemptOf(s, o.SpawnedFrom) {
 			children++
 		}
 	}
@@ -1373,15 +1375,36 @@ func lineageBadge(s protocol.SessionView, sessions []protocol.SessionView) strin
 }
 
 // lineageLabel names a parent session: its display label while it is still on the
-// roster, else the raw local id — the source session stays alive only until the user
-// closes it (D4), and a child must still say where it came from afterwards.
+// roster, else the label of the discussion that continued it under a new id (a resume
+// hides the old attempt and lists it in the new row's Supersedes), else the raw local
+// id — the source session stays alive only until the user closes it (D4), and a child
+// must still say where it came from afterwards.
 func lineageLabel(parent string, sessions []protocol.SessionView) string {
 	for _, s := range sessions {
 		if localID(s.ID) == parent && s.Name != "" {
 			return s.Name
 		}
 	}
+	for _, s := range sessions {
+		if s.Name != "" && isAttemptOf(s, parent) {
+			return s.Name
+		}
+	}
 	return parent
+}
+
+// isAttemptOf reports whether the local id names row s or one of the earlier attempts
+// it superseded, i.e. whether a child spawned from that id belongs to s's discussion.
+func isAttemptOf(s protocol.SessionView, local string) bool {
+	if localID(s.ID) == local {
+		return true
+	}
+	for _, id := range s.Supersedes {
+		if localID(id) == local {
+			return true
+		}
+	}
+	return false
 }
 
 // localID is the local half of a namespaced row id, or the id itself when it is not

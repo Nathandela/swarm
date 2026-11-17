@@ -90,17 +90,18 @@ func (agyAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 }
 
 // Options is the declarative launch-option schema the launch form renders
-// (R-D3): model (free string, curated by the 8 `agy models` display names),
-// mode (accept-edits|plan, no default — the CLI's own default applies when
-// unset), and dangerously-skip-permissions (bool, default "false").
+// (R-D3): model, mode, and dangerously-skip-permissions.
 func (agyAdapter) Options() []adapter.OptionSpec {
 	return []adapter.OptionSpec{
 		{Key: "model", Label: "Model", Type: "string", Suggest: []string{
-			"Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Low)",
-			"Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (High)",
-			"Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)",
+			"Orchestrator (Carbon)", "Orchestrator (Argon)",
+			"Gemini 4 Carbon (Medium)", "Gemini 4 Carbon (High)",
+			"Gemini 4 Argon (Medium)",
+			"Gemini 4 Hydrogen (Medium)", "Gemini 4 Hydrogen (High)",
+			"Gemini 3.8 Flash (Medium)",
+			"Claude Sonnet 5.5 (Medium)", "Claude Opus 5.5 (Medium)", "GPT-OSS 120B (Medium)",
 		}},
-		{Key: "mode", Label: "Execution mode", Type: "choice", Choices: []string{"accept-edits", "plan"}},
+		{Key: "mode", Label: "Execution mode", Type: "choice", Choices: []string{"accept-edits", "auto", "plan"}},
 		{Key: "dangerously-skip-permissions", Label: "Skip permission prompts", Type: "bool", Default: "false"},
 	}
 }
@@ -119,13 +120,32 @@ func (agyAdapter) SignalSources() []adapter.SignalSource {
 	}
 }
 
-// Resume composes `agy --conversation <id>`; an empty id resumes nothing
+// Resume composes `agy [options] --conversation <id>`; an empty id resumes nothing
 // (R-D5).
 func (agyAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	return []string{binary, "--conversation", spec.ConversationID}, nil
+	argv := []string{binary}
+	argv = append(argv, optionFlags(spec.Options)...)
+	argv = append(argv, "--conversation", spec.ConversationID)
+	return argv, nil
+}
+
+// IsValidConversationID implements adapter.ConversationIDValidator.
+func (agyAdapter) IsValidConversationID(id string) bool {
+	return adapter.IsCanonicalConversationID(id)
+}
+
+// TranscriptProviderRoot implements adapter.DirectTranscriptLayout.
+func (agyAdapter) TranscriptProviderRoot() string {
+	return ".gemini"
+}
+
+// TranscriptSubpath implements adapter.DirectTranscriptLayout for agy's
+// antigravity-cli brain logs.
+func (agyAdapter) TranscriptSubpath(convID string) []string {
+	return []string{"antigravity-cli", "brain", convID, ".system_generated", "logs", "transcript.jsonl"}
 }
 
 // ExtractConversationID recovers the conversation id from the raw capture,
@@ -166,38 +186,18 @@ func uuidTokenAt(rest string) (string, bool) {
 		return "", false // unterminated at EOF: token may be truncated mid-write
 	}
 	token := rest[:end]
-	if !isUUID(token) {
+	if !adapter.IsCanonicalConversationID(token) {
 		return "", false
 	}
 	return token, true
 }
 
-// isUUID reports whether s is a lowercase-hex 8-4-4-4-12 UUID.
-func isUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if s[i] != '-' {
-				return false
-			}
-			continue
-		}
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // optionFlags translates resolved option values into agy flags in the FIXED
 // order model, mode, dangerously-skip-permissions, so Command stays
-// deterministic (R-D2).
+// deterministic (R-D2). Flag-shaped free-text values are ignored.
 func optionFlags(opts map[string]string) []string {
 	var flags []string
-	if m := opts["model"]; m != "" {
+	if m := opts["model"]; m != "" && !strings.HasPrefix(m, "-") {
 		flags = append(flags, "--model", m)
 	}
 	if m := opts["mode"]; m != "" {
