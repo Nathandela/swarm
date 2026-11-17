@@ -32,7 +32,7 @@ The production CLI sent locally synthesized English speech and returned audio ov
 | Hello, please say the words blue apple. | Splue apple. | 530,880 bytes (11.06 s) | 13,184 |
 | Please repeat the words purple umbrella. | Purple umbrella. | 407,040 bytes (8.48 s) | 10,048 |
 
-Both connections closed successfully. The first discrepancy could originate in synthesis, transcription, or both. These samples verify authenticated audio in both directions and illustrate why written manager receipts must remain authoritative. Neither test used a microphone or played audio to a physical speaker.
+The final build also streamed the same synthetic purple-umbrella input directly from a fast pipe. Its internal PCM clock produced a clean close, 507,840 output bytes, a peak of 7,328, and the transcript “Purple umbrella.” All three connections closed successfully. The first discrepancy could originate in synthesis, transcription, or both. These samples verify authenticated audio in both directions and illustrate why written manager receipts must remain authoritative. Neither test used a microphone or played audio to a physical speaker.
 
 To repeat the billed second check on macOS with a configured Swarm state directory and FFmpeg installed, run the following from the repository root. It uses a fixed synthetic phrase and temporary audio files. [Spike source](../../../scripts/verification/openai_live_voice.py)
 
@@ -40,3 +40,9 @@ To repeat the billed second check on macOS with a configured Swarm state directo
 go build -o /tmp/swarm-voice-check ./cmd/swarm
 python3 scripts/verification/openai_live_voice.py /tmp/swarm-voice-check
 ```
+
+## Repository checks
+
+The build, vet and lint checks passed. The complete CLI and voice-package race suites passed, including the OpenAI transport fixtures. The independent migration review verified PCM pacing, signal shutdown, terminal transcript rendering, Unicode validation, key custody and the standalone delegation error.
+
+The production reachability gate reported 52 unreachable exports on the untouched parent `1aff7fae`. The migration reported 34, all present in the parent findings. They comprise 28 controller/store methods and functions, five device-wire validators or decoders, and one Claude interrupt method. This keeps the unfinished voice-manager integration visible. The repository test invocation reached Go's ten-minute package deadline in `internal/skeleton` as a fresh test began. With a 25-minute deadline the full package finished in 724.194 seconds with one failing case. `TestResumeRejectsExplicitWorktreeBeforeResolvingSourceOrExecutable/resume_from` looks up a source before refusing an invalid worktree resume. It failed identically on both the untouched parent and the migration in isolated runs. Tracked in `agents-tracker-uv6m.7.2`.
