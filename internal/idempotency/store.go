@@ -458,7 +458,7 @@ func (s *Store) expired(rec Record, now time.Time) bool {
 		return false
 	}
 	// An unresolved native write must never age into another fresh input or decision.
-	if (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && unresolvedPhase(rec.Phase) {
+	if (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "manager_interrupt" || rec.Action == "composer_send" && len(rec.Request) > 0) && unresolvedPhase(rec.Phase) {
 		return false
 	}
 	if rec.Phase == PhaseCompleted && len(rec.Request) > 0 && (rec.Action == "semantic_send" || rec.Action == "composer_send") && !settledNativeInputEvidence(rec.Evidence) {

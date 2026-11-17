@@ -6,6 +6,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputFilter
+import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -13,6 +15,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.doAfterTextChanged
 import dev.swarm.phone.scan.QrScanner
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.ctaButton
@@ -27,11 +30,16 @@ import swarmmobile.VoiceDevice
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /** Explicit, foreground voice surface. It never reads launch intents or dashboard state. */
 class VoiceActivity : AppCompatActivity() {
     private val requests = Executors.newSingleThreadExecutor()
+    private val playbackLane = Executors.newSingleThreadExecutor()
+    private val playbackChecks = Executors.newSingleThreadScheduledExecutor()
+    private var playback: VoicePlaybackAttempt? = null
     private val transport = AtomicReference<VoiceDevice?>()
     private lateinit var store: VoiceStore
     private var state: VoiceState? = null
@@ -61,6 +69,9 @@ class VoiceActivity : AppCompatActivity() {
     private lateinit var message: EditText
     private lateinit var operation: EditText
     private lateinit var output: TextView
+    private lateinit var publicationButtons: LinearLayout
+    private lateinit var playbackStatus: TextView
+    private lateinit var playbackStop: TextView
     private lateinit var hint: TextView
     private lateinit var publicKeys: TextView
     private lateinit var start: TextView
@@ -131,7 +142,26 @@ class VoiceActivity : AppCompatActivity() {
         item(hint)
         output = notice(this, "").apply { setTextIsSelectable(true) }
         item(output)
-        setContentView(ScrollView(this).apply { addView(stack) })
+        publicationButtons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        item(publicationButtons)
+        playbackStop = ctaButton(this, "Stop reading", CtaKind.MORE, bloom = false).apply {
+            filterTouchesWhenObscured = true
+            visibility = View.GONE
+            setOnClickListener { stopPlayback("Audio preview stopped.") }
+        }
+        playbackStatus = notice(this, "").apply { visibility = View.GONE }
+        operation.doAfterTextChanged {
+            stopPlayback()
+            publicationButtons.removeAllViews()
+            output.text = ""
+        }
+        setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(ScrollView(this@VoiceActivity).apply { addView(stack) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(playbackStop.screenAir())
+            addView(playbackStatus.screenAir())
+        })
     }
 
     override fun onResume() {
@@ -155,10 +185,13 @@ class VoiceActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         requests.shutdownNow()
+        playbackLane.shutdownNow()
+        playbackChecks.shutdownNow()
         super.onDestroy()
     }
 
     private fun endTransport() {
+        stopPlayback()
         generation++
         busy = false
         stop.isEnabled = false
@@ -236,6 +269,7 @@ class VoiceActivity : AppCompatActivity() {
         if (imported != null && (imported.place != placeID || imported.endpoint != profile.endpoint)) {
             return tell("Place and loopback must match the imported invitation.")
         }
+        stopPlayback()
         work("Enrolling over pinned SSH…", {
             val device = open(profile, saved.keys)
             val grant = device.enroll(placeID, invite, profile.endpoint)
@@ -252,6 +286,7 @@ class VoiceActivity : AppCompatActivity() {
         val saved = state ?: return tell("Generate voice keys first.")
         val profile = saved.profile ?: return tell("Enroll a voice invitation first.")
         if (VoiceMicrophoneSession.current.get() != null) return
+        stopPlayback()
         work("Connecting over pinned SSH…", {
             JSONObject(open(profile, saved.keys).status(saved.grant))
         }) { result ->
@@ -305,6 +340,7 @@ class VoiceActivity : AppCompatActivity() {
         val next = saved.copy(operation = UUID.randomUUID().toString())
         state = next
         operation.setText(next.operation)
+        stopPlayback()
         work("Reserving recording…", {
             store.save(next)
             require(JSONObject(device.beginPTT(next.grant, next.operation)).optString("phase") == "capturing")
@@ -356,14 +392,17 @@ class VoiceActivity : AppCompatActivity() {
         val saved = state ?: return
         val id = operation.text.toString().trim()
         if (id.isEmpty() || VoiceMicrophoneSession.current.get() != null) return
+        stopPlayback()
         work("Checking the exact request…", {
             val receipt = JSONObject(device.receipt(saved.grant, id))
             val publications = runCatching { JSONArray(device.publications(saved.grant, id)) }
             receipt to publications
         }) { (receipt, publications) ->
+            if (operation.text.toString().trim() != id) return@work
             showReceipt(receipt)
+            publicationButtons.removeAllViews()
             output.text = publications.fold(
-                onSuccess = { items -> (0 until items.length()).joinToString("\n\n") { items.getJSONObject(it).optString("text") } },
+                onSuccess = { items -> showPublications(id, receipt.optString("phase") == "completed", items); "" },
                 onFailure = {
                     if (it.message?.contains("voice publication history exceeds handset capacity") == true) {
                         "This request has more publication history than the phone can show."
@@ -371,6 +410,89 @@ class VoiceActivity : AppCompatActivity() {
                 },
             )
         }
+    }
+
+    private fun showPublications(operationID: String, completed: Boolean, items: JSONArray) {
+        for (i in 0 until items.length()) {
+            val publication = items.getJSONObject(i)
+            val id = publication.optString("id")
+            publicationButtons.addView(notice(this, publication.optString("text")))
+            if (completed && id.isNotEmpty()) {
+                publicationButtons.addView(ctaButton(this, "Read aloud", CtaKind.MORE, bloom = false).apply {
+                    contentDescription = "Read aloud publication ${i + 1}"
+                    filterTouchesWhenObscured = true
+                    setOnClickListener { startPlayback(operationID, id) }
+                })
+            }
+        }
+    }
+
+    private fun startPlayback(operationID: String, publicationID: String) {
+        val device = transport.get() ?: return tell("Connect the voice grant first.")
+        val grant = state?.grant ?: return
+        if (!active || busy || operation.text.toString().trim() != operationID || VoiceMicrophoneSession.current.get() != null) return
+        stopPlayback()
+        val attempt = VoicePlaybackAttempt()
+        playback = attempt
+        playbackStop.visibility = View.VISIBLE
+        playbackStatus.visibility = View.VISIBLE
+        playbackStatus.text = "Preparing audio preview…"
+        playbackLane.execute {
+            val result = runCatching {
+                check(attempt.isActive())
+                val preview = device.previewPublication(grant, operationID, publicationID)
+                attempt.attach { runCatching { preview.stop() } }
+                preview.verify()
+                val clip = decodeVoicePreview(preview.readPCM())
+                var monitor: ScheduledFuture<*>? = null
+                try {
+                    monitor = playbackChecks.scheduleWithFixedDelay({
+                        if (attempt.isActive() && runCatching { preview.verify() }.isFailure) {
+                            attempt.stop()
+                            runOnUiThread {
+                                if (active && playback === attempt) stopPlayback("Audio preview stopped. The voice connection changed.")
+                            }
+                        }
+                    }, 0, 1, TimeUnit.SECONDS)
+                    playVoicePreview(applicationContext, clip, attempt) { played, total ->
+                        runOnUiThread {
+                            if (active && playback === attempt && attempt.isActive()) {
+                                playbackStatus.text = "Preview · ${previewTime(played)} / ${previewTime(total)} s played"
+                            }
+                        }
+                    }
+                } finally {
+                    monitor?.cancel(true)
+                    clip.fill(0)
+                }
+            }
+            runOnUiThread {
+                if (!active || playback !== attempt) return@runOnUiThread
+                stopPlayback(
+                    when (result.getOrNull()) {
+                        true -> "Audio preview ended. The publication text is the exact result."
+                        false -> "Audio preview stopped."
+                        null -> "Audio preview unavailable. The publication text is still available."
+                    },
+                )
+            }
+        }
+    }
+
+    private fun stopPlayback(note: String = "") {
+        val prior = playback
+        playback = null
+        prior?.stop()
+        if (::playbackStop.isInitialized) playbackStop.visibility = View.GONE
+        if (::playbackStatus.isInitialized && (prior != null || note.isNotEmpty())) {
+            playbackStatus.text = note
+            playbackStatus.visibility = if (note.isEmpty()) View.GONE else View.VISIBLE
+        }
+    }
+
+    private fun previewTime(frames: Int): String {
+        val tenths = frames * 10 / VOICE_RATE
+        return "${tenths / 10}.${tenths % 10}"
     }
 
     private fun showReceipt(receipt: JSONObject) {

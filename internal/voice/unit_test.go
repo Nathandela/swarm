@@ -34,7 +34,7 @@ func TestRenderVoiceLaunchdArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := plistArguments(t, unit), []string{binary, "voice", "serve", "--state-dir", stateDir}; !slices.Equal(got, want) {
+	if got, want := plistArguments(t, unit), []string{binary, "voice", "serve", "--unattended", "--state-dir", stateDir}; !slices.Equal(got, want) {
 		t.Fatalf("ProgramArguments = %#v, want %#v", got, want)
 	}
 	for _, want := range []string{
@@ -60,7 +60,7 @@ func TestRenderVoiceSystemdEscapesAndLiteralExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantStart := "ExecStart=:\"/path with space/" + homeVar + "%%\" voice serve --state-dir \"/state/" + homeVar + "%% \\\"voice\\\"\\\\data\""
+	wantStart := "ExecStart=:\"/path with space/" + homeVar + "%%\" voice serve --unattended --state-dir \"/state/" + homeVar + "%% \\\"voice\\\"\\\\data\""
 	if !strings.Contains(unit, wantStart) {
 		t.Errorf("missing escaped literal command %q:\n%s", wantStart, unit)
 	}
@@ -85,7 +85,7 @@ func TestRenderVoiceSystemdAcceptsKnownSafeExecutablePunctuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rejected systemd string_is_safe characters: %v", err)
 	}
-	want := "ExecStart=:\"/opt/swarm with space/über!@#$%%^&()_+=,:;]\" voice serve --state-dir " +
+	want := "ExecStart=:\"/opt/swarm with space/über!@#$%%^&()_+=,:;]\" voice serve --unattended --state-dir " +
 		"\"/state with spaces/$data %% \\\"quoted\\\"\\\\literal\""
 	if !strings.Contains(unit, want) {
 		t.Fatalf("unit omitted safe executable path %q:\n%s", want, unit)

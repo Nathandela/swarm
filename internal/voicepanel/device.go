@@ -12,7 +12,7 @@ import (
 
 // ServeDevice uses the same loopback browser boundary as the local manager panel.
 func ServeDevice(ctx context.Context, client *voiceclient.DeviceClient, grant voicewire.DeviceCredential, alias string, ready func(string) error) error {
-	return serve(ctx, deviceManager{client: client, grant: grant, alias: alias}, true, ready)
+	return serve(ctx, deviceManager{client: client, grant: grant, alias: alias}, false, ready)
 }
 
 type deviceManager struct {
@@ -24,8 +24,8 @@ type deviceManager struct {
 func (m deviceManager) Status(ctx context.Context) (voice.ManagerStatus, error) {
 	s, err := m.client.Status(ctx, m.grant)
 	return voice.ManagerStatus{
-		Ready: s.Ready, Binding: voice.ManagerBinding{ConversationID: s.ConversationID, Provider: s.Provider},
-		Attention: "SSH · " + m.alias + " · Audio preview unavailable",
+		Ready: s.Ready, SchedulerPaused: s.SchedulerPaused, CustodyLost: s.CustodyLost, Binding: voice.ManagerBinding{ConversationID: s.ConversationID, Provider: s.Provider, Generation: s.Generation},
+		Attention: "SSH · " + m.alias,
 	}, deviceError(err)
 }
 
@@ -61,8 +61,13 @@ func (m deviceManager) Publications(ctx context.Context, id string) ([]voice.Pub
 	return results, nil
 }
 
-func (m deviceManager) PreviewPublication(context.Context, string, string) ([]byte, error) {
-	return nil, voice.ErrPreviewUnavailable
+func (m deviceManager) PreviewPublication(ctx context.Context, id, publication string) ([]byte, error) {
+	pcm, err := m.client.PreviewPublication(ctx, m.grant, id, publication)
+	var status *voiceclient.DeviceHTTPError
+	if errors.As(err, &status) && status.StatusCode == http.StatusFailedDependency {
+		return nil, voice.ErrPreviewUnavailable
+	}
+	return pcm, deviceError(err)
 }
 
 func deviceAdmission(r voicewire.DeviceAdmission) voice.Admission {
@@ -75,6 +80,8 @@ func deviceError(err error) error {
 		return err
 	}
 	switch status.StatusCode {
+	case http.StatusTooManyRequests:
+		return voice.ErrCaptureBusy
 	case http.StatusBadRequest:
 		return voice.ErrInvalid
 	case http.StatusNotFound:
@@ -90,4 +97,8 @@ func deviceError(err error) error {
 	default:
 		return err
 	}
+}
+
+func (m deviceManager) EndPTT(ctx context.Context, id string) error {
+	return deviceError(m.client.EndPTT(ctx, m.grant, id))
 }

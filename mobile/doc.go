@@ -105,7 +105,8 @@
 // revoke the server grant. A new handle with the same profile and signers can
 // use the stored grant after restart. Android owns microphone permission and
 // foreground capture. The facade accepts one bounded finalized recording.
-// Playback and background media are separate.
+// An explicit publication preview is a separate single-use handle. The app
+// owns rendering, played-frame progress, and stopping the audio sink.
 package swarmmobile
 
 // CallbackQueueSize is the bound on the queue between the Go core and the app's

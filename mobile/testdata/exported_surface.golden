@@ -289,10 +289,14 @@ method VoiceDevice.BeginPTT(string, string) (string, error)
 method VoiceDevice.End() error
 method VoiceDevice.Enroll(string, string, string) (string, error)
 method VoiceDevice.FinalizePTT(string, string, string) (string, error)
+method VoiceDevice.PreviewPublication(string, string, string) (*VoicePreview, error)
 method VoiceDevice.Publications(string, string) (string, error)
 method VoiceDevice.Receipt(string, string) (string, error)
 method VoiceDevice.Status(string) (string, error)
 method VoiceDevice.SubmitText(string, string, string) (string, error)
+method VoicePreview.ReadPCM() (string, error)
+method VoicePreview.Stop() error
+method VoicePreview.Verify() error
 type App struct
 type ComposerPublication struct
 type ComposerPublicationList struct
@@ -330,5 +334,6 @@ type UndeliveredInput struct
 type UndeliveredList struct
 type VoiceDevice struct
 type VoiceEnrollmentSigner interface
+type VoicePreview struct
 type VoiceSSHSigner interface
 type WakeAlert struct

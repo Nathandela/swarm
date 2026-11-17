@@ -291,7 +291,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1418,6 +1418,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleNativeDecide(c)
 	case OpNativeRequests:
 		cc.handleNativeRequests(c)
+	case OpManagerInterrupt, OpManagerInterruptStatus:
+		cc.handleManagerInterrupt(c)
 	case OpManagerRuntime, OpManagerResolveCall, OpManagerInputStatus:
 		cc.handleManagerRuntime(c)
 	case OpNativeDecisionStatus:
@@ -1509,10 +1511,14 @@ func (s *Server) supportedCaps() []string {
 	_, semantic := s.d.(SemanticComposerSender)
 	_, nativeObservation := s.d.(OpenCodeObservationBackend)
 	_, nativeDecisions := s.d.(NativeDecisionApplier)
+	managerInterrupt, hasManagerInterrupt := s.d.(ManagerInterruptSource)
 	_, managerProvenance := s.d.(ManagerRuntimeSource)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
 		if cap == CapJournalSourceIdentity && (!journalFrom || !hasJournalIdentity || !ValidJournalSourceID(journalIdentity.JournalSourceID())) {
+			continue
+		}
+		if cap == CapManagerInterrupt && (s.remoteTier || !hasManagerInterrupt || !managerInterrupt.ManagerInterruptSupported()) {
 			continue
 		}
 		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {

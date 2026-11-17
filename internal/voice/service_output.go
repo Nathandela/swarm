@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/voice/openailive"
+	"github.com/Nathandela/swarm/internal/voicewire"
 )
 
 const (
 	previewTimeout         = 24 * time.Second
 	previewReceive         = 6 * time.Second
-	previewPCMSize         = 24_000 * 2 * 6
+	previewPCMSize         = voicewire.MaxPreviewPCMBytes
 	previewClockInterval   = 20 * time.Millisecond
 	previewClockFrameBytes = 24_000 * 2 / 50
 )
@@ -93,7 +94,9 @@ func (c *managerControl) servePublicationPreview(w http.ResponseWriter, r *http.
 	}
 	ctx, done := c.preview.begin(r.Context())
 	defer done()
-	pcm, err := c.collectPreview(ctx, req, pub, greeting)
+	pcm, err := c.collectPreview(ctx, pub, greeting, func() (Publication, error) {
+		return c.previewPublication(req)
+	})
 	if errors.Is(err, ErrStale) || ctx.Err() != nil {
 		w.WriteHeader(http.StatusPreconditionFailed)
 		return
@@ -120,11 +123,15 @@ func (c *managerControl) previewPublication(req previewRequest) (Publication, er
 	if err != nil {
 		return Publication{}, err
 	}
+	return c.verifyPublication(state, receipt, req.PublicationID)
+}
+
+func (c *managerControl) verifyPublication(state State, receipt Admission, publicationID string) (Publication, error) {
 	if err := checkBinding(&state, c.binding); err != nil ||
 		state.Conversations[c.binding.ConversationID].CustodyLost || receipt.NativeBindingRetired {
 		return Publication{}, ErrStale
 	}
-	pub, ok := state.Publications[key(receipt.ConversationID, req.PublicationID)]
+	pub, ok := state.Publications[key(receipt.ConversationID, publicationID)]
 	if !ok || pub.Admission != receipt.Sequence || pub.ConversationID != receipt.ConversationID {
 		return Publication{}, ErrNotFound
 	}
@@ -149,13 +156,13 @@ func (c *managerControl) previewPublication(req previewRequest) (Publication, er
 	return pub, nil
 }
 
-func (c *managerControl) collectPreview(ctx context.Context, req previewRequest, pub Publication, greeting string) ([]byte, error) {
+func (c *managerControl) collectPreview(ctx context.Context, pub Publication, greeting string, verify func() (Publication, error)) ([]byte, error) {
 	session, err := c.preview.open(ctx, greeting)
 	if err != nil {
 		return nil, ErrPreviewUnavailable
 	}
 	defer func() { _ = session.Close() }()
-	current, err := c.previewPublication(req)
+	current, err := verify()
 	if err != nil || current != pub || ctx.Err() != nil {
 		return nil, ErrStale
 	}

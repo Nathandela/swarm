@@ -40,6 +40,10 @@ func dispatchVoice(args []string, stdout, stderr io.Writer) int {
 		return dispatchVoiceSSH(args, stdout, stderr)
 	}
 	switch args[0] {
+	case "interrupt-manager", "interrupt-status":
+		return dispatchManagerInterrupt(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "capture":
+		return dispatchVoiceCapture(args[1:], stdout, stderr)
 	case "enroll", "revoke", "device-endpoint", "devices":
 		return dispatchVoiceDevice(args[0], args[1:], stdout, stderr)
 	case "start", "stop":
@@ -48,7 +52,7 @@ func dispatchVoice(args []string, stdout, stderr io.Writer) int {
 		return dispatchVoicePanel(args[1:], stdout, stderr)
 	case "question", "answer", "resume", "ack", "replace", "replacement":
 		return dispatchVoiceRecovery(args[0], args[1:], os.Stdin, stdout, stderr)
-	case "serve", "status", "text", "ptt", "read", "receipt", "publications":
+	case "serve", "status", "text", "ptt", "read", "receipt", "publications", "switch":
 		return dispatchVoiceManager(args, os.Stdin, stdout, stderr)
 	case "setup":
 		if len(args) > 1 {

@@ -18,7 +18,7 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-const voiceUsage = `usage: swarm voice setup | start | stop | serve | status | text | ptt | receipt | publications | live | transcribe
+const voiceUsage = `usage: swarm voice setup | switch | start | stop | serve | status | text | ptt | receipt | publications | live | transcribe
   --host ALIAS   open an enrolled remote manager through OpenSSH (--enroll for first use)
   panel       open the local browser panel (default); --print-url for manual opening
   setup       use the global OpenAI speech endpoint; enter the key privately or pipe it to stdin
@@ -33,6 +33,7 @@ const voiceUsage = `usage: swarm voice setup | start | stop | serve | status | t
   receipt     read an admission by --id
   publications  read the manager's canonical reply phrases by --id
   enroll / devices / revoke / device-endpoint   manage scoped device grants over SSH
+  interrupt-manager / interrupt-status   act on one saved active manager status from stdin
   question / answer   inspect or answer an exact manager clarification
   resume / ack        reconcile manual input or an uncertain admission
   replace / replacement   replace a quarantined manager or inspect its receipt

@@ -31,12 +31,14 @@ import (
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
-	JournalSourceID   string `json:"journal_source_id,omitempty"`
-	JournalHistoryGap bool   `json:"journal_history_gap,omitempty"`
-	Op                string `json:"op"`
-	EndpointID        string `json:"endpoint_id"`
-	SessionID         string `json:"session_id,omitempty"`
-	ProtocolVersion   int    `json:"protocol_version,omitempty"`
+	ManagerInterruptRequest *ManagerInterruptReq     `json:"manager_interrupt_request,omitempty"`
+	ManagerInterrupt        *ManagerInterruptReceipt `json:"manager_interrupt,omitempty"`
+	JournalSourceID         string                   `json:"journal_source_id,omitempty"`
+	JournalHistoryGap       bool                     `json:"journal_history_gap,omitempty"`
+	Op                      string                   `json:"op"`
+	EndpointID              string                   `json:"endpoint_id"`
+	SessionID               string                   `json:"session_id,omitempty"`
+	ProtocolVersion         int                      `json:"protocol_version,omitempty"`
 	// BuildVersion is the daemon's internal/version.Version, carried on the hello
 	// reply (E13.2). It is ADDITIVE: unlike ProtocolVersion (the wire skew gate,
 	// unchanged by this field), a mismatch here is not fatal to the handshake — it

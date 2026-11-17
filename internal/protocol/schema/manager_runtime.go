@@ -77,3 +77,37 @@ type ManagerCallProof struct {
 	NativeCallID  string `json:"native_call_id"`
 	Main          bool   `json:"main"`
 }
+
+// ManagerInterruptReq names the admitted native turn the owner selected.
+type ManagerInterruptReq struct {
+	Binding       ManagerRuntimeBinding `json:"binding"`
+	NativeInputID string                `json:"native_input_id"`
+	NativeTurnID  string                `json:"native_turn_id"`
+}
+
+func (r ManagerInterruptReq) Validate() error {
+	if (ManagerAdmission{Binding: r.Binding, Nonce: r.NativeInputID}).Validate() != nil ||
+		r.NativeTurnID == "" || len(r.NativeTurnID) > 128 || strings.TrimSpace(r.NativeTurnID) != r.NativeTurnID ||
+		strings.ContainsFunc(r.NativeTurnID, unicode.IsControl) {
+		return errors.New("invalid manager interrupt target")
+	}
+	return nil
+}
+
+// ManagerInterruptReceipt distinguishes awaiting observation from a proven terminal turn.
+type ManagerInterruptReceipt struct {
+	OperationID   string `json:"operation_id"`
+	NativeInputID string `json:"native_input_id"`
+	NativeTurnID  string `json:"native_turn_id"`
+	State         string `json:"state"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+func (r ManagerInterruptReceipt) ValidState() bool {
+	switch r.State {
+	case "unknown", "prepared", "pending", "uncertain", "interrupted", "ended":
+		return true
+	default:
+		return false
+	}
+}

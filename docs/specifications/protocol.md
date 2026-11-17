@@ -125,6 +125,8 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `manager_call` | `*ManagerCallReq` | Owner-only exact tool name, canonical argument hash and native host metadata resolution request |
 | `manager_call_proof` | `*ManagerCallProof` | Authenticated native input/turn/call join; model-provided identifiers never populate this reply |
 | `manager_input_status_request` | `*ManagerAdmission` | Owner-only historical outcome read by exact binding and existing input nonce; performs no admission |
+| `manager_interrupt_request` | `*ManagerInterruptReq` | Owner-only interrupt or status read bound to an exact manager runtime, admission nonce and native turn |
+| `manager_interrupt` | `*ManagerInterruptReceipt` | Original durable operation ID and exact native turn observation |
 | `manager_input_status` | `*ManagerNativeTurn` | Retained exact input outcome, independent of whichever native turn is current |
 | `native_decision` | `*NativeDecisionReq` | Negotiated `native-requests-v1` decision: exact worker/native request identity, content hash, expiry and permission/question answer; the complete body is signed through `NativeDecisionContentHash`. |
 | `native_decision_receipt` | `*NativeDecisionReceipt` | Correlated native decision processing receipt, including admitted/rejected/uncertain state and actual native side-effect scope. |
@@ -213,6 +215,18 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 Runtime `bridge_socket` and `auth_file` are private server-derived references checked before controller adoption; they are absent from device projections and the public roster. Input admission and call resolution revalidate binding and account/process custody. Historical receipts cannot reconstruct native permissions after a lost feed or restart. Evidence tables are bounded; exhausted or conflicting custody fails closed instead of evicting unresolved authority or permitting replay.
 
 Any of the three manager proof reads can return `manager_custody_lost` in `error_code`. This reports lost native custody for the selected manager session and requires explicit fresh-session replacement. Clients retain the original operation and admission receipts for reconciliation and preserve the typed error when the daemon closes after sending its reply. An ordinary `unavailable` response reports missing evidence for that read.
+
+The owner-only `manager-interrupt` capability exposes `manager_interrupt` and
+its read-only `manager_interrupt_status`. The operation ID derives from the
+exact binding, native input ID and native turn ID. The daemon persists the
+request before provider I/O and reconciles a dispatched operation without
+resending it. `unknown` means the daemon found no record. `prepared` means
+the operation has not reached provider I/O. `pending` reports that the exact
+turn is still running. `uncertain` reports unavailable evidence. `interrupted` reports a retained
+terminal abort for the selected turn. `ended` reports another terminal
+disposition. These observations describe what happened to the turn and carry
+no attribution for who stopped it. A Claude broker acceptance or a Codex RPC
+acknowledgement alone cannot settle the receipt.
 
 Manager MCP configuration uses the trusted Swarm executable selected by the daemon, never a `PATH` lookup. Its argv is `voice mcp --socket <bridge_socket> --auth-file <auth_file> --conversation <conversation_id>`. Claude receives per-invocation JSON through `--mcp-config`, keeps ordinary hooks/settings/native tools and qualified native broker enrollment even when Discord is disabled, and requests unrestricted native permissions. Codex receives the corresponding stdio MCP config and full-access policy at the shim-owned app-server that actually owns tools. Its TUI attaches to that same backend and creates/resumes the native thread normally; no second thread is started. An unavailable backend or absent/mismatched attach handshake refuses manager standalone fallback. Native organization/provider policy still applies.
 

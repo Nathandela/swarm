@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/voice/openailive"
 )
 
@@ -34,26 +33,7 @@ type PTTCapture struct {
 }
 
 func (c *managerControl) beginPTT(id string) (PTTCapture, error) {
-	return c.beginScopedPTT(id, localPTTDevice)
-}
-
-func (c *managerControl) beginScopedPTT(id, source string) (PTTCapture, error) {
-	if c.controller == nil {
-		return PTTCapture{}, ErrStale
-	}
-	if c.preparePTT == nil {
-		return PTTCapture{}, ErrPTTUnavailable
-	}
-	if err := c.store.checkControllerBinding(c.binding); err != nil {
-		if errors.Is(err, managerproof.ErrQuarantined) {
-			return PTTCapture{}, ErrStale
-		}
-		return PTTCapture{}, err
-	}
-	u, err := c.controller.BeginUtterance(Utterance{
-		ID: id, DeviceID: source, VoiceSessionID: id, MediaEpoch: 1,
-	})
-	return PTTCapture{ID: u.ID, Phase: u.Phase, Admission: u.Admission}, err
+	return c.beginCapture(id, localPTTDevice, "", "")
 }
 
 func (c *managerControl) receivePTT(r *http.Request) (Admission, error) {
@@ -86,10 +66,10 @@ func (c *managerControl) receivePTT(r *http.Request) (Admission, error) {
 		return Admission{}, err
 	}
 
-	return c.finalizeScopedPTT(r.Context(), id, localPTTDevice, pcm, nil, nil)
+	return c.finalizeScopedPTT(r.Context(), id, localPTTDevice, "", pcm, nil, nil)
 }
 
-func (c *managerControl) finalizeScopedPTT(parent context.Context, id, source string, pcm []byte, claimFence, commitFence func(func() error) error) (Admission, error) {
+func (c *managerControl) finalizeScopedPTT(parent context.Context, id, source, session string, pcm []byte, claimFence, commitFence func(func() error) error) (Admission, error) {
 	var transcribe pttTranscriber
 	if c.preparePTT != nil {
 		transcribe, _ = c.preparePTT()
@@ -97,7 +77,9 @@ func (c *managerControl) finalizeScopedPTT(parent context.Context, id, source st
 	digest := hashBytes(pcm)
 	var receipt Admission
 	claim := func() (err error) {
-		receipt, err = c.store.claimPTT(parent, c.binding, id, source, digest, transcribe != nil)
+		c.capture.mu.Lock()
+		defer c.capture.mu.Unlock()
+		receipt, err = c.store.claimPTT(parent, c.binding, id, source, digest, transcribe != nil, c.capture.matchesLocked(id, source, session))
 		return err
 	}
 	var err error
@@ -109,6 +91,7 @@ func (c *managerControl) finalizeScopedPTT(parent context.Context, id, source st
 	if err != nil || receipt.Sequence != 0 {
 		return receipt, err
 	}
+	defer c.capture.release(id, source, session)
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -119,6 +102,11 @@ func (c *managerControl) finalizeScopedPTT(parent context.Context, id, source st
 		return Admission{}, ErrPTTUnconfirmed
 	}
 	commit := func() error {
+		c.capture.mu.Lock()
+		defer c.capture.mu.Unlock()
+		if !c.capture.matchesLocked(id, source, session) {
+			return ErrStale
+		}
 		var err error
 		receipt, err = c.store.commitPTT(ctx, c.binding, id, source, digest, text)
 		if err != nil {
@@ -163,7 +151,7 @@ func pttUtterance(st *State, b ManagerBinding, id, source string) (Utterance, er
 }
 
 // claimPTT commits the digest and in-flight state before any provider request.
-func (s *Store) claimPTT(ctx context.Context, b ManagerBinding, id, source, digest string, ready bool) (Admission, error) {
+func (s *Store) claimPTT(ctx context.Context, b ManagerBinding, id, source, digest string, ready, ownsLease bool) (Admission, error) {
 	var result Admission
 	err := s.update(func(st *State) error {
 		u, err := pttUtterance(st, b, id, source)
@@ -183,6 +171,9 @@ func (s *Store) claimPTT(ctx context.Context, b ManagerBinding, id, source, dige
 		}
 		if u.Phase != "capturing" || u.AudioHash != "" {
 			return ErrPTTUnconfirmed
+		}
+		if !ownsLease || u.MediaEpoch != b.Generation {
+			return ErrStale
 		}
 		if !ready {
 			return ErrPTTUnavailable

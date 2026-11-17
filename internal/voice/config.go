@@ -20,19 +20,20 @@ const maxConfigBytes = 16 << 10
 
 // Config contains only settings; the speech key is kept in a separate private file.
 type Config struct {
-	Version        int    `json:"version"`
-	PlaceID        string `json:"place_id"`
-	Name           string `json:"name"`
-	Provider       string `json:"provider"`
-	ConversationID string `json:"conversation_id"`
-	WorkDir        string `json:"work_dir"`
-	Model          string `json:"model,omitempty"`
-	DaemonSocket   string `json:"daemon_socket"`
-	Region         string `json:"region,omitempty"`
-	Language       string `json:"language"`
-	VoiceID        string `json:"voice_id"`
-	Mode           string `json:"mode"`
-	DeviceListen   string `json:"device_listen,omitempty"`
+	Version              int    `json:"version"`
+	PlaceID              string `json:"place_id"`
+	Name                 string `json:"name"`
+	Provider             string `json:"provider"`
+	ConversationID       string `json:"conversation_id"`
+	WorkDir              string `json:"work_dir"`
+	Model                string `json:"model,omitempty"`
+	DaemonSocket         string `json:"daemon_socket"`
+	Region               string `json:"region,omitempty"`
+	Language             string `json:"language"`
+	VoiceID              string `json:"voice_id"`
+	Mode                 string `json:"mode"`
+	DeviceListen         string `json:"device_listen,omitempty"`
+	IsolatedConversation bool   `json:"isolated_conversation,omitempty"`
 }
 
 func (c Config) Validate() error {
@@ -118,7 +119,7 @@ func readConfig(dir string) (Config, error) {
 }
 
 func validateConfigJSON(raw []byte) error {
-	return validateObjectMembers(raw, "version", "place_id", "name", "provider", "conversation_id", "work_dir", "model", "daemon_socket", "region", "language", "voice_id", "mode", "device_listen")
+	return validateObjectMembers(raw, "version", "place_id", "name", "provider", "conversation_id", "work_dir", "model", "daemon_socket", "region", "language", "voice_id", "mode", "device_listen", "isolated_conversation")
 }
 
 func validateObjectMembers(raw []byte, allowed ...string) error {

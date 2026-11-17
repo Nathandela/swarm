@@ -30,6 +30,7 @@ func (m *fixtureManager) SubmitText(_ context.Context, id, text string) (voice.A
 	m.ids = append(m.ids, id)
 	return voice.Admission{Sequence: 1, InputText: text}, nil
 }
+func (*fixtureManager) EndPTT(context.Context, string) error { return nil }
 func (*fixtureManager) BeginPTT(_ context.Context, id string) (voice.PTTCapture, error) {
 	return voice.PTTCapture{ID: id, Phase: "capturing"}, nil
 }

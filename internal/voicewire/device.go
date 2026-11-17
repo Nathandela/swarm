@@ -55,10 +55,16 @@ type DeviceText struct {
 }
 
 type DeviceStatus struct {
-	PlaceID        string `json:"place_id"`
-	ConversationID string `json:"conversation_id"`
-	Provider       string `json:"provider"`
-	Ready          bool   `json:"ready"`
+	Capture           string `json:"capture,omitempty"`
+	PlaceID           string `json:"place_id"`
+	ConversationID    string `json:"conversation_id"`
+	Provider          string `json:"provider"`
+	Ready             bool   `json:"ready"`
+	Generation        uint64 `json:"generation"`
+	SchedulerPaused   bool   `json:"scheduler_paused,omitempty"`
+	CustodyLost       bool   `json:"custody_lost,omitempty"`
+	AdmissionSequence uint64 `json:"admission_sequence,omitempty"`
+	AdmissionPhase    string `json:"admission_phase,omitempty"`
 }
 
 type DeviceAdmission struct {
@@ -69,6 +75,11 @@ type DeviceAdmission struct {
 
 const MaxDevicePCMBytes = 24_000 * 2 * 120
 
+type DeviceCaptureIntent struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Version   int    `json:"version"`
+}
 type DeviceCapture struct {
 	ID        string `json:"id"`
 	Phase     string `json:"phase"`
@@ -93,4 +104,13 @@ type DevicePublicationQuery struct {
 }
 
 // DeviceFinalizeAction binds the stable utterance ID as well as the signed PCM body.
-func DeviceFinalizeAction(id string) string { return "ptt/finalize:" + id }
+func DeviceFinalizeAction(id, session string) string {
+	return "ptt/finalize:" + session + ":" + id
+}
+
+const MaxPreviewPCMBytes = 24_000 * 2 * 6
+
+type DevicePreviewRequest struct {
+	UtteranceID   string `json:"utterance_id"`
+	PublicationID string `json:"publication_id"`
+}

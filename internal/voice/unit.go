@@ -47,7 +47,7 @@ func RenderUnit(goos, binary, stateDir, logPath string) (string, error) {
 			"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"+
 			"<plist version=\"1.0\"><dict>\n"+
 			"<key>Label</key><string>com.swarm.voice</string>\n"+
-			"<key>ProgramArguments</key><array><string>%s</string><string>voice</string><string>serve</string><string>--state-dir</string><string>%s</string></array>\n"+
+			"<key>ProgramArguments</key><array><string>%s</string><string>voice</string><string>serve</string><string>--unattended</string><string>--state-dir</string><string>%s</string></array>\n"+
 			"<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>AbandonProcessGroup</key><true/><key>ThrottleInterval</key><integer>10</integer>\n"+
 			"<key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string>\n"+
 			"</dict></plist>\n", escape(binary), escape(stateDir), escape(logPath), escape(logPath)), nil
@@ -66,7 +66,7 @@ func RenderUnit(goos, binary, stateDir, logPath string) (string, error) {
 		}
 		log := strings.ReplaceAll(logPath, "%", "%%")
 		// The leading colon disables systemd's $ expansion for caller-provided paths.
-		return fmt.Sprintf("[Unit]\nDescription=Swarm Voice\nStartLimitIntervalSec=0\n[Service]\nExecStart=:%s voice serve --state-dir %s\nRestart=always\nKillMode=process\nRestartSec=10\nStandardOutput=append:%s\nStandardError=append:%s\n[Install]\nWantedBy=default.target\n", quote(binary), quote(stateDir), log, log), nil
+		return fmt.Sprintf("[Unit]\nDescription=Swarm Voice\nStartLimitIntervalSec=0\n[Service]\nExecStart=:%s voice serve --unattended --state-dir %s\nRestart=always\nKillMode=process\nRestartSec=10\nStandardOutput=append:%s\nStandardError=append:%s\n[Install]\nWantedBy=default.target\n", quote(binary), quote(stateDir), log, log), nil
 	default:
 		return "", errors.New("voice: unsupported service platform")
 	}

@@ -234,7 +234,7 @@ func (f *deviceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		action = voicewire.DeviceFinalizeAction(utterance)
+		action = voicewire.DeviceFinalizeAction(utterance, r.Header.Get("Swarm-Capture-Session"))
 	case "enroll":
 		if decoder.Decode(&proof) != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -262,17 +262,29 @@ func (f *deviceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "enroll":
 		_ = encode.Encode(f.grant)
-	case "status":
+	case "session":
 		if f.statusFailure != 0 {
 			w.WriteHeader(f.statusFailure)
 			return
 		}
-		_ = encode.Encode(voicewire.DeviceStatus{PlaceID: f.grant.PlaceID, ConversationID: "actual-place", Provider: "codex", Ready: true})
+		msg, err := voicewire.DecodeClientMessage(body)
+		if err != nil || !strings.HasPrefix(msg.SessionID, f.grant.DeviceID+".") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		cursor := voicewire.Cursor{StreamID: "fixture", Sequence: 1}
+		page := voicewire.DeviceStatusPage{Version: 1, Head: cursor}
+		if msg.After == nil || *msg.After != cursor {
+			data, _ := json.Marshal(voicewire.DeviceStatus{PlaceID: f.grant.PlaceID, ConversationID: "actual-place", Provider: "codex", Ready: true, Generation: 1})
+			page.Reset = true
+			page.Events = []voicewire.ServerEvent{{Type: "snapshot", SessionID: msg.SessionID, Cursor: cursor, Data: data}}
+		}
+		_ = encode.Encode(page)
 	case "ptt/begin":
 		var msg voicewire.DeviceText
 		_ = json.Unmarshal(body, &msg)
 		_ = encode.Encode(voicewire.DeviceCapture{ID: msg.ID, Phase: "capturing"})
-	case voicewire.DeviceFinalizeAction(utterance):
+	case voicewire.DeviceFinalizeAction(utterance, r.Header.Get("Swarm-Capture-Session")):
 		f.admitted[utterance] = "PTT text"
 		_ = encode.Encode(voicewire.DeviceAdmission{ID: utterance, Sequence: 2, Phase: "admitted"})
 	case "text", "receipt":
@@ -300,6 +312,16 @@ func (f *deviceFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			page.Text = []byte("Observed worker result")
 		}
 		_ = encode.Encode(page)
+	case "preview":
+		var request voicewire.DevicePreviewRequest
+		if json.Unmarshal(body, &request) != nil || request.PublicationID != "output" ||
+			f.admitted[request.UtteranceID] == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte{0, 4, 0, 7})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -414,8 +436,8 @@ func TestOpenSSHDesktopPanelThroughKnownJump(t *testing.T) {
 		return raw
 	}
 	raw := request(http.MethodGet, "status", "", 200)
-	if !bytes.Contains(raw, []byte("actual-place")) || !bytes.Contains(raw, []byte(`"preview_unavailable":true`)) {
-		t.Fatalf("panel status omitted exact signed place or media limit: %s", raw)
+	if !bytes.Contains(raw, []byte("actual-place")) || bytes.Contains(raw, []byte(`"preview_unavailable":true`)) {
+		t.Fatalf("panel status omitted exact signed place or hid signed preview: %s", raw)
 	}
 	const id = "00112233-4455-6677-8899-aabbccddeeff"
 	const textBody = `{"id":"` + id + `","text":"Literal text; no SSH command"}`
@@ -427,6 +449,10 @@ func TestOpenSSHDesktopPanelThroughKnownJump(t *testing.T) {
 	if raw = request(http.MethodPost, "publications", `{"id":"`+id+`"}`, 200); !bytes.Contains(raw, []byte("Observed worker result")) {
 		t.Fatalf("missing publication: %s", raw)
 	}
+	if raw = request(http.MethodPost, "read-aloud", `{"id":"`+id+`","publication_id":"output"}`, 200); !bytes.Equal(raw, []byte{0, 4, 0, 7}) {
+		t.Fatal("signed desktop preview did not return renderable PCM")
+	}
+	request(http.MethodPost, "read-aloud", `{"id":"`+id+`","publication_id":"other"}`, 404)
 	const pttID = "00112233-4455-6677-8899-aabbccddeeee"
 	request(http.MethodPost, "ptt/begin", `{"id":"`+pttID+`"}`, 200)
 	ptt, err := http.NewRequestWithContext(ctx, http.MethodPost, origin+"/api/ptt/finalize", bytes.NewReader([]byte{1, 2, 3, 4}))

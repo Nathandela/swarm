@@ -8,7 +8,7 @@ This record concerns the development branch based on the OpenAI speech migration
 |---|---|---|
 | Hosted Codex 0.167.0 | A real manager read the local roster and published “Purple umbrella verified.” After controller restart, a retry returned the original native turn and one publication. | Dedicated local daemon, temporary workspace, native account. This run included diagnostic logging of proof stages. |
 | Hosted worker launch | The ordinary production binary created a disposable Codex worker. The manager published “Worker launch receipt verified.” After restart and retry the roster held one probe worker, and the manager returned the original turn and publication. | Proves actual creation and receipt recovery. Worker task completion requires its own observed result. |
-| Push-to-talk | GPT-Transcribe turned synthetic speech into a finalized instruction for the real Codex manager. Its published reply was “purple umbrella verified.” | Explicit admission. Live caption fragments cannot schedule a worker. Generated audio and physical playback are separate observations. |
+| Push-to-talk | The production binary received synthetic 24 kHz speech, finalized it with GPT-Transcribe, obtained the native Codex publication “purple umbrella verified.” and returned 216,000 bytes of non-silent PCM through GPT-Live Read aloud. Reconnecting and repeating the same audio ID recovered the same native turn and exactly one publication. | The returned clip was 4.5 seconds including silence. This checks generated audio independently of loudspeaker or human-heard playback. GPT-Live may paraphrase the displayed text. Live caption fragments cannot schedule a worker. |
 | Claude Code | Installed 2.1.319 and 2.1.326 both passed isolated native provenance, main-turn binding, interruption, terminal receipt, manual steering, permission prompt and failure fixtures. The 2.1.326 executable SHA-256 was `e214ad76dcc0e846b03be28ed1c2734aacd4e27acb527cb7f8a9e2bed644e837`. | Hosted Claude reported an expired login. A fresh interactive login shell outside the sandbox also reported that its OAuth session could not be refreshed. Fixture and hosted-account results are tracked separately. |
 | Browser | Real Chromium rendered the panel and exercised an exact selected publication, playback progress, Stop, binding change and reload with synthetic PCM. | Local loopback, scoped panel token. Physical microphone, speakers and acoustic echo remain device gates. |
 | Desktop SSH | Installed OpenSSH used generated host, jump and client keys to reach a separate loopback SSH server. The signed client enrolled, submitted text and audio, reconciled receipts/publications and rejected host-key replacement. | The transport uses the real OpenSSH binary. A genuine off-machine network/human trial remains open. |
@@ -30,3 +30,26 @@ The device fixture runs a real SSH direct-tcpip channel to a loopback HTTP servi
 The app exposes opt-in setup and explicit recording, protected device-grant storage and a user-started microphone foreground service. The mobile API and Android gate tests ran against a Go-built AAR. Kotlin/Robolectric tested setup and service lifecycle. The Android setup requirements, supported controls and physical-device limits are in the [handset guide](../../../android/voice-device.md).
 
 The host currently has Apple Command Line Tools without a full iOS SDK. Signed iPhone builds, real lock-screen recording, interruptions, acoustic latency and the multi-hour soak still require their target environments. A physical Android handset was absent during the initial inventory. The owner requested removal of the temporary OpenAI staging file only after the entire manager ships.
+
+
+## Scheduler cost
+
+An idle controller originally deep-copied its ledger twice a second. The store already performs copy-on-write publication of committed tables. Internal scheduler reads now borrow those immutable tables. External snapshots remain detached copies. A race test checks that a reader holding the previous committed state can see neither the next capture update nor a partially applied transaction.
+
+The existing `BenchmarkControllerIdleTick` was run on the same Apple M1 with two ten-iteration samples at each load. At 10,000 records the baseline allocated about 3.08 MB and 30,120 objects per tick. After the change it allocated about 7.5 KB and 82 objects. Baseline wall time was 2.8–3.3 ms per tick and the new samples measured 0.20–0.23 ms. These are local fixture measurements, independent of provider latency.
+
+
+## Follow-up controls
+
+The owner can inspect a specific active manager turn and request interruption using its saved binding, input and native turn IDs. The deterministic operation survives a lost reply. A generic native acknowledgement stays pending until retained terminal evidence confirms interruption of that turn. Ordinary worker interrupt capability still depends on an adapter offering an exact, durable owner operation.
+
+Signed device status uses a device-scoped replay stream. Resume validates the version and cursor, and a gap returns a scoped snapshot. The microphone lease admits one capture across devices. Focused tests covered explicit takeover while transcription was running, revocation, End, conflicting audio, and same-ID receipt recovery. They also exercised signed per-device playback authorization on the real loopback SSH transport with a fixture provider. Clip bytes, playback-head progress, and a human hearing intelligible speech are three separate observations.
+
+The Android app includes explicit Read aloud and local Stop. The preview targets an exact publication, uses mono 24 kHz AudioTrack output and observes focus, route, binding and activity changes. It exposes playback-head progress. Both Kotlin and Go fixture tests were used. The initial inventory found no attached handset and no installed emulator system image.
+
+
+## Apple component and remaining release work
+
+The Apple package builds on macOS with Swift 5.10. Its checks exercised separate CryptoKit signers and profile/grant behavior. The Swift client bridge typechecked against Objective-C headers generated from the actual gomobile facade. The XCFramework preflight reported missing Xcode, iPhoneOS and iPhoneSimulator SDKs. A signed iOS application, physical lock-screen audio and distribution remain open. [Apple build and custody notes](../../../ios/README.md)
+
+The scope of this integration is explicit push-to-talk and user-requested playback. Continuous duplex manager delegation, physically measured interruption and latency, comparison of identifier fidelity, both native accounts on every route, and the release soak remain qualification or implementation work. The standalone GPT-Live conversation command still has its own speech-only semantics.

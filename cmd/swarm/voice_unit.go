@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/voice"
 )
 
@@ -54,7 +56,13 @@ func dispatchVoiceUnit(command string, args []string, stdout, stderr io.Writer) 
 	}
 	home, err := os.UserHomeDir()
 	if err == nil {
-		err = manageVoiceUnit(command, runtime.GOOS, home, cc.DaemonBin, filepath.Clean(cc.StateDir), runVoiceUnit)
+		cc.StateDir = filepath.Clean(cc.StateDir)
+		err = manageVoiceUnit(command, runtime.GOOS, home, cc.DaemonBin, cc.StateDir, runVoiceUnit, func(cfg voice.Config) error {
+			if testing.Testing() {
+				return errors.New("voice: refusing a real supervisor start inside a test binary")
+			}
+			return ensureVoiceDaemon(cc, cfg, false, daemon.Dial, daemon.EnsureDaemon)
+		})
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
@@ -68,7 +76,7 @@ func dispatchVoiceUnit(command string, args []string, stdout, stderr io.Writer) 
 	return 0
 }
 
-func manageVoiceUnit(command, goos, home, binary, stateDir string, run voiceUnitRunner) error {
+func manageVoiceUnit(command, goos, home, binary, stateDir string, run voiceUnitRunner, prepare func(voice.Config) error) error {
 	start := command == "start"
 	path, err := voice.UnitPath(goos, home)
 	if err != nil {
@@ -78,8 +86,10 @@ func manageVoiceUnit(command, goos, home, binary, stateDir string, run voiceUnit
 		return errors.New("voice: invalid base state directory")
 	}
 	dir := filepath.Join(stateDir, "voice")
+	var config voice.Config
 	if start {
-		if _, err := voice.LoadConfig(dir); err != nil {
+		config, err = voice.LoadConfig(dir)
+		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return errors.New("voice: manager setup is missing; run swarm voice setup --manager codex (or claude) first")
 			}
@@ -170,6 +180,11 @@ func manageVoiceUnit(command, goos, home, binary, stateDir string, run voiceUnit
 	if err := log.Close(); err != nil {
 		return err
 	}
+	if prepare != nil {
+		if err := prepare(config); err != nil {
+			return err
+		}
+	}
 	if newUnit {
 		if err := writeVoiceUnit(path, body); err != nil {
 			return err
@@ -188,6 +203,31 @@ func manageVoiceUnit(command, goos, home, binary, stateDir string, run voiceUnit
 		return run("systemctl", "--user", "enable", "--now", voiceLinuxUnit)
 	}
 	return errors.New("voice: unsupported service platform")
+}
+
+func ensureVoiceDaemon(cc daemon.ClientConfig, cfg voice.Config, unattended bool, dial func(string, int) (net.Conn, error), ensure func(daemon.ClientConfig) (net.Conn, error)) error {
+	cc.SocketPath = cfg.DaemonSocket
+	cc.LockPath = filepath.Join(cc.StateDir, "daemon.lock")
+	cc.LogPath = filepath.Join(cc.StateDir, "daemon.log")
+	if unattended {
+		conn, err := dial(cc.SocketPath, daemon.ProtocolVersion)
+		if err == nil {
+			return conn.Close()
+		}
+		if errors.Is(err, daemon.ErrVersionSkew) {
+			return err
+		}
+		saved, err := daemon.LoadSavedEnv(cc.StateDir)
+		if err != nil || len(saved) == 0 {
+			return errors.New("voice: no saved supervisor environment; run swarm voice start from your shell")
+		}
+		cc.Env = saved
+	}
+	conn, err := ensure(cc)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func runVoiceUnit(name string, args ...string) error {
@@ -301,6 +341,31 @@ func syncVoiceUnitDir(path string) error {
 	}
 	defer func() { _ = dir.Close() }()
 	return dir.Sync()
+}
+
+func requireVoiceUnitStopped(stateDir string) error {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path, err := voice.UnitPath(runtime.GOOS, home)
+	if err != nil {
+		return err
+	}
+	installed, err := readVoiceUnit(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if bytes.HasSuffix(installed, []byte(voiceUnitMarker(runtime.GOOS, stateDir))) {
+		return errors.New("voice: run swarm voice stop before switching the installed service")
+	}
+	return nil
 }
 
 func voiceUnitMarker(goos, stateDir string) string {

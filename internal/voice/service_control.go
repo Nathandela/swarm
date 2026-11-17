@@ -26,6 +26,8 @@ type ManagerStatus struct {
 	SchedulerPaused bool           `json:"scheduler_paused"`
 	ExternalInput   uint64         `json:"external_input"`
 	CustodyLost     bool           `json:"custody_lost"`
+	NativeInputID   string         `json:"native_input_id,omitempty"`
+	NativeTurnID    string         `json:"native_turn_id,omitempty"`
 	Attention       string         `json:"attention,omitempty"`
 }
 
@@ -53,8 +55,16 @@ func (c *managerControl) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err = readManagerControlRequest(r, &req); err == nil {
 			data, err = c.beginPTT(req.ID)
 		}
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/ptt/end":
+		var req managerControlRequest
+		if err = readManagerControlRequest(r, &req); err == nil {
+			err = c.capture.end(req.ID, localPTTDevice, "")
+			data = struct{}{}
+		}
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/ptt/finalize":
 		data, err = c.receivePTT(r)
+	case strings.HasPrefix(r.URL.Path, "/v1/capture/"):
+		data, err = c.ownerCaptureAction(r)
 	case strings.HasPrefix(r.URL.Path, "/v1/devices/"):
 		data, err = c.ownerDeviceAction(r)
 	case strings.HasPrefix(r.URL.Path, "/v1/recovery/"):
@@ -125,7 +135,7 @@ func readManagerControlRequest(r *http.Request, req *managerControlRequest) erro
 }
 
 func (c *managerControl) status() (ManagerStatus, error) {
-	state, err := c.store.Snapshot()
+	state, err := c.store.readView()
 	if err != nil {
 		return ManagerStatus{}, err
 	}
@@ -137,10 +147,11 @@ func (c *managerControl) status() (ManagerStatus, error) {
 	if attention == "" {
 		attention = c.journalAttention
 	}
+	inputID, turnID := activeManagerInterruptTarget(state, binding)
 	return ManagerStatus{
 		Ready:   c.controller != nil && !active.CustodyLost && state.CurrentConversation == binding.ConversationID,
 		Binding: binding, SchedulerPaused: active.SchedulerPaused, ExternalInput: active.ExternalInput,
-		CustodyLost: active.CustodyLost, Attention: attention,
+		CustodyLost: active.CustodyLost, Attention: attention, NativeInputID: inputID, NativeTurnID: turnID,
 	}, nil
 }
 
@@ -175,7 +186,7 @@ func (c *managerControl) submit(req managerControlRequest) (Admission, error) {
 }
 
 func (c *managerControl) receipt(id string) (Admission, State, error) {
-	state, err := c.store.Snapshot()
+	state, err := c.store.readView()
 	if err != nil {
 		return Admission{}, State{}, err
 	}
@@ -211,6 +222,8 @@ func managerControlErrorStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, ErrCaptureBusy):
+		return http.StatusTooManyRequests
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict
 	case errors.Is(err, ErrExpired):
@@ -386,6 +399,8 @@ func (c *ManagerClient) perform(req *http.Request, result any) error {
 		return ErrInvalid
 	case http.StatusNotFound:
 		return ErrNotFound
+	case http.StatusTooManyRequests:
+		return ErrCaptureBusy
 	case http.StatusConflict:
 		return ErrConflict
 	case http.StatusGone:

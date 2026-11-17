@@ -173,6 +173,12 @@ func TestVoiceDeviceEndpointOverPinnedSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if status, err := other.Status(ctx, otherGrant); err != nil || status.AdmissionSequence != 0 {
+		t.Fatalf("another device received the first admission: %+v (%v)", status, err)
+	}
+	if status, err := client.Status(ctx, grant); err != nil || status.AdmissionSequence != first.Sequence || status.Generation == 0 {
+		t.Fatalf("own status replay missed durable admission: %+v (%v)", status, err)
+	}
 	if _, err := other.Receipt(ctx, otherGrant, "same-id"); err == nil {
 		t.Fatal("second device saw first device's receipt")
 	}
@@ -202,10 +208,47 @@ func TestVoiceDeviceEndpointOverPinnedSSH(t *testing.T) {
 	}}
 	defer transport.CloseIdleConnections()
 	raw := &http.Client{Transport: transport}
+	var versionChallenge voicewire.DeviceChallenge
+	if code := postDeviceFixture(t, ctx, raw, "/v1/device/challenge", grant, &versionChallenge); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	wrongMajor, _ := json.Marshal(voicewire.ClientMessage{Type: voicewire.TypeHandshake, Version: 2, Sequence: 1, SessionID: grant.DeviceID + ".00112233445566778899aabbccddeeff"})
+	versionProof := voicewire.DeviceProof{Credential: grant, Challenge: versionChallenge.Challenge}
+	versionProof.Signature = ed25519.Sign(private, voicewire.DeviceSignedBytes(versionProof, "session", wrongMajor))
+	if code := postDeviceFixture(t, ctx, raw, "/v1/device/session", voicewire.DeviceRequest{Proof: versionProof, Body: wrongMajor}, nil); code != http.StatusBadRequest {
+		t.Fatal("unsupported signed protocol accepted", code)
+	}
 	const audioID = "audio-stable"
 	audio := []byte{1, 2, 3, 4}
 	if capture, err := client.BeginPTT(ctx, grant, audioID); err != nil || capture.Phase != "capturing" {
 		t.Fatalf("device PTT begin = %+v, %v", capture, err)
+	}
+	lease, err := owner.Capture(ctx)
+	if err != nil || lease.ID == "" || lease.Source != "device:"+grant.DeviceID+":ptt" {
+		t.Fatalf("owner cannot inspect lease: %+v %v", lease, err)
+	}
+	if _, err := owner.BeginPTT(ctx, "owner-busy"); !errors.Is(err, ErrCaptureBusy) {
+		t.Fatalf("owner acquired without takeover: %v", err)
+	}
+	if _, err := other.BeginPTT(ctx, otherGrant, "other-busy"); err == nil {
+		t.Fatal("other device bypassed capture lease")
+	}
+	if st, err := other.Status(ctx, otherGrant); err != nil || st.Capture != "busy" {
+		t.Fatalf("passive status: %+v, %v", st, err)
+	}
+	passive, err := voiceclient.NewDeviceClient(ctx, sshCfg, sshKey, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer passive.Close()
+	if _, err := passive.FinalizePTT(ctx, grant, audioID, audio); err == nil || providerCalls.Load() != 0 {
+		t.Fatal("passive same-grant transport submitted audio", err)
+	}
+	if err := passive.EndPTT(ctx, grant, audioID); err == nil {
+		t.Fatal("passive same-grant transport ended capture")
+	}
+	if _, err := other.SubmitText(ctx, otherGrant, "while-speaking", "text remains independent"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := client.SubmitText(ctx, grant, audioID, "text cannot overwrite capture"); err == nil {
 		t.Fatal("device text overwrote an existing PTT capture")
@@ -222,6 +265,42 @@ func TestVoiceDeviceEndpointOverPinnedSSH(t *testing.T) {
 	}
 	if _, err := other.Receipt(ctx, otherGrant, audioID); err == nil {
 		t.Fatal("a different device saw the PTT receipt")
+	}
+	if _, err := passive.BeginPTT(ctx, grant, "discarded"); err != nil {
+		t.Fatal(err)
+	}
+	if err := passive.EndPTT(ctx, grant, "discarded"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := passive.BeginPTT(ctx, grant, "close-discards"); err != nil {
+		t.Fatal(err)
+	}
+	passive.Close()
+	if current, err := owner.Capture(ctx); err != nil || current.ID != "" {
+		t.Fatalf("close retained capture: %+v %v", current, err)
+	}
+	if _, err := other.BeginPTT(ctx, otherGrant, "owner-takeover"); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := owner.Capture(ctx)
+	if err != nil || previous.ID == "" {
+		t.Fatal("missing host lease", err)
+	}
+	if _, err := owner.TakeCapture(ctx, previous.ID, "local-takeover"); err != nil {
+		t.Fatal("owner takeover", err)
+	}
+	if err := owner.EndCapture(ctx, previous.ID); !errors.Is(err, ErrStale) {
+		t.Fatal("stale end released replacement", err)
+	}
+	if _, err := other.FinalizePTT(ctx, otherGrant, "owner-takeover", audio); err == nil || providerCalls.Load() != 1 {
+		t.Fatal("superseded capture transmitted", err)
+	}
+	replacement, err := owner.Capture(ctx)
+	if err != nil || replacement.ID == previous.ID || replacement.Source != localPTTDevice {
+		t.Fatal("missing local takeover", err)
+	}
+	if err := owner.EndCapture(ctx, replacement.ID); err != nil {
+		t.Fatal("end replacement", err)
 	}
 	if _, err := client.BeginPTT(ctx, grant, "blocked-audio"); err != nil {
 		t.Fatal(err)
@@ -442,7 +521,7 @@ func postDeviceAudioFixture(t *testing.T, ctx context.Context, client *http.Clie
 		t.Fatalf("PTT proof challenge status = %d", code)
 	}
 	proof := voicewire.DeviceProof{Credential: credential, Challenge: challenge.Challenge}
-	proof.Signature = ed25519.Sign(signer, voicewire.DeviceSignedBytes(proof, voicewire.DeviceFinalizeAction(id), signed))
+	proof.Signature = ed25519.Sign(signer, voicewire.DeviceSignedBytes(proof, voicewire.DeviceFinalizeAction(id, "00112233445566778899aabbccddeeff"), signed))
 	raw, err := json.Marshal(proof)
 	if err != nil {
 		t.Fatal(err)
@@ -453,6 +532,7 @@ func postDeviceAudioFixture(t *testing.T, ctx context.Context, client *http.Clie
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Swarm-Utterance-ID", id)
+	req.Header.Set("Swarm-Capture-Session", "00112233445566778899aabbccddeeff")
 	req.Header.Set("Swarm-Device-Proof", base64.RawURLEncoding.EncodeToString(raw))
 	response, err := client.Do(req)
 	if err != nil {

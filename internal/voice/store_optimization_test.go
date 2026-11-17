@@ -294,3 +294,64 @@ func TestStoreNativeGenerationIsRequiredAndImmutable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSchedulerReadViewSurvivesConcurrentTransactions(t *testing.T) {
+	s, b, _ := testStore(t)
+	mustBegin(t, s, b, "one")
+	st, err := s.readView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, e := s.FinalizeUtterance(b, "one", "finished"); done <- e }()
+	k := key(b.ConversationID, "one")
+	for i := 0; i < 20; i++ {
+		if st.Utterances[k].Phase != "capturing" {
+			t.Fatal("read view changed")
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.readView()
+	if err != nil || current.Utterances[k].Text != "finished" || st.Utterances[k].Phase != "capturing" {
+		t.Fatalf("prior/current capture not isolated: %v", err)
+	}
+}
+
+func TestBoundedReceiptMaintenancePreservesUnresolvedWork(t *testing.T) {
+	s, b, _ := testStore(t)
+	now := time.Now().UTC()
+	aged := now.Add(-8 * 24 * time.Hour)
+	err := s.update(func(st *State) error {
+		conv := st.Conversations[b.ConversationID]
+		conv.RetiredThrough = 3
+		conv.LastAdmission = 4
+		putRecord(st, "conversations", &st.Conversations, b.ConversationID, conv)
+		for seq := uint64(1); seq <= 4; seq++ {
+			a := Admission{ConversationID: b.ConversationID, Sequence: seq, SettledAt: aged}
+			if seq == 4 {
+				a.SettledAt = time.Time{}
+			}
+			putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, seq), a)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.compactReceipts(b, now, 2); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Snapshot()
+	if err != nil || len(st.Admissions) != 2 {
+		t.Fatalf("unexpected first pass: %d %v", len(st.Admissions), err)
+	}
+	if err = s.Compact(b, now); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Snapshot()
+	if err != nil || len(st.Admissions) != 1 || st.Admissions[admissionKey(b.ConversationID, 4)].Sequence != 4 || st.Conversations[b.ConversationID].RetiredThrough != 3 {
+		t.Fatal("cleanup crossed an unresolved admission or reset its floor", err)
+	}
+}

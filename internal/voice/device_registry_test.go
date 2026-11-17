@@ -13,7 +13,7 @@ import (
 func TestVoiceDeviceRegistryEnrollmentChallengeRevocation(t *testing.T) {
 	dir := privateServerDir(t)
 	now := time.Now
-	registry, err := openDeviceRegistry(dir, "place", now)
+	registry, err := openDeviceRegistry(dir, deviceRegistryFile, "place", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +53,25 @@ func TestVoiceDeviceRegistryEnrollmentChallengeRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	secondNonce, err := registry.challenge(grant)
+	if err != nil || secondNonce == challenge {
+		t.Fatal("concurrent grant challenge", err)
+	}
+	concurrent := voicewire.DeviceProof{Credential: grant, Challenge: secondNonce}
+	concurrent.Signature = ed25519.Sign(private, voicewire.DeviceSignedBytes(concurrent, "status", nil))
+	if err := registry.authorize(concurrent, "status", nil, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 	proof := voicewire.DeviceProof{Credential: grant, Challenge: challenge}
 	body := []byte("exact body")
+	proof.Signature = ed25519.Sign(private, voicewire.DeviceSignedBytes(proof, "status", nil))
+	if err := registry.authorize(proof, "status", nil, func(string) error { return nil }); err != nil {
+		t.Fatal("polling invalidated unfinished request", err)
+	}
+	proof.Challenge, err = registry.challenge(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
 	proof.Signature = ed25519.Sign(private, voicewire.DeviceSignedBytes(proof, "text", body))
 	calls := 0
 	action := func(_ string) error { calls++; return nil }
@@ -83,7 +100,7 @@ func TestVoiceDeviceRegistryEnrollmentChallengeRevocation(t *testing.T) {
 	if err := registry.authorize(proof, "text", body, action); !errors.Is(err, errDeviceDenied) || calls != 1 {
 		t.Fatalf("revoked signature retained authority: %v, calls=%d", err, calls)
 	}
-	registry, err = openDeviceRegistry(dir, "place", now)
+	registry, err = openDeviceRegistry(dir, deviceRegistryFile, "place", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +112,7 @@ func TestVoiceDeviceRegistryEnrollmentChallengeRevocation(t *testing.T) {
 func TestVoiceDeviceRegistryReferenceExpiresAtTenMinutes(t *testing.T) {
 	dir := privateServerDir(t)
 	at := time.Date(2031, time.January, 1, 12, 0, 0, 0, time.UTC)
-	registry, err := openDeviceRegistry(dir, "place", func() time.Time { return at })
+	registry, err := openDeviceRegistry(dir, deviceRegistryFile, "place", func() time.Time { return at })
 	if err != nil {
 		t.Fatal(err)
 	}

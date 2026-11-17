@@ -23,7 +23,7 @@ func validDeviceEndpoint(address string, allowZero bool) bool {
 }
 
 func (c *managerControl) startDeviceEndpoint(ctx context.Context, address string) (func(), error) {
-	if !validDeviceEndpoint(address, true) || c.devices == nil || c.controller == nil {
+	if !validDeviceEndpoint(address, true) || c.devices == nil {
 		return nil, ErrInvalid
 	}
 	var listen net.ListenConfig
@@ -82,9 +82,12 @@ func (c *managerControl) serveDevice(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	case "/v1/device/preview":
+		c.serveDevicePreview(w, r)
+		return
 	case "/v1/device/ptt/finalize":
 		data, err = c.deviceFinalize(r)
-	case "/v1/device/status", "/v1/device/text", "/v1/device/receipt", "/v1/device/publications", "/v1/device/ptt/begin":
+	case "/v1/device/session", "/v1/device/status", "/v1/device/text", "/v1/device/receipt", "/v1/device/publications", "/v1/device/ptt/begin", "/v1/device/ptt/end":
 		var request voicewire.DeviceRequest
 		if err = readDeviceJSON(r, &request, "proof", "body"); err != nil {
 			break
@@ -121,6 +124,9 @@ func readDeviceJSON(r *http.Request, output any, fields ...string) error {
 }
 
 func (c *managerControl) deviceAction(action, place, device string, body []byte) (any, error) {
+	if action == "session" {
+		return c.deviceStatusPage(device, place, body)
+	}
 	if action == "status" {
 		if len(body) != 0 {
 			return nil, ErrInvalid
@@ -145,6 +151,19 @@ func (c *managerControl) deviceAction(action, place, device string, body []byte)
 			Item: &voicewire.DevicePublication{ID: p.ID, Sequence: p.Sequence, Final: p.Final}, Text: []byte(p.Text),
 		}, nil
 	}
+	if action == "ptt/begin" || action == "ptt/end" {
+		var intent voicewire.DeviceCaptureIntent
+		if validateObjectMembers(body, "id", "session_id", "version") != nil || json.Unmarshal(body, &intent) != nil || !configText(intent.ID, 128) || !deviceHex(intent.SessionID, 16) || intent.Version != voicewire.ProtocolVersion {
+			return nil, ErrInvalid
+		}
+		source, keyID := deviceUtterance(device, intent.ID)
+		source += ":ptt"
+		if action == "ptt/end" {
+			return struct{}{}, c.capture.end(keyID, source, intent.SessionID)
+		}
+		captured, err := c.beginCapture(keyID, source, intent.SessionID, "")
+		return voicewire.DeviceCapture{ID: intent.ID, Phase: captured.Phase, Admission: captured.Admission}, err
+	}
 	var req voicewire.DeviceText
 	fields := []string{"id"}
 	if action == "text" {
@@ -154,13 +173,13 @@ func (c *managerControl) deviceAction(action, place, device string, body []byte)
 		return nil, ErrInvalid
 	}
 	source, keyID := deviceUtterance(device, req.ID)
-	if action == "ptt/begin" {
-		captured, err := c.beginScopedPTT(keyID, source+":ptt")
-		return voicewire.DeviceCapture{ID: req.ID, Phase: captured.Phase, Admission: captured.Admission}, err
-	}
+
 	var receipt Admission
 	var err error
 	if action == "text" {
+		if c.controller == nil {
+			return nil, ErrStale
+		}
 		if strings.TrimSpace(req.Text) == "" || len(req.Text) > MaxUtteranceBytes || !utf8.ValidString(req.Text) {
 			return nil, ErrInvalid
 		}
@@ -172,6 +191,9 @@ func (c *managerControl) deviceAction(action, place, device string, body []byte)
 			receipt, _, err = c.deviceReceipt(device, req.ID)
 		}
 		if err == nil {
+			if err := c.syncDeviceStatuses(); err != nil {
+				return nil, err
+			}
 			select {
 			case c.wake <- struct{}{}:
 			default:
@@ -204,6 +226,9 @@ func (c *managerControl) deviceReceipt(device, id string) (Admission, State, err
 
 func (c *managerControl) deviceFinalize(r *http.Request) (voicewire.DeviceAdmission, error) {
 	var empty voicewire.DeviceAdmission
+	if c.controller == nil {
+		return empty, ErrStale
+	}
 	ids, proofHeaders := r.Header.Values("Swarm-Utterance-ID"), r.Header.Values("Swarm-Device-Proof")
 	if len(ids) != 1 || !configText(ids[0], 128) || len(proofHeaders) != 1 ||
 		len(proofHeaders[0]) > 2048 || r.ContentLength > MaxPTTBytes {
@@ -217,6 +242,11 @@ func (c *managerControl) deviceFinalize(r *http.Request) (voicewire.DeviceAdmiss
 	if err := c.devices.commitIfGranted(proof.Credential, func() error { return nil }); err != nil {
 		return empty, err
 	}
+	sessions := r.Header.Values("Swarm-Capture-Session")
+	if len(sessions) != 1 || !deviceHex(sessions[0], 16) {
+		return empty, ErrInvalid
+	}
+	session := sessions[0]
 	id := ids[0]
 	source, keyID := deviceUtterance(proof.Credential.DeviceID, id)
 	select {
@@ -229,10 +259,15 @@ func (c *managerControl) deviceFinalize(r *http.Request) (voicewire.DeviceAdmiss
 	if err != nil || !validPTTAudio(pcm) {
 		return empty, ErrInvalid
 	}
-	receipt, err := c.finalizeScopedPTT(r.Context(), keyID, source+":ptt", pcm, func(claim func() error) error {
-		return c.devices.authorize(proof, voicewire.DeviceFinalizeAction(id), pcm, func(string) error { return claim() })
+	receipt, err := c.finalizeScopedPTT(r.Context(), keyID, source+":ptt", session, pcm, func(claim func() error) error {
+		return c.devices.authorize(proof, voicewire.DeviceFinalizeAction(id, session), pcm, func(string) error { return claim() })
 	}, func(commit func() error) error {
-		return c.devices.commitIfGranted(proof.Credential, commit)
+		return c.devices.commitIfGranted(proof.Credential, func() error {
+			if err := commit(); err != nil {
+				return err
+			}
+			return c.syncDeviceStatuses()
+		})
 	})
 	return voicewire.DeviceAdmission{ID: id, Sequence: receipt.Sequence, Phase: receipt.Phase}, err
 }
@@ -269,7 +304,18 @@ func (c *managerControl) ownerDeviceAction(r *http.Request) (any, error) {
 		if err := readDeviceJSON(r, &req, "device_id"); err != nil || !deviceHex(req.DeviceID, 16) {
 			return nil, ErrInvalid
 		}
-		return struct{}{}, c.devices.revoke(req.DeviceID)
+		if err := c.devices.revoke(req.DeviceID); err != nil {
+			return nil, err
+		}
+		c.capture.mu.Lock()
+		if c.capture.current.Source == "device:"+req.DeviceID+":ptt" {
+			c.capture.current = captureOwner{}
+		}
+		c.capture.mu.Unlock()
+		c.statusStreams.mu.Lock()
+		delete(c.statusStreams.devices, req.DeviceID)
+		c.statusStreams.mu.Unlock()
+		return struct{}{}, nil
 	}
 	return nil, ErrNotFound
 }

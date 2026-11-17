@@ -16,6 +16,7 @@ type managerRecoveryRequest struct {
 	ExternalInput *uint64         `json:"external_input,omitempty"`
 	Admission     uint64          `json:"admission,omitempty"`
 	OperationID   string          `json:"operation_id,omitempty"`
+	NativeInputID string          `json:"native_input_id,omitempty"`
 	NativeTurnID  string          `json:"native_turn_id,omitempty"`
 	RequestID     string          `json:"request_id,omitempty"`
 	RequestHash   string          `json:"request_hash,omitempty"`
@@ -43,6 +44,15 @@ func readManagerRecoveryRequest(r *http.Request, fields ...string) (managerRecov
 func (c *managerControl) recoveryAction(r *http.Request) (any, error) {
 	var fields []string
 	switch r.URL.Path {
+	case "/v1/recovery/interrupt", "/v1/recovery/interrupt-status":
+		if r.Method != http.MethodPost {
+			return nil, ErrNotFound
+		}
+		req, err := readManagerRecoveryRequest(r, "native_input_id", "native_turn_id")
+		if err != nil {
+			return nil, err
+		}
+		return c.interruptManager(r.Context(), req, r.URL.Path == "/v1/recovery/interrupt-status")
 	case "/v1/recovery/replacement":
 		if r.Method == http.MethodGet {
 			return c.replacementStatus()

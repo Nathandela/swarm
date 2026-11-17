@@ -26,6 +26,7 @@ type manager interface {
 	Status(context.Context) (voice.ManagerStatus, error)
 	SubmitText(context.Context, string, string) (voice.Admission, error)
 	BeginPTT(context.Context, string) (voice.PTTCapture, error)
+	EndPTT(context.Context, string) error
 	FinalizePTT(context.Context, string, []byte) (voice.Admission, error)
 	Receipt(context.Context, string) (voice.Admission, error)
 	Publications(context.Context, string) ([]voice.Publication, error)
@@ -166,6 +167,8 @@ func (p panel) api(w http.ResponseWriter, r *http.Request) {
 			status, label = 400, "invalid"
 		case errors.Is(err, voice.ErrNotFound):
 			status, label = 404, "not_found"
+		case errors.Is(err, voice.ErrCaptureBusy):
+			status, label = http.StatusTooManyRequests, "capture_busy"
 		case errors.Is(err, voice.ErrConflict):
 			status, label = 409, "conflict"
 		}
@@ -198,6 +201,8 @@ func (p panel) submit(w http.ResponseWriter, r *http.Request) (any, error) {
 	switch r.URL.Path {
 	case "/api/text":
 		return p.manager.SubmitText(r.Context(), req.ID, req.Text)
+	case "/api/ptt/end":
+		return struct{}{}, p.manager.EndPTT(r.Context(), req.ID)
 	case "/api/ptt/begin":
 		return p.manager.BeginPTT(r.Context(), req.ID)
 	case "/api/receipt":

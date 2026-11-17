@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -256,7 +257,7 @@ func (c *managerControl) progressReplacement(ctx context.Context) (bool, error) 
 		if err = r.checkRoster(c.binding, ""); err != nil {
 			return false, err
 		}
-		if _, err = managerBridgeCredential(r.dir, true); err != nil {
+		if _, err = managerBridgeCredential(r.dir, filepath.Base(r.refs.AuthFile), true); err != nil {
 			return false, err
 		}
 		if err = r.begin(intent); err != nil {

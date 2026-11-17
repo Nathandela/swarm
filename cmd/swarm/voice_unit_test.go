@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/voice"
 )
 
@@ -45,7 +47,7 @@ func TestVoiceUnitLifecycle(t *testing.T) {
 				return nil
 			}
 			for range 2 {
-				if err := manageVoiceUnit("start", goos, home, binary, state, run); err != nil {
+				if err := manageVoiceUnit("start", goos, home, binary, state, run, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -57,7 +59,7 @@ func TestVoiceUnitLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(body), state) || strings.Contains(string(body), "serve --state-dir \""+filepath.Join(state, "voice")+"\"") {
+			if !strings.Contains(string(body), state) || strings.Contains(string(body), "serve --unattended --state-dir \""+filepath.Join(state, "voice")+"\"") {
 				t.Fatalf("unit did not use the base state directory: %s", body)
 			}
 			log, err := os.Stat(filepath.Join(state, "voice", "service.log"))
@@ -66,7 +68,7 @@ func TestVoiceUnitLifecycle(t *testing.T) {
 			}
 			beforeRefusal := len(calls)
 			for _, command := range []string{"start", "stop"} {
-				if err := manageVoiceUnit(command, goos, home, binary, otherState, run); err == nil {
+				if err := manageVoiceUnit(command, goos, home, binary, otherState, run, nil); err == nil {
 					t.Fatalf("%s accepted a different state directory", command)
 				}
 			}
@@ -74,7 +76,7 @@ func TestVoiceUnitLifecycle(t *testing.T) {
 				t.Fatal("state mismatch reached the service manager")
 			}
 			for range 2 {
-				if err := manageVoiceUnit("stop", goos, home, binary, state, run); err != nil {
+				if err := manageVoiceUnit("stop", goos, home, binary, state, run, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -118,7 +120,7 @@ func TestVoiceUnitRejectsUnsafePathAndMissingConfig(t *testing.T) {
 		t.Error("unsafe or incomplete installation reached the system service manager")
 		return nil
 	}
-	if err := manageVoiceUnit("start", "linux", home, binary, state, run); err == nil || !strings.Contains(err.Error(), "swarm voice setup") {
+	if err := manageVoiceUnit("start", "linux", home, binary, state, run, nil); err == nil || !strings.Contains(err.Error(), "swarm voice setup") {
 		t.Fatalf("missing configuration error = %v", err)
 	}
 	configureVoiceUnitFixture(t, state)
@@ -137,7 +139,7 @@ func TestVoiceUnitRejectsUnsafePathAndMissingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, command := range []string{"start", "stop"} {
-		if err := manageVoiceUnit(command, "linux", home, binary, state, run); err == nil {
+		if err := manageVoiceUnit(command, "linux", home, binary, state, run, nil); err == nil {
 			t.Fatalf("%s accepted a symlink unit", command)
 		}
 	}
@@ -152,12 +154,12 @@ func TestVoiceUnitKeepsRegistrationAfterFailedStop(t *testing.T) {
 	binary := filepath.Join(home, "swarm")
 	configureVoiceUnitFixture(t, state)
 	available := func(string, ...string) error { return nil }
-	if err := manageVoiceUnit("start", "linux", home, binary, state, available); err != nil {
+	if err := manageVoiceUnit("start", "linux", home, binary, state, available, nil); err != nil {
 		t.Fatal(err)
 	}
 	domainFailure := errors.New("service manager unavailable")
 	failed := func(string, ...string) error { return domainFailure }
-	if err := manageVoiceUnit("stop", "linux", home, binary, state, failed); !errors.Is(err, domainFailure) {
+	if err := manageVoiceUnit("stop", "linux", home, binary, state, failed, nil); !errors.Is(err, domainFailure) {
 		t.Fatalf("stop error = %v", err)
 	}
 	unit, _ := voice.UnitPath("linux", home)
@@ -175,5 +177,108 @@ func configureVoiceUnitFixture(t *testing.T, state string) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVoiceUnitPreparesInteractiveDaemonOnlyAfterValidation(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	binary := filepath.Join(home, "swarm")
+	var order []string
+	run := func(_ string, args ...string) error {
+		order = append(order, args[1])
+		return nil
+	}
+	prepare := func(cfg voice.Config) error {
+		if cfg.DaemonSocket != filepath.Join(state, "daemon.sock") {
+			t.Fatalf("wrong daemon socket: %s", cfg.DaemonSocket)
+		}
+		order = append(order, "prepare")
+		return nil
+	}
+	if err := manageVoiceUnit("start", "linux", home, binary, state, run, prepare); err == nil || len(order) != 0 {
+		t.Fatalf("missing config reached preparations: %v %v", err, order)
+	}
+	configureVoiceUnitFixture(t, state)
+	path, err := voice.UnitPath("linux", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("unmanaged unit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manageVoiceUnit("start", "linux", home, binary, state, run, prepare); err == nil || len(order) != 0 {
+		t.Fatalf("conflicting unit reached preparations: %v %v", err, order)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := manageVoiceUnit("start", "linux", home, binary, state, run, prepare); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(order, []string{"prepare", "daemon-reload", "enable"}) {
+		t.Fatalf("unsafe startup order: %v", order)
+	}
+}
+
+func TestVoiceDaemonEnvironmentUsesSavedOwnerStateOnlyUnattended(t *testing.T) {
+	state := t.TempDir()
+	cc := daemon.ClientConfig{StateDir: state}
+	cfg := voice.Config{DaemonSocket: filepath.Join(state, "configured.sock")}
+	dials, starts := 0, 0
+	dial := func(socket string, _ int) (net.Conn, error) {
+		dials++
+		if socket != cfg.DaemonSocket {
+			t.Fatal("dial ignored configured manager socket")
+		}
+		return nil, os.ErrNotExist
+	}
+	var received daemon.ClientConfig
+	start := func(got daemon.ClientConfig) (net.Conn, error) {
+		starts++
+		received = got
+		conn, peer := net.Pipe()
+		_ = peer.Close()
+		return conn, nil
+	}
+	if err := ensureVoiceDaemon(cc, cfg, false, dial, start); err != nil || dials != 0 || starts != 1 || received.Env != nil {
+		t.Fatalf("interactive start did not inherit the owner shell: %v, dials=%d starts=%d", err, dials, starts)
+	}
+	if err := ensureVoiceDaemon(cc, cfg, true, dial, start); err == nil || starts != 1 {
+		t.Fatalf("unattended cold spawn did not refuse missing saved environment: %v", err)
+	}
+	saved := []string{"PATH=/fixture/native-cli:/usr/bin", "LANG=C"}
+	if err := os.WriteFile(daemon.SavedEnvPath(state), []byte(strings.Join(saved, "\n")+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureVoiceDaemon(cc, cfg, true, dial, start); err != nil || starts != 2 || !slices.Equal(received.Env, saved) {
+		t.Fatalf("unattended spawn did not use the exact saved environment: %v, starts=%d", err, starts)
+	}
+	if received.SocketPath != cfg.DaemonSocket || received.LockPath != filepath.Join(state, "daemon.lock") ||
+		received.LogPath != filepath.Join(state, "daemon.log") {
+		t.Fatalf("unattended spawn changed daemon custody: %+v", received)
+	}
+	alreadyRunning := func(string, int) (net.Conn, error) {
+		conn, peer := net.Pipe()
+		_ = peer.Close()
+		return conn, nil
+	}
+	if err := ensureVoiceDaemon(cc, cfg, true, alreadyRunning, start); err != nil || starts != 2 {
+		t.Fatalf("running daemon was restarted or treated as cold: %v, starts=%d", err, starts)
+	}
+}
+
+func TestVoiceSwitchCommandRequiresExactSelection(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if code := dispatchVoice([]string{"switch", "--help"}, &out, &stderr); code != 0 ||
+		!strings.Contains(stderr.String(), "-from") || !strings.Contains(stderr.String(), "-manager") {
+		t.Fatalf("switch help = %d, %q", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := dispatchVoice([]string{"switch", "--manager", "claude"}, &out, &stderr); code != misuseExit ||
+		!strings.Contains(stderr.String(), "--from") {
+		t.Fatalf("missing exact identity = %d, %q", code, stderr.String())
 	}
 }

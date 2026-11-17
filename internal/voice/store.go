@@ -606,19 +606,25 @@ func (s *Store) update(fn func(*State) error) error {
 
 var errNoStoreChange = fmt.Errorf("voice: unchanged transaction")
 
-func (s *Store) Snapshot() (State, error) {
+// readView returns the committed maps for read-only use inside the controller.
+// Transactions copy each affected table before modifying it.
+func (s *Store) readView() (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var st State
-	err := s.db.View(func(tx *bolt.Tx) error {
-		if err := s.load(tx); err != nil {
-			return err
-		}
-		st = cloneState(s.cached)
-		return nil
-	})
-	return st, err
+	if err := s.db.View(s.load); err != nil {
+		return State{}, err
+	}
+	return s.cached, nil
 }
+
+func (s *Store) Snapshot() (State, error) {
+	st, err := s.readView()
+	if err != nil {
+		return State{}, err
+	}
+	return cloneState(st), nil
+}
+
 func cloneState(st State) State {
 	st.Workers = maps.Clone(st.Workers)
 	st.Conversations = maps.Clone(st.Conversations)
@@ -1060,6 +1066,11 @@ func (s *Store) SettleAdmission(b ManagerBinding, seq uint64) error {
 // Compact removes seven-day settled receipts only behind the durable retirement floor.
 // Utterance ID tombstones stay bounded and prevent a compacted capture being re-executed.
 func (s *Store) Compact(b ManagerBinding, now time.Time) error {
+	return s.compactReceipts(b, now, MaxRecords)
+}
+
+// The service limits writes per pass so cleanup doesn't monopolize the same ledger used for admission.
+func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) error {
 	return s.update(func(st *State) error {
 		if err := checkBinding(st, b); err != nil {
 			return err
@@ -1067,19 +1078,42 @@ func (s *Store) Compact(b ManagerBinding, now time.Time) error {
 		cutoff := now.Add(-7 * 24 * time.Hour)
 		floor := st.Conversations[b.ConversationID].RetiredThrough
 		for k, a := range st.Actions {
-			if a.ConversationID == b.ConversationID && a.Admission <= floor && a.State == "settled" && !a.SettledAt.After(cutoff) {
+			if budget == 0 {
+				return nil
+			}
+			if a.ConversationID == b.ConversationID && a.Admission <= floor && a.State == "settled" && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
 				deleteRecord(st, "actions", &st.Actions, k)
+				budget--
 			}
 		}
 		for k, a := range st.Admissions {
+			if budget == 0 {
+				return nil
+			}
 			if a.ConversationID == b.ConversationID && a.Sequence <= floor && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
 				deleteRecord(st, "admissions", &st.Admissions, k)
+				budget--
+			}
+		}
+		for k, p := range st.Publications {
+			if budget == 0 {
+				return nil
+			}
+			if p.ConversationID == b.ConversationID && p.Admission > 0 && p.Admission <= floor {
+				if _, retained := st.Admissions[admissionKey(b.ConversationID, p.Admission)]; !retained {
+					deleteRecord(st, "publications", &st.Publications, k)
+					budget--
+				}
 			}
 		}
 		for k, u := range st.Utterances {
-			if u.ConversationID == b.ConversationID && u.Admission != 0 && u.Admission <= floor {
+			if budget == 0 {
+				return nil
+			}
+			if u.ConversationID == b.ConversationID && u.Admission != 0 && u.Admission <= floor && u.Text != "" {
 				u.Text = ""
 				putRecord(st, "utterances", &st.Utterances, k, u)
+				budget--
 			}
 		}
 		return nil

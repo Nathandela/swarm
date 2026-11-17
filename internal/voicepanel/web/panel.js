@@ -71,6 +71,7 @@ function forget(id) {
   options();
 }
 function discardUnsent(id) {
+  if (id) void api("ptt/end", {id}).catch(() => {});
   const item = records.find((record) => record.id === id);
   if (item?.kind === "audio" && item.audioSent === false) {
     try { forget(id); } catch { /* Keep the ID if local storage cannot be updated. */ }
@@ -312,10 +313,10 @@ mic.addEventListener("click", async () => {
     capture = device;
     device.input.connect(device.node).connect(device.context.destination);
     notice.textContent = "Recording. Select Stop to send.";
-  } catch {
+  } catch (error) {
     if (capture === device) capture = undefined;
     discardUnsent(device.id);
-    if (opening === device) notice.textContent = "Microphone recording could not start. Check permission and connection.";
+    if (opening === device) notice.textContent = error.status === 429 ? "Another microphone capture is active. End it on its device or inspect swarm voice capture on the host." : "Microphone recording could not start. Check permission and connection.";
   } finally {
     if (capture !== device) release(device);
     if (opening === device) {

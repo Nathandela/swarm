@@ -81,6 +81,15 @@ func runManagerController(ctx context.Context, dir, endpoint string, cfg Config,
 		return err
 	}
 	defer func() { _ = bridge.Close() }()
+	if _, production := runtime.(*ProtocolControllerClient); production {
+		persisted, err := LoadConfig(dir)
+		if err != nil {
+			return err
+		}
+		if persisted != cfg {
+			return errors.New("voice: configuration changed during startup; start the service again")
+		}
+	}
 	controlMux := http.NewServeMux()
 	listener, err := startPrivateHTTPOn(ctx, dir, managerControlSocket, "control.lock", controlMux)
 	if err != nil {
@@ -98,12 +107,12 @@ func runManagerController(ctx context.Context, dir, endpoint string, cfg Config,
 	}
 	var devices *deviceRegistry
 	if cfg.DeviceListen != "" {
-		devices, err = openDeviceRegistry(dir, cfg.PlaceID, time.Now)
+		devices, err = openDeviceRegistry(dir, deviceRegistryName(cfg), cfg.PlaceID, time.Now)
 		if err != nil {
 			return err
 		}
 	}
-	refs := ManagerBridgeRefs{Socket: bridge.socket, AuthFile: filepath.Join(dir, managerBridgeAuth)}
+	refs := ManagerBridgeRefs{Socket: bridge.socket, AuthFile: filepath.Join(dir, managerBridgeAuthName(cfg))}
 	recovery := &managerReplacement{dir: dir, endpoint: endpoint, config: cfg, refs: refs, runtime: runtime, wake: make(chan struct{}, 1)}
 	readOnly := func(binding ManagerBinding) error {
 		boundEndpoint, _, valid := protocol.ParseID(binding.SessionID)
@@ -111,6 +120,13 @@ func runManagerController(ctx context.Context, dir, endpoint string, cfg Config,
 			return ErrStale
 		}
 		control := &managerControl{store: store, binding: binding, replacement: recovery, devices: devices, tickAttention: "manager custody lost; explicit replacement required"}
+		if devices != nil {
+			stopDevices, err := control.startDeviceEndpoint(ctx, cfg.DeviceListen)
+			if err != nil {
+				return err
+			}
+			defer stopDevices()
+		}
 		recovery.signal()
 		controlMux.Handle("/v1/", control)
 		return control.run(ctx, bridge, listener)
@@ -130,7 +146,7 @@ func runManagerController(ctx context.Context, dir, endpoint string, cfg Config,
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	credential, err := managerBridgeCredential(dir, existing == nil && !intentExists)
+	credential, err := managerBridgeCredential(dir, filepath.Base(refs.AuthFile), existing == nil && !intentExists)
 	if err != nil {
 		return err
 	}
@@ -180,15 +196,15 @@ func runManagerController(ctx context.Context, dir, endpoint string, cfg Config,
 	return control.run(ctx, bridge, listener)
 }
 
-func managerBridgeCredential(dir string, create bool) (string, error) {
-	raw, err := readVoiceFile(dir, managerBridgeAuth, 64)
+func managerBridgeCredential(dir, file string, create bool) (string, error) {
+	raw, err := readVoiceFile(dir, file, 64)
 	if errors.Is(err, os.ErrNotExist) && create {
 		var token [32]byte
 		if _, err := rand.Read(token[:]); err != nil {
 			return "", err
 		}
 		credential := hex.EncodeToString(token[:])
-		if err := writeVoiceFile(dir, managerBridgeAuth, []byte(credential)); err != nil {
+		if err := writeVoiceFile(dir, file, []byte(credential)); err != nil {
 			return "", err
 		}
 		return credential, nil
@@ -213,6 +229,8 @@ type managerControl struct {
 	preview        ownerPreview
 	devices        *deviceRegistry
 	deviceEndpoint string
+	statusStreams  deviceStatusStreams
+	capture        captureSlot
 
 	mu               sync.Mutex
 	tickAttention    string
@@ -230,10 +248,21 @@ func (c *managerControl) run(ctx context.Context, bridge, listener *privateHTTP)
 		defer ticker.Stop()
 		ticks = ticker.C
 	}
+	nextCleanup := time.Now().Add(time.Minute)
 	for {
 		if c.controller != nil {
 			tickCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 			err := c.controller.Tick(tickCtx)
+			if now := time.Now(); !now.Before(nextCleanup) {
+				cleanupErr := c.store.compactReceipts(c.binding, now, 64)
+				if err == nil {
+					err = cleanupErr
+				}
+				nextCleanup = now.Add(5 * time.Minute)
+			}
+			if streamErr := c.syncDeviceStatuses(); err == nil {
+				err = streamErr
+			}
 			cancel()
 			c.mu.Lock()
 			c.tickAttention = serviceAttention(err)

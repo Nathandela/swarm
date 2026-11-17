@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -77,7 +78,7 @@ func voiceTestTunnel(t *testing.T, caller ssh.PublicKey, host ssh.Signer, target
 				if err != nil {
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				go ssh.DiscardRequests(requests)
 				for incoming := range channels {
 					if incoming.ChannelType() != "direct-tcpip" {
@@ -134,9 +135,10 @@ func TestVoiceDeviceSeparatesSSHAndGrantAndEndsStalledForward(t *testing.T) {
 	grant := voicewire.DeviceCredential{PlaceID: "fixture", DeviceID: strings.Repeat("a", 32), Generation: 1, Token: strings.Repeat("b", 64)}
 	invite := strings.Repeat("c", 64)
 	challenge := strings.Repeat("d", 64)
-	var enrolled, revoked, stall, oversized atomic.Bool
+	var enrolled, revoked, stall, oversized, stallPreview, otherBinding atomic.Bool
 	entered := make(chan struct{}, 1)
 	confirmed := make(chan struct{}, 1)
+	previewEntered := make(chan struct{}, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		action := strings.TrimPrefix(r.URL.Path, "/v1/device/")
@@ -162,25 +164,57 @@ func TestVoiceDeviceSeparatesSSHAndGrantAndEndsStalledForward(t *testing.T) {
 			raw, decodeErr := base64.RawURLEncoding.DecodeString(r.Header.Get("Swarm-Device-Proof"))
 			var proof voicewire.DeviceProof
 			id := r.Header.Get("Swarm-Utterance-ID")
-			if readErr != nil || decodeErr != nil || json.Unmarshal(raw, &proof) != nil || id != "operation" || !bytes.Equal(pcm, []byte{1, 2}) || proof.Credential != grant || proof.Challenge != challenge || !ed25519.Verify(grantKey.key.Public().(ed25519.PublicKey), voicewire.DeviceSignedBytes(proof, voicewire.DeviceFinalizeAction(id), pcm), proof.Signature) {
+			if readErr != nil || decodeErr != nil || json.Unmarshal(raw, &proof) != nil || id != "operation" || !bytes.Equal(pcm, []byte{1, 2}) || proof.Credential != grant || proof.Challenge != challenge || !ed25519.Verify(grantKey.key.Public().(ed25519.PublicKey), voicewire.DeviceSignedBytes(proof, voicewire.DeviceFinalizeAction(id, r.Header.Get("Swarm-Capture-Session")), pcm), proof.Signature) {
 				deny()
 				return
 			}
 			respond(voicewire.DeviceAdmission{ID: id, Sequence: 1, Phase: "queued"})
-		case "status", "text", "receipt", "ptt/begin", "publications":
+		case "session", "text", "receipt", "ptt/begin", "publications", "preview":
 			var req voicewire.DeviceRequest
 			if json.NewDecoder(r.Body).Decode(&req) != nil || req.Proof.Challenge != challenge || req.Proof.Credential != grant || revoked.Load() || !ed25519.Verify(grantKey.key.Public().(ed25519.PublicKey), voicewire.DeviceSignedBytes(req.Proof, action, req.Body), req.Proof.Signature) {
 				deny()
 				return
 			}
-			if action == "status" {
+			if action == "session" {
 				if stall.Load() {
 					entered <- struct{}{}
 					<-r.Context().Done()
 					confirmed <- struct{}{}
 					return
 				}
-				respond(voicewire.DeviceStatus{PlaceID: grant.PlaceID, ConversationID: "conversation", Ready: true})
+				msg, err := voicewire.DecodeClientMessage(req.Body)
+				if err != nil || !strings.HasPrefix(msg.SessionID, grant.DeviceID+".") {
+					deny()
+					return
+				}
+				generation := uint64(1)
+				if otherBinding.Load() {
+					generation++
+				}
+				cursor := voicewire.Cursor{StreamID: fmt.Sprintf("fixture-%d", generation), Sequence: 1}
+				page := voicewire.DeviceStatusPage{Version: 1, Head: cursor}
+				if msg.After == nil || *msg.After != cursor {
+					data, _ := json.Marshal(voicewire.DeviceStatus{PlaceID: grant.PlaceID, ConversationID: "conversation", Provider: "codex", Ready: true, Generation: generation})
+					page.Reset = true
+					page.Events = []voicewire.ServerEvent{{Type: "snapshot", SessionID: msg.SessionID, Cursor: cursor, Data: data}}
+				}
+				respond(page)
+				return
+			}
+			if action == "preview" {
+				var target voicewire.DevicePreviewRequest
+				if json.Unmarshal(req.Body, &target) != nil || target.UtteranceID != "operation" || target.PublicationID != "pub" {
+					deny()
+					return
+				}
+				if stallPreview.Load() {
+					previewEntered <- struct{}{}
+					<-r.Context().Done()
+					return
+				}
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Content-Length", "2")
+				_, _ = w.Write([]byte{3, 4})
 				return
 			}
 			if action == "publications" {
@@ -284,6 +318,55 @@ func TestVoiceDeviceSeparatesSSHAndGrantAndEndsStalledForward(t *testing.T) {
 		t.Fatalf("missing explicit handset capacity error: %v", err)
 	}
 	oversized.Store(false)
+	preview, err := device.PreviewPublication(raw, "operation", "pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preview.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if pcm, err := preview.ReadPCM(); err != nil || pcm != "AwQ=" {
+		t.Fatalf("signed preview: %v", err)
+	}
+	if _, err := preview.ReadPCM(); !errors.Is(err, errVoiceEnded) {
+		t.Fatalf("reused preview: %v", err)
+	}
+	otherBinding.Store(true)
+	if err := preview.Verify(); !errors.Is(err, errVoiceUnavailable) {
+		t.Fatalf("changed binding retained preview: %v", err)
+	}
+	revoked.Store(true)
+	if err := preview.Verify(); !errors.Is(err, errVoiceUnavailable) {
+		t.Fatalf("revoked grant retained preview: %v", err)
+	}
+	revoked.Store(false)
+	_ = preview.Stop()
+	stallPreview.Store(true)
+	preview, err = device.PreviewPublication(raw, "operation", "pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResult := make(chan error, 1)
+	go func() { _, err := preview.ReadPCM(); previewResult <- err }()
+	select {
+	case <-previewEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("preview did not reach stalled handler")
+	}
+	if err := preview.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-previewResult:
+		if !errors.Is(err, errVoiceEnded) {
+			t.Fatalf("stopped preview: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("preview Stop did not unblock")
+	}
+	if _, err = device.Status(raw); err != nil {
+		t.Fatalf("preview Stop closed the device: %v", err)
+	}
 	revoked.Store(true)
 	if _, err = device.Status(raw); !errors.Is(err, errVoiceUnavailable) {
 		t.Fatalf("revoked grant: %v", err)

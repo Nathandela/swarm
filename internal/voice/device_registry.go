@@ -56,19 +56,21 @@ type deviceChallenge struct {
 type deviceRegistry struct {
 	mu         sync.Mutex
 	dir        string
+	file       string
 	now        func() time.Time
 	state      deviceRegistryState
 	challenges map[string]deviceChallenge
+	previews   map[string]*devicePreviewSlot
 }
 
-func openDeviceRegistry(dir, place string, now func() time.Time) (*deviceRegistry, error) {
+func openDeviceRegistry(dir, file, place string, now func() time.Time) (*deviceRegistry, error) {
 	if !configText(place, 128) {
 		return nil, ErrInvalid
 	}
 	state := deviceRegistryState{
 		Version: 1, PlaceID: place, Invitations: map[string]deviceInvitationRecord{}, Devices: map[string]deviceGrantRecord{},
 	}
-	raw, err := readVoiceFile(dir, deviceRegistryFile, maxDeviceLedger)
+	raw, err := readVoiceFile(dir, file, maxDeviceLedger)
 	if err == nil {
 		if validateObjectMembers(raw, "version", "place_id", "invitations", "devices") != nil || json.Unmarshal(raw, &state) != nil ||
 			state.Version != 1 || state.PlaceID != place || state.Invitations == nil || state.Devices == nil ||
@@ -89,7 +91,7 @@ func openDeviceRegistry(dir, place string, now func() time.Time) (*deviceRegistr
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	return &deviceRegistry{dir: dir, now: now, state: state, challenges: map[string]deviceChallenge{}}, nil
+	return &deviceRegistry{dir: dir, file: file, now: now, state: state, challenges: map[string]deviceChallenge{}}, nil
 }
 
 func (r *deviceRegistry) save(next deviceRegistryState) error {
@@ -100,13 +102,15 @@ func (r *deviceRegistry) save(next deviceRegistryState) error {
 	if len(raw) > maxDeviceLedger {
 		return ErrCapacity
 	}
-	if err := writeVoiceFile(r.dir, deviceRegistryFile, raw); err != nil {
+	if err := writeVoiceFile(r.dir, r.file, raw); err != nil {
 		// A failed directory sync can follow a successful atomic rename. Refuse
 		// further authorization until service restart reloads the durable file.
+		r.invalidatePreviews(deviceRegistryState{})
 		r.state = deviceRegistryState{}
 		clear(r.challenges)
 		return err
 	}
+	r.invalidatePreviews(next)
 	r.state = next
 	return nil
 }
@@ -147,8 +151,14 @@ func (r *deviceRegistry) challenge(credential voicewire.DeviceCredential) (strin
 	if err != nil {
 		return "", err
 	}
-	maps.DeleteFunc(r.challenges, func(_ string, c deviceChallenge) bool { return !now.Before(c.ExpiresAt) || c.Subject == subject })
-	if len(r.challenges) >= maxDeviceRecords {
+	maps.DeleteFunc(r.challenges, func(_ string, c deviceChallenge) bool { return !now.Before(c.ExpiresAt) })
+	active := 0
+	for _, challenge := range r.challenges {
+		if challenge.Subject == subject {
+			active++
+		}
+	}
+	if active >= 4 || len(r.challenges) >= maxDeviceRecords {
 		return "", ErrCapacity
 	}
 	nonce, err := deviceRandom(32)

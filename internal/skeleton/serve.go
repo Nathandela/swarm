@@ -551,6 +551,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.composerTransactional = d.composerSendTransactional
 	d.api.semanticComposer = d.semanticSendTransactional
 	d.api.semanticStatus = d.semanticOperation
+	d.api.managerInterruptTurn = d.interruptManagerTurn
 	d.api.managerInputStatus = d.managerInputStatus
 	d.api.managerRuntime = d.managerRuntime
 	d.api.managerCall = d.resolveManagerCall

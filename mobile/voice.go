@@ -75,7 +75,7 @@ func (s voiceSigner) Sign(_ io.Reader, message []byte, opts crypto.SignerOpts) (
 
 var (
 	errVoiceInput       = classed(ErrClassInvalidRequest, errors.New("swarmmobile: invalid voice profile, grant, or request"))
-	errVoiceSign        = errors.New("swarmmobile: voice signing failed")
+	errVoiceSign        = classed(ErrClassUnreconciled, errors.New("swarmmobile: voice signing failed"))
 	errVoiceEnded       = classed(ErrClassClosed, errors.New("swarmmobile: voice device ended"))
 	errVoiceUnavailable = classed(ErrClassUnreconciled, errors.New("swarmmobile: voice device request unavailable or refused"))
 )

@@ -34,26 +34,14 @@ func startPrivateHTTPOn(parent context.Context, dir, socketName, lockName string
 		return nil, err
 	}
 	_ = d.Close()
-	lock, err := os.OpenFile(filepath.Join(dir, lockName), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	lock, err := lockPrivateService(dir, lockName)
 	if err != nil {
 		return nil, err
 	}
-	locked := false
 	fail := func(err error) (*privateHTTP, error) {
-		if locked {
-			_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		}
 		_ = lock.Close()
 		return nil, err
 	}
-	info, err := lock.Stat()
-	if err != nil || !privateRegular(info) || info.Mode().Perm() != 0600 {
-		return fail(ErrInvalid)
-	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return fail(errors.New("voice: controller already running"))
-	}
-	locked = true
 	path := filepath.Join(dir, socketName)
 	if info, err := os.Lstat(path); err == nil {
 		owner, ok := info.Sys().(*syscall.Stat_t)
@@ -105,6 +93,28 @@ func startPrivateHTTPOn(parent context.Context, dir, socketName, lockName string
 		_ = s.Close()
 	}()
 	return s, nil
+}
+
+var errControllerRunning = errors.New("voice: controller already running")
+
+func lockPrivateService(dir, name string) (*os.File, error) {
+	lock, err := os.OpenFile(filepath.Join(dir, name), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	if err != nil {
+		return nil, err
+	}
+	info, err := lock.Stat()
+	if err != nil || !privateRegular(info) || info.Mode().Perm() != 0600 {
+		_ = lock.Close()
+		return nil, ErrInvalid
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errControllerRunning
+		}
+		return nil, err
+	}
+	return lock, nil
 }
 
 func removeOwnedSocket(path string, identity os.FileInfo) {

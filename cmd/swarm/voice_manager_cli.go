@@ -27,14 +27,20 @@ func dispatchVoiceManager(args []string, in io.Reader, out, errout io.Writer) in
 		_, _ = fmt.Fprintln(errout, err)
 		return 1
 	}
-	var manager, workspace, model, id, deviceListen, publication string
+	var manager, workspace, model, id, deviceListen, publication, from string
+	var unattended bool
 	switch args[0] {
 	case "setup":
 		fs.StringVar(&deviceListen, "device-listen", "", "opt-in literal loopback host:port for enrolled devices (port 0 selects an available port)")
 		fs.StringVar(&manager, "manager", "", "native manager (codex or claude)")
 		fs.StringVar(&workspace, "dir", ".", "manager workspace")
 		fs.StringVar(&model, "model", "", "native manager model")
+	case "switch":
+		fs.StringVar(&from, "from", "", "exact currently configured manager conversation ID")
+		fs.StringVar(&manager, "manager", "", "next native manager (codex or claude)")
+		fs.StringVar(&workspace, "dir", "", "manager workspace (defaults to the configured workspace)")
 	case "serve":
+		fs.BoolVar(&unattended, "unattended", false, "spawn the supervisor only from its saved environment")
 		fs.StringVar(&cc.StateDir, "state-dir", cc.StateDir, "Swarm state directory")
 	case "text", "ptt", "receipt", "publications", "read":
 		if args[0] == "read" {
@@ -49,6 +55,10 @@ func dispatchVoiceManager(args []string, in io.Reader, out, errout io.Writer) in
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return misuseExit
+	}
+	if args[0] == "switch" && (from == "" || (manager != "codex" && manager != "claude")) {
+		_, _ = fmt.Fprintln(errout, "voice: switch requires --from <conversation-id> and --manager codex or claude")
 		return misuseExit
 	}
 	if fs.NArg() != 0 || (args[0] == "read" && (id == "" || publication == "")) || ((args[0] == "receipt" || args[0] == "publications") && id == "") {
@@ -67,17 +77,7 @@ func dispatchVoiceManager(args []string, in io.Reader, out, errout io.Writer) in
 			_, _ = fmt.Fprintln(errout, "voice: choose --manager claude or codex")
 			return misuseExit
 		}
-		workspace, err = filepath.Abs(workspace)
-		if err == nil {
-			workspace, err = filepath.EvalSymlinks(workspace)
-		}
-		if err == nil {
-			var info os.FileInfo
-			info, err = os.Stat(workspace)
-			if err == nil && !info.IsDir() {
-				err = errors.New("voice: manager workspace must be a directory")
-			}
-		}
+		workspace, err = resolveVoiceWorkspace(workspace)
 		if err == nil {
 			var addr *string
 			fs.Visit(func(f *flag.Flag) {
@@ -86,6 +86,16 @@ func dispatchVoiceManager(args []string, in io.Reader, out, errout io.Writer) in
 				}
 			})
 			result, err = voice.ConfigureManager(dir, skeleton.EndpointIDForStateDir(cc.StateDir), manager, workspace, cc.SocketPath, model, addr)
+		}
+	case "switch":
+		if workspace != "" {
+			workspace, err = resolveVoiceWorkspace(workspace)
+		}
+		if err == nil {
+			err = requireVoiceUnitStopped(filepath.Clean(cc.StateDir))
+		}
+		if err == nil {
+			result, err = voice.SwitchManager(dir, from, manager, workspace)
 		}
 	case "read":
 		if f, ok := out.(*os.File); ok && term.IsTerminal(f.Fd()) {
@@ -109,17 +119,12 @@ func dispatchVoiceManager(args []string, in io.Reader, out, errout io.Writer) in
 		var cfg voice.Config
 		cfg, err = voice.LoadConfig(dir)
 		if err == nil {
-			cc.SocketPath = cfg.DaemonSocket
-			cc.LockPath = filepath.Join(cc.StateDir, "daemon.lock")
-			cc.LogPath = filepath.Join(cc.StateDir, "daemon.log")
-			conn, dialErr := daemon.EnsureDaemon(cc)
-			err = dialErr
-			if err == nil {
-				_ = conn.Close()
-				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-				defer stop()
-				err = voice.ServeManager(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir))
-			}
+			err = ensureVoiceDaemon(cc, cfg, unattended, daemon.Dial, daemon.EnsureDaemon)
+		}
+		if err == nil {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			err = voice.ServeManager(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir))
 		}
 	default:
 		result, err = localManagerCall(args[0], id, dir, in, errout)
@@ -132,6 +137,24 @@ func dispatchVoiceManager(args []string, in io.Reader, out, errout io.Writer) in
 		return 1
 	}
 	return 0
+}
+
+func resolveVoiceWorkspace(workspace string) (string, error) {
+	path, err := filepath.Abs(workspace)
+	if err == nil {
+		path, err = filepath.EvalSymlinks(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("voice: manager workspace must be a directory")
+	}
+	return path, nil
 }
 
 func localManagerCall(command, id, dir string, in io.Reader, notices io.Writer) (any, error) {

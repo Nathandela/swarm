@@ -47,13 +47,14 @@ const (
 // here (not FromDaemon) so its poller is stopped deterministically on Close — the
 // daemon owns the socket, so the Server never runs FromDaemon's own stop path.
 type coreAPI struct {
-	matchResumeInstance func(persist.Meta, string) bool
-	managerInputStatus  func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
-	managerRuntime      func(string, string) (protocol.ManagerRuntimeStatus, error)
-	managerCall         func(context.Context, string, protocol.ManagerCallReq) (protocol.ManagerCallProof, error)
-	core                *daemon.Daemon
-	fakeAgentBin        string
-	endpointID          string // this daemon's stable federation id (resume source validation)
+	matchResumeInstance  func(persist.Meta, string) bool
+	managerInterruptTurn func(context.Context, string, string, protocol.ManagerInterruptReq, func() error) error
+	managerInputStatus   func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
+	managerRuntime       func(string, string) (protocol.ManagerRuntimeStatus, error)
+	managerCall          func(context.Context, string, protocol.ManagerCallReq) (protocol.ManagerCallProof, error)
+	core                 *daemon.Daemon
+	fakeAgentBin         string
+	endpointID           string // this daemon's stable federation id (resume source validation)
 	// killFn/deleteFn let the assembly place owner lifecycle operations behind
 	// the same per-session end fence as automatic auth recycling. Bare coreAPI
 	// tests retain the raw daemon fallback.

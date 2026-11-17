@@ -136,7 +136,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 	if err = c.store.observeController(c.binding, status.Turn.ExternalInput, status.Turn.ExternallySteered && status.Turn.State == "running"); err != nil {
 		return err
 	}
-	st, err := c.store.Snapshot()
+	st, err := c.store.readView()
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 			return err
 		}
 		if err == nil {
-			st, err = c.store.Snapshot()
+			st, err = c.store.readView()
 			if err != nil {
 				return err
 			}
@@ -178,7 +178,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 		}
 	}
 	if admittedWake {
-		st, err = c.store.Snapshot()
+		st, err = c.store.readView()
 		if err != nil {
 			return err
 		}

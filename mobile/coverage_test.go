@@ -26,6 +26,7 @@ var requiredScreenElements = []string{
 	"voice.enroll",
 	"voice.control",
 	"voice.end",
+	"voice.preview",
 	// pairing (QR decode, short code, SAS, confirm, cancel)
 	"pairing.qr_decode",
 	// The ten-character spelling, ADR-007 B140 (agents-tracker-tr0n): required so the

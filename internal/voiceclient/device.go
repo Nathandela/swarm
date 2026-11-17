@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,11 +27,18 @@ var ErrPublicationCapacity = errors.New("voice: device publication byte limit re
 
 // DeviceClient speaks the signed device HTTP protocol over an authenticated SSH transport.
 type DeviceClient struct {
-	http     *http.Client
-	signer   crypto.Signer
-	cancel   context.CancelFunc
-	gate     chan struct{}
-	endpoint string
+	http                  *http.Client
+	signer                crypto.Signer
+	cancel                context.CancelFunc
+	gate                  chan struct{}
+	statusCursor          voicewire.Cursor
+	captureSession        string
+	activeGrant           voicewire.DeviceCredential
+	activeCapture         string
+	statusDevice          string
+	statusGrantGeneration uint64
+	statusSnapshot        voicewire.DeviceStatus
+	endpoint              string
 }
 
 // NewDeviceClient requires the lifetime of the app-owned transport and separate
@@ -55,6 +63,10 @@ func NewDeviceClientWithDial(ctx context.Context, endpoint string, signer crypto
 	if public, ok := signer.Public().(ed25519.PublicKey); !ok || len(public) != ed25519.PublicKeySize {
 		return nil, errors.New("voice: an Ed25519 device signer is required")
 	}
+	var session [16]byte
+	if _, err := rand.Read(session[:]); err != nil {
+		return nil, err
+	}
 	lifetime, cancel := context.WithCancel(ctx)
 	transport := &http.Transport{
 		MaxConnsPerHost: 1, IdleConnTimeout: 10 * time.Second,
@@ -69,12 +81,28 @@ func NewDeviceClientWithDial(ctx context.Context, endpoint string, signer crypto
 		http: &http.Client{Transport: transport, Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
-		signer: signer, cancel: cancel, gate: make(chan struct{}, 1), endpoint: endpoint,
+		captureSession: hex.EncodeToString(session[:]), signer: signer, cancel: cancel, gate: make(chan struct{}, 1), endpoint: endpoint,
 	}, nil
 }
 
 func (c *DeviceClient) Close() {
-	c.cancel()
+	// On idle close, relinquish an unfinished capture. A blocked in-flight request
+	// is canceled immediately; the owner can also end its fenced lease on the host.
+	select {
+	case c.gate <- struct{}{}:
+		if c.activeCapture != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			var empty struct{}
+			_ = c.signedLocked(ctx, c.activeGrant, "ptt/end", c.captureIntent(c.activeCapture), &empty)
+			cancel()
+			c.activeCapture = ""
+			c.activeGrant = voicewire.DeviceCredential{}
+		}
+		c.cancel()
+		<-c.gate
+	default:
+		c.cancel()
+	}
 	c.http.CloseIdleConnections()
 }
 
@@ -92,12 +120,41 @@ func (c *DeviceClient) Enroll(ctx context.Context, invitation voicewire.DeviceIn
 }
 
 func (c *DeviceClient) Status(ctx context.Context, credential voicewire.DeviceCredential) (voicewire.DeviceStatus, error) {
-	var status voicewire.DeviceStatus
-	err := c.signed(ctx, credential, "status", nil, &status)
-	if err == nil && (status.PlaceID != credential.PlaceID || status.ConversationID == "") {
-		err = errors.New("voice: invalid device status")
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-ctx.Done():
+		return voicewire.DeviceStatus{}, ctx.Err()
 	}
-	return status, err
+	if c.statusDevice != credential.DeviceID || c.statusGrantGeneration != credential.Generation || c.statusSnapshot.PlaceID != credential.PlaceID {
+		c.statusCursor = voicewire.Cursor{}
+		c.statusSnapshot = voicewire.DeviceStatus{}
+	}
+	session := credential.DeviceID + "." + c.captureSession
+	for i := 0; i <= 256/voicewire.MaxDeviceStatusPage; i++ {
+		msg := voicewire.ClientMessage{Type: voicewire.TypeHandshake, Version: voicewire.ProtocolVersion, SessionID: session, Sequence: 1}
+		if c.statusCursor.StreamID != "" {
+			msg.Type = voicewire.TypeResume
+			msg.After = &c.statusCursor
+			msg.Sequence = c.statusCursor.Sequence + 1
+		}
+		var page json.RawMessage
+		if err := c.signedLocked(ctx, credential, "session", msg, &page); err != nil {
+			return voicewire.DeviceStatus{}, err
+		}
+		status, cursor, caughtUp, err := voicewire.DecodeDeviceStatusPage(page, session, credential.PlaceID, c.statusCursor, c.statusSnapshot)
+		if err != nil {
+			return voicewire.DeviceStatus{}, err
+		}
+		c.statusSnapshot, c.statusCursor, c.statusDevice = status, cursor, credential.DeviceID
+		c.statusGrantGeneration = credential.Generation
+		if caughtUp {
+			return status, nil
+		}
+	}
+	return voicewire.DeviceStatus{}, errors.New("voice: status replay did not catch up")
 }
 
 func (c *DeviceClient) SubmitText(ctx context.Context, credential voicewire.DeviceCredential, id, text string) (voicewire.DeviceAdmission, error) {
@@ -126,6 +183,10 @@ func (c *DeviceClient) signed(ctx context.Context, credential voicewire.DeviceCr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	return c.signedLocked(ctx, credential, action, value, result)
+}
+
+func (c *DeviceClient) signedLocked(ctx context.Context, credential voicewire.DeviceCredential, action string, value, result any) error {
 	var body []byte
 	if value != nil {
 		var err error
@@ -161,13 +222,47 @@ func (c *DeviceClient) makeProof(ctx context.Context, credential voicewire.Devic
 	return proof, nil
 }
 
+func (c *DeviceClient) captureIntent(id string) voicewire.DeviceCaptureIntent {
+	return voicewire.DeviceCaptureIntent{ID: id, SessionID: c.captureSession, Version: voicewire.ProtocolVersion}
+}
+
 func (c *DeviceClient) BeginPTT(ctx context.Context, credential voicewire.DeviceCredential, id string) (voicewire.DeviceCapture, error) {
 	var capture voicewire.DeviceCapture
-	err := c.signed(ctx, credential, "ptt/begin", voicewire.DeviceText{ID: id}, &capture)
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-ctx.Done():
+		return capture, ctx.Err()
+	}
+	err := c.signedLocked(ctx, credential, "ptt/begin", c.captureIntent(id), &capture)
 	if err == nil && (capture.ID != id || capture.Phase == "") {
-		err = errors.New("voice: invalid device capture receipt")
+		return capture, errors.New("voice: invalid device capture receipt")
+	}
+	if err == nil && capture.Phase == "capturing" {
+		c.activeGrant, c.activeCapture = credential, id
 	}
 	return capture, err
+}
+
+// EndPTT releases only the named capture owned by this client session.
+func (c *DeviceClient) EndPTT(ctx context.Context, credential voicewire.DeviceCredential, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	var out struct{}
+	err := c.signedLocked(ctx, credential, "ptt/end", c.captureIntent(id), &out)
+	if err == nil && c.activeGrant == credential && c.activeCapture == id {
+		c.activeCapture = ""
+		c.activeGrant = voicewire.DeviceCredential{}
+	}
+	return err
 }
 
 // FinalizePTT sends one explicitly bounded PCM16LE utterance. Resolve an ambiguous
@@ -185,7 +280,7 @@ func (c *DeviceClient) FinalizePTT(ctx context.Context, credential voicewire.Dev
 	case <-ctx.Done():
 		return result, ctx.Err()
 	}
-	proof, err := c.makeProof(ctx, credential, voicewire.DeviceFinalizeAction(id), pcm)
+	proof, err := c.makeProof(ctx, credential, voicewire.DeviceFinalizeAction(id, c.captureSession), pcm)
 	if err != nil {
 		return result, err
 	}
@@ -198,6 +293,7 @@ func (c *DeviceClient) FinalizePTT(ctx context.Context, credential voicewire.Dev
 		return result, err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Swarm-Capture-Session", c.captureSession)
 	req.Header.Set("Swarm-Utterance-ID", id)
 	req.Header.Set("Swarm-Device-Proof", base64.RawURLEncoding.EncodeToString(raw))
 	if err := c.perform(req, &result); err != nil {
@@ -205,6 +301,10 @@ func (c *DeviceClient) FinalizePTT(ctx context.Context, credential voicewire.Dev
 	}
 	if result.ID != id || result.Sequence == 0 {
 		return voicewire.DeviceAdmission{}, errors.New("voice: invalid device admission receipt")
+	}
+	if c.activeGrant == credential && c.activeCapture == id {
+		c.activeGrant = voicewire.DeviceCredential{}
+		c.activeCapture = ""
 	}
 	return result, nil
 }
