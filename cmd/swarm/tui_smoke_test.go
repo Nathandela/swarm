@@ -59,11 +59,13 @@ func startSmokeDaemon(t *testing.T, swarmBin, fakeAgentBin string) []string {
 		"SWARM_DAEMON_SOCK=" + sock,
 		"SWARM_DAEMON_LOCK=" + filepath.Join(dir, "d.lock"),
 		"SWARM_DAEMON_LOG=" + filepath.Join(dir, "d.log"),
+		"SWARM_DAEMON_REMOTE_SOCK=", // an unpaired fixture must not bind the enclosing daemon's remote socket
 		envFakeAgentBin + "=" + fakeAgentBin,
 	}
 
 	cmd := exec.Command(swarmBin, "daemon")
 	cmd.Env = append(os.Environ(), env...)
+	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start swarm daemon: %v", err)
 	}
@@ -73,14 +75,17 @@ func startSmokeDaemon(t *testing.T, swarmBin, fakeAgentBin string) []string {
 	})
 
 	deadline := time.Now().Add(10 * time.Second)
+	var dialErr error
 	for time.Now().Before(deadline) {
-		if c, derr := protocol.Dial(sock, nil); derr == nil {
+		c, err := protocol.Dial(sock, nil)
+		if err == nil {
 			_ = c.Close()
 			return env
 		}
+		dialErr = err
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("smoke daemon never served the client protocol within 10s")
+	t.Fatalf("smoke daemon never served %s within 10s: %v", sock, dialErr)
 	return nil
 }
 

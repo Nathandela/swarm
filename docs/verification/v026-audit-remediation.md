@@ -12,3 +12,29 @@ Baseline a1da607e. Scope covers the eight audit issues for the terminal dashboar
 | Qualification (q44t) | Isolate inherited hook endpoints and use canonical fixture roots. Scope source gates to the checkout. Recheck race tests and relay approval through the real local Worker harness. |
 
 Review the strategy and challenge failure paths before merging implementation. Cross-review changes with agents who did not author them. Run focused failures first, then build, vet, lint, full race tests and local relay integration. Record unresolved platform or release gates. Push reviewed source, with release publication a separate operation.
+
+## Implementation and independent review
+
+The storage, identity and qualification workstreams reviewed their initial strategy and exercised failures with temporary stores and session fixtures. Review by agents outside the authoring workstream changed the implementation in four places.
+
+- A zero-byte write failure can retry once the filesystem recovers. A partial append or uncertain sync blocks further writes and compaction until replay.
+- Newly appended rows fit the previous reader’s 4 MiB ceiling. Replay and compaction preserve existing rows up to 16 MiB. The [operator notes](../ops/storage-clean.md#operation-log-recovery) cover failures and rollback.
+- Segment retirement proceeds newest-first and syncs the directory after each removal. A partially completed cleanup leaves a replayable prefix of the original segments and the complete replacements.
+- Repeated agy titles advance an in-memory timestamp on the session without writing metadata on every tick. A daemon replacement ignores ticks stamped before it opened. Tests cover a delayed different title both before and after replacement.
+
+Codex bulk reattachment aborts before launch when the same thread appears in both searched roots. Default discovery still reads active history. Discord cleanup seeks by encoded request prefix and verifies key identity. A regression puts an unreadable publication under a different request and proves the expired request can still be pruned.
+
+The old gateway artifact was removed from the tree and the checkout. Release packaging continues to build it from source. Dashboard rendering, section sizing and layout assertions now exercise the shipped board. The legacy push gateway backup and restore implementation remains available under its existing retention decision.
+
+## Verification
+
+- macOS build, vet and golangci-lint passed. The strict Phase B manifest check passed, and all 162 OpenCode bridge tests passed.
+- The local Workerd suite passed with the release workflow’s 300-second budget, including the approval, pairing, revocation and terminal cases.
+- Linux arm64 with Go 1.26.0 passed the complete idempotency, journal and Discord package race suites and focused native-title, Codex reattach, shim and board race tests. Linux amd64 cross-build also passed during integration.
+- The previously failing CLI, persistence, hook, source-walk and shim checks passed under the race detector with an inherited shim endpoint and an aliased temporary root. The two attach-snapshot fixtures passed ten consecutive race runs after replacing fixed sleeps with a socket observation barrier.
+- The exact 4 MiB append boundary was checked against the previous scanner. It read both the maximum accepted record and its suffix. The writer rejected one additional byte.
+- The real-PTY smoke clients restrict provider discovery to their fixture binaries. Six repetitions passed. The daemon fixture clears the enclosing remote-socket override and reports its last failed dial. An invalid inherited socket reproduced a startup timeout before isolation and passed three repetitions after it. The original timeout did not retain enough evidence to establish the same cause.
+- The containment fixture passed ten race repetitions after replacing a sleep with a parent-child handshake. Three runs with the parent's readiness wait bypassed failed as expected.
+- Final macOS runs of `go test -p 2 -timeout 35m ./...` and `go test -race -p 2 -timeout 35m ./...` both exited successfully. Each reported 82 passing packages. These runs included the production reachability check and the full supervisor assembly suite. Independent review identified no remaining blockers in the final changes.
+
+This record covers local release-candidate qualification. Hosted push, physical Android devices and release publication were outside this change.
