@@ -136,7 +136,7 @@ func agyStatusLineConfig(env []string, binary string) map[string]any {
 		return defaultLine
 	}
 	if enabled, hasEnabled := line["enabled"].(bool); hasEnabled && !enabled {
-		return defaultLine
+		return nil
 	}
 	kind, _ := line["type"].(string)
 	cmd, _ := line["command"].(string)
@@ -204,26 +204,11 @@ func (d *Daemon) observeAgyTitle(sessionID, rawTitle, rawObservedAt string) {
 	if name == "" {
 		return
 	}
-	d.agyTitlesMu.Lock()
-	if d.agyTitles == nil {
-		d.agyTitles = make(map[string]string)
-	}
-	if d.agyTitles[sessionID] == name {
-		d.agyTitlesMu.Unlock()
-		return
-	}
-	d.agyTitles[sessionID] = name
-	d.agyTitlesMu.Unlock()
-
 	at, err := time.Parse(time.RFC3339Nano, rawObservedAt)
 	if err != nil {
-		at = time.Now()
-	}
-	m, ok := d.core.Get(sessionID)
-	if !ok || !at.After(m.NameSetAt) || name == m.Name {
 		return
 	}
-	if err := d.core.RenameAt(sessionID, name, at); err == nil && d.api != nil {
+	if changed, err := d.core.RenameAt(sessionID, name, at); err == nil && changed && d.api != nil {
 		d.api.pokeWatch()
 	}
 }

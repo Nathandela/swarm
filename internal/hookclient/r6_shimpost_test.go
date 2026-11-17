@@ -401,8 +401,9 @@ func TestEnvHookSocket_UnsetMeansPostSmartNeverDials(t *testing.T) {
 	// must never even attempt to dial a shim: point it at a socket that would fail
 	// loudly if dialed (a directory, not a listenable path), and prove the ONLY
 	// traffic is the daemon post.
-	if _, ok := os.LookupEnv(EnvHookSocket); ok {
-		t.Fatalf("%s is set in this test's environment; the test needs it genuinely unset", EnvHookSocket)
+	t.Setenv(EnvHookSocket, "") // restore the enclosing Swarm session after this test
+	if err := os.Unsetenv(EnvHookSocket); err != nil {
+		t.Fatal(err)
 	}
 	got := os.Getenv(EnvHookSocket)
 	if got != "" {

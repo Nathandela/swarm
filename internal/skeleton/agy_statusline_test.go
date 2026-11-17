@@ -133,6 +133,22 @@ func TestAgyStatusLineArgs_DefaultAndExistingSettings(t *testing.T) {
 	})
 }
 
+func TestAgyDisabledStatusLinePreservesLaunchArgs(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gemini", "antigravity-cli")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"statusLine":{"enabled":false}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	argv := []string{"agy", "--mode", "plan"}
+	got := agyStatusLineArgsWithBinary(argv, []string{"HOME=" + home}, "/opt/bin/swarm")
+	if !reflect.DeepEqual(got, argv) {
+		t.Fatalf("disabled status line was overridden: %q", got)
+	}
+}
+
 func TestAgyStatusLineIngest_AuthStatusIdentityAndTitle(t *testing.T) {
 	sk := assemble(t)
 	dir := t.TempDir()

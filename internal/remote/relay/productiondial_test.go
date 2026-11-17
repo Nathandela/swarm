@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // TestPBOPS5_OneParserOwnsRelayJSON is the structural half of "the pin must not be
@@ -39,13 +40,12 @@ func TestPBOPS5_OneParserOwnsRelayJSON(t *testing.T) {
 	fset := token.NewFileSet()
 	var offenders []string
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := testbin.WalkGoTree(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", ".codex", ".gradle", "build", "dist", "vendor", "testdata", "node_modules", "relaycfg":
+			if d.Name() == "testdata" || d.Name() == "relaycfg" {
 				return fs.SkipDir
 			}
 			return nil
@@ -112,13 +112,12 @@ func TestPBOPS5_OnlyRelayCfgDecodesThePin(t *testing.T) {
 	fset := token.NewFileSet()
 	var readers []string
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := testbin.WalkGoTree(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", ".codex", ".gradle", "build", "dist", "vendor", "testdata", "node_modules", "relaycfg":
+			if d.Name() == "testdata" || d.Name() == "relaycfg" {
 				return fs.SkipDir
 			}
 			return nil

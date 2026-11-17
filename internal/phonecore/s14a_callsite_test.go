@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // s14aRefusingKeyStore refuses the operation under test and delegates everything else to a
@@ -198,19 +199,12 @@ func TestS14A_NoCallSiteDiscardsACustodyError(t *testing.T) {
 	root := s14aRepoRoot(t)
 
 	var visited int
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := testbin.WalkGoTree(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			// `.claude` and `.codex` hold per-agent git worktrees -- full checkouts of this repository that
-			// `git worktree add` leaves behind. A walk from the repo root treats them as source and
-			// reports findings about another agent's private copy as findings about this tree.
-			// Adding the directory to .gitignore does NOT prevent this: gitignore governs what git
-			// tracks and has no effect on filepath.WalkDir. Four gates were red for this reason
-			// before it was understood; b30_blindadopt_test.go carries the same skip.
-			case ".git", ".claude", ".codex", ".gradle", "vendor", "testdata", "build", "dist", "node_modules":
+			if d.Name() == "testdata" {
 				return fs.SkipDir
 			}
 			return nil
@@ -340,15 +334,11 @@ func TestS14A_TheCleartextSealerHasNoCallSitesLeft(t *testing.T) {
 	root := s14aRepoRoot(t)
 
 	seen := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := testbin.WalkGoTree(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", ".codex", ".gradle", "vendor", "build", "dist", "node_modules":
-				return fs.SkipDir
-			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {

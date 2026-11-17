@@ -46,6 +46,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // fakeGatewaySupervisor records the calls `swarm remote init` and `swarm remote pair`
@@ -438,16 +439,12 @@ func TestDaemonNeverSpawnsTheGateway(t *testing.T) {
 	}
 
 	importers := map[string]bool{}
-	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err = testbin.WalkGoTree(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			// .claude and .codex hold the sibling git worktrees this repo is developed in
-			// (.claude/worktrees/* and .codex/worktrees/*), which are FULL checkouts visible from the main
-			// one. Walking them would record their cmd/swarm as another importer and fail
-			// this test for a package that is this same package, in another working copy.
-			if name := d.Name(); name == ".git" || name == ".claude" || name == ".codex" || name == ".gradle" || name == "build" || name == "dist" || name == "docs" {
+			if d.Name() == "docs" {
 				return filepath.SkipDir
 			}
 			return nil

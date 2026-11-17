@@ -208,12 +208,7 @@ func (j *Journal) openLive() (*Journal, error) {
 			return nil, err
 		}
 	}
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil {
-			return nil, err
-		}
-	}
-	if err := syncLiveDir(j.dir); err != nil {
+	if err := retireLiveSegments(j.dir, paths); err != nil {
 		return nil, err
 	}
 	seg := segments[len(segments)-1]
@@ -236,11 +231,12 @@ func (j *Journal) recoverLiveLocked() error {
 		return err
 	}
 	var paths []string
-	var tempPaths []string
 	var maxSeq uint64
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".live-journal-") && !entry.IsDir() {
-			tempPaths = append(tempPaths, filepath.Join(j.dir, entry.Name()))
+			if err := os.Remove(filepath.Join(j.dir, entry.Name())); err != nil {
+				return err
+			}
 			continue
 		}
 		if seq, ok := parseSegName(entry.Name()); ok && !entry.IsDir() {
@@ -356,18 +352,12 @@ func (j *Journal) recoverLiveLocked() error {
 		return err
 	}
 
-	if j.activeF != nil {
-		_ = j.activeF.Close()
-	}
-	for _, tp := range tempPaths {
-		_ = os.Remove(tp)
-	}
-	for _, path := range paths {
-		_ = os.Remove(path)
-	}
-	if err := syncLiveDir(j.dir); err != nil {
+	if err := retireLiveSegments(j.dir, paths); err != nil {
 		_ = newActiveF.Close()
 		return err
+	}
+	if j.activeF != nil {
+		_ = j.activeF.Close()
 	}
 
 	var liveInteractions []Record
@@ -394,6 +384,21 @@ func (j *Journal) recoverLiveLocked() error {
 	j.enforceLiveRetentionLocked()
 	if j.storageErr != nil {
 		return j.storageErr
+	}
+	return nil
+}
+
+// Replay visits originals before replacements and discards duplicate cursors.
+// Retire newest-first so a retry always sees an original prefix followed by its
+// complete replacement. Persist each removal before shortening that prefix again.
+func retireLiveSegments(dir string, paths []string) error {
+	for i := len(paths) - 1; i >= 0; i-- {
+		if err := os.Remove(paths[i]); err != nil {
+			return err
+		}
+		if err := syncLiveDir(dir); err != nil {
+			return err
+		}
 	}
 	return nil
 }

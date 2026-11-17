@@ -60,11 +60,12 @@ func init() {
 	pidFile := os.Getenv(r7EdgeEnvVar + "_PIDS")
 	switch mode {
 	case r7EdgeBind:
+		// Publishing the socket lets the shim kill this helper immediately.
+		r7EdgeWritePids(pidFile, os.Getpid())
 		ln, err := net.Listen("unix", sock)
 		if err != nil {
 			os.Exit(90)
 		}
-		r7EdgeWritePids(pidFile, os.Getpid())
 		for {
 			c, err := ln.Accept()
 			if err != nil {

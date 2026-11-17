@@ -65,11 +65,12 @@ func (d *Daemon) adoptLiveSessionName(local string, ad adapter.Adapter) {
 	if name == "" || name == m.Name {
 		return
 	}
-	if err := d.core.RenameAt(local, name, best.Since); err != nil {
+	changed, err := d.core.RenameAt(local, name, best.Since)
+	if err != nil {
 		log.Printf("skeleton: could not adopt the CLI's name for session %s: %v", local, err)
 		return
 	}
-	if d.api != nil {
+	if changed && d.api != nil {
 		d.api.pokeWatch()
 	}
 }

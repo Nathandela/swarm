@@ -130,7 +130,7 @@ func TestCodexReattachAllIncludesArchivedAndDeduplicates(t *testing.T) {
 }
 
 func TestCodexReattachRejectsUnsafeMetadataBeforeAnyLaunch(t *testing.T) {
-	for _, kind := range []string{"malformed", "oversize", "wrong-id", "relative-cwd", "missing-cwd", "symlink", "conflicting-duplicate"} {
+	for _, kind := range []string{"malformed", "oversize", "wrong-id", "relative-cwd", "missing-cwd", "symlink", "conflicting-duplicate", "mixed-archive"} {
 		t.Run(kind, func(t *testing.T) {
 			home, cwd := filepath.Join(t.TempDir(), ".codex"), t.TempDir()
 			t.Setenv("HOME", filepath.Dir(home))
@@ -156,6 +156,8 @@ func TestCodexReattachRejectsUnsafeMetadataBeforeAnyLaunch(t *testing.T) {
 				if err := os.Symlink(filepath.Join(home, "sessions/2026/11/17", filepath.Base(writeCodexReattachFixture(t, home, "outside", testClaudeSettledID, cwd))), path); err != nil {
 					t.Fatal(err)
 				}
+			case "mixed-archive":
+				writeCodexReattachFixture(t, home, "archived_sessions", testClaudeLiveID, cwd)
 			case "conflicting-duplicate":
 				writeCodexReattachFixture(t, home, "sessions/2026/11/19", testClaudeLiveID, t.TempDir())
 			}
@@ -166,7 +168,7 @@ func TestCodexReattachRejectsUnsafeMetadataBeforeAnyLaunch(t *testing.T) {
 			}
 			client := newFakeReattachClient()
 			var stdout, stderr bytes.Buffer
-			if code := runReattach([]string{"--cli", "codex", "--take-over"}, client, &stdout, &stderr); code != 1 {
+			if code := runReattach([]string{"--cli", "codex", "--take-over", "--all"}, client, &stdout, &stderr); code != 1 {
 				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 			}
 			if len(client.launches) != 0 {

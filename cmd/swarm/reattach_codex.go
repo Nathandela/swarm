@@ -119,7 +119,7 @@ func discoverCodexReattach(home string, all bool, selected string) ([]codexReatt
 	}
 	defer func() { _ = root.Close() }()
 	sessions := make([]codexReattachSession, 0)
-	seen := make(map[string]string)
+	seen := make(map[string]codexReattachSession)
 	entries, files, bytesRead := 0, 0, 0
 	var walk func(string, int) error
 	walk = func(dir string, depth int) error {
@@ -186,14 +186,17 @@ func discoverCodexReattach(home string, all bool, selected string) ([]codexReatt
 				if session.ID == "" {
 					continue
 				}
-				if cwd, ok := seen[session.ID]; ok {
-					if cwd != session.Cwd {
+				session.Archived = strings.HasPrefix(path, "archived_sessions"+string(filepath.Separator))
+				if prior, ok := seen[session.ID]; ok {
+					if prior.Archived != session.Archived {
+						return fmt.Errorf("session %s appears in both active and archived history", session.ID)
+					}
+					if prior.Cwd != session.Cwd {
 						return fmt.Errorf("conflicting native metadata for %s", session.ID)
 					}
 					continue
 				}
-				seen[session.ID] = session.Cwd
-				session.Archived = strings.HasPrefix(path, "archived_sessions"+string(filepath.Separator))
+				seen[session.ID] = session
 				sessions = append(sessions, session)
 			}
 			if errors.Is(readErr, io.EOF) {

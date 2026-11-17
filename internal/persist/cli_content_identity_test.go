@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 func TestCLIContentFingerprintRejectsMetadataPreservingTamperAndOldReaders(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cli")
+	path := filepath.Join(testbin.CanonicalTempDir(t), "cli")
 	if err := os.WriteFile(path, []byte("synthetic executable bytes"), 0o500); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +52,7 @@ func TestCLIContentFingerprintRejectsMetadataPreservingTamperAndOldReaders(t *te
 }
 
 func TestCLIContentFingerprintBoundsAndPrivateCustody(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cli")
+	path := filepath.Join(testbin.CanonicalTempDir(t), "cli")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o500)
 	if err != nil {
 		t.Fatal(err)
