@@ -113,6 +113,8 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/testbin.KillProcessesOf":    "test-support: the daemon TestMain kills processes of the binaries its run built; production never runs test binaries.",
 	"github.com/Nathandela/swarm/internal/testbin.RegisterExecutable": "test-support: TestMains and test build helpers register run-owned executables; production never builds test binaries.",
 	"github.com/Nathandela/swarm/internal/testbin.Supervise":          "test-support: package TestMains run it to own cleanup outside m.Run; production never launches test suites.",
+	"github.com/Nathandela/swarm/internal/testbin.CanonicalTempDir":   "test fixtures need canonical private paths on macOS to exercise production validation.",
+	"github.com/Nathandela/swarm/internal/testbin.WalkGoTree":         "source verification tests scan the current checkout and exclude other worktrees and concurrent release probes.",
 	// ---- internal/remote/crypto: the frozen Phase-1 primitive's own API ------------------
 	// The machine's shipped identity path is internal/remote/machineid; the phone's keystore
 	// is the Android Keystore behind mobile/keycustody.go. These are the primitive's file-backed

@@ -67,8 +67,9 @@ func TestTUI_TouchReturnPreservesLiveSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(swarmBin)
-			// Isolate the client preference from the real user's configuration.
-			cmd.Env = append(os.Environ(), append(daemonEnv, "HOME="+clientHome, "XDG_CONFIG_HOME="+configDir)...)
+			// A host provider probe could outlive this TUI and write into clientHome during cleanup.
+			cmd.Env = append(os.Environ(), daemonEnv...)
+			cmd.Env = append(cmd.Env, "HOME="+clientHome, "XDG_CONFIG_HOME="+configDir, "PATH="+filepath.Dir(swarmBin))
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 			if err := cmd.Start(); err != nil {

@@ -106,7 +106,8 @@ func TestTUI_OpensAndRestoresOverPTY(t *testing.T) {
 	}
 
 	cmd := exec.Command(swarmBin) // no args -> the TUI role
-	cmd.Env = append(os.Environ(), daemonEnv...)
+	// The smoke test only needs its fake provider. Keep host CLI discovery out of the owner's profile.
+	cmd.Env = append(append(os.Environ(), daemonEnv...), "PATH="+filepath.Dir(swarmBin))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	if err := cmd.Start(); err != nil {
