@@ -717,3 +717,46 @@ func finishPublicationFixture(store *Store, ref, id string, messageIDs []string,
 	}
 	return nil
 }
+
+func TestPruneOnlyVisitsExpiredRequestPublications(t *testing.T) {
+	s := openTestStore(t)
+	const ref = "request:\"<&"
+	for i, id := range []string{ref, ref + "-other"} {
+		now := testNow.Add(time.Duration(i) * time.Hour)
+		req := sampleRequest()
+		req.Ref, req.EventID, req.EventAt = id, id, now
+		r, _, err := s.Admit(req, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err = s.PreparePublication(r.Ref, "", "reply", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A broken row outside the requested key range must never be decoded.
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte("publications")).Put(publicationKey(ref+"-other", "unrelated"), []byte("{"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Prune(testNow.Add(RequestTTL)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.View(func(tx *bolt.Tx) error {
+		for _, id := range []string{ref, ref + "-other"} {
+			p, err := loadPublication(tx, id, "")
+			if err != nil {
+				return err
+			}
+			if id == ref && (p.Body != "" || p.State != StateFailed) {
+				t.Fatalf("expired publication retained: %+v", p)
+			}
+			if id != ref && (p.Body != "reply" || p.State != StatePrepared) {
+				t.Fatalf("active publication changed: %+v", p)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

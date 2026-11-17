@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -641,29 +642,31 @@ func (s *Store) Prune(now time.Time) error {
 			var deleteKeys [][]byte
 			var clearBodies []Publication
 			var sealed []Publication
-			if e := pubs.ForEach(func(k, v []byte) error {
+			// Publication keys are JSON pairs [ref,id]. Seek to the encoded first member and comma.
+			prefix, _ := json.Marshal([]string{r.Request.Ref})
+			prefix[len(prefix)-1] = ','
+			cursor := pubs.Cursor()
+			for k, v := cursor.Seek(prefix); bytes.HasPrefix(k, prefix); k, v = cursor.Next() {
 				var p Publication
-				if e := json.Unmarshal(v, &p); e != nil {
-					return e
+				if err := json.Unmarshal(v, &p); err != nil {
+					return err
 				}
-				if p.RequestRef == r.Request.Ref {
-					if p.State == StatePrepared {
-						p.State = StateFailed
-						sealed = append(sealed, p)
-					}
-					if !terminal(p.State) {
-						unresolved = true
-					} else if !now.Before(r.GuardUntil) {
-						deleteKeys = append(deleteKeys, append([]byte(nil), k...))
-					} else {
-						p.Body = ""
-						p.Chunks = nil
-						clearBodies = append(clearBodies, p)
-					}
+				if !bytes.Equal(k, publicationKey(p.RequestRef, p.ID)) {
+					return errors.New("discord: publication key disagrees with stored identity")
 				}
-				return nil
-			}); e != nil {
-				return e
+				if p.State == StatePrepared {
+					p.State = StateFailed
+					sealed = append(sealed, p)
+				}
+				if !terminal(p.State) {
+					unresolved = true
+				} else if !now.Before(r.GuardUntil) {
+					deleteKeys = append(deleteKeys, append([]byte(nil), k...))
+				} else {
+					p.Body = ""
+					p.Chunks = nil
+					clearBodies = append(clearBodies, p)
+				}
 			}
 			for _, p := range sealed {
 				if e := putJSON(tx, "publications", publicationKey(p.RequestRef, p.ID), p); e != nil {
