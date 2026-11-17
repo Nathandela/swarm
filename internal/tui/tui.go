@@ -477,7 +477,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s := protocol.SessionView{ID: msg.id, Agent: msg.agent, Name: msg.name}
 			if m.attachRunner != nil {
 				m.screen = screenAttach
-				return m, runAttach(m.attachRunner, s, false, m.touchBack)
+				return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing())
 			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach
@@ -599,6 +599,12 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// user back on the board (agents-tracker-1uq; both branches implemented the
 		// identical behavior independently).
 		cmd := m.enterGeneral()
+		if msg.last != "" {
+			// The user cycled sessions with Ctrl+P / Ctrl+N: the board comes back on the
+			// session they were last in, not the one the attach started from.
+			m.general.restoreSel(msg.last)
+			m.general.revealFocus()
+		}
 		if msg.err != nil {
 			return m, tea.Batch(cmd, m.general.setBanner("attach failed: "+msg.err.Error()))
 		}

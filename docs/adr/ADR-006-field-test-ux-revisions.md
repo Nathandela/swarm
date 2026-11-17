@@ -3,6 +3,33 @@
 **Status**: Accepted
 **Date**: 2026-07-18
 
+## Amendment: session cycling keys (2026-11-09)
+
+Owners who supervise several sessions moved between them by returning to the board
+(Ctrl+q), selecting the next row and attaching again: three steps and a full board
+repaint per hop. While attached, **Ctrl+p (0x10) and Ctrl+n (0x0e) now move straight to
+the previous and next running session**, in the board's display order (the order Down
+walks, rows inside a collapsed group excluded), wrapping at both ends. The board is not
+repainted between hops: the TUI runner keeps the terminal released and chains one
+passthrough per session. Returning with Ctrl+q selects the session the owner was last
+in. With no other running session the key re-attaches the current one.
+
+The keys are recognized by the same streaming input filter as the detach key (legacy
+byte and Kitty CSI-u, across read boundaries, never inside bracketed paste or a string
+payload); `attach.Run` reports them as `ReasonPrev` / `ReasonNext`. They are opt-in
+through `attach.Config.PrevKey` / `NextKey`: a zero value forwards the byte to the agent
+as before, and the swarm TUI sets both. The reserved-row hint names them.
+
+The neighbour list is a snapshot taken when the attach starts, so a session launched
+during the attach is reachable only after returning to the board, and a session that
+ended since is refused by the daemon and reported on the board banner.
+
+Trade-off: like Ctrl+q, the two chords no longer reach an attached agent. Both are
+emacs/readline history keys (previous/next line); the supported agents bind the same
+movement to the arrow keys, which stay untouched. The pair was chosen over unbound
+chords because it is the conventional previous/next binding and the P and N positions
+are identical across US/Swiss/QWERTZ/AZERTY layouts, the criterion that chose Ctrl+q.
+
 ## Amendment: terminal type matches the shim PTY (2026-10-12)
 
 Swarm runs agents inside shim-owned PTYs consumed by its xterm-compatible VT

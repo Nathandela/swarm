@@ -651,7 +651,7 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	if m.attachRunner != nil {
 		m.screen = screenAttach
 		// Only running rows reach here, so the passthrough is always read-write.
-		return m, runAttach(m.attachRunner, s, false, m.touchBack)
+		return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing())
 	}
 	m.attach = attachModel{session: s, hasSession: true, width: m.width}
 	m.screen = screenAttach

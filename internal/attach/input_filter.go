@@ -25,6 +25,8 @@ var (
 type detachInputFilter struct {
 	mu                 sync.Mutex
 	key                byte
+	cycle              []byte // extra keys that also end the attach (ADR-006 session cycling)
+	fired              byte   // the key that ended the attach; 0 until one does
 	forward            func([]byte)
 	detach             func()
 	pending            []byte
@@ -101,7 +103,7 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 	continuation := f.pos.c1 && f.pos.utf8Left > 0 && b >= 0x80 && b < 0xc0
 
 	if len(f.pending) == 0 {
-		if !payload && b == f.key && b != '\x1b' {
+		if !payload && f.endKey(b) {
 			return true
 		}
 		f.pos.feed(b)
@@ -119,7 +121,7 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 	// ADR-019: CSI/ESC/nF reports use printable bytes. A C0 detach byte
 	// arriving while such a report is incomplete is a real keypress, not part
 	// of the report. Preserve the report prefix, withhold the key, and detach.
-	if !payload && b == f.key && b != '\x1b' {
+	if !payload && f.endKey(b) {
 		if !mouseInputCandidate(f.pending) || f.dropMouseCandidate == nil || !f.dropMouseCandidate() {
 			*out = append(*out, f.pending...)
 		}
@@ -161,6 +163,9 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 		}
 		if f.mouse != nil {
 			if handled, detach := f.mouse(seq); handled {
+				if detach {
+					f.fired = f.key
+				}
 				return detach
 			}
 		}
@@ -195,7 +200,44 @@ func (f *detachInputFilter) isKittyDetach(seq []byte) bool {
 		return false // releases and non-key CSI sequences are passthrough
 	}
 	key := press.Key()
-	return key.Code == detachKeyRune(f.key) && key.Mod.Contains(uv.ModCtrl)
+	if !key.Mod.Contains(uv.ModCtrl) {
+		return false
+	}
+	for _, k := range f.keys() {
+		if key.Code == detachKeyRune(k) {
+			f.fired = k
+			return true
+		}
+	}
+	return false
+}
+
+// keys lists every key that ends the attach: the detach key first, then the cycling keys.
+func (f *detachInputFilter) keys() []byte {
+	return append([]byte{f.key}, f.cycle...)
+}
+
+// endKey reports whether the legacy byte b is one of the keys that end the attach, and
+// records which one. ESC is never matched here: as a key it is only recognizable by the
+// absence of a following byte (flushTimedOut).
+func (f *detachInputFilter) endKey(b byte) bool {
+	if b == '\x1b' || b == 0 {
+		return false
+	}
+	for _, k := range f.keys() {
+		if b == k {
+			f.fired = k
+			return true
+		}
+	}
+	return false
+}
+
+// Fired returns the key that ended the attach, or 0 if none has.
+func (f *detachInputFilter) Fired() byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fired
 }
 
 func detachKeyRune(key byte) rune {
@@ -246,6 +288,7 @@ func (f *detachInputFilter) flushTimedOut(gen uint64) {
 	if !f.inPaste && f.key == '\x1b' && bytes.Equal(f.pending, []byte{'\x1b'}) {
 		f.pending = nil
 		f.detached = true
+		f.fired = f.key
 		f.detach()
 		return
 	}
