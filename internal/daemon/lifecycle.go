@@ -142,7 +142,7 @@ func (d *Daemon) Delete(id string) error {
 	}
 	d.mu.Unlock()
 	// WAL-first: a crash during directory removal must leave a durable deletion event.
-	if _, jerr := d.journal.Append(journal.Record{SessionID: id, Type: journal.TypeDeleted}); jerr != nil {
+	if _, jerr := d.appendJournal(journal.Record{SessionID: id, Type: journal.TypeDeleted}); jerr != nil {
 		return jerr
 	}
 	if err := deleteSessionDirFn(d, id); err != nil {
@@ -151,7 +151,7 @@ func (d *Daemon) Delete(id string) error {
 				err = errors.Join(err, d.store.Save(meta))
 			}
 			// Restore the remote row after the failed deletion, retaining its cleanup owner.
-			_, stateErr := d.journal.Append(completeSessionRecord(meta, journal.TypeSessionState, nil))
+			_, stateErr := d.appendJournal(completeSessionRecord(meta, journal.TypeSessionState, nil))
 			err = errors.Join(err, stateErr)
 		}
 		return err

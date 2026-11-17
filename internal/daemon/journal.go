@@ -136,7 +136,7 @@ func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShim
 	if payload == nil {
 		return true, nil
 	}
-	_, err = d.journal.Append(completeSessionRecord(m, journal.TypeSessionState, payload))
+	_, err = d.appendJournal(completeSessionRecord(m, journal.TypeSessionState, payload))
 	return true, err
 }
 
@@ -147,8 +147,18 @@ func (d *Daemon) RecordGatewayPresence(online bool) error {
 	payload, _ := json.Marshal(struct {
 		Online bool `json:"online"`
 	}{online})
-	_, err := d.journal.Append(journal.Record{Type: journal.TypePresence, Payload: payload})
+	_, err := d.appendJournal(journal.Record{Type: journal.TypePresence, Payload: payload})
 	return err
+}
+
+func (d *Daemon) appendJournal(r journal.Record) (journal.Record, error) {
+	rec, err := d.journal.Append(r)
+	if err != nil && d.journal.NeedsRecovery() {
+		if rerr := d.journal.Recover(); rerr == nil {
+			return d.journal.Append(r)
+		}
+	}
+	return rec, err
 }
 
 // journalRecordFor derives the journal record a meta write warrants from the

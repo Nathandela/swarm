@@ -85,6 +85,7 @@ func (j *Journal) reserveCursorLocked() error {
 		return nil
 	}
 	if j.cursor > math.MaxUint64-liveCursorBlock {
+		j.exhausted = true
 		return errors.New("journal: cursor space exhausted")
 	}
 	ceiling := j.cursor + liveCursorBlock
@@ -227,6 +228,195 @@ func (j *Journal) openLive() (*Journal, error) {
 		return nil, j.storageErr
 	}
 	return j, nil
+}
+
+func (j *Journal) recoverLiveLocked() error {
+	entries, err := os.ReadDir(j.dir)
+	if err != nil {
+		return err
+	}
+	var paths []string
+	var tempPaths []string
+	var maxSeq uint64
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".live-journal-") && !entry.IsDir() {
+			tempPaths = append(tempPaths, filepath.Join(j.dir, entry.Name()))
+			continue
+		}
+		if seq, ok := parseSegName(entry.Name()); ok && !entry.IsDir() {
+			paths = append(paths, filepath.Join(j.dir, entry.Name()))
+			maxSeq = max(maxSeq, seq)
+		}
+	}
+	sort.Strings(paths)
+	if maxSeq == math.MaxUint64 {
+		j.exhausted = true
+		return errors.New("journal: segment sequence exhausted")
+	}
+
+	var diskMaxCursor uint64
+	var controlBytes int64
+	var lastControl uint64
+	var droppedThrough uint64
+	var diskControls []Record
+	for _, path := range paths {
+		err := streamSegment(path, func(r Record) error {
+			diskMaxCursor = max(diskMaxCursor, r.Cursor)
+			if r.Type == TypeInteraction || r.Type == typeCursorReservation || r.Cursor <= lastControl {
+				return nil
+			}
+			lastControl = r.Cursor
+			n := int64(len(EncodeRecord(r)) + 1)
+			if n > j.opts.MaxTotalBytes {
+				return errors.New("journal: control record exceeds retention budget")
+			}
+			diskControls = append(diskControls, r)
+			controlBytes += n
+			for controlBytes > j.opts.MaxTotalBytes {
+				droppedThrough = max(droppedThrough, diskControls[0].Cursor)
+				controlBytes -= int64(len(EncodeRecord(diskControls[0])) + 1)
+				diskControls[0] = Record{}
+				diskControls = diskControls[1:]
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	newCursor := max(j.cursor, diskMaxCursor)
+	newReserved := max(j.reserved, newCursor)
+	var checkpoint []byte
+	if newReserved > lastControl {
+		checkpoint = append(EncodeRecord(Record{SchemaVersion: SchemaVersion, Cursor: newReserved, Type: typeCursorReservation, TS: j.clock().UTC()}), '\n')
+	}
+	if int64(len(checkpoint)) > j.opts.MaxTotalBytes {
+		return errors.New("journal: control budget cannot hold cursor reservation")
+	}
+	for controlBytes+int64(len(checkpoint)) > j.opts.MaxTotalBytes && len(diskControls) > 0 {
+		droppedThrough = max(droppedThrough, diskControls[0].Cursor)
+		controlBytes -= int64(len(EncodeRecord(diskControls[0])) + 1)
+		diskControls[0] = Record{}
+		diskControls = diskControls[1:]
+	}
+
+	var data bytes.Buffer
+	var segments []*segment
+	nextSeq := maxSeq + 1
+	var lastCursor uint64
+	cleanupNewSegments := func() {
+		for _, s := range segments {
+			_ = os.Remove(s.path)
+		}
+	}
+	flush := func() error {
+		if nextSeq == 0 {
+			return errors.New("journal: segment sequence exhausted")
+		}
+		name := segName(nextSeq)
+		if err := writeLiveSegment(j.dir, name, data.Bytes()); err != nil {
+			return err
+		}
+		segments = append(segments, &segment{seq: nextSeq, path: filepath.Join(j.dir, name), bytes: int64(data.Len()), lastCursor: lastCursor})
+		nextSeq++
+		data.Reset()
+		lastCursor = 0
+		return nil
+	}
+	for _, record := range diskControls {
+		line := append(EncodeRecord(record), '\n')
+		if data.Len() > 0 && int64(data.Len()+len(line)) > j.opts.MaxBytes {
+			if err := flush(); err != nil {
+				cleanupNewSegments()
+				return err
+			}
+		}
+		data.Write(line)
+		lastCursor = record.Cursor
+	}
+	if data.Len() > 0 && int64(data.Len()+len(checkpoint)) > j.opts.MaxBytes {
+		if err := flush(); err != nil {
+			cleanupNewSegments()
+			return err
+		}
+	}
+	data.Write(checkpoint)
+	if data.Len() > 0 || len(segments) == 0 {
+		if err := flush(); err != nil {
+			cleanupNewSegments()
+			return err
+		}
+	}
+
+	seg := segments[len(segments)-1]
+	newActiveF, err := os.OpenFile(seg.path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		cleanupNewSegments()
+		return err
+	}
+
+	if j.activeF != nil {
+		_ = j.activeF.Close()
+	}
+	for _, tp := range tempPaths {
+		_ = os.Remove(tp)
+	}
+	for _, path := range paths {
+		_ = os.Remove(path)
+	}
+	if err := syncLiveDir(j.dir); err != nil {
+		_ = newActiveF.Close()
+		return err
+	}
+
+	var liveInteractions []Record
+	for _, rec := range j.records {
+		if rec.Type == TypeInteraction {
+			liveInteractions = append(liveInteractions, rec)
+		}
+	}
+	merged := mergeOrderedRecords(diskControls, liveInteractions)
+
+	prevCursor := j.cursor
+	j.cursor = newCursor
+	j.reserved = newReserved
+	j.lostThrough = max(j.lostThrough, droppedThrough)
+	if diskMaxCursor > prevCursor {
+		j.lostThrough = max(j.lostThrough, diskMaxCursor)
+	}
+	j.records = merged
+	j.active = seg
+	j.activeF = newActiveF
+	j.segments = segments
+	j.nextSeq = nextSeq
+	j.storageErr = nil
+	j.enforceLiveRetentionLocked()
+	if j.storageErr != nil {
+		return j.storageErr
+	}
+	return nil
+}
+
+func mergeOrderedRecords(a, b []Record) []Record {
+	out := make([]Record, 0, len(a)+len(b))
+	i, k := 0, 0
+	for i < len(a) && k < len(b) {
+		if a[i].Cursor < b[k].Cursor {
+			out = append(out, a[i])
+			i++
+		} else if b[k].Cursor < a[i].Cursor {
+			out = append(out, b[k])
+			k++
+		} else {
+			out = append(out, a[i])
+			i++
+			k++
+		}
+	}
+	out = append(out, a[i:]...)
+	out = append(out, b[k:]...)
+	return out
 }
 
 func streamSegment(path string, visit func(Record) error) error {

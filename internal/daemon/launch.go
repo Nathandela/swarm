@@ -842,7 +842,7 @@ func (d *Daemon) superviseLaunched(id string, cmd *exec.Cmd, stop chan struct{})
 	case <-stop:
 		return // Delete: do not finalize; Delete owns the teardown
 	case <-waitCh:
-		d.handleShimExit(id) // exited on its own or via Kill: finalize from side-files
+		d.handleShimExitWithRetry(id, stop) // exited on its own or via Kill: finalize from side-files
 	}
 }
 
