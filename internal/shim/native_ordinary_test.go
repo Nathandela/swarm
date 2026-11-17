@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/procstart"
 )
 
 func init() {
@@ -40,5 +42,25 @@ func TestOrdinaryNativeProviderLaunchHasNoLoginOrUnsupportedContainmentRegressio
 	}
 	if proof.DescendantsContained != (runtime.GOOS == "linux") {
 		t.Fatal("platform proof claimed unsupported descendant custody")
+	}
+}
+
+// The native record names its boot so a reboot, which skips the stop proof,
+// still proves the recorded writers ended.
+func TestNativeRecordCarriesBootID(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command(selfExe(t), "fixture-native-ordinary", dir, newSocketPath(t))
+	cmd.Env = []string{}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ordinary native launch: %v: %s", err, out)
+	}
+	var native NativeProcessInfo
+	raw, err := os.ReadFile(filepath.Join(dir, NativeProcessFile))
+	if err != nil || json.Unmarshal(raw, &native) != nil {
+		t.Fatal("no native process record")
+	}
+	boot, err := procstart.BootID()
+	if err != nil || boot == "" || native.BootID != boot {
+		t.Fatalf("native record boot id = %q, want %q (%v)", native.BootID, boot, err)
 	}
 }
