@@ -136,6 +136,28 @@ func TestCycleKeys_HintNamesThem(t *testing.T) {
 	}
 }
 
+func TestCycleKeys_ModifiedKittyChordsPassThroughAndDetachPrecedence(t *testing.T) {
+	f, got := newRecordingFilter(t)
+	// Ctrl+Shift+P (CSI 112;6u) and Ctrl+Alt+N (CSI 110;7u) carry extra modifiers and
+	// must reach the agent rather than triggering plain Ctrl+P / Ctrl+N cycling.
+	modified := []byte("\x1b[112;6u\x1b[110;7u")
+	if f.Feed(modified) {
+		t.Fatal("modified Kitty Ctrl+Shift+P / Ctrl+Alt+N ended the attach")
+	}
+	if !bytes.Equal(got(), modified) {
+		t.Fatalf("forwarded = %q, want %q", got(), modified)
+	}
+
+	// If DetachKey collides with PrevKey, DetachKey takes precedence.
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess, DetachKey: ctrlP, PrevKey: ctrlP, NextKey: ctrlN})
+	term.feed([]byte{ctrlP})
+	if res := waitResult(t, ch); res.reason != ReasonDetached {
+		t.Fatalf("colliding DetachKey/PrevKey reason = %v, want ReasonDetached", res.reason)
+	}
+}
+
 func newRecordingFilter(t *testing.T) (*detachInputFilter, func() []byte) {
 	t.Helper()
 	var buf bytes.Buffer

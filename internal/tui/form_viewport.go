@@ -142,6 +142,9 @@ func (m rootModel) formReading(f formContent) (lines []string, budget int, key s
 	if width <= 0 {
 		width = 80
 	}
+	if !m.compactMobileForm() && (m.screen == screenHandoff || m.screen == screenLaunch || m.screen == screenResume || m.screen == screenOptions) && width > 4 {
+		width -= 2
+	}
 	for _, line := range strings.Split(f.context, "\n") {
 		lines = append(lines, strings.Split(ansi.Wrap(line, width, ""), "\n")...)
 	}
@@ -357,6 +360,8 @@ func (m rootModel) formHasPinnedTail() bool {
 		return m.handoff.confirmPending() || m.handoff.errMsg != "" || (m.handoff.method == handoffMethodHandsOff && m.handoff.sourceRunning)
 	case screenResume:
 		return m.resume.reason != "" || m.resume.directory.errMsg != ""
+	case screenOptions:
+		return m.options.contextGuard.err != ""
 	}
 	return false
 }
@@ -399,6 +404,17 @@ func (m rootModel) scrollFormInOrder(raw []string) string {
 			candidate := rest[i:]
 			for len(candidate) > 0 && strings.TrimSpace(ansi.Strip(candidate[0])) == "" {
 				candidate = candidate[1:]
+			}
+			if len(candidate) > bodyRows-2 {
+				var compact []string
+				for _, cl := range candidate {
+					if strings.TrimSpace(ansi.Strip(cl)) != "" {
+						compact = append(compact, cl)
+					}
+				}
+				if len(compact) <= bodyRows-2 {
+					candidate = compact
+				}
 			}
 			if len(candidate) > 0 && len(candidate) <= bodyRows-2 {
 				if len(rest[i:]) <= bodyRows-2 {

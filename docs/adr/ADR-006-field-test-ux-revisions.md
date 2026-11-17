@@ -26,7 +26,8 @@ ended since is refused by the daemon and reported on the board banner.
 
 Trade-off: like Ctrl+q, the two chords no longer reach an attached agent. Both are
 emacs/readline history keys (previous/next line); the supported agents bind the same
-movement to the arrow keys, which stay untouched. The pair was chosen over unbound
+movement to the arrow keys, which stay untouched (and OpenCode's default Ctrl+p/Ctrl+n
+shortcuts remain reachable through its slash commands). The pair was chosen over unbound
 chords because it is the conventional previous/next binding and the P and N positions
 are identical across US/Swiss/QWERTZ/AZERTY layouts, the criterion that chose Ctrl+q.
 

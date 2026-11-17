@@ -477,7 +477,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s := protocol.SessionView{ID: msg.id, Agent: msg.agent, Name: msg.name}
 			if m.attachRunner != nil {
 				m.screen = screenAttach
-				return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing())
+				return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing(s))
 			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
 			m.screen = screenAttach
@@ -598,13 +598,13 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// dial failing) is surfaced on the banner rather than silently dropping the
 		// user back on the board (agents-tracker-1uq; both branches implemented the
 		// identical behavior independently).
-		cmd := m.enterGeneral()
 		if msg.last != "" {
 			// The user cycled sessions with Ctrl+P / Ctrl+N: the board comes back on the
 			// session they were last in, not the one the attach started from.
 			m.general.restoreSel(msg.last)
 			m.general.revealFocus()
 		}
+		cmd := m.enterGeneral()
 		if msg.err != nil {
 			return m, tea.Batch(cmd, m.general.setBanner("attach failed: "+msg.err.Error()))
 		}
@@ -622,6 +622,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.general.confirm && m.general.confirmID == msg.id {
 			m.general.confirm = false
 			m.general.confirmID = ""
+		}
+		if m.general.editing && m.general.editID == msg.id {
+			m.general.closeEdit()
 		}
 		return m, m.general.setBanner("session deleted")
 

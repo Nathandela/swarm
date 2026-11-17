@@ -228,7 +228,16 @@ func (m generalModel) compactRows() bool {
 func ellipsis(s string, n int) string { return ansi.Truncate(s, max(0, n), "…") }
 func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 	prefix := "  "
-	if selected {
+	prefixWidth := 2
+	switch {
+	case m.confirm && s.ID == m.confirmID:
+		prompt := confirmPrompt(s)
+		if m.width > 0 && m.width < ansi.StringWidth(prompt)+12 {
+			prompt = "?"
+		}
+		prefix = styleError.Render(prompt) + " "
+		prefixWidth = ansi.StringWidth(prompt) + 1
+	case selected:
 		prefix = styleAccent.Render("▌") + " "
 	}
 	state := attentionToken(s)
@@ -252,12 +261,21 @@ func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 	}
 	if markers != "" {
 		// Keep a failure indication even when several diagnostics compete for one row.
-		state += " " + ellipsis(strings.TrimSpace(markers), max(1, m.width-8-ansi.StringWidth(state)))
+		state += " " + ellipsis(strings.TrimSpace(markers), max(1, m.width-prefixWidth-6-ansi.StringWidth(state)))
 	}
 	// State remains readable; diagnostic details live in the existing doctor/ls surfaces.
-	budget := max(0, m.width-4)
+	budget := max(0, m.width-prefixWidth-2)
 	state = ellipsis(state, max(0, budget-5))
 	nameWidth := max(0, budget-ansi.StringWidth(state)-1)
+	if m.editing && s.ID == m.editID {
+		var edited string
+		if m.editTag {
+			edited = "[" + editViewport(m.edit.text, m.edit.cursor, max(1, nameWidth-2)) + "]"
+		} else {
+			edited = editViewport(m.edit.text, m.edit.cursor, max(1, nameWidth))
+		}
+		return prefix + groupStyle(s.Group).Render(groupIcon(s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(edited, nameWidth)) + " " + groupStyle(s.Group).Render(state)
+	}
 	name := displayName(s)
 	if name == "" {
 		name = s.ID
@@ -326,7 +344,7 @@ func (m rootModel) sessionLineVisible(id string) bool {
 // confirm prefix plus minimum name and cwd columns (general.go:rowColumnsFor),
 // while keeping 32x8 and 40x8 mobile viewports on the compact sheet.
 func (m rootModel) inlineBoardOverlay() bool {
-	if m.pairing != nil || m.screen != screenGeneral || (!m.general.editing && !m.general.confirm) {
+	if m.pairing != nil || m.screen != screenGeneral || m.general.more != nil || (!m.general.editing && !m.general.confirm) {
 		return false
 	}
 	if m.formTooSmall() || (m.width > 0 && m.width < 64) || (m.height > 0 && m.height < 10) || !m.boardUsable() {

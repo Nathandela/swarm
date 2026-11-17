@@ -200,7 +200,7 @@ func (f *detachInputFilter) isKittyDetach(seq []byte) bool {
 		return false // releases and non-key CSI sequences are passthrough
 	}
 	key := press.Key()
-	if !key.Mod.Contains(uv.ModCtrl) {
+	if !key.Mod.Contains(uv.ModCtrl) || key.Mod&(uv.ModShift|uv.ModAlt|uv.ModMeta|uv.ModSuper) != 0 {
 		return false
 	}
 	for _, k := range f.keys() {

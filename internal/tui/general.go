@@ -654,7 +654,7 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	if m.attachRunner != nil {
 		m.screen = screenAttach
 		// Only running rows reach here, so the passthrough is always read-write.
-		return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing())
+		return m, runAttach(m.attachRunner, s, false, m.touchBack, m.general.sessionRing(s))
 	}
 	m.attach = attachModel{session: s, hasSession: true, width: m.width}
 	m.screen = screenAttach
@@ -1140,7 +1140,7 @@ func minInt(a, b int) int {
 // renderRow renders one session row: a 2-cell selection prefix (or the confirm
 // prompt), the group icon, then the five V-4 fields on one line.
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
-	if m.compactRows() && !m.editing && !m.confirm {
+	if m.compactRows() {
 		return m.compactRow(s, selected)
 	}
 	gs := groupStyle(g)

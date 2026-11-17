@@ -73,14 +73,20 @@ func runAttach(r AttachRunner, s protocol.SessionView, readOnly, touchBack bool,
 
 // sessionRing snapshots the board's running rows in display order -- the order Down
 // walks, so rows inside a collapsed group are not part of it -- for the attach about to
-// start. A snapshot, not a live view: the runner works off the update loop.
-func (m generalModel) sessionRing() SessionRing {
+// start. When an auto-attached fresh launch has not yet arrived on the board subscription,
+// initial seeds it into the ring so cycling out and back can return to it.
+func (m generalModel) sessionRing(initial ...protocol.SessionView) SessionRing {
 	var rows []protocol.SessionView
 	m.navigation(func(l boardLine, _ int) {
 		if l.kind == lineSession && l.session.Status.Process == status.ProcessRunning {
 			rows = append(rows, l.session)
 		}
 	})
+	for _, init := range initial {
+		if init.ID != "" && !slices.ContainsFunc(rows, func(s protocol.SessionView) bool { return s.ID == init.ID }) {
+			rows = append(rows, init)
+		}
+	}
 	return func(fromID string, step int) (protocol.SessionView, bool) {
 		n := len(rows)
 		at := slices.IndexFunc(rows, func(s protocol.SessionView) bool { return s.ID == fromID })

@@ -1,12 +1,14 @@
 package skeleton
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -53,6 +55,7 @@ func agyStatusLineArgs(argv, env []string) []string {
 }
 
 func agyStatusLineArgsWithBinary(argv, env []string, binary string) []string {
+	binary = strings.TrimSuffix(binary, " (deleted)")
 	if len(argv) == 0 || !filepath.IsAbs(binary) {
 		return argv
 	}
@@ -155,20 +158,20 @@ func homeFromEnv(env []string) string {
 }
 
 func readAgySettingsBounded(path string) []byte {
-	fi, err := os.Stat(path)
-	if err != nil || !fi.Mode().IsRegular() {
-		return nil
-	}
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, maxAgySettingsBytes))
-	if err != nil {
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxAgySettingsBytes {
 		return nil
 	}
-	return data
+	data, err := io.ReadAll(io.LimitReader(f, maxAgySettingsBytes+1))
+	if err != nil || len(data) > maxAgySettingsBytes {
+		return nil
+	}
+	return bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 }
 
 func (d *Daemon) observeAgyStatusLine(cb engine.Callback) {

@@ -637,10 +637,12 @@ func Run(cfg Config) (reason Reason, err error) {
 				armHeal()
 			}
 		case <-detachCh:
-			switch k := byte(firedKey.Load()); {
-			case k != 0 && k == cfg.NextKey:
+			switch k := byte(firedKey.Load()); k {
+			case 0, detachKey:
+				return finish(ReasonDetached)
+			case cfg.NextKey:
 				return finish(ReasonNext)
-			case k != 0 && k == cfg.PrevKey:
+			case cfg.PrevKey:
 				return finish(ReasonPrev)
 			}
 			return finish(ReasonDetached)
