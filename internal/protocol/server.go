@@ -3470,6 +3470,13 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
+	// Owner semantic callers bind sends to the daemon's current session instance.
+	// Missing or invalid records stay absent rather than inventing an identity.
+	if source, ok := s.d.(SessionCapabilityLookup); ok {
+		if caps, present := source.SessionCapabilities(m.ID); present && caps.Validate() == nil {
+			view.Capabilities = &caps
+		}
+	}
 	if source, ok := s.d.(OpenCodeObservationBackend); ok {
 		if native, present := source.OpenCodeObservation(m.ID); present {
 			view.OpenCode = &native
