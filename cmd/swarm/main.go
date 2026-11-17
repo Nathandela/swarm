@@ -76,8 +76,8 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spaw
   swarm spawn      launch a new session with context
                    (--cli agent [--dir d] [--model m] [--worktree] [--name n],
                     one of --prompt text | --handoff file | --delegate file)
-  swarm reattach   adopt provider-managed background sessions
-                   (--cli claude [--all] [--take-over] [--dry-run])
+  swarm reattach   import existing Claude background or Codex CLI conversations
+                   (--cli claude|codex [--session ID (codex)] [--all] [--take-over] [--dry-run])
   swarm ls         list sessions (--json for the full roster)
   swarm watch      wait for a session to reach a status
                    (--until needs_input[,ready_for_review,completed]|change, --timeout d)

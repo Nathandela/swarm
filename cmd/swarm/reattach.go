@@ -146,21 +146,25 @@ func (w *cappedCommandOutput) truncatedOutput() bool {
 func runReattach(args []string, c agentClient, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("reattach", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cli := fs.String("cli", "", "provider CLI to import (currently claude)")
-	all := fs.Bool("all", false, "include completed and stopped background sessions")
-	takeOver := fs.Bool("take-over", false, "stop the provider's background supervisor before adopting live sessions")
+	cli := fs.String("cli", "", "provider CLI to import (claude or codex)")
+	all := fs.Bool("all", false, "include completed/stopped Claude sessions or archived Codex sessions")
+	takeOver := fs.Bool("take-over", false, "stop Claude supervisor; for Codex, confirm original CLIs are already stopped")
+	selected := fs.String("session", "", "import one native Codex conversation id")
 	dryRun := fs.Bool("dry-run", false, "show eligible sessions without stopping or launching anything")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 || *cli != "claude" {
-		_, _ = fmt.Fprintln(stderr, "reattach: use `swarm reattach --cli claude [--all] [--take-over] [--dry-run]`")
+	if fs.NArg() != 0 || (*cli != "claude" && *cli != "codex") || (*selected != "" && (*cli != "codex" || !adapter.IsCanonicalConversationID(*selected))) {
+		_, _ = fmt.Fprintln(stderr, "reattach: use `swarm reattach --cli claude|codex [--session ID (codex)] [--all] [--take-over] [--dry-run]`")
 		return 2
 	}
 	capable, ok := c.(interface{ Capabilities() []string })
 	if !ok || !slices.Contains(capable.Capabilities(), protocol.CapExternalResume) {
 		_, _ = fmt.Fprintln(stderr, "reattach: the running swarm daemon does not support external resume; restart it with this CLI version")
 		return 1
+	}
+	if *cli == "codex" {
+		return runCodexReattach(*all, *takeOver, *dryRun, *selected, c, stdout, stderr)
 	}
 	source, err := newExecClaudeSessionSource()
 	if err != nil {

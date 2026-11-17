@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -77,5 +78,17 @@ func TestProviderSwitchUsesNativeCodexModelForModernRolloutLayouts(t *testing.T)
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestCodexExternalResumeRefusesManagedHomeRedirection(t *testing.T) {
+	f := newLoginFixture(t)
+	spec := daemon.LaunchSpec{AgentType: "codex", Cwd: t.TempDir(), Options: map[string]string{protocol.OptionResumeConversationID: "01a00339-a80e-72a0-966f-116427b6b9ce"}}
+	err := f.m.d.api.bindLoginLaunch(&spec)
+	if err == nil || !strings.Contains(err.Error(), "native sign-in") {
+		t.Fatalf("external native discussion redirected into managed home: runtime=%v err=%v", spec.LoginRuntime, err)
+	}
+	if spec.LoginRuntime != nil {
+		t.Fatal("failed external import bound a managed runtime")
 	}
 }
