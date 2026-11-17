@@ -156,6 +156,7 @@ field WakeAlert.ContentReady bool
 field WakeAlert.Text string
 func DecodeQR(string) (*QRPayload, error)
 func NewApp(*Config, KeyCustody) (*App, error)
+func NewVoiceDevice(string, string, string, string, VoiceSSHSigner, VoiceEnrollmentSigner) (*VoiceDevice, error)
 ifacemethod EventListener.OnEvent(*Event)
 ifacemethod KeyCustody.ContentKEK() ([]byte, error)
 ifacemethod KeyCustody.WakeKEK() ([]byte, error)
@@ -163,6 +164,10 @@ ifacemethod PushAttestor.Attest([]byte) (string, error)
 ifacemethod PushInstallationSigner.PublicKey() []byte
 ifacemethod PushInstallationSigner.Sign([]byte) ([]byte, error)
 ifacemethod RelayTrust.VerifyRelayChain(string, []byte) error
+ifacemethod VoiceEnrollmentSigner.SignVoiceEnrollment(string) (string, error)
+ifacemethod VoiceEnrollmentSigner.VoiceEnrollmentPublicKey() string
+ifacemethod VoiceSSHSigner.SignVoiceSSH(string) (string, error)
+ifacemethod VoiceSSHSigner.VoiceSSHPublicKey() string
 method App.AddMachine(string, string) error
 method App.Approve(string, string, string) (*Op, error)
 method App.BeginPairing(string) (*Pairing, error)
@@ -280,6 +285,14 @@ method TranscriptPage.Stale() (bool, error)
 method UndeliveredList.At(int) (*UndeliveredInput, error)
 method UndeliveredList.Count() (int, error)
 method UndeliveredList.Dropped() (int, error)
+method VoiceDevice.BeginPTT(string, string) (string, error)
+method VoiceDevice.End() error
+method VoiceDevice.Enroll(string, string, string) (string, error)
+method VoiceDevice.FinalizePTT(string, string, string) (string, error)
+method VoiceDevice.Publications(string, string) (string, error)
+method VoiceDevice.Receipt(string, string) (string, error)
+method VoiceDevice.Status(string) (string, error)
+method VoiceDevice.SubmitText(string, string, string) (string, error)
 type App struct
 type ComposerPublication struct
 type ComposerPublicationList struct
@@ -315,4 +328,7 @@ type TranscriptItem struct
 type TranscriptPage struct
 type UndeliveredInput struct
 type UndeliveredList struct
+type VoiceDevice struct
+type VoiceEnrollmentSigner interface
+type VoiceSSHSigner interface
 type WakeAlert struct

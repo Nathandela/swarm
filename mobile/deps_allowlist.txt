@@ -98,3 +98,14 @@ go.etcd.io/bbolt
 # Note it is NOT the same package as golang.org/x/sys/cpu above, which is real code the
 # darwin closure runs (crypto feature detection) and is absent from the android one.
 golang.org/x/sys/unix
+
+# P8 scoped voice device API. The device transport/wire packages are leaves
+# with no controller, daemon, relay, dashboard identity, or push dependencies.
+github.com/Nathandela/swarm/internal/jsontext
+github.com/Nathandela/swarm/internal/voiceclient
+github.com/Nathandela/swarm/internal/voicewire
+golang.org/x/crypto/blowfish
+golang.org/x/crypto/cryptobyte
+golang.org/x/crypto/cryptobyte/asn1
+golang.org/x/crypto/ssh
+golang.org/x/crypto/ssh/internal/bcrypt_pbkdf

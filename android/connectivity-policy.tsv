@@ -6,8 +6,9 @@
 # and that the rows are jointly consistent. ConnectivityPolicyTest.kt asserts the shipping
 # implementation IS this table.
 #
-# The decision itself is ADR-007 B16: backgrounding DISCONNECTS and no foreground service
-# ships in v1. B7's inbound mechanism parks a socket in a bounded server-side wait for up to
+# This table applies to the dashboard. The explicitly started, separately scoped
+# voice microphone service is documented in android/voice-device.md.
+# ADR-007 B16 disconnects the dashboard on backgrounding. B7's inbound mechanism parks a socket in a bounded server-side wait for up to
 # 25 s (docs section 6.0), which is exactly what Doze, App Standby and battery saver exist to
 # kill. Holding it would force a foregroundServiceType of dataSync (capped from API 34 at
 # ~6 h/day, after which the system force-stops the service) or specialUse (a Play-review
