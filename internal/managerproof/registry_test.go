@@ -5,12 +5,51 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func proofBinding(provider string) Binding {
 	return Binding{Session: "place/session", SessionInstance: "incarnation", ConversationID: "conversation", Provider: provider, NativeSessionID: "native-session", NativeGeneration: "native-generation", ObservationGeneration: "observer-generation", LoginEpoch: "account-epoch"}
+}
+func TestSnapshotWaitsForQueuedNativeEvidence(t *testing.T) {
+	r, err := NewRegistry(proofBinding("codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending atomic.Bool
+	pending.Store(true)
+	probed := make(chan struct{}, 1)
+	r.SetProofPending(func() bool {
+		select {
+		case probed <- struct{}{}:
+		default:
+		}
+		return pending.Load()
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := r.WaitSnapshot(ctx)
+		result <- err
+	}()
+	select {
+	case <-probed:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	pending.Store(false)
+	r.NotifyCustodyProgress()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	pending.Store(true)
+	cancel()
+	if _, err := r.WaitSnapshot(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waiting after cancellation: %v", err)
+	}
 }
 func TestProofRequiresExactNativeInputAndMCPJoin(t *testing.T) {
 	b := proofBinding("claude")

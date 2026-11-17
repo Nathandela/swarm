@@ -2,10 +2,12 @@ package skeleton
 
 import (
 	"context"
-	"github.com/Nathandela/swarm/internal/adapter/codex"
+	"errors"
+	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -38,6 +40,9 @@ func (d *Daemon) managerMeta(local, instance string) (persist.Meta, string, erro
 	meta, ok := d.core.Get(local)
 	if !ok || meta.Role != "manager" || meta.ManagerConversationID == "" || meta.ManagerBridgeSocket == "" || meta.ManagerAuthFile == "" || meta.CLIIdentity == nil || meta.Status.Process != status.ProcessRunning || meta.ResumeError != "" {
 		return persist.Meta{}, "", managerproof.ErrUnavailable
+	}
+	if meta.ManagerReplayID == "" {
+		return persist.Meta{}, "", managerproof.ErrQuarantined
 	}
 	current, ok := d.sessionInstance(local)
 	if !ok || instance == "" || current != instance {
@@ -90,11 +95,17 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance stri
 			return result, managerproof.ErrUnavailable
 		}
 		desc, err := d.core.SessionClaudeInput(local)
+		if errors.Is(err, managerproof.ErrQuarantined) {
+			return result, err
+		}
 		if err != nil || desc.ManagerConversationID != meta.ManagerConversationID {
 			return result, managerproof.ErrUnavailable
 		}
 		client := claudeinput.NewClient(desc)
 		worker, err := client.Ready(ctx)
+		if errors.Is(err, managerproof.ErrQuarantined) {
+			return result, err
+		}
 		if err != nil {
 			return result, managerproof.ErrUnavailable
 		}
@@ -104,13 +115,22 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance stri
 			return result, managerproof.ErrUnavailable
 		}
 		binding.ObservationGeneration, err = client.ManagerObservation(ctx, worker)
+		if errors.Is(err, managerproof.ErrQuarantined) {
+			return result, err
+		}
 		if err != nil {
 			return result, managerproof.ErrUnavailable
 		}
 		if err := client.BindManager(ctx, worker, binding); err != nil {
+			if errors.Is(err, managerproof.ErrQuarantined) {
+				return result, err
+			}
 			return result, managerproof.ErrStale
 		}
 		turn, err := client.Turn(ctx, worker)
+		if errors.Is(err, managerproof.ErrQuarantined) {
+			return result, err
+		}
 		if err != nil {
 			return result, managerproof.ErrUnavailable
 		}
@@ -131,9 +151,9 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance stri
 		}
 		registry, err := d.codexManagerRegistry(local, binding)
 		if err != nil {
-			return result, managerproof.ErrUnavailable
+			return result, err
 		}
-		result, err = registry.Snapshot()
+		result, err = registry.WaitSnapshot(ctx)
 		if err != nil {
 			return result, err
 		}
@@ -211,6 +231,9 @@ func (d *Daemon) resolveManagerCall(ctx context.Context, local string, req manag
 }
 
 func (d *Daemon) managerInputStatus(ctx context.Context, local string, req protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error) {
+	if historical, err := d.managerTerminalInput(ctx, local, req); err == nil {
+		return historical, nil
+	}
 	current, err := d.checkedManagerBindingContext(ctx, local, req.Binding)
 	if err != nil {
 		return protocol.ManagerNativeTurn{}, err
@@ -236,4 +259,46 @@ func (d *Daemon) managerInputStatus(ctx context.Context, local string, req proto
 	default:
 		return protocol.ManagerNativeTurn{}, managerproof.ErrUnavailable
 	}
+}
+
+// managerTerminalInput returns only compact history. It never renews native authority.
+func (d *Daemon) managerTerminalInput(ctx context.Context, local string, req protocol.ManagerAdmission) (managerproof.Turn, error) {
+	binding := req.Binding
+	if d.core == nil || (binding.Session != local && (d.api == nil || binding.Session != protocol.NamespacedID(d.api.endpointID, local))) {
+		return managerproof.Turn{}, managerproof.ErrUnavailable
+	}
+	binding.Session = local
+	meta, ok := d.core.Get(local)
+	if !ok || meta.Role != "manager" || meta.AgentType != binding.Provider || meta.ManagerReplayID == "" || meta.ManagerConversationID != binding.ConversationID {
+		return managerproof.Turn{}, managerproof.ErrUnavailable
+	}
+	var receipt managerproof.TerminalReceipt
+	var err error
+	switch binding.Provider {
+	case "codex":
+		receipt, err = d.codexManagerTerminal(ctx, local, binding, req.Nonce)
+	case "claude":
+		if desc, descErr := d.core.SessionClaudeInput(local); descErr == nil {
+			return claudeinput.NewClient(desc).ManagerInputStatus(ctx, claudeinput.Worker{}, binding, req.Nonce)
+		}
+		if err := ctx.Err(); err != nil {
+			return managerproof.Turn{}, err
+		}
+		replay, openErr := managerproof.OpenReplay(filepath.Join(d.stateDir, local), local, meta.ManagerConversationID, meta.ManagerReplayID)
+		if openErr != nil {
+			return managerproof.Turn{}, openErr
+		}
+		defer func() { _ = replay.Close() }()
+		receipt, err = replay.Terminal(binding, req.Nonce)
+	default:
+		return managerproof.Turn{}, managerproof.ErrUnavailable
+	}
+	if err != nil {
+		return managerproof.Turn{}, err
+	}
+	state := receipt.State
+	if state == "" {
+		state = "completed"
+	}
+	return managerproof.Turn{NativeInputID: receipt.Nonce, NativeTurnID: receipt.NativeTurnID, State: state, Reason: receipt.Reason, ExternallySteered: receipt.ExternallySteered}, ctx.Err()
 }

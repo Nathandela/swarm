@@ -47,12 +47,13 @@ const (
 // here (not FromDaemon) so its poller is stopped deterministically on Close — the
 // daemon owns the socket, so the Server never runs FromDaemon's own stop path.
 type coreAPI struct {
-	managerInputStatus func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
-	managerRuntime     func(string, string) (protocol.ManagerRuntimeStatus, error)
-	managerCall        func(context.Context, string, protocol.ManagerCallReq) (protocol.ManagerCallProof, error)
-	core               *daemon.Daemon
-	fakeAgentBin       string
-	endpointID         string // this daemon's stable federation id (resume source validation)
+	matchResumeInstance func(persist.Meta, string) bool
+	managerInputStatus  func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
+	managerRuntime      func(string, string) (protocol.ManagerRuntimeStatus, error)
+	managerCall         func(context.Context, string, protocol.ManagerCallReq) (protocol.ManagerCallProof, error)
+	core                *daemon.Daemon
+	fakeAgentBin        string
+	endpointID          string // this daemon's stable federation id (resume source validation)
 	// killFn/deleteFn let the assembly place owner lifecycle operations behind
 	// the same per-session end fence as automatic auth recycling. Bare coreAPI
 	// tests retain the raw daemon fallback.
@@ -845,6 +846,7 @@ func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 // hole the phone improvises around.
 func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.SessionCapabilities, bool)) protocol.JournalRecord {
 	out := protocol.JournalRecord{
+		SessionInstance: r.SessionInstance, Role: r.Role,
 		Cursor:    r.Cursor,
 		SessionID: r.SessionID,
 		Type:      string(r.Type),
@@ -866,12 +868,24 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 		var rec protocol.SessionCapabilities
 		if json.Unmarshal(r.Payload, &rec) == nil && rec.Validate() == nil {
 			out.Capabilities = &rec
+			if out.SessionInstance == "" {
+				out.SessionInstance = rec.SessionInstance
+			} else if out.SessionInstance != rec.SessionInstance {
+				out.SessionInstance = ""
+			}
 		} else if r.Type == journal.TypeSessionState && len(r.Payload) > 0 {
 			out.Capabilities = &protocol.SessionCapabilities{}
 		}
-	} else if caps != nil {
+	} else if r.Type == journal.TypeRoster && caps != nil {
 		if rec, ok := caps(r.SessionID); ok {
 			out.Capabilities = &rec
+			if rec.Validate() == nil {
+				if out.SessionInstance == "" || out.SessionInstance == rec.SessionInstance {
+					out.SessionInstance = rec.SessionInstance
+				} else {
+					out.SessionInstance = ""
+				}
+			}
 		}
 	}
 	if r.Type == journal.TypeInteraction || r.Type == journal.TypeStructuredGap {
@@ -900,7 +914,7 @@ func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
 		if err != nil {
 			return
 		}
-		out = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		out = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync, SourceID: res.SourceID}
 		for _, r := range res.Roster {
 			// The roster's metadata and capability record must describe the same
 			// state boundary. The full assembly freezes capability authors and
@@ -914,6 +928,7 @@ func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
 	for _, e := range res.Events {
 		out.Events = append(out.Events, toWireJournalRecord(e))
 	}
+	out.HistoryGap = protocol.JournalRecordsHaveIdentityGap(out.Events) || protocol.JournalRecordsHaveIdentityGap(out.Roster)
 	return out, nil
 }
 
@@ -978,7 +993,7 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 		if err != nil {
 			return
 		}
-		outResume = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		outResume = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync, SourceID: res.SourceID}
 		for _, r := range res.Roster {
 			outResume.Roster = append(outResume.Roster, toWireJournalRecordWith(r, a.sessionCaps))
 		}
@@ -991,6 +1006,7 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 	for _, r := range res.Events {
 		outResume.Events = append(outResume.Events, toWireJournalRecord(r))
 	}
+	outResume.HistoryGap = protocol.JournalRecordsHaveIdentityGap(outResume.Events) || protocol.JournalRecordsHaveIdentityGap(outResume.Roster)
 	out := make(chan protocol.JournalRecord, eventsBuffer)
 	done := make(chan struct{})
 	go func() {
@@ -1025,9 +1041,18 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	if err := validateResumeRelocation(spec); err != nil {
+		return persist.Meta{}, err
+	}
 	if spec.OwnerLaunchHash != "" {
 		if m, known, err := a.core.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash); known {
 			return m, err
+		}
+	}
+	if spec.ResumeSource != nil {
+		local, source, err := validateResumeSource(spec.Options[protocol.OptionResumeFrom], spec.AgentType, a.endpointID, a.core.Get)
+		if err != nil || a.validateBoundWorkerResume(spec, local, source) != nil {
+			return persist.Meta{}, daemon.ErrResumeSourceChanged
 		}
 	}
 	if spec.Manager != nil {
@@ -1077,9 +1102,6 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 				}
 			}()
 		}
-	}
-	if err := validateResumeRelocation(spec); err != nil {
-		return persist.Meta{}, err
 	}
 	// Directory completion appends a separator. Strip only trailing separators
 	// before history, worktree, projection and persistence use the cwd; keep
@@ -1219,7 +1241,16 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 		if !sourceExists || source.RosterHidden {
 			return persist.Meta{}, fmt.Errorf("resume: source discussion was deleted or archived")
 		}
+		if spec.ResumeSource != nil {
+			if err := a.validateBoundWorkerResume(spec, local, source); err != nil {
+				return persist.Meta{}, err
+			}
+			spec.ResumeSource = &daemon.ResumeSourceFence{Instance: spec.ResumeSource.Instance, ShimPID: source.ShimPID, ShimStartTime: source.ShimStartTime}
+		}
 		if existing, ok := runningConversation(a.core.List(), source); ok {
+			if spec.ResumeSource != nil {
+				return persist.Meta{}, daemon.ErrResumeSourceChanged
+			}
 			if err := validateManagerSelection(spec, existing); err != nil {
 				return persist.Meta{}, err
 			}
@@ -1313,6 +1344,14 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
+	}
+	if expected := resolved.ResumeSource; expected != nil {
+		source, ok := a.core.Get(resolved.ResumedFrom)
+		if !ok || a.validateBoundWorkerResume(resolved, resolved.ResumedFrom, source) != nil ||
+			source.ShimPID != expected.ShimPID || source.ShimStartTime != expected.ShimStartTime ||
+			source.ConversationID != resolved.ConversationID {
+			return persist.Meta{}, daemon.ErrResumeSourceChanged
+		}
 	}
 	if coreAttempted != nil {
 		*coreAttempted = true
@@ -1419,10 +1458,10 @@ var _ protocol.SessionCapabilityLookup = (*coreAPI)(nil)
 // lookPath (a stub in tests, the real PATH search in production). A missing binary
 // is a clear launch error.
 func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, getSource func(local string) (persist.Meta, bool), lookPath func(name string, env []string) (string, error)) (daemon.LaunchSpec, error) {
-	if err := validateManagerSource(spec, endpointID, getSource); err != nil {
+	if err := validateResumeRelocation(spec); err != nil {
 		return daemon.LaunchSpec{}, err
 	}
-	if err := validateResumeRelocation(spec); err != nil {
+	if err := validateManagerSource(spec, endpointID, getSource); err != nil {
 		return daemon.LaunchSpec{}, err
 	}
 	// GG-6 scope: refuse a registered-but-non-production adapter at the launch

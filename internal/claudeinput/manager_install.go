@@ -18,11 +18,15 @@ const managerEnvelopePrefix = "[SWARM_MANAGER_INPUT_V1:"
 
 type managerSetup struct {
 	ConversationID string `json:"conversation_id"`
+	ReplayID       string `json:"replay_id"`
 	SenderName     string `json:"sender_name"`
 }
 
 // InstallManager creates a unique per-invocation native source; ordinary workers use Install.
-func InstallManager(dir, conversationID string) (string, error) {
+func InstallManager(dir, conversationID, replayID string) (string, error) {
+	if len(replayID) != 32 {
+		return "", managerproof.ErrQuarantined
+	}
 	if conversationID == "" || len(conversationID) > 128 {
 		return "", errors.New("invalid manager conversation")
 	}
@@ -30,7 +34,7 @@ func InstallManager(dir, conversationID string) (string, error) {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", err
 	}
-	setup := managerSetup{ConversationID: conversationID, SenderName: "swarm-manager-input-" + hex.EncodeToString(nonce[:])}
+	setup := managerSetup{ConversationID: conversationID, ReplayID: replayID, SenderName: "swarm-manager-input-" + hex.EncodeToString(nonce[:])}
 	raw, _ := json.Marshal(setup)
 	if err := os.WriteFile(filepath.Join(dir, managerSetupFile), raw, 0600); err != nil {
 		return "", err
@@ -43,7 +47,7 @@ func readManagerSetup(dir string) (managerSetup, error) {
 	if err != nil {
 		return setup, err
 	}
-	if len(raw) > 1024 || json.Unmarshal(raw, &setup) != nil || setup.ConversationID == "" || len(setup.ConversationID) > 128 || !strings.HasPrefix(setup.SenderName, "swarm-manager-input-") || len(setup.SenderName) != len("swarm-manager-input-")+32 {
+	if len(raw) > 1024 || json.Unmarshal(raw, &setup) != nil || setup.ConversationID == "" || len(setup.ReplayID) != 32 || len(setup.ConversationID) > 128 || !strings.HasPrefix(setup.SenderName, "swarm-manager-input-") || len(setup.SenderName) != len("swarm-manager-input-")+32 {
 		return managerSetup{}, os.ErrInvalid
 	}
 	suffix := strings.TrimPrefix(setup.SenderName, "swarm-manager-input-")

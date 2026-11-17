@@ -63,7 +63,7 @@ def probe():
  for server in [api,deny]:server.daemon_threads=True;threading.Thread(target=server.serve_forever,daemon=True).start()
  (config/'.claude.json').write_text(json.dumps({'hasCompletedOnboarding':True,'theme':'dark','lastOnboardingVersion':descriptor['provider_version'],'oauthAccount':{'accountUuid':'synthetic-account','emailAddress':'synthetic@example.invalid','organizationUuid':'synthetic-org'},'projects':{str(root):{'hasTrustDialogAccepted':True}}}))
  (config/'.credentials.json').write_text(json.dumps({'claudeAiOauth':{'accessToken':'synthetic-token','refreshToken':'synthetic-refresh','expiresAt':int(time.time()*1000)+3600000,'scopes':['user:inference','user:profile'],'subscriptionType':'max','rateLimitTier':'default_claude_max_5x'}}))
- env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':str(home),'CLAUDE_CONFIG_DIR':str(config),'CLAUDE_SECURESTORAGE_CONFIG_DIR':str(config),'TMPDIR':str(home/'tmp'),'TERM':'xterm-256color','ANTHROPIC_BASE_URL':'http://127.0.0.1:'+str(api.server_port),'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC':'1','DISABLE_AUTOUPDATER':'1','CLAUDE_CODE_MAX_RETRIES':'0','PYTHONDONTWRITEBYTECODE':'1','HTTP_PROXY':'http://127.0.0.1:'+str(deny.server_port),'HTTPS_PROXY':'http://127.0.0.1:'+str(deny.server_port),'ALL_PROXY':'http://127.0.0.1:'+str(deny.server_port),'NO_PROXY':'127.0.0.1,localhost'}
+ env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':str(home),'CLAUDE_CONFIG_DIR':str(config),'CLAUDE_SECURESTORAGE_CONFIG_DIR':str(config),'TMPDIR':str(home/'tmp'),'CLAUDE_CODE_TMPDIR':str(home/'tmp'),'TERM':'xterm-256color','ANTHROPIC_BASE_URL':'http://127.0.0.1:'+str(api.server_port),'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC':'1','DISABLE_AUTOUPDATER':'1','CLAUDE_CODE_MAX_RETRIES':'0','PYTHONDONTWRITEBYTECODE':'1','HTTP_PROXY':'http://127.0.0.1:'+str(deny.server_port),'HTTPS_PROXY':'http://127.0.0.1:'+str(deny.server_port),'ALL_PROXY':'http://127.0.0.1:'+str(deny.server_port),'NO_PROXY':'127.0.0.1,localhost'}
  custody=root/'mcp-custody.json';repo=pathlib.Path(__file__).resolve().parents[2];recorder=pathlib.Path(__file__).with_name('claude_manager_recorder.py')
  mcp={'mcpServers':{'swarm_voice':{'command':sys.executable,'args':[str(recorder),'http://127.0.0.1:'+str(api.server_port)+'/mcp',str(repo/'docs/verification/voice-manager/probes'),str(custody)]}}}
  cmd=[binary,'--setting-sources','','--strict-mcp-config','--mcp-config',json.dumps(mcp),'--plugin-dir',str(plugin),'--plugin-dir',str(plugin.parent/'claude-input-guard-plugin'),'--system-prompt','Neutral bounded provenance fixture.','--tools','','--allowedTools','mcp__swarm_voice__publish','--permission-mode','default','--model','claude-sonnet-4-6','--debug-file',str(root/'debug.log')]
@@ -115,7 +115,7 @@ def probe():
   assert original['proof']['main'] and original['proof']['native_turn_id']!=original['args']['turn_id']
   results.append({'case':'native-call','proof':original['proof'],'meta':original['meta'],'completed':outcome(nonce)})
   phase='hold';hold.clear();release.clear();nonce=submit('Hold this synthetic model turn.')
-  wait(hold.is_set);active=turn();assert active['state']=='running' and not active['ready_for_input']
+  wait(hold.is_set);active=wait(lambda:(lambda t:t if t['state']=='running' else None)(turn()));assert not active['ready_for_input']
   broker('/interrupt',{'worker':worker,'operation_id':'exact-native-stop','turn_id':active['turn_id']})
   wait(lambda:outcome(nonce).get('reason')=='aborted');release.set();wait(lambda:turn().get('ready_for_input'))
   phase='normal';fresh=submit('Fresh human input after exact native abort.');wait(lambda:outcome(fresh)['state']=='completed')
@@ -127,7 +127,7 @@ def probe():
    results.append({'case':failure+'-recovery','old':terminal_outcome,'fresh':outcome(fresh)})
   phase='modal';nonce=submit('Exercise a neutral native permission modal.')
   wait(lambda:any(e['event']=='permission' and e.get('tool')=='mcp__swarm_voice__ask_permission' for e in trace))
-  modal=turn();assert modal['state']=='running' and not modal['ready_for_input']
+  modal=wait(lambda:(lambda t:t if t['state']=='running' else None)(turn()));assert not modal['ready_for_input']
   # Stay beyond the broker liveness horizon: native timers must keep custody live.
   modal_until=time.monotonic()+3.5
   while time.monotonic()<modal_until:
@@ -136,7 +136,7 @@ def probe():
   os.write(master,b'\x1b');wait(lambda:outcome(nonce)['state']=='completed');wait(lambda:turn().get('ready_for_input'))
   results.append({'case':'permission-modal','ready':modal['ready_for_input'],'held_seconds':3.5,'no_host_call':True,'outcome':outcome(nonce)})
   phase='publish';mcp_seen.clear();mcp_release.clear();nonce=submit('Hold a publication for manual native steering.')
-  wait(mcp_seen.is_set);before=turn();assert not before['ready_for_input']
+  wait(mcp_seen.is_set);before=wait(lambda:(lambda t:t if t['state']=='running' else None)(turn()));assert not before['ready_for_input']
   os.write(master,b'Manual native steering.');time.sleep(.15);os.write(master,b'\r')
   wait(lambda:turn()['external_input']>before['external_input'])
   call=next(c for c in reversed(calls) if c['proof']['native_input_id']==nonce)

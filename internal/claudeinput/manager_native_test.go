@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/testbin"
 )
 
@@ -16,17 +17,21 @@ func TestNativeClaudeManagerProvenance(t *testing.T) {
 		t.Skip("explicit isolated installed-Claude manager proof fixture only")
 	}
 	binary, version, dir := privateNativeClaude(t)
-	if version != "2.1.319" {
+	if version != "2.1.319" && version != "2.1.326" {
 		t.Fatal("installed manager version is not qualified")
 	}
 	if err := testbin.RegisterExecutable(binary); err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := InstallManager(dir, "native-proof-conversation")
+	id, err := managerproof.InitializeReplay(dir, "native-proof", "native-proof-conversation")
 	if err != nil {
 		t.Fatal(err)
 	}
-	broker, err := Start(dir, "native-proof", version, os.Getpid(), 1)
+	plugin, err := InstallManager(dir, "native-proof-conversation", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := StartManager(dir, "native-proof", version, os.Getpid(), 1, id)
 	if err != nil {
 		t.Fatal(err)
 	}

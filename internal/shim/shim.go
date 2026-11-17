@@ -48,9 +48,10 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
-	HermesInput *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
-	AgyInput    *agyinput.Config           `json:"agy_input,omitempty"`
-	ClaudeInput bool                       `json:"claude_input,omitempty"`
+	ManagerReplayID string                     `json:"manager_replay_id,omitempty"`
+	HermesInput     *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
+	AgyInput        *agyinput.Config           `json:"agy_input,omitempty"`
+	ClaudeInput     bool                       `json:"claude_input,omitempty"`
 	// LogPath authorizes retention only when inherited stderr matches this owned inode.
 	LogPath           string
 	LoginRuntime      *logins.Runtime
@@ -190,7 +191,12 @@ func Run(cfg Config) (agentExit int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		broker, err := claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		var broker *claudeinput.Broker
+		if cfg.ManagerReplayID != "" {
+			broker, err = claudeinput.StartManager(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started, cfg.ManagerReplayID)
+		} else {
+			broker, err = claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		}
 		if err != nil {
 			return 0, err
 		}

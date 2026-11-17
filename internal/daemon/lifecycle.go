@@ -142,7 +142,7 @@ func (d *Daemon) Delete(id string) error {
 	}
 	d.mu.Unlock()
 	// WAL-first: a crash during directory removal must leave a durable deletion event.
-	if _, jerr := d.appendJournal(journal.Record{SessionID: id, Type: journal.TypeDeleted}); jerr != nil {
+	if _, jerr := d.appendJournal(journal.Record{SessionID: id, Type: journal.TypeDeleted, SessionInstance: d.recordedJournalInstance(meta), Role: meta.Role}); jerr != nil {
 		return jerr
 	}
 	if err := deleteSessionDirFn(d, id); err != nil {

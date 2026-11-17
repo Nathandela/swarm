@@ -22,7 +22,13 @@ const (
 	OpOwnerLaunch       = "owner_launch"
 	OpOwnerLaunchStatus = "owner_launch_status"
 	CapOwnerLaunch      = "owner-launch"
+	CapOwnerBoundResume = "owner-bound-resume"
 )
+
+// ErrOwnerResumeStaleSource proves the exact resume source was refused before launch.
+var ErrOwnerResumeStaleSource = errors.New("protocol: resume source instance or status changed")
+
+type OwnerBoundResumeSource interface{ OwnerBoundResumeSupported() bool }
 
 type OwnerLaunchSource interface {
 	OwnerLaunchReplay(operationID, requestHash string) (persist.Meta, bool, error)
@@ -37,6 +43,11 @@ func NewLaunchOperationID() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("launch:%d:%x", time.Now().UnixMilli(), nonce), nil
+}
+
+// LaunchOperationReplayable reports whether an undispatched intent can still launch.
+func LaunchOperationReplayable(id string, now time.Time) bool {
+	return validLaunchOperationID(id, now)
 }
 
 func validLaunchOperationID(id string, now time.Time) bool {
@@ -72,6 +83,9 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 	if req.Manager != nil && !slices.Contains(c.caps, CapManagerLaunch) {
 		return "", "", errors.New("protocol: manager launch requires an updated daemon and manager-launch capability")
 	}
+	if req.ResumeSourceInstance != "" && !slices.Contains(c.caps, CapOwnerBoundResume) {
+		return "", "", errors.New("protocol: instance-bound owner resume was not negotiated")
+	}
 	if !validLaunchOperationID(operationID, time.Now()) {
 		return "", "", errors.New("protocol: invalid or expired launch operation ID; an earlier attempt may still have an effect")
 	}
@@ -84,6 +98,9 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 		return "", "", err
 	}
 	if resp.Op == OpError {
+		if req.ResumeSourceInstance != "" && resp.ErrorCode == CodeStaleInstance {
+			return "", "", ErrOwnerResumeStaleSource
+		}
 		return "", "", fmt.Errorf("protocol: owner launch: %s (%s)", resp.Error, resp.ErrorCode)
 	}
 	if resp.Op != OpLaunch || resp.OperationID != operationID || resp.Session == nil {
@@ -140,6 +157,10 @@ func (cc *clientConn) handleOwnerLaunch(c Control) {
 		cc.replyErrorCode("owner launch requires an exact request and current timestamped operation ID", CodeInvalidField)
 		return
 	}
+	if c.Launch.ResumeSourceInstance != "" && !cc.hasCap(CapOwnerBoundResume) {
+		cc.replyErrorCode("instance-bound owner resume was not negotiated", CodeCapabilityRefused)
+		return
+	}
 	unlock := cc.srv.lockComposerOperation(c.OperationID)
 	defer unlock()
 	m, known, err := src.OwnerLaunchReplay(c.OperationID, ownerLaunchHash(c.Launch))
@@ -155,6 +176,10 @@ func (cc *clientConn) handleOwnerLaunch(c Control) {
 }
 
 func (cc *clientConn) ownerLaunchError(err error) {
+	if errors.Is(err, daemon.ErrResumeSourceChanged) {
+		cc.replyErrorCode("owner launch: "+err.Error(), CodeStaleInstance)
+		return
+	}
 	code := CodeInvalidField
 	if errors.Is(err, daemon.ErrLaunchOutcomeUnknown) || errors.Is(err, daemon.ErrLaunchOpConsumed) {
 		code = schema.CodeOutcomeUnknown

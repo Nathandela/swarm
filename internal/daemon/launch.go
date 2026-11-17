@@ -20,6 +20,7 @@ import (
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/logins"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
@@ -29,6 +30,9 @@ import (
 // ErrMaxSessions is returned by Launch when the daemon is at its configured
 // concurrent-session cap; the message names the cap value (S-7).
 var ErrMaxSessions = errors.New("daemon: max sessions reached")
+
+// ErrResumeSourceChanged refuses an owner resume before reserving an effect.
+var ErrResumeSourceChanged = errors.New("resume source instance or status changed")
 
 // ErrLaunchOpConsumed refuses a REPLAYED signed launch whose operation already
 // applied definitively (the idempotency record reached PhaseCompleted) and whose
@@ -118,6 +122,7 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	ManagerReplayID       string                     `json:"manager_replay_id,omitempty"`
 	HermesInput           *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
 	AgyInput              *agyinput.Config           `json:"agy_input,omitempty"`
 	ClaudeInput           bool                       `json:"claude_input,omitempty"`
@@ -386,6 +391,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.mu.Unlock()
 		return persist.Meta{}, errors.New("daemon: closed")
 	}
+	if expected := spec.ResumeSource; expected != nil {
+		source, ok := d.sessions[spec.ResumedFrom]
+		if !ok || source.meta.ShimPID != expected.ShimPID || source.meta.ShimStartTime != expected.ShimStartTime ||
+			source.meta.AgentType != spec.AgentType || source.meta.ConversationID != spec.ConversationID ||
+			source.meta.Role == "manager" || source.meta.RosterHidden || source.meta.Status.Process != status.ProcessExited {
+			d.mu.Unlock()
+			return persist.Meta{}, ErrResumeSourceChanged
+		}
+	}
 	if d.liveCountLocked() >= d.cfg.MaxSessions {
 		d.mu.Unlock()
 		return persist.Meta{}, fmt.Errorf("%w: at capacity (max %d sessions)", ErrMaxSessions, d.cfg.MaxSessions)
@@ -552,7 +566,22 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, err
 	}
 	dir := d.sessionDir(id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if spec.Manager != nil {
+		// Never bootstrap a second replay ledger under an existing session ID.
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			if preLaunchOK && d.cfg.PreDelete != nil {
+				_ = d.cfg.PreDelete(m)
+			}
+			d.dropReserved(id)
+			return persist.Meta{}, fmt.Errorf("manager replay requires a fresh session directory: %w", err)
+		}
+		replayID, err := managerproof.InitializeReplay(dir, id, m.ManagerConversationID)
+		if err != nil {
+			d.rollbackReserved(id, m, preLaunchOK)
+			return persist.Meta{}, err
+		}
+		m.ManagerReplayID = replayID
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
@@ -584,7 +613,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, terr
 	}
-	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token)
+	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token, m.ManagerReplayID)
 	if err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
@@ -705,7 +734,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // error: the launch proceeds (playbook §6.1), and the caller persists the reason
 // onto the meta so the degradation is visible in ls/TUI/doctor rather than only
 // in the daemon log.
-func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (cmd *exec.Cmd, backendPlanErr string, err error) {
+func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayID string) (cmd *exec.Cmd, backendPlanErr string, err error) {
 	// The structured-capture channel (playbook §6.1): the shim binds its own hook
 	// socket beside its control socket, the agent's `swarm hook` is pointed at it, and
 	// the DRAIN verb is gated by a secret minted here and persisted only in this 0600
@@ -754,7 +783,8 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		var plugin string
 		var err error
 		if spec.Manager != nil {
-			plugin, err = claudeinput.InstallManager(dir, spec.Manager.ConversationID)
+			plugin, err = claudeinput.InstallManager(dir, spec.Manager.ConversationID, replayID)
+			lc.ManagerReplayID = replayID
 		} else {
 			plugin, err = claudeinput.Install(dir)
 		}

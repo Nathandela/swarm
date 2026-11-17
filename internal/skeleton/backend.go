@@ -145,7 +145,8 @@ func newBackendFeed() *backendFeed { return &backendFeed{epoch: newItemID()} }
 
 // backendState is the assembly's per-session backend bookkeeping.
 type backendState struct {
-	mu sync.Mutex
+	managerFailures sync.Map // session IDs whose persistent manager observation was lost
+	mu              sync.Mutex
 	// beforeRegisterInstall is a deterministic test seam at the instance-check/map-install
 	// boundary. Production leaves it nil.
 	beforeRegisterInstall func(local, expectedInstance string)
@@ -891,6 +892,7 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 	if local == "" || expectedInstance == "" || feed == nil || at.IsZero() || feed.retired.Load() {
 		return
 	}
+	d.captureCodexManagerFrame(local, feed, method, frame)
 	if d.contextGuards != nil {
 		d.contextGuards.replaceMu.Lock()
 	}
@@ -916,7 +918,6 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 		guardFrame = guardProjection[0]
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, guardFrame, at)
-	d.captureCodexManagerFrame(local, feed, method, frame)
 	if d.logins != nil {
 		d.logins.observeCodexUsage(local, method, frame, at)
 		d.logins.observeNativeFailure(local, expectedInstance, feed, method, frame)

@@ -111,7 +111,12 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 			}
 		}
 	}
+	var resumeSource *daemon.ResumeSourceFence
+	if req.ResumeSourceInstance != "" {
+		resumeSource = &daemon.ResumeSourceFence{Instance: req.ResumeSourceInstance}
+	}
 	return daemon.LaunchSpec{
+		ResumeSource:  resumeSource,
 		Manager:       manager,
 		HermesOrigins: hermesOrigins,
 		AgentType:     req.Agent,
@@ -282,10 +287,11 @@ const maxCommandValidity = 1 * time.Hour
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
+	CapJournalSourceIdentity,
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapManagerLaunch, CapManagerProvenance,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -693,7 +699,7 @@ func (s *Server) distributeJournal(rec JournalRecord) {
 	for sc := range s.jsubs {
 		// Encode HERE (in the fan-out), not in the writer, so one encoding is shared
 		// across subscribers and the fan-out never blocks on a slow writer.
-		body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: sc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+		body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: sc.endpointID, Cursor: rec.Cursor, Journal: legacyJournalRecords([]JournalRecord{rec})})
 		if err != nil {
 			continue
 		}
@@ -1493,8 +1499,10 @@ func (cc *clientConn) handleHello(c Control) {
 // subscribe-from to it would make a new gateway select an operation the server must then refuse.
 func (s *Server) supportedCaps() []string {
 	managerSource, managerLaunch := s.d.(ManagerLaunchSource)
+	boundResume, hasBoundResume := s.d.(OwnerBoundResumeSource)
 	_, ownerLaunch := s.d.(OwnerLaunchSource)
 	_, journalFrom := s.d.(JournalSubscribeFromBackend)
+	journalIdentity, hasJournalIdentity := s.d.(JournalIdentityBackend)
 	_, durable := s.d.(ComposerOperationExecutor)
 	_, sender := s.d.(ComposerSender)
 	_, transactional := s.d.(TransactionalComposerSender)
@@ -1504,10 +1512,16 @@ func (s *Server) supportedCaps() []string {
 	_, managerProvenance := s.d.(ManagerRuntimeSource)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
+		if cap == CapJournalSourceIdentity && (!journalFrom || !hasJournalIdentity || !ValidJournalSourceID(journalIdentity.JournalSourceID())) {
+			continue
+		}
 		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {
 			continue
 		}
 		if cap == CapManagerLaunch && (s.remoteTier || !ownerLaunch || !managerLaunch || !managerSource.ManagerLaunchSupported()) {
+			continue
+		}
+		if cap == CapOwnerBoundResume && (s.remoteTier || !ownerLaunch || !hasBoundResume || !boundResume.OwnerBoundResumeSupported()) {
 			continue
 		}
 		if cap == CapOwnerLaunch && (s.remoteTier || !ownerLaunch) {
@@ -1572,6 +1586,13 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// LaunchSessionSentinel, and its spec is bound via LaunchContentHash so a gateway
 	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
 	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
+		return
+	}
+	if req.ResumeSourceInstance != "" && (c.Op != OpOwnerLaunch || cc.srv.remoteTier || req.Options[OptionResumeFrom] == "" ||
+		req.Options[OptionResumeConversationID] != "" || req.Options[OptionResumeRelocate] != "" || req.Manager != nil ||
+		req.Worktree || req.InitialPrompt != "" || len(req.ResumeSourceInstance) > 256 ||
+		strings.TrimSpace(req.ResumeSourceInstance) != req.ResumeSourceInstance || strings.ContainsFunc(req.ResumeSourceInstance, unicode.IsControl)) {
+		cc.replyErrorCode("launch: resume_source_instance requires an exact reliable owner worker resume", CodeInvalidField)
 		return
 	}
 	// The hands-off handoff (ADR-010 Amendment 4). Guarded BEFORE the external-resume
@@ -2681,6 +2702,10 @@ func (cc *clientConn) handleJournalRead(c Control) {
 		Roster:     res.Roster,
 		FullResync: res.FullResync,
 	}
+	if err := cc.qualifyJournalIdentity(&reply, res.SourceID, res.HistoryGap); err != nil {
+		cc.replyError(err.Error())
+		return
+	}
 	if c.JournalMaxBytes <= 0 {
 		if err := cc.writeControl(reply); err != nil {
 			// WriteFrame rejects an oversized body before writing any bytes. Give an old
@@ -2784,6 +2809,10 @@ func maxPageRecords(page Control, records []JournalRecord, max int, field string
 // negotiated `journal` cap) and starts its bounded-queue writer, then acks. Journal
 // events stream as journal_event frames via the journal fan-out.
 func (cc *clientConn) handleJournalSubscribe() {
+	if cc.hasCap(CapJournalSourceIdentity) {
+		cc.replyError("source-aware journal requires atomic journal_subscribe_from")
+		return
+	}
 	if _, ok := cc.journalBackend(); !ok {
 		return
 	}
@@ -2840,6 +2869,11 @@ func (cc *clientConn) handleJournalSubscribeFrom(c Control) {
 		Op: OpJournalSubscribeFrom, EndpointID: cc.endpointID, Cursor: res.Cursor,
 		Journal: res.Events, Roster: res.Roster, FullResync: res.FullResync,
 	}
+	if err := cc.qualifyJournalIdentity(&reply, res.SourceID, res.HistoryGap); err != nil {
+		cancel()
+		cc.replyError(err.Error())
+		return
+	}
 	max := c.JournalMaxBytes
 	if max <= 0 {
 		max = wire.MaxFrame - 1
@@ -2879,10 +2913,10 @@ func (cc *clientConn) handleJournalSubscribeFrom(c Control) {
 		}
 	}
 	cc.srv.wg.Add(1)
-	go cc.journalDirectLoop(source, cancel)
+	go cc.journalDirectLoop(source, cancel, res.SourceID)
 }
 
-func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func()) {
+func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func(), sourceID string) {
 	defer cc.srv.wg.Done()
 	defer cancel()
 	for {
@@ -2894,7 +2928,12 @@ func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func
 				cc.close()
 				return
 			}
-			body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: cc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+			reply := Control{Op: OpJournalEvent, EndpointID: cc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}}
+			if err := cc.qualifyJournalIdentity(&reply, sourceID, false); err != nil {
+				cc.close()
+				return
+			}
+			body, err := EncodeControl(reply)
 			if err != nil {
 				cc.close()
 				return

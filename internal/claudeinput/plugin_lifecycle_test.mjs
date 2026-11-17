@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { webcrypto } from 'node:crypto';
 globalThis.crypto ??= webcrypto;
 const senderSource = (await readFile(process.argv[2], 'utf8')).replaceAll('__CONFIG_PATH__', '"descriptor"');
-const guardSource = (await readFile(new URL('./guard.js', import.meta.url), 'utf8')).replaceAll('__CONFIG_PATH__', '"descriptor"');
+const guardSource = (await readFile(process.env.SWARM_GUARD_FIXTURE_SOURCE ?? new URL('./guard.js', import.meta.url), 'utf8')).replaceAll('__CONFIG_PATH__', '"descriptor"');
 let copies = 0;
 async function fixture(guard = false, manager = false) {
   const source = guard ? guardSource : senderSource;
@@ -141,5 +141,17 @@ async function fixture(guard = false, manager = false) {
   const events=f.calls.slice(from);
   assert(events.findIndex(c=>c.path==='/manager-tool-complete')<events.findIndex(c=>c.path==='/turn'));
   assert.equal(events.at(-1).path,'/manager-idle');assert(!f.canceled());
+}
+{
+  const f=await fixture(true,true);
+  await f.hooks.get('turn.start')(f.$,{turnId:'long-main'},f.next);
+  for(let i=0;i<1100;i++){
+    const id='long-call-'+i;
+    const stream=async function*(){yield {kind:'tool',id,name:'mcp__swarm_voice__publish'}};
+    for await(const _ of f.hooks.get('turn.step')(f.$,{turnId:'long-main'},stream)){}
+    const tool={tool:'mcp__swarm_voice__publish',tool_use_id:id,text:'neutral'};
+    assert.equal(await f.hooks.get('tool.call')(f.$,tool,f.next),tool,'closed local cache exhausted native call admission');
+  }
+  assert(!f.canceled(),'closed broker-owned negative guards retained local full call cache');
 }
 console.log('plugin lifecycle interleavings passed');

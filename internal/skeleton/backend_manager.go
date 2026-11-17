@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/idempotency"
@@ -44,12 +46,21 @@ type codexManagerEvent struct {
 // This buffer belongs to one physical feed. Reconnection never restores permissions
 // from a durable receipt: missing native lifecycle evidence remains unknown.
 type codexManagerFeed struct {
-	mu      sync.Mutex
-	state   *codexManagerState
-	pending []codexManagerEvent
-	dropped bool
+	mu                  sync.Mutex
+	setupMu             sync.Mutex
+	actor               atomic.Pointer[managerproof.Custody]
+	published           atomic.Pointer[codexManagerState]
+	lost                atomic.Bool
+	observedBeforeClaim atomic.Bool
+	replay              *managerproof.Replay
+	cancel              context.CancelFunc
+	done                chan struct{}
+	state               *codexManagerState
+	pending             []codexManagerEvent
+	pendingBytes        int
 }
 type codexManagerState struct {
+	replay     *managerproof.Replay
 	mu         sync.Mutex
 	binding    managerproof.Binding
 	registry   *managerproof.Registry
@@ -63,15 +74,20 @@ func codexManagerTextHash(text string) string {
 	h := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(h[:])
 }
-func newCodexManagerState(binding managerproof.Binding) (*codexManagerState, error) {
+func newCodexManagerState(binding managerproof.Binding, persistent ...*managerproof.Replay) (*codexManagerState, error) {
 	if binding.Provider != "codex" {
 		return nil, managerproof.ErrInvalid
 	}
 	r, err := managerproof.NewRegistry(binding)
+	var replay *managerproof.Replay
+	if len(persistent) == 1 {
+		replay = persistent[0]
+		r, err = managerproof.NewPersistentRegistry(binding, replay)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &codexManagerState{binding: binding, registry: r, intents: map[string]codexManagerIntent{}, evidence: map[string]codexManagerEvidence{}, unretained: map[string]codexManagerEvidence{}, messages: map[string]codexManagerEvent{}}, nil
+	return &codexManagerState{binding: binding, registry: r, replay: replay, intents: map[string]codexManagerIntent{}, evidence: map[string]codexManagerEvidence{}, unretained: map[string]codexManagerEvidence{}, messages: map[string]codexManagerEvent{}}, nil
 }
 func (s *codexManagerState) prepare(intent codexManagerIntent) error {
 	s.mu.Lock()
@@ -151,7 +167,7 @@ func parseCodexManagerEvent(raw []byte) (codexManagerEvent, bool, error) {
 	if jsontext.ValidateUnicode(raw) != nil {
 		return event, false, managerproof.ErrInvalid
 	}
-	for _, id := range []string{event.thread, event.turn, event.parent, event.id, event.client, event.tool} {
+	for _, id := range []string{event.thread, event.turn, event.parent, event.id, event.client, event.tool, event.state} {
 		if len(id) > 256 {
 			return event, false, managerproof.ErrInvalid
 		}
@@ -201,6 +217,21 @@ func (s *codexManagerState) observeEvent(e codexManagerEvent) (err error) {
 			return managerproof.ErrInvalid
 		}
 		s.registry.CloseTurn(e.turn, reason)
+		if err := s.registry.CustodyError(); err != nil {
+			return err
+		}
+		if s.replay != nil {
+			for id, message := range s.messages {
+				if message.turn == e.turn {
+					if _, owned := s.intents[message.client]; !owned {
+						if err := s.replay.CloseKeys(s.binding, managerproof.ReplayKey{Kind: managerproof.ReplayMessage, ID: id, Owner: managerproof.ReplayFingerprint(message.turn, message.client)}); err != nil {
+							return err
+						}
+						delete(s.messages, id)
+					}
+				}
+			}
+		}
 		for nonce, old := range s.evidence {
 			if old.Receipt.TurnID == e.turn && old.Receipt.Status == "admitted" {
 				old.Outcome = outcome
@@ -228,6 +259,11 @@ func (s *codexManagerState) observeEvent(e codexManagerEvent) (err error) {
 			s.messages[e.id] = e
 			intent, ok := s.intents[e.client]
 			if !ok || intent.TextHash != e.textHash {
+				if s.replay != nil {
+					if err := s.replay.Reserve(s.binding, managerproof.ReplayKey{Kind: managerproof.ReplayMessage, ID: e.id, Owner: managerproof.ReplayFingerprint(e.turn, e.client)}); err != nil {
+						return err
+					}
+				}
 				s.registry.ExternalActivity()
 				return nil
 			}
@@ -258,6 +294,12 @@ func (s *codexManagerState) recordReceipt(nonce, turn string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.registry.RecordTurnReceipt(nonce, turn); err != nil {
+		if s.replay != nil && !s.registry.InputDetailRetained(nonce) {
+			receipt, readErr := s.replay.Terminal(s.binding, nonce)
+			if readErr == nil && receipt.NativeTurnID == turn {
+				return nil
+			}
+		}
 		return err
 	}
 	old := s.evidence[nonce]
@@ -273,6 +315,24 @@ func (s *codexManagerState) recordReceipt(nonce, turn string) error {
 		s.unretained[nonce] = old
 	}
 	return nil
+}
+
+func (s *codexManagerState) releaseTerminalDetail() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for nonce, e := range s.evidence {
+		if e.Outcome == "" || s.unretained[nonce].Version != 0 || s.registry.InputDetailRetained(nonce) {
+			continue
+		}
+		delete(s.intents, nonce)
+		delete(s.evidence, nonce)
+		for id, event := range s.messages {
+			if event.turn == e.Receipt.TurnID {
+				delete(s.messages, id)
+			}
+		}
+	}
+	return s.registry.CustodyError()
 }
 func (s *codexManagerState) receipts() []codexManagerEvidence {
 	s.mu.Lock()
@@ -300,107 +360,317 @@ func (s *codexManagerState) retained(e codexManagerEvidence) {
 	}
 }
 
+// Claim precedes the native reader and initial backend_attach. A replacement
+// observer may read generic native status but never renew this dirty manager owner.
+func (d *Daemon) prepareCodexManagerFeed(local, instance string, feed *backendFeed) error {
+	f := &feed.manager
+	f.setupMu.Lock()
+	defer f.setupMu.Unlock()
+	if f.lost.Load() {
+		return managerproof.ErrQuarantined
+	}
+	if c := f.actor.Load(); c != nil {
+		return c.Err()
+	}
+	if d.core == nil {
+		return nil
+	}
+	meta, ok := d.core.Get(local)
+	if !ok || meta.Role != "manager" {
+		return nil
+	}
+	if meta.ManagerReplayID == "" || meta.ManagerConversationID == "" {
+		f.lost.Store(true)
+		d.backend.managerFailures.Store(local, struct{}{})
+		return managerproof.ErrQuarantined
+	}
+	if f.observedBeforeClaim.Load() {
+		f.lost.Store(true)
+		d.backend.managerFailures.Store(local, struct{}{})
+		return managerproof.ErrQuarantined
+	}
+	current, ok := d.sessionInstance(local)
+	if !ok || current != instance {
+		return managerproof.ErrStale
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	f.cancel = cancel
+	f.done = make(chan struct{})
+	c := managerproof.NewCustody(parent, func(error) {
+		f.lost.Store(true)
+		d.backend.managerFailures.Store(local, struct{}{})
+		if s := f.published.Load(); s != nil {
+			s.registry.Retire()
+		}
+		cancel()
+	}, func() {
+		if s := f.published.Load(); s != nil {
+			s.registry.NotifyCustodyProgress()
+		}
+	})
+	f.actor.Store(c)
+	ctx, stop := context.WithTimeout(context.Background(), backendCallTimeout)
+	defer stop()
+	err := c.Do(ctx, 256, func(context.Context) error {
+		replay, err := managerproof.OpenReplay(filepath.Join(d.stateDir, local), local, meta.ManagerConversationID, meta.ManagerReplayID)
+		if err != nil {
+			return err
+		}
+		f.replay = replay
+		return replay.Claim(feed.epoch)
+	})
+	if err != nil {
+		f.lost.Store(true)
+		d.backend.managerFailures.Store(local, struct{}{})
+		cancel()
+		c.Close()
+		if f.replay != nil {
+			_ = f.replay.Close()
+		}
+		close(f.done)
+		return managerproof.ErrQuarantined
+	}
+	go func() {
+		select {
+		case <-d.closing:
+		case <-parent.Done():
+		}
+		discardCodexManagerFeed(feed)
+	}()
+	return nil
+}
+
+func codexManagerEventBytes(e codexManagerEvent) int {
+	return 384 + len(e.method) + len(e.thread) + len(e.turn) + len(e.parent) + len(e.state) + len(e.kind) + len(e.id) + len(e.client) + len(e.textHash) + len(e.tool) + len(e.argumentsHash)
+}
+
+func (d *Daemon) codexManagerCustodyError(local string) error {
+	if _, failed := d.backend.managerFailures.Load(local); failed {
+		return managerproof.ErrQuarantined
+	}
+	return nil
+}
+
+func (d *Daemon) applyCodexManagerEvent(feed *backendFeed, event codexManagerEvent) error {
+	f := &feed.manager
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lost.Load() || feed.retired.Load() {
+		return managerproof.ErrQuarantined
+	}
+	s := f.state
+	if s == nil {
+		if len(f.pending) >= 128 || f.pendingBytes+codexManagerEventBytes(event) > 256<<10 {
+			return managerproof.ErrCapacity
+		}
+		f.pending = append(f.pending, event)
+		f.pendingBytes += codexManagerEventBytes(event)
+		return nil
+	}
+	if err := s.observeEvent(event); err != nil {
+		return err
+	}
+	if err := s.registry.CustodyError(); err != nil {
+		return err
+	}
+	return d.retainCodexManagerState(s)
+}
+
 func (d *Daemon) codexManagerRegistry(local string, binding managerproof.Binding) (*managerproof.Registry, error) {
 	entry, ok := d.sessionBackendFor(local)
 	if !ok || entry.feed == nil || entry.feed.retired.Load() || entry.sessionInstance != binding.SessionInstance || entry.threadID != binding.NativeSessionID || binding.Session != local || binding.ObservationGeneration != entry.feed.epoch {
 		return nil, managerproof.ErrStale
 	}
 	f := &entry.feed.manager
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.dropped {
+	if f.lost.Load() {
+		return nil, managerproof.ErrQuarantined
+	}
+	c := f.actor.Load()
+	if c == nil {
+		if f.observedBeforeClaim.Load() || d.codexManagerCustodyError(local) != nil {
+			return nil, managerproof.ErrQuarantined
+		}
 		return nil, managerproof.ErrUnavailable
 	}
-	if f.state == nil {
-		s, err := newCodexManagerState(binding)
-		if err != nil {
+	if c.Err() != nil {
+		return nil, managerproof.ErrQuarantined
+	}
+	if s := f.published.Load(); s != nil {
+		if s.binding != binding {
+			return nil, managerproof.ErrQuarantined
+		}
+		if err := s.registry.CustodyError(); err != nil {
 			return nil, err
 		}
+		return s.registry, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
+	defer cancel()
+	err := c.Do(ctx, 256, func(context.Context) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.lost.Load() || entry.feed.retired.Load() {
+			return managerproof.ErrQuarantined
+		}
+		if f.state != nil {
+			if f.state.binding != binding {
+				return managerproof.ErrQuarantined
+			}
+			return nil
+		}
+		s, err := newCodexManagerState(binding, f.replay)
+		if err != nil {
+			return err
+		}
+		s.registry.SetProofPending(func() bool { return f.lost.Load() || c.Pending() || c.Err() != nil })
 		for _, event := range f.pending {
 			if err = s.observeEvent(event); err != nil {
-				f.dropped = true
-				return nil, err
+				return err
 			}
+		}
+		if err = s.registry.CustodyError(); err != nil {
+			return err
 		}
 		f.state = s
 		f.pending = nil
-	} else if f.state.binding != binding {
-		f.state.registry.Retire()
-		return nil, managerproof.ErrStale
+		f.pendingBytes = 0
+		f.published.Store(s)
+		return nil
+	})
+	if err != nil {
+		f.lost.Store(true)
+		d.backend.managerFailures.Store(local, struct{}{})
+		return nil, managerproof.ErrQuarantined
 	}
-	if entry.feed.retired.Load() {
-		f.state.registry.Retire()
-		return nil, managerproof.ErrStale
-	}
-	return f.state.registry, nil
+	return f.published.Load().registry, nil
 }
+
+// The native reader only parses bounded evidence and enqueues. It never takes
+// the feed/write fence, waits for a receipt, or touches durable custody.
 func (d *Daemon) captureCodexManagerFrame(local string, feed *backendFeed, method string, raw []byte) {
 	switch method {
 	case "thread/started", "thread/status/changed", "turn/started", "turn/completed", "item/started", "item/completed":
 	default:
 		return
 	}
-	event, relevant, err := parseCodexManagerEvent(raw)
 	f := &feed.manager
-	f.mu.Lock()
-	if f.dropped {
-		f.mu.Unlock()
+	if f.lost.Load() || feed.retired.Load() {
 		return
 	}
+	event, relevant, err := parseCodexManagerEvent(raw)
 	if err != nil {
-		f.dropped = true
-		if f.state != nil {
-			f.state.registry.Retire()
+		f.lost.Store(true)
+		if f.actor.Load() != nil {
+			d.backend.managerFailures.Store(local, struct{}{})
 		}
-		f.pending = nil
-		f.mu.Unlock()
+		if s := f.published.Load(); s != nil {
+			s.registry.Retire()
+		}
+		if f.actor.Load() != nil && f.cancel != nil {
+			f.cancel()
+		}
 		return
 	}
 	if !relevant {
-		f.mu.Unlock()
 		return
 	}
-	s := f.state
-	if s == nil {
-		if len(f.pending) >= 128 {
-			f.dropped = true
-			f.pending = nil
-		} else {
-			f.pending = append(f.pending, event)
-		}
-		f.mu.Unlock()
+	c := f.actor.Load()
+	if c == nil {
+		f.observedBeforeClaim.Store(true)
 		return
 	}
-	err = s.observeEvent(event)
-	if err != nil {
-		f.dropped = true
-	}
-	f.mu.Unlock()
-	if err == nil {
-		d.retainCodexManagerState(s)
+	if c.Enqueue(codexManagerEventBytes(event), func(context.Context) error { return d.applyCodexManagerEvent(feed, event) }) != nil {
+		f.lost.Store(true)
 	}
 }
-func (d *Daemon) retainCodexManagerState(s *codexManagerState) {
+
+// Terminal lookup is private history only. It never claims an observer or
+// consults current positive readiness/account authority.
+func (d *Daemon) codexManagerTerminal(ctx context.Context, local string, binding managerproof.Binding, nonce string) (managerproof.TerminalReceipt, error) {
+	var empty managerproof.TerminalReceipt
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if binding.Session != local {
+		if d.api == nil || binding.Session != protocol.NamespacedID(d.api.endpointID, local) {
+			return empty, managerproof.ErrStale
+		}
+		binding.Session = local
+	}
+	if binding.Validate() != nil || binding.Provider != "codex" || !managerproof.ValidHash(nonce) || d.core == nil {
+		return empty, managerproof.ErrInvalid
+	}
+	meta, ok := d.core.Get(local)
+	if !ok || meta.Role != "manager" || meta.AgentType != "codex" || meta.ManagerReplayID == "" || meta.ManagerConversationID != binding.ConversationID {
+		return empty, managerproof.ErrUnavailable
+	}
+	if entry, ok := d.sessionBackendFor(local); ok && entry.feed != nil {
+		f := &entry.feed.manager
+		f.setupMu.Lock()
+		replay := f.replay
+		f.setupMu.Unlock()
+		if replay != nil {
+			receipt, err := replay.Terminal(binding, nonce)
+			if ctx.Err() != nil {
+				return empty, ctx.Err()
+			}
+			// An open observer already owns the ledger lock. Retrying misses
+			// through another open would only wait on that same lock.
+			return receipt, err
+		}
+	}
+	replay, err := managerproof.OpenReplay(filepath.Join(d.stateDir, local), local, meta.ManagerConversationID, meta.ManagerReplayID)
+	if err != nil {
+		return empty, err
+	}
+	defer func() { _ = replay.Close() }()
+	receipt, err := replay.Terminal(binding, nonce)
+	if ctx.Err() != nil {
+		return empty, ctx.Err()
+	}
+	return receipt, err
+}
+func (d *Daemon) retainCodexManagerState(s *codexManagerState) error {
 	for _, e := range s.pendingReceipts() {
 		if _, err := d.retainCodexManagerReceipt(e); err != nil {
 			s.registry.Retire()
-			return
+			return err
 		}
 		s.retained(e)
 	}
+	return s.releaseTerminalDetail()
 }
 func discardCodexManagerFeed(feed *backendFeed) {
 	if feed == nil {
 		return
 	}
 	f := &feed.manager
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.dropped = true
-	f.pending = nil
-	if f.state != nil {
-		f.state.registry.Retire()
+	f.lost.Store(true)
+	f.setupMu.Lock()
+	cancel := f.cancel
+	c := f.actor.Load()
+	done := f.done
+	f.setupMu.Unlock()
+	if c == nil {
+		return
 	}
+	if cancel != nil {
+		cancel()
+	}
+	c.Close()
+	f.setupMu.Lock()
+	if f.replay != nil {
+		_ = f.replay.Close()
+		f.replay = nil
+	}
+	if done != nil {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+	f.setupMu.Unlock()
 }
 func (d *Daemon) retainCodexManagerReceipt(next codexManagerEvidence) (codexManagerEvidence, error) {
 	for range 4 {
@@ -441,11 +711,11 @@ func (d *Daemon) sendCodexManager(local, operationID string, req protocol.Compos
 	}
 	current, err := d.checkedManagerBinding(local, req.ManagerAdmission.Binding)
 	if err != nil {
-		return protocol.CodeInputBusy, err
+		return codexManagerProofCode(err, protocol.CodeInputBusy), err
 	}
 	r, err := d.codexManagerRegistry(local, current.Binding)
 	if err != nil {
-		return protocol.CodeStructuredUnsupported, err
+		return codexManagerProofCode(err, protocol.CodeStructuredUnsupported), err
 	}
 	entry, ok := d.sessionBackendFor(local)
 	if !ok || entry.feed == nil {
@@ -462,21 +732,34 @@ func (d *Daemon) sendCodexManager(local, operationID string, req protocol.Compos
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: prior native input is unresolved; nothing was sent", protocol.ErrComposerOutcomeUnknown)
 	}
 	intent := codexManagerIntent{Binding: current.Binding, Nonce: req.ManagerAdmission.Nonce, TextHash: codexManagerTextHash(req.Text), OperationID: operationID, ExpectedExternalInput: req.ManagerAdmission.ExpectedExternalInput}
-	raw, _ := json.Marshal(composerOriginIntent{Version: 1, Origin: req.Origin, CodexManager: &intent})
-	if err = d.core.BindSemanticRequest(operationID, raw); err != nil {
-		return protocol.CodeInvalidField, err
+	f := &entry.feed.manager
+	c := f.actor.Load()
+	if f.lost.Load() || c == nil || c.Err() != nil {
+		return protocol.CodeManagerCustodyLost, managerproof.ErrQuarantined
 	}
-	entry.feed.manager.mu.Lock()
-	s := entry.feed.manager.state
-	entry.feed.manager.mu.Unlock()
+	s := f.published.Load()
 	if s == nil {
 		return protocol.CodeStructuredUnsupported, managerproof.ErrUnavailable
 	}
-	if err = s.prepare(intent); err != nil {
-		return protocol.CodeInputBusy, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer cancel()
+	raw, _ := json.Marshal(composerOriginIntent{Version: 1, Origin: req.Origin, CodexManager: &intent})
+	if err = c.Do(ctx, len(raw), func(context.Context) error {
+		if err := d.core.BindSemanticRequest(operationID, raw); err != nil {
+			return err
+		}
+		return s.prepare(intent)
+	}); err != nil {
+		if s.registry.CustodyError() != nil {
+			f.lost.Store(true)
+			d.backend.managerFailures.Store(local, struct{}{})
+			if f.cancel != nil {
+				f.cancel()
+			}
+			err = managerproof.ErrQuarantined
+		}
+		return codexManagerProofCode(err, protocol.CodeInputBusy), err
+	}
 	var result struct {
 		Turn struct {
 			ID string `json:"id"`
@@ -509,7 +792,7 @@ func (d *Daemon) sendCodexManager(local, operationID string, req protocol.Compos
 		}
 		entry.feed.manager.mu.Lock()
 		lane.mu.Lock()
-		if lane.barrier != barrier || lane.retired || lane.ownerEnding || lane.recycling || entry.feed.retired.Load() || !r.ReadyForInput() {
+		if lane.barrier != barrier || lane.retired || lane.ownerEnding || lane.recycling || entry.feed.retired.Load() || f.lost.Load() || c.Err() != nil || !r.ReadyForInput() {
 			lane.mu.Unlock()
 			unlockFeed()
 			boundaryRejected = true
@@ -527,6 +810,12 @@ func (d *Daemon) sendCodexManager(local, operationID string, req protocol.Compos
 			boundaryRejected = true
 			return e
 		}
+		if c.Pending() || c.Err() != nil || f.lost.Load() {
+			lane.mu.Unlock()
+			unlockFeed()
+			boundaryRejected = true
+			return fmt.Errorf("%w: native custody changed before the request write", protocol.ErrComposerOutcomeUnknown)
+		}
 		return nil
 	}, func() {
 		lane.mu.Unlock()
@@ -541,7 +830,7 @@ func (d *Daemon) sendCodexManager(local, operationID string, req protocol.Compos
 			if errors.Is(err, protocol.ErrComposerOutcomeUnknown) {
 				return protocol.CodeOutcomeUnknown, err
 			}
-			return protocol.CodeInputBusy, err
+			return codexManagerProofCode(err, protocol.CodeInputBusy), err
 		}
 		err = classifyComposerBackendError(err)
 		if errors.Is(err, protocol.ErrComposerOutcomeUnknown) {
@@ -552,18 +841,22 @@ func (d *Daemon) sendCodexManager(local, operationID string, req protocol.Compos
 	if result.Turn.ID == "" {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native turn acknowledgement missing; input will not be replayed", protocol.ErrComposerOutcomeUnknown)
 	}
-	if err = s.recordReceipt(intent.Nonce, result.Turn.ID); err != nil {
+	if err = c.Do(ctx, 256, func(context.Context) error {
+		if err := s.recordReceipt(intent.Nonce, result.Turn.ID); err != nil {
+			return err
+		}
+		return d.retainCodexManagerState(s)
+	}); err != nil {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: conflicting native turn receipt", protocol.ErrComposerOutcomeUnknown)
 	}
-	for _, e := range s.pendingReceipts() {
-		if e.Intent.OperationID == operationID {
-			if _, err = d.retainCodexManagerReceipt(e); err != nil {
-				return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native receipt could not be retained", protocol.ErrComposerOutcomeUnknown)
-			}
-			s.retained(e)
-		}
-	}
 	return "", nil
+}
+
+func codexManagerProofCode(err error, fallback protocol.ErrorCode) protocol.ErrorCode {
+	if errors.Is(err, managerproof.ErrQuarantined) {
+		return protocol.CodeManagerCustodyLost
+	}
+	return fallback
 }
 
 func (d *Daemon) codexManagerReceipt(local, operationID string, rec idempotency.Record, result protocol.SemanticMessageReceipt) protocol.SemanticMessageReceipt {

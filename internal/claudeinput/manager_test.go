@@ -13,10 +13,14 @@ import (
 
 func TestManagerNonceProjectionAndNativeCallProof(t *testing.T) {
 	dir := shortDir(t)
-	if _, err := InstallManager(dir, "conversation"); err != nil {
+	id, err := managerproof.InitializeReplay(dir, "session", "conversation")
+	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Start(dir, "session", "2.1.319", 123, 456)
+	if _, err := InstallManager(dir, "conversation", id); err != nil {
+		t.Fatal(err)
+	}
+	b, err := StartManager(dir, "session", "2.1.319", 123, 456, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +86,10 @@ func TestManagerNonceProjectionAndNativeCallProof(t *testing.T) {
 }
 func TestManagerInstallUniqueAndWorkersUnchanged(t *testing.T) {
 	a, b := shortDir(t), shortDir(t)
-	_, _ = InstallManager(a, "conversation")
-	_, _ = InstallManager(b, "conversation")
+	oneID, _ := managerproof.InitializeReplay(a, "one", "conversation")
+	twoID, _ := managerproof.InitializeReplay(b, "two", "conversation")
+	_, _ = InstallManager(a, "conversation", oneID)
+	_, _ = InstallManager(b, "conversation", twoID)
 	one, err := readManagerSetup(a)
 	if err != nil {
 		t.Fatal(err)

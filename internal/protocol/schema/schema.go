@@ -31,10 +31,12 @@ import (
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
-	Op              string `json:"op"`
-	EndpointID      string `json:"endpoint_id"`
-	SessionID       string `json:"session_id,omitempty"`
-	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	JournalSourceID   string `json:"journal_source_id,omitempty"`
+	JournalHistoryGap bool   `json:"journal_history_gap,omitempty"`
+	Op                string `json:"op"`
+	EndpointID        string `json:"endpoint_id"`
+	SessionID         string `json:"session_id,omitempty"`
+	ProtocolVersion   int    `json:"protocol_version,omitempty"`
 	// BuildVersion is the daemon's internal/version.Version, carried on the hello
 	// reply (E13.2). It is ADDITIVE: unlike ProtocolVersion (the wire skew gate,
 	// unchanged by this field), a mismatch here is not fatal to the handshake — it
@@ -398,9 +400,10 @@ type PairingControl struct {
 // LaunchReq is a client's request to launch a new session. Every field is
 // re-validated server-side (E6.6) before it reaches the DaemonAPI.
 type LaunchReq struct {
-	Manager *ManagerLaunchReq `json:"manager,omitempty"`
-	Agent   string            `json:"agent"`
-	Name    string            `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
+	ResumeSourceInstance string            `json:"resume_source_instance,omitempty"`
+	Manager              *ManagerLaunchReq `json:"manager,omitempty"`
+	Agent                string            `json:"agent"`
+	Name                 string            `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
 	// Tag is the optional manual grouping label given at creation, the same label
 	// set_tag assigns to a live session. It is re-validated + sanitized server-side
 	// exactly like Name, and stamped into the reservation meta, so a session the

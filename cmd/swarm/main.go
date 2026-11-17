@@ -654,6 +654,7 @@ type shimLaunchConfig struct {
 	HermesInput       *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
 	AgyInput          *agyinput.Config           `json:"agy_input,omitempty"`
 	ClaudeInput       bool                       `json:"claude_input,omitempty"`
+	ManagerReplayID   string                     `json:"manager_replay_id,omitempty"`
 	LogPath           string                     `json:"log_path,omitempty"`
 	LoginRuntime      *logins.Runtime            `json:"login_runtime,omitempty"`
 	LoginStateRoot    string                     `json:"login_state_root,omitempty"`
@@ -715,12 +716,13 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
-		HermesInput:  lc.HermesInput,
-		AgyInput:     lc.AgyInput,
-		ClaudeInput:  lc.ClaudeInput,
-		LogPath:      lc.LogPath,
-		OpenCode:     lc.OpenCode,
-		LoginRuntime: lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
+		HermesInput:     lc.HermesInput,
+		AgyInput:        lc.AgyInput,
+		ClaudeInput:     lc.ClaudeInput,
+		ManagerReplayID: lc.ManagerReplayID,
+		LogPath:         lc.LogPath,
+		OpenCode:        lc.OpenCode,
+		LoginRuntime:    lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
 		InputEmbargo:      lc.InputEmbargo,
 		InputEmbargoToken: lc.InputEmbargoToken,
 		CLIIdentity:       lc.CLIIdentity,

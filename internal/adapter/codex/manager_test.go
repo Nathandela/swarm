@@ -24,7 +24,7 @@ func TestManagerMCPAndFullPolicyReachCodexBackendForFreshAndResume(t *testing.T)
 		src, _ := adapter.AsBackendSource(New())
 		plan, _ := src.Backend(adapter.BackendSpec{SocketPath: "/private/session/codex.sock", AgentArgv: argv})
 		joined := strings.Join(plan.Args, "\n")
-		for _, want := range []string{"mcp_servers.swarm_voice=", `approval_policy="never"`, `sandbox_mode="danger-full-access"`, manager.Command, manager.Args[3], manager.Args[5]} {
+		for _, want := range []string{"mcp_servers.swarm_voice=", `env_vars=["SWARM_SESSION_ID"]`, `approval_policy="never"`, `sandbox_mode="danger-full-access"`, manager.Command, manager.Args[3], manager.Args[5]} {
 			if !strings.Contains(joined, want) {
 				t.Fatalf("manager native tool owner missing %q: %q", want, joined)
 			}
@@ -44,6 +44,19 @@ func TestManagerMCPAndFullPolicyReachCodexBackendForFreshAndResume(t *testing.T)
 					t.Fatalf("remote resume TUI retained backend-only override: %q", arg)
 				}
 			}
+		}
+	}
+}
+
+func TestFreshManagerSuppressesOnlyOptionalStartupUpdate(t *testing.T) {
+	const updateOverride = "check_for_update_on_startup=false"
+	for _, manager := range []*adapter.ManagerSpec{nil, {Command: "/private/swarm"}} {
+		argv, err := New().Command(adapter.LaunchSpec{Manager: manager})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if has := strings.Contains(strings.Join(argv, "\n"), "\n-c\n"+updateOverride); has != (manager != nil) {
+			t.Fatalf("manager %t got unexpected startup argv %q", manager != nil, argv)
 		}
 	}
 }

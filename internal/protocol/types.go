@@ -188,14 +188,15 @@ const (
 // caps (R-PROT.1): the hello handshake returns the intersection with the client's
 // offer, and an op whose capability was not negotiated is refused.
 const (
-	CapAttach               = "attach"
-	CapSubscribe            = "subscribe"
-	CapRemoteGateway        = "remote-gateway"
-	CapJournal              = "journal"
-	CapJournalSubscribeFrom = "journal-subscribe-from"
-	CapActivity             = "activity"
-	CapPolicy               = "policy"
-	CapPairing              = "pairing"
+	CapAttach                = "attach"
+	CapSubscribe             = "subscribe"
+	CapRemoteGateway         = "remote-gateway"
+	CapJournal               = "journal"
+	CapJournalSubscribeFrom  = "journal-subscribe-from"
+	CapJournalSourceIdentity = "journal-source-identity"
+	CapActivity              = "activity"
+	CapPolicy                = "policy"
+	CapPairing               = "pairing"
 	// CapExternalResume permits an owner-tier client to launch a session from a
 	// provider-native conversation id that was discovered outside swarm. Older
 	// daemons do not negotiate it, so a new CLI cannot silently fresh-launch.

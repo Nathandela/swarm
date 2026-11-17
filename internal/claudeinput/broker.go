@@ -27,13 +27,14 @@ const maxOperations = 128
 
 // SupportedVersion names actual native runtime qualification, not an optimistic range.
 func SupportedVersion(version string) bool {
-	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311" || version == "2.1.319"
+	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311" || SupportsNativeTurns(version)
 }
 
 // SupportsNativeTurns requires separately qualified exact turn lifecycle events.
-func SupportsNativeTurns(version string) bool { return version == "2.1.319" }
+func SupportsNativeTurns(version string) bool { return version == "2.1.319" || version == "2.1.326" }
 
 type Descriptor struct {
+	ReplayID              string `json:"replay_id,omitempty"`
 	SenderName            string `json:"sender_name,omitempty"`
 	ManagerConversationID string `json:"manager_conversation_id,omitempty"`
 	SessionID             string `json:"session_id"`
@@ -85,6 +86,8 @@ type request struct {
 }
 
 type Broker struct {
+	replay           *managerproof.Replay
+	custody          *managerproof.Custody
 	manager          *managerproof.Registry
 	managerInputs    map[string]managerInput
 	nativeInputReady bool
@@ -103,6 +106,17 @@ type Broker struct {
 }
 
 func Start(dir, session, version string, pid int, started int64) (*Broker, error) {
+	return start(dir, session, version, pid, started, "")
+}
+
+func StartManager(dir, session, version string, pid int, started int64, replayID string) (*Broker, error) {
+	if len(replayID) != 32 {
+		return nil, managerproof.ErrQuarantined
+	}
+	return start(dir, session, version, pid, started, replayID)
+}
+
+func start(dir, session, version string, pid int, started int64, replayID string) (*Broker, error) {
 	if !SupportedVersion(version) || session == "" {
 		return nil, errors.New("claude native input runtime is not qualified")
 	}
@@ -113,24 +127,55 @@ func Start(dir, session, version string, pid int, started int64) (*Broker, error
 	desc := Descriptor{SessionID: session, Generation: hex.EncodeToString(nonce[:16]), Token: hex.EncodeToString(nonce[16:]), SocketPath: filepath.Join(dir, "claude-input.sock"), ProviderVersion: version, ShimPID: pid, ShimStartTime: started, LifecycleFence: true}
 	desc.NativeTurns = SupportsNativeTurns(version)
 	desc.SenderName = "swarm-native-input"
-	if setup, err := readManagerSetup(dir); err == nil {
+	var replay *managerproof.Replay
+	var replayErr error
+	setup, err := readManagerSetup(dir)
+	if replayID != "" {
+		if err != nil || setup.ReplayID != replayID {
+			return nil, managerproof.ErrQuarantined
+		}
 		if !desc.NativeTurns {
 			return nil, errors.New("manager native runtime is not qualified")
 		}
 		desc.SenderName = setup.SenderName
 		desc.ManagerConversationID = setup.ConversationID
+		desc.ReplayID = setup.ReplayID
+		replay, replayErr = managerproof.OpenReplay(dir, session, setup.ConversationID, setup.ReplayID)
+		if replayErr != nil {
+			return nil, replayErr
+		}
+		if replayErr = replay.Claim(desc.Generation); replayErr != nil {
+			_ = replay.Close()
+			return nil, replayErr
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.New("manager native setup is invalid")
 	}
 	listener, err := net.Listen("unix", desc.SocketPath)
 	if err != nil {
+		if replay != nil {
+			_ = replay.Close()
+		}
 		return nil, err
 	}
 	if err = os.Chmod(desc.SocketPath, 0o600); err != nil {
 		_ = listener.Close()
+		if replay != nil {
+			_ = replay.Close()
+		}
 		return nil, err
 	}
-	b := &Broker{descriptor: desc, operations: map[string]Message{}}
+	b := &Broker{descriptor: desc, operations: map[string]Message{}, replay: replay}
+	if replay != nil {
+		b.custody = managerproof.NewCustody(context.Background(), func(error) { b.mu.Lock(); b.revokeLocked(); b.mu.Unlock() }, func() {
+			b.mu.Lock()
+			registry := b.manager
+			b.mu.Unlock()
+			if registry != nil {
+				registry.NotifyCustodyProgress()
+			}
+		})
+	}
 	b.server = &http.Server{Handler: http.HandlerFunc(b.serve), ReadHeaderTimeout: time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second, MaxHeaderBytes: 4096}
 	raw, err := json.Marshal(desc)
 	if err == nil {
@@ -138,13 +183,25 @@ func Start(dir, session, version string, pid int, started int64) (*Broker, error
 	}
 	if err != nil {
 		_ = listener.Close()
+		_ = b.Close()
 		return nil, err
 	}
 	go func() { _ = b.server.Serve(listener) }()
 	return b, nil
 }
 func (b *Broker) Descriptor() Descriptor { return b.descriptor }
-func (b *Broker) Close() error           { return b.server.Close() }
+func (b *Broker) Close() error {
+	if b.custody != nil {
+		b.custody.Close()
+	}
+	err := b.server.Close()
+	if b.replay != nil {
+		if e := b.replay.Close(); err == nil {
+			err = e
+		}
+	}
+	return err
+}
 
 func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+b.descriptor.Token)) != 1 {
@@ -154,6 +211,21 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 	var req request
 	if err := json.NewDecoder(io.LimitReader(r.Body, 128<<10)).Decode(&req); err != nil || req.Generation != b.descriptor.Generation {
 		http.Error(w, "invalid generation", http.StatusBadRequest)
+		return
+	}
+	if b.replay != nil {
+		switch r.URL.Path {
+		case "/interrupt", "/ready", "/manager-bind", "/manager-submit", "/manager-resolve", "/turn-status", "/manager-observation":
+			b.mu.Lock()
+			lost := b.revoked || b.custody.Err() != nil || (b.manager != nil && b.manager.CustodyError() != nil)
+			b.mu.Unlock()
+			if lost {
+				http.Error(w, "native custody lost; fresh manager session required", http.StatusGone)
+				return
+			}
+		}
+	}
+	if b.serveCustody(w, r, req) {
 		return
 	}
 	if r.URL.Path == "/manager-resolve" {
@@ -230,6 +302,12 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		b.seen = time.Now()
 		if req.OperationID != "" {
 			msg, ok := b.operations[req.OperationID]
+			if !ok {
+				if old, found := b.compactOperationLocked(req.OperationID); found && old.Worker == req.Worker {
+					respond(nil)
+					return
+				}
+			}
 			if !ok || msg.Worker != worker || req.State != "submitted" && req.State != "started" && req.State != "rejected" && req.State != "uncertain" || len(req.Reason) > 512 {
 				refuse("invalid native receipt")
 				return
@@ -312,6 +390,9 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		respond(msg)
 	case "/operation":
 		msg, ok := b.operations[req.OperationID]
+		if !ok {
+			msg, ok = b.compactOperationLocked(req.OperationID)
+		}
 		if !ok || msg.Worker != req.Worker {
 			refuse("native operation unavailable")
 			return
@@ -353,6 +434,9 @@ func (c *Client) call(ctx context.Context, path string, req request, out any) er
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusGone {
+		return managerproof.ErrQuarantined
+	}
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("claude native input refused (%d)", response.StatusCode)
 	}

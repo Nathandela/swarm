@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -92,5 +93,39 @@ func TestManagerClaudeRequiresQualifiedNativeTurns(t *testing.T) {
 	spec.Manager = &ManagerLaunchSpec{ConversationID: "voice-conversation", Command: d.ManagerBridgeCommand()}
 	if _, err := d.Launch(spec); err == nil {
 		t.Fatal("manager accepted legacy input-only runtime without native-turn lifecycle")
+	}
+}
+
+func TestManagerReplayBootstrapPrecedesNativeActivity(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			d := openDaemon(t, daemonConfig(t))
+			spec := announceSpec(t, t.TempDir()+"/pid")
+			spec.AgentType = provider
+			version := "2.1.319"
+			if provider == "codex" {
+				version = "0.167.0"
+			}
+			spec.CLIIdentity = &persist.CLIIdentity{Path: spec.Argv[0], Version: version}
+			spec.Manager = &ManagerLaunchSpec{ConversationID: "replay-conversation", Command: d.cfg.ShimBinary}
+			sentinel := errors.New("stop before native spawn")
+			_, err := d.launch(spec, func(phase launchPhase, m persist.Meta) error {
+				if phase != phaseReserved {
+					return nil
+				}
+				if m.ManagerReplayID == "" {
+					t.Fatal("manager reservation lacks durable replay identity")
+				}
+				r, err := managerproof.OpenReplay(filepath.Join(d.cfg.StateDir, m.ID), m.ID, m.ManagerConversationID, m.ManagerReplayID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = r.Close()
+				return sentinel
+			})
+			if !errors.Is(err, sentinel) {
+				t.Fatal(err)
+			}
+		})
 	}
 }

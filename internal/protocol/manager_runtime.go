@@ -121,21 +121,30 @@ func (c *Client) managerRequest(ctx context.Context, request Control) (Control, 
 		}
 		return Control{}, managerproof.ErrUnavailable
 	}
+	var response Control
 	select {
-	case response := <-c.respCh:
-		if operation.Err() != nil {
-			return Control{}, operation.Err()
-		}
-		return response, nil
+	case response = <-c.respCh:
 	case <-operation.Done():
 		_ = c.Close()
 		return Control{}, operation.Err()
 	case <-c.done:
-		if operation.Err() != nil {
-			return Control{}, operation.Err()
+		// The reader can enqueue a complete reply immediately before EOF.
+		select {
+		case response = <-c.respCh:
+		default:
+			if operation.Err() != nil {
+				return Control{}, operation.Err()
+			}
+			return Control{}, managerproof.ErrUnavailable
 		}
-		return Control{}, managerproof.ErrUnavailable
 	}
+	if operation.Err() != nil {
+		return Control{}, operation.Err()
+	}
+	if response.Op == OpError && response.ErrorCode == CodeManagerCustodyLost {
+		return Control{}, managerproof.ErrQuarantined
+	}
+	return response, nil
 }
 func (cc *clientConn) handleManagerRuntime(c Control) {
 	if cc.srv.remoteTier {
@@ -164,6 +173,10 @@ func (cc *clientConn) handleManagerRuntime(c Control) {
 			return
 		}
 		status, err := source.ManagerRuntime(local, c.ManagerRuntimeRequest.SessionInstance)
+		if errors.Is(err, managerproof.ErrQuarantined) {
+			cc.replyErrorCode("native custody lost; explicitly replace this manager session", CodeManagerCustodyLost)
+			return
+		}
 		if err != nil || status.Binding.Validate() != nil || status.Binding.Session != local || status.Binding.SessionInstance != c.ManagerRuntimeRequest.SessionInstance {
 			cc.replyErrorCode("manager runtime proof is unavailable", CodeUnavailable)
 			return
@@ -182,6 +195,10 @@ func (cc *clientConn) handleManagerRuntime(c Control) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		outcome, err := source.ManagerInputStatus(ctx, local, req)
+		if errors.Is(err, managerproof.ErrQuarantined) {
+			cc.replyErrorCode("native custody lost; explicitly replace this manager session", CodeManagerCustodyLost)
+			return
+		}
 		if err != nil || outcome.NativeInputID != req.Nonce {
 			cc.replyErrorCode("manager input outcome unavailable", CodeUnavailable)
 			return
@@ -198,6 +215,10 @@ func (cc *clientConn) handleManagerRuntime(c Control) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	proof, err := source.ResolveManagerCall(ctx, local, req)
+	if errors.Is(err, managerproof.ErrQuarantined) {
+		cc.replyErrorCode("native custody lost; explicitly replace this manager session", CodeManagerCustodyLost)
+		return
+	}
 	if err != nil || !proof.Main || !managerproof.ValidHash(proof.NativeInputID) || proof.NativeTurnID == "" || proof.NativeCallID == "" {
 		cc.replyErrorCode("manager native-call proof is unavailable", CodeUnavailable)
 		return

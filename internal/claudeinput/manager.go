@@ -13,11 +13,12 @@ import (
 )
 
 type managerTool struct {
-	CallID    string          `json:"call_id"`
-	TurnID    string          `json:"turn_id"`
-	AgentID   string          `json:"agent_id,omitempty"`
-	ToolName  string          `json:"tool_name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
+	CallID        string          `json:"call_id"`
+	TurnID        string          `json:"turn_id"`
+	AgentID       string          `json:"agent_id,omitempty"`
+	ToolName      string          `json:"tool_name"`
+	Arguments     json.RawMessage `json:"arguments,omitempty"`
+	ArgumentsHash string          `json:"-"`
 }
 type managerInput struct {
 	ExpectedExternalInput                                  uint64
@@ -66,6 +67,19 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 	default:
 		return false
 	}
+	if path == "/manager-input-status" && b.replay != nil && req.Binding != nil && req.Binding.Validate() == nil && req.Binding.Session == b.descriptor.SessionID && req.Binding.ConversationID == b.descriptor.ManagerConversationID {
+		b.mu.Unlock()
+		receipt, err := b.replay.Terminal(*req.Binding, req.NativeInputID)
+		b.mu.Lock()
+		if err == nil {
+			state := receipt.State
+			if state == "" {
+				state = "completed"
+			}
+			respond(managerproof.Turn{NativeInputID: receipt.Nonce, NativeTurnID: receipt.NativeTurnID, State: state, Reason: receipt.Reason, ExternallySteered: receipt.ExternallySteered, ExternalInput: b.turn.ExternalInput})
+			return true
+		}
+	}
 	if path == "/manager-idle" {
 		if b.descriptor.ManagerConversationID == "" || !b.descriptor.NativeTurns || b.revoked || req.Worker != b.guard || b.guard.Generation == "" || req.TurnID != b.turn.TurnID || b.turn.State != "idle" && b.turn.State != "completed" {
 			refuse("native idle continuation unavailable")
@@ -99,7 +113,7 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 			return true
 		}
 		if b.manager != nil {
-			snapshot, err := b.manager.Snapshot()
+			snapshot, err := b.manager.BindingSnapshot()
 			if err != nil || snapshot.Binding != *req.Binding {
 				refuse("manager binding retired or changed")
 				return true
@@ -107,16 +121,27 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 			respond(nil)
 			return true
 		}
-		registry, err := managerproof.NewRegistry(*req.Binding, b.turn.ExternalInput)
+		registry, err := managerproof.NewPersistentRegistry(*req.Binding, b.replay, b.turn.ExternalInput)
 		if err != nil {
 			refuse("invalid manager binding")
 			return true
 		}
 		b.manager = registry
+		registry.SetProofPending(b.custody.Pending)
+		registry.SetTerminalIdentity(b.worker.Generation, b.worker.Version)
 		if b.turn.TurnID != "" {
-			_ = registry.StartTurn(b.turn.TurnID, "")
-			if b.turn.State == "completed" {
-				registry.CloseTurn(b.turn.TurnID, b.turn.Reason)
+			turn := b.turn
+			if err := b.registryIO(func() error {
+				if err := registry.StartTurn(turn.TurnID, ""); err != nil {
+					return err
+				}
+				if turn.State == "completed" {
+					registry.CloseTurn(turn.TurnID, turn.Reason)
+				}
+				return registry.CustodyError()
+			}); err != nil {
+				refuse("native custody unavailable")
+				return true
 			}
 		}
 		if b.nativeInputReady {
@@ -130,12 +155,13 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 		return true
 	}
 	if path == "/manager-input-status" {
-		snapshot, err := b.manager.Snapshot()
+		snapshot, err := b.manager.BindingSnapshot()
 		if err != nil || req.Worker != b.worker || req.Binding == nil || *req.Binding != snapshot.Binding {
 			refuse("manager input history binding unavailable")
 			return true
 		}
-		outcome, err := b.manager.InputStatus(req.NativeInputID)
+		var outcome managerproof.Turn
+		err = b.registryIO(func() error { var e error; outcome, e = b.manager.InputStatus(req.NativeInputID); return e })
 		if err != nil {
 			refuse("manager input history unavailable")
 			return true
@@ -150,7 +176,7 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 		return true
 	}
 	if path == "/manager-submit" {
-		snapshot, err := b.manager.Snapshot()
+		snapshot, err := b.manager.BindingSnapshot()
 		if err != nil || req.Worker != b.worker || req.Admission == nil || req.Admission.Validate() != nil || req.Admission.Binding != snapshot.Binding || req.OperationID == "" || len(req.OperationID) > 128 || req.Text == "" || strings.Contains(req.Text, managerEnvelopePrefix) {
 			refuse("invalid manager admission")
 			return true
@@ -177,7 +203,9 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 			refuse("manager input receipt capacity reached")
 			return true
 		}
-		if err := b.manager.Prepare(req.Admission.Nonce, req.OperationID, digest, req.Admission.ExpectedExternalInput); err != nil {
+		if err := b.registryIO(func() error {
+			return b.manager.Prepare(req.Admission.Nonce, req.OperationID, digest, req.Admission.ExpectedExternalInput)
+		}); err != nil {
 			refuse("manager admission conflict or capacity")
 			return true
 		}
@@ -235,13 +263,18 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 	call := req.Call
 	var err error
 	if path == "/manager-tool-step" {
-		err = b.manager.ToolStep(call.CallID, call.TurnID, call.AgentID, call.ToolName)
+		err = b.registryIO(func() error { return b.manager.ToolStep(call.CallID, call.TurnID, call.AgentID, call.ToolName) })
 	} else {
 		var digest string
-		digest, err = managerproof.ArgumentsHash(call.Arguments)
+		digest = call.ArgumentsHash
+		if digest == "" {
+			digest, err = managerproof.ArgumentsHash(call.Arguments)
+		}
 		if err == nil {
 			if path == "/manager-tool-complete" {
-				err = b.manager.CompleteTool(call.CallID, call.TurnID, call.AgentID, call.ToolName, digest)
+				err = b.registryIO(func() error {
+					return b.manager.CompleteTool(call.CallID, call.TurnID, call.AgentID, call.ToolName, digest)
+				})
 			} else {
 				err = b.manager.AttestTool(call.CallID, call.TurnID, call.AgentID, call.ToolName, digest)
 			}
@@ -261,14 +294,13 @@ func (b *Broker) observeManagerTurnLocked(req request) error {
 	}
 	turn := req.Turn
 	if turn.State == "completed" {
-		b.manager.CloseTurn(turn.TurnID, turn.Reason)
-		return nil
+		return b.registryIO(func() error { b.manager.CloseTurn(turn.TurnID, turn.Reason); return b.manager.CustodyError() })
 	}
 	if turn.State != "running" {
 		return nil
 	}
 	b.nativeInputReady = false
-	if err := b.manager.StartTurn(turn.TurnID, ""); err != nil {
+	if err := b.registryIO(func() error { return b.manager.StartTurn(turn.TurnID, "") }); err != nil {
 		return err
 	}
 	if turn.NativeInputID == "" {
@@ -278,7 +310,7 @@ func (b *Broker) observeManagerTurnLocked(req request) error {
 	if !ok || input.MessageID == "" || input.MessageID != turn.NativeMessageID || input.ProjectionHash == "" || input.ProjectionHash != humanHash(req.Projection) {
 		return managerproof.ErrUnbound
 	}
-	if err := b.manager.BindInput(turn.NativeInputID, turn.TurnID, input.MessageID); err != nil {
+	if err := b.registryIO(func() error { return b.manager.BindInput(turn.NativeInputID, turn.TurnID, input.MessageID) }); err != nil {
 		return err
 	}
 	message := b.operations[input.OperationID]

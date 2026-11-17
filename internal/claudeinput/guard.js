@@ -45,6 +45,7 @@ const drainToolClosures = async $ => {
   for (const [id, call] of pendingToolClosures) {
     if (!await attest($, '/manager-tool-complete', { call })) return false;
     pendingToolClosures.delete(id);
+    nativeTools.delete(id);
   }
   return true;
 };
@@ -54,6 +55,7 @@ const closeTool = async ($, next, call) => {
     try {
       const response = await runtime($, '/manager-tool-complete', { call });
       if (!response.ok) await retire($);
+      else nativeTools.delete(call.call_id);
       return;
     } catch {
       if (!next.signal.aborted) { await retire($); return; }
@@ -73,16 +75,20 @@ export function register(on) {
       await retire($); return { drop: reason };
     }
     const machine = managerMode() && event.text.includes(envelopePrefix);
+    let admittedNonce;
     if (machine) {
       if (!owned(event) || !event.text.startsWith(envelopePrefix) || next.signal.aborted) return { drop: 'Unattested machine input envelope' };
       const proof = await attest($, '/manager-prompt', { text: event.text });
       if (!proof || !proof.value?.nonce || admissions.has(proof.value.nonce)) return { drop: 'Unattested or repeated machine input envelope' };
       admissions.set(proof.value.nonce, event.text);
+      admittedNonce=proof.value.nonce;
     }
     if ((!owned(event) || managerMode() && !machine) && await current($)) {
       await observe($, '/activity', { external_input: ++externalInput });
     }
-    return next(event);
+    const result=await next(event);
+    if(admittedNonce && result?.drop) admissions.delete(admittedNonce);
+    return result;
   });
   on('session.append', async ($, event, next) => {
     const stored = await next(event);

@@ -78,7 +78,9 @@ func (d *Daemon) appendStructuredGap(event StructuredGapEvent, sessionID string)
 	if err != nil {
 		return fmt.Errorf("daemon: marshal structured_gap event: %w", err)
 	}
+	instance, role := d.verifiedJournalPayloadIdentity(sessionID, event.SessionInstance)
 	_, err = d.appendJournal(journal.Record{
+		SessionInstance: instance, Role: role,
 		SessionID: sessionID,
 		Type:      journal.TypeStructuredGap,
 		Payload:   payload,
@@ -93,7 +95,9 @@ func (d *Daemon) EmitCapabilityTransition(sessionID string, payload []byte) erro
 	if sessionID == "" || len(payload) == 0 {
 		return fmt.Errorf("daemon: capability transition requires session and payload")
 	}
+	instance, role := d.verifiedJournalPayloadIdentity(sessionID, payloadJournalInstance(payload))
 	_, err := d.appendJournal(journal.Record{
+		SessionInstance: instance, Role: role,
 		SessionID: sessionID,
 		Type:      journal.TypeCapabilityTransition,
 		Payload:   append([]byte(nil), payload...),

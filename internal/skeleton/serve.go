@@ -455,6 +455,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// the remote-tier capability gate consults. Wired here and nowhere else, so there is
 	// exactly one place that decides a bare coreAPI authors nothing.
 	d.api.onLaunched = d.authorLaunchedSessionCapabilities
+	d.api.matchResumeInstance = d.matchesResumeSourceInstance
 	d.api.sessionCaps = d.sessionCapabilities
 	d.api.ownerSessionCaps = d.ownerSessionCapabilities
 	// Freeze capability instance authors and chat-plane transitions outside the

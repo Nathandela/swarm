@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -810,5 +811,23 @@ func TestResumeMigration_UnsupportedProvidersKeepExistingNoCapturedIDRefusal(t *
 				t.Fatalf("unsupported legacy %s resume error = %v, want existing no-captured-id refusal", agent, err)
 			}
 		})
+	}
+}
+
+func TestOwnerBoundWorkerResumeRefusesStaleIncarnationBeforeHistoryRecovery(t *testing.T) {
+	resolver := &fakeResumeHistoryResolver{}
+	rig := newResumeAPIRig(t, "codex", "", resolver)
+	rig.api.matchResumeInstance = func(source persist.Meta, expected string) bool {
+		return source.ID == rig.sourceID && expected == "current-instance"
+	}
+	spec := rig.launchSpec("codex")
+	spec.ResumeSource = &daemon.ResumeSourceFence{Instance: "older-instance"}
+	spec.OwnerLaunchHash = "bound"
+	spec.OperationID = "owner"
+	if _, err := rig.api.Launch(spec); !errors.Is(err, daemon.ErrResumeSourceChanged) {
+		t.Fatalf("stale instance reached identity migration: %v", err)
+	}
+	if len(rig.core.List()) != 1 || resolver.calls != 0 {
+		t.Fatal("stale source looked up history or reserved a worker")
 	}
 }

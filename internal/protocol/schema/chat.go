@@ -99,7 +99,8 @@ const (
 	// CodeUnavailable is IS-CAP-3's answer for a detail read outside the bounded
 	// retention window: the full body is gone and saying so beats presenting a partial
 	// body as whole.
-	CodeUnavailable ErrorCode = "unavailable"
+	CodeUnavailable        ErrorCode = "unavailable"
+	CodeManagerCustodyLost ErrorCode = "manager_custody_lost"
 	// CodeStructuredUnsupported refuses a composer_send against a session whose
 	// structured_chat capability is absent or has been degraded by a proven
 	// structured_gap (ADR-017 T2 rule 2, Mirror M5.5). It is the composer's sibling of

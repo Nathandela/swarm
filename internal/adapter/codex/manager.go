@@ -16,7 +16,7 @@ func managerFlags(manager *adapter.ManagerSpec) []string {
 		return nil
 	}
 	args, _ := json.Marshal(manager.Args)
-	return []string{"-c", "mcp_servers.swarm_voice={command=" + strconv.Quote(manager.Command) + ",args=" + string(args) + ",required=true}", "-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`}
+	return []string{"-c", "mcp_servers.swarm_voice={command=" + strconv.Quote(manager.Command) + ",args=" + string(args) + `,env_vars=["SWARM_SESSION_ID"],required=true}`, "-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`}
 }
 
 func managerOverride(value string) bool {

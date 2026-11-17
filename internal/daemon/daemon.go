@@ -157,6 +157,12 @@ type Config struct {
 }
 
 // LaunchSpec is a request to launch a new session.
+type ResumeSourceFence struct {
+	Instance      string
+	ShimPID       int
+	ShimStartTime int64
+}
+
 type LaunchSpec struct {
 	managerLogin      *managerLoginBinding
 	Manager           *ManagerLaunchSpec
@@ -198,6 +204,8 @@ type LaunchSpec struct {
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
+	// ResumeSource pins an exact reliable owner resume through reservation.
+	ResumeSource *ResumeSourceFence
 	// SpawnedFrom, when non-empty, is the LOCAL id of the session that spawned this
 	// one (ADR-010-inter-session-orchestration D4), and SpawnIntent is "handoff" or
 	// "delegate". The daemon only stamps them into meta — exactly as it does ResumedFrom.
@@ -853,6 +861,7 @@ func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
 	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
 	// journal record without meta (tolerable) but never meta without journal (A7).
 	if rec, ok := journalRecordFor(prev, prevExists, *m); ok {
+		rec.SessionInstance = d.recordedJournalInstance(*m)
 		if _, jerr := d.appendJournal(rec); jerr != nil {
 			return false, jerr
 		}

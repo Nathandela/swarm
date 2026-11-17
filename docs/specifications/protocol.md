@@ -88,7 +88,9 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `device_sig`       | string            | detached Ed25519 signature over the canonical op tuple (D4)                  |
 | `cursor`           | uint64            | journal cursor, carried on `journal_read` / `journal_event` (R-PROT.3)       |
 | `journal_max_bytes`| int               | opt-in maximum encoded response-page size for `journal_read`; omitted keeps the legacy single reply |
-| `journal_more`     | bool              | a bounded `journal_read` response has another page in the same atomic result |
+| `journal_more`     | bool              | a bounded journal response has another page in the same atomic result |
+| `journal_source_id` | string          | durable journal namespace, a canonical lowercase UUIDv4 carried on source-aware journal replies and events |
+| `journal_history_gap` | bool          | a source-aware reply or event contains session notification history without an exact session instance, requiring reconciliation |
 | `issued_at`        | time              | daemon-authoritative issue time (pointer; the key is omitted when zero)      |
 | `expires_at`       | time              | daemon-authoritative expiry (pointer; the key is omitted when zero)          |
 | `approve`          | `*ApproveReq`     | remote approval of an agent interaction (A6)                                 |
@@ -148,6 +150,15 @@ The owner-only `owner_launch` operation requires negotiated `owner-launch` capab
 
 The owner reservation binds SHA-256 of the complete JSON `LaunchReq`, including owner environment, resume options, dimensions, prompt and lineage. Map keys encode deterministically and array order remains significant. A conflicting payload is refused. Exact replay reconciles before mutable source/runtime validation, returns the original usable session, and never re-drives a missing, lost or uncertain reservation. An existing conversation selected by resume/adoption receives its own durable operation binding. Unresolved owner reservations survive TTL compaction; store capacity refuses new effects rather than evicting them. A reply lost after launch can therefore be recovered without creating a replacement worker.
 
+The additive `owner-bound-resume` capability extends `owner_launch` with the
+`resume_source_instance` precondition for a linked worker resume. The requested
+source must be an exact exited worker. The assembly checks its incarnation and
+the core revalidates its shim identity, provider conversation and exit state
+under the launch reservation lock. A changed precondition returns
+`stale_instance` without reserving a new effect. Clients must negotiate this
+capability before sending the field. The old owner and signed remote launch
+routes cannot use it. Reliable launch status remains available by operation ID.
+
 The owner-only `owner_launch_status` read requires the same capability. It accepts `subject_operation_id` without a mutation age limit and echoes that exact subject with `operation_outcome`: `applied` plus original namespaced session ID, `outcome_unknown`, or `unknown_operation`. The read launches nothing. Existing signed remote `operation_status` also excludes owner-launch custody and returns `unknown_operation` for an owner launch ID. An unknown/expired result never proves an earlier effect did not happen and never authorizes a new operation ID. Legacy owner `launch` remains available without a durable operation ID; nonempty owner operation IDs require the new route. No wire fields or protocol-major change are required.
 
 Manager launch is an additive owner-only extension to `owner_launch`, requiring both `owner-launch` and `manager-launch` capabilities. A manager-bearing request on legacy `launch`, an unnegotiated connection, or the signed remote socket is refused before launch; existing remote launch hashes intentionally remain unchanged. The manager object and every exact reference participate in the owner launch hash. An older owner-launch server cannot silently create an ordinary worker because the client refuses without the new capability.
@@ -161,7 +172,7 @@ Manager launch is an additive owner-only extension to `owner_launch`, requiring 
 | `role` | string | Roster role stamped from typed launch metadata; `manager` for manager sessions, absent for ordinary workers; names grant no role |
 | `manager_conversation_id` | string | The roster's persisted voice-manager conversation identity, independent of the native provider conversation ID |
 
-The additive `manager-provenance` capability is owner-only and requires a qualified native source. `manager_runtime` derives role, session incarnation, native process generation, selected login identity and bridge references from current server custody. `manager_resolve_call` resolves a native host tool invocation against the same binding with a cancellable wait bounded to one second. `manager_input_status` reads a retained admission by nonce without submitting or replaying input. Remote connections cannot negotiate or use these operations. Unsupported native versions, lost feeds, child/direct-terminal calls, changed accounts/processes and ambiguous or externally steered turns refuse proof.
+The additive `manager-provenance` capability is owner-only and requires a qualified native source. `manager_runtime` derives role, session incarnation, native process and observer generations, selected login identity and bridge references from current server custody. `manager_resolve_call` resolves a native host tool invocation against the same binding with a cancellable wait bounded to one second. `manager_input_status` reads a retained admission by nonce without submitting or replaying input. Remote connections cannot negotiate or use these operations. Unsupported native versions, lost feeds, child/direct-terminal calls, changed accounts/processes and ambiguous or externally steered turns refuse proof.
 
 | JSON key | Type | Meaning |
 |---|---|---|
@@ -201,6 +212,8 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 
 Runtime `bridge_socket` and `auth_file` are private server-derived references checked before controller adoption; they are absent from device projections and the public roster. Input admission and call resolution revalidate binding and account/process custody. Historical receipts cannot reconstruct native permissions after a lost feed or restart. Evidence tables are bounded; exhausted or conflicting custody fails closed instead of evicting unresolved authority or permitting replay.
 
+Any of the three manager proof reads can return `manager_custody_lost` in `error_code`. This reports lost native custody for the selected manager session and requires explicit fresh-session replacement. Clients retain the original operation and admission receipts for reconciliation and preserve the typed error when the daemon closes after sending its reply. An ordinary `unavailable` response reports missing evidence for that read.
+
 Manager MCP configuration uses the trusted Swarm executable selected by the daemon, never a `PATH` lookup. Its argv is `voice mcp --socket <bridge_socket> --auth-file <auth_file> --conversation <conversation_id>`. Claude receives per-invocation JSON through `--mcp-config`, keeps ordinary hooks/settings/native tools and qualified native broker enrollment even when Discord is disabled, and requests unrestricted native permissions. Codex receives the corresponding stdio MCP config and full-access policy at the shim-owned app-server that actually owns tools. Its TUI attaches to that same backend and creates/resumes the native thread normally; no second thread is started. An unavailable backend or absent/mismatched attach handshake refuses manager standalone fallback. Native organization/provider policy still applies.
 
 Private session metadata retains the manager role, conversation identity and nonsecret bridge references. An already-running native conversation is selected only when its manager binding matches exactly. Resuming a typed manager requires an explicit current manager configuration for that same conversation; an ordinary resume cannot silently drop its bridge or native enrollment. None of these additions modifies global CLI configuration, provider credential stores or ordinary worker defaults.
@@ -237,7 +250,9 @@ needs; the daemon-internal payload is not carried wholesale. There are **two exp
 | ------------ | ----------------- | ----------------------------------------------------------------------- |
 | `cursor`     | uint64            | the record's monotonic journal cursor; ordering is this and nothing else. Deliberately unset (`0`) on a roster record, which is a set member and not a point in the stream (PB-SYNC-8) |
 | `session_id` | string            | namespaced session id the record is about; absent on a session-neutral record (`presence`) |
-| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` \| `capability_transition` |
+| `session_instance` | string    | exact session incarnation captured for this record or roster snapshot, when available and negotiated through `journal-source-identity` |
+| `role`       | string            | persisted session role captured for this record or roster snapshot, when available and negotiated through `journal-source-identity` |
+| `type`       | string            | `session_state` \| `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` \| `capability_transition` |
 | `group`      | `status.Group`    | the server-derived display group; carried on `group_transition` and on a roster record, absent elsewhere |
 | `agent`      | string            | the session's agent identity (`claude`, `codex`, …). Its ABSENCE IS MEANINGFUL: a record with no agent carries none, and `""` is never an agent by that name |
 | `item`       | `json.RawMessage` | the transcript payload, carried when `type` is `interaction` or `structured_gap`. The latter is the durable visible history-tear marker. Opaque on the wire: the gateway forwards it and parses no item (§10). |
@@ -247,6 +262,17 @@ needs; the daemon-internal payload is not carried wholesale. There are **two exp
 
 Every field but `cursor`, `session_id` and `type` is `omitempty`, so a record type
 that predates one of them serializes byte-identically to what earlier builds wrote.
+
+A client that negotiates `journal-source-identity` uses `journal_subscribe_from`
+to bind the initial backlog and roster snapshot to its live notifications.
+Every page of the same reply carries the same journal source, cursor and gap
+state. A cursor is usable only with its source ID. A new source or a history gap
+requires a reconciled snapshot before notification-driven actions can resume.
+The source-aware client closes the subscription on an invalid or changed source
+or a live identity gap. Historical session identities come from the record
+itself or validated event-time capabilities. A current roster entry cannot
+supply the incarnation of an older record. Peers without this capability
+receive the existing journal wire shape.
 
 `structured_gap` is the durable, transcript-visible history boundary of ADR-017 T2 rule 2
 (`internal/journal.TypeStructuredGap`, `internal/daemon.StructuredGapEvent`). Its body crosses
@@ -329,6 +355,7 @@ and unrelated secrets are dropped.
 
 | JSON key         | Go type             | Meaning                                                    |
 | ---------------- | ------------------- | ---------------------------------------------------------- |
+| `resume_source_instance` | string | Exact source incarnation for `owner-bound-resume`, with `options.resume_from`. Requires an exited worker and forbids worktree creation, relocation, manager launch or initial prompt. |
 | `agent`          | string              | agent type to launch                                       |
 | `name`           | string              | optional session label; sanitized + length-capped server-side (P2) |
 | `tag`            | string              | optional manual grouping label given at creation, sanitized exactly as `set_tag`'s (blank is untagged) and stamped into the reservation meta |

@@ -1,11 +1,13 @@
 package protocol
 
 import (
+	"errors"
 	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
@@ -89,6 +91,7 @@ func TestOwnerLaunchHashBindsEveryRequestField(t *testing.T) {
 		func(r *LaunchReq) { r.SpawnedFrom = "source" },
 		func(r *LaunchReq) { r.Supervision = "manual" },
 		func(r *LaunchReq) { r.InitialPrompt = "new task" },
+		func(r *LaunchReq) { r.ResumeSourceInstance = "different-incarnation" },
 	} {
 		changed := req
 		mutate(&changed)
@@ -99,5 +102,51 @@ func TestOwnerLaunchHashBindsEveryRequestField(t *testing.T) {
 	id, err := NewLaunchOperationID()
 	if err != nil || !validLaunchOperationID(id, time.Now()) {
 		t.Fatalf("operation ID = %q, %v", id, err)
+	}
+}
+
+type boundResumeOwnerStub struct {
+	*ownerLaunchStub
+	seen chan daemon.LaunchSpec
+}
+
+func (*boundResumeOwnerStub) OwnerBoundResumeSupported() bool { return true }
+
+func (s *boundResumeOwnerStub) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+	s.seen <- spec
+	return persist.Meta{}, daemon.ErrResumeSourceChanged
+}
+
+func TestOwnerBoundResumeNegotiatesAndPreservesStaleInstanceRefusal(t *testing.T) {
+	b := &boundResumeOwnerStub{ownerLaunchStub: &ownerLaunchStub{durableComposerStub: newDurableComposerStub()}, seen: make(chan daemon.LaunchSpec, 2)}
+	socket := serveOwnerAPI(t, b)
+	for _, caps := range [][]string{{CapOwnerLaunch}, {CapOwnerLaunch, CapOwnerBoundResume}} {
+		c, err := Dial(socket, caps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := NewLaunchOperationID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = c.LaunchOperation(id, LaunchReq{
+			Agent: "codex", Cwd: t.TempDir(), Cols: 120, Rows: 32, ResumeSourceInstance: "bound-instance",
+			Options: map[string]string{OptionResumeFrom: NamespacedID(c.EndpointID(), "source")},
+		})
+		_ = c.Close()
+		if len(caps) == 1 {
+			if err == nil || len(b.seen) != 0 {
+				t.Fatal("unnegotiated bound resume reached the backend", err)
+			}
+		} else {
+			if !errors.Is(err, ErrOwnerResumeStaleSource) {
+				t.Fatal("stale source error lost across owner wire", err)
+			}
+			spec := <-b.seen
+			if spec.ResumeSource == nil || spec.ResumeSource.Instance != "bound-instance" ||
+				spec.OwnerLaunchHash == "" || spec.OperationID != id {
+				t.Fatalf("owner dispatch changed exact source authority: %+v", spec)
+			}
+		}
 	}
 }

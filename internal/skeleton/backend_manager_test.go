@@ -191,6 +191,10 @@ func newCodexManagerSendRig(t *testing.T) (*Daemon, managerproof.Binding, *backe
 		t.Fatal(err)
 	}
 	meta = managerLifecycleMeta(meta)
+	meta.ManagerReplayID, err = managerproof.InitializeReplay(filepath.Join(dir, meta.ID), meta.ID, meta.ManagerConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := persist.NewStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -225,10 +229,31 @@ func newCodexManagerSendRig(t *testing.T) (*Daemon, managerproof.Binding, *backe
 	b.ConversationID = meta.ManagerConversationID
 	b.NativeGeneration = native.Generation
 	feed := newBackendFeed()
+	t.Cleanup(func() { discardCodexManagerFeed(feed) })
 	b.ObservationGeneration = feed.epoch
 	sk.backend.live = map[string]*sessionBackend{meta.ID: {threadID: b.NativeSessionID, sessionInstance: b.SessionInstance, feed: feed}}
+	if err := sk.prepareCodexManagerFeed(meta.ID, b.SessionInstance, feed); err != nil {
+		t.Fatal(err)
+	}
 	sk.captureCodexManagerFrame(meta.ID, feed, "thread/status/changed", codexManagerFrame("thread/status/changed", b.NativeSessionID, map[string]any{"status": map[string]any{"type": "idle"}}))
+	if _, err := sk.codexManagerRegistry(meta.ID, b); err != nil {
+		t.Fatal(err)
+	}
+	waitCodexCustody(t, feed)
 	return sk, b, feed
+}
+
+func waitCodexCustody(t *testing.T, feed *backendFeed) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c := feed.manager.actor.Load()
+	if c == nil {
+		t.Fatal("fixture custody missing")
+	}
+	if err := c.Do(ctx, 0, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCodexManagerLostACKReconcilesEchoWithoutRedrive(t *testing.T) {
@@ -262,6 +287,7 @@ func TestCodexManagerLostACKReconcilesEchoWithoutRedrive(t *testing.T) {
 	if code != protocol.CodeOutcomeUnknown || !errors.Is(err, protocol.ErrComposerOutcomeUnknown) {
 		t.Fatalf("lost ACK was definite: %s %v", code, err)
 	}
+	waitCodexCustody(t, feed)
 	receipt, err := sk.semanticOperation(b.Session, op)
 	if err != nil || receipt.State != "admitted" || receipt.NativeMessageID != "native-message" || receipt.NativeInputID != nonce || receipt.NativeTurnID != "native-turn" {
 		t.Fatalf("lost ACK did not reconcile exact echo: %+v %v", receipt, err)
@@ -274,15 +300,11 @@ func TestCodexManagerLostACKReconcilesEchoWithoutRedrive(t *testing.T) {
 		t.Fatalf("native submission redriven %d times", writes)
 	}
 	// A new observer cannot manufacture input authority from that durable receipt.
+	discardCodexManagerFeed(feed)
 	sk.backend.live[b.Session].feed = newBackendFeed()
 	b.ObservationGeneration = sk.backend.live[b.Session].feed.epoch
-	r, err := sk.codexManagerRegistry(b.Session, b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, err := r.Snapshot()
-	if err != nil || status.Turn.State != "unknown" || r.ReadyForInput() {
-		t.Fatalf("restart guessed proof: %+v %v", status, err)
+	if _, err := sk.codexManagerRegistry(b.Session, b); !errors.Is(err, managerproof.ErrQuarantined) {
+		t.Fatalf("replacement observer renewed dirty manager custody: %v", err)
 	}
 }
 
@@ -358,16 +380,10 @@ func TestCodexManagerRejectsRewrittenNativeMessageIdentity(t *testing.T) {
 }
 
 func TestCodexManagerPreRegistrationBufferAndRetirement(t *testing.T) {
-	b := codexProofFixture()
-	feed := newBackendFeed()
-	b.ObservationGeneration = feed.epoch
-	d := &Daemon{}
-	if err := d.recordSessionInstance(b.Session, b.SessionInstance, 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	d.backend.live = map[string]*sessionBackend{b.Session: {threadID: b.NativeSessionID, sessionInstance: b.SessionInstance, feed: feed}}
+	d, b, feed := newCodexManagerSendRig(t)
 	d.captureCodexManagerFrame(b.Session, feed, "thread/status/changed", codexManagerFrame("thread/status/changed", "foreign", map[string]any{"status": map[string]any{"type": "active"}}))
 	d.captureCodexManagerFrame(b.Session, feed, "thread/status/changed", codexManagerFrame("thread/status/changed", b.NativeSessionID, map[string]any{"status": map[string]any{"type": "idle"}}))
+	waitCodexCustody(t, feed)
 	r, err := d.codexManagerRegistry(b.Session, b)
 	if err != nil || !r.ReadyForInput() {
 		t.Fatalf("native idle before binding lost: %v", err)
@@ -376,13 +392,22 @@ func TestCodexManagerPreRegistrationBufferAndRetirement(t *testing.T) {
 	if _, err := r.Snapshot(); !errors.Is(err, managerproof.ErrStale) {
 		t.Fatal("retired feed retained proof")
 	}
-	feed = newBackendFeed()
-	b.ObservationGeneration = feed.epoch
-	d.backend.live[b.Session].feed = feed
+	d, b, feed = newCodexManagerSendRig(t)
+	release := make(chan struct{})
+	defer close(release)
+	if err := feed.manager.actor.Load().Enqueue(0, func(ctx context.Context) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 129; i++ {
 		d.captureCodexManagerFrame(b.Session, feed, "thread/status/changed", codexManagerFrame("thread/status/changed", b.NativeSessionID, map[string]any{"status": map[string]any{"type": "idle"}}))
 	}
-	if _, err := d.codexManagerRegistry(b.Session, b); !errors.Is(err, managerproof.ErrUnavailable) {
+	if _, err := d.codexManagerRegistry(b.Session, b); !errors.Is(err, managerproof.ErrQuarantined) {
 		t.Fatalf("overflow guessed complete native history: %v", err)
 	}
 }
@@ -395,7 +420,9 @@ func TestCodexManagerExpiredHistoricalReceiptDoesNotRetireCurrentProof(t *testin
 	}
 	// A settled history entry may outlive the idempotency retention window.
 	s.evidence["old"] = codexManagerEvidence{Version: 1, Intent: codexManagerIntent{OperationID: "expired-settled-operation"}}
-	r.sk.retainCodexManagerState(s)
+	if err := r.sk.retainCodexManagerState(s); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.registry.Snapshot(); err != nil {
 		t.Fatalf("unmodified expired history retired current native proof: %v", err)
 	}
@@ -530,19 +557,17 @@ func TestCodexManagerObservationReconnectInvalidatesStaleAdmission(t *testing.T)
 			if err == nil || began || writes != 0 {
 				t.Fatalf("observation reset reused old admission: err=%v begin=%v writes=%d", err, began, writes)
 			}
-			current, err := sk.managerRuntime(b.Session, b.SessionInstance)
-			if err != nil {
-				t.Fatal(err)
+			current := b
+			current.ObservationGeneration = fresh.epoch
+			if _, err := sk.codexManagerRegistry(b.Session, current); !errors.Is(err, managerproof.ErrQuarantined) {
+				t.Fatalf("same manager session was renewed after owner loss: %v", err)
 			}
-			if current.Binding == b || current.Binding.NativeGeneration != b.NativeGeneration {
-				t.Fatalf("observation and physical process identities were conflated: old=%+v new=%+v", b, current.Binding)
+			if native, err := sk.core.SessionNativeGeneration(b.Session); err != nil || native != b.NativeGeneration {
+				t.Fatalf("observer quarantine changed the live process: %s %v", native, err)
 			}
-			if _, _, err := sk.core.ClaimComposerOperation("reconciled", protocol.OpSemanticSend, b.Session, b.SessionInstance, "hash-reconciled"); err != nil {
-				t.Fatal(err)
-			}
-			_, err = sk.sendCodexManager(b.Session, "reconciled", protocol.ComposerSendReq{Text: "input after explicit reconciliation", ManagerAdmission: &protocol.ManagerAdmission{Binding: current.Binding, Nonce: strings.Repeat("f", 64), ExpectedExternalInput: current.Turn.ExternalInput}}, func() error { return sk.core.BeginComposerOperation("reconciled") }, lane, barrier)
-			if err != nil || writes != 1 {
-				t.Fatalf("fresh observation could not be explicitly reconciled: err=%v writes=%d", err, writes)
+			meta, _ := sk.core.Get(b.Session)
+			if err := syscall.Kill(meta.ShimPID, 0); err != nil {
+				t.Fatal("observer quarantine stopped the native session")
 			}
 		})
 	}
