@@ -134,3 +134,48 @@ func TestSwitchManagerRefusesUnconfirmedLaunchWithoutBinding(t *testing.T) {
 		t.Fatalf("refused switch edited launch recovery state: %v", err)
 	}
 }
+
+func TestSwitchManagerChecksReplacementBeforeAbandoningBoundConversation(t *testing.T) {
+	for _, phase := range []string{"executing", "applied", "adopted"} {
+		t.Run(phase, func(t *testing.T) {
+			store, bound, dir := testStore(t)
+			cfg := testConfig()
+			cfg.ConversationID = bound.ConversationID
+			if err := SaveConfig(dir, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			replacement := managerReplacement{dir: dir, endpoint: "machine", config: cfg}
+			receipt := ManagerReplacement{Previous: bound, OperationID: "replacement", Phase: phase}
+			switch phase {
+			case "applied":
+				receipt.SessionID = "machine/replacement"
+			case "adopted":
+				receipt.Phase = "applied"
+				receipt.Previous.SessionID = "machine/previous"
+				receipt.SessionID = bound.SessionID
+			}
+			if err := replacement.write(replacementIntent{Version: 1, Receipt: receipt}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := SwitchManager(dir, cfg.ConversationID, "claude", "")
+			if phase == "adopted" {
+				if err != nil {
+					t.Fatal("adopted replacement blocked switch", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "reconcile") {
+				t.Fatal("switch stranded replacement", err)
+			}
+			if got, err := LoadConfig(dir); err != nil || got != cfg {
+				t.Fatal("refusal changed configuration", err)
+			}
+			if got, err := replacement.read(); err != nil || got.Receipt != receipt {
+				t.Fatal("refusal changed replacement receipt", err)
+			}
+		})
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/Nathandela/swarm/internal/protocol"
 )
 
 // SwitchManager selects a fresh manager conversation while the service is
@@ -48,7 +50,7 @@ func SwitchManager(dir, from, provider, workspace string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if err := checkSwitchEffects(dir, state, from); err != nil {
+	if err := checkSwitchEffects(dir, state, current); err != nil {
 		return Config{}, err
 	}
 	current.Provider = provider
@@ -64,7 +66,8 @@ func SwitchManager(dir, from, provider, workspace string) (Config, error) {
 	return current, nil
 }
 
-func checkSwitchEffects(dir string, state State, conversation string) error {
+func checkSwitchEffects(dir string, state State, cfg Config) error {
+	conversation := cfg.ConversationID
 	uncertain := errors.New("voice: current manager has unresolved native effects; restart its voice service and reconcile its work before switching")
 	for _, action := range state.Actions {
 		if action.ConversationID == conversation && action.State == "executing" {
@@ -84,7 +87,20 @@ func checkSwitchEffects(dir string, state State, conversation string) error {
 			return uncertain
 		}
 	}
-	if _, bound := state.Conversations[conversation]; bound {
+	if prior, bound := state.Conversations[conversation]; bound {
+		endpoint, _, _ := protocol.ParseID(prior.Binding.SessionID)
+		replacement := managerReplacement{dir: dir, endpoint: endpoint, config: cfg}
+		intent, err := replacement.read()
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		receipt := intent.Receipt
+		if receipt.Phase == "executing" || (receipt.Phase == "applied" && receipt.SessionID != prior.Binding.SessionID) {
+			return uncertain
+		}
 		return nil
 	}
 	raw, err := readVoiceFile(dir, managerIntentName(conversation), MaxControlFrameBytes)
