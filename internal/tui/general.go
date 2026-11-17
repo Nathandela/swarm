@@ -588,6 +588,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editing = true
 			m.general.editID = s.ID
 			m.general.edit = newLineEditor(s.Name)
+			m.general.revealSession(s.ID)
 		}
 	case k.Text == "t":
 		if s, ok := m.boardCommandSession(); ok {
@@ -595,6 +596,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editTag = true
 			m.general.editID = s.ID
 			m.general.edit = newLineEditor(s.Tag)
+			m.general.revealSession(s.ID)
 		}
 	case k.Text == "o":
 		// Open the options window seeded with the live layout (owner decision
@@ -624,6 +626,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.confirm = true
 			m.general.confirmID = s.ID
 			m.general.confirmKill = s.Status.Process == status.ProcessRunning
+			m.general.revealSession(s.ID)
 		}
 	case k.Code == tea.KeyEsc:
 		return m, tea.Quit

@@ -619,6 +619,10 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.general.remove(msg.id)
 		m.general.tombstone(msg.id) // a late buffered event must not resurrect the row (item 6)
+		if m.general.confirm && m.general.confirmID == msg.id {
+			m.general.confirm = false
+			m.general.confirmID = ""
+		}
 		return m, m.general.setBanner("session deleted")
 
 	case killDoneMsg:
@@ -809,7 +813,7 @@ func (m rootModel) generalStatus() string {
 		return "type  ←→ move  " + lineEditFastHint + "  ⏎ save  esc cancel"
 	}
 	if m.general.confirm {
-		return "y confirm   n cancel"
+		return "y / ctrl+x confirm · n / esc cancel"
 	}
 	return "↑↓ move · ⏎ attach (ctrl+q returns) · o options · t tag · e rename · n new · h handoff · ^x kill · esc quit"
 }
@@ -951,12 +955,8 @@ func semverParts(core string) []int {
 	return parts
 }
 
-// composeBoard anchors a one-line status bar on the bottom row of a full-screen
-// board: the body fills the rows above it — padded with blank rows, or clipped if it
-// would overflow — and the dim bar occupies the final row. A version-skew notice, when
-// present, takes the row directly above the bar (persistent, distinct from a session
-// row). Before the first WindowSizeMsg (height unknown) the tail simply follows the body.
-func (m rootModel) composeBoard(body, status string) string {
+// statusStrip renders the bottom key-hint and build-version strip within width.
+func (m rootModel) statusStrip(status string) string {
 	if m.connectionLost {
 		status = m.generalStatus()
 	}
@@ -977,6 +977,16 @@ func (m rootModel) composeBoard(body, status string) string {
 			bar += strings.Repeat(" ", gap) + styleDim.Render(ver)
 		}
 	}
+	return bar
+}
+
+// composeBoard anchors a one-line status bar on the bottom row of a full-screen
+// board: the body fills the rows above it — padded with blank rows, or clipped if it
+// would overflow — and the dim bar occupies the final row. A version-skew notice, when
+// present, takes the row directly above the bar (persistent, distinct from a session
+// row). Before the first WindowSizeMsg (height unknown) the tail simply follows the body.
+func (m rootModel) composeBoard(body, status string) string {
+	bar := m.statusStrip(status)
 
 	// The version-skew notice reserves its own row above the bar, clamped and styled the
 	// same way so it likewise cannot wrap.

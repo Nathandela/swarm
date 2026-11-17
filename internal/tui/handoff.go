@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -262,17 +263,32 @@ func (m handoffModel) view() string {
 	// E6: two live writers in one checkout. The source is left alive on purpose, so
 	// the mitigation is honesty, not enforcement -- this warns and never blocks.
 	if m.method == handoffMethodHandsOff && m.sourceRunning {
-		b.WriteString("\n" + m.clampLine("  "+styleDim.Render(handoffRunningWarning)) + "\n")
+		b.WriteString("\n" + wrapIndented(handoffRunningWarning, m.width, styleDim) + "\n")
 	}
 	// E4: the disclosure question, naming both CLIs. It is a separate thing from the
 	// warning above -- that one is informational, this one blocks the submit.
 	if m.confirmPending() {
-		b.WriteString("\n" + m.clampLine("  "+styleAccent.Render(m.crossCLIQuestion())) + "\n")
+		b.WriteString("\n" + wrapIndented(m.crossCLIQuestion(), m.width, styleAccent) + "\n")
 	}
 	if m.errMsg != "" {
-		b.WriteString("\n" + m.clampLine("  "+styleError.Render(m.errMsg)) + "\n")
+		b.WriteString("\n" + wrapIndented(m.errMsg, m.width, styleError) + "\n")
 	}
 	return b.String()
+}
+
+// wrapIndented wraps plain text inside a 2-space indent budget before applying
+// style per line so narrow or split panes preserve the entire message without
+// slicing ANSI sequences.
+func wrapIndented(text string, width int, style lipgloss.Style) string {
+	wrapped := text
+	if width > 4 {
+		wrapped = ansi.Wrap(text, width-2, "")
+	}
+	lines := strings.Split(wrapped, "\n")
+	for i, line := range lines {
+		lines[i] = "  " + style.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // handoffRunningWarning is E6's honesty. It is deliberately in the conditional: the
@@ -296,7 +312,7 @@ func (m handoffModel) fieldLine(label, value string, focused bool) string {
 
 func (m handoffModel) clampLine(line string) string {
 	if m.width > 0 {
-		return clampCells(line, m.width)
+		return ansi.Truncate(line, m.width, "")
 	}
 	return line
 }

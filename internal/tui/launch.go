@@ -767,7 +767,7 @@ func (m launchModel) view() string {
 
 	b.WriteString("\n")
 	if m.errMsg != "" {
-		b.WriteString("  " + styleError.Render(m.errMsg) + "\n\n")
+		b.WriteString(wrapIndented(m.errMsg, m.width, styleError) + "\n\n")
 	}
 	// The contextual field hint is promoted to the router's persistent bottom bar
 	// (composeBoard uses m.hint()), so it is no longer rendered inline here.
