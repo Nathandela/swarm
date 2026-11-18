@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // rosterTypeNames are the composite-literal type names that carry a journal record on any
@@ -56,7 +58,7 @@ func TestS10_NoTestFixtureStampsANonzeroRosterCursor(t *testing.T) {
 	fset := token.NewFileSet()
 	var offenders []string
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := testbin.WalkGoTree(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

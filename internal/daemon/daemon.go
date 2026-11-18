@@ -236,8 +236,9 @@ type LaunchSpec struct {
 // per-session stop channel that halts its monitor without finalizing it (Delete,
 // and the clean-shutdown / abandon paths via the shared stop below).
 type session struct {
-	meta persist.Meta
-	stop chan struct{}
+	agyLastRepeat time.Time // guarded by writeMu; repeated ticks only advance the in-memory clock
+	meta          persist.Meta
+	stop          chan struct{}
 	// persisted is false for a launch reservation until its first saveMetaLocked
 	// commits, and true for any session known to disk (adopted via putMem). It lets
 	// the journal choke point tell a fresh launch (no prior on disk) apart from a
@@ -249,6 +250,7 @@ type session struct {
 // Daemon is the running lifecycle authority. Exactly one holds the flock + bound
 // socket (S12).
 type Daemon struct {
+	openedAt time.Time // live agy ticks from the previous daemon epoch are stale
 	cfg      Config
 	store    *persist.Store
 	journal  *journal.Journal   // daemon-wide durable event log (R-JRN)
@@ -345,6 +347,7 @@ func Open(cfg Config) (*Daemon, error) {
 	}
 
 	d := &Daemon{
+		openedAt: time.Now(),
 		cfg:      cfg,
 		store:    store,
 		journal:  jrnl,
@@ -607,13 +610,19 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 // write; a tombstoned session is dropped by saveMetaLocked. NameSetAt is stamped now:
 // this is swarm's own rename, the moment the newest-wins clock (ADR-022) records.
 func (d *Daemon) Rename(id, name string) error {
-	return d.RenameAt(id, name, time.Now())
+	_, err := d.rename(id, name, time.Time{})
+	return err
 }
 
-// RenameAt is Rename with the caller vouching for WHEN the name was set. The assembly
-// uses it to adopt a name the CLI published, carrying the CLI's own timestamp so a
-// later swarm rename compares against the right moment (ADR-022).
-func (d *Daemon) RenameAt(id, name string, at time.Time) error {
+// RenameAt compares the native observation and commits it under the same write lock.
+func (d *Daemon) RenameAt(id, name string, at time.Time) (bool, error) {
+	if at.IsZero() {
+		return false, nil
+	}
+	return d.rename(id, name, at)
+}
+
+func (d *Daemon) rename(id, name string, at time.Time) (bool, error) {
 	d.writeMu.Lock()
 	d.mu.Lock()
 	sess, ok := d.sessions[id]
@@ -624,25 +633,46 @@ func (d *Daemon) RenameAt(id, name string, at time.Time) error {
 	d.mu.Unlock()
 	if !ok {
 		d.writeMu.Unlock()
-		return fmt.Errorf("daemon: unknown session %q", id)
+		return false, fmt.Errorf("daemon: unknown session %q", id)
 	}
-	if m.Name == name {
+	priorTitle := m.AgyTitle
+	changed := m.Name != name
+	if at.IsZero() {
+		at = time.Now()
+	} else if m.AgentType == "agy" {
+		if at.Before(d.openedAt) || !at.After(sess.agyLastRepeat) || !at.After(m.AgyTitleObservedAt) {
+			d.writeMu.Unlock()
+			return false, nil
+		}
+		if m.AgyTitle == name {
+			sess.agyLastRepeat = at
+			d.writeMu.Unlock()
+			return false, nil
+		}
+		// A pre-upgrade session with a post-launch name may already have a manual override.
+		baseline := m.AgyTitle == "" && m.NameSetAt.After(m.CreatedAt)
+		changed = changed && !baseline && at.After(m.NameSetAt)
+		m.AgyTitle, m.AgyTitleObservedAt = name, at
+	} else {
+		changed = changed && at.After(m.NameSetAt)
+	}
+	if changed {
+		m.Name, m.NameSetAt = name, at
+	} else if priorTitle == m.AgyTitle {
 		d.writeMu.Unlock()
-		return nil // no label change to persist
+		return false, nil
 	}
-	m.Name = name
-	m.NameSetAt = at
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = d.store.MetaEnv(m)
 	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
-		return err
+		return false, err
 	}
-	if d.cfg.onMetaSave != nil {
+	if changed && d.cfg.onMetaSave != nil {
 		d.cfg.onMetaSave(m)
 	}
-	return nil
+	return changed, nil
 }
 
 // SetTag updates a session's manual grouping label. It follows the same durable,

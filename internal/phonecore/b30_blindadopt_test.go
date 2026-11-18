@@ -48,6 +48,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // b30Paired is a handset that has completed a real pairing under real tier KEKs and has
@@ -302,19 +303,12 @@ func TestB30_NoCallerOutsideTheCoreAdoptsTheWholeDurableBlob(t *testing.T) {
 	}
 
 	var scanned []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+	err = testbin.WalkGoTree(root, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return werr
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			// `.claude` and `.codex` hold per-agent git worktrees -- full checkouts of this repository that
-			// `git worktree add` leaves behind. A walk from the repo root treats them as source
-			// and reports findings about an agent's private copy as findings about this tree.
-			// Adding the directory to .gitignore does NOT prevent this: gitignore governs what
-			// git tracks and has no effect on filepath.WalkDir. Two gates were red for this
-			// reason before it was understood.
-			case ".git", ".claude", ".codex", ".gradle", "vendor", "testdata", "build", "dist", "node_modules":
+			if d.Name() == "testdata" {
 				return fs.SkipDir
 			}
 			if path == self {

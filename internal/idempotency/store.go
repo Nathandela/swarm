@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -40,6 +41,13 @@ const MaxOperationIDLen = 128
 
 // logFile is the append-only durable log within the store dir.
 const logFile = "idempotency.log"
+
+// Both limits include the newline. Keep new appends readable on rollback.
+// Legacy writers could commit larger records; preserve them during compaction.
+const (
+	maxAppendRecordBytes = 4 << 20
+	maxReplayRecordBytes = 16 << 20
+)
 
 // ErrCapacity refuses new effects without evicting an existing replay guard.
 var ErrCapacity = errors.New("idempotency: capacity reached; retry after protected operations expire")
@@ -82,6 +90,7 @@ type Store struct {
 	f              *os.File // append-only log handle
 	logRecords     int
 	pendingDirSync bool
+	appendErr      error // a partial write or uncertain sync requires replay before further mutation
 }
 
 // Open opens (or creates) the store at dir with default (no-TTL) retention.
@@ -97,11 +106,13 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 	if s.clock == nil {
 		s.clock = time.Now
 	}
-	if err := s.replay(); err != nil {
+	f, err := os.OpenFile(filepath.Join(dir, logFile), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, logFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
+	s.f = f
+	if err := s.replay(); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 	// The supplied parent is established state; persist this directory and log name.
@@ -111,37 +122,62 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 			return nil, err
 		}
 	}
-	s.f = f
 	return s, nil
 }
 
 // replay loads the log, last-write-wins per operation_id.
 func (s *Store) replay() error {
-	f, err := os.Open(filepath.Join(s.dir, logFile))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	sc := bufio.NewScanner(s.f)
+	sc.Buffer(make([]byte, 64<<10), maxReplayRecordBytes+1)
+	// Keep the delimiter so a valid final row lacking its newline can be sealed.
+	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			return i + 1, data[:i+1], nil
 		}
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	var offset int64
+	var seal, truncate bool
 	for sc.Scan() {
 		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+		terminated := line[len(line)-1] == '\n'
+		if len(line) > maxReplayRecordBytes || !terminated && len(line) == maxReplayRecordBytes {
+			return fmt.Errorf("idempotency: record at offset %d exceeds %d bytes", offset, maxReplayRecordBytes)
+		}
+		var rec Record
+		if err := json.Unmarshal(line, &rec); err != nil {
+			// A missing suffix after a crash is repairable; arbitrary bad JSON is not.
+			if !terminated && errors.Is(json.NewDecoder(bytes.NewReader(line)).Decode(new(json.RawMessage)), io.ErrUnexpectedEOF) {
+				truncate = true
+				continue
+			}
+			return fmt.Errorf("idempotency: corrupt record at offset %d: %w", offset, err)
+		}
+		if rec.OperationID == "" {
+			return fmt.Errorf("idempotency: missing operation ID at offset %d", offset)
 		}
 		s.logRecords++
-		var rec Record
-		if json.Unmarshal(line, &rec) != nil {
-			continue // torn/corrupt line: tolerate
+		s.records[rec.OperationID] = rec
+		offset += int64(len(line))
+		seal = !terminated
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("idempotency: read log at offset %d: %w", offset, err)
+	}
+	if truncate {
+		if err := s.f.Truncate(offset); err != nil {
+			return err
 		}
-		if rec.OperationID != "" {
-			s.records[rec.OperationID] = rec
+	} else if seal {
+		if _, err := s.f.Write([]byte{'\n'}); err != nil {
+			return err
 		}
 	}
-	return nil
+	// Reopening after a failed file sync must re-establish the durability barrier.
+	return s.f.Sync()
 }
 
 // Prepare durably records `prepared` (fsync) BEFORE any side effect. If a record
@@ -435,6 +471,9 @@ func (s *Store) admitLocked() error {
 }
 
 func (s *Store) compactLocked(now time.Time) error {
+	if s.appendErr != nil {
+		return s.appendErr
+	}
 	kept := make([]Record, 0, len(s.records))
 	for _, rec := range s.records {
 		if s.expired(rec, now) {
@@ -493,16 +532,27 @@ func (s *Store) appendLocked(rec Record) error {
 	if err := s.syncPendingDirectoryLocked(); err != nil {
 		return err
 	}
+	line, err := encodeLogRecord(rec, maxAppendRecordBytes)
+	if err != nil {
+		return err
+	}
 	if s.opts.MaxEntries > 0 && s.logRecords >= 2*s.opts.MaxEntries {
 		if err := s.compactLocked(s.clock()); err != nil {
 			return err
 		}
 	}
-	line := append(mustMarshal(rec), '\n')
-	if _, err := s.f.Write(line); err != nil {
+	n, err := writeLogRecord(s.f, line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n > 0 {
+			s.appendErr = err
+		}
 		return err
 	}
 	if err := s.f.Sync(); err != nil {
+		s.appendErr = err
 		return err
 	}
 	s.logRecords++
@@ -510,6 +560,9 @@ func (s *Store) appendLocked(rec Record) error {
 }
 
 func (s *Store) syncPendingDirectoryLocked() error {
+	if s.appendErr != nil {
+		return s.appendErr
+	}
 	if s.pendingDirSync {
 		if err := syncDir(s.dir); err != nil {
 			return err
@@ -523,6 +576,8 @@ func (s *Store) syncPendingDirectoryLocked() error {
 // be injected to verify the store degrades to "not compacted this cycle" rather
 // than being left dead.
 var renameLog = os.Rename
+
+var writeLogRecord = (*os.File).Write
 
 // syncDir fsyncs dir so a preceding rename within it is durable across a crash
 // (mirrors remotegw.persistSeqCeiling's tmp+fsync+rename+dirsync idiom). Without
@@ -557,7 +612,11 @@ func (s *Store) rewriteLocked(kept []Record) error {
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename below succeeds
 	for _, rec := range kept {
-		if _, err := tmp.Write(append(mustMarshal(rec), '\n')); err != nil {
+		line, err := encodeLogRecord(rec, maxReplayRecordBytes)
+		if err == nil {
+			_, err = tmp.Write(line)
+		}
+		if err != nil {
 			_ = tmp.Close()
 			return err
 		}
@@ -587,9 +646,15 @@ func (s *Store) rewriteLocked(kept []Record) error {
 	return s.syncPendingDirectoryLocked()
 }
 
-func mustMarshal(rec Record) []byte {
-	b, _ := json.Marshal(rec) // Record is always marshalable
-	return b
+func encodeLogRecord(rec Record, limit int) ([]byte, error) {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) >= limit {
+		return nil, fmt.Errorf("idempotency: encoded record exceeds %d bytes", limit)
+	}
+	return append(b, '\n'), nil
 }
 
 // CompareEvidence checkpoints newer qualified evidence without changing delivery state.

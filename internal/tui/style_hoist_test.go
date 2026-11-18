@@ -135,7 +135,7 @@ const pinLaunchError = "\x1b[1;38;2;142;180;230mswarm\x1b[m\x1b[38;2;102;113;138
 
 const pinLaunchAuthline = "\x1b[1;38;2;142;180;230mswarm\x1b[m\x1b[38;2;102;113;138m · new session\x1b[m\n\n\x1b[38;2;142;180;230m▌\x1b[m \x1b[38;2;102;113;138mdirectory   \x1b[m/tmp/swarm-pin-test█\n  \x1b[38;2;102;113;138mname        \x1b[m\x1b[38;2;102;113;138m(optional · defaults to agent-dir)\x1b[m\n  \x1b[38;2;102;113;138mtag         \x1b[m\x1b[38;2;102;113;138m(optional · groups the board under o)\x1b[m\n  \x1b[38;2;102;113;138magent       \x1b[m\x1b[38;2;102;113;138m◂ \x1b[m\x1b[38;2;142;180;230m● claude\x1b[m   \x1b[38;2;102;113;138m○ codex (upgrade codex to >= 1.2.0)\x1b[m   \x1b[38;2;102;113;138m✕ gemini (install: npm i -g @google/gemini-cli)\x1b[m\x1b[38;2;102;113;138m ▸\x1b[m\n  \x1b[38;2;102;113;138mModel       \x1b[mopus \x1b[38;2;102;113;138m▾\x1b[m\n  \x1b[38;2;102;113;138mprompt      \x1b[m\x1b[38;2;102;113;138m(optional)\x1b[m\n  \x1b[38;2;102;113;138mworktree    \x1b[m[ ] \x1b[38;2;102;113;138mspace · isolate in a git worktree\x1b[m\n\n  \x1b[38;2;142;180;230mauth: ANTHROPIC_API_KEY from env (API billing)\x1b[m\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n  \x1b[38;2;102;113;138mtype or paste · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left · ↑↓ next · enter launch · esc cancel\x1b[m                         \x1b[38;2;102;113;138mdev\x1b[m"
 
-// R4.1.1 — alloc evidence: testing.AllocsPerRun on generalModel.view() (the whole
+// R4.1.1 — alloc evidence: testing.AllocsPerRun on rootModel.boardView() (the whole
 // board, four groups) and renderRow (one row) before/after the hoist. Logged, not
 // asserted, per the plan's "record measured numbers" allowance — the exact count
 // is compiler/arch-sensitive; the delta is what matters and is recorded in the
@@ -150,8 +150,8 @@ func TestStyleHoist_AllocBudget(t *testing.T) {
 	gm := newGeneralModel(sessions)
 	gm.width = testCols
 
-	viewAllocs := testing.AllocsPerRun(200, func() { _ = gm.view() })
-	t.Logf("generalModel.view() AllocsPerRun = %.1f", viewAllocs)
+	viewAllocs := testing.AllocsPerRun(200, func() { _ = (rootModel{general: gm, width: testCols, height: testRows}).boardView() })
+	t.Logf("rootModel.boardView() AllocsPerRun = %.1f", viewAllocs)
 
 	row := sessions[0]
 	rowAllocs := testing.AllocsPerRun(500, func() { _ = gm.renderRow(row, status.GroupNeedsInput, true) })

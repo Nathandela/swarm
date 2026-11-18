@@ -98,6 +98,7 @@ func hookEnv(t *testing.T, sock string, capture []string) {
 	t.Setenv(hookclient.EnvSessionID, "sid-1")
 	t.Setenv(hookclient.EnvToken, "tok-abc")
 	t.Setenv(hookclient.EnvSocket, sock)
+	t.Setenv(hookclient.EnvHookSocket, "")
 	t.Setenv(hookclient.EnvSequenceFile, filepath.Join(t.TempDir(), "hook.seq"))
 	t.Setenv(hookclient.EnvCapture, hookclient.CaptureEnv(capture))
 }

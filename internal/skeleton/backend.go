@@ -214,21 +214,6 @@ type deltaBatch struct {
 
 // ---- the registry ----------------------------------------------------------
 
-// registerBackend records a session's live app-server connection. threadID is the thread the
-// daemon joined, and it is what every subsequent turn/* request names.
-func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
-	instance, _ := d.sessionInstance(local)
-	_ = d.registerBackendForInstance(local, instance, threadID, conn)
-}
-
-// registerBackendForInstance is the backend sink's proof boundary. Production captures
-// expectedInstance before dialing/initializing and arrives here only once this exact
-// connection can serve turn/start. A replaced session refuses the old connection before
-// it can publish either a sink or a capability upgrade.
-func (d *Daemon) registerBackendForInstance(local, expectedInstance, threadID string, conn backendConn) bool {
-	return d.registerBackendFeedForInstance(local, expectedInstance, threadID, conn, newBackendFeed())
-}
-
 func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadID string, conn backendConn, feed *backendFeed) bool {
 	if local == "" || conn == nil || expectedInstance == "" {
 		return false
@@ -1316,18 +1301,6 @@ func (d *Daemon) noteBackendGapForInstance(local, expectedInstance, markerReason
 	d.markSessionDegradedFor(local, backendGapGeneration(markerReason))
 	d.emitBackendGap(local, gapBackendUnavailable)
 	d.degradeCapabilitiesOnBackendLossForInstance(local, expectedInstance)
-}
-
-// noteBackendRejoined is CASE 2: the daemon went away and came back, the shim and its
-// app-server survived (ADR-001), the dial succeeded and the thread was rejoined.
-//
-// IT EMITS NOTHING AND DEGRADES NOTHING, and that is the whole point. markSessionDegraded is
-// ONE-WAY and DURABLE, so a rule that degraded on every daemon restart would PERMANENTLY
-// remove the composer from every live Codex session on the first `swarm daemon restart` -- the
-// operation ADR-001 exists to make ordinary. A successful rejoin is not a proven gap, and
-// ADR-017's whole posture is that a gap is proven, never assumed.
-func (d *Daemon) noteBackendRejoined(local, threadID string, conn backendConn) {
-	d.registerBackend(local, threadID, conn)
 }
 
 // noteBackendLost is CASE 3: the backend died mid-session. The session itself ends (that half

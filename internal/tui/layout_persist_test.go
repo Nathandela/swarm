@@ -66,7 +66,7 @@ func TestNewSeedsBoardFromPersistedLayout(t *testing.T) {
 		t.Fatalf("first paint grouping=%v ordering=%v, want tag/name from the store",
 			rm.general.grouping, rm.general.ordering)
 	}
-	if got := stripANSI(rm.general.header()); !strings.Contains(got, "group: tag · order: name") {
+	if got := stripANSI(rm.boardHeader()); !strings.Contains(got, "group: tag · order: name") {
 		t.Fatalf("restored layout is not visible in the header: %q", got)
 	}
 	// Reopening the options window seeds the form from the restored layout too.

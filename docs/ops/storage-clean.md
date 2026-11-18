@@ -32,3 +32,9 @@ action is reported as partial/error. Bytes observed changing on processed target
 do not guarantee filesystem free-space recovery; hard links, filesystem behavior,
 and concurrent writes can affect actual allocation. No live cleanup has been
 performed by this guide.
+
+## Operation-log recovery
+
+The daemon keeps duplicate-operation guards in `idempotency/idempotency.log` under its state directory. If a write returns a partial count or file sync fails, further mutations stop until the store reopens. Restore filesystem health before restarting the daemon. On reopen it preserves a valid final record missing its newline and removes an incomplete JSON tail.
+
+New records fit within 4 MiB including the newline. Recovery and compaction can preserve historical records up to 16 MiB. A malformed interior record, read failure, or larger record stops startup before compaction. Preserve the complete file, including the bytes after the reported offset, for recovery. Removing the log discards the evidence used to prevent duplicate operations. A rollback to v0.26.0 with a historical record larger than 4 MiB can silently discard the later history on startup.

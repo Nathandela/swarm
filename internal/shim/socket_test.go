@@ -75,17 +75,28 @@ func TestSocket_HelloVersionMismatch(t *testing.T) {
 	c2.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
 }
 
+// Observe the marker on a separate connection so the connection under test
+// still has to deliver it in its first attach snapshot.
+func waitForGridMarker(t *testing.T, socketPath, marker string) {
+	t.Helper()
+	probe := dialShim(t, socketPath)
+	defer func() { _ = probe.conn.Close() }()
+	probe.startReader()
+	probe.hello(shimwire.Version)
+	probe.attach()
+	probe.waitObserved(marker, 5*time.Second)
+}
+
 // E4.2 — attach yields a decodable grid snapshot reflecting the agent's output.
 func TestSocket_AttachDeliversSnapshot(t *testing.T) {
 	cfg := helperConfig(t, modeIdle, nil, nil)
 	ch := runShimAsync(cfg)
 	t.Cleanup(func() { waitRun(t, ch, 10*time.Second) })
 
+	waitForGridMarker(t, cfg.SocketPath, "IDLING")
 	c := dialShim(t, cfg.SocketPath)
 	c.startReader()
 	c.hello(shimwire.Version)
-	// Wait until the agent's marker has reached the grid, then attach.
-	time.Sleep(150 * time.Millisecond)
 	c.attach()
 
 	snap := c.firstSnapshot(3 * time.Second)
@@ -166,12 +177,10 @@ func TestContinuity_SnapshotThenStream_Boundary(t *testing.T) {
 	cfg := helperConfig(t, modeStreamBlock, nil, nil)
 	ch := runShimAsync(cfg)
 
+	waitForGridMarker(t, cfg.SocketPath, "PHASE1_DONE")
 	c := dialShim(t, cfg.SocketPath)
 	c.startReader()
 	c.hello(shimwire.Version)
-	// Give phase1 time to reach the grid; the agent then blocks on stdin, so no
-	// output is in flight when we attach.
-	time.Sleep(300 * time.Millisecond)
 	c.attach()
 
 	// Exactly one snapshot, and it is the first frame after attach — no DataOut

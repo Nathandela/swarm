@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/skeleton"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 func TestCLIRefreshReportDoesNotCreateState(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "absent")
+	dir := filepath.Join(testbin.CanonicalTempDir(t), "absent")
 	var out, stderr bytes.Buffer
 	if code := runCLIRefresh(nil, dir, &out, &stderr); code != 0 {
 		t.Fatalf("code %d: %s", code, &stderr)
@@ -25,7 +26,7 @@ func TestCLIRefreshReportDoesNotCreateState(t *testing.T) {
 }
 
 func TestCLIRefreshPolicyIsIndependentOfAuth(t *testing.T) {
-	dir := t.TempDir()
+	dir := testbin.CanonicalTempDir(t)
 	for _, mode := range []string{"off", "on"} {
 		var out, stderr bytes.Buffer
 		if code := runCLIRefresh([]string{"--auto", mode, "--json"}, dir, &out, &stderr); code != 0 {
@@ -42,7 +43,7 @@ func TestCLIRefreshPolicyIsIndependentOfAuth(t *testing.T) {
 
 func TestCLIRefreshRejectsInvalidArgumentsBeforeWriting(t *testing.T) {
 	for _, args := range [][]string{{"--auto", "maybe"}, {"--auto", "off", "extra"}, {"--force"}} {
-		dir := filepath.Join(t.TempDir(), "absent")
+		dir := filepath.Join(testbin.CanonicalTempDir(t), "absent")
 		var out, stderr bytes.Buffer
 		if code := runCLIRefresh(args, dir, &out, &stderr); code != 2 {
 			t.Fatalf("%v: code %d", args, code)
@@ -54,7 +55,7 @@ func TestCLIRefreshRejectsInvalidArgumentsBeforeWriting(t *testing.T) {
 }
 
 func TestCLIRefreshReportsBlockedOpenCodeTarget(t *testing.T) {
-	dir := t.TempDir()
+	dir := testbin.CanonicalTempDir(t)
 	raw := `{"identities":{},"cli_refresh":{"source":{"agent_type":"opencode","target":{"path":"/native/opencode","version":"1.20.0","fingerprint":"target"},"state":"blocked","last_error":"managed OpenCode refresh requires explicit end and resume; worker retained"}}}`
 	if err := os.WriteFile(filepath.Join(dir, "auth-watch-state.json"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)

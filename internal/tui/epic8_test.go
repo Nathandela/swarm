@@ -217,7 +217,7 @@ func TestConfirm_PromptRendersOnConfirmIDRowNotSelectedRow(t *testing.T) {
 		width:       testCols,
 	}
 
-	out := stripANSI(gm.view())
+	out := stripANSI((rootModel{general: gm, width: testCols, height: testRows}).boardView())
 	alphaLine := lineContaining(out, "alpha")
 	betaLine := lineContaining(out, "beta")
 
@@ -243,7 +243,7 @@ func TestConfirm_RemovedTargetShowsNoPromptOnNeighbor(t *testing.T) {
 		width:     testCols,
 	}
 
-	out := stripANSI(gm.view())
+	out := stripANSI((rootModel{general: gm, width: testCols, height: testRows}).boardView())
 	betaLine := lineContaining(out, "beta")
 	if strings.Contains(betaLine, "delete?") || strings.Contains(betaLine, "kill?") {
 		t.Fatalf("a removed confirm target must not paint its prompt onto a neighbor:\n%s", out)

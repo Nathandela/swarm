@@ -15,7 +15,8 @@ contract without changing the protocol or adapter architecture.
 - Both `rollout-<timestamp>-<thread UUID>.jsonl` and modern
   `rollout-<timestamp>-<thread UUID>_<physical UUID>.jsonl` are supported. Metadata
   IDs must match the filename's stable thread UUID. Duplicate IDs with conflicting
-  directories refuse the operation before any launch.
+  directories refuse the operation before any launch. When both roots are inspected,
+  finding one ID in active and archived history also refuses the batch.
 - Only the first metadata record is parsed. Compressed-only `.jsonl.zst`, native
   index-only histories, and native names stored separately are not discovered.
   Imported names initially use `codex <UUID prefix>`.

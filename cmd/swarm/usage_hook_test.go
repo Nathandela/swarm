@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 const usageConversation = "10000000-0000-4000-8000-000000000001"
@@ -27,7 +28,7 @@ func TestUsageHookPostsOnlyUsageAndNeverRaw(t *testing.T) {
 	now := time.Now()
 	sock, next := hookSink(t)
 	hookEnv(t, sock, []string{"SwarmUsage"})
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", testbin.CanonicalTempDir(t))
 	var output, diagnostics bytes.Buffer
 	if code := runUsageHook(nil, strings.NewReader(usageBody(now)), &output, &diagnostics); code != 0 {
 		t.Fatalf("exit = %d", code)
@@ -50,7 +51,7 @@ func TestUsageHookPostsOnlyUsageAndNeverRaw(t *testing.T) {
 func TestUsageHookDoesNotWaitForHookSequenceLock(t *testing.T) {
 	sock, next := hookSink(t)
 	hookEnv(t, sock, nil)
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", testbin.CanonicalTempDir(t))
 	file, err := os.OpenFile(os.Getenv(hookclient.EnvSequenceFile), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +111,7 @@ func setUsageStatusLine(t *testing.T, home, command string) {
 }
 
 func TestUsageHookPreservesNativeCommandAndReloadsIt(t *testing.T) {
-	home := t.TempDir()
+	home := testbin.CanonicalTempDir(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("SWARM_USAGE_TEST", "value with 'quotes' $ and ;")
 	t.Setenv(hookclient.EnvToken, "")
@@ -140,7 +141,7 @@ func TestUsageHookPreservesNativeCommandAndReloadsIt(t *testing.T) {
 }
 
 func TestUsageHookDoesNotTruncateNativeCommandInput(t *testing.T) {
-	home := t.TempDir()
+	home := testbin.CanonicalTempDir(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	setUsageStatusLine(t, home, "cat")
 	body := strings.Repeat("x", hookStdinLimit+123)
@@ -164,7 +165,7 @@ func TestUsageHookDaemonFailureDoesNotHoldNativeStatusLine(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	// A socket that neither accepts nor reads must not keep the custom line waiting.
 	hookEnv(t, socket, []string{"SwarmUsage"})
-	home := t.TempDir()
+	home := testbin.CanonicalTempDir(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	setUsageStatusLine(t, home, "printf retained")
 	for _, path := range []string{socket, filepath.Join(dir, "absent.sock")} {
@@ -181,7 +182,7 @@ func TestUsageHookCancellationKeepsNativeProcessGroup(t *testing.T) {
 	if os.Getenv("SWARM_USAGE_CANCEL_CHILD") == "1" {
 		os.Exit(runUsageHook(nil, strings.NewReader("{}"), os.Stdout, os.Stderr))
 	}
-	home := t.TempDir()
+	home := testbin.CanonicalTempDir(t)
 	pidfile := filepath.Join(home, "pid")
 	setUsageStatusLine(t, home, `printf '%s' "$$" > '`+pidfile+`'; exec sleep 30`)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestUsageHookCancellationKeepsNativeProcessGroup$")

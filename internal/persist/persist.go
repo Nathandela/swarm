@@ -53,8 +53,11 @@ type Meta struct {
 	// schema-version bump for the same rollback reason as AgentCwd below; a zero value
 	// on an older record means "never stamped", which any CLI-published name beats.
 	NameSetAt time.Time `json:"name_set_at"`
-	Tag       string    `json:"tag"` // user-assigned grouping label; empty means untagged
-	Cwd       string    `json:"cwd"`
+	// agy reports its current title on every tick, including after a manual rename.
+	AgyTitle           string    `json:"agy_title,omitempty"`
+	AgyTitleObservedAt time.Time `json:"agy_title_observed_at,omitzero"`
+	Tag                string    `json:"tag"` // user-assigned grouping label; empty means untagged
+	Cwd                string    `json:"cwd"`
 	// AgentCwd is additive and DELIBERATELY DID NOT BUMP SchemaVersion. An adversarial
 	// review proposed bumping it, reasoning that a rolled-back old daemon would rewrite
 	// meta.json from its own struct and drop the field. That is true, and bumping is the
