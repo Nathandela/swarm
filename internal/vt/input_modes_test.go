@@ -120,6 +120,34 @@ func TestInputModes_TransitionsResetAndHostileValidation(t *testing.T) {
 	}
 }
 
+func TestInputModes_IncompleteEscapeOrStringBoundaryIsUnknown(t *testing.T) {
+	for _, parts := range [][2]string{
+		{"\x1b[?1003", "h"},
+		{"\x1b]0;title", "\x1b\\"},
+		{"\x1bPpayload", "\x1b\\"},
+	} {
+		e := NewEmulator(20, 5)
+		e.Feed([]byte("\x1b[?2004h"))
+		e.Feed([]byte(parts[0]))
+		snap := snapshotDecode(t, e)
+		if snap.InputModes == nil || snap.InputModes.Known {
+			_ = e.Close()
+			t.Fatalf("incomplete boundary %q claimed InputModes.Known=true: %+v", parts[0], snap.InputModes)
+		}
+		e.Feed([]byte(parts[1]))
+		snap = snapshotDecode(t, e)
+		_ = e.Close()
+		if snap.InputModes == nil || !snap.InputModes.Known {
+			t.Fatalf("completed boundary %q stayed InputModes.Known=false: %+v", parts, snap.InputModes)
+		}
+	}
+
+	seeded := NewMouseTracker(&MouseState{Tracking: MouseTrackNormal, Encoding: MouseEncodeSGR, Known: true})
+	if seeded.snapshotInputModes().Known {
+		t.Fatalf("non-zero MouseState seed without exact InputModes claimed inputKnown=true: %+v", seeded.snapshotInputModes())
+	}
+}
+
 func mustMarshalInputModes(t *testing.T, im *InputModes) []byte {
 	t.Helper()
 	b, err := json.Marshal(im)

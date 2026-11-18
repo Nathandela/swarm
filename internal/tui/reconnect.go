@@ -173,6 +173,10 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 	m.events = msg.events
 	m.connectionLost = false
 	m.reconnecting = false
+	if m.general.bannerText == "connection to daemon lost - reconnecting" {
+		m.general.bannerMandatory = false
+		m.general.bannerText = ""
+	}
 	m.rosterInvalidations = true
 	m.rosterRefreshing = false
 	m.rosterDirty = false

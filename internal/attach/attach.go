@@ -254,7 +254,11 @@ func Run(cfg Config) (reason Reason, err error) {
 	mousePending := false
 	if snap, derr := vt.DecodeSnapshot(cfg.Session.Snapshot()); derr == nil {
 		wasAlt = snap.AltScreen
-		mouseTracker = vt.NewMouseTracker(snap.Mouse)
+		if cfg.ReadOnly && snap.Mouse != nil {
+			mouseTracker = vt.NewMouseTracker(&vt.MouseState{Known: snap.Mouse.Known})
+		} else {
+			mouseTracker = vt.NewMouseTracker(snap.Mouse)
+		}
 		// Clip the snapshot to the reserved area (rows-1 when chrome is on) so it never
 		// paints over the hint row.
 		rendered := vt.RenderSnapshotClipped(snap, cols, ptyRows(rows))

@@ -72,45 +72,59 @@ func TestSourceIdentityLegacyMigrationAndInterruptedMarkerPreserveCursor(t *test
 }
 
 func TestSourceIdentityMutationAndDirectoryReplacementRefuseOldHandle(t *testing.T) {
-	for _, replacement := range []string{"identity", "directory"} {
-		t.Run(replacement, func(t *testing.T) {
-			dir := t.TempDir()
-			j, err := Open(dir, Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = j.Close() }()
-			mustAppend(t, j, Record{Type: TypePresence})
-			if replacement == "directory" {
-				moved := dir + "-old"
-				if err := os.Rename(dir, moved); err != nil {
+	for _, mode := range []struct {
+		name string
+		opts Options
+	}{
+		{"legacy", Options{}},
+		{"live", liveOptions()},
+	} {
+		for _, replacement := range []string{"identity", "directory"} {
+			t.Run(mode.name+"/"+replacement, func(t *testing.T) {
+				dir := t.TempDir()
+				j, err := Open(dir, mode.opts)
+				if err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { _ = os.RemoveAll(moved) })
-				if err := os.Mkdir(dir, 0700); err != nil {
+				defer func() { _ = j.Close() }()
+				mustAppend(t, j, Record{Type: TypePresence})
+				if replacement == "directory" {
+					moved := dir + "-old"
+					if err := os.Rename(dir, moved); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.RemoveAll(moved) })
+					if err := os.Mkdir(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				id, err := newJournalSourceID()
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			id, err := newJournalSourceID()
-			if err != nil {
-				t.Fatal(err)
-			}
-			raw, _ := json.Marshal(journalSourceDocument{Version: 1, SourceID: id})
-			for _, name := range []string{journalSourceFile, journalSourceMarker} {
-				if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
-					t.Fatal(err)
+				raw, _ := json.Marshal(journalSourceDocument{Version: 1, SourceID: id})
+				for _, name := range []string{journalSourceFile, journalSourceMarker} {
+					if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			if _, err := j.Append(Record{Type: TypePresence}); err == nil {
-				t.Fatal("old source handle appended after custody changed")
-			}
-			if j.Cursor() != 1 {
-				t.Fatal("refused source mutation consumed a cursor")
-			}
-			if _, err := j.ReadFrom(0); err == nil {
-				t.Fatal("old handle returned a trusted snapshot after custody changed")
-			}
-		})
+				if _, err := j.Append(Record{Type: TypePresence}); err == nil {
+					t.Fatal("old source handle appended after custody changed")
+				}
+				if err := j.Recover(); err == nil {
+					t.Fatal("Recover cleared storage failure despite tampered journal source custody")
+				}
+				if _, err := j.Append(Record{Type: TypePresence}); err == nil {
+					t.Fatal("old source handle appended after refused Recover")
+				}
+				if j.Cursor() != 1 {
+					t.Fatal("refused source mutation consumed a cursor")
+				}
+				if _, err := j.ReadFrom(0); err == nil {
+					t.Fatal("old handle returned a trusted snapshot after custody changed")
+				}
+			})
+		}
 	}
 }
 

@@ -158,3 +158,43 @@ func TestAttach_ReadOnlySkipsInputModeRestore(t *testing.T) {
 		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
 	}
 }
+
+func TestAttach_ReadOnlyTouchBackShrinkDoesNotEmitSessionMouseModes(t *testing.T) {
+	e := vt.NewEmulator(80, 23)
+	e.Feed([]byte("\x1b[?1000h\x1b[?1006hREADONLY-SNAP"))
+	snapBytes, err := e.Snapshot()
+	_ = e.Close()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession(snapBytes)
+	ch := runInBackground(Config{
+		Term:      term,
+		Session:   sess,
+		Chrome:    true,
+		TouchBack: true,
+		ReadOnly:  true,
+		Name:      "codex",
+	})
+
+	waitOut(t, term, func(b []byte) bool {
+		return bytes.Contains(b, []byte("[swarm (ctrl+q)]"))
+	})
+	beforeLen := len(term.outBytes())
+	term.setSize(80, 2)
+	sess.pushFrame([]byte("!"))
+	waitOut(t, term, func(b []byte) bool {
+		return len(b) > beforeLen && bytes.Contains(b[beforeLen:], []byte("!"))
+	})
+	afterResize := term.outBytes()[beforeLen:]
+	if bytes.Contains(afterResize, []byte("\x1b[?1000h")) {
+		t.Fatalf("read-only attach emitted session mouse tracking ?1000h on touch fallback: %q", afterResize)
+	}
+
+	term.feed([]byte{DefaultDetachKey})
+	if res := waitResult(t, ch); res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+}

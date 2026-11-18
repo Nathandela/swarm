@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 )
@@ -162,5 +165,49 @@ func TestBanner_AppearingMidClickPreservesRowHitbox(t *testing.T) {
 
 	if len(runner.calls) != 1 || runner.calls[0].session.ID != "endpoint/r1" {
 		t.Fatalf("banner appearing between press and release broke row attach: calls=%+v", runner.calls)
+	}
+}
+
+func TestBanner_RoutineAcknowledgementsStaySingleLineAndDoNotBrickCompactViewport(t *testing.T) {
+	s1 := sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Hour)
+	m := newModel(t, newFakeClient(s1), detectMixed())
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	wantWorkingY := rowY(t, m, "▾ WORKING")
+
+	longTag := strings.Repeat("long-tag-", 10)
+	m = send(m, tagDoneMsg{id: "endpoint/s1", tag: longTag})
+	rm := m.(rootModel)
+	start, _, banner, _ := rm.boardGeometry()
+	if start != 2 || len(banner) != 1 {
+		t.Fatalf("long tag acknowledgement wrapped on 80x24: start=%d bannerLines=%d", start, len(banner))
+	}
+	if got := rowY(t, m, "▾ WORKING"); got != wantWorkingY {
+		t.Fatalf("long tag acknowledgement shifted WORKING row from %d to %d", wantWorkingY, got)
+	}
+
+	// Compact 24x4 viewport must stay usable on routine tag/delete notices.
+	mSmall := newModel(t, newFakeClient(s1), detectMixed())
+	mSmall = send(mSmall, tea.WindowSizeMsg{Width: 24, Height: 4})
+	mSmall = send(mSmall, tagDoneMsg{id: "endpoint/s1", tag: "backend"})
+	if !mSmall.(rootModel).boardUsable() {
+		t.Fatalf("routine tagDoneMsg bricked 24x4 boardUsable():\n%s", view(mSmall))
+	}
+}
+
+func TestBanner_BackgroundTransitionDoesNotClobberActiveMandatoryError(t *testing.T) {
+	s1 := sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Hour)
+	s2 := sWorking("endpoint/s2", "codex", "~/Code/y", "testing", 2*time.Hour)
+	m := newModel(t, newFakeClient(s1, s2), detectMixed())
+
+	m = send(m, launchResultMsg{err: errors.New("account quota exhausted; run swarm relogin")})
+	if !strings.Contains(view(m), "launch failed: account quota exhausted") {
+		t.Fatalf("missing mandatory launch error banner:\n%s", view(m))
+	}
+
+	// A background worker finishing its turn must not erase an unexpired mandatory error.
+	m = send(m, eventMsg{ev: protocol.Event{Session: sReview("endpoint/s2", "codex", "~/Code/y", "done", 0)}})
+	rm := m.(rootModel)
+	if !rm.general.bannerMandatory || !strings.Contains(view(m), "launch failed: account quota exhausted") {
+		t.Fatalf("background V-5 transition overwrote active mandatory error banner:\n%s", view(m))
 	}
 }

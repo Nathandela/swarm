@@ -454,7 +454,8 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	m.refreshLayout(selID)
 	m.restoreUpdateFocus(focus)
 
-	if bannerGroup(s.Group) && (!found || oldGroup != s.Group || oldAttention != attentionToken(s)) {
+	if bannerGroup(s.Group) && (!found || oldGroup != s.Group || oldAttention != attentionToken(s)) &&
+		(!m.bannerMandatory || m.bannerText == "" || !time.Now().Before(m.bannerExpiry)) {
 		// A transition INTO needs_input/ready_for_review raises a transient banner
 		// (V-5) rendered IN View().Content, so it is visible under the alt-screen —
 		// where the former tea.Printf (which writes to scrollback above the program)
@@ -490,7 +491,11 @@ func (m generalModel) renderBanner(limit int) []string {
 	if m.bannerText == "" {
 		return nil
 	}
-	lines := []string{"● " + m.bannerText}
+	text := m.bannerText
+	if !m.bannerMandatory {
+		text = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(text)
+	}
+	lines := []string{"● " + text}
 	if m.width > 2 {
 		if !m.bannerMandatory {
 			lines = []string{ellipsis(lines[0], m.width-2)}
@@ -932,6 +937,13 @@ func (m *generalModel) setBanner(text string) tea.Cmd {
 	d := bannerDuration * time.Duration(max(1, len(m.bannerLines())))
 	m.bannerExpiry = time.Now().Add(d)
 	return bannerTick(d)
+}
+
+func (m *generalModel) notifyBanner(text string) tea.Cmd {
+	m.bannerMandatory = false
+	m.bannerText = text
+	m.bannerExpiry = time.Now().Add(bannerDuration)
+	return bannerTick(bannerDuration)
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {

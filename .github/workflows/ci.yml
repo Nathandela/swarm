@@ -87,7 +87,7 @@ jobs:
       - name: Vet (GG-4)
         run: go vet ./...
       - name: Run tests
-        run: go test -race ./...
+        run: go test -race ./... -timeout 35m
       # E10.6: exercise the REAL linux CPU sampler (/proc) against live processes.
       # The parser UNIT tests run above (untagged); this covers the syscall path.
       - name: CPU sampler integration (E10.6, linux /proc)

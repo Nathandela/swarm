@@ -41,6 +41,31 @@ func TestReleaseManifestRequiresExplicitTagAndEmitsIt(t *testing.T) {
 	}
 }
 
+func TestReleaseManifestRejectsNonNumericVersionTags(t *testing.T) {
+	badTags := []string{
+		"0.27.0",
+		"v0.27.0-prep",
+		"v0.27.0-rc1",
+		"v0.27.0-SNAPSHOT-1234",
+		"v0.27.0+meta",
+		"v01.27.0",
+		"v0.27",
+		"v0.27.0.1",
+	}
+	for _, tag := range badTags {
+		outPath := filepath.Join(t.TempDir(), "compat.json")
+		cmd := exec.Command("go", "run", ".", "--tag", tag, "--out", outPath)
+		cmd.Env = withoutTagEnv()
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("releasemanifest accepted invalid release tag %q: output=%q", tag, out)
+		}
+		if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+			t.Fatalf("releasemanifest wrote compat.json for invalid tag %q", tag)
+		}
+	}
+}
+
 func withoutTagEnv() []string {
 	var out []string
 	for _, entry := range os.Environ() {

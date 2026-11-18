@@ -514,7 +514,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if result.err != nil {
 			return m, tea.Batch(cmd, m.general.setBanner("daemon upgrade failed: "+result.err.Error()))
 		}
-		return m, tea.Batch(cmd, m.general.setBanner("daemon upgraded"))
+		return m, tea.Batch(cmd, m.general.notifyBanner("daemon upgraded"))
 
 	case daemonReconnectTickMsg:
 		return m.reconnectDaemon(msg)
@@ -626,7 +626,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.general.editing && m.general.editID == msg.id {
 			m.general.closeEdit()
 		}
-		return m, m.general.setBanner("session deleted")
+		return m, m.general.notifyBanner("session deleted")
 
 	case killDoneMsg:
 		// A kill failure is surfaced; a success is a no-op here — the daemon event
@@ -662,9 +662,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.general.applyTag(msg.id, msg.tag)
 		if msg.tag == "" {
-			return m, m.general.setBanner("session tag cleared")
+			return m, m.general.notifyBanner("session tag cleared")
 		}
-		return m, m.general.setBanner("session tagged " + msg.tag)
+		return m, m.general.notifyBanner("session tagged " + msg.tag)
 
 	case layoutSavedMsg:
 		// Durable custody is best-effort: the layout is already applied, so a failed

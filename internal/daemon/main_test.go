@@ -224,17 +224,22 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
+	for i := 1; i < len(os.Args); i++ {
+		switch os.Args[i] {
 		case "test-reaper-helper":
+			os.Args = append([]string{os.Args[0]}, os.Args[i:]...)
 			runReaperTestHelper()
 		case markerAnnounce:
+			os.Args = append([]string{os.Args[0]}, os.Args[i:]...)
 			runAnnounceAgent() // never returns
 		case markerEnvDump:
+			os.Args = append([]string{os.Args[0]}, os.Args[i:]...)
 			runEnvDumpAgent()
 		case markerCatchTerm:
+			os.Args = append([]string{os.Args[0]}, os.Args[i:]...)
 			runCatchTermAgent()
 		case markerDaemonRun:
+			os.Args = append([]string{os.Args[0]}, os.Args[i:]...)
 			runTestDaemon()
 		}
 	}

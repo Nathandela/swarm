@@ -210,7 +210,7 @@ func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 		return m.updateGeneral(actionKey(key))
 	}
 	if _, ok := m.general.sessionByID(target); !ok {
-		return m, m.general.setBanner("menu target disappeared")
+		return m, m.general.notifyBanner("menu target disappeared")
 	}
 	// The menu's named context is visible even when its captured row moves off-board.
 	m.general.commandID = target

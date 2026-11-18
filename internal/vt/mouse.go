@@ -95,11 +95,11 @@ func NewMouseTracker(initial *MouseState) *MouseTracker {
 	t.p.SetParamsSize(32)
 	t.p.SetDataSize(1)
 	if initial != nil {
-		t.inputKnown = true
 		t.state = *initial
 		if !t.state.valid() || t.state.ambiguous() {
 			t.state.Known = false
 		}
+		t.inputKnown = t.state.Known && t.state.Tracking == 0 && t.state.Encoding == 0
 	}
 	t.p.SetHandler(ansi.Handler{HandleCsi: t.csi, HandleEsc: func(cmd ansi.Cmd) {
 		if cmd == 'c' {
@@ -133,8 +133,12 @@ func (t *MouseTracker) snapshotState() MouseState {
 }
 
 func (t *MouseTracker) snapshotInputModes() *InputModes {
+	known := t.inputKnown
+	if t.stringKind != 0 || (t.p.State() != parser.GroundState && t.p.State() != parser.Utf8State) {
+		known = false
+	}
 	m := &InputModes{
-		Known:          t.inputKnown,
+		Known:          known,
 		Tracking:       t.inputTracking,
 		Encoding:       t.inputEncoding,
 		BracketedPaste: t.bracketedPaste,

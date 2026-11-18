@@ -208,3 +208,63 @@ func TestDigestManifestIsAttachedToTheDurableGitHubRelease(t *testing.T) {
 		t.Fatalf("container manifest upload must read the runner.temp download, got %q", uploadCommand)
 	}
 }
+
+func TestReleaseEnforcesNumericOnlyVersionAcrossPublishAndArchives(t *testing.T) {
+	wf := parseWorkflow(t, "../../.github/workflows/release.yml")
+	for _, jobName := range []string{"publish_containers", "publish"} {
+		j, ok := wf.Jobs[jobName]
+		if !ok {
+			t.Fatalf("release workflow missing job %q", jobName)
+		}
+		guarded := false
+		for _, s := range j.Steps {
+			if strings.Contains(s.Run, `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`) ||
+				strings.Contains(s.Run, `^v[0-9]+\.[0-9]+\.[0-9]+$`) {
+				guarded = true
+			}
+			if strings.Contains(s.Run, "goreleaser release") && strings.Contains(s.Run, "--snapshot") {
+				t.Fatalf("job %s must never pass --snapshot during release publication: %q", jobName, s.Run)
+			}
+		}
+		if !guarded {
+			t.Fatalf("job %s must guard GITHUB_REF_NAME with an exact numeric vMAJOR.MINOR.PATCH check before publishing", jobName)
+		}
+	}
+
+	publish := wf.Jobs["publish"]
+	verifiedBinaryVersion := false
+	for _, s := range publish.Steps {
+		if strings.Contains(s.Run, `^swarm (0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)( |$)`) {
+			verifiedBinaryVersion = true
+		}
+	}
+	if !verifiedBinaryVersion {
+		t.Fatal("publish job must verify compiled release binary reports a strictly numeric MAJOR.MINOR.PATCH version")
+	}
+
+	goreleaserRaw := read(t, "../../.goreleaser.yaml")
+	var gr struct {
+		Builds []struct {
+			ID      string   `yaml:"id"`
+			Ldflags []string `yaml:"ldflags"`
+		} `yaml:"builds"`
+	}
+	if err := yaml.Unmarshal([]byte(goreleaserRaw), &gr); err != nil {
+		t.Fatalf("parse .goreleaser.yaml: %v", err)
+	}
+	if len(gr.Builds) == 0 {
+		t.Fatal("no builds found in .goreleaser.yaml")
+	}
+	const wantStamp = "-X github.com/Nathandela/swarm/internal/version.Version={{ .Version }}"
+	for _, b := range gr.Builds {
+		found := false
+		for _, flag := range b.Ldflags {
+			if strings.TrimSpace(flag) == wantStamp {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("build %q does not stamp exact numeric {{ .Version }} via %q", b.ID, wantStamp)
+		}
+	}
+}

@@ -601,6 +601,9 @@ func (j *Journal) Recover() error {
 	if j.exhausted {
 		return j.storageErr
 	}
+	if err := validateJournalSource(j.dir, j.sourceID, j.sourceAnchor); err != nil {
+		return j.failStorageLocked(err)
+	}
 	if j.opts.LiveBytes > 0 {
 		return j.recoverLiveLocked()
 	}

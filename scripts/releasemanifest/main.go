@@ -21,6 +21,9 @@ func main() {
 	if *tag == "" {
 		fatal("releasemanifest: release tag is required")
 	}
+	if err := upgrade.ValidateReleaseTag(*tag); err != nil {
+		fatal("releasemanifest: %v", err)
+	}
 	data, err := json.MarshalIndent(upgrade.CurrentManifest(*tag), "", "  ")
 	if err != nil {
 		fatal("releasemanifest: %v", err)
