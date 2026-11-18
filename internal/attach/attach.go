@@ -260,6 +260,12 @@ func Run(cfg Config) (reason Reason, err error) {
 		rendered := vt.RenderSnapshotClipped(snap, cols, ptyRows(rows))
 		writeAll(out, rendered)
 		parser.feedAll(rendered)
+		if !cfg.ReadOnly {
+			if modes := snapshotInputModes(snap); len(modes) > 0 {
+				writeAll(out, modes)
+				parser.feedAll(modes)
+			}
+		}
 	} else {
 		// A snapshot that fails to decode paints a single plain notice instead of
 		// nothing, so an attach to a session with a skewed/corrupt snapshot is never
@@ -953,4 +959,108 @@ func keyLabel(b byte) string {
 		return "Ctrl+" + string(rune(b|0x40))
 	}
 	return string(rune(b))
+}
+
+func snapshotInputModes(snap *vt.Snap) []byte {
+	if snap == nil {
+		return nil
+	}
+	var b strings.Builder
+	if im := snap.InputModes; im != nil {
+		if !im.Known {
+			return nil
+		}
+		if im.AltScroll != nil {
+			if *im.AltScroll {
+				b.WriteString("\x1b[?1007h")
+			} else {
+				b.WriteString("\x1b[?1007l")
+			}
+		}
+		if isValidMouseTrackingMode(im.Tracking) {
+			writeDECSet(&b, im.Tracking)
+		}
+		if isValidMouseEncodingMode(im.Encoding) {
+			writeDECSet(&b, im.Encoding)
+		}
+		if im.BracketedPaste {
+			b.WriteString("\x1b[?2004h")
+		}
+		if im.FocusEvents {
+			b.WriteString("\x1b[?1004h")
+		}
+		if im.CursorKeys {
+			b.WriteString("\x1b[?1h")
+		}
+	} else if snap.Mouse != nil {
+		const (
+			validMouseTrackBits  = vt.MouseTrackX10 | vt.MouseTrackNormal | vt.MouseTrackHighlight | vt.MouseTrackButton | vt.MouseTrackAny
+			validMouseEncodeBits = vt.MouseEncodeUTF8 | vt.MouseEncodeSGR | vt.MouseEncodeURXVT | vt.MouseEncodePixel
+		)
+		if snap.Mouse.Tracking&^validMouseTrackBits != 0 || snap.Mouse.Encoding&^validMouseEncodeBits != 0 {
+			return nil
+		}
+		if tracking := fallbackMouseTracking(snap.Mouse.Tracking); tracking != 0 {
+			writeDECSet(&b, tracking)
+		}
+		if encoding := fallbackMouseEncoding(snap.Mouse.Encoding); encoding != 0 {
+			writeDECSet(&b, encoding)
+		}
+	}
+	if b.Len() == 0 {
+		return nil
+	}
+	return []byte(b.String())
+}
+
+func writeDECSet(b *strings.Builder, mode int) {
+	b.WriteString("\x1b[?")
+	b.WriteString(strconv.Itoa(mode))
+	b.WriteByte('h')
+}
+
+func isValidMouseTrackingMode(mode int) bool {
+	switch mode {
+	case 9, 1000, 1001, 1002, 1003:
+		return true
+	}
+	return false
+}
+
+func isValidMouseEncodingMode(mode int) bool {
+	switch mode {
+	case 1005, 1006, 1015, 1016:
+		return true
+	}
+	return false
+}
+
+func fallbackMouseTracking(mask uint16) int {
+	switch {
+	case mask&vt.MouseTrackAny != 0:
+		return 1003
+	case mask&vt.MouseTrackButton != 0:
+		return 1002
+	case mask&vt.MouseTrackHighlight != 0:
+		return 1001
+	case mask&vt.MouseTrackNormal != 0:
+		return 1000
+	case mask&vt.MouseTrackX10 != 0:
+		return 9
+	}
+	return 0
+}
+
+func fallbackMouseEncoding(mask uint16) int {
+	switch {
+	case mask&vt.MouseEncodeSGR != 0:
+		return 1006
+	case mask&vt.MouseEncodePixel != 0:
+		return 1016
+	case mask&vt.MouseEncodeURXVT != 0:
+		return 1015
+	case mask&vt.MouseEncodeUTF8 != 0:
+		return 1005
+	}
+	return 0
 }

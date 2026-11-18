@@ -14,6 +14,35 @@ type MouseState struct {
 	Known    bool   `json:"known"`
 }
 
+// InputModes records the effective DEC private input modes active at the
+// snapshot boundary so an interactive attach can restore mouse, alternate-scroll,
+// paste, focus, and cursor-key reporting enabled before attach or prior to detach.
+type InputModes struct {
+	Known          bool  `json:"known"`
+	Tracking       int   `json:"tracking,omitempty"`   // 0, 9, 1000, 1001, 1002, 1003
+	Encoding       int   `json:"encoding,omitempty"`   // 0, 1005, 1006, 1015, 1016
+	AltScroll      *bool `json:"altScroll,omitempty"`  // ?1007 when explicitly set (h) or reset (l)
+	BracketedPaste bool  `json:"paste,omitempty"`      // ?2004h
+	FocusEvents    bool  `json:"focus,omitempty"`      // ?1004h
+	CursorKeys     bool  `json:"cursorKeys,omitempty"` // ?1h (DECCKM)
+}
+
+func (m InputModes) validTracking() bool {
+	switch m.Tracking {
+	case 0, 9, 1000, 1001, 1002, 1003:
+		return true
+	}
+	return false
+}
+
+func (m InputModes) validEncoding() bool {
+	switch m.Encoding {
+	case 0, 1005, 1006, 1015, 1016:
+		return true
+	}
+	return false
+}
+
 const (
 	MouseTrackX10 uint16 = 1 << iota
 	MouseTrackNormal
@@ -50,6 +79,15 @@ type MouseTracker struct {
 	stringKind         byte
 	stringEsc          bool
 	utf8Left           int
+
+	inputKnown     bool
+	inputTracking  int
+	inputEncoding  int
+	altScrollKnown bool
+	altScroll      bool
+	bracketedPaste bool
+	focusEvents    bool
+	cursorKeys     bool
 }
 
 func NewMouseTracker(initial *MouseState) *MouseTracker {
@@ -57,6 +95,7 @@ func NewMouseTracker(initial *MouseState) *MouseTracker {
 	t.p.SetParamsSize(32)
 	t.p.SetDataSize(1)
 	if initial != nil {
+		t.inputKnown = true
 		t.state = *initial
 		if !t.state.valid() || t.state.ambiguous() {
 			t.state.Known = false
@@ -65,9 +104,21 @@ func NewMouseTracker(initial *MouseState) *MouseTracker {
 	t.p.SetHandler(ansi.Handler{HandleCsi: t.csi, HandleEsc: func(cmd ansi.Cmd) {
 		if cmd == 'c' {
 			t.set(MouseState{Known: true})
+			t.resetInputModes()
 		}
 	}})
 	return t
+}
+
+func (t *MouseTracker) resetInputModes() {
+	t.inputKnown = true
+	t.inputTracking = 0
+	t.inputEncoding = 0
+	t.altScrollKnown = false
+	t.altScroll = false
+	t.bracketedPaste = false
+	t.focusEvents = false
+	t.cursorKeys = false
 }
 
 func (t *MouseTracker) State() MouseState { return t.state }
@@ -79,6 +130,22 @@ func (t *MouseTracker) snapshotState() MouseState {
 		s.Known = false
 	}
 	return s
+}
+
+func (t *MouseTracker) snapshotInputModes() *InputModes {
+	m := &InputModes{
+		Known:          t.inputKnown,
+		Tracking:       t.inputTracking,
+		Encoding:       t.inputEncoding,
+		BracketedPaste: t.bracketedPaste,
+		FocusEvents:    t.focusEvents,
+		CursorKeys:     t.cursorKeys,
+	}
+	if t.altScrollKnown {
+		v := t.altScroll
+		m.AltScroll = &v
+	}
+	return m
 }
 
 // Feed reports any intermediate state change, even a change undone in this chunk.
@@ -170,11 +237,51 @@ func (t *MouseTracker) set(s MouseState) {
 	}
 }
 
-func (t *MouseTracker) unknown() { s := t.state; s.Known = false; t.set(s) }
+func (t *MouseTracker) unknownMouse() { s := t.state; s.Known = false; t.set(s) }
+
+func (t *MouseTracker) unknown() {
+	t.unknownMouse()
+	t.inputKnown = false
+}
+
+func isTrackedInputMode(n int) bool {
+	switch n {
+	case 1, 1004, 1007, 2004:
+		return true
+	}
+	return false
+}
+
+func (t *MouseTracker) observeInputMode(n int, enable bool) {
+	switch n {
+	case 9, 1000, 1001, 1002, 1003:
+		if enable {
+			t.inputTracking = n
+		} else if t.inputTracking == n {
+			t.inputTracking = 0
+		}
+	case 1005, 1006, 1015, 1016:
+		if enable {
+			t.inputEncoding = n
+		} else if t.inputEncoding == n {
+			t.inputEncoding = 0
+		}
+	case 1:
+		t.cursorKeys = enable
+	case 1004:
+		t.focusEvents = enable
+	case 1007:
+		t.altScrollKnown = true
+		t.altScroll = enable
+	case 2004:
+		t.bracketedPaste = enable
+	}
+}
 
 func (t *MouseTracker) csi(cmd ansi.Cmd, params ansi.Params) {
 	if cmd == ansi.Cmd('p'|('!'<<16)) {
-		t.unknown() // DECSTR handling varies; only RIS establishes a known reset.
+		t.cursorKeys = false
+		t.unknownMouse() // DECSTR handling varies; only RIS establishes a known mouse reset.
 		return
 	}
 	final := byte(cmd)
@@ -196,6 +303,9 @@ func (t *MouseTracker) csi(cmd ansi.Cmd, params ansi.Params) {
 	}
 	for _, p := range params {
 		n := p.Param(0)
+		if final == 'h' || final == 'l' {
+			t.observeInputMode(n, final == 'h')
+		}
 		var tracking, encoding uint16
 		switch n {
 		case 9:
@@ -211,6 +321,9 @@ func (t *MouseTracker) csi(cmd ansi.Cmd, params ansi.Params) {
 		case 1016:
 			encoding = MouseEncodePixel
 		default:
+			if final == 'r' && isTrackedInputMode(n) {
+				t.inputKnown = false
+			}
 			continue
 		}
 		if final == 'r' {

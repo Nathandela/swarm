@@ -93,7 +93,8 @@ type Snap struct {
 	CursorVisible bool        `json:"cursorVisible"`
 	Title         string      `json:"title,omitempty"`
 	Lines         []Line      `json:"lines"`
-	Mouse         *MouseState `json:"mouse,omitempty"` // absent in older v1 snapshots; never replayed as ANSI
+	Mouse         *MouseState `json:"mouse,omitempty"`      // absent in older v1 snapshots; never replayed by RenderSnapshotClipped
+	InputModes    *InputModes `json:"inputModes,omitempty"` // absent in older v1 snapshots; restored by interactive attach
 }
 
 // Emulator wraps a charm x/vt emulator with Feed/Snapshot/Resize and the
@@ -534,6 +535,7 @@ func (e *Emulator) buildSnap() *Snap {
 		Title:         clampBytes(sanitizeText(e.title), SnapshotTitleMax),
 		Lines:         make([]Line, e.rows),
 		Mouse:         &mouse,
+		InputModes:    e.mouse.snapshotInputModes(),
 	}
 	for y := 0; y < e.rows; y++ {
 		s.Lines[y] = e.buildLine(y)
@@ -636,6 +638,9 @@ func DecodeSnapshot(b []byte) (*Snap, error) {
 	}
 	if s.Mouse != nil && (!s.Mouse.valid() || s.Mouse.ambiguous()) {
 		s.Mouse.Known = false
+	}
+	if s.InputModes != nil && (!s.InputModes.validTracking() || !s.InputModes.validEncoding()) {
+		s.InputModes = &InputModes{Known: false}
 	}
 	return &s, nil
 }
