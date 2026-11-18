@@ -492,9 +492,13 @@ func (m generalModel) renderBanner(limit int) []string {
 	}
 	lines := []string{"● " + m.bannerText}
 	if m.width > 2 {
-		lines = strings.Split(ansi.Wrap(lines[0], m.width-2, ""), "\n")
-		if limit > 0 {
-			lines = lines[:min(len(lines), limit)]
+		if !m.bannerMandatory {
+			lines = []string{ellipsis(lines[0], m.width-2)}
+		} else {
+			lines = strings.Split(ansi.Wrap(lines[0], m.width-2, ""), "\n")
+			if limit > 0 {
+				lines = lines[:min(len(lines), limit)]
+			}
 		}
 	}
 	for i := range lines {

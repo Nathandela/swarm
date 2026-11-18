@@ -678,6 +678,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Change the layout in Update so mouse hit-tests retain the displayed rows
 		// until expiry is handled. An older banner's tick cannot clear a newer one.
 		if !time.Now().Before(m.general.bannerExpiry) {
+			m.general.bannerMandatory = false
 			m.general.bannerText = ""
 		}
 		return m, nil

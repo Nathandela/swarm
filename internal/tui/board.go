@@ -278,16 +278,16 @@ func (m rootModel) boardGeometry() (start, rows int, banner []string, notice boo
 	if height <= 0 {
 		height = 1000000
 	}
-	start = 1
+	spacer := 0
 	if height >= 12 {
-		start++
+		spacer = 1
 	}
 	banner = m.boardBannerLines()
-	available := max(0, height-start-2) // footer and at least one content line
+	available := max(0, height-3) // header, footer, and at least one content line
 	if len(banner) > available {
 		banner = banner[:available]
 	}
-	start += len(banner)
+	start = 1 + max(spacer, len(banner))
 	notice = skewNotice(m.daemonVersion, m.clientVersion) != "" && height-start-2 >= 1
 	rows = max(0, height-start-1)
 	if notice {
@@ -366,10 +366,11 @@ func (m rootModel) boardView() string {
 	}
 	start, rows, banner, notice := m.boardGeometry()
 	lines := []string{m.boardHeader()}
-	if m.height >= 12 {
+	if len(banner) > 0 {
+		lines = append(lines, banner...)
+	} else if m.height <= 0 || m.height >= 12 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, banner...)
 	n := 0
 	m.general.content(func(l boardLine) {
 		if n >= m.general.top && n < m.general.top+rows {
