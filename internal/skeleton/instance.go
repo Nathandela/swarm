@@ -40,8 +40,29 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
+
+func (a *coreAPI) OwnerBoundResumeSupported() bool { return a.matchResumeInstance != nil }
+
+func (a *coreAPI) validateBoundWorkerResume(spec daemon.LaunchSpec, local string, source persist.Meta) error {
+	if spec.OwnerLaunchHash == "" || spec.OperationID == "" || spec.ResumeSource.Instance == "" || local != source.ID ||
+		source.Role == "manager" || source.AgentType != spec.AgentType || source.RosterHidden || source.Status.Process != status.ProcessExited ||
+		a.matchResumeInstance == nil || !a.matchResumeInstance(source, spec.ResumeSource.Instance) {
+		return daemon.ErrResumeSourceChanged
+	}
+	return nil
+}
+
+func (d *Daemon) matchesResumeSourceInstance(source persist.Meta, expected string) bool {
+	d.capStore.mu.Lock()
+	defer d.capStore.mu.Unlock()
+	id, identity, ok := d.sessionInstanceLocked(source.ID)
+	return ok && id == expected && identity == (sessionIncarnation{ShimPID: source.ShimPID, ShimStartTime: source.ShimStartTime})
+}
 
 // sessionInstanceFile is the per-incarnation identifier's on-disk name.
 const sessionInstanceFile = "session-instance"

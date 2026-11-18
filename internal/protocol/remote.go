@@ -150,6 +150,8 @@ type JournalReseed = schema.JournalReseed
 
 // JournalResume is journal_read's snapshot+range result (atomic per R-JRN.4).
 type JournalResume struct {
+	SourceID   string
+	HistoryGap bool
 	Cursor     uint64
 	Roster     []JournalRecord // live sessions as-of Cursor (snapshot half of R-JRN.4)
 	Events     []JournalRecord
@@ -171,6 +173,9 @@ type JournalBackend interface {
 type JournalSubscribeFromBackend interface {
 	JournalSubscribeFrom(from uint64) (JournalResume, <-chan JournalRecord, func(), error)
 }
+
+// JournalIdentityBackend identifies the persistent journal namespace.
+type JournalIdentityBackend interface{ JournalSourceID() string }
 
 // DeviceAuthenticator is the optional interface a remote-tier DaemonAPI implements to
 // authorize remote mutating ops (R-POL.9): AuthorizeCommand returns nil ONLY when the

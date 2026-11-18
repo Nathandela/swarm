@@ -1,0 +1,6 @@
+go test -race ./internal/voice/gradium -count=1
+ok  	github.com/Nathandela/swarm/internal/voice/gradium	4.135s
+go vet ./internal/voice/gradium
+PASS
+git diff --check
+PASS

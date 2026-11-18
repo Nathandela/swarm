@@ -48,6 +48,11 @@ func writeSavedEnv(stateDir string) error {
 	env := append(PolicyEnv(original), NativeConfigurationEnvironment(original)...)
 	env = append(env, HermesConfigurationEnvironment(original)...)
 	env = append(env, openCodeSavedEnvironment(original)...)
+	for _, agent := range []string{"codex", "claude"} {
+		if !ManagerNativeEnvironmentSupported(agent, original) {
+			env = append(env, managerOriginMarker(agent))
+		}
+	}
 
 	var buf strings.Builder
 	for _, kv := range env {

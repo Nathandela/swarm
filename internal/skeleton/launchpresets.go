@@ -119,7 +119,7 @@ func presetPolicyRevision(presets []daemon.LaunchPreset) string {
 // form the phone's roster carries, so the applied answer names a session the phone
 // can actually find.
 func (a *coreAPI) RemoteOperationOutcome(operationID string) (schema.OperationOutcomeView, bool) {
-	out, ok := a.core.OperationOutcome(operationID)
+	out, ok := a.core.RemoteOperationOutcome(operationID)
 	if !ok {
 		return schema.OperationOutcomeView{}, false
 	}

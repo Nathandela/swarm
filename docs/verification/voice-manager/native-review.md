@@ -1,0 +1,9 @@
+# Native manager independent review
+
+The native manager lifecycle, causal proof and owner input hint changes were independently reviewed by Astra. [The exact production manifest](native-reviewed-source.sha256) records the reviewed source. Native interface and installed-fixture evidence are separate in [native implementation](native-implementation.md) and [owner input hints](owner-input-hint.md).
+
+Review reproduced and corrected automatic manager restart without resumable authority, unknown completion reopening a turn, trusted managed-account environments being mistaken for raw overrides, unqualified Codex reaching launch effects, observation counters resetting across reconnect, and native probes blocking shared status fanout. The original regressions and permanent adversarial tests passed under the race detector. Reconnect tests include actual core close/open; lifecycle tests prove refusal before account preparation or worktree/native effects.
+
+Final independent race samples: skeleton manager regressions 17.644 seconds, daemon 5.660 seconds, CLI 2.892 seconds, common registry 1.208 seconds, and complete Claude broker/JavaScript lifecycle 3.422 seconds. Final owner-hint overlays passed in 9.240 seconds for skeleton and 2.552 seconds for protocol; the complete hint lifecycle group passed in 9.542 and 2.588 seconds. These include queue bounds, shutdown join, ended/replaced identity and late success after invalidation.
+
+The reviewer inspected source-matched installed Claude evidence but did not repeat paid-provider or native-account calls. No live production sessions were changed. This approval covers these components; full controller/client integration and physical qualification remain open. In particular, the initial 128-admission Claude and 1,024-record common-proof limits still require replay-safe retirement before sustained production use.

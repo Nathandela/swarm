@@ -1,6 +1,8 @@
 package dev.swarm.phone.runtime
 
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import dev.swarm.phone.voice.VoiceMicrophoneService
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -90,7 +92,14 @@ class RuntimeManifestTest {
             context.packageName,
             PackageManager.GET_SERVICES,
         ).services ?: emptyArray()
-        val foregroundServices = services.filter { it.foregroundServiceType != 0 }
+        val voice = services.single { it.name == VoiceMicrophoneService::class.java.name }
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE, voice.foregroundServiceType)
+        assertEquals(false, voice.exported)
+        assertTrue("android.permission.FOREGROUND_SERVICE_MICROPHONE" in requestedPermissions())
+        // A user-started voice capture owns its own socket. The table governs dashboard connectivity.
+        val foregroundServices = services.filter {
+            it.name != voice.name && it.foregroundServiceType != 0
+        }
 
         if (policyUsesService) {
             assertTrue(

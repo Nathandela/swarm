@@ -157,7 +157,15 @@ type Config struct {
 }
 
 // LaunchSpec is a request to launch a new session.
+type ResumeSourceFence struct {
+	Instance      string
+	ShimPID       int
+	ShimStartTime int64
+}
+
 type LaunchSpec struct {
+	managerLogin      *managerLoginBinding
+	Manager           *ManagerLaunchSpec
 	HermesOrigins     []string                   `json:"-"`
 	HermesInput       *hermesinput.SessionConfig `json:"-"`
 	RequiredRuntime   string                     `json:"-"`
@@ -196,6 +204,8 @@ type LaunchSpec struct {
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
+	// ResumeSource pins an exact reliable owner resume through reservation.
+	ResumeSource *ResumeSourceFence
 	// SpawnedFrom, when non-empty, is the LOCAL id of the session that spawned this
 	// one (ADR-010-inter-session-orchestration D4), and SpawnIntent is "handoff" or
 	// "delegate". The daemon only stamps them into meta — exactly as it does ResumedFrom.
@@ -217,11 +227,13 @@ type LaunchSpec struct {
 	// LookPath and session-dir containment checks -- exactly as it resolves Argv and
 	// CaptureEvents, because this package resolves no adapter.
 	Backend *BackendSpec
-	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
-	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
-	// session — the replay reuses the reserved session and spawns nothing. Local
-	// launches leave it "" (no idempotency reservation).
+	// OperationID is the durable launch identity. Signed remote launches use
+	// `<device_id>:<client-ULID>`; reliable owner launches also set OwnerLaunchHash.
+	// Legacy local launches leave it empty (no idempotency reservation).
 	OperationID string
+	// OwnerLaunchHash binds an owner operation to its exact wire request. Unlike
+	// signed remote launches, uncertain owner launches must never be re-driven.
+	OwnerLaunchHash string
 	// AuthIdentity is the provider-account identity the agent is being launched
 	// under (ADR-024). The assembly resolves it from the adapter's AuthProbe and
 	// the credentials on disk — exactly as it resolves Argv — and the daemon only
@@ -879,6 +891,7 @@ func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
 	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
 	// journal record without meta (tolerable) but never meta without journal (A7).
 	if rec, ok := journalRecordFor(prev, prevExists, *m); ok {
+		rec.SessionInstance = d.recordedJournalInstance(*m)
 		if _, jerr := d.appendJournal(rec); jerr != nil {
 			return false, jerr
 		}

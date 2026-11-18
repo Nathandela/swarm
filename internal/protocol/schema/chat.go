@@ -7,7 +7,10 @@ package schema
 // reason: the gomobile-bound facade is the SIGNER of composer_send and must reach the body
 // and its content binding without dragging internal/daemon onto a handset.
 
-import "crypto/sha256"
+import (
+	"crypto/sha256"
+	"encoding/json"
+)
 
 // ComposerSendReq is the composer_send body (IS-LIFE-5): one structured message from the
 // phone into a session's agent CLI. ExpectedTurn is the turn the phone RENDERED the send
@@ -15,11 +18,12 @@ import "crypto/sha256"
 // advisory for message delivery: the daemon orders accepted messages per session and applies
 // each queue head to current provider state. TurnInterruptReq remains strictly turn-scoped.
 type ComposerSendReq struct {
-	Session         string         `json:"session"`
-	SessionInstance string         `json:"session_instance,omitempty"`
-	ExpectedTurn    string         `json:"expected_turn,omitempty"`
-	Text            string         `json:"text"`
-	Origin          *MessageOrigin `json:"origin,omitempty"`
+	ManagerAdmission *ManagerAdmission `json:"manager_admission,omitempty"`
+	Session          string            `json:"session"`
+	SessionInstance  string            `json:"session_instance,omitempty"`
+	ExpectedTurn     string            `json:"expected_turn,omitempty"`
+	Text             string            `json:"text"`
+	Origin           *MessageOrigin    `json:"origin,omitempty"`
 }
 
 // TurnInterruptReq is the turn_interrupt body (Mirror M2.4).
@@ -95,7 +99,9 @@ const (
 	// CodeUnavailable is IS-CAP-3's answer for a detail read outside the bounded
 	// retention window: the full body is gone and saying so beats presenting a partial
 	// body as whole.
-	CodeUnavailable ErrorCode = "unavailable"
+	CodeUnavailable               ErrorCode = "unavailable"
+	CodeManagerLaunchPrerequisite ErrorCode = "manager_launch_prerequisite"
+	CodeManagerCustodyLost        ErrorCode = "manager_custody_lost"
 	// CodeStructuredUnsupported refuses a composer_send against a session whose
 	// structured_chat capability is absent or has been degraded by a proven
 	// structured_gap (ADR-017 T2 rule 2, Mirror M5.5). It is the composer's sibling of
@@ -154,6 +160,11 @@ func ComposerSendContentHash(req *ComposerSendReq) []byte {
 		for _, field := range req.Origin.fields() {
 			writeHashField(h, []byte(field))
 		}
+	}
+	if req.ManagerAdmission != nil {
+		writeHashField(h, []byte("manager-admission-v1"))
+		raw, _ := json.Marshal(req.ManagerAdmission)
+		writeHashField(h, raw)
 	}
 	return h.Sum(nil)
 }

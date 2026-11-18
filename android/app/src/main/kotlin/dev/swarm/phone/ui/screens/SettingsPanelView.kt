@@ -232,6 +232,7 @@ fun settingsPanelView(
     below: View? = null,
     status: View? = null,
     onOpenMachines: (() -> Unit)? = null,
+    voiceEntry: View? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -371,6 +372,7 @@ fun settingsPanelView(
         )
     }
 
+    voiceEntry?.let { column.addView(it) }
     below?.let { column.addView(it) }
     return column
 }

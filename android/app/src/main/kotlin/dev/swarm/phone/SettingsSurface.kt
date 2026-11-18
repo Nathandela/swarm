@@ -47,6 +47,7 @@ import dev.swarm.phone.ui.screens.SettingsPanel
 import dev.swarm.phone.ui.screens.SettingsPanelScreen
 import dev.swarm.phone.ui.screens.SettingsRow
 import dev.swarm.phone.ui.screens.settingsPanelView
+import dev.swarm.phone.voice.VoiceActivity
 import swarmmobile.App
 import swarmmobile.Op
 import swarmmobile.PushPreference
@@ -862,6 +863,10 @@ class SettingsSurface(
                 below = outcome,
                 status = statusSlot(),
                 onOpenMachines = onOpenMachines,
+                voiceEntry = ctaButton(activity, "Voice manager", CtaKind.MORE, bloom = false).apply {
+                    filterTouchesWhenObscured = true
+                    setOnClickListener { activity.startActivity(Intent(activity, VoiceActivity::class.java)) }
+                }.screenAir(),
             ),
         )
     }

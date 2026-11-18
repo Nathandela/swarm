@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-08",
+  "scope": "one neutral synthetic TTS request; audio payloads and generated codec tokens omitted",
+  "ready": {
+    "audio_stream_names": [
+      "tts"
+    ],
+    "client_req_id": null,
+    "frame_size": 1920,
+    "model_ext": "c2752f2b@10",
+    "model_name": "c2752f2b@10",
+    "request_id": "_WUajhamoaA",
+    "residency": "best-effort; zone=eu",
+    "sample_rate": 24000,
+    "text_stream_names": [
+      "tts"
+    ],
+    "type": "ready"
+  },
+  "first_audio_metadata": {
+    "audio": 2560,
+    "client_req_id": null,
+    "start_s": 0,
+    "stop_s": 0.04,
+    "stream_id": 0,
+    "type": "audio"
+  },
+  "tts_flush_event": {
+    "client_req_id": null,
+    "type": "flushed"
+  },
+  "audio_chunks_after_tts_flush": 65,
+  "final_event": {
+    "client_req_id": null,
+    "type": "end_of_stream"
+  },
+  "interpretation": "TTS model-level flushed has no flush_id and is followed by further audio; it is not EOS, playback completion, or correlated STT utterance finality."
+}

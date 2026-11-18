@@ -84,6 +84,29 @@
 //
 // SendInput is the only other []byte parameter. Keystrokes are sensitive but are not KEY
 // material, and they are inbound-only too.
+//
+// # Scoped voice controller binding
+//
+// NewVoiceDevice owns an independent app SSH profile and checks the configured
+// OpenSSH SHA256 host-key pin before authenticating. The enrollment signer is
+// a second Ed25519 identity. Its raw public key is supplied to the owner for
+// invitation issuance. Both reverse-bound callbacks sign canonical decoded
+// bytes and return padded Base64. They run synchronously on Go worker threads
+// and must return promptly. Private keys remain in the platform provider.
+//
+// Enroll checks the invitation's exact remote loopback endpoint and returns a
+// scoped grant bound to the profile and both public keys. Store the result
+// unchanged in app-protected storage and never log it or signing callback
+// values. Status, SubmitText and Receipt use that grant. Call SubmitText with
+// a stable operation ID and consult Receipt after an uncertain result.
+//
+// Network operations belong off the UI thread. End can be called concurrently,
+// cancels the owned transport and permanently ends this handle. End does not
+// revoke the server grant. A new handle with the same profile and signers can
+// use the stored grant after restart. Android owns microphone permission and
+// foreground capture. The facade accepts one bounded finalized recording.
+// An explicit publication preview is a separate single-use handle. The app
+// owns rendering, played-frame progress, and stopping the audio sink.
 package swarmmobile
 
 // CallbackQueueSize is the bound on the queue between the Go core and the app's

@@ -1,0 +1,20 @@
+--- FAIL: TestReviewClosePurgesAlreadyCompletedAudio (0.07s)
+    review_test.go:15: Close returned with old queued event still readable: audio
+--- FAIL: TestReviewInvalidUnicodeTranscriptRejected (0.01s)
+    review_test.go:20: invalid Unicode became accepted transcript "�"
+--- FAIL: TestReviewInlineFlushRejectedBeforeEffect (0.00s)
+    review_test.go:28: accepted inline flush tag generated a protocol failure after dispatch
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/voice/gradium	2.830s
+FAIL
+
+Additional failing-first diagnostic helper test compilation:
+# github.com/Nathandela/swarm/internal/voice/gradium [github.com/Nathandela/swarm/internal/voice/gradium.test]
+internal/voice/gradium/review_regression_test.go:140:30: undefined: characterizationFields
+internal/voice/gradium/review_regression_test.go:147:27: undefined: characterizationFields
+FAIL	github.com/Nathandela/swarm/internal/voice/gradium [build failed]
+FAIL
+
+Additional race failure observed before cancellation recheck:
+--- FAIL: TestCancelledWriterAndInputSize
+    client_test.go:529: cancelled writer: <nil>

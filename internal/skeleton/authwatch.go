@@ -765,6 +765,9 @@ func (w *authWatcher) workPending(agent, id string, allowKill ...bool) {
 		case w.sessionIdentity != nil && w.sessionIdentity(agent, m.Env) != id:
 			w.once("authscope:"+local, "authwatch: %s session %s uses different or unreadable session credentials; holding automatic recovery", agent, local)
 			keep = append(keep, local)
+		case m.Role == "manager" && (m.Status.Process == status.ProcessRunning || w.state.Killed[local]):
+			w.holdManagerRestart(m, true)
+			keep = append(keep, local)
 		case m.Status.Process != status.ProcessRunning && w.state.Killed[local]:
 			// OUR kill: the resume is owed (audit H1). A crash or an exit-wait
 			// timeout between the kill and the resume lands here on a later tick
@@ -834,6 +837,9 @@ func (w *authWatcher) workPending(agent, id string, allowKill ...bool) {
 // to be recorded, resume-as-new-session, verify the replacement -- and reports
 // whether the session should stay pending (true = retry next tick).
 func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
+	if w.holdManagerRestart(m, false) {
+		return true
+	}
 	w.ensureStateMaps()
 	local := m.ID
 	hadClaim := w.state.Killed[local]
@@ -876,6 +882,9 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
 			w.sessionUnsafe(local) || w.sessionIdentityChanged(agent, cur) {
 			return errAuthRecycleUnsafe
+		}
+		if err := managerRestartPreflight(cur); err != nil {
+			return err
 		}
 		// THE CLAIM: record the kill as ours -- durably -- immediately before
 		// signalling it. A claim that cannot be persisted forbids the kill:
@@ -975,6 +984,9 @@ func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
 // resumeEnded starts at most one replacement and observes it on a later tick.
 // Retain the source history even after readiness; roster lineage hides old attempts.
 func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
+	if w.holdManagerRestart(m, true) {
+		return true
+	}
 	local := m.ID
 	if current, ok := w.get(local); !ok || current.RosterHidden {
 		return false // Owner deletion/archive wins even after the pending snapshot.

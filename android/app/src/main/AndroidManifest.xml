@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- O6 haptics (ui/kit/Haptics.kt drives Vibrator/VibratorManager directly). VIBRATE is a
          normal install-time permission: no runtime prompt, so PermissionStateResolver is not
@@ -25,10 +28,8 @@
         android:name="android.hardware.camera"
         android:required="false" />
 
-    <!-- No foreground service is declared: ADR-007 B16 disconnects on backgrounding, so no
-         state in android/connectivity-policy.tsv holds one. No REQUEST_IGNORE_BATTERY_-
-         OPTIMIZATIONS either: an exemption would opt out of the constraints that policy
-         exists to describe. -->
+    <!-- Dashboard connectivity retains ADR-007 B16. The separate voice microphone
+         service can start only from an explicit foreground user action. -->
 
     <!-- PB-SEC-10 / PB-STATE-6. allowBackup="false" is the CLOUD half: `adb backup` and cloud
          backup return nothing for this app. dataExtractionRules is the DEVICE-TO-DEVICE half,
@@ -71,7 +72,7 @@
         android:theme="@style/Theme.Swarm"
         android:usesCleartextTraffic="false">
 
-        <!-- PB-SEC-12 / PB-E2E-2. The app's one Activity: the window every panel is hosted on
+        <!-- PB-SEC-12 / PB-E2E-2. The app's dashboard Activity: the window every panel is hosted on
              and the View hierarchy the overlay filter applies to. Before it existed both
              requirements had no subject, because S16 shipped screen models and a data class
              has no window. It carried PB-SEC-4 too until ADR-007 B65 withdrew that
@@ -91,6 +92,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".voice.VoiceActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
+        <service
+            android:name=".voice.VoiceMicrophoneService"
+            android:foregroundServiceType="microphone"
+            android:exported="false" />
 
         <receiver
             android:name=".runtime.BootReceiver"

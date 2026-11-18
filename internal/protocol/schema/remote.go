@@ -54,10 +54,12 @@ func (c ErrorCode) Transient() bool { return c == CodeRateLimit }
 // daemon journal's record fields the phone needs. Interaction and structured-gap
 // payloads cross as Item; a capability-transition payload crosses as Capabilities.
 type JournalRecord struct {
-	Cursor    uint64       `json:"cursor"`
-	SessionID string       `json:"session_id"`
-	Type      string       `json:"type"`
-	Group     status.Group `json:"group,omitempty"`
+	SessionInstance string       `json:"session_instance,omitempty"`
+	Role            string       `json:"role,omitempty"`
+	Cursor          uint64       `json:"cursor"`
+	SessionID       string       `json:"session_id"`
+	Type            string       `json:"type"`
+	Group           status.Group `json:"group,omitempty"`
 	// Agent is the session's agent identity (persist.Meta.AgentType), carried so the
 	// phone can label a session with the CLI running it. Like Group it is omitempty
 	// because most record types do not carry it: the roster snapshot does, and a bare

@@ -76,12 +76,28 @@ var remoteForbiddenOptions = map[string]string{
 // entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
+	var manager *daemon.ManagerLaunchSpec
+	if req.Manager != nil {
+		manager = &daemon.ManagerLaunchSpec{ConversationID: req.Manager.ConversationID, BridgeSocket: req.Manager.BridgeSocket, AuthFile: req.Manager.AuthFile}
+		if req.Agent == "claude" && req.Env != nil {
+			config := ""
+			for _, entry := range req.Env {
+				if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
+					config = value
+				}
+			}
+			manager.ClaudeConfigDir = &config
+		}
+	}
 	var clientEnv, openCodeEnv []string
 	var hermesOrigins []string
 	if !remote && req.Env != nil {
 		// Capture owner configuration origins before the launch allowlist removes
 		// them. Nil still requests daemon policy; an explicit empty env stays empty.
 		clientEnv = persist.FilterEnv(req.Env)
+		if req.Manager != nil {
+			clientEnv = daemon.ManagerLaunchEnvironment(req.Agent, req.Env)
+		}
 		if req.Agent == "hermes" {
 			hermesOrigins = daemon.HermesConfigurationEnvironment(req.Env)
 		}
@@ -95,7 +111,13 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 			}
 		}
 	}
+	var resumeSource *daemon.ResumeSourceFence
+	if req.ResumeSourceInstance != "" {
+		resumeSource = &daemon.ResumeSourceFence{Instance: req.ResumeSourceInstance}
+	}
 	return daemon.LaunchSpec{
+		ResumeSource:  resumeSource,
+		Manager:       manager,
 		HermesOrigins: hermesOrigins,
 		AgentType:     req.Agent,
 		Name:          SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
@@ -108,10 +130,8 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		Cols:        req.Cols,
 		Rows:        req.Rows,
 		Options:     launchOptions(req),
-		// OperationID carries the signed launch operation_id to the daemon so its launch
-		// idempotency engages — a replayed signed remote launch reuses the reserved session
-		// instead of double-spawning (C3). Owner-tier launches carry no operation_id (""), so
-		// they take no idempotency reservation, unchanged.
+		// Remote signed launches and capability-gated owner launches carry their
+		// operation ID into durable reservation. Legacy owner launches leave it empty.
 		OperationID:   operationID,
 		InitialPrompt: req.InitialPrompt, // carry through to the Epic 9 adapter (F8)
 		// ADR-010 D4: the spawn lineage is carried VERBATIM — the server validates the
@@ -267,10 +287,11 @@ const maxCommandValidity = 1 * time.Hour
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
+	CapJournalSourceIdentity,
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -678,7 +699,7 @@ func (s *Server) distributeJournal(rec JournalRecord) {
 	for sc := range s.jsubs {
 		// Encode HERE (in the fan-out), not in the writer, so one encoding is shared
 		// across subscribers and the fan-out never blocks on a slow writer.
-		body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: sc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+		body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: sc.endpointID, Cursor: rec.Cursor, Journal: legacyJournalRecords([]JournalRecord{rec})})
 		if err != nil {
 			continue
 		}
@@ -1387,12 +1408,20 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleComposerSend(c)
 	case OpSemanticSend:
 		cc.handleSemanticSend(c)
+	case OpOwnerLaunch:
+		cc.handleOwnerLaunch(c)
+	case OpOwnerLaunchStatus:
+		cc.handleOwnerLaunchStatus(c)
 	case OpSemanticStatus:
 		cc.handleSemanticStatus(c)
 	case OpNativeDecide:
 		cc.handleNativeDecide(c)
 	case OpNativeRequests:
 		cc.handleNativeRequests(c)
+	case OpManagerInterrupt, OpManagerInterruptStatus:
+		cc.handleManagerInterrupt(c)
+	case OpManagerRuntime, OpManagerResolveCall, OpManagerInputStatus:
+		cc.handleManagerRuntime(c)
 	case OpNativeDecisionStatus:
 		cc.handleNativeDecisionStatus(c)
 	case OpOperationStatus:
@@ -1471,15 +1500,39 @@ func (cc *clientConn) handleHello(c Control) {
 // DaemonAPI may still satisfy JournalBackend and serve the legacy read+subscribe path; advertising
 // subscribe-from to it would make a new gateway select an operation the server must then refuse.
 func (s *Server) supportedCaps() []string {
+	managerSource, managerLaunch := s.d.(ManagerLaunchSource)
+	boundResume, hasBoundResume := s.d.(OwnerBoundResumeSource)
+	_, ownerLaunch := s.d.(OwnerLaunchSource)
 	_, journalFrom := s.d.(JournalSubscribeFromBackend)
+	journalIdentity, hasJournalIdentity := s.d.(JournalIdentityBackend)
 	_, durable := s.d.(ComposerOperationExecutor)
 	_, sender := s.d.(ComposerSender)
 	_, transactional := s.d.(TransactionalComposerSender)
 	_, semantic := s.d.(SemanticComposerSender)
 	_, nativeObservation := s.d.(OpenCodeObservationBackend)
 	_, nativeDecisions := s.d.(NativeDecisionApplier)
+	managerInterrupt, hasManagerInterrupt := s.d.(ManagerInterruptSource)
+	_, managerProvenance := s.d.(ManagerRuntimeSource)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
+		if cap == CapJournalSourceIdentity && (!journalFrom || !hasJournalIdentity || !ValidJournalSourceID(journalIdentity.JournalSourceID())) {
+			continue
+		}
+		if cap == CapManagerInterrupt && (s.remoteTier || !hasManagerInterrupt || !managerInterrupt.ManagerInterruptSupported()) {
+			continue
+		}
+		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {
+			continue
+		}
+		if cap == CapManagerLaunch && (s.remoteTier || !ownerLaunch || !managerLaunch || !managerSource.ManagerLaunchSupported()) {
+			continue
+		}
+		if cap == CapOwnerBoundResume && (s.remoteTier || !ownerLaunch || !hasBoundResume || !boundResume.OwnerBoundResumeSupported()) {
+			continue
+		}
+		if cap == CapOwnerLaunch && (s.remoteTier || !ownerLaunch) {
+			continue
+		}
 		if cap == CapNativeRequests && !nativeDecisions {
 			continue
 		}
@@ -1512,6 +1565,24 @@ func (cc *clientConn) handleList() {
 }
 
 func (cc *clientConn) handleLaunch(c Control) {
+	if c.Launch != nil && c.Launch.Manager != nil {
+		if cc.srv.remoteTier || c.Op != OpOwnerLaunch {
+			cc.replyErrorCode("manager launch is owner-only and requires owner_launch", CodePolicy)
+			return
+		}
+		if !cc.hasCap(CapManagerLaunch) {
+			cc.replyErrorCode("manager-launch capability was not negotiated", CodeNotImplemented)
+			return
+		}
+		if err := validateManagerLaunch(*c.Launch); err != nil {
+			cc.replyErrorCode("manager launch: "+err.Error(), CodeInvalidField)
+			return
+		}
+	}
+	if !cc.srv.remoteTier && c.Op != OpOwnerLaunch && c.OperationID != "" {
+		cc.replyErrorCode("launch operation IDs require the owner_launch capability and operation", CodeInvalidField)
+		return
+	}
 	req := c.Launch
 	if req == nil {
 		cc.replyError("launch: missing request")
@@ -1521,6 +1592,13 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// LaunchSessionSentinel, and its spec is bound via LaunchContentHash so a gateway
 	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
 	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
+		return
+	}
+	if req.ResumeSourceInstance != "" && (c.Op != OpOwnerLaunch || cc.srv.remoteTier || req.Options[OptionResumeFrom] == "" ||
+		req.Options[OptionResumeConversationID] != "" || req.Options[OptionResumeRelocate] != "" || req.Manager != nil ||
+		req.Worktree || req.InitialPrompt != "" || len(req.ResumeSourceInstance) > 256 ||
+		strings.TrimSpace(req.ResumeSourceInstance) != req.ResumeSourceInstance || strings.ContainsFunc(req.ResumeSourceInstance, unicode.IsControl)) {
+		cc.replyErrorCode("launch: resume_source_instance requires an exact reliable owner worker resume", CodeInvalidField)
 		return
 	}
 	// The hands-off handoff (ADR-010 Amendment 4). Guarded BEFORE the external-resume
@@ -1689,11 +1767,18 @@ func (cc *clientConn) handleLaunch(c Control) {
 		return
 	}
 	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
+	if c.Op == OpOwnerLaunch {
+		spec.OwnerLaunchHash = ownerLaunchHash(req)
+	}
 	if resolvedCwd != "" {
 		spec.Cwd = resolvedCwd // ADR-007 D8 (finding D): use the RESOLVED path the policy validated
 	}
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
+		if c.Op == OpOwnerLaunch {
+			cc.ownerLaunchError(err)
+			return
+		}
 		cc.replyError("launch: " + err.Error())
 		return
 	}
@@ -2623,6 +2708,10 @@ func (cc *clientConn) handleJournalRead(c Control) {
 		Roster:     res.Roster,
 		FullResync: res.FullResync,
 	}
+	if err := cc.qualifyJournalIdentity(&reply, res.SourceID, res.HistoryGap); err != nil {
+		cc.replyError(err.Error())
+		return
+	}
 	if c.JournalMaxBytes <= 0 {
 		if err := cc.writeControl(reply); err != nil {
 			// WriteFrame rejects an oversized body before writing any bytes. Give an old
@@ -2726,6 +2815,10 @@ func maxPageRecords(page Control, records []JournalRecord, max int, field string
 // negotiated `journal` cap) and starts its bounded-queue writer, then acks. Journal
 // events stream as journal_event frames via the journal fan-out.
 func (cc *clientConn) handleJournalSubscribe() {
+	if cc.hasCap(CapJournalSourceIdentity) {
+		cc.replyError("source-aware journal requires atomic journal_subscribe_from")
+		return
+	}
 	if _, ok := cc.journalBackend(); !ok {
 		return
 	}
@@ -2782,6 +2875,11 @@ func (cc *clientConn) handleJournalSubscribeFrom(c Control) {
 		Op: OpJournalSubscribeFrom, EndpointID: cc.endpointID, Cursor: res.Cursor,
 		Journal: res.Events, Roster: res.Roster, FullResync: res.FullResync,
 	}
+	if err := cc.qualifyJournalIdentity(&reply, res.SourceID, res.HistoryGap); err != nil {
+		cancel()
+		cc.replyError(err.Error())
+		return
+	}
 	max := c.JournalMaxBytes
 	if max <= 0 {
 		max = wire.MaxFrame - 1
@@ -2821,10 +2919,10 @@ func (cc *clientConn) handleJournalSubscribeFrom(c Control) {
 		}
 	}
 	cc.srv.wg.Add(1)
-	go cc.journalDirectLoop(source, cancel)
+	go cc.journalDirectLoop(source, cancel, res.SourceID)
 }
 
-func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func()) {
+func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func(), sourceID string) {
 	defer cc.srv.wg.Done()
 	defer cancel()
 	for {
@@ -2836,7 +2934,12 @@ func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func
 				cc.close()
 				return
 			}
-			body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: cc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+			reply := Control{Op: OpJournalEvent, EndpointID: cc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}}
+			if err := cc.qualifyJournalIdentity(&reply, sourceID, false); err != nil {
+				cc.close()
+				return
+			}
+			body, err := EncodeControl(reply)
 			if err != nil {
 				cc.close()
 				return
@@ -3470,10 +3573,17 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
-	// Owner semantic callers bind sends to the daemon's current session instance.
-	// Missing or invalid records stay absent rather than inventing an identity.
-	if source, ok := s.d.(SessionCapabilityLookup); ok {
+	if source, ok := s.d.(OwnerSessionCapabilitySource); ok {
+		if caps, present := source.OwnerSessionCapabilities(m.ID, m.ShimPID, m.ShimStartTime); present && caps.Validate() == nil {
+			if m.Status.Process != status.ProcessRunning || m.ResumeError != "" || caps.Provider != m.AgentType {
+				caps.NativeOwnerInput = false
+			}
+			view.Capabilities = &caps
+		}
+	} else if source, ok := s.d.(SessionCapabilityLookup); ok {
 		if caps, present := source.SessionCapabilities(m.ID); present && caps.Validate() == nil {
+			// Only the instance-bound owner lookup can qualify a native input hint.
+			caps.NativeOwnerInput = false
 			view.Capabilities = &caps
 		}
 	}
@@ -3504,6 +3614,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		sentAt = &at
 	}
 	return &SessionView{
+		Role: m.Role, ManagerConversationID: m.ManagerConversationID,
 		RosterHidden:   m.RosterHidden,
 		EndpointID:     endpointID,
 		ID:             NamespacedID(endpointID, m.ID),

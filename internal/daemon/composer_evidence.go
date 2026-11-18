@@ -21,6 +21,20 @@ func (d *Daemon) UnobservedSemanticOperation(session, exceptOperation string) st
 	return d.idem.UnobservedOperation("composer_send", session, exceptOperation)
 }
 
+// BindManagerInterruptRequest persists the exact request before native I/O.
+func (d *Daemon) BindManagerInterruptRequest(operationID string, request []byte) error {
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rec, ok := d.idem.Get(operationID)
+	if !ok || rec.Action != "manager_interrupt" {
+		return errors.New("manager interrupt request has no matching custody")
+	}
+	return d.idem.SetRequest(operationID, request)
+}
+
 func (d *Daemon) BindSemanticRequest(operationID string, request []byte) error {
 	unlock, err := d.lockComposerCustody()
 	if err != nil {

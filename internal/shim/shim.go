@@ -48,9 +48,10 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
-	HermesInput *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
-	AgyInput    *agyinput.Config           `json:"agy_input,omitempty"`
-	ClaudeInput bool                       `json:"claude_input,omitempty"`
+	ManagerReplayID string                     `json:"manager_replay_id,omitempty"`
+	HermesInput     *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
+	AgyInput        *agyinput.Config           `json:"agy_input,omitempty"`
+	ClaudeInput     bool                       `json:"claude_input,omitempty"`
 	// LogPath authorizes retention only when inherited stderr matches this owned inode.
 	LogPath           string
 	LoginRuntime      *logins.Runtime
@@ -190,7 +191,12 @@ func Run(cfg Config) (agentExit int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		broker, err := claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		var broker *claudeinput.Broker
+		if cfg.ManagerReplayID != "" {
+			broker, err = claudeinput.StartManager(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started, cfg.ManagerReplayID)
+		} else {
+			broker, err = claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -430,15 +436,23 @@ func Run(cfg Config) (agentExit int, err error) {
 			Stderr:      tty,
 			SysProcAttr: &syscall.SysProcAttr{Setsid: true, Setctty: true},
 		}
-		startErr := cmd.Start()
+		var startErr error
+		if cfg.Backend.Required && (backendWatch == nil || len(attach.AgentArgs) != 2 || attach.AgentArgs[0] != "--remote" || attach.AgentArgs[1] != "unix://"+cfg.Backend.SocketPath) {
+			startErr = errors.New("required native backend unavailable; standalone fallback refused")
+		} else {
+			startErr = cmd.Start()
+		}
 		_ = tty.Close() // the child holds its own dup; the master is ours
 		if startErr != nil {
 			sigStop()
+			close(sigDone)
+			sigWG.Wait()
 			_ = ptmx.Close()
 			_ = listener.Close()
 			closeTranscript(tr)
 			<-acceptDone
 			<-drainDone
+			replies.close()
 			// THE BACKEND IS ALREADY RUNNING ON THIS PATH, and this is the only exit from
 			// Run that does not pass through finalization. Review BLOCKING 5, PROBED: with
 			// cfg.Argv naming a nonexistent program the backend was still alive 5 s after

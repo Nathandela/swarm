@@ -18,9 +18,10 @@ import (
 var testHookClaudeNativeReceiptObserved atomic.Pointer[func()]
 
 type claudeInputIntent struct {
-	Hash       string             `json:"hash"`
-	Generation string             `json:"generation"`
-	Worker     claudeinput.Worker `json:"worker"`
+	ManagerAdmission *protocol.ManagerAdmission `json:"manager_admission,omitempty"`
+	Hash             string                     `json:"hash"`
+	Generation       string                     `json:"generation"`
+	Worker           claudeinput.Worker         `json:"worker"`
 }
 
 func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.ComposerSendReq, begin func() error, lane *composerLane, barrier uint64) (protocol.ErrorCode, error) {
@@ -41,8 +42,24 @@ func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.Compos
 	if err != nil {
 		return protocol.CodeStructuredUnsupported, errors.New("claude native message input is unproven; explicitly refresh this session before sending")
 	}
+	var managerAdmission *protocol.ManagerAdmission
+	if req.ManagerAdmission != nil {
+		current, err := d.checkedManagerBinding(local, req.ManagerAdmission.Binding)
+		if err != nil || current.Binding.Provider != "claude" {
+			return protocol.CodeStaleInstance, errors.New("manager native binding changed; nothing was submitted")
+		}
+		if current.Turn.ExternalInput != req.ManagerAdmission.ExpectedExternalInput {
+			return protocol.CodeInputBusy, errors.New("external native input changed; manager input was not submitted")
+		}
+		if _, err := claudeinput.ManagerEnvelope(req.ManagerAdmission.Nonce, req.Text); err != nil {
+			return protocol.CodeInvalidField, errors.New("manager text is invalid or exceeds the qualified native input bound")
+		}
+		copy := *req.ManagerAdmission
+		copy.Binding = current.Binding
+		managerAdmission = &copy
+	}
 	hash := sha256.Sum256([]byte(req.Text))
-	raw, err := json.Marshal(composerOriginIntent{Version: 1, Origin: req.Origin, ClaudeInput: &claudeInputIntent{Generation: desc.Generation, Hash: hex.EncodeToString(hash[:]), Worker: proof}})
+	raw, err := json.Marshal(composerOriginIntent{Version: 1, Origin: req.Origin, ClaudeInput: &claudeInputIntent{Generation: desc.Generation, Hash: hex.EncodeToString(hash[:]), Worker: proof, ManagerAdmission: managerAdmission}})
 	if err != nil {
 		return protocol.CodeInvalidField, err
 	}
@@ -58,7 +75,11 @@ func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.Compos
 		lane.mu.Unlock()
 		return protocol.CodeInvalidField, err
 	}
-	_, err = client.Submit(ctx, proof, operationID, req.Text)
+	if managerAdmission != nil {
+		_, err = client.SubmitManager(ctx, proof, operationID, req.Text, *managerAdmission)
+	} else {
+		_, err = client.Submit(ctx, proof, operationID, req.Text)
+	}
 	lane.mu.Unlock()
 	if err != nil {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native submission is unconfirmed and will not be replayed", protocol.ErrComposerOutcomeUnknown)
@@ -112,6 +133,16 @@ func (d *Daemon) claudeNativeReceipt(local, operationID string, intent composerO
 	if !valid {
 		return result
 	}
+	if binding.ManagerAdmission != nil {
+		if retained.NativeInputID != binding.ManagerAdmission.Nonce {
+			result.State = "uncertain"
+			result.Reason = "manager input receipt identity conflict"
+			return result
+		}
+		result.NativeInputID = retained.NativeInputID
+		result.NativeTurnID = retained.NativeTurnID
+		result.NativeMessageID = retained.NativeMessageID
+	}
 	switch retained.State {
 	case "submitted":
 		result.State = "submitted"
@@ -157,7 +188,10 @@ func (d *Daemon) retainClaudeReceipt(operationID string, result claudeinput.Mess
 			if json.Unmarshal(record.Evidence, &old) != nil || old.OperationID != result.OperationID || old.Hash != result.Hash || old.Worker != result.Worker {
 				return result, errors.New("native receipt identity conflict")
 			}
-			if old.State == "started" || old.State == "rejected" {
+			if old.NativeInputID != "" && result.NativeInputID != old.NativeInputID || old.NativeTurnID != "" && result.NativeTurnID != "" && result.NativeTurnID != old.NativeTurnID {
+				return result, errors.New("native manager receipt identity conflict")
+			}
+			if old.State == "rejected" || old.State == "started" && (result.State != "started" || old.NativeTurnID != "" || result.NativeTurnID == "") {
 				return old, nil
 			}
 		}

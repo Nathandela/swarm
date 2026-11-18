@@ -88,7 +88,9 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `device_sig`       | string            | detached Ed25519 signature over the canonical op tuple (D4)                  |
 | `cursor`           | uint64            | journal cursor, carried on `journal_read` / `journal_event` (R-PROT.3)       |
 | `journal_max_bytes`| int               | opt-in maximum encoded response-page size for `journal_read`; omitted keeps the legacy single reply |
-| `journal_more`     | bool              | a bounded `journal_read` response has another page in the same atomic result |
+| `journal_more`     | bool              | a bounded journal response has another page in the same atomic result |
+| `journal_source_id` | string          | durable journal namespace, a canonical lowercase UUIDv4 carried on source-aware journal replies and events |
+| `journal_history_gap` | bool          | a source-aware reply or event contains session notification history without an exact session instance, requiring reconciliation |
 | `issued_at`        | time              | daemon-authoritative issue time (pointer; the key is omitted when zero)      |
 | `expires_at`       | time              | daemon-authoritative expiry (pointer; the key is omitted when zero)          |
 | `approve`          | `*ApproveReq`     | remote approval of an agent interaction (A6)                                 |
@@ -118,6 +120,14 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
 | `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5), amended for ordered sends: the phone's structured message under the wire name `composer_send`, carrying `session` / required `session_instance` / advisory `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text, context, or a replacement session incarnation (ADR-009 (8)) |
 | `semantic_receipt` | `*SemanticMessageReceipt` | owner-only `semantic_status` result: operation/session/incarnation, submission state, exact native session/message/generation/creation coordinates and observed agent/model/variant/selection basis where qualified; absent native coordinates are not invented |
+| `manager_runtime_request` | `*ManagerRuntimeReq` | Owner-only current native manager proof request, carrying required `session_instance` |
+| `manager_runtime` | `*ManagerRuntimeStatus` | Derived exact binding, native turn, explicit readiness and private bridge references |
+| `manager_call` | `*ManagerCallReq` | Owner-only exact tool name, canonical argument hash and native host metadata resolution request |
+| `manager_call_proof` | `*ManagerCallProof` | Authenticated native input/turn/call join; model-provided identifiers never populate this reply |
+| `manager_input_status_request` | `*ManagerAdmission` | Owner-only historical outcome read by exact binding and existing input nonce; performs no admission |
+| `manager_interrupt_request` | `*ManagerInterruptReq` | Owner-only interrupt or status read bound to an exact manager runtime, admission nonce and native turn |
+| `manager_interrupt` | `*ManagerInterruptReceipt` | Original durable operation ID and exact native turn observation |
+| `manager_input_status` | `*ManagerNativeTurn` | Retained exact input outcome, independent of whichever native turn is current |
 | `native_decision` | `*NativeDecisionReq` | Negotiated `native-requests-v1` decision: exact worker/native request identity, content hash, expiry and permission/question answer; the complete body is signed through `NativeDecisionContentHash`. |
 | `native_decision_receipt` | `*NativeDecisionReceipt` | Correlated native decision processing receipt, including admitted/rejected/uncertain state and actual native side-effect scope. |
 | `native_requests` | `*NativeRequestsReq` | Owner-only, negotiated native pending-request read; no selectors lists bounded summaries, exact request/native-session selectors return one full authoritative card. |
@@ -137,6 +147,102 @@ The owner-only `semantic_send` operation reuses `composer_send` and body version
 Its operation ID is `semantic:<Unix milliseconds>:<32 lowercase hex nonce>`. Mutation retries are accepted only within one hour, with at most 30 seconds of future clock skew. This horizon is shorter than terminal receipt retention, so an expired receipt cannot make an old mutation fresh. An executing or outcome-unknown semantic operation survives ordinary TTL compaction; capacity refuses new effects rather than evicting that guard. Successful submission is distinct from model completion. A legacy OpenCode HTTP 204 is scheduling acknowledgement only; native admission requires a matching native user message.
 
 The owner-only, negotiated `semantic_status` operation reads an existing operation using `session_id` and `operation_id`, including after its mutation replay horizon. It performs no provider submission. Its `semantic_receipt` distinguishes unknown/prepared/uncertain/rejected/submitted/admitted/running and qualified terminal execution states. Native identifiers, model selection and outcome source are evidence fields; an admitted or completed execution does not certify task correctness. The remote socket refuses this read before accessing private operation custody.
+
+The owner-only `owner_launch` operation requires negotiated `owner-launch` capability and a backend with durable owner reservations. It reuses `launch` and `operation_id`; its success is an ordinary `launch` reply naming the same operation ID and original session. Clients persist the exact request and a `launch:<Unix milliseconds>:<32 lowercase hex nonce>` operation ID before dispatch. Mutations accept one hour of age and at most 30 seconds of future clock skew; a client without the capability refuses and never substitutes legacy `launch`. The remote socket refuses this operation before reservation or launch; remote signatures and policy remain separate.
+
+The owner reservation binds SHA-256 of the complete JSON `LaunchReq`, including owner environment, resume options, dimensions, prompt and lineage. Map keys encode deterministically and array order remains significant. A conflicting payload is refused. Exact replay reconciles before mutable source/runtime validation, returns the original usable session, and never re-drives a missing, lost or uncertain reservation. An existing conversation selected by resume/adoption receives its own durable operation binding. Unresolved owner reservations survive TTL compaction; store capacity refuses new effects rather than evicting them. A reply lost after launch can therefore be recovered without creating a replacement worker.
+
+The additive `owner-bound-resume` capability extends `owner_launch` with the
+`resume_source_instance` precondition for a linked worker resume. The requested
+source must be an exact exited worker. The assembly checks its incarnation and
+the core revalidates its shim identity, provider conversation and exit state
+under the launch reservation lock. A changed precondition returns
+`stale_instance` without reserving a new effect. Clients must negotiate this
+capability before sending the field. The old owner and signed remote launch
+routes cannot use it. Reliable launch status remains available by operation ID.
+
+A correlated `manager_launch_prerequisite` refusal means native manager runtime
+qualification failed before account preparation and no reservation exists.
+The client can retry the same prepared intent after selecting a supported CLI.
+An absent response, generic refusal or known reservation grants no permission
+to retry an executing intent.
+
+The owner-only `owner_launch_status` read requires the same capability. It accepts `subject_operation_id` without a mutation age limit and echoes that exact subject with `operation_outcome`: `applied` plus original namespaced session ID, `outcome_unknown`, or `unknown_operation`. The read launches nothing. Existing signed remote `operation_status` also excludes owner-launch custody and returns `unknown_operation` for an owner launch ID. An unknown/expired result never proves an earlier effect did not happen and never authorizes a new operation ID. Legacy owner `launch` remains available without a durable operation ID; nonempty owner operation IDs require the new route. No wire fields or protocol-major change are required.
+
+Manager launch is an additive owner-only extension to `owner_launch`, requiring both `owner-launch` and `manager-launch` capabilities. A manager-bearing request on legacy `launch`, an unnegotiated connection, or the signed remote socket is refused before launch; existing remote launch hashes intentionally remain unchanged. The manager object and every exact reference participate in the owner launch hash. An older owner-launch server cannot silently create an ordinary worker because the client refuses without the new capability.
+
+| JSON key | Type | Meaning |
+|---|---|---|
+| `manager` | `*ManagerLaunchReq` | Optional launch-only request for a native Codex or Claude manager; absent preserves ordinary launch behavior |
+| `conversation_id` | string | Stable voice-manager conversation identity, nonempty, at most 128 bytes, without control characters or surrounding whitespace; distinct from the provider-native conversation/thread ID |
+| `bridge_socket` | string | Canonical absolute path to the existing owner-private service Unix socket, mode 0600 beneath an owner-owned 0700 directory |
+| `auth_file` | string | Canonical absolute path to an owner-owned, single-link private regular authentication-reference file, mode 0600, 1–4096 bytes; the credential is never copied into argv or wire fields |
+| `role` | string | Roster role stamped from typed launch metadata; `manager` for manager sessions, absent for ordinary workers; names grant no role |
+| `manager_conversation_id` | string | The roster's persisted voice-manager conversation identity, independent of the native provider conversation ID |
+
+The additive `manager-provenance` capability is owner-only and requires a qualified native source. `manager_runtime` derives role, session incarnation, native process and observer generations, selected login identity and bridge references from current server custody. `manager_resolve_call` resolves a native host tool invocation against the same binding with a cancellable wait bounded to one second. `manager_input_status` reads a retained admission by nonce without submitting or replaying input. Remote connections cannot negotiate or use these operations. Unsupported native versions, lost feeds, child/direct-terminal calls, changed accounts/processes and ambiguous or externally steered turns refuse proof.
+
+| JSON key | Type | Meaning |
+|---|---|---|
+| `binding` | `ManagerRuntimeBinding` | Exact `session`, `session_instance`, `conversation_id`, `provider`, `native_session_id`, `native_generation`, `observation_generation` and `login_epoch`; all coordinates are required and revalidated |
+| `provider` | string | Qualified native provider: `claude` or `codex` |
+| `native_session_id` | string | Actual native conversation/thread identity |
+| `turn` | `ManagerNativeTurn` | Current native turn projection, independent of historical input outcomes |
+| `text` | string | Human message text; manager admission identity remains separate |
+| `expected_turn` | string | Advisory send or required interrupt subject, depending on the operation |
+| `origin` | `*MessageOrigin` | Optional native routing lineage; never substitutes for manager admission or native proof |
+| `native_message_id` | string | Exact native stored user-message identity when observed |
+| `native_created_at_ms` | int64 | Qualified native admission creation timestamp, otherwise absent |
+| `agent` | string | Observed provider agent selection |
+| `model` | string | Observed native model selection |
+| `variant` | string | Observed native model variant |
+| `selection_basis` | string | Evidence source for observed model selection |
+| `selection_message_id` | string | Native message supplying that model selection |
+| `outcome_source` | string | Qualified observation source for a semantic receipt's execution outcome |
+| `native_generation` | string | Actual owning native process generation; reconnect does not fabricate preserved evidence |
+| `observation_generation` | string | Exact authenticated observer epoch: current Codex feed ID or retained Claude broker/guard scope; changed observation requires explicit reconciliation even when the physical process survives |
+| `login_epoch` | string | Server-derived managed runtime epoch or selected native account digest; caller text cannot create an identity |
+| `manager_admission` | `*ManagerAdmission` | Optional owner `semantic_send` admission; requires `manager-provenance`, typed manager role and exact binding; participates in the semantic content hash |
+| `nonce` | string | One-use 256-bit lowercase hexadecimal input identity, separate from human text and operation ID |
+| `expected_external_input` | uint64 | Native external-input counter compared at admission/write boundary; stale baselines cannot submit unsolicited manager input |
+| `native_input_id` | string | Exact admitted nonce, retained in semantic receipt and historical outcome |
+| `native_turn_id` | string | Exact native main-turn identifier, retained separately from the input nonce |
+| `native_call_id` | string | Exact host-native tool call identifier joined to native observations |
+| `state` | string | Historical input state: prepared, admitted, running, completed, rejected or unknown; missing proof remains unknown |
+| `reason` | string | Qualified native completion outcome; completion does not certify task correctness or readiness |
+| `externally_steered` | bool | Authoritative external activity invalidated that turn's voice authority, including same-turn manual steering |
+| `external_input` | uint64 | Current monotonic observed external activity counter for this generation |
+| `ready_for_input` | bool | Explicit current native idle/continuation evidence; never inferred from the last completion reason |
+| `tool_name` | string | Native Swarm tool name without MCP server prefix |
+| `arguments_hash` | string | SHA-256 of semantic canonical JSON object: sorted keys, precise JSON numbers, no duplicate keys or invalid Unicode |
+| `host_meta` | raw JSON object | Host-provided MCP metadata, separate from model arguments; Claude joins `claudecode/toolUseId`, Codex joins `callId` plus exact thread/session/turn metadata; Codex `itemId` is not its call ID |
+| `main` | bool | True only for an exact active main turn with one admitted voice input and no disqualifying external steering |
+
+Runtime `bridge_socket` and `auth_file` are private server-derived references checked before controller adoption; they are absent from device projections and the public roster. Input admission and call resolution revalidate binding and account/process custody. Historical receipts cannot reconstruct native permissions after a lost feed or restart. Evidence tables are bounded; exhausted or conflicting custody fails closed instead of evicting unresolved authority or permitting replay.
+
+Any of the three manager proof reads can return `manager_custody_lost` in `error_code`. This reports lost native custody for the selected manager session and requires explicit fresh-session replacement. Clients retain the original operation and admission receipts for reconciliation and preserve the typed error when the daemon closes after sending its reply. An ordinary `unavailable` response reports missing evidence for that read.
+
+The owner-only `manager-interrupt` capability exposes `manager_interrupt` and
+its read-only `manager_interrupt_status`. The operation ID derives from the
+exact binding, native input ID and native turn ID. The daemon persists the
+request before provider I/O and reconciles a dispatched operation without
+resending it. `unknown` means the daemon found no record. `prepared` means
+the operation has not reached provider I/O. `pending` reports that the exact
+turn is still running. `uncertain` reports unavailable evidence. `interrupted` reports a retained
+terminal abort for the selected turn. `ended` reports another terminal
+disposition. These observations describe what happened to the turn and carry
+no attribution for who stopped it. A Claude broker acceptance or a Codex RPC
+acknowledgement alone cannot settle the receipt.
+
+Manager MCP configuration uses the trusted Swarm executable selected by the daemon, never a `PATH` lookup. Its argv is `voice mcp --socket <bridge_socket> --auth-file <auth_file> --conversation <conversation_id>`. Claude receives per-invocation JSON through `--mcp-config`, keeps ordinary hooks/settings/native tools and qualified native broker enrollment even when Discord is disabled, and requests unrestricted native permissions. Codex receives the corresponding stdio MCP config and full-access policy at the shim-owned app-server that actually owns tools. Its TUI attaches to that same backend and creates/resumes the native thread normally; no second thread is started. An unavailable backend or absent/mismatched attach handshake refuses manager standalone fallback. Native organization/provider policy still applies.
+
+Private session metadata retains the manager role, conversation identity and nonsecret bridge references. An already-running native conversation is selected only when its manager binding matches exactly. Resuming a typed manager requires an explicit current manager configuration for that same conversation; an ordinary resume cannot silently drop its bridge or native enrollment. None of these additions modifies global CLI configuration, provider credential stores or ordinary worker defaults.
+
+Unattended auth recovery and CLI refresh defer typed managers before issuing a stop or restart claim: they cannot renew the voice controller's authority. Managed account changes preflight the affected fleet before stopping any member or preparing credentials, and recheck restored switch journals before further effects. The hold names controller reconciliation as the recovery action; CLI refresh reports a blocked record. A detected native account change also retains an input quarantine in the manager's status. Typed input dispatch requires the current native identity or managed runtime epoch; preserving a process does not renew its old controller grant. Reconcile or end the manager through voice control before a fresh typed manager launch/account change. Explicit human native-terminal turns and unrelated providers/workers keep their existing behavior.
+
+Unmanaged Claude managers use a manager-only account/org digest from the selected native `.claude.json`: `HOME/.claude.json` by default, or `CLAUDE_CONFIG_DIR/.claude.json` for an explicit canonical owner-controlled configuration directory. The nonsecret selector is retained privately as `ManagerClaudeConfigDir` and restored only for that manager's native process. Missing/unknown explicit identity never falls back to HOME. The digest is stamped at launch and revalidated at typed input/native bridge admission; token refresh does not change account identity. This adds no global Claude worker `AuthProbe` and copies no native credential store. Managed managers retain the existing validated runtime identity/epoch gate.
+
+Unsupported manager credential/backend substitutions are refused before environment filtering can erase evidence, including API-key/token overrides and unqualified alternate backend/profile selectors. The native Codex default account and qualified Claude native account paths do not require a new model API key. Only genuinely disabled empty/false flags are accepted; ambiguous selector sets refuse. Safe provider-specific refusal markers survive private request/daemon-environment custody without retaining the unsupported credential values. Ordinary worker environment policy remains unchanged.
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -164,7 +270,9 @@ needs; the daemon-internal payload is not carried wholesale. There are **two exp
 | ------------ | ----------------- | ----------------------------------------------------------------------- |
 | `cursor`     | uint64            | the record's monotonic journal cursor; ordering is this and nothing else. Deliberately unset (`0`) on a roster record, which is a set member and not a point in the stream (PB-SYNC-8) |
 | `session_id` | string            | namespaced session id the record is about; absent on a session-neutral record (`presence`) |
-| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` \| `capability_transition` |
+| `session_instance` | string    | exact session incarnation captured for this record or roster snapshot, when available and negotiated through `journal-source-identity` |
+| `role`       | string            | persisted session role captured for this record or roster snapshot, when available and negotiated through `journal-source-identity` |
+| `type`       | string            | `session_state` \| `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` \| `capability_transition` |
 | `group`      | `status.Group`    | the server-derived display group; carried on `group_transition` and on a roster record, absent elsewhere |
 | `agent`      | string            | the session's agent identity (`claude`, `codex`, …). Its ABSENCE IS MEANINGFUL: a record with no agent carries none, and `""` is never an agent by that name |
 | `item`       | `json.RawMessage` | the transcript payload, carried when `type` is `interaction` or `structured_gap`. The latter is the durable visible history-tear marker. Opaque on the wire: the gateway forwards it and parses no item (§10). |
@@ -174,6 +282,17 @@ needs; the daemon-internal payload is not carried wholesale. There are **two exp
 
 Every field but `cursor`, `session_id` and `type` is `omitempty`, so a record type
 that predates one of them serializes byte-identically to what earlier builds wrote.
+
+A client that negotiates `journal-source-identity` uses `journal_subscribe_from`
+to bind the initial backlog and roster snapshot to its live notifications.
+Every page of the same reply carries the same journal source, cursor and gap
+state. A cursor is usable only with its source ID. A new source or a history gap
+requires a reconciled snapshot before notification-driven actions can resume.
+The source-aware client closes the subscription on an invalid or changed source
+or a live identity gap. Historical session identities come from the record
+itself or validated event-time capabilities. A current roster entry cannot
+supply the incarnation of an older record. Peers without this capability
+receive the existing journal wire shape.
 
 `structured_gap` is the durable, transcript-visible history boundary of ADR-017 T2 rule 2
 (`internal/journal.TypeStructuredGap`, `internal/daemon.StructuredGapEvent`). Its body crosses
@@ -256,6 +375,7 @@ and unrelated secrets are dropped.
 
 | JSON key         | Go type             | Meaning                                                    |
 | ---------------- | ------------------- | ---------------------------------------------------------- |
+| `resume_source_instance` | string | Exact source incarnation for `owner-bound-resume`, with `options.resume_from`. Requires an exited worker and forbids worktree creation, relocation, manager launch or initial prompt. |
 | `agent`          | string              | agent type to launch                                       |
 | `name`           | string              | optional session label; sanitized + length-capped server-side (P2) |
 | `tag`            | string              | optional manual grouping label given at creation, sanitized exactly as `set_tag`'s (blank is untagged) and stamped into the reservation meta |
@@ -401,6 +521,7 @@ is a procedural obligation carried by that type's Go doc comments.
 | Field               | Go type | Meaning                                                              |
 | -------------------- | ------- | --------------------------------------------------------------------- |
 | `provider`           | string  | adapter identity: `claude`, `codex`, `opencode`, `agy`, ...            |
+| `native_owner_input` | bool | Optional retained native owner `semantic_send` sink hint on owner roster rows: current Codex backend/thread, qualified enrolled Claude, or existing OpenCode native composer. A bounded daemon worker refreshes snapshots; roster/event fanout reads memory only. Cold/expired/false means temporarily unavailable. Snapshots expire within one second and match the exact session/physical incarnation. This never grants phone composer or raw fallback; the send revalidates the native sink. |
 | `provider_version`    | string  | the DETECTED version of the installed CLI, never a configured/assumed one |
 | `adapter_revision`    | string  | the revision of the Swarm adapter that produced the record            |
 | `structured_chat`     | bool    | true only when every T3 complete-chat row passes against `provider_version` |

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"golang.org/x/sys/unix"
 )
@@ -46,7 +47,7 @@ type pilotEnvelope struct {
 	Outbound        any             `json:"outbound,omitempty"`
 }
 
-const pilotOperations = "swarm pilot --context <context> roster | open <id> | view <id> | send <id> --text <exact message> | await <id> [--timeout 10m] | watch <id>... [--once [--timeout 10m]] [--after cursor] | create --cli <agent> --prompt <exact task> [--dir d] [--name n] [--tag t] | resume <ended-id> | exit. Exit closes this context and stops active waits."
+const pilotOperations = "swarm pilot --context <context> roster | open <id> | view <id> | send <id> --text <exact message> | await <id> [--timeout 10m] | watch <id>... [--once [--timeout 10m]] [--after cursor] | create --cli <agent> --prompt <exact task> [--dir d] [--name n] [--tag t] | resume <ended-id> | launch-status <operation-id> | exit. Exit closes this context and stops active waits."
 
 type pilotHistoryClient interface {
 	InteractionHistory(string, int) ([]protocol.JournalRecord, error)
@@ -82,6 +83,9 @@ func dispatchPilot(args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() > 0 && fs.Arg(0) == "watch" {
 		caps = append(caps, protocol.CapJournalSubscribeFrom)
+	}
+	if fs.NArg() > 0 && (fs.Arg(0) == "create" || fs.Arg(0) == "resume" || fs.Arg(0) == "launch-status") {
+		caps = append(caps, protocol.CapOwnerLaunch)
 	}
 	return dispatchAgentVerb(runPilot, args, caps, stdout, stderr)
 }
@@ -190,9 +194,11 @@ func runPilot(args []string, c agentClient, stdout, stderr io.Writer) int {
 		remaining := time.Until(ctx.Expires)
 		code = pilotAwait(*path, rest, remaining, c, &data, stderr)
 	case "create":
-		code = pilotCreate(rest, c, &data, stderr, &outbound)
+		code = pilotCreate(*path, rest, c, &data, stderr, &outbound)
 	case "resume":
-		code = pilotResume(rest, c, &data, stderr)
+		code = pilotResume(*path, rest, c, &data, stderr)
+	case "launch-status":
+		code = pilotLaunchStatus(rest, c, &data, stderr)
 	default:
 		return pilotMisuse(stderr, "unknown operation "+op)
 	}
@@ -240,6 +246,23 @@ func runPilot(args []string, c agentClient, stdout, stderr io.Writer) int {
 	}
 	if pilotJSON(stdout, stderr, env) != 0 {
 		return 1
+	}
+	if op == "create" || op == "resume" || op == "launch-status" {
+		var receipt struct {
+			OperationID string                      `json:"operation_id"`
+			Operation   schema.OperationOutcomeView `json:"operation"`
+		}
+		if err := json.Unmarshal(data.Bytes(), &receipt); err != nil {
+			_, _ = fmt.Fprintf(stderr, "pilot: read launch receipt: %v\n", err)
+			return 1
+		}
+		if op == "launch-status" && (receipt.Operation.State != schema.OutcomeApplied || receipt.Operation.SessionID == "") {
+			return code
+		}
+		if err := settlePilotLaunch(*path, receipt.OperationID); err != nil {
+			_, _ = fmt.Fprintf(stderr, "pilot: %s: save receipt: %v\n", op, err)
+			return 1
+		}
 	}
 	return code
 }
@@ -489,6 +512,10 @@ func pilotSend(path string, args []string, c agentClient, stdout, stderr io.Writ
 }
 
 func savePilotPending(path string, pending pilotPending) error {
+	return savePilotRecord(path, pending)
+}
+
+func savePilotRecord(path string, pending any) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".pending-*")
 	if err != nil {
 		return err
@@ -522,7 +549,7 @@ func pilotPendingPath(path, id string) string {
 	return filepath.Join(path, "pending-"+hex.EncodeToString(b[:]))
 }
 
-func pilotCreate(args []string, c agentClient, stdout, stderr io.Writer, outbound *any) int {
+func pilotCreate(path string, args []string, c agentClient, stdout, stderr io.Writer, outbound *any) int {
 	fs := flag.NewFlagSet("pilot create", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cli := fs.String("cli", "", "worker CLI")
@@ -543,35 +570,38 @@ func pilotCreate(args []string, c agentClient, stdout, stderr io.Writer, outboun
 		_, _ = fmt.Fprintf(stderr, "pilot: create: %v\n", err)
 		return 1
 	}
-	id, canonical, err := c.Launch(protocol.LaunchReq{Agent: *cli, Name: *name, Tag: *tag,
-		Cwd: cwd, Env: os.Environ(), Cols: spawnCols, Rows: spawnRows, InitialPrompt: *prompt})
+	pending, id, canonical, err := pilotLaunch(path, "create", args, c, func() (protocol.LaunchReq, error) {
+		return protocol.LaunchReq{Agent: *cli, Name: *name, Tag: *tag,
+			Cwd: cwd, Env: os.Environ(), Cols: spawnCols, Rows: spawnRows, InitialPrompt: *prompt}, nil
+	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pilot: create: %v\n", err)
 		return 1
 	}
 	*outbound = map[string]string{"prompt": *prompt}
-	return pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "name": canonical})
+	return pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "name": canonical, "operation_id": pending.OperationID})
 }
 
-func pilotResume(args []string, c agentClient, stdout, stderr io.Writer) int {
+func pilotResume(path string, args []string, c agentClient, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		return pilotMisuse(stderr, "resume needs one explicit ended discussion ID")
 	}
-	row, err := pilotTarget(c, args[0])
+	pending, id, name, err := pilotLaunch(path, "resume", args, c, func() (protocol.LaunchReq, error) {
+		row, err := pilotTarget(c, args[0])
+		if err != nil {
+			return protocol.LaunchReq{}, err
+		}
+		if row.Status.Process == status.ProcessRunning {
+			return protocol.LaunchReq{}, errors.New("discussion is already running")
+		}
+		return protocol.LaunchReq{Agent: row.Agent, Name: row.Name, Cwd: row.Cwd,
+			Options: map[string]string{protocol.OptionResumeFrom: row.ID}, Env: os.Environ(), Cols: spawnCols, Rows: spawnRows}, nil
+	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pilot: resume: %v\n", err)
 		return 1
 	}
-	if row.Status.Process == status.ProcessRunning {
-		return pilotMisuse(stderr, "discussion is already running")
-	}
-	id, name, err := c.Launch(protocol.LaunchReq{Agent: row.Agent, Name: row.Name, Cwd: row.Cwd,
-		Options: map[string]string{protocol.OptionResumeFrom: row.ID}, Env: os.Environ(), Cols: spawnCols, Rows: spawnRows})
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "pilot: resume: %v\n", err)
-		return 1
-	}
-	return pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "name": name, "resumed_from": row.ID})
+	return pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "name": name, "resumed_from": args[0], "operation_id": pending.OperationID})
 }
 
 func pilotAwait(path string, args []string, remaining time.Duration, c agentClient, stdout, stderr io.Writer) int {

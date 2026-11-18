@@ -107,6 +107,11 @@ func (codexAdapter) SupportedVersions() adapter.VersionConstraint {
 func (codexAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 	argv := []string{binary}
 	argv = append(argv, optionFlags(spec.Options)...)
+	if spec.Manager != nil {
+		// Manager startup is pinned to a qualified version and cannot wait on an update menu.
+		argv = append(argv, "-c", "check_for_update_on_startup=false")
+	}
+	argv = append(argv, managerFlags(spec.Manager)...)
 	if spec.InitialPrompt != "" {
 		argv = append(argv, spec.InitialPrompt)
 	}
@@ -167,7 +172,8 @@ func (codexAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.Cwd != "" {
 		argv = append(argv, "--cd", spec.Cwd)
 	}
-	return append(argv, optionFlags(spec.Options)...), nil
+	argv = append(argv, optionFlags(spec.Options)...)
+	return append(argv, managerFlags(spec.Manager)...), nil
 }
 
 // ExtractConversationID recovers the conversation id (Codex's app-server threadId)

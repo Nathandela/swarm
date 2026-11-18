@@ -2,6 +2,8 @@ package schema
 
 // SemanticMessageReceipt separates transport submission, native admission and execution outcome.
 type SemanticMessageReceipt struct {
+	NativeInputID      string         `json:"native_input_id,omitempty"`
+	NativeTurnID       string         `json:"native_turn_id,omitempty"`
 	Origin             *MessageOrigin `json:"origin,omitempty"`
 	OperationID        string         `json:"operation_id"`
 	Session            string         `json:"session"`

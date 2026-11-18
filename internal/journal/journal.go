@@ -86,12 +86,14 @@ const (
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by
 // Append and never reused for the journal's whole lifetime.
 type Record struct {
-	SchemaVersion int          `json:"schema_version"`
-	Cursor        uint64       `json:"cursor"`
-	TS            time.Time    `json:"ts"`
-	SessionID     string       `json:"session_id"`
-	Type          RecordType   `json:"type"`
-	Group         status.Group `json:"group,omitempty"` // set on group_transition
+	SessionInstance string       `json:"session_instance,omitempty"`
+	Role            string       `json:"role,omitempty"`
+	SchemaVersion   int          `json:"schema_version"`
+	Cursor          uint64       `json:"cursor"`
+	TS              time.Time    `json:"ts"`
+	SessionID       string       `json:"session_id"`
+	Type            RecordType   `json:"type"`
+	Group           status.Group `json:"group,omitempty"` // set on group_transition
 	// Agent is the session's agent identity (persist.Meta.AgentType), so the phone can label
 	// a session with the CLI running it. The daemon sets it on the roster snapshot and on all
 	// four journalworthy transitions (internal/daemon/journal.go); the `deleted` record
@@ -140,6 +142,7 @@ type Record struct {
 // caller's cursor fell below the retained floor (dropped records were not silently
 // omitted, R-JRN.6).
 type Resume struct {
+	SourceID   string
 	Cursor     uint64
 	Roster     []Record
 	Events     []Record
@@ -199,9 +202,11 @@ type segmentFile interface {
 
 // Journal is the daemon-wide durable event journal and its retained in-memory mirror.
 type Journal struct {
-	dir   string
-	opts  Options
-	clock func() time.Time
+	sourceID     string
+	sourceAnchor os.FileInfo
+	dir          string
+	opts         Options
+	clock        func() time.Time
 
 	mu            sync.Mutex
 	cursor        uint64     // high-water mark, monotonic for the journal's lifetime
@@ -237,7 +242,11 @@ func Open(dir string, opts Options) (*Journal, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	j := &Journal{dir: dir, opts: opts, clock: opts.Clock}
+	source, anchor, err := openJournalSource(dir)
+	if err != nil {
+		return nil, err
+	}
+	j := &Journal{dir: dir, opts: opts, clock: opts.Clock, sourceID: source, sourceAnchor: anchor}
 	if j.clock == nil {
 		j.clock = time.Now
 	}
@@ -348,6 +357,9 @@ func (j *Journal) Append(r Record) (Record, error) {
 	if j.storageErr != nil {
 		return Record{}, j.storageErr
 	}
+	if err := validateJournalSource(j.dir, j.sourceID, j.sourceAnchor); err != nil {
+		return Record{}, j.failStorageLocked(err)
+	}
 	if j.opts.LiveBytes > 0 {
 		if r.Type == TypeInteraction {
 			if err := j.reserveCursorLocked(); err != nil {
@@ -443,7 +455,7 @@ func (j *Journal) Subscribe() (<-chan Record, func()) {
 	if j.subs == nil {
 		j.subs = make(map[chan Record]struct{})
 	}
-	if j.closed {
+	if j.closed || validateJournalSource(j.dir, j.sourceID, j.sourceAnchor) != nil {
 		// Already shut down: hand back an immediately-closed feed so the reader sees
 		// EOF and no goroutine leaks.
 		j.mu.Unlock()
@@ -480,6 +492,11 @@ func (j *Journal) SubscribeFrom(from uint64) (Resume, <-chan Record, func(), err
 		close(ch)
 		return Resume{}, ch, func() {}, errors.New("journal: closed")
 	}
+	if err := validateJournalSource(j.dir, j.sourceID, j.sourceAnchor); err != nil {
+		j.mu.Unlock()
+		close(ch)
+		return Resume{}, ch, func() {}, err
+	}
 	res := j.readFromLocked(from)
 	if j.subs == nil {
 		j.subs = make(map[chan Record]struct{})
@@ -515,6 +532,9 @@ func (j *Journal) Cursor() uint64 {
 func (j *Journal) ReadFrom(from uint64) (Resume, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if err := validateJournalSource(j.dir, j.sourceID, j.sourceAnchor); err != nil {
+		return Resume{}, err
+	}
 	return j.readFromLocked(from), nil
 }
 
@@ -522,7 +542,7 @@ func (j *Journal) readFromLocked(from uint64) Resume {
 	if j.opts.LiveBytes > 0 {
 		j.trimLiveLocked()
 	}
-	res := Resume{Cursor: j.cursor}
+	res := Resume{Cursor: j.cursor, SourceID: j.sourceID}
 	if j.opts.LiveBytes > 0 && from > 0 && from < j.lostThrough {
 		res.FullResync = true
 	}

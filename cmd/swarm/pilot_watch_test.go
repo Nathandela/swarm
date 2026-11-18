@@ -196,14 +196,14 @@ func TestPilotWatchExpiresWhileIdle(t *testing.T) {
 	if err := json.Unmarshal(body, &info); err != nil {
 		t.Fatal(err)
 	}
-	info.Expires = time.Now().Add(100 * time.Millisecond)
+	info.Expires = time.Now().Add(time.Second)
 	body, _ = json.Marshal(info)
 	if err := os.WriteFile(file, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
 	start := time.Now()
-	if code := runPilotWatch(path, []string{"local/ami"}, c, &out, &errs); code == 0 || time.Since(start) > time.Second {
+	if code := runPilotWatch(path, []string{"local/ami"}, c, &out, &errs); code == 0 || time.Now().Before(info.Expires) || time.Now().After(info.Expires.Add(900*time.Millisecond)) {
 		t.Fatalf("idle expiry exit=%d elapsed=%s err=%q", code, time.Since(start), errs.String())
 	}
 	if got := watchLines(t, out.String()); len(got) != 1 || got[0].Receipt != "snapshot" {

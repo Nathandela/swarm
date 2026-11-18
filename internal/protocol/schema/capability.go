@@ -12,6 +12,7 @@ import (
 // recover only through the machine's exact-current-sink proof path; SetStructuredChat below
 // remains the public degrade-only helper and cannot perform that recovery.
 type SessionCapabilities struct {
+	NativeOwnerInput         bool   `json:"native_owner_input,omitempty"`         // bounded owner routing hint; native semantic send revalidates
 	NativeInteractionVersion int    `json:"native_interaction_version,omitempty"` // independently proven native read projection
 	NativeComposer           bool   `json:"native_composer,omitempty"`            // current native sink proof, independent of generic chat
 	Provider                 string `json:"provider"`                             // adapter identity: claude, codex, opencode, agy, ...

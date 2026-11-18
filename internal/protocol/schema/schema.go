@@ -31,10 +31,14 @@ import (
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
-	Op              string `json:"op"`
-	EndpointID      string `json:"endpoint_id"`
-	SessionID       string `json:"session_id,omitempty"`
-	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	ManagerInterruptRequest *ManagerInterruptReq     `json:"manager_interrupt_request,omitempty"`
+	ManagerInterrupt        *ManagerInterruptReceipt `json:"manager_interrupt,omitempty"`
+	JournalSourceID         string                   `json:"journal_source_id,omitempty"`
+	JournalHistoryGap       bool                     `json:"journal_history_gap,omitempty"`
+	Op                      string                   `json:"op"`
+	EndpointID              string                   `json:"endpoint_id"`
+	SessionID               string                   `json:"session_id,omitempty"`
+	ProtocolVersion         int                      `json:"protocol_version,omitempty"`
 	// BuildVersion is the daemon's internal/version.Version, carried on the hello
 	// reply (E13.2). It is ADDITIVE: unlike ProtocolVersion (the wire skew gate,
 	// unchanged by this field), a mismatch here is not fatal to the handshake — it
@@ -62,7 +66,7 @@ type Control struct {
 	// Every field is omitempty so an existing-shape Control serializes
 	// byte-identically (GG-7); the daemon-authoritative times are pointers so a zero
 	// Control emits no new key (a zero time.Time is NOT omitted by encoding/json).
-	OperationID     string          `json:"operation_id,omitempty"`      // idempotency key of a remote mutating op
+	OperationID     string          `json:"operation_id,omitempty"`      // idempotency key of a remote mutation or capability-gated owner operation
 	InteractionID   string          `json:"interaction_id,omitempty"`    // the agent interaction being approved (A6)
 	DeviceID        string          `json:"device_id,omitempty"`         // pairing device id (never trusted alone, A1)
 	DeviceSig       string          `json:"device_sig,omitempty"`        // detached Ed25519 over the canonical op tuple (D4)
@@ -138,12 +142,18 @@ type Control struct {
 	// Wave R6 complete-chat additive fields (Mirror M2.4 / M3.1 / M3.3, ADR-009 (8)).
 	// ComposerSend is the composer_send body: one structured message plus the turn it was
 	// rendered against, bound into the device signature via ComposerSendContentHash.
-	ComposerSend          *ComposerSendReq        `json:"composer_send,omitempty"`
-	SemanticReceipt       *SemanticMessageReceipt `json:"semantic_receipt,omitempty"`
-	NativeDecision        *NativeDecisionReq      `json:"native_decision,omitempty"`
-	NativeDecisionReceipt *NativeDecisionReceipt  `json:"native_decision_receipt,omitempty"`
-	NativeRequests        *NativeRequestsReq      `json:"native_requests,omitempty"`
-	NativeRequestsResult  *NativeRequestsReply    `json:"native_requests_result,omitempty"`
+	ManagerInputStatusRequest *ManagerAdmission       `json:"manager_input_status_request,omitempty"`
+	ManagerInputStatus        *ManagerNativeTurn      `json:"manager_input_status,omitempty"`
+	ManagerRuntimeRequest     *ManagerRuntimeReq      `json:"manager_runtime_request,omitempty"`
+	ManagerRuntime            *ManagerRuntimeStatus   `json:"manager_runtime,omitempty"`
+	ManagerCall               *ManagerCallReq         `json:"manager_call,omitempty"`
+	ManagerCallProof          *ManagerCallProof       `json:"manager_call_proof,omitempty"`
+	ComposerSend              *ComposerSendReq        `json:"composer_send,omitempty"`
+	SemanticReceipt           *SemanticMessageReceipt `json:"semantic_receipt,omitempty"`
+	NativeDecision            *NativeDecisionReq      `json:"native_decision,omitempty"`
+	NativeDecisionReceipt     *NativeDecisionReceipt  `json:"native_decision_receipt,omitempty"`
+	NativeRequests            *NativeRequestsReq      `json:"native_requests,omitempty"`
+	NativeRequestsResult      *NativeRequestsReply    `json:"native_requests_result,omitempty"`
 	// TurnInterrupt is the turn_interrupt body (Wave R6 review fix-pack B7): the session
 	// plus the turn the phone RENDERED the Stop against, bound into the device signature
 	// via TurnInterruptContentHash. See schema/chat.go for why the op stopped being
@@ -246,6 +256,8 @@ type AgentInstanceRef struct {
 // namespaced id + endpoint id + the daemon-computed status Group (E6.9 — clients
 // never call status.Derive), alongside the three raw status dimensions.
 type SessionView struct {
+	Role                  string `json:"role,omitempty"`
+	ManagerConversationID string `json:"manager_conversation_id,omitempty"`
 	// Resume projection affects roster visibility, never the raw event identity.
 	RosterHidden   bool          `json:"roster_hidden,omitempty"`
 	Supersedes     []string      `json:"supersedes,omitempty"`
@@ -390,8 +402,10 @@ type PairingControl struct {
 // LaunchReq is a client's request to launch a new session. Every field is
 // re-validated server-side (E6.6) before it reaches the DaemonAPI.
 type LaunchReq struct {
-	Agent string `json:"agent"`
-	Name  string `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
+	ResumeSourceInstance string            `json:"resume_source_instance,omitempty"`
+	Manager              *ManagerLaunchReq `json:"manager,omitempty"`
+	Agent                string            `json:"agent"`
+	Name                 string            `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
 	// Tag is the optional manual grouping label given at creation, the same label
 	// set_tag assigns to a live session. It is re-validated + sanitized server-side
 	// exactly like Name, and stamped into the reservation meta, so a session the

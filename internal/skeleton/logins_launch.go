@@ -22,6 +22,9 @@ import (
 var errResumeHomeMismatch = errors.New("launch: resume-home-mismatch")
 
 func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
+	if spec.Manager != nil && (spec.Manager.UnsupportedOrigin || !daemon.ManagerNativeEnvironmentSupported(spec.AgentType, spec.ClientEnv)) {
+		return errors.New("manager native account configuration is unsupported; select its native CLI account without credential or backend overrides")
+	}
 	if !managedLoginProvider(spec.AgentType) {
 		if spec.LoginRuntime != nil {
 			return logins.ErrIneligible
@@ -74,7 +77,10 @@ func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 	} else {
 		spec.ClientEnv, err = a.logins.store.PrepareEnvironment(runtime, spec.ClientEnv)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return spec.BindManagerLoginEnvironment(a.logins.store)
 }
 
 // checkResumeHome refuses an exact resume into a home without the source's

@@ -47,9 +47,14 @@ const (
 // here (not FromDaemon) so its poller is stopped deterministically on Close — the
 // daemon owns the socket, so the Server never runs FromDaemon's own stop path.
 type coreAPI struct {
-	core         *daemon.Daemon
-	fakeAgentBin string
-	endpointID   string // this daemon's stable federation id (resume source validation)
+	matchResumeInstance  func(persist.Meta, string) bool
+	managerInterruptTurn func(context.Context, string, string, protocol.ManagerInterruptReq, func() error) error
+	managerInputStatus   func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
+	managerRuntime       func(string, string) (protocol.ManagerRuntimeStatus, error)
+	managerCall          func(context.Context, string, protocol.ManagerCallReq) (protocol.ManagerCallProof, error)
+	core                 *daemon.Daemon
+	fakeAgentBin         string
+	endpointID           string // this daemon's stable federation id (resume source validation)
 	// killFn/deleteFn let the assembly place owner lifecycle operations behind
 	// the same per-session end fence as automatic auth recycling. Bare coreAPI
 	// tests retain the raw daemon fallback.
@@ -205,8 +210,9 @@ type coreAPI struct {
 	// (ADR-017 T2-a): the first authors a record the instant a launch succeeds, the
 	// second is the PURE READ the remote-tier gate consults. Both nil until Serve wires
 	// them, and nil is fail-closed -- no record authored, no record found.
-	onLaunched  func(persist.Meta)
-	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
+	onLaunched       func(persist.Meta)
+	sessionCaps      func(local string) (protocol.SessionCapabilities, bool)
+	ownerSessionCaps func(local string, shimPID int, shimStart int64) (protocol.SessionCapabilities, bool)
 	// withSessionStateSnapshot, when wired by the full assembly, runs a journal
 	// roster boundary and its capability lookups under one shared state fence.
 	withSessionStateSnapshot func(func())
@@ -841,6 +847,7 @@ func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 // hole the phone improvises around.
 func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.SessionCapabilities, bool)) protocol.JournalRecord {
 	out := protocol.JournalRecord{
+		SessionInstance: r.SessionInstance, Role: r.Role,
 		Cursor:    r.Cursor,
 		SessionID: r.SessionID,
 		Type:      string(r.Type),
@@ -862,12 +869,24 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 		var rec protocol.SessionCapabilities
 		if json.Unmarshal(r.Payload, &rec) == nil && rec.Validate() == nil {
 			out.Capabilities = &rec
+			if out.SessionInstance == "" {
+				out.SessionInstance = rec.SessionInstance
+			} else if out.SessionInstance != rec.SessionInstance {
+				out.SessionInstance = ""
+			}
 		} else if r.Type == journal.TypeSessionState && len(r.Payload) > 0 {
 			out.Capabilities = &protocol.SessionCapabilities{}
 		}
-	} else if caps != nil {
+	} else if r.Type == journal.TypeRoster && caps != nil {
 		if rec, ok := caps(r.SessionID); ok {
 			out.Capabilities = &rec
+			if rec.Validate() == nil {
+				if out.SessionInstance == "" || out.SessionInstance == rec.SessionInstance {
+					out.SessionInstance = rec.SessionInstance
+				} else {
+					out.SessionInstance = ""
+				}
+			}
 		}
 	}
 	if r.Type == journal.TypeInteraction || r.Type == journal.TypeStructuredGap {
@@ -896,7 +915,7 @@ func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
 		if err != nil {
 			return
 		}
-		out = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		out = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync, SourceID: res.SourceID}
 		for _, r := range res.Roster {
 			// The roster's metadata and capability record must describe the same
 			// state boundary. The full assembly freezes capability authors and
@@ -910,6 +929,7 @@ func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
 	for _, e := range res.Events {
 		out.Events = append(out.Events, toWireJournalRecord(e))
 	}
+	out.HistoryGap = protocol.JournalRecordsHaveIdentityGap(out.Events) || protocol.JournalRecordsHaveIdentityGap(out.Roster)
 	return out, nil
 }
 
@@ -974,7 +994,7 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 		if err != nil {
 			return
 		}
-		outResume = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		outResume = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync, SourceID: res.SourceID}
 		for _, r := range res.Roster {
 			outResume.Roster = append(outResume.Roster, toWireJournalRecordWith(r, a.sessionCaps))
 		}
@@ -987,6 +1007,7 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 	for _, r := range res.Events {
 		outResume.Events = append(outResume.Events, toWireJournalRecord(r))
 	}
+	outResume.HistoryGap = protocol.JournalRecordsHaveIdentityGap(outResume.Events) || protocol.JournalRecordsHaveIdentityGap(outResume.Roster)
 	out := make(chan protocol.JournalRecord, eventsBuffer)
 	done := make(chan struct{})
 	go func() {
@@ -1021,6 +1042,39 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	if err := validateResumeRelocation(spec); err != nil {
+		return persist.Meta{}, err
+	}
+	if spec.OwnerLaunchHash != "" {
+		if m, known, err := a.core.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash); known {
+			return m, err
+		}
+	}
+	if spec.ResumeSource != nil {
+		local, source, err := validateResumeSource(spec.Options[protocol.OptionResumeFrom], spec.AgentType, a.endpointID, a.core.Get)
+		if err != nil || a.validateBoundWorkerResume(spec, local, source) != nil {
+			return persist.Meta{}, daemon.ErrResumeSourceChanged
+		}
+	}
+	if spec.Manager != nil {
+		manager := *spec.Manager
+		manager.Command = a.core.ManagerBridgeCommand()
+		nativeEnv := a.core.ManagerEnvironment(spec.AgentType, spec.ClientEnv)
+		manager.UnsupportedOrigin = !daemon.ManagerNativeEnvironmentSupported(spec.AgentType, nativeEnv)
+		if spec.AgentType == "claude" && manager.ClaudeConfigDir == nil {
+			config := ""
+			for _, entry := range nativeEnv {
+				if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok {
+					config = value
+				}
+			}
+			manager.ClaudeConfigDir = &config
+		}
+		spec.Manager = &manager
+	}
+	if err := validateManagerSource(spec, a.endpointID, a.core.Get); err != nil {
+		return persist.Meta{}, err
+	}
 	var handoff *handoffHistoryResolver
 	coreAttempted := false
 	resolver := a.historyResolver
@@ -1049,9 +1103,6 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 				}
 			}()
 		}
-	}
-	if err := validateResumeRelocation(spec); err != nil {
-		return persist.Meta{}, err
 	}
 	// Directory completion appends a separator. Strip only trailing separators
 	// before history, worktree, projection and persistence use the cwd; keep
@@ -1091,6 +1142,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 	// agent runs. THIS is the one point every launch entry passes through; resolving
 	// here is what makes the daemon-side seam real (R1 audit H1).
 	spec.ClientEnv = a.core.LaunchPolicyEnv(spec.ClientEnv)
+	if spec.Manager != nil {
+		spec.ClientEnv = daemon.ManagerLaunchEnvironment(spec.AgentType, spec.ClientEnv)
+	}
 	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
 	// because it is the ONLY point every launch entry passes through. handleLaunch has
 	// the same presence check, but `session_launch` (the signed remote-preset path) does
@@ -1156,7 +1210,10 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 		defer a.externalResumeMu.Unlock()
 		for _, existing := range a.core.List() {
 			if existing.AgentType == spec.AgentType && existing.ConversationID == conversationID {
-				return existing, nil
+				if err := validateManagerSelection(spec, existing); err != nil {
+					return persist.Meta{}, err
+				}
+				return a.core.RecordOwnerLaunch(spec, existing)
 			}
 		}
 	}
@@ -1185,8 +1242,20 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 		if !sourceExists || source.RosterHidden {
 			return persist.Meta{}, fmt.Errorf("resume: source discussion was deleted or archived")
 		}
+		if spec.ResumeSource != nil {
+			if err := a.validateBoundWorkerResume(spec, local, source); err != nil {
+				return persist.Meta{}, err
+			}
+			spec.ResumeSource = &daemon.ResumeSourceFence{Instance: spec.ResumeSource.Instance, ShimPID: source.ShimPID, ShimStartTime: source.ShimStartTime}
+		}
 		if existing, ok := runningConversation(a.core.List(), source); ok {
-			return existing, nil
+			if spec.ResumeSource != nil {
+				return persist.Meta{}, daemon.ErrResumeSourceChanged
+			}
+			if err := validateManagerSelection(spec, existing); err != nil {
+				return persist.Meta{}, err
+			}
+			return a.core.RecordOwnerLaunch(spec, existing)
 		}
 		if managedLoginProvider(source.AgentType) {
 			for _, attempt := range a.core.List() {
@@ -1228,12 +1297,18 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAttempted *bool) (persist.Meta, error) {
 	a.workspaceMu.RLock()
 	defer a.workspaceMu.RUnlock()
+	if err := qualifyManagerLaunchCLI(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
 	if a.logins != nil && managedLoginProvider(resolved.AgentType) {
 		gate := &a.logins.admission[loginProviderIndex(resolved.AgentType)]
 		gate.Lock()
 		defer gate.Unlock()
 	}
 	if err := a.bindLoginLaunch(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
+	if err := prepareManagerNativeIdentity(&resolved); err != nil {
 		return persist.Meta{}, err
 	}
 
@@ -1270,6 +1345,14 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
+	}
+	if expected := resolved.ResumeSource; expected != nil {
+		source, ok := a.core.Get(resolved.ResumedFrom)
+		if !ok || a.validateBoundWorkerResume(resolved, resolved.ResumedFrom, source) != nil ||
+			source.ShimPID != expected.ShimPID || source.ShimStartTime != expected.ShimStartTime ||
+			source.ConversationID != resolved.ConversationID {
+			return persist.Meta{}, daemon.ErrResumeSourceChanged
+		}
 	}
 	if coreAttempted != nil {
 		*coreAttempted = true
@@ -1379,6 +1462,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 	if err := validateResumeRelocation(spec); err != nil {
 		return daemon.LaunchSpec{}, err
 	}
+	if err := validateManagerSource(spec, endpointID, getSource); err != nil {
+		return daemon.LaunchSpec{}, err
+	}
 	// GG-6 scope: refuse a registered-but-non-production adapter at the launch
 	// boundary so a crafted launch RPC cannot spawn it in a real install. The only
 	// such adapter is the fixture-only "reference" (kept registered for the E9.5
@@ -1422,6 +1508,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
 		}
 		argv, err := ad.Resume(adapter.ResumeSpec{
+			Manager:        managerAdapterSpec(spec.Manager),
 			Cwd:            spec.Cwd,
 			ConversationID: conversationID,
 			Options:        spec.Options,
@@ -1472,6 +1559,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: saved conversation identity is invalid")
 		}
 		argv, rerr := ad.Resume(adapter.ResumeSpec{
+			Manager:        managerAdapterSpec(spec.Manager),
 			Cwd:            spec.Cwd,
 			Relocate:       spec.Options[protocol.OptionResumeRelocate] == "true",
 			ConversationID: srcMeta.ConversationID,
@@ -1511,6 +1599,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		default:
 			if ad, ok := registry.New(spec.AgentType); ok {
 				argv, err := ad.Command(adapter.LaunchSpec{
+					Manager:       managerAdapterSpec(spec.Manager),
 					Cwd:           spec.Cwd,
 					Name:          spec.Name,
 					Options:       spec.Options,

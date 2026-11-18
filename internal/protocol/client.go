@@ -34,12 +34,13 @@ type Client struct {
 	reqMu  sync.Mutex   // one outstanding request/reply at a time
 	respCh chan Control // read loop delivers responses here
 
-	mu           sync.Mutex
-	eventsCh     chan Event
-	att          *Attachment
-	peekCh       chan TerminalSnapshot // terminal_snapshot PUSHES, never the request respCh
-	journalPages chan Control
-	journalCh    chan JournalRecord
+	mu              sync.Mutex
+	eventsCh        chan Event
+	att             *Attachment
+	peekCh          chan TerminalSnapshot // terminal_snapshot PUSHES, never the request respCh
+	journalPages    chan Control
+	journalCh       chan JournalRecord
+	journalSourceID string
 
 	pairMu  sync.Mutex      // one pairing in flight per client (mirrors the daemon host)
 	pairing *PairingSession // the in-flight pairing, routing pair_pending/pair_result pushes
@@ -169,6 +170,9 @@ func (c *Client) InteractionHistory(id string, limit int) ([]JournalRecord, erro
 // chrome uses the canonical name so the label matches what the daemon persisted (an
 // older daemon whose reply predates naming returns an empty name).
 func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
+	if req.Manager != nil {
+		return "", "", errors.New("manager launch requires the owner LaunchOperation route")
+	}
 	if _, relocate := req.Options[OptionResumeRelocate]; relocate && !slices.Contains(c.caps, CapResumeRelocate) {
 		return "", "", errors.New("resume relocation requires an updated daemon; run swarm daemon restart")
 	}
@@ -441,13 +445,16 @@ func (c *Client) JournalSubscribeFrom(ctx context.Context, from uint64) (Journal
 	if ctx.Err() != nil {
 		return JournalResume{}, nil, ctx.Err()
 	}
-	hasJournal, hasResume := false, false
+	hasJournal, hasResume, hasSource := false, false, false
 	for _, cap := range c.caps {
 		if cap == CapJournal {
 			hasJournal = true
 		}
 		if cap == CapJournalSubscribeFrom {
 			hasResume = true
+		}
+		if cap == CapJournalSourceIdentity {
+			hasSource = true
 		}
 	}
 	if !hasJournal || !hasResume {
@@ -501,7 +508,7 @@ func (c *Client) JournalSubscribeFrom(ctx context.Context, from uint64) (Journal
 			_ = c.Close()
 			return JournalResume{}, nil, errors.New(page.Error)
 		}
-		if page.Op != OpJournalSubscribeFrom || (!first && (page.Cursor != res.Cursor || page.FullResync != res.FullResync)) {
+		if page.Op != OpJournalSubscribeFrom || (!first && (page.Cursor != res.Cursor || page.FullResync != res.FullResync || hasSource && (page.JournalSourceID != res.SourceID || page.JournalHistoryGap != res.HistoryGap))) || hasSource && !ValidJournalSourceID(page.JournalSourceID) {
 			_ = c.Close()
 			return JournalResume{}, nil, errors.New("protocol: invalid journal snapshot page")
 		}
@@ -513,6 +520,9 @@ func (c *Client) JournalSubscribeFrom(ctx context.Context, from uint64) (Journal
 		}
 		total += len(body)
 		res.Cursor, res.FullResync = page.Cursor, page.FullResync
+		if hasSource {
+			res.SourceID, res.HistoryGap = page.JournalSourceID, page.JournalHistoryGap
+		}
 		res.Events = append(res.Events, page.Journal...)
 		res.Roster = append(res.Roster, page.Roster...)
 		if !page.JournalMore {
@@ -812,7 +822,18 @@ func (c *Client) dispatchControl(ctrl Control) {
 	case OpJournalSubscribeFrom, OpJournalEvent:
 		c.mu.Lock()
 		pages, live := c.journalPages, c.journalCh
+		badSource := false
+		if live != nil && slices.Contains(c.caps, CapJournalSourceIdentity) {
+			badSource = !ValidJournalSourceID(ctrl.JournalSourceID) || c.journalSourceID != "" && c.journalSourceID != ctrl.JournalSourceID || ctrl.Op == OpJournalEvent && ctrl.JournalHistoryGap
+			if !badSource && c.journalSourceID == "" {
+				c.journalSourceID = ctrl.JournalSourceID
+			}
+		}
 		c.mu.Unlock()
+		if badSource {
+			_ = c.Close()
+			return
+		}
 		if ctrl.Op == OpJournalSubscribeFrom && pages != nil {
 			select {
 			case pages <- ctrl:

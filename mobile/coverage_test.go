@@ -20,6 +20,13 @@ import (
 // (op.outcome, key_custody.install, callbacks). It is hard-coded HERE, not read from
 // the TSV, so deleting a row from the table cannot make the requirement disappear.
 var requiredScreenElements = []string{
+	// P8 exposes the scoped voice controller for native consumers. Phone screens
+	// and audio remain separate platform work.
+	"voice.profile",
+	"voice.enroll",
+	"voice.control",
+	"voice.end",
+	"voice.preview",
 	// pairing (QR decode, short code, SAS, confirm, cancel)
 	"pairing.qr_decode",
 	// The ten-character spelling, ADR-007 B140 (agents-tracker-tr0n): required so the

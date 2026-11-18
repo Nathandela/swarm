@@ -69,6 +69,7 @@ func (d *Daemon) rosterSnapshotLocked() []journal.Record {
 		// state and then applies Events (cursor > from) on top. A consumer must not
 		// sort roster records by their own Cursor.
 		roster = append(roster, journal.Record{
+			SessionInstance: d.recordedJournalInstance(m), Role: m.Role,
 			SessionID:  m.ID,
 			Type:       journal.TypeRoster,
 			Group:      status.Derive(m.Status),
@@ -136,7 +137,12 @@ func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShim
 	if payload == nil {
 		return true, nil
 	}
-	_, err = d.appendJournal(completeSessionRecord(m, journal.TypeSessionState, payload))
+	rec := completeSessionRecord(m, journal.TypeSessionState, payload)
+	rec.SessionInstance = payloadJournalInstance(payload)
+	if rec.SessionInstance == "" {
+		rec.SessionInstance = d.recordedJournalInstance(m)
+	}
+	_, err = d.appendJournal(rec)
 	return true, err
 }
 
@@ -187,6 +193,7 @@ func journalRecordFor(prev persist.Meta, prevExists bool, next persist.Meta) (jo
 
 func completeSessionRecord(m persist.Meta, typ journal.RecordType, payload json.RawMessage) journal.Record {
 	return journal.Record{
+		Role:      m.Role,
 		SessionID: m.ID, Type: typ, Group: status.Derive(m.Status), Agent: m.AgentType,
 		Name: m.Name, StateSince: m.EffectiveGroupEnteredAt(), Payload: payload,
 	}

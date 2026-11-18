@@ -61,7 +61,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -70,6 +70,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spaw
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
   swarm discord    connect this Swarm to Discord, or operate its local bridge
+  swarm voice      configure OpenAI speech, stream live audio, or transcribe an utterance
   swarm handoff    launch a supervised cross-CLI handoff
                    (--cli agent [--model m] [--name n]
                     [--supervision passive|manual|none] --context-file file)
@@ -150,6 +151,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runRemote(args[1:], stdout, stderr)
 	case "discord":
 		return dispatchDiscord(args[1:], stdout, stderr)
+	case "voice":
+		return dispatchVoice(args[1:], stdout, stderr)
 	case "relay":
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
@@ -651,6 +654,7 @@ type shimLaunchConfig struct {
 	HermesInput       *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
 	AgyInput          *agyinput.Config           `json:"agy_input,omitempty"`
 	ClaudeInput       bool                       `json:"claude_input,omitempty"`
+	ManagerReplayID   string                     `json:"manager_replay_id,omitempty"`
 	LogPath           string                     `json:"log_path,omitempty"`
 	LoginRuntime      *logins.Runtime            `json:"login_runtime,omitempty"`
 	LoginStateRoot    string                     `json:"login_state_root,omitempty"`
@@ -692,6 +696,7 @@ type shimLaunchConfig struct {
 	// BackendProgram is the RESOLVED absolute path the daemon obtained through the adapter
 	// contract's LookPath discipline, so the shim never searches PATH itself.
 	BackendCwd        string   `json:"backend_cwd,omitempty"`
+	BackendRequired   bool     `json:"backend_required,omitempty"`
 	BackendProgram    string   `json:"backend_program"`
 	BackendArgs       []string `json:"backend_args"`
 	BackendAgentArgs  []string `json:"backend_agent_args"`
@@ -711,12 +716,13 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
-		HermesInput:  lc.HermesInput,
-		AgyInput:     lc.AgyInput,
-		ClaudeInput:  lc.ClaudeInput,
-		LogPath:      lc.LogPath,
-		OpenCode:     lc.OpenCode,
-		LoginRuntime: lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
+		HermesInput:     lc.HermesInput,
+		AgyInput:        lc.AgyInput,
+		ClaudeInput:     lc.ClaudeInput,
+		ManagerReplayID: lc.ManagerReplayID,
+		LogPath:         lc.LogPath,
+		OpenCode:        lc.OpenCode,
+		LoginRuntime:    lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
 		InputEmbargo:      lc.InputEmbargo,
 		InputEmbargoToken: lc.InputEmbargoToken,
 		CLIIdentity:       lc.CLIIdentity,
@@ -743,7 +749,7 @@ func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 // socket has no endpoint for the agent to be pointed at. Either alone is a malformed config
 // and nil -- the pre-R7 session -- is the safe reading of it.
 func backendConfigFromLaunch(lc shimLaunchConfig) *shim.BackendConfig {
-	if lc.BackendSocketPath == "" || lc.BackendProgram == "" {
+	if (lc.BackendSocketPath == "" || lc.BackendProgram == "") && !lc.BackendRequired {
 		return nil
 	}
 	env := lc.BackendEnv
@@ -754,6 +760,7 @@ func backendConfigFromLaunch(lc shimLaunchConfig) *shim.BackendConfig {
 		env = lc.Env
 	}
 	return &shim.BackendConfig{
+		Required:   lc.BackendRequired,
 		Program:    lc.BackendProgram,
 		Cwd:        lc.BackendCwd,
 		Args:       lc.BackendArgs,
@@ -770,6 +777,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to the JSON launch config")
 	requireOpenCode := fs.Bool("require-opencode-tui", false, "require a managed OpenCode TUI launch")
+	requireManager := fs.Bool("require-manager", false, "require native manager runtime configuration")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
@@ -790,6 +798,10 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return 2
 	}
 	if err := validateShimRuntime(lc, *requireOpenCode); err != nil {
+		_, _ = fmt.Fprintln(stderr, "shim:", err)
+		return 2
+	}
+	if err := validateManagerShimRuntime(lc, *requireManager); err != nil {
 		_, _ = fmt.Fprintln(stderr, "shim:", err)
 		return 2
 	}

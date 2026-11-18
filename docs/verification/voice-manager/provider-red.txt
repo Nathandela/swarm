@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/voice/gradium [github.com/Nathandela/swarm/internal/voice/gradium.test]
+internal/voice/gradium/client_test.go:22:79: undefined: dialFunc
+internal/voice/gradium/client_test.go:37:33: undefined: Session
+internal/voice/gradium/client_test.go:37:54: undefined: Event
+internal/voice/gradium/client_test.go:37: undefined: Event
+internal/voice/gradium/client_test.go:38:32: undefined: Session
+internal/voice/gradium/client_test.go:57:9: undefined: open
+internal/voice/gradium/client_test.go:57:53: undefined: Config
+internal/voice/gradium/client_test.go:57:106: undefined: stt
+internal/voice/gradium/client_test.go:61:62: undefined: ErrFlushPending
+internal/voice/gradium/client_test.go:67:62: undefined: ErrFinalized
+internal/voice/gradium/client_test.go:67:62: too many errors
+FAIL	github.com/Nathandela/swarm/internal/voice/gradium [build failed]
+FAIL

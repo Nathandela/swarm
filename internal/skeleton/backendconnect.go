@@ -662,6 +662,9 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	ctx, cancel := context.WithTimeout(context.Background(), d.backendDeadline())
 	defer cancel()
 	feed := newBackendFeed()
+	if err := d.prepareCodexManagerFeed(id, expectedInstance, feed); err != nil {
+		return nil, feed, err
+	}
 
 	var conn *appserver.Client
 	var err error

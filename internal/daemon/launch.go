@@ -13,12 +13,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/logins"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
@@ -28,6 +30,12 @@ import (
 // ErrMaxSessions is returned by Launch when the daemon is at its configured
 // concurrent-session cap; the message names the cap value (S-7).
 var ErrMaxSessions = errors.New("daemon: max sessions reached")
+
+// ErrManagerLaunchPrerequisite is raised by native runtime qualification before account preparation or reservation.
+var ErrManagerLaunchPrerequisite = errors.New("manager requires a qualified native-turn runtime; install or select a supported CLI version")
+
+// ErrResumeSourceChanged refuses an owner resume before reserving an effect.
+var ErrResumeSourceChanged = errors.New("resume source instance or status changed")
 
 // ErrLaunchOpConsumed refuses a REPLAYED signed launch whose operation already
 // applied definitively (the idempotency record reached PhaseCompleted) and whose
@@ -117,6 +125,7 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	ManagerReplayID       string                     `json:"manager_replay_id,omitempty"`
 	HermesInput           *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
 	AgyInput              *agyinput.Config           `json:"agy_input,omitempty"`
 	ClaudeInput           bool                       `json:"claude_input,omitempty"`
@@ -159,6 +168,7 @@ type shimSpawnConfig struct {
 	// in particular is the RESOLVED absolute path, so a restart never re-resolves a bare
 	// name through a PATH that may now point at a different CLI version.
 	BackendCwd              string   `json:"backend_cwd,omitempty"`
+	BackendRequired         bool     `json:"backend_required,omitempty"`
 	BackendProgram          string   `json:"backend_program,omitempty"`
 	BackendArgs             []string `json:"backend_args,omitempty"`
 	BackendAgentArgs        []string `json:"backend_agent_args,omitempty"`
@@ -330,6 +340,30 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+	if spec.OwnerLaunchHash != "" {
+		if spec.OperationID == "" {
+			return persist.Meta{}, errors.New("daemon: owner launch requires operation ID")
+		}
+		if m, known, err := d.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash); known {
+			return m, err
+		}
+	}
+	if spec.Manager != nil {
+		if spec.AgentType != "codex" && spec.AgentType != "claude" || spec.Manager.ConversationID == "" || spec.Manager.Command != d.cfg.ShimBinary {
+			return persist.Meta{}, errors.New("manager requires an exact native runtime and trusted bridge command")
+		}
+		managerEnv, err := d.checkedManagerLaunchEnvironment(spec)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+		spec.ClientEnv = managerEnv
+		if spec.AgentType == "claude" && (spec.CLIIdentity == nil || !claudeinput.SupportsNativeTurns(spec.CLIIdentity.Version)) {
+			return persist.Meta{}, errors.New("manager requires a qualified Claude native-turn runtime")
+		}
+		if spec.AgentType == "codex" && (spec.CLIIdentity == nil || !codex.SupportsNativeTurns(spec.CLIIdentity.Version)) {
+			return persist.Meta{}, errors.New("manager requires a qualified codex native-turn runtime")
+		}
+	}
 	hermes, hermesErr := d.hermesLaunchConfig(spec)
 	if hermesErr != nil {
 		return persist.Meta{}, hermesErr
@@ -349,6 +383,9 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// the shim actually execs the agent with cannot disagree (ADR-007 D8's daemon-policy
 	// half; see PolicyEnv). spec is a value copy, so this is local to this launch.
 	spec.ClientEnv = d.LaunchPolicyEnv(spec.ClientEnv)
+	if spec.Manager != nil {
+		spec.ClientEnv = ManagerLaunchEnvironment(spec.AgentType, spec.ClientEnv)
+	}
 
 	// Cap check + id reservation, atomically, BEFORE any spawn (S-7): the rejected
 	// launch must grow nothing and spawn nothing.
@@ -356,6 +393,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	if d.closed {
 		d.mu.Unlock()
 		return persist.Meta{}, errors.New("daemon: closed")
+	}
+	if expected := spec.ResumeSource; expected != nil {
+		source, ok := d.sessions[spec.ResumedFrom]
+		if !ok || source.meta.ShimPID != expected.ShimPID || source.meta.ShimStartTime != expected.ShimStartTime ||
+			source.meta.AgentType != spec.AgentType || source.meta.ConversationID != spec.ConversationID ||
+			source.meta.Role == "manager" || source.meta.RosterHidden || source.meta.Status.Process != status.ProcessExited {
+			d.mu.Unlock()
+			return persist.Meta{}, ErrResumeSourceChanged
+		}
 	}
 	if d.liveCountLocked() >= d.cfg.MaxSessions {
 		d.mu.Unlock()
@@ -389,23 +435,45 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		Supervision:     spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
 		Status:          status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
+	if spec.Manager != nil {
+		m.Role = "manager"
+		m.ManagerConversationID = spec.Manager.ConversationID
+		m.ManagerBridgeSocket = spec.Manager.BridgeSocket
+		m.ManagerAuthFile = spec.Manager.AuthFile
+		if spec.Manager.ClaudeConfigDir != nil {
+			m.ManagerClaudeConfigDir = *spec.Manager.ClaudeConfigDir
+		}
+	}
 	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
 
-	// Remote launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
+	// Launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
 	// the reservation so a replayed launch reuses the reserved session and spawns
 	// nothing. Prepare is mutex-guarded, so a concurrent double-launch has exactly one
 	// winner; the loser drops its fresh reservation and returns the cached session. The
 	// reservation has touched only d.sessions (no disk yet), so dropReserved is a clean
 	// abort here.
 	if spec.OperationID != "" {
-		_, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
+		action := "launch"
+		if spec.OwnerLaunchHash != "" {
+			action = "owner_launch"
+		}
+		record, existed, perr := d.idem.PrepareBound(spec.OperationID, action, id, "", spec.OwnerLaunchHash)
 		if perr != nil {
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
 		}
 		if existed {
+			if record.Action != action || record.RequestHash != spec.OwnerLaunchHash {
+				d.dropReserved(id)
+				return persist.Meta{}, ErrOwnerLaunchConflict
+			}
+			if spec.OwnerLaunchHash != "" {
+				d.dropReserved(id)
+				m, _, err := d.OwnerLaunchReplay(spec.OperationID, spec.OwnerLaunchHash)
+				return m, err
+			}
 			// Replay of a known operation_id. The signal is LIVENESS, not phase: return
 			// the recorded session only if it is still usable; a MISSING (W1) or LOST
 			// (W3) session means the prior attempt crashed mid-launch and left no usable
@@ -501,7 +569,22 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, err
 	}
 	dir := d.sessionDir(id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if spec.Manager != nil {
+		// Never bootstrap a second replay ledger under an existing session ID.
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			if preLaunchOK && d.cfg.PreDelete != nil {
+				_ = d.cfg.PreDelete(m)
+			}
+			d.dropReserved(id)
+			return persist.Meta{}, fmt.Errorf("manager replay requires a fresh session directory: %w", err)
+		}
+		replayID, err := managerproof.InitializeReplay(dir, id, m.ManagerConversationID)
+		if err != nil {
+			d.rollbackReserved(id, m, preLaunchOK)
+			return persist.Meta{}, err
+		}
+		m.ManagerReplayID = replayID
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
@@ -533,7 +616,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, terr
 	}
-	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token)
+	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token, m.ManagerReplayID)
 	if err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
@@ -654,7 +737,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // error: the launch proceeds (playbook §6.1), and the caller persists the reason
 // onto the meta so the degradation is visible in ls/TUI/doctor rather than only
 // in the daemon log.
-func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (cmd *exec.Cmd, backendPlanErr string, err error) {
+func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayID string) (cmd *exec.Cmd, backendPlanErr string, err error) {
 	// The structured-capture channel (playbook §6.1): the shim binds its own hook
 	// socket beside its control socket, the agent's `swarm hook` is pointed at it, and
 	// the DRAIN verb is gated by a secret minted here and persisted only in this 0600
@@ -666,6 +749,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 	agentEnv := PolicyEnv(spec.ClientEnv)
+	if spec.Manager != nil && spec.AgentType == "claude" && spec.Manager.ClaudeConfigDir != nil && *spec.Manager.ClaudeConfigDir != "" {
+		agentEnv = append(agentEnv, "CLAUDE_CONFIG_DIR="+*spec.Manager.ClaudeConfigDir)
+	}
 	if spec.OpenCodeLaunch != nil {
 		agentEnv = mergeOpenCodeEnv(agentEnv, spec.OpenCodeEnv)
 		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(filepath.Dir(spec.OpenCodeLaunch.BindingFile), "opencode-tui.json"))
@@ -696,8 +782,15 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.AgyInput = &agyinput.Config{SessionID: id, Executable: spec.CLIIdentity.Path, Version: spec.CLIIdentity.Version, Fingerprint: spec.CLIIdentity.Fingerprint, Cwd: spec.Cwd, BootstrapCommand: command}
 		lc.Argv = agyinput.LaunchArgs(lc.Argv, command)
 	}
-	if d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled() && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
-		plugin, err := claudeinput.Install(dir)
+	if (spec.Manager != nil || d.NativeInputEnabled()) && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
+		var plugin string
+		var err error
+		if spec.Manager != nil {
+			plugin, err = claudeinput.InstallManager(dir, spec.Manager.ConversationID, replayID)
+			lc.ManagerReplayID = replayID
+		} else {
+			plugin, err = claudeinput.Install(dir)
+		}
 		if err != nil {
 			return nil, "", err
 		}
@@ -739,6 +832,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		}
 	}
 	if spec.Backend != nil {
+		lc.BackendRequired = spec.Manager != nil && spec.AgentType == "codex"
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
 		// Codex records the app-server's cwd as the thread's and roots its sandbox there, so
@@ -748,6 +842,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock
 		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
+	}
+	if spec.Manager != nil && spec.AgentType == "codex" && (spec.Backend == nil || spec.Backend.Program == "") {
+		return nil, "", errors.New("manager requires its native app-server backend; standalone fallback refused")
 	}
 	data, err := json.Marshal(lc)
 	if err != nil {
@@ -759,6 +856,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	}
 
 	shimArgs := []string{"shim"}
+	if spec.Manager != nil {
+		shimArgs = append(shimArgs, "--require-manager")
+	}
 	if spec.OpenCodeLaunch != nil {
 		shimArgs = append(shimArgs, "--require-opencode-tui")
 	}

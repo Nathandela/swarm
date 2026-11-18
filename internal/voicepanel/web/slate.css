@@ -1,0 +1,16 @@
+/* Derived from internal/design/tokens.json. */
+:root {
+  --p-bg: #0b0e14;
+  --p-card: #131824;
+  --p-well: #080a10;
+  --p-hair: #262e3f;
+  --p-ink: #eef2f8;
+  --p-ink2: #9aa6ba;
+  --p-hero: #8eb4e6;
+  --p-hero-ink: #0b1524;
+  --p-err: #e5736b;
+  --p-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  --p-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --p-card-r: 16px;
+  --p-btn-r: 12px;
+}

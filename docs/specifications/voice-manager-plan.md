@@ -1,8 +1,8 @@
 # Swarm voice manager — implementation specification and build plan
 
-2026-11-08 · Planning issue `agents-tracker-uv6m.5`; delivery epic `agents-tracker-uv6m`.
+2026-11-08 · Speech provider decision amended 2026-11-17 · Planning issue `agents-tracker-uv6m.5`; delivery epic `agents-tracker-uv6m`.
 
-Status: owner requirements recorded; implementation design reviewed separately in [review evidence](../verification/voice-manager-plan-review.md). No implementation or release is claimed. The owner authorized the complete plan and independent review, so discovery/specification/decomposition proceed together. Execution remains in Beads, without Markdown progress checkboxes. This plan supersedes conflicting recommendations in the [initial research](../research/gradium-voice-manager-2026-11-08.md); it does not supersede its measured evidence.
+Status: owner requirements recorded; implementation design reviewed separately in [review evidence](../verification/voice-manager-plan-review.md). The standalone OpenAI pipeline is tracked in the [operation guide](../operations/voice.md) and [speech verification](../verification/voice-manager/openai-live.md). The broader integration, route-specific evidence and remaining release gates are tracked in [controller integration](../verification/voice-manager/controller-integration.md). The owner authorized the complete plan and independent review, so discovery/specification/decomposition proceed together. Execution remains in Beads, without Markdown progress checkboxes. This plan supersedes conflicting recommendations in the [initial research](../research/gradium-voice-manager-2026-11-08.md); it does not supersede its measured evidence.
 
 ## 1. Product contract and scope
 
@@ -14,7 +14,7 @@ Swarm remains a terminal product. A desktop voice panel and the Swarm phone app 
 | Both connection options; SSH can come first | Deliver local desktop and SSH for desktop/phones first. Keep the application protocol independent of SSH, but defer HTTPS deployment/overlay/relay integration until needed. No Tailscale account is required. |
 | Both manager CLIs, chosen during setup | Codex and Claude are functional setup choices before release. Neither is a post-release optional promise. Each uses the user's own installed CLI/account. |
 | Unrestricted manager | Manager retains normal full coding/shell/tool capability under the user's account and mandatory platform/provider policy. No artificial tool-only sandbox or extra approval ritual. Swarm's exact-operation helpers remain the preferred orchestration path. |
-| Users supply Gradium keys | Per-place BYO key; no Swarm-hosted speech account, shared billing service or credential broker. Cloud speech is accepted. This does not implicitly select EU residency or paid ZDR. |
+| Users supply OpenAI API project keys | Per-place BYO key; no Swarm-hosted speech account, shared billing service or credential broker. Cloud speech is accepted. This does not implicitly select EU residency or paid ZDR. |
 | Reuse existing app/design | Extend existing Android app and its Slate component kit. Share tokens/assets/behavior with a thin new native iOS shell and desktop panel. No redesign or framework migration. |
 
 Locked-screen support means: explicitly start a voice session while unlocked; lock/switch apps; speak and hear replies; stop/mute through available system/app controls. It does not mean boot-time recording, waking the microphone by push, restarting recording after force-stop, or uninterrupted audio during phone calls. OS interruption is a recoverable state, never silent command replay.
@@ -68,7 +68,7 @@ Applicable invariants: S1/S3/S5/S11/S12 preserve process ownership; S4 preserves
 | ID | Requirement |
 |---|---|
 | V01 | When setup runs, Swarm shall offer Codex and Claude, report installed/native-login capability, and persist the user's choice for that place. |
-| V02 | When the manager starts, Swarm shall use the user's native CLI/account without exporting its credentials to Gradium or the phone. An unsupported account/runtime path shall block that option with an actionable explanation. |
+| V02 | When the manager starts, Swarm shall use the user's native CLI/account without exporting its credentials to speech providers or the phone. An unsupported account/runtime path shall block that option with an actionable explanation. |
 | V03 | While acting as manager, the CLI shall retain unrestricted native tools under owner-granted scope; worker output shall remain data rather than authorization. |
 | V04 | When a task is accepted, the controller shall retain its manager/worker/action associations and observe work independently of the voice device. |
 | V05 | When a Swarm mutation is retried, the same logical action and exact payload shall reconcile the original receipt; a conflicting payload shall be refused. |
@@ -83,13 +83,13 @@ Applicable invariants: S1/S3/S5/S11/S12 preserve process ownership; S4 preserves
 | V14 | When network service returns during a still-active qualified session, the client shall reconcile control state and start a new media generation; unaccepted audio shall not be replayed as new work. |
 | V15 | When the user mutes, ends voice or loses the allowed audio route, the client shall cease capture/transmission as specified by the lifecycle table and bound provider resource lifetime. |
 | V16 | When the user stops speech/barge-in occurs, local playback shall stop without cancelling a manager/worker task. Explicit turn/task cancellation remains a different action. |
-| V17 | When PTT releases or conversational endpointing commits, the service shall correlate provider flush/finality and admit at most one human utterance ID. |
+| V17 | When PTT releases or conversational endpointing commits, the service shall correlate the finalized GPT-Transcribe response with the explicit utterance and admit at most one human utterance ID. |
 | V18 | If late speech/text arrives from an old generation, it shall not create a task, answer a request or play audio. |
 | V19 | When a pending question is answered, the answer shall bind to the exact current request/proposal; a stale or ambiguous yes shall not answer a different request. |
 | V20 | When SSH connects, the client shall verify the host key and use explicitly enrolled credentials; a changed key shall require renewed foreground verification. |
 | V21 | While native voice runs, its SSH transport shall be owned by Swarm and shall not depend on a Termux/iPhone terminal process. |
 | V22 | When a phone enrolls, its SSH profile and voice device grant shall remain distinct from existing relay pairings and cryptographic identities. |
-| V23 | When Gradium is configured, its key shall remain in private per-place custody, never in app bundles, URLs, argv, logs or worker prompts. |
+| V23 | When OpenAI speech is configured, its key shall remain in private per-place custody, never in app bundles, URLs, argv, logs or worker prompts. |
 | V24 | When queues or storage bounds are reached, the system shall preserve uncertain-operation guards, refuse new effects and keep PTY draining independently. |
 | V25 | When a provider limit, timeout, quota or account failure occurs, text/control shall remain available and the UI shall expose the specific recovery state. |
 | V26 | When UI is rendered, it shall reuse Slate tokens and accessible components, preserve target identity and provide keyboard/touch/screen-reader operation. |
@@ -110,7 +110,7 @@ flowchart TB
   D --> L[Local launcher / OpenSSH forward]
   C -->|SSH direct-tcpip + authenticated voice protocol| S
   L --> S[Optional per-place voice controller / media service]
-  S <--> G[Gradium using user's key]
+  S <--> G[OpenAI GPT-Live-1 and GPT-Transcribe using the speech key]
   S <--> R[Bounded control ledger / event scheduler]
   S <--> B[Typed Swarm actions and manager MCP publication]
   B <--> DA[Existing daemon / native control paths]
@@ -127,7 +127,7 @@ New packages are small boundaries, not frameworks: `internal/voicewire` (daemon-
 
 ### Public entry points and onboarding
 
-Proposed commands: `swarm voice setup` (manager/key/voice settings), `swarm voice` (local panel), `swarm voice --host <ssh-alias>` (desktop remote panel), `swarm voice status`, `swarm voice stop` (voice service only), and enrollment/revoke commands documented with the protocol. Key input is hidden stdin/secure UI, never a CLI argument. A setup failure cannot silently choose the other manager or another account.
+The speech pipeline uses `swarm voice setup`, `swarm voice live` and `swarm voice transcribe`. See the [operation guide](../operations/voice.md). The integrated manager exposes `swarm voice` for the local panel, `swarm voice --host <ssh-alias>` for an enrolled remote machine, `swarm voice status`, `swarm voice stop`, and private enrollment and revocation commands. Key input is hidden stdin/secure UI, never a CLI argument. A setup failure cannot silently choose the other manager or another account.
 
 Desktop remote uses installed OpenSSH host aliases/known_hosts/ProxyJump; use argv, explicit loopback binding and bounded owned-child cleanup. A fixed remote discovery command returns service endpoint/version and an expiring device bootstrap through authenticated SSH. Do not interpolate voice text or host metadata into remote shell code. Inside an already-remote terminal, show the local launcher command or existing phone connection rather than trying to open a VM browser.
 
@@ -141,11 +141,11 @@ Native `x/crypto/ssh` opens direct-tcpip to the remote loopback endpoint without
 |---|---|---|
 | C1 Enrollment/auth | protocol version; stable place/device IDs; verified SSH host fingerprint; server-issued scoped device credential and generation | SSH login precedes device enrollment. Bootstrap one-use/10-minute expiry, bound to place and presented device public identity. Service credential remains private client storage. Reject wrong place/revoked device before media or mutation. Native endpoint authentication is not inferred from loopback source address. |
 | C2 Connection | protocol major/minor; device/voice session; manager conversation; media epoch; voice-service stream ID + sequence; advertised actions | Major mismatch refuses with upgrade guidance. Service replay coordinates are separate from upstream daemon journal binding/cursor. Snapshot then replay/live; 5 s heartbeat, 15 s lost-peer deadline proposed. Reconnect never replays an in-memory write blindly. |
-| C3 Audio | direction; epoch; monotonic frame sequence; capture sample counter/rate/channels/PCM16 encoding | Native audio callback only copies into bounded queue. Use 80 ms provider batches where supported; max accepted media frame 64 KiB, max outbound backlog 500 ms; reject malformed lengths/rates. PCM over SSH is ephemeral. Pause/declare gap on overflow; no minutes of catch-up audio. |
-| C4 Utterance | durable client-allocated utterance ID before audio; source device/epoch; selected manager; explicit boundary; exact final text digest | Client retains ID/binding/phase before begin; service acknowledges begin before accepting its audio. States: capturing → finalizing → committed → admitted or failed/uncertain. Finalize reuses the same ID; commit once after correlated flush. A lost finalize/admission ACK queries that ID across reconnect. 10 s timeout before commit fails that capture; after possible commit it is uncertain until reconciled, never a fresh retry. Max-length input is held, never truncated and executed. |
+| C3 Audio | direction; epoch; monotonic frame sequence; capture sample counter/rate/channels/PCM16 encoding | Native audio callback only copies into bounded queue. Convert Live input/output to mono signed PCM16LE at 24 kHz. Max accepted media frame 64 KiB, max outbound backlog 500 ms. Reject malformed lengths/rates. PCM over SSH is ephemeral. Pause/declare gap on overflow; no minutes of catch-up audio. |
+| C4 Utterance | durable client-allocated utterance ID before audio; source device/epoch; selected manager; explicit boundary; exact final text digest | Client retains ID/binding/phase before begin; service acknowledges begin before accepting its audio. States: capturing → finalizing → committed → admitted or failed/uncertain. Finalize reuses the same ID; submit one complete bounded audio sample to GPT-Transcribe and commit once after its correlated final response. Live caption deltas have no commit authority. A lost finalize/admission ACK queries that ID across reconnect. 10 s timeout before commit fails that capture; after possible commit it is uncertain until reconciled, never a fresh retry. Max-length input is held, never truncated and executed. |
 | C5 Swarm action | logical action ID; conversation/task; immutable target instance; exact request payload/hash; operation ID; native coordinates | Persist before dispatch; reconcile via daemon receipt/status. Actions never derive identity from MCP request ID. Provider side-effect ambiguity remains explicit; owner create/resume needs durable server reservation/status. No name/cwd heuristic resolves a lost launch. |
 | C6 Manager run | manager instance/native identity/login epoch; native input/turn ID; current state; activity source; exact pending native request | One scheduler per conversation. Native complete/error/cancel owns turn completion, independent of spoken publication. Direct TUI input suspends unsolicited scheduling until reconciled. Unknown native state blocks automatic new turns. |
-| C7 Publication | authenticated manager instance; native turn/input admission; output ID; phrase sequence; service-issued speech permit/epoch; exact text/digest; final marker | Complete-phrase publish dedups exact repeats. Stop revokes that native turn's speech permit; later publish calls from the same still-running turn remain text-only and cannot acquire a fresh permit. Never speak partial JSON/tool arguments. `ask` returns pending promptly. Spoken-final is separate from native completion/task success. |
+| C7 Publication | authenticated manager instance; native turn/input admission; output ID; phrase sequence; service-issued speech permit/epoch; exact text/digest; final marker | Complete-phrase publication deduplicates exact repeats and preserves authenticated manager text as canonical. GPT-Live-1 commentary can be paraphrased and has no per-phrase output-audio-done event. Keep exact confirmations bound to C8. Stop revokes that native turn's speech permit; later publish calls from the same still-running turn remain text-only and cannot acquire a fresh permit. Never speak partial JSON/tool arguments. `ask` returns pending promptly. Local playback progress remains separate from native completion and task success. |
 | C8 Request/decision | kind (manager clarification / native request); ID/hash; task/session; native coordinates when applicable; reply schema/meaning; expiry; answer ID | Manager clarification survives its originating native turn completing, until answer/cancel/task supersession/provider switch/24 h expiry. A true native request expires when its provider request resolves or owning turn/generation ends. An answer cannot cross kinds or retarget. Unsupported native prompts stay terminal-action-required; generic text cannot manufacture approval. |
 | C9 Playback/cancel | voice session; speech epoch; phrase sequence; played sample watermark; stop acknowledgement | Local stop flushes rendering and queue without network. Old audio drops after epoch change. Report actual playback progress; unplayed generated text is not assumed heard. Manager/worker interruption is a separate exact action. |
 | C10 Storage/config | schema/version; private key reference; manager selection; native IDs; compact task/action state; event cursor | Private 0700 directory/0600 files; atomic replace or transactional store. Native CLIs own history. Audio never persisted by default. Corrupt/future state quarantines/refuses affected mutations, never silently resets and replays. |
@@ -182,9 +182,9 @@ Unrestricted means the model can also run shell, edit files and use its normal t
 
 ## 7. Speech, lifecycle and locked-screen contract
 
-Gradium is server-proxied initially: native/browser clients send media to the selected place; its private key is used only by speech clients. Implement documented setup/ready/audio/text/flush/EOS/error with negotiated format metadata. The configured capture wire rate and provider-internal ready rate are distinct; prior 44.1 kHz input produced 24 kHz ready metadata. Test actual conversion rather than demanding equality. `AudioWorklet`/native PCM floats require explicit downmix/clipping/PCM16 encoding. No new DSP dependency until platform processing fails a gate.
+The selected place calls the global OpenAI API with the user's speech key. GPT-Live-1 uses a primary WebSocket with continuous 24 kHz mono PCM16LE and input/output caption deltas. Those deltas have no utterance-final event. Continuous Live audio has no manual commit command. GPT-Live-1 can communicate complete manager commentary in its own words. An acknowledgment of commentary only confirms receipt, and playback progress is tracked locally. Use client delegation mode without OpenAI-hosted tools. The native manager owns actions, canonical text and exact confirmations. [Live WebSockets](https://developers.openai.com/api/docs/guides/voice-websockets?api=live) · [Live primary WebSocket reference](https://developers.openai.com/api/reference/resources/live/primary-websocket)
 
-Set supported language explicitly. VAD is a boundary candidate, not authority. PTT is a full alternative; natural duplex calibrates with human hesitant speech. Keep one flush in flight; correlate its ID; race-test late text/end_text around ack. Prior VM token reuse conflicts with documented single-use and cannot be a security boundary; proxy mode does not distribute tokens. No reconnect replay of partial provider audio. Rotate provider sessions at a safe utterance boundary before actual plan limits; unresolved boundary pauses with an explanation. Closing TTS stops local use but does not prove billing/resource refund. [Prior evidence](../research/gradium-voice-evidence-2026-11-08/README.md)
+PTT release or a qualified local endpoint supplies the explicit utterance boundary. Send the complete bounded utterance to GPT-Transcribe, correlate the finalized response with the existing utterance ID, and preserve uncertainty on ambiguous failures. Calibrate natural endpointing with real hesitant speech. Test downmixing, clipping, PCM16 encoding and resampling. Purge old-generation audio on reconnect and rotate provider sessions at safe boundaries. Request Live finalization with `session.close` and confirm it with `session.closed`. Swarm keeps audio ephemeral by default. OpenAI retention and residency depend on applicable project controls and product eligibility. [GPT-Transcribe](https://developers.openai.com/api/docs/models/gpt-transcribe) · [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data)
 
 ```mermaid
 stateDiagram-v2
@@ -209,7 +209,7 @@ stateDiagram-v2
 |---|---|---|
 | Lock or switch to Termux during active native session | Continue under declared native audio/service modes | Same SSH connection; no need for terminal tunnel. |
 | Desktop page hidden | Desktop foreground contract may pause; clearly show it on return | Worker execution continues; desktop browser lock support is not a phone substitute. |
-| Mute | Stop transmitting/capturing audio; stop/open provider STT as its idle contract requires | Session may retain connection briefly; do not use silent audio to keep OS alive. If OS suspends it, resume from foreground. |
+| Mute | Stop transmitting/capturing audio; pause or close provider media according to its idle contract | Session may retain connection briefly; do not use silent audio to keep OS alive. If OS suspends it, resume from foreground. |
 | Incoming call/audio interruption | Stop capture/playback immediately; preserve accepted utterances/receipts | Native interrupted state; explicit resume after call, rather than surprise playback. |
 | Bluetooth/private route disappears | Stop capture and playback; no automatic switch to speaker | Ask for route/resume on available UI; don't read private text aloud through new route. |
 | Short network loss | Stop capture uploads and purge stale output; bounded 30 s reconnect attempt with jitter | Reconcile admitted utterances and effects before new media epoch; resume only the still-active session on unchanged safe route. |
@@ -223,7 +223,7 @@ iOS: new thin SwiftUI shell, controller independent of view lifetime, AVAudioSes
 
 Local End voice is independent of ASR/network and tears down mic, playback, SSH and ownership idempotently. Android's notification End action must work while locked/offline without Activity. iOS targets public remote stop/pause commands for the genuine audio session, mapping the qualified action to End; verify lock-screen/headset delivery with network unplugged. If no reliable locked local End path is available, P0/P10 records a design blocker to resolve before the claimed locked mode; voice recognition is never the only stop mechanism. The unlocked app End action always works offline. Do not invent lock-screen buttons or use fake audio to obtain them. [Apple remote commands](https://developer.apple.com/documentation/mediaplayer/mpremotecommandcenter)
 
-Android explicitly audits both microphone and media-playback foreground service types/permissions for the selected capture+TTS behavior and current target SDK; declare each required type, and request audio focus with its denial/loss handling. Treat `AudioRecordingConfiguration.isClientSilenced`, privacy-toggle suppression, recorder errors and focus/route loss as distinct states instead of showing a healthy mic from a running recorder alone. Test non-exported service and notification PendingIntent actions; untrusted intents may end current media but cannot enroll/start a microphone or grant authority.
+Android explicitly audits both microphone and media-playback foreground service types/permissions for the selected capture and speech playback and current target SDK; declare each required type, and request audio focus with its denial/loss handling. Treat `AudioRecordingConfiguration.isClientSilenced`, privacy-toggle suppression, recorder errors and focus/route loss as distinct states instead of showing a healthy mic from a running recorder alone. Test non-exported service and notification PendingIntent actions; untrusted intents may end current media but cannot enroll/start a microphone or grant authority.
 
 Credential storage must permit the selected active-session reconnection behavior while locked. Use platform private/sealed device-local custody with documented accessibility, never per-reconnect biometric prompts for a promised locked call. Reuse Android custody mechanisms without reusing relay key bytes. iOS after-first-unlock device-only key access is a candidate to characterize; no before-first-unlock startup or OS backup export. Device revocation and host-key rotation require independent tests.
 
@@ -245,13 +245,19 @@ Locked-screen/system UI exposes nonsensitive session state and mute/end actions 
 sequenceDiagram
   participant U as Human/native phone
   participant V as Voice service
-  participant G as Gradium
+  participant T as GPT-Transcribe
+  participant L as GPT-Live-1
   participant M as Native manager
   participant D as Swarm daemon
   U->>V: authenticated audio epoch + frames
-  V->>G: audio; correlated flush at boundary
-  G-->>V: finalization events
-  V->>V: persist utterance/admission identity
+  opt Live captions enabled
+    V->>L: continuous 24 kHz PCM
+    L-->>V: caption deltas for display
+  end
+  V->>V: finalize capture under the existing utterance ID
+  V->>T: submit complete bounded utterance
+  T-->>V: finalized transcript for that submission
+  V->>V: persist final text and admission identity
   V->>M: exact native input
   M->>V: typed create action through manager tools
   V->>V: persist exact pending action
@@ -259,8 +265,10 @@ sequenceDiagram
   D-->>V: original operation receipt + worker ID
   V-->>M: receipt
   M->>V: publish complete acknowledgement phrase
-  V->>G: phrase TTS
-  G-->>U: audio through V, current speech epoch
+  V-->>U: exact manager text
+  V->>L: complete commentary if speech permit is current
+  L-->>V: generated audio and output captions
+  V-->>U: audio in current speech epoch
   Note over U,D: phone locks; native audio and SSH continue
   D-->>V: worker event / replay cursor
   V->>M: coalesced relevant event after current native turn
@@ -278,7 +286,7 @@ sequenceDiagram
 | Native permission/question | V08,19 | Exact supported request answered; unsupported card stays pending with terminal route. |
 | User attaches and types | V10 | Human native turn preserved; no competing automatic turn or unexplained duplicate response. |
 | Barge-in during action acceptance | V16,18 | Audio clears locally; action receipt stays truthful; work isn't implicitly cancelled. |
-| Late ASR/TTS after reconnect | V14,18 | No task/approval/audio from old epoch. |
+| Late speech events after reconnect | V14,18 | No task/approval/audio from old epoch. |
 | Call, headset loss, permission removal | V13,15 | No hidden recording/speaker leak; accepted work remains tracked; deliberate resume. |
 | Key revoked/host key changed | V20,22,23 | No trust downgrade or active replay; explicit repair. |
 | Provider quota/session rotation | V25,30 | Text usable; safe utterance boundary; no duplicate model turn or unexpected continued recording. |
@@ -290,9 +298,25 @@ sequenceDiagram
 
 Each epic has bounded scope and reviewable outputs. Builders split its listed work into independent Beads tasks before dispatch; shared contracts land before dependent platform tasks. No epic closes on mocked business logic alone. Proposed filenames are a change map, not a mandate to create empty scaffolding.
 
+### Delivery sequence after the controller recovery
+
+This sequence applies the requirements and contracts above to the implementation checkpoint. The parent branch supplies the shim-owned native managers and operation receipts. PR #75 supplies GPT-Live-1 and GPT-Transcribe. The integration branch includes current main's journal recovery and native reattach behavior. Keep the speech key on the selected machine. A handset or browser connects to that machine through its own authenticated session.
+
+| Delivery unit and upstream dependency | Implementation boundary | Evidence required to promote |
+|---|---|---|
+| Runtime and recovery baseline · P0-R/P1/P2 | Reconcile the owner roster by shim identity, make native error replies survive EOF, preserve v2 ledger checksums and admission floors through the v3 migration, and repair native proof retention and interrupt receipts. | Migrate a populated ledger from the previous writer twice. Recover after storage faults, reject reused input IDs, pass the worktree-resume regression and compare reachability with the parent. |
+| A native text turn · P3/P4/P5, after the baseline | Configure one place, workspace and manager. Start the private service, reserve the native launch once, prove the selected runtime, submit one identified utterance, then bind MCP publication to the native turn. Keep the owner control socket separate from manager MCP. | In an isolated daemon, run each installed provider. Read the canonical reply, restart the controller, resubmit the same ID and recover the same admission, native turn and publication. An expired account or a missing publication remains visible. |
+| Worker control and attention · P1–P5, after a native text turn | Have the manager read a roster, create one disposable worker, submit a bounded task, read its result, and publish a receipt-backed answer. Implement explicit pause/resume and replacement against the old immutable binding. Follow the daemon journal from a verified source cursor. | Drop a launch reply, reconnect, and observe one worker and one action receipt. Close the UI while the worker runs. Verify the manager can still observe its result. Provider switching must preserve old receipts and pending work. |
+| Voice admission, publications and local desktop · P6/P7, after the controller bridge | Persist a client ID before capture. At the explicit boundary pin the PCM digest before GPT-Transcribe, queue canonical text exactly once, and return the original receipt after reconnection. Render ordered manager publications in a loopback panel. For spoken output, bind authorization to the turn and media epoch, stream GPT-Live commentary, track actual playback, and revoke locally on Stop. | Interrupt before and after transcription and admission. Replay identical bytes under the same ID, reject conflicting bytes and demonstrate no duplicate billing request after an uncertain call. Use a genuine desktop microphone and speaker. Verify stale audio is discarded after interruption. |
+| Authenticated SSH transport and enrollment · P7/P8, after the local service contract | Desktop uses the selected OpenSSH alias. The mobile Go client owns SSH host-key verification, device enrollment, grant revocation, direct-tcpip and cancellation. Keep device credentials separate from full account SSH authority. | A real SSH endpoint and loopback fixture exercise host-key mismatch, revoke, stalled read/write, reconnect and replay gaps. An unpaired client cannot send audio or mutate a manager. Verify both managers over the selected desktop SSH route. |
+| Android and iOS · P9/P10, after enrollment and the shared client | Build the Android microphone foreground service, focus and lock behavior into the existing UI. Build a thin iOS conversation client with AVAudioSession, Keychain and the same protocol. Bind Android and iOS libraries from the verified Go source. | Check AAR/XCFramework provenance. On signed physical devices, test app switch, lock, interrupted calls, route changes, revoke and reconnect. Only the active voice service may keep recording. |
+| Qualification and release · P11/P12, after the four client routes | Run the latency, accuracy, resource, privacy and accessibility matrix in §11. Reconcile ADRs and user-facing support claims with measured behavior. Retain the owner-only temporary OpenAI credential until the whole voice manager ships. | Require both managers on desktop local, desktop SSH, Android and iOS, an eight-hour rotation soak, upgrade/rollback, full build/vet/lint/test/race gates, independent review, signing and release authorization. Record release evidence before removing the temporary credential. |
+
+The [integration verification record](../verification/voice-manager/controller-integration.md) identifies which routes have passed. The first integrated spikes use a fixed roster read and a single short publication. The synthetic native fixtures cover transport and provenance. The hosted-account spike covers the actual login, manager, publication and restart path. A native completion with zero publications cannot satisfy that test. The hosted Codex workflow now proves manager publication, worker launch, and exact receipt recovery after restart. A second synthetic route passed from GPT-Transcribe through the manager to a 4.5-second GPT-Live audio preview. The Apple binding is typechecked against generated Go headers. The iOS UI, signed device and audio lifecycle require the outstanding Apple build environment. Hosted Claude reached native startup but reported an expired login. See the verification record for installed-version and account-specific coverage. Android had no attached authorized handset and the Apple toolchain was Command Line Tools only. Those are distinct qualification dependencies. Work and evidence are tracked under `agents-tracker-uv6m`.
+
 ### P0 — Qualify the critical native paths
 
-Scope: characterize both actual native manager versions/accounts; demonstrate Android and iOS signed Go binding + native audio + app-owned SSH under lock; settle existing user authentication-method support. Also run fresh Gradium finality/rate/rotation and speech tests when the key is available. No production UI yet. Requirements V01–03,12,20–23,29. Contracts C1–3,C6. Dependencies: none. Assumption: access to actual devices/signing credentials and user-provided provider key is a gate, not something tests can simulate away. Exit: retained command/source/version/device provenance, exact native capability matrix and minimal locked-device vertical probe; identify missing credentials as unrun. The rest may progress on stable contracts, but full mobile/runtime implementation cannot assume a failed probe away.
+Scope: characterize both actual native manager versions/accounts; demonstrate Android and iOS signed Go binding + native audio + app-owned SSH under lock; settle existing user authentication-method support. Qualify GPT-Live-1 startup, audio/rate, captions, commentary, finalization and session rotation, plus GPT-Transcribe explicit utterance finality. The standalone evidence covers only the tests recorded in the [speech verification](../verification/voice-manager/openai-live.md). No production UI yet. Requirements V01–03,12,20–23,29. Contracts C1–3,C6. Dependencies: none. Assumption: access to actual devices/signing credentials and user-provided provider key is a gate, not something tests can simulate away. Exit: retained command/source/version/device provenance, exact native capability matrix and minimal locked-device vertical probe; identify missing credentials as unrun. The rest may progress on stable contracts, but full mobile/runtime implementation cannot assume a failed probe away.
 
 P0 has independent checkpoints **P0-R runtime**, **P0-S speech**, **P0-N native build/audio/SSH**. They close independently in Beads. P1/P3/P4 use P0-R; P6 uses P0-S; P8/P9/P10 use P0-N. Missing phone/signing/key access must not block unrelated control/text work. The graph's P0 edges refer to the relevant checkpoint, not all three being complete; P12 requires all.
 
@@ -316,9 +340,9 @@ Scope: interactive native session + qualified per-invocation mod; native queued-
 
 Scope: CLI setup/status/start/stop; private authenticated local endpoint, desktop text panel, service install/removal; usable both-provider manager creates workers and reports results. V01–11,19,23–28,30; C1–2,C4–10. Depends P3,P4. Exit: one scripted human workflow on Mac + Linux survives panel close/reopen and controlled daemon/controller restart; actual reply and action receipts; per-place key handling/version skew; tests show no unrelated workers terminated. This is the early complete usable slice; speech/phone scope remains open.
 
-### P6 — Gradium media and conversation engine
+### P6 — OpenAI media and conversation engine
 
-Scope: direct Go STT/TTS clients, explicit format conversion contract, endpointing/flush, phrase chunking, playback epochs, metering/resource limits/session rotation. V11,14–18,23–25,30; C3–4,C9. Depends P0 provider evidence,P2. Exit: exact PCM encoder fixtures, real speech corpus and event/failure injection, provider outage/text fallback; no premature effects on partial speech; old-generation cancellation; bounded provider resource cleanup. No LiveKit/Pipecat/Gradbot runtime added without measured justification.
+Scope: integrate the standalone Go GPT-Live-1 and GPT-Transcribe clients with the controller. Implement explicit format conversion, bounded endpointing and finalized utterance submission, complete-phrase publication, playback epochs, and resource limits/session rotation. V11,14–18,23–25,30. Contracts C3–4,C7,C9. Depends on P0-S and P2. Exit: exact PCM encoder fixtures, real speech corpus and event/failure injection, provider outage/text fallback; no premature effects on partial speech; old-generation cancellation; bounded provider resource cleanup. No LiveKit/Pipecat/Gradbot runtime added without measured justification.
 
 ### P7 — Desktop local and SSH voice UX
 
@@ -379,7 +403,7 @@ P3/P4 can run independently; P6 can run beside runtime work; P9/P10 proceed in p
 
 Correctness is mandatory: zero wrong-target or duplicate *bridged accepted* effects in adversarial fixtures; no approval inferred from worker prose; no ghost mic after End; no unrelated worker loss; no old speech after stop/takeover; no silence falsely shown as healthy capture. Don't inflate this into exactly-once arbitrary shell execution.
 
-Initial latency targets (ratify against actual P0/P6 results): local stop-rendering p95 <100 ms; deterministic heard/working indicator <100 ms after local commit; first meaningful spoken acknowledgement p95 <2.5 s after true speech end on the defined simple-command corpus. Report ASR finality, manager first phrase, action receipt, TTS first network frame and audible onset separately. A complex task may take longer, with truthful progress. At least 100 utterances per claimed route/provider for latency distribution; report failures, not only successful turns. High model thinking latency is an early integration gate, not masked by an earcon.
+Initial latency targets (ratify against actual P0/P6 results): local stop-rendering p95 <100 ms; deterministic heard/working indicator <100 ms after local commit; first meaningful spoken acknowledgement p95 <2.5 s after true speech end on the defined simple-command corpus. Report ASR finality, manager first phrase, action receipt, first output audio frame and audible onset separately. A complex task may take longer, with truthful progress. At least 100 utterances per claimed route/provider for latency distribution; report failures, not only successful turns. High model thinking latency is an early integration gate, not masked by an earcon.
 
 Physical matrix: local desktop + desktop SSH; Android with app switching/lock independently of Termux; iPhone independently of its terminal client. Both manager choices on every route. Android min/target physical devices plus intermediate emulator regression; iOS selected minimum/latest supported physical builds after P0. Wired/USB where available, built-in speakers and Bluetooth; noise/hesitation/overlapping speech; 1/5/15/60-minute lock tests; Wi-Fi↔cellular, Doze/battery saver, incoming call, permissions, headphones removed, SSH host change/key revocation/rekey, quota and controller/daemon/provider restarts. One 8-hour managed-work soak crosses multiple provider-session rotations; short locked tests do not imply 8-hour background audio certification. Record device/OS/CLI/app/binary SHA, network, route, environment and raw timestamp definitions.
 
@@ -389,7 +413,7 @@ Run `go build ./...`, `go vet ./...`, `golangci-lint run`, `go test ./...`, and 
 
 ## 12. Documentation, migration and rollout
 
-Proposed [ADR-038](../adr/ADR-038-voice-manager.md) records active native voice as a bounded exception to the Android background-disconnect rule, unrestricted native managers, both providers, BYO speech and separate SSH transport. Implementation must amend affected ADR-007 remote B16/Android connectivity policy, ADR-010 native-input ownership/contracts, ADR-021 component mapping where needed, ADR-033 control-state retention boundary, ADR-034 manager login participation, protocol field tables and exported facade inventory. Historical criteria/evidence remain intact, with explicit amendments; do not silently overwrite them.
+Proposed [ADR-038](../adr/ADR-038-voice-manager.md) records active native voice as a bounded exception to the Android background-disconnect rule, unrestricted native Codex and Claude managers, BYO OpenAI speech and separate SSH transport. Implementation must amend affected ADR-007 remote B16/Android connectivity policy, ADR-010 native-input ownership/contracts, ADR-021 component mapping where needed, ADR-033 control-state retention boundary, ADR-034 manager login participation, protocol field tables and exported facade inventory. Historical criteria/evidence remain intact, with explicit amendments; do not silently overwrite them.
 
 Use opt-in voice service/setup. Existing Swarm operation without voice/key remains normal. Existing pairings and legacy phone surfaces coexist; don't migrate Noise identities into SSH or reset devices. Store voice settings and SSH profiles in new versioned namespaces; no ambiguous upgrade of old opaque data. Key rotation closes affected speech generations and preserves accepted operations. Uninstall stops only voice-owned resources and offers separate credential/device removal; never deletes native conversations/workspaces as cleanup.
 
@@ -399,7 +423,7 @@ Rollout: local development proof → owner installed native alpha across both ph
 
 ## 13. Implementation guidelines
 
-Repository/user constraints override generic process advice below. Owner has authorized planning through this document, not implementation. Beads is the only progress tracker; model assignment uses available qualified models (Sol for implementation, Astra for architecture/independent review in this environment, or authorized native Claude reviewers). Normal fixes continue within scope; unresolved requirement/platform/security blockers are reported rather than disguised as completion.
+Repository/user constraints override generic process advice below. Delivery is tracked by the associated Beads issues. Beads is the only progress tracker; model assignment uses available qualified models (Sol for implementation, Astra for architecture/independent review in this environment, or authorized native Claude reviewers). Normal fixes continue within scope; unresolved requirement/platform/security blockers are reported rather than disguised as completion.
 
 Ground rules for whoever builds an epic from this plan -- not a separate phase or skill, just the discipline the build should follow.
 
@@ -416,4 +440,4 @@ Ground rules for whoever builds an epic from this plan -- not a separate phase o
 
 Codebase anchors: [pilot](../operations/pilot.md), [system goals](implementation-goals.md), [native Discord ingress](../verification/discord-protocol/README.md), [Android lifecycle](../../android/app/src/main/kotlin/dev/swarm/phone/LifecycleLane.kt), [mobile boundary](../../mobile/doc.go), [Slate decision](../adr/ADR-021-slate-palette-and-breathing-scale.md), [phone refit](phone-refit-playbook.md), [remote-v2 boundary](../adr/ADR-027-clean-remote-control-v2.md), [existing handset gates](../operations/physical-handset-gate.md).
 
-Context7 and primary platform/native CLI documentation were used in specialist planning; current source and installed-runtime help take precedence over irrelevant/stale retrievals. The previous [research evidence](../research/gradium-voice-evidence-2026-11-08/README.md) contains actual desktop/SSH foundations, fixture control tests and scoped prior live-provider observations. This planning revision does not run or certify a new model turn, actual microphone, native locked phone, iOS build, SSH credential enrollment or deployment. P0/P11/P12 deliberately keep those proofs explicit.
+Context7 and primary platform/native CLI documentation were used in specialist planning; current source and installed-runtime help take precedence over irrelevant/stale retrievals. The previous [research evidence](../research/gradium-voice-evidence-2026-11-08/README.md) contains actual desktop/SSH foundations, fixture control tests and scoped prior live-provider observations. That historical evidence is retained alongside the [standalone OpenAI speech verification](../verification/voice-manager/openai-live.md). P0/P11/P12 still require proof of the native manager, real microphone, locked phone, iOS build, SSH credential enrollment and deployment claims.

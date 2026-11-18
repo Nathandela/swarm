@@ -1,0 +1,93 @@
+{
+  "date": "2026-11-08",
+  "scope": "Actual copied native CLIs, private synthetic accounts/configs, loopback fake models and experimental MCP recorder; no real credentials, provider requests, microphone or production sessions. Provenance qualification, not complete manager integration.",
+  "claude": {
+    "version": "2.1.319",
+    "sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+    "live_busy_queue": true,
+    "bound_native_turn_id": "81f105d4-f34c-4cfa-9329-531dbee92d8a",
+    "native_projection_sha256": "4b16bb8c5abe58634d12a845acb85fce53c8c5ffa67a29fa23a8b629fb9b2327",
+    "admission": "service-operation-1",
+    "opaque_nonce_sha256": "f734545b0510523d98eb9eaeb6c118eddbc86e4cc204d0706fcda0208c4e0a24",
+    "identical_composer_envelope_refused": true,
+    "repeated_plugin_envelope_refused": true,
+    "real_child_with_same_nonce_unbound": true,
+    "clear_retired_generation": true,
+    "tool_calls": [
+      {
+        "native_tool_use_id": "causal_tool_1",
+        "native_turn_id": "47c08502-9218-4d3c-a6df-2a1cf7146c1a",
+        "agent_id": null,
+        "admission": null,
+        "model_turn_claim": "MODEL_CLAIM_NOT_AUTHORITY",
+        "mcp_meta_keys": [
+          "claudecode/toolUseId",
+          "progressToken"
+        ]
+      },
+      {
+        "native_tool_use_id": "causal_tool_3",
+        "native_turn_id": "81f105d4-f34c-4cfa-9329-531dbee92d8a",
+        "agent_id": null,
+        "admission": "service-operation-1",
+        "model_turn_claim": "MODEL_CLAIM_NOT_AUTHORITY",
+        "mcp_meta_keys": [
+          "claudecode/toolUseId",
+          "progressToken"
+        ]
+      },
+      {
+        "native_tool_use_id": "causal_tool_7",
+        "native_turn_id": "c9afef8a-90f5-4c02-86f5-5fd642cbe48a",
+        "agent_id": "a81d5d481f07c3060",
+        "admission": null,
+        "model_turn_claim": "MODEL_CLAIM_NOT_AUTHORITY",
+        "mcp_meta_keys": [
+          "claudecode/toolUseId",
+          "progressToken"
+        ]
+      },
+      {
+        "native_tool_use_id": "causal_tool_9",
+        "native_turn_id": "45fe8ae2-0baa-41a1-94aa-b19edb1a1713",
+        "agent_id": null,
+        "admission": null,
+        "model_turn_claim": "MODEL_CLAIM_NOT_AUTHORITY",
+        "mcp_meta_keys": [
+          "claudecode/toolUseId",
+          "progressToken"
+        ]
+      }
+    ],
+    "whole_chain_test_seconds": 12.28,
+    "busy_queue_test_seconds": 12.38
+  },
+  "codex": {
+    "version": "0.167.0",
+    "sha256": "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc",
+    "meta_call_id": "call_native_probe",
+    "native_mcp_item_id": "call_native_probe",
+    "responses_item_id": "fc_probe",
+    "thread_id": "01a1bc58-3571-7452-bd5c-348fe1b9d7ff",
+    "turn_id": "01a1bc58-35b0-7522-b8fc-e872c252465b",
+    "exact_server_tool_arguments_match": true,
+    "mcp_meta_keys": [
+      "callId",
+      "itemId",
+      "progressToken",
+      "sessionId",
+      "threadId",
+      "windowId",
+      "x-codex-turn-metadata"
+    ],
+    "model_turn_claim": "MODEL_CLAIM_NOT_AUTHORITY",
+    "scope": "Own isolated app-server/thread for the metadata probe; actual Swarm-owned TUI thread adoption remains an integration gate."
+  },
+  "limits": [
+    "No hostile same-UID/native-plugin security sandbox is claimed.",
+    "Busy queue proof does not prove cancellation of already-admitted queued inputs.",
+    "Clear retirement observed; delayed MCP arrival after clear still needs production bridge tests.",
+    "Durable restart/replay, source-hook failure, duplicate native call-ID and arbitrary third-party mod ordering need integration tests.",
+    "Production MCP must use a maintained implementation; the tiny recorder is experimental only."
+  ]
+}

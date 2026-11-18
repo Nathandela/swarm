@@ -46,6 +46,18 @@ func (codexAdapter) Backend(spec adapter.BackendSpec) (adapter.BackendPlan, bool
 			}
 		}
 	}
+	// The backend owns tools; manager policy must also override a resumed source's default.
+	for i := 1; i+1 < len(spec.AgentArgv); i++ {
+		switch spec.AgentArgv[i] {
+		case "-c":
+			if managerOverride(spec.AgentArgv[i+1]) {
+				args = append(args, "-c", spec.AgentArgv[i+1])
+			}
+			i++
+		case "--model", "--sandbox", "--cd":
+			i++
+		}
+	}
 	// The app-server executes the agent's commands. Legacy resumed threads use its
 	// sandbox default, so carry forward the source's explicit mode when known.
 	return adapter.BackendPlan{
@@ -76,7 +88,7 @@ func remoteResumeArgs(argv []string) []string {
 				i++
 				continue
 			case "-c", "--model":
-				if argv[i] != "-c" || argv[i+1] != sandboxNetworkOverride {
+				if argv[i] != "-c" || argv[i+1] != sandboxNetworkOverride && !managerOverride(argv[i+1]) {
 					args = append(args, argv[i], argv[i+1])
 				}
 				i++
