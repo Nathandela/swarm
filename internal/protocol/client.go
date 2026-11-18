@@ -1124,7 +1124,7 @@ const (
 	snapshotBytesPerCell    = snapshotRunFixedMax + snapshotCellTextMax
 	snapshotLineFraming     = 16                         // {"runs":[ ]} + separator, per line
 	snapshotTitleSerialized = vt.SnapshotTitleMax*6 + 16 // clamped title, every byte escaped to \uXXXX
-	snapshotWrapperMax      = 256                        // version/cols/rows/cursor + keys
+	snapshotWrapperMax      = 512                        // version/cols/rows/cursor + mouse/inputModes + keys
 
 	maxSnapshotBytes = maxDim*maxDim*snapshotBytesPerCell +
 		maxDim*snapshotLineFraming +
