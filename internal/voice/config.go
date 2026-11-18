@@ -28,14 +28,17 @@ type Config struct {
 	WorkDir        string `json:"work_dir"`
 	Model          string `json:"model,omitempty"`
 	DaemonSocket   string `json:"daemon_socket"`
-	Region         string `json:"region"`
+	Region         string `json:"region,omitempty"`
 	Language       string `json:"language"`
 	VoiceID        string `json:"voice_id"`
 	Mode           string `json:"mode"`
 }
 
 func (c Config) Validate() error {
-	if c.Version != 1 {
+	if c.Version == 1 {
+		return errors.New("voice: Gradium settings require migration; run swarm voice setup to switch to the global OpenAI endpoint and reset the speech voice to marin")
+	}
+	if c.Version != 2 {
 		return errors.New("voice: unsupported configuration version")
 	}
 	if c.Provider != "codex" && c.Provider != "claude" {
@@ -54,7 +57,7 @@ func (c Config) Validate() error {
 			return ErrInvalid
 		}
 	}
-	if c.Region != "auto" && c.Region != "eu" && c.Region != "us" {
+	if c.Region != "" || strings.IndexFunc(c.VoiceID, unicode.IsSpace) >= 0 {
 		return ErrInvalid
 	}
 	if c.Language != "en" && c.Language != "fr" && c.Language != "es" && c.Language != "pt" && c.Language != "de" && c.Language != "any" {
@@ -85,6 +88,17 @@ func SaveConfig(dir string, config Config) error {
 }
 
 func LoadConfig(dir string) (Config, error) {
+	config, err := readConfig(dir)
+	if err != nil {
+		return Config{}, err
+	}
+	if err = config.Validate(); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+func readConfig(dir string) (Config, error) {
 	raw, err := readVoiceFile(dir, "config.json", maxConfigBytes)
 	if err != nil {
 		return Config{}, err
@@ -95,9 +109,6 @@ func LoadConfig(dir string) (Config, error) {
 	}
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return Config{}, ErrCorrupt
-	}
-	if err := config.Validate(); err != nil {
-		return Config{}, err
 	}
 	return config, nil
 }
@@ -140,30 +151,58 @@ func validateObjectMembers(raw []byte, allowed ...string) error {
 	return nil
 }
 
-// SaveGradiumKey accepts a raw key from hidden input, never from a command argument.
-func SaveGradiumKey(dir string, input io.Reader) error {
+// SetupOpenAISpeech explicitly switches v1 installations to the global OpenAI
+// endpoint, preserving the manager identity and resetting the provider-specific voice.
+func SetupOpenAISpeech(dir string, input io.Reader) error {
+	config, err := readConfig(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	migrate := err == nil && config.Version == 1
+	if err == nil {
+		if migrate {
+			if (config.Region != "auto" && config.Region != "eu" && config.Region != "us") || !configText(config.VoiceID, 128) {
+				return ErrCorrupt
+			}
+			config.Version, config.Region, config.VoiceID = 2, "", "marin"
+		}
+		if err := config.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := SaveOpenAIKey(dir, input); err != nil {
+		return err
+	}
+	if migrate {
+		return SaveConfig(dir, config)
+	}
+	return nil
+}
+
+// SaveOpenAIKey accepts a raw key from hidden input, never from a command argument.
+func SaveOpenAIKey(dir string, input io.Reader) error {
 	raw, err := io.ReadAll(io.LimitReader(input, 4097))
 	if err != nil {
 		return errors.New("voice: could not read speech credential")
 	}
-	key, err := parseGradiumKey(raw)
+	key, err := parseOpenAIKey(raw)
 	if err != nil {
 		return err
 	}
-	return writeVoiceFile(dir, "gradium.key", []byte(key))
+	return writeVoiceFile(dir, "openai.key", []byte(key))
 }
 
-func LoadGradiumKey(dir string) (string, error) {
-	raw, err := readVoiceFile(dir, "gradium.key", 4096)
+func LoadOpenAIKey(dir string) (string, error) {
+	raw, err := readVoiceFile(dir, "openai.key", 4096)
 	if err != nil {
 		return "", err
 	}
-	return parseGradiumKey(raw)
+	return parseOpenAIKey(raw)
 }
 
-func parseGradiumKey(raw []byte) (string, error) {
+func parseOpenAIKey(raw []byte) (string, error) {
 	key := strings.TrimSpace(string(raw))
-	if len(raw) > 4096 || key == "" || !utf8.ValidString(key) || strings.IndexFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+	if len(raw) > 4096 || key == "" || strings.IndexFunc(key, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
 		return "", errors.New("voice: invalid speech credential")
 	}
 	return key, nil

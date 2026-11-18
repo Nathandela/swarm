@@ -33,8 +33,7 @@ var voiceMCPRun = func(ctx context.Context, socket, auth, conversation, session 
 
 func dispatchVoice(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "mcp" {
-		_, _ = fmt.Fprintln(stderr, "swarm voice mcp --socket <private-socket> --auth-file <private-file> --conversation <id>")
-		return misuseExit
+		return dispatchSpeech(args, os.Stdin, stdout, stderr)
 	}
 	fs := flag.NewFlagSet("voice mcp", flag.ContinueOnError)
 	fs.SetOutput(stderr)

@@ -61,7 +61,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -70,6 +70,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spaw
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
   swarm discord    connect this Swarm to Discord, or operate its local bridge
+  swarm voice      configure OpenAI speech, stream live audio, or transcribe an utterance
   swarm handoff    launch a supervised cross-CLI handoff
                    (--cli agent [--model m] [--name n]
                     [--supervision passive|manual|none] --context-file file)
