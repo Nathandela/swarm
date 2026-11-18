@@ -492,9 +492,13 @@ func (m generalModel) renderBanner(limit int) []string {
 	}
 	lines := []string{"● " + m.bannerText}
 	if m.width > 2 {
-		lines = strings.Split(ansi.Wrap(lines[0], m.width-2, ""), "\n")
-		if limit > 0 {
-			lines = lines[:min(len(lines), limit)]
+		if !m.bannerMandatory {
+			lines = []string{ellipsis(lines[0], m.width-2)}
+		} else {
+			lines = strings.Split(ansi.Wrap(lines[0], m.width-2, ""), "\n")
+			if limit > 0 {
+				lines = lines[:min(len(lines), limit)]
+			}
 		}
 	}
 	for i := range lines {
@@ -962,11 +966,11 @@ type boardLine struct {
 // drawn there. banner is how many notification lines are showing.
 func (m generalModel) layout(banner int, visit func(boardLine)) {
 	visit(boardLine{kind: lineHeader})
-	visit(boardLine{kind: lineSpacer})
 	if banner > 0 {
 		for i := 0; i < banner; i++ {
 			visit(boardLine{kind: lineBanner, idx: i})
 		}
+	} else {
 		visit(boardLine{kind: lineSpacer})
 	}
 	// idx walks the flat display order so it lines up with the selection index.
