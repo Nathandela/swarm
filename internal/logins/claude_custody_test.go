@@ -592,7 +592,10 @@ func TestClaudeLegacyUnknownRuntimeCannotBecomeUnrelatedAtOperationalFloor(t *te
 func TestClaudeAbsentMetadataAndDeletionFenceConcurrentBootstrap(t *testing.T) {
 	for _, kind := range []string{"save", "delete"} {
 		t.Run(kind, func(t *testing.T) {
-			state := t.TempDir()
+			state, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := os.Chmod(state, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -619,7 +622,11 @@ func TestClaudeAbsentMetadataAndDeletionFenceConcurrentBootstrap(t *testing.T) {
 					callbackDone <- WithClaudeReservationRetirement(state, "source", nil, func(ClaudeReservationRetirement) error { return callback() })
 				}
 			}()
-			<-entered
+			select {
+			case <-entered:
+			case err := <-callbackDone:
+				t.Fatalf("callback returned before entering: %v", err)
+			}
 			probe, err := os.Open(state)
 			if err != nil {
 				t.Fatal(err)

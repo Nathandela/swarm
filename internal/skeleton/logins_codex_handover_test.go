@@ -3,6 +3,7 @@ package skeleton
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"runtime"
@@ -1121,6 +1122,130 @@ func TestCodexHandoverInvalidationSerializesWithFinalPublication(t *testing.T) {
 	}
 }
 
+func TestCodexSpendDenialKeepsSelectedLogin(t *testing.T) {
+	for _, mode := range []string{"legacy", "native-grant"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newLoginFixture(t)
+			if mode == "native-grant" {
+				enableCodexNativeGrantUsage(t, f)
+				c := newCodexHandoverCoordinator(f.m)
+				f.m.codexHandover = c
+				c.members = func() ([]logins.NativeMember, error) { return nil, nil }
+				if err := f.m.prepareCodexSelection(); err != nil {
+					t.Fatal(err)
+				}
+				r, _ := f.m.store.Snapshot()
+				r, _, err := f.m.store.Add(r.Revision, logins.ProviderCodex, "b", usageCodexGrant("b"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.usageSelection, err = selectedCodexAuth(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.rollingUntil, c.usageAllowed = time.Now().Add(time.Minute), false
+			}
+			r, _ := f.m.store.Snapshot()
+			active := r.Providers[logins.ProviderCodex].ActiveID
+			if _, err := f.m.store.UpdateExhaustion(r.Revision, active, time.Time{}, true); err != nil {
+				t.Fatal(err)
+			}
+			f.m.step()
+			after, err := f.m.store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Providers[logins.ProviderCodex].ActiveID != active || len(after.Switches) != 0 {
+				t.Fatal("spend denial triggered automatic selection")
+			}
+		})
+	}
+}
+
+func TestCodexAutomaticHandoverRequiresScopedRollingDenial(t *testing.T) {
+	f := newLoginFixture(t)
+	enableCodexNativeGrantUsage(t, f)
+	c := newCodexHandoverCoordinator(f.m)
+	f.m.codexHandover = c
+	c.members = func() ([]logins.NativeMember, error) { return nil, nil }
+	if err := f.m.prepareCodexSelection(); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := f.m.store.Snapshot()
+	r, alternate, err := f.m.store.Add(r.Revision, logins.ProviderCodex, "b", usageCodexGrant("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := selectedCodexAuth(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &codexHandoverFeed{native: logins.NativeMember{SessionID: "source-1"}, current: func() bool { return true }}
+	s.publish = func(selection codexAuthSelection, phase string, usage *codexScopedUsage) error {
+		return f.m.publishCodexAdoption(s, selection, phase, usage)
+	}
+	now := time.Now()
+	window := func(used float64, duration string) string {
+		return fmt.Sprintf(`"secondary":{"usedPercent":%g,%s"resetsAt":%d}`, used, duration, now.Add(time.Hour).Unix())
+	}
+	weekly := func(used float64) string { return window(used, `"windowDurationMins":10080,`) }
+	const typed = `"rateLimitReachedType":"rate_limit_reached",`
+	rolling := typed + weekly(100)
+	for i, tc := range []struct {
+		name, limits string
+		age          time.Duration
+		wantSwitch   bool
+	}{
+		{"unclassified", `"limitId":"codex",` + weekly(0), 0, false},
+		{"typed-with-headroom", `"limitId":"codex",` + typed + weekly(0), 0, false},
+		{"percentage-only", `"limitId":"codex",` + weekly(100), 0, false},
+		{"missing-duration", `"limitId":"codex",` + typed + window(100, ""), 0, false},
+		{"invalid-duration", `"limitId":"codex",` + typed + window(100, `"windowDurationMins":-1,`), 0, false},
+		{"fractional-headroom", `"limitId":"codex",` + typed + weekly(99.9), 0, false},
+		{"foreign-bucket", `"limitId":"other",` + rolling, 0, false},
+		{"missing-bucket", rolling, 0, false},
+		{"stale", `"limitId":"codex",` + rolling, 2 * time.Minute, false},
+		{"rolling", `"limitId":"codex",` + rolling + fmt.Sprintf(`,"primary":{"usedPercent":100,"resetsAt":%d}`, now.Add(2*time.Hour).Unix()), 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := json.RawMessage(`{"accountId":"a","ordinaryUsageAllowed":false,"rateLimits":{` + tc.limits + `}}`)
+			usage, ok := decodeCodexScopedUsage(raw, "a", now.Add(-tc.age))
+			if !ok || usage.allowed {
+				t.Fatal("account denial was lost")
+			}
+			usage.order = uint64(i + 1)
+			if err := s.publishProof(context.Background(), backendAuthTokens{selection: sel}, "adopted", &usage, 0); err != nil {
+				t.Fatal(err)
+			}
+			r, err := f.m.store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, _ := loginByID(r, sel.id)
+			if !active.LimitKnown || active.ExhaustedUntil.IsZero() == tc.wantSwitch {
+				t.Fatalf("unexpected denial/reset evidence for %s: %+v", tc.name, active.ExhaustedUntil)
+			}
+			if tc.wantSwitch && active.ExhaustedUntil.Unix() != now.Add(time.Hour).Unix() {
+				t.Fatal("unrelated window changed the weekly reset")
+			}
+			if c.usageAllowed {
+				t.Fatal("a denied account remained available for input")
+			}
+			_, err = f.m.beginCodexAutomaticHandover(r)
+			if (err == nil) != tc.wantSwitch {
+				t.Fatalf("switch error = %v, want switch %v", err, tc.wantSwitch)
+			}
+			after, err := f.m.store.Snapshot()
+			if err != nil || (after.Providers[logins.ProviderCodex].ActiveID == alternate.ID) != tc.wantSwitch {
+				t.Fatalf("unexpected selected login after denial: %v", err)
+			}
+		})
+		if t.Failed() {
+			return
+		}
+	}
+}
+
 func TestCodexHandoverManualSelectionWinsStaleAutomaticRejection(t *testing.T) {
 	f := newLoginFixture(t)
 	enableCodexNativeGrantUsage(t, f)
@@ -1133,7 +1258,7 @@ func TestCodexHandoverManualSelectionWinsStaleAutomaticRejection(t *testing.T) {
 	r, _ := f.m.store.Snapshot()
 	sel, _ := selectedCodexAuth(r)
 	c.usageSelection = sel
-	c.usageValid = true
+	c.rollingUntil = time.Now().Add(time.Minute)
 	c.usageAllowed = false
 	if _, err := f.m.store.UpdateExhaustion(r.Revision, sel.id, time.Time{}, false); err != nil {
 		t.Fatal(err)
@@ -1164,11 +1289,11 @@ func TestCodexHandoverManualSelectionWinsStaleAutomaticRejection(t *testing.T) {
 	}
 	// A proof can become unknown without a registry mutation.
 	c.usageSelection, _ = selectedCodexAuth(r)
-	c.usageValid = false
+	c.rollingUntil = time.Time{}
 	if _, err = f.m.beginCodexAutomaticHandover(r); err == nil {
 		t.Fatal("invalidated provider evidence authorized automatic selection")
 	}
-	c.usageValid = true
+	c.rollingUntil = time.Now().Add(time.Minute)
 	if _, err = f.m.store.UpdateExhaustion(r.Revision, dest.ID, time.Time{}, false); err != nil {
 		t.Fatal(err)
 	}

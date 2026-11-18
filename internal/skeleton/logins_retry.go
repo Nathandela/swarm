@@ -24,6 +24,10 @@ func (m *loginManager) retryRejectedDestination(op logins.Switch) bool {
 		if login.ID != op.ToID {
 			continue
 		}
+		if op.Provider == logins.ProviderCodex && login.LimitNonRolling {
+			m.saveError(op, errors.New("credit or spending limit reached. Activate an available login to resume these discussions"))
+			return true
+		}
 		if login.AuthState == logins.AuthNeedsLogin {
 			rejected = true
 			reason = "native sign-in required"
@@ -40,7 +44,7 @@ func (m *loginManager) retryRejectedDestination(op logins.Switch) bool {
 		m.saveError(op, fmt.Errorf("%s logins are exhausted or need sign-in; sign in or activate an available login to resume these discussions", op.Provider))
 		return true
 	}
-	if err = m.store.BeginSwitchRetry(op.ID, next.ID, reason); err != nil {
+	if err = m.store.BeginSwitchRetryAtRevision(r.Revision, op.ID, next.ID, reason); err != nil {
 		m.saveError(op, err)
 	}
 	return true

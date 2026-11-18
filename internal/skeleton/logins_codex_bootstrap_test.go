@@ -302,7 +302,7 @@ func TestCodexBootstrapBindsAndRepublishesOnlyChildBeforeRelease(t *testing.T) {
 			}
 			r, _ = f.m.store.Snapshot()
 			selection, _ := selectedCodexAuth(r)
-			c.usageSelection, c.usageAllowed, c.usageValid = selection, true, true
+			c.usageSelection, c.usageAllowed = selection, true
 			healthy := &codexHandoverFeed{ready: true, readySelection: selection, adopted: selection, current: func() bool { return true }, auth: &backendAuthCoordinator{syncWake: make(chan struct{}, 1)}}
 			c.feeds[newBackendFeed()] = healthy
 			t.Cleanup(func() { c.feeds = make(map[*backendFeed]*codexHandoverFeed) })

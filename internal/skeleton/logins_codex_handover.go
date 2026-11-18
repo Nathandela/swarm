@@ -18,10 +18,11 @@ import (
 )
 
 type codexScopedUsage struct {
-	order   uint64
-	allowed bool
-	limits  codexQuotaSnapshot
-	weekly  *protocol.LoginUsageWindow
+	rollingUntil time.Time
+	order        uint64
+	allowed      bool
+	limits       codexQuotaSnapshot
+	weekly       *protocol.LoginUsageWindow
 }
 type codexHandoverFeed struct {
 	auth                               *backendAuthCoordinator
@@ -200,6 +201,10 @@ func decodeCodexScopedUsage(raw json.RawMessage, account string, now time.Time) 
 		if json.Unmarshal(limits, &out.limits) != nil {
 			return codexScopedUsage{}, false
 		}
+		if id := out.limits.LimitID; id != nil && *id != "" && *id != "codex" {
+			out.limits = codexQuotaSnapshot{}
+			return out, true // The permission is account-wide, the foreign bucket is not.
+		}
 		var windows struct {
 			Primary, Secondary *struct {
 				Used    *float64 `json:"usedPercent"`
@@ -225,6 +230,14 @@ func decodeCodexScopedUsage(raw json.RawMessage, account string, now time.Time) 
 			if out.weekly == nil {
 				return codexScopedUsage{}, false
 			}
+			// Only a typed denial of the fully used Codex weekly window authorizes rotation.
+			if !out.allowed && *w.Used == 100 && out.limits.LimitID != nil && *out.limits.LimitID == "codex" &&
+				out.limits.ReachedType != nil && *out.limits.ReachedType == "rate_limit_reached" && !out.limits.nonRolling() {
+				out.rollingUntil = now.Add(time.Minute)
+				if out.weekly.ResetsAt.Before(out.rollingUntil) {
+					out.rollingUntil = out.weekly.ResetsAt
+				}
+			}
 		}
 	}
 	return out, true
@@ -244,7 +257,7 @@ type codexHandoverCoordinator struct {
 	ended           func(logins.NativeMember) bool
 	usageSelection  codexAuthSelection
 	usageAllowed    bool
-	usageValid      bool
+	rollingUntil    time.Time
 	attachWG        sync.WaitGroup
 	readOrder       atomic.Uint64
 	usageOrder      uint64
@@ -629,7 +642,11 @@ func (m *loginManager) publishCodexAdoption(s *codexHandoverFeed, selection code
 			if usage.allowed {
 				_, err = m.store.UpdateAvailability(r.Revision, selection.id, logins.AuthReady, false, time.Time{})
 			} else {
-				_, err = m.store.UpdateExhaustion(r.Revision, selection.id, usage.limits.reset(time.Now()), usage.limits.nonRolling())
+				var reset time.Time
+				if time.Now().Before(usage.rollingUntil) {
+					reset = usage.weekly.ResetsAt
+				}
+				_, err = m.store.UpdateExhaustion(r.Revision, selection.id, reset, usage.limits.nonRolling())
 			}
 			if errors.Is(err, logins.ErrConflict) {
 				continue
@@ -647,7 +664,10 @@ func (m *loginManager) publishCodexAdoption(s *codexHandoverFeed, selection code
 			c.usageSelection = selection
 			c.usageOrder = usage.order
 			c.usageAllowed = valid && usage.allowed
-			c.usageValid = valid
+			c.rollingUntil = time.Time{}
+			if valid {
+				c.rollingUntil = usage.rollingUntil
+			}
 			c.mu.Unlock()
 			s.mu.Unlock()
 			if !valid {
@@ -819,7 +839,7 @@ func (m *loginManager) codexAutomaticRejectionCurrent(r logins.Registry) bool {
 	c := m.codexHandover
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.closed && c.usageSelection == selection && c.usageValid && !c.usageAllowed
+	return !c.closed && c.usageSelection == selection && !c.usageAllowed && time.Now().Before(c.rollingUntil)
 }
 
 func (m *loginManager) beginCodexAutomaticHandover(expected logins.Registry) (logins.Switch, error) {
@@ -839,7 +859,7 @@ func (m *loginManager) beginCodexAutomaticHandover(expected logins.Registry) (lo
 		return logins.Switch{}, logins.ErrPending
 	}
 	active, ok := loginByID(r, selection.id)
-	if !ok || !active.LimitKnown || !active.ExhaustedUntil.IsZero() && !time.Now().Before(active.ExhaustedUntil) {
+	if !ok || !active.LimitKnown || active.LimitNonRolling || !active.ExhaustedUntil.IsZero() && !time.Now().Before(active.ExhaustedUntil) {
 		return logins.Switch{}, logins.ErrPending
 	}
 	next, err := m.store.NextEligible(logins.ProviderCodex, nil, time.Now())

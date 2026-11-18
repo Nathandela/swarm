@@ -480,13 +480,16 @@ func (m *loginManager) step() {
 				_, _ = m.beginCodexAutomaticHandover(r)
 				continue
 			}
+			if provider == logins.ProviderCodex && login.LimitNonRolling {
+				continue // A credit or spend denial does not authorize switching accounts.
+			}
 			next, err := m.store.NextEligible(provider, nil, time.Now())
 			if err == nil {
 				reason := "subscription exhausted"
 				if login.AuthState == logins.AuthNeedsLogin {
 					reason = "native sign-in required"
 				}
-				_, _ = m.beginSwitch(provider, next.ID, reason)
+				_, _ = m.beginSwitchExpected(provider, next.ID, reason, &r.Revision)
 			}
 		}
 	}

@@ -373,6 +373,27 @@ func startUnreadyDestination(t *testing.T, f *loginFixture) logins.Switch {
 	t.Fatal("destination did not reach native startup")
 	return logins.Switch{}
 }
+func TestSpendDeniedDestinationWaitsForManualSelection(t *testing.T) {
+	f := newLoginFixture(t)
+	third := addFixtureLogin(t, f, "third")
+	op := startUnreadyDestination(t, f)
+	if err := f.m.recordExhaustionFact(f.rows["child-1"], time.Time{}, true, true); err != nil {
+		t.Fatal(err)
+	}
+	f.m.step()
+	r, err := f.m.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := r.Switches[logins.ProviderCodex]
+	if current.ID != op.ID || current.Phase != op.Phase || current.NextID != "" || current.LastError == "" {
+		t.Fatalf("spend denial failed to hold the current switch: %+v", current)
+	}
+	if _, err := f.m.BeginSwitch(logins.ProviderCodex, third.ID, "manual"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRejectedDestinationRetargetsOneJournalWithoutLosingOriginalConversations(t *testing.T) {
 	f := newLoginFixture(t)
 	third := addFixtureLogin(t, f, "third")
