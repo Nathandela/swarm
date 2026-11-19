@@ -32,7 +32,7 @@ func TestFreeTextAnswerSettlesOnceInsideCurrentHumanTurn(t *testing.T) {
 	}
 	one, two, native := makeQuestion("one", "manager"), makeQuestion("two", "manager"), makeQuestion("native", "native")
 	origin := schema.MessageOrigin{Kind: "external", InstallationID: "install", DiscussionID: "d", GuildID: "g", ChannelID: "t", MessageID: "m", RequestID: "event", ActorID: "bob", RequesterID: "bob", Revision: "revision"}
-	a, err := c.submitDiscussionInProject(origin, "decorated context, not the answer", "main.go", "", "", "")
+	a, err := c.submitDiscussionInProject(origin, "decorated context, not the answer", "main.go", "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

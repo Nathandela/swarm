@@ -26,7 +26,7 @@ import (
 	"github.com/Nathandela/swarm/internal/teammatemanager"
 )
 
-const discordUsage = "swarm discord connect|run|status|doctor|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
+const discordUsage = "swarm discord connect|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
 
 var discordLocalCall = discord.CallLocal
 var discordUnitRun = runDiscordUnit
@@ -66,7 +66,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	rest := args[1:]
 	id := ""
 	switch command {
-	case "context", "reply", "exclude", "include", "propose":
+	case "context", "reply", "exclude", "include", "propose", "resume-manual":
 		var ok bool
 		id, rest, ok = takeSessionID(rest)
 		if !ok || id == "" {
@@ -87,7 +87,12 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	projects := map[string]string{}
 	var install, allChannels bool
 	var offset int
-	var checkChannel string
+	var checkChannel, session, instance, counter string
+	if command == "resume-manual" {
+		fs.StringVar(&session, "session", "", "manager session from status")
+		fs.StringVar(&instance, "instance", "", "exact manager instance from status")
+		fs.StringVar(&counter, "external-input", "", "observed external input counter from status")
+	}
 	if command == "doctor" {
 		fs.StringVar(&checkChannel, "channel", "", "verify bot access to this server channel or thread")
 	}
@@ -358,6 +363,17 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	}
 	var request, response any
 	switch command {
+	case "resume-manual":
+		n, err := strconv.ParseUint(counter, 10, 64)
+		if err != nil || session == "" || instance == "" {
+			_, _ = fmt.Fprintln(stderr, "discord: specify --session, --instance and --external-input from status")
+			return misuseExit
+		}
+		request = discord.LocalTeammateResumeManual{Discussion: id, Session: session, Instance: instance, ExternalInput: n}
+		response = &struct {
+			Resumed bool `json:"resumed"`
+		}{}
+
 	case "context":
 		request = discord.LocalContextRequest{Ref: id, Offset: offset}
 		response = &discord.LocalContext{}

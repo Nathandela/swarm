@@ -25,7 +25,7 @@ func (c *Client) NativeHistoryPage(req schema.InteractionHistoryReq) (schema.Nat
 	}
 	page := *reply.NativeHistory
 	if req.Worker != nil {
-		if page.Version != 1 || page.Scope != "authorized_worker_turn" || !page.Floor || page.NextCursor != "" || len(page.Items) != 0 {
+		if page.Version != 1 || page.Scope != "authorized_worker_turn" || !page.Floor || (page.WorkerEvidenceLimited && page.Worker != nil) || page.NextCursor != "" || len(page.Items) != 0 {
 			return schema.NativeHistoryPage{}, errors.New("protocol: invalid scoped worker history response")
 		}
 		if proof := page.Worker; proof != nil {
@@ -40,7 +40,7 @@ func (c *Client) NativeHistoryPage(req schema.InteractionHistoryReq) (schema.Nat
 		}
 		return page, nil
 	}
-	if page.Worker != nil {
+	if page.Worker != nil || page.WorkerEvidenceLimited {
 		return schema.NativeHistoryPage{}, errors.New("protocol: unexpected worker evidence")
 	}
 	scope, scopeErr := hex.DecodeString(page.Scope)

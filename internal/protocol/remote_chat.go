@@ -278,15 +278,21 @@ func (cc *clientConn) handleComposerSend(c Control) {
 
 			var code ErrorCode
 			var sendErr error
+			begun := false
+			begin := func() error {
+				err := exec.BeginComposerOperation(c.OperationID)
+				begun = err == nil
+				return err
+			}
 			if semantic, ok := cc.srv.d.(SemanticComposerSender); ok && c.Op == OpSemanticSend {
 				code, sendErr = semantic.SemanticSendTransactional(
 					cc.endpointID, c.OperationID, *body,
-					func() error { return exec.BeginComposerOperation(c.OperationID) },
+					begin,
 				)
 			} else if transactional, ok := cc.srv.d.(TransactionalComposerSender); ok {
 				code, sendErr = transactional.ComposerSendTransactional(
 					cc.endpointID, c.OperationID, *body,
-					func() error { return exec.BeginComposerOperation(c.OperationID) },
+					begin,
 				)
 			} else {
 				// Compatibility only: older durable test doubles cannot expose the daemon's
@@ -302,6 +308,12 @@ func (cc *clientConn) handleComposerSend(c Control) {
 				cc.replyErrorCode("composer_send: "+sendErr.Error(), schema.CodeOutcomeUnknown)
 				return
 			}
+			if !begun && !cc.srv.remoteTier && c.Op == OpSemanticSend && body.Origin != nil && body.Origin.DiscussionID != "" &&
+				sendErr != nil && code == CodeInputBusy {
+				cc.replyErrorCode("composer_send: "+sendErr.Error(), code)
+				return
+			}
+
 			outcome := composerCachedOutcome{OK: sendErr == nil, Code: code}
 			if sendErr != nil {
 				outcome.Message = sendErr.Error()

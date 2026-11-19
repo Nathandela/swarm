@@ -227,7 +227,9 @@ func findBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRef
 			if row.ID == id {
 				observedExact = true
 				selected, err := selectBootstrapManager(observeCtx, cfg, refs, endpoint, existing, row, client)
-				if !errors.Is(err, managerproof.ErrUnavailable) && !(strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) && errors.Is(err, context.DeadlineExceeded) && observeCtx.Err() != nil) {
+				discussionDeadline := strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) &&
+					errors.Is(err, context.DeadlineExceeded) && observeCtx.Err() != nil
+				if !errors.Is(err, managerproof.ErrUnavailable) && !discussionDeadline {
 					return selected, err
 				}
 			}

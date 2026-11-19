@@ -32,14 +32,16 @@ type ControllerWorkers interface {
 var _ ControllerWorkers = (*protocol.Client)(nil)
 
 type controllerActionRequest struct {
-	WorkerWakeID string                      `json:"worker_wake_id,omitempty"`
-	Origin       *schema.MessageOrigin       `json:"origin,omitempty"`
-	Project      string                      `json:"project,omitempty"`
-	Tool         string                      `json:"tool"`
-	Arguments    json.RawMessage             `json:"arguments"`
-	Launch       *protocol.LaunchReq         `json:"launch,omitempty"`
-	Send         *protocol.ComposerSendReq   `json:"send,omitempty"`
-	Decision     *protocol.NativeDecisionReq `json:"decision,omitempty"`
+	WorkerJobID     string                      `json:"worker_job_id,omitempty"`
+	WorkerAttemptID string                      `json:"worker_attempt_id,omitempty"`
+	WorkerWakeID    string                      `json:"worker_wake_id,omitempty"`
+	Origin          *schema.MessageOrigin       `json:"origin,omitempty"`
+	Project         string                      `json:"project,omitempty"`
+	Tool            string                      `json:"tool"`
+	Arguments       json.RawMessage             `json:"arguments"`
+	Launch          *protocol.LaunchReq         `json:"launch,omitempty"`
+	Send            *protocol.ComposerSendReq   `json:"send,omitempty"`
+	Decision        *protocol.NativeDecisionReq `json:"decision,omitempty"`
 }
 
 func decodeControllerInput[T any](raw json.RawMessage) (T, error) {
@@ -314,7 +316,10 @@ func (c *Controller) workerResumeRequest(input ResumeInput, admission uint64) (*
 	if !ok || !valid || sourceEndpoint != endpoint || row.RosterHidden || row.Status.Process != status.ProcessExited {
 		return nil, ErrStale
 	}
-	if !registry.IsProduction(row.Agent) {
+	if c.discussion != nil && row.Agent != "codex" {
+		return nil, fmt.Errorf("%w: this Discord worker provider cannot supply exact result evidence", ErrControllerUnsupported)
+	}
+	if !registry.IsProduction(row.Agent) || (c.discussion != nil && row.Agent != "codex") {
 		return nil, ErrControllerUnsupported
 	}
 	return &protocol.LaunchReq{Agent: row.Agent, Name: row.Name, Tag: row.Tag, Cwd: row.Cwd, Cols: 120, Rows: 32,
@@ -351,8 +356,13 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		if !valid {
 			return nil, ErrStale
 		}
-		if c.discussion != nil && !c.projectPath(admission.Project, input.Cwd) {
-			return nil, fmt.Errorf("%w: select an enrolled project before dispatching work", ErrInvalid)
+		if c.discussion != nil {
+			if input.Agent != "codex" && input.Agent != "claude" {
+				return nil, fmt.Errorf("%w: use Codex for delegated Discord work with verified results", ErrControllerUnsupported)
+			}
+			if !c.projectPath(admission.Project, input.Cwd) {
+				return nil, fmt.Errorf("%w: select an enrolled project before dispatching work", ErrInvalid)
+			}
 		}
 		id = input.ActionID
 		target = "new-worker:" + id
@@ -381,8 +391,12 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		if err != nil {
 			return nil, err
 		}
-		if _, err = c.workerTarget(input.SessionInput, true); err != nil {
+		worker, err := c.workerTarget(input.SessionInput, c.discussion == nil)
+		if err != nil {
 			return nil, err
+		}
+		if c.discussion != nil && worker.Agent != "codex" {
+			return nil, ErrControllerUnsupported
 		}
 		id = input.ActionID
 		target = key(input.Session, input.SessionInstance)
@@ -399,11 +413,6 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 				}
 				request.Origin, request.Send.Origin, request.WorkerWakeID = origin, origin, wakeID
 				request.Send.Text = "System continuation under the previously authorized Discord job. Only continue the original scope.\n\n" + request.Send.Text
-			}
-			for _, effect := range st.Actions {
-				if effect.Target == target && effect.State == "executing" {
-					return nil, ErrControllerUncertain
-				}
 			}
 		}
 	case "swarm_decision":
@@ -445,7 +454,8 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 	if status.Turn.ExternallySteered || status.Turn.NativeInputID != admission.NativeInputID || status.Turn.ExternalInput != admission.ExternalInput || status.Turn.State != "running" || status.Turn.NativeTurnID != admission.NativeTurnID {
 		return nil, ErrStale
 	}
-	if err = c.store.controllerActionExecuting(c.binding, id); err != nil {
+	queueSend := c.discussion != nil && name == "swarm_send"
+	if err = c.store.controllerActionExecuting(c.binding, id, queueSend); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return c.reconcileAction(ctx, action)
 		}
@@ -458,6 +468,9 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 			}
 		}
 		return nil, err
+	}
+	if queueSend {
+		return queuedDiscussionSendReceipt(action)
 	}
 	switch name {
 	case "swarm_create", "swarm_resume":
@@ -518,6 +531,9 @@ func (c *Controller) reconcileAction(ctx context.Context, action Action) (json.R
 		return nil, ErrConflict
 	}
 	action = stored
+	if action.State == discussionQueuedSend {
+		return queuedDiscussionSendReceipt(action)
+	}
 	if action.State == "settled" {
 		return controllerActionResult(action.ID, action.Receipt)
 	}
@@ -684,6 +700,15 @@ func (c *Controller) prepareManagerAction(name, id, target string, request contr
 			return Action{}, ErrStale
 		}
 		request.Project = association.Project
+		if name == "swarm_send" {
+			request.WorkerJobID, request.WorkerAttemptID = association.JobID, association.AttemptID
+			for _, effect := range st.Actions {
+				if effect.ID != id && effect.Target == target && effect.ConversationID == c.binding.ConversationID &&
+					(effect.State == "executing" || effect.State == discussionQueuedSend) {
+					return Action{}, ErrControllerUncertain
+				}
+			}
+		}
 	}
 	var operation string
 	prior, exists := st.Actions[key(c.binding.ConversationID, id)]

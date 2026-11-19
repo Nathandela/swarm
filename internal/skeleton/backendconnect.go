@@ -480,7 +480,7 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 		}
 		// A source rollout that is really gone never appears: its retry is bounded by the join
 		// deadline, while the recorded `no rollout found` race keeps the session's life.
-		sourceGone := isMissingSourceRollout(err) && time.Since(start) > d.backendDeadline()
+		sourceGone := (isMissingSourceRollout(err) || isPendingTurnIndex(err)) && time.Since(start) > d.backendDeadline()
 		retry := isMissingRollout(err) && !sourceGone
 		if !retry {
 			log.Printf("skeleton: session %s can never subscribe to thread %s: %v", id, threadID, err)
@@ -506,7 +506,13 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 // codex >= 0.156's paginated-history "invalid paginated history lineage for <uuid>: missing
 // source rollout" (isMissingSourceRollout).
 func isMissingRollout(err error) bool {
-	return rpcMessageContains(err, "no rollout found") || isMissingSourceRollout(err)
+	return rpcMessageContains(err, "no rollout found") || isMissingSourceRollout(err) || isPendingTurnIndex(err)
+}
+
+// Codex 0.170 can report this precise error while its fresh rollout is still being indexed.
+func isPendingTurnIndex(err error) bool {
+	var rpcErr *appserver.RPCError
+	return errors.As(err, &rpcErr) && rpcErr.Code == -32601 && rpcErr.Message == "list_turns is not supported yet"
 }
 
 func isMissingSourceRollout(err error) bool {

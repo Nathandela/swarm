@@ -98,16 +98,18 @@ type Config struct {
 // the protocol server bound to its socket, the status engine, and the roster
 // event source, with one Close that tears all four down cleanly.
 type Daemon struct {
-	core        *daemon.Daemon
-	srv         *protocol.Server
-	scheduleSrv *protocol.Server
-	remoteSrv   *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
-	api         *coreAPI
-	eng         *engine.Engine
-	socketPath  string
-	stateDir    string // for reading a session's transcript tail (conversation-id capture)
-	home        string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
-	directInput directInputState
+	discussionScanMu sync.Mutex
+	discussionScans  map[discussionScanKey]*discussionTranscriptScan
+	core             *daemon.Daemon
+	srv              *protocol.Server
+	scheduleSrv      *protocol.Server
+	remoteSrv        *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
+	api              *coreAPI
+	eng              *engine.Engine
+	socketPath       string
+	stateDir         string // for reading a session's transcript tail (conversation-id capture)
+	home             string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
+	directInput      directInputState
 
 	cancel context.CancelFunc // stops engine.Run
 

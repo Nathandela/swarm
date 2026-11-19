@@ -24,6 +24,9 @@ func TestIsMissingRollout_RecognizesThePaginatedHistoryMissingSourceRollout(t *t
 		err  error
 		want bool
 	}{
+		{"materializing 0.170 thread", &appserver.RPCError{Code: -32601, Message: "list_turns is not supported yet"}, true},
+		{"other missing method", &appserver.RPCError{Code: -32601, Message: "thread/resume is not supported yet"}, false},
+		{"different error category", &appserver.RPCError{Code: -32603, Message: "list_turns is not supported yet"}, false},
 		{"legacy wording", &appserver.RPCError{Code: -32600, Message: "no rollout found for thread id " + id}, true},
 		{"paginated wording", &appserver.RPCError{Code: -32600, Message: "invalid paginated history lineage for " + id + ": missing source rollout"}, true},
 		{"other paginated lineage fault", &appserver.RPCError{Code: -32600, Message: "invalid paginated history lineage for " + id + ": cycle detected"}, false},

@@ -27,6 +27,17 @@ func discussionRecoverableBindingError(err error) bool {
 		errors.Is(err, ErrControllerNativeUnavailable) || errors.Is(err, managerproof.ErrQuarantined)
 }
 
+func discussionManagerExited(rows []protocol.SessionView, binding protocol.ManagerRuntimeBinding) bool {
+	for _, row := range rows {
+		if row.ID == binding.Session && row.Role == "manager" && row.ManagerConversationID == binding.ConversationID &&
+			row.Agent == binding.Provider && row.Status.Process == status.ProcessExited &&
+			(row.Capabilities == nil || row.Capabilities.SessionInstance == binding.SessionInstance) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *DiscussionController) recoverActive(ctx context.Context, original error) error {
 	previous := d.controller.binding
 	native, err := d.runtime.ManagerRuntime(previous.SessionID, previous.SessionInstance)
@@ -51,20 +62,7 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	if err != nil {
 		return err
 	}
-	ended := false
-	for _, row := range rows {
-		if row.Role != "manager" || row.ManagerConversationID != previous.ConversationID {
-			continue
-		}
-		if row.ID == previous.SessionID && row.Agent == previous.Provider && row.Status.Process == status.ProcessExited &&
-			(row.Capabilities == nil || row.Capabilities.SessionInstance == previous.SessionInstance) {
-			ended = true
-		}
-		if row.ID == previous.SessionID && row.Status.Process == status.ProcessRunning {
-			return original
-		}
-	}
-	if !ended {
+	if !discussionManagerExited(rows, runtimeBinding(previous)) {
 		return ErrControllerUncertain
 	}
 	st, err := d.store.Snapshot()
@@ -129,7 +127,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				continue
 			}
 			switch a.Phase {
-			case "":
+			case "", "superseded":
 				continue
 			case "prepared":
 				a.Phase, a.NativeInputID, a.OperationID, a.Request, a.ExternalInput = "", "", "", nil, 0
@@ -163,7 +161,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 			if err != nil {
 				return err
 			}
-			p := Publication{ID: "continuity-" + hashValue(identity(previous)), ConversationID: id, OutputSequence: sequence,
+			p := Publication{ID: "continuity-" + hashValue(identity(previous)), ConversationID: id, OutputSequence: sequence, DiscussionSource: DiscussionOutputSource{SystemCause: "manager_continuity_gap"},
 				Text: "I recovered this discussion after the previous manager exited. Its native conversation history could not be resumed. I kept the discussion and tracked jobs, and I will not replay uncertain work."}
 			p.TextHash = hashBytes([]byte(p.Text))
 			putRecord(st, "publications", &st.Publications, key(id, p.ID), p)

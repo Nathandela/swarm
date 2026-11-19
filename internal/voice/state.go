@@ -72,6 +72,8 @@ type Utterance struct {
 }
 
 type Admission struct {
+	SourceCutover        bool                  `json:"source_cutover,omitempty"`
+	ProjectExplicit      bool                  `json:"project_explicit,omitempty"`
 	QuestionBoundary     uint64                `json:"question_boundary,omitempty"`
 	HumanReply           string                `json:"human_reply,omitempty"`
 	Origin               *schema.MessageOrigin `json:"origin,omitempty"`
@@ -167,7 +169,6 @@ type JournalSnapshot struct {
 type Event struct {
 	WorkerProof     bool            `json:"worker_proof,omitempty"`
 	NativeTurnID    string          `json:"native_turn_id,omitempty"`
-	WorkerExited    bool            `json:"worker_exited,omitempty"`
 	JobID           string          `json:"job_id,omitempty"`
 	AttemptID       string          `json:"attempt_id,omitempty"`
 	RecoveryOnly    bool            `json:"recovery_only,omitempty"`
@@ -193,6 +194,8 @@ type Wake struct {
 }
 
 type WorkerAssociation struct {
+	EvidenceLimited  bool   `json:"evidence_limited,omitempty"`
+	Parent           string `json:"parent,omitempty"`
 	Ended            bool   `json:"ended,omitempty"`
 	Project          string `json:"project,omitempty"`
 	InitialSourceID  string `json:"initial_source_id,omitempty"`

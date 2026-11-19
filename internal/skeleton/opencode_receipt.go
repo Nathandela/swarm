@@ -212,6 +212,13 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 	if json.Unmarshal(rec.Request, &originIntent) == nil && originIntent.Version == 1 && (originIntent.Origin != nil || originIntent.HermesInput != nil || originIntent.ClaudeInput != nil || originIntent.CodexManager != nil) {
 		if originIntent.Origin == nil || originIntent.Origin.Validate() == nil {
 			result.Origin = originIntent.Origin
+			if originIntent.Origin != nil && originIntent.Origin.DiscussionID != "" && len(rec.Evidence) != 0 {
+				var evidence discussionCodexReceipt
+				if json.Unmarshal(rec.Evidence, &evidence) == nil && adapter.IsCanonicalConversationID(evidence.TurnID) && evidence.InputID != "" {
+					result.NativeInputID, result.NativeTurnID, result.State = evidence.InputID, evidence.TurnID, "admitted"
+					return result, nil
+				}
+			}
 			if originIntent.CodexManager != nil {
 				return d.codexManagerReceipt(local, operationID, rec, result), nil
 			}

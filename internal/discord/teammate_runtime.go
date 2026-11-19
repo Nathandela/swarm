@@ -229,29 +229,45 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 	cfg := t.service.Config
 	store := t.service.Store
 	var a TeammateAdmission
+	var noticeErr error
 	if c.State == StateSending && c.Admission != nil {
 		a = *c.Admission
-		if err := t.checkDiscussion(ctx, a.Discussion); err != nil {
-			return err
-		}
-		known, err := t.manager.AdmissionKnown(ctx, a)
+		state, err := t.manager.AdmissionState(ctx, a)
 		if err != nil {
 			return err
 		}
-		if !known {
-			current, err := t.client.teammateMessage(ctx, a.Route)
-			if teammateAPIStatus(err, http.StatusNotFound) {
-				return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "source deleted before native submission", nil)
+		switch state {
+		case TeammateAdmissionMissing:
+			if err = t.checkDiscussion(ctx, a.Discussion); err != nil {
+				return err
+			}
+			current, err := t.readAdmissionSource(ctx, c)
+			if errors.Is(err, ErrTeammateSourceChanged) {
+				if a.Supersedes != "" {
+					a.Revision = a.Supersedes
+					if err = t.manager.CancelAdmission(ctx, a); err != nil {
+						return err
+					}
+				}
+				return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, ErrTeammateSourceChanged.Error(), nil)
 			}
 			if err != nil {
 				return err
 			}
-			if !teammateHuman(current, t.service.botUserID()) || current.Author.ID != a.Author.ID {
-				return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "verified author changed", nil)
-			}
 			if teammateRevision(current) != a.Revision {
+				if a.Supersedes != "" {
+					return t.submitRevision(ctx, c, a, current)
+				}
 				return store.teammateCandidateChange(cfg.InstallationID, c, StatePrepared, "source changed before native submission", nil)
 			}
+			a.Text = current.Content
+			noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			noticeErr = t.sendStartupNotice(noticeCtx, a.Discussion, nil)
+			cancel()
+		case TeammateAdmissionSuperseded:
+			return t.refreshAdmission(ctx, c)
+		default:
+			return t.saveAdmissionPhase(c, state)
 		}
 	} else {
 		b, m, err := t.resolve(ctx, c)
@@ -282,7 +298,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		if err != nil {
 			return err
 		}
-		if p.GapEpoch > b.NotifiedEpoch {
+		if b.Opened && p.GapEpoch > b.NotifiedEpoch {
 			b.Gap = p.GapEpoch
 			if err = t.queueGap(b.TeammateDiscussion); err != nil {
 				return err
@@ -295,31 +311,116 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		if current.Author.ID == cfg.OwnerID {
 			authority = AuthorityOwnerDirect
 		}
-		reply := teammateReply(current)
 		a = TeammateAdmission{RequireMention: !b.Opened, Discussion: b.TeammateDiscussion, OperationID: "da_" + digest([]string{cfg.InstallationID, current.ID})[:32],
-			Revision: teammateRevision(current), Text: current.Content, ReplyTo: reply, Route: c.Route, Author: Actor{ID: current.Author.ID, Name: current.Author.Username},
+			Route: c.Route, Author: Actor{ID: current.Author.ID, Name: current.Author.Username},
 			InvokerID: current.Author.ID, Authority: authority, Sequence: c.Sequence,
 		}
-		if reply != "" {
-			a.QuestionID, a.QuestionHash, err = store.teammateQuestion(b.TeammateDiscussion, reply)
-			if err != nil {
-				return err
-			}
-		}
-		if err = store.teammateCandidateChange(cfg.InstallationID, c, StateSending, "", &a); err != nil {
+		return t.submitRevision(ctx, c, a, current)
+	}
+	return errors.Join(noticeErr, t.dispatchAdmission(ctx, c, a))
+}
+
+func (t *teammateConnector) submitRevision(ctx context.Context, c teammateCandidate, a TeammateAdmission, m *discordgo.Message) error {
+	if c.State == teammateStateAccepted {
+		a.Supersedes = a.Revision
+	}
+	a.Revision, a.Text, a.ReplyTo = teammateRevision(m), m.Content, teammateReply(m)
+	a.QuestionID, a.QuestionHash = "", ""
+	if a.ReplyTo != "" {
+		var err error
+		a.QuestionID, a.QuestionHash, err = t.service.Store.teammateQuestion(a.Discussion, a.ReplyTo)
+		if err != nil {
 			return err
 		}
-		c.State = StateSending
-		c.Admission = &a
 	}
+	if err := t.service.Store.teammateCandidateChange(a.Discussion.InstallationID, c, StateSending, "", &a); err != nil {
+		return err
+	}
+	c.State, c.Admission = StateSending, &a
+	return t.dispatchAdmission(ctx, c, a)
+}
+
+func (t *teammateConnector) dispatchAdmission(ctx context.Context, c teammateCandidate, a TeammateAdmission) error {
 	anchor := ""
 	if a.Route.ChannelID == a.Discussion.Route.ChannelID {
 		anchor = a.Route.MessageID
 	}
 	if err := t.manager.Admit(ctx, a, t.history(a.Discussion, anchor)); err != nil {
+		return t.managerStartupError(ctx, a.Discussion, err)
+	}
+	phase, err := t.manager.AdmissionState(ctx, a)
+	if err != nil {
 		return err
 	}
-	return store.teammateCandidateChange(cfg.InstallationID, c, StateSent, "", nil)
+	return t.saveAdmissionPhase(c, phase)
+}
+
+func (t *teammateConnector) saveAdmissionPhase(c teammateCandidate, phase string) error {
+	store, install := t.service.Store, t.service.Config.InstallationID
+	switch phase {
+	case TeammateAdmissionCutover:
+		return store.teammateCandidateChange(install, c, StateSent, "", nil)
+	case TeammateAdmissionCancelled:
+		return store.teammateCandidateChange(install, c, StateFailed, "source cancelled before native submission", nil)
+	case TeammateAdmissionAccepted, TeammateAdmissionSuperseded:
+		if c.State == teammateStateAccepted {
+			return nil
+		}
+		return store.teammateCandidateChange(install, c, teammateStateAccepted, "", nil)
+	}
+	return ErrConflict
+}
+
+func (t *teammateConnector) reconcileAccepted(ctx context.Context, c teammateCandidate) error {
+	if c.Admission == nil || c.State != teammateStateAccepted {
+		return ErrInvalid
+	}
+	state, err := t.manager.AdmissionState(ctx, *c.Admission)
+	if err != nil {
+		return err
+	}
+	if state == TeammateAdmissionSuperseded {
+		return t.refreshAdmission(ctx, c)
+	}
+	return t.saveAdmissionPhase(c, state)
+}
+
+func (t *teammateConnector) refreshAdmission(ctx context.Context, c teammateCandidate) error {
+	a := *c.Admission
+	a.Supersedes = a.Revision
+	m, err := t.readAdmissionSource(ctx, c)
+	if errors.Is(err, ErrTeammateSourceChanged) {
+		if err = t.manager.CancelAdmission(ctx, a); err != nil {
+			return err
+		}
+		return t.saveAdmissionPhase(c, TeammateAdmissionCancelled)
+	}
+	if err != nil {
+		return err
+	}
+	if err = t.checkDiscussion(ctx, a.Discussion); err != nil {
+		return err
+	}
+	return t.submitRevision(ctx, c, a, m)
+}
+
+func (t *teammateConnector) readAdmissionSource(ctx context.Context, c teammateCandidate) (*discordgo.Message, error) {
+	if c.Deleted {
+		return nil, ErrTeammateSourceChanged
+	}
+	a := c.Admission
+	m, err := t.client.teammateMessage(ctx, a.Route)
+	if teammateAPIStatus(err, http.StatusNotFound) || errors.Is(err, ErrConflict) {
+		return nil, ErrTeammateSourceChanged
+	}
+	if err != nil {
+		return nil, err
+	}
+	botID := t.service.botUserID()
+	if !teammateHuman(m, botID) || m.Author.ID != a.Author.ID || a.RequireMention && !teammateMention(m, botID) {
+		return nil, ErrTeammateSourceChanged
+	}
+	return m, nil
 }
 
 type teammateTaskResult struct {
@@ -410,6 +511,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	}
 	now := time.Now()
 	predecessors := make(map[string]bool)
+	accepted := make(map[string]teammateCandidate)
 	for _, c := range pending {
 		id := c.Route.ChannelID
 		if c.ParentChannel && c.Opening {
@@ -424,6 +526,10 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		predecessors[id] = true
 		if c.Opening {
 			predecessors[c.Route.MessageID] = true
+		}
+		if c.State == teammateStateAccepted {
+			accepted[id] = c
+			continue
 		}
 		if active[id] || reserved[id] || active[c.Route.MessageID] || reserved[c.Route.MessageID] || now.Before(retryAfter[id]) ||
 			bound[id].Opened && !now.Before(syncAfter[id]) {
@@ -442,13 +548,25 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		if active[b.Route.ChannelID] || reserved[b.Route.ChannelID] || now.Before(syncAfter[b.Route.ChannelID]) {
 			continue
 		}
+		waiting, hasAccepted := accepted[b.Route.ChannelID]
+		if !b.Opened && !hasAccepted && !b.ProvisionalCancelled {
+			continue
+		}
 		launch(b.Route.ChannelID, "", true, func(ctx context.Context) error {
 			repairErr := t.repair(ctx, b, checkpoint.GapEpoch)
-			if !b.Opened {
-				return nil
+			if hasAccepted {
+				if err := t.reconcileAccepted(ctx, waiting); err != nil {
+					return errors.Join(repairErr, err)
+				}
 			}
 			if checkpoint.GapEpoch > b.NotifiedEpoch {
 				b.Gap = checkpoint.GapEpoch
+			}
+			var noticeErr error
+			if !b.Opened && !b.ProvisionalCancelled {
+				noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				noticeErr = t.sendStartupNotice(noticeCtx, b.TeammateDiscussion, nil)
+				cancel()
 			}
 			var emitted []string
 			managerErr := t.manager.Sync(ctx, b.TeammateDiscussion, t.history(b.TeammateDiscussion), func(p TeammatePublication) error {
@@ -458,6 +576,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				emitted = append(emitted, p.ID)
 				return nil
 			})
+			managerErr = t.managerStartupError(ctx, b.TeammateDiscussion, managerErr)
 			var ackErr error
 			if managerErr == nil {
 				ackErr = store.teammateAckOutputs(b.TeammateDiscussion, emitted)
@@ -469,8 +588,11 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				acknowledged = manager.PublicationExported
 			}
 			compactErr := store.teammateCompactOutbox(b.TeammateDiscussion, t.service.Now(), acknowledged)
-			outputErr := t.sendPending(ctx, b.TeammateDiscussion)
-			if err := errors.Join(repairErr, managerErr, ackErr, compactErr, outputErr); err != nil {
+			var outputErr error
+			if b.Opened {
+				outputErr = t.sendPending(ctx, b.TeammateDiscussion)
+			}
+			if err := errors.Join(repairErr, noticeErr, managerErr, ackErr, compactErr, outputErr); err != nil {
 				return err
 			}
 			if b.Error != "" {

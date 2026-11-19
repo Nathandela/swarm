@@ -596,6 +596,13 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
 	}
+	discussionCodex := req.Origin != nil && req.Origin.DiscussionID != "" && meta.AgentType == "codex" && meta.Role != "manager"
+	if discussionCodex {
+		parent, ok := d.core.Get(meta.SpawnedFrom)
+		if source != adapter.SourceOwner || !ok || parent.Role != "manager" || parent.ManagerConversationID != "discord-teammate-"+req.Origin.DiscussionID || meta.SpawnIntent != "delegate" || req.SessionInstance == "" {
+			return protocol.CodeStructuredUnsupported, errors.New("discussion send requires an exact local delegated worker")
+		}
+	}
 	if req.ManagerAdmission != nil {
 		if source != adapter.SourceOwner || meta.Role != "manager" {
 			return protocol.CodeStructuredUnsupported, errors.New("manager admission requires the owner manager source")
@@ -704,6 +711,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 			lane.closedAtReservation = ""
 			lane.supersededTurn = ""
 		}
+		if discussionCodex && active {
+			return
+		}
 		if d.pendingSends == nil {
 			d.pendingSends = map[string][]pendingSend{}
 		}
@@ -723,6 +733,10 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	})
 	if priorUncertain {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: a prior message has no provider outcome yet; no later message was allowed to overtake it", protocol.ErrComposerOutcomeUnknown)
+	}
+	if discussionCodex && (active || sink.backend == nil) {
+		d.dropPendingSend(local, operationID)
+		return protocol.CodeInputBusy, errors.New("discussion send requires an idle native turn")
 	}
 	if lane.barrierChanged(admittedBarrier) {
 		d.dropPendingSend(local, operationID)
@@ -788,6 +802,12 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 				lane.supersededTurn = ""
 			}
 		})
+	}
+	if discussionCodex {
+		evidence, _ := json.Marshal(discussionCodexReceipt{TurnID: startedNative, InputID: pending.clientRef})
+		if !adapter.IsCanonicalConversationID(startedNative) || pending.clientRef == "" || d.core.ObserveSemanticReceipt(operationID, evidence) != nil {
+			return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native discussion send receipt could not be retained", protocol.ErrComposerOutcomeUnknown)
+		}
 	}
 	// Owner automation must not claim that a phone is driving the session.
 	if source == adapter.SourcePhone {

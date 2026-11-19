@@ -15,7 +15,6 @@ import (
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
-	"github.com/Nathandela/swarm/internal/status"
 )
 
 const DiscussionIdleGrace = 2 * time.Minute
@@ -26,15 +25,16 @@ type discussionRuntime interface {
 }
 
 type DiscussionInput struct {
-	Origin                                 schema.MessageOrigin
-	Text, Answer, QuestionID, QuestionHash string
-	Project                                func(string) string
+	Origin                                             schema.MessageOrigin
+	Text, Answer, QuestionID, QuestionHash, Supersedes string
+	Project                                            func(string) (string, bool)
 }
 
 type DiscussionOutputSource struct {
 	AdmissionID string `json:"admission_id,omitempty"`
 	JobID       string `json:"job_id,omitempty"`
 	AttemptID   string `json:"attempt_id,omitempty"`
+	SystemCause string `json:"system_cause,omitempty"`
 }
 
 type DiscussionOutput struct {
@@ -178,26 +178,27 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	if err != nil {
 		return err
 	}
-	known, err := discussionAdmissionKnown(st, input.Origin)
-	if err != nil || known {
+	a, err := findDiscussionAdmission(st, input.Origin)
+	if err != nil {
 		return err
+	}
+	if a.Origin != nil && *a.Origin == input.Origin {
+		return nil
+	}
+	if a.Origin != nil && (a.Phase != "superseded" || a.Origin.Revision != input.Supersedes) {
+		return ErrConflict
 	}
 	if err := d.activate(ctx, st); err != nil {
 		return err
 	}
-	project := ""
+	project, explicit := "", false
 	if input.Project != nil {
-		project = input.Project(st.Conversations[d.cfg.ConversationID].Project)
+		project, explicit = input.Project(st.Conversations[d.cfg.ConversationID].Project)
 	}
 	if input.QuestionID == "" {
 		input.QuestionID, input.QuestionHash = matchingDiscussionQuestion(st, input.Answer, d.now())
 	}
-	projectContext := "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action."
-	if project != "" {
-		value, _ := json.Marshal(project)
-		projectContext = "Approved project for new work " + string(value)
-	}
-	_, err = d.controller.submitDiscussionInProject(input.Origin, projectContext+"\n"+input.Text, input.Answer, input.QuestionID, input.QuestionHash, project)
+	_, err = d.controller.submitDiscussionInProject(input.Origin, input.Text, input.Answer, input.QuestionID, input.QuestionHash, project, explicit)
 	if err == nil {
 		d.idleSince = time.Time{}
 	}
@@ -205,29 +206,79 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 }
 
 func (d *DiscussionController) AdmissionKnown(origin schema.MessageOrigin) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	state, err := d.AdmissionState(origin)
+	return state != "missing", err
+}
+
+func (d *DiscussionController) AdmissionState(origin schema.MessageOrigin) (string, error) {
 	if !d.scope.validateOrigin(origin) {
-		return false, ErrInvalid
+		return "missing", ErrInvalid
 	}
 	st, err := d.store.readView()
 	if err != nil {
-		return false, err
+		return "missing", err
 	}
-	return discussionAdmissionKnown(st, origin)
+	a, err := findDiscussionAdmission(st, origin)
+	if err != nil || a.Origin == nil {
+		return "missing", err
+	}
+	if *a.Origin != origin {
+		if a.Phase != "superseded" {
+			return "missing", ErrConflict
+		}
+		return "missing", nil
+	}
+	switch {
+	case a.SourceCutover:
+		return "cutover", nil
+	case a.Phase == "superseded":
+		return "superseded", nil
+	case a.Phase == "rejected" || !a.SettledAt.IsZero():
+		return "cancelled", nil
+	default:
+		return "accepted", nil
+	}
 }
 
-func discussionAdmissionKnown(st State, origin schema.MessageOrigin) (bool, error) {
+func (d *DiscussionController) CancelAdmission(origin schema.MessageOrigin) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.controller == nil || !d.scope.validateOrigin(origin) {
+		return ErrInvalid
+	}
+	st, err := d.store.readView()
+	if err != nil {
+		return err
+	}
+	a, err := findDiscussionAdmission(st, origin)
+	if err != nil {
+		return err
+	}
+	if a.Origin == nil || *a.Origin != origin || a.SourceCutover {
+		return ErrStale
+	}
+	if a.Phase == "rejected" && !a.SettledAt.IsZero() {
+		return nil
+	}
+	if a.Phase != "superseded" {
+		return ErrConflict
+	}
+	return d.store.rejectQueuedControllerInput(d.controller.binding, a, "Discord source withdrawn before native submission")
+}
+
+func findDiscussionAdmission(st State, origin schema.MessageOrigin) (Admission, error) {
 	for _, a := range st.Admissions {
 		if a.Origin == nil || a.Origin.RequestID != origin.RequestID {
 			continue
 		}
-		if *a.Origin != origin {
-			return false, ErrConflict
+		previous := *a.Origin
+		previous.Revision, previous.ActorName = origin.Revision, origin.ActorName
+		if previous != origin {
+			return Admission{}, ErrConflict
 		}
-		return true, nil
+		return a, nil
 	}
-	return false, nil
+	return Admission{}, nil
 }
 
 func (d *DiscussionController) activate(ctx context.Context, st State) error {
@@ -318,8 +369,16 @@ func (d *DiscussionController) Dormant() (bool, error) {
 	if !st.Conversations[d.cfg.ConversationID].Parked || !discussionQuiescent(st, d.now()) {
 		return false, nil
 	}
+	for _, action := range st.Actions {
+		if action.ConversationID == d.cfg.ConversationID && action.State == discussionQueuedSend {
+			return false, nil
+		}
+	}
 	for _, worker := range st.Workers {
 		if !worker.Ended {
+			return false, nil
+		}
+		if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified && !worker.EvidenceLimited {
 			return false, nil
 		}
 	}
@@ -341,6 +400,9 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	}
 	if len(st.Workers) > 0 {
 		if err := d.controller.reconcileDiscussionWorkerEvidence(ctx); err != nil {
+			return err
+		}
+		if err := d.controller.reconcileDiscussionSends(ctx); err != nil {
 			return err
 		}
 		st, err = d.store.Snapshot()
@@ -394,7 +456,7 @@ func discussionQuiescent(st State, now time.Time) bool {
 		return false
 	}
 	for _, a := range st.Actions {
-		if a.State != "settled" {
+		if a.State != "settled" && a.State != discussionQueuedSend {
 			return false
 		}
 	}
@@ -482,7 +544,29 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		}
 		native, err := d.controller.nativeStatus(ctx)
 		if err != nil {
-			return err
+			if !discussionRecoverableBindingError(err) {
+				return err
+			}
+			if receipt.State == "unknown" {
+				rows, listErr := d.runtime.List()
+				if listErr != nil {
+					return listErr
+				}
+				if discussionManagerExited(rows, req.Binding) {
+					d.idleSince = time.Time{}
+					return d.recordRetirement(req, false)
+				}
+			}
+			binding := d.controller.binding
+			observed, probeErr := d.runtime.ManagerRuntime(binding.SessionID, binding.SessionInstance)
+			if probeErr != nil || !discussionSameNative(binding, discussionBindingFromNative(observed.Binding)) ||
+				observed.AuthFile != d.controller.refs.AuthFile || observed.BridgeSocket != d.controller.refs.Socket {
+				return err
+			}
+			// No daemon claim exists, and the original physical manager is still
+			// provable under a new observation epoch. Reconcile it on the next tick.
+			d.idleSince = time.Time{}
+			return d.recordRetirement(req, false)
 		}
 		if !native.ReadyForInput || native.Turn != req.ExpectedTurn {
 			d.idleSince = time.Time{}
@@ -514,11 +598,8 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		if err != nil {
 			return err
 		}
-		for _, row := range rows {
-			if row.ID == req.Binding.Session && row.Role == "manager" && row.ManagerConversationID == req.Binding.ConversationID &&
-				row.Status.Process == status.ProcessExited && (row.Capabilities == nil || row.Capabilities.SessionInstance == req.Binding.SessionInstance) {
-				return d.recordRetirement(req, true)
-			}
+		if discussionManagerExited(rows, req.Binding) {
+			return d.recordRetirement(req, true)
 		}
 	}
 	return ErrControllerUncertain

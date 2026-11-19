@@ -11,10 +11,21 @@ import (
 
 // TeammateManager admits stable operations and acknowledges publications through a durable callback.
 type TeammateManager interface {
-	AdmissionKnown(context.Context, TeammateAdmission) (bool, error)
+	AdmissionState(context.Context, TeammateAdmission) (string, error)
+	CancelAdmission(context.Context, TeammateAdmission) error
 	Admit(context.Context, TeammateAdmission, TeammateHistoryReader) error
 	Sync(context.Context, TeammateDiscussion, TeammateHistoryReader, func(TeammatePublication) error) error
 }
+
+const (
+	TeammateAdmissionMissing    = "missing"
+	TeammateAdmissionAccepted   = "accepted"
+	TeammateAdmissionCutover    = "cutover"
+	TeammateAdmissionSuperseded = "superseded"
+	TeammateAdmissionCancelled  = "cancelled"
+	TeammateSystemContinuityGap = "manager_continuity_gap"
+	teammateStateAccepted       = "accepted"
+)
 
 type TeammateNativeStatus struct {
 	State           string              `json:"state"`
@@ -22,6 +33,7 @@ type TeammateNativeStatus struct {
 	ManagerInstance string              `json:"manager_instance,omitempty"`
 	Project         string              `json:"project,omitempty"`
 	Diagnostic      string              `json:"diagnostic,omitempty"`
+	ExternalInput   uint64              `json:"external_input"`
 	Generation      uint64              `json:"generation"`
 	Jobs            []TeammateJobStatus `json:"jobs,omitempty"`
 }
@@ -44,6 +56,7 @@ type TeammateDiscussion struct {
 
 type TeammateAdmission struct {
 	RequireMention                       bool
+	Supersedes                           string
 	Discussion                           TeammateDiscussion
 	OperationID, Revision, Text, ReplyTo string
 	QuestionID, QuestionHash             string
@@ -55,6 +68,7 @@ type TeammateAdmission struct {
 }
 
 type TeammatePublication struct {
+	SystemCause                                                       string
 	ID, Body, AdmissionID, JobID, AttemptID, QuestionID, QuestionHash string
 	Sequence                                                          uint64
 }
@@ -62,6 +76,7 @@ type TeammatePublication struct {
 type TeammateHistoryReader func(context.Context, TeammateHistoryQuery) (TeammateHistoryPage, error)
 
 var ErrTeammateSourceChanged = errors.New("discord: source message changed before native submission")
+var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is unavailable")
 
 type TeammateHistoryQuery struct {
 	Source, Cursor, Anchor                     string

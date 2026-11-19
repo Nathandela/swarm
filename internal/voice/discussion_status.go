@@ -9,7 +9,7 @@ import (
 
 type DiscussionNativeStatus struct {
 	State, ManagerSession, ManagerInstance, Project, Diagnostic string
-	Generation                                                  uint64
+	Generation, ExternalInput                                   uint64
 	Jobs                                                        []DiscussionJobStatus
 }
 
@@ -34,6 +34,7 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 		return result, nil
 	}
 	result.Generation = max(c.ManagerGeneration, 1)
+	result.ExternalInput = c.ExternalInput
 	result.ManagerSession, result.ManagerInstance, result.Project = c.Binding.SessionID, c.Binding.SessionInstance, c.Project
 	switch {
 	case c.Parked:
@@ -41,7 +42,7 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 		result.State = "parking"
 	case c.CustodyLost:
 		result.State = "blocked"
-		result.Diagnostic = "manager native custody unavailable"
+		result.Diagnostic = discussionCustodyDiagnostic
 	default:
 		result.State = "active"
 		switch {
@@ -60,6 +61,9 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 			job.State = "uncertain"
 		case worker.Ended:
 			job.State = "exited"
+			if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified {
+				job.State = "exited_unconfirmed"
+			}
 		}
 		result.Jobs = append(result.Jobs, job)
 	}

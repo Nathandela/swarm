@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 
@@ -40,18 +44,22 @@ func TestDiscussionAdmissionKeepsAuthorAndDeduplicates(t *testing.T) {
 type discussionTestRuntime struct {
 	*controllerRuntimeFixture
 	bootstrapFixture
-	retirements []bool
-	retirement  protocol.ManagerRetireReceipt
+	retirements           []bool
+	retirement            protocol.ManagerRetireReceipt
+	managerErr, retireErr error
 }
 
 func (r *discussionTestRuntime) ManagerRuntime(session, instance string) (protocol.ManagerRuntimeStatus, error) {
+	if r.managerErr != nil {
+		return protocol.ManagerRuntimeStatus{}, r.managerErr
+	}
 	return r.controllerRuntimeFixture.ManagerRuntime(session, instance)
 }
 
 func (r *discussionTestRuntime) ManagerRetire(_ context.Context, req protocol.ManagerRetireReq, statusOnly bool) (protocol.ManagerRetireReceipt, error) {
 	r.retirements = append(r.retirements, statusOnly)
 	r.retirement.OperationID = protocol.ManagerRetireOperationID(req)
-	return r.retirement, nil
+	return r.retirement, r.retireErr
 }
 
 func TestDiscussionRetirementWaitsForGraceAndExactExit(t *testing.T) {
@@ -88,7 +96,7 @@ func TestDiscussionRetirementWaitsForGraceAndExactExit(t *testing.T) {
 	if err := d.finishRetirement(ctx, *conv.Retirement, true); !errors.Is(err, ErrControllerUncertain) {
 		t.Fatalf("missing process counted as exact exit: %v", err)
 	}
-	db.rows = []protocol.SessionView{{ID: binding.SessionID, Role: "manager", ManagerConversationID: binding.ConversationID,
+	db.rows = []protocol.SessionView{{ID: binding.SessionID, Role: "manager", Agent: binding.Provider, ManagerConversationID: binding.ConversationID,
 		Status: status.Status{Process: status.ProcessExited}}}
 	if err := d.finishRetirement(ctx, *conv.Retirement, true); err != nil {
 		t.Fatal(err)
@@ -96,6 +104,55 @@ func TestDiscussionRetirementWaitsForGraceAndExactExit(t *testing.T) {
 	st, _ = s.Snapshot()
 	if !st.Conversations[binding.ConversationID].Parked {
 		t.Fatal("corroborated retirement did not park")
+	}
+}
+
+func TestDiscussionUnclaimedRetirementClearsOnlyForExactExitedManager(t *testing.T) {
+	for _, tc := range []struct {
+		name, receipt string
+		process       status.Process
+		instance      string
+		transport     error
+		clear         bool
+	}{
+		{name: "exact exit", receipt: "unknown", process: status.ProcessExited, clear: true},
+		{name: "missing", receipt: "unknown"},
+		{name: "lost", receipt: "unknown", process: status.ProcessLost},
+		{name: "replacement", receipt: "unknown", process: status.ProcessExited, instance: "another-incarnation"},
+		{name: "ambiguous daemon claim", receipt: "uncertain", process: status.ProcessExited},
+		{name: "unavailable transport", receipt: "unknown", process: status.ProcessExited, transport: errors.New("lost transport")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, s, runtime, b := newControllerFixture(t)
+			db := &discussionTestRuntime{controllerRuntimeFixture: runtime, managerErr: managerproof.ErrUnavailable, retireErr: tc.transport, retirement: protocol.ManagerRetireReceipt{State: tc.receipt}}
+			c.runtime = db
+			d := &DiscussionController{controller: c, store: s, runtime: db, now: time.Now}
+			req := protocol.ManagerRetireReq{Binding: runtimeBinding(b), Generation: 1, Checkpoint: strings.Repeat("a", 64)}
+			if err := s.update(func(st *State) error {
+				conv := st.Conversations[b.ConversationID]
+				conv.Retirement = &req
+				putRecord(st, "conversations", &st.Conversations, b.ConversationID, conv)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.process != "" {
+				row := protocol.SessionView{ID: b.SessionID, Role: "manager", Agent: b.Provider, ManagerConversationID: b.ConversationID, Status: status.Status{Process: tc.process}}
+				if tc.instance != "" {
+					row.Capabilities = &schema.SessionCapabilities{SessionInstance: tc.instance}
+				}
+				db.rows = []protocol.SessionView{row}
+			}
+			err := d.finishRetirement(context.Background(), req, true)
+			st, snapErr := s.Snapshot()
+			if snapErr != nil {
+				t.Fatal(snapErr)
+			}
+			conv := st.Conversations[b.ConversationID]
+			if (err == nil) != tc.clear || (conv.Retirement == nil) != tc.clear || conv.Parked || db.launches != 0 {
+				t.Fatalf("retire=%+v parked=%v launched=%d err=%v", conv.Retirement, conv.Parked, db.launches, err)
+			}
+		})
 	}
 }
 
@@ -186,29 +243,121 @@ func discussionFixtureOrigin(id string) schema.MessageOrigin {
 	return schema.MessageOrigin{Kind: "external", InstallationID: "install", GuildID: "guild", ChannelID: "thread", RequestID: id, MessageID: id, ActorID: "member", RequesterID: "member"}
 }
 
-func TestDiscussionRevalidatesQueuedHumanBeforeNativeSend(t *testing.T) {
+func TestDiscussionRevalidatesAndReplacesQueuedRevisionInOriginalSlot(t *testing.T) {
 	c, s, runtime, binding := newControllerFixture(t)
-	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread",
+	scope := &DiscussionScope{DiscussionID: "discussion", InstallationID: "install", GuildID: "guild", ThreadID: "thread",
 		VerifyOrigin: func(_ context.Context, origin schema.MessageOrigin) error {
-			if origin.RequestID == "changed" {
+			if origin.Revision == "old" {
 				return ErrDiscussionSourceChanged
 			}
 			return nil
 		}}
-	changed, err := c.submitDiscussionInProject(discussionFixtureOrigin("changed"), "switch project", "", "", "", "/withdrawn")
+	c.discussion = scope
+	d := &DiscussionController{scope: *scope, controller: c, store: s}
+	origin := discussionFixtureOrigin("changed")
+	origin.DiscussionID, origin.Revision = "discussion", "old"
+	changed, err := c.submitDiscussionInProject(origin, "switch project", "", "", "", "/withdrawn", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.submitDiscussion(discussionFixtureOrigin("fresh"), "new request", "", ""); err != nil {
+	fresh := discussionFixtureOrigin("fresh")
+	fresh.DiscussionID, fresh.Revision = "discussion", "one"
+	if _, err := c.submitDiscussion(fresh, "new request", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if state, err := d.AdmissionState(origin); err != nil || state != "superseded" || len(runtime.sent) != 0 {
+		t.Fatalf("stale revision bypassed its reserved queue slot: %q %v sends=%d", state, err, len(runtime.sent))
+	}
+	origin.Revision = "new"
+	revised, err := c.submitDiscussion(origin, "edited request", "", "")
+	if err != nil || revised.Sequence != changed.Sequence {
+		t.Fatalf("edited revision lost original slot: %+v %v", revised, err)
+	}
+	if err := c.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	st, _ := s.Snapshot()
-	if len(runtime.sent) != 1 || runtime.sent[0].Origin.RequestID != "fresh" ||
-		st.Admissions[admissionKey(binding.ConversationID, changed.Sequence)].Phase != "rejected" || st.Conversations[binding.ConversationID].Project != "" {
-		t.Fatalf("changed source took effect: %+v %+v", runtime.sent, st.Admissions)
+	if len(runtime.sent) != 1 || runtime.sent[0].Origin.Revision != "new" ||
+		st.Conversations[binding.ConversationID].Project != "" {
+		t.Fatalf("stale source or newer message overtook the edited source: %+v %+v", runtime.sent, st.Admissions)
+	}
+	if state, err := d.AdmissionState(origin); err != nil || state != "cutover" {
+		t.Fatalf("cutoff not persisted: %q %v", state, err)
+	}
+	origin.Revision = "too-late"
+	if _, err := c.submitDiscussion(origin, "again", "", ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("post-cutoff edit reran input: %v", err)
+	}
+}
+
+func TestDiscussionSourceWithdrawalCancelsWithoutNativeSend(t *testing.T) {
+	c, s, runtime, _ := newControllerFixture(t)
+	scope := &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", VerifyOrigin: func(context.Context, schema.MessageOrigin) error { return ErrDiscussionSourceChanged }}
+	c.discussion = scope
+	origin := discussionFixtureOrigin("withdrawn")
+	if _, err := c.submitDiscussion(origin, "tag removed", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	d := &DiscussionController{scope: *scope, store: s, controller: c}
+	if err := d.CancelAdmission(origin); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := d.AdmissionState(origin); state != "cancelled" || err != nil || len(runtime.sent) != 0 {
+		t.Fatalf("state=%q err=%v sends=%d", state, err, len(runtime.sent))
+	}
+}
+
+func TestDiscussionQueuedProjectSwitchAppliesToNextParticipant(t *testing.T) {
+	c, s, runtime, binding := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread"}
+	project := func() string {
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	alpha, beta := project(), project()
+	if err := s.update(func(st *State) error {
+		conv := st.Conversations[binding.ConversationID]
+		conv.Project = alpha
+		putRecord(st, "conversations", &st.Conversations, binding.ConversationID, conv)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := discussionFixtureOrigin("working")
+	if _, err := c.submitDiscussion(previous, "working on alpha", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.submitDiscussionInProject(discussionFixtureOrigin("switch"), "switch to beta", "switch", "", "", beta, true); err != nil {
+		t.Fatal(err)
+	}
+	followup := discussionFixtureOrigin("go-ahead")
+	followup.ActorID = "new-participant"
+	if _, err := c.submitDiscussionInProject(followup, "go ahead", "go ahead", "", "", alpha, false); err != nil {
+		t.Fatal(err)
+	}
+	for idx := range 2 {
+		runtime.status.Turn = protocol.ManagerNativeTurn{State: "completed", NativeInputID: runtime.sent[idx].ManagerAdmission.Nonce, NativeTurnID: fmt.Sprintf("turn-%d", idx)}
+		if err := c.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, _ := s.Snapshot()
+	if st.Conversations[binding.ConversationID].Project != beta || len(runtime.sent) != 3 ||
+		!strings.Contains(runtime.sent[1].Text, beta) || !strings.Contains(runtime.sent[2].Text, beta) ||
+		strings.Contains(runtime.sent[2].Text, alpha) || runtime.sent[2].Origin.ActorID != "new-participant" {
+		t.Fatalf("queued follow-up restored stale project: %q sends=%+v", st.Conversations[binding.ConversationID].Project, runtime.sent)
 	}
 }
 
@@ -252,6 +401,11 @@ func TestDiscussionObserverRebindPreservesExactExecutingInputAndReconstructionKe
 		!queued.SettledAt.IsZero() || queued.Phase != "" || len(st.Publications) != 1 || len(runtime.sent) != 1 {
 		t.Fatalf("continuity recovery changed old effect or lost new input: %+v / %+v", old, queued)
 	}
+	d.cfg.ConversationID = prior.ConversationID
+	var notice DiscussionOutput
+	if err := d.export(st, func(out DiscussionOutput) error { notice = out; return nil }); err != nil || notice.SystemCause != "manager_continuity_gap" || notice.AdmissionID != "" {
+		t.Fatalf("unset or human-misattributed recovery notice: %+v %v", notice, err)
+	}
 }
 
 func TestDiscussionWakePublicationsRetainOrderAndAcknowledgedRetries(t *testing.T) {
@@ -290,6 +444,11 @@ func TestDiscussionWakePublicationsRetainOrderAndAcknowledgedRetries(t *testing.
 	}
 	d := &DiscussionController{store: s, cfg: Config{ConversationID: binding.ConversationID}, now: time.Now}
 	st, _ := s.Snapshot()
+	var uncertain DiscussionOutput
+	lost := errors.New("outbox acknowledgment lost")
+	if err := d.export(st, func(output DiscussionOutput) error { uncertain = output; return lost }); !errors.Is(err, lost) {
+		t.Fatalf("torn outbox acknowledgment was ignored: %v", err)
+	}
 	var received []DiscussionOutput
 	emit := func(output DiscussionOutput) error {
 		received = append(received, output)
@@ -298,7 +457,7 @@ func TestDiscussionWakePublicationsRetainOrderAndAcknowledgedRetries(t *testing.
 	if err := d.export(st, emit); err != nil {
 		t.Fatal(err)
 	}
-	if len(received) != 2 || received[0].ID != first.ID || received[1].ID != final.ID ||
+	if len(received) != 2 || received[0] != uncertain || received[0].ID != first.ID || received[1].ID != final.ID ||
 		received[0].Sequence >= received[1].Sequence || received[1].JobID != "job" || received[1].AttemptID != "attempt" ||
 		received[1].AdmissionID != "resumed-wake" {
 		t.Fatalf("wrong durable wake outputs: %+v", received)
@@ -309,5 +468,83 @@ func TestDiscussionWakePublicationsRetainOrderAndAcknowledgedRetries(t *testing.
 	after, _ := s.Snapshot()
 	if err := d.export(after, emit); err != nil || len(received) != 2 {
 		t.Fatalf("acknowledged outputs sent again: %+v %v", received, err)
+	}
+}
+
+func TestDiscussionWakeAuthorityUsesExactOriginalGrantAndCannotCreate(t *testing.T) {
+	c, _, _, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread"}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := discussionFixtureOrigin("original")
+	rootAdmission := Admission{SourceID: "discussion:original", ConversationID: b.ConversationID, Origin: &origin}
+	worker := WorkerAssociation{Session: "machine/worker", SessionInstance: "instance", InitialSourceID: rootAdmission.SourceID, JobID: "job", AttemptID: "attempt", ActionID: "action", Project: root}
+	target := key(worker.Session, worker.SessionInstance)
+	event := Event{ID: discussionEvidenceID(worker), JobID: worker.JobID, AttemptID: worker.AttemptID, WorkerProof: true, NativeTurnID: "native-turn",
+		Metadata: json.RawMessage(`{"session":"machine/worker","instance":"instance"}`)}
+	wake := Wake{ID: "wake", EventID: event.ID}
+	trigger := Admission{SourceID: "wake:" + wake.ID, Sequence: 2}
+	st := State{
+		Admissions: map[string]Admission{"original": rootAdmission},
+		Workers:    map[string]WorkerAssociation{key(b.ConversationID, target): worker},
+		Events:     map[string]Event{key(b.ConversationID, event.ID): event},
+		Wakes:      map[string]Wake{key(b.ConversationID, wake.ID): wake},
+	}
+	if grant, wakeID, err := c.discussionContinuation(st, trigger, target, "action"); err != nil || grant == nil || *grant != origin || wakeID != wake.ID {
+		t.Fatalf("exact continuation did not preserve original actor: %+v %q %v", grant, wakeID, err)
+	}
+	if err := c.discussionEffect(trigger, "swarm_create"); !errors.Is(err, ErrExpired) {
+		t.Fatalf("wake could create: %v", err)
+	}
+	worker.ActionID = "newer-directive"
+	st.Workers[key(b.ConversationID, target)] = worker
+	if _, _, err := c.discussionContinuation(st, trigger, target, "action"); !errors.Is(err, ErrExpired) {
+		t.Fatalf("stale event could mutate after newer directive: %v", err)
+	}
+}
+
+func TestDiscussionRejectsUnqualifiedWorkerProviderBeforeEffect(t *testing.T) {
+	c, _, _, _ := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread"}
+	workers := &controllerWorkerFixture{}
+	c.workers = workers
+	origin := discussionFixtureOrigin("worker")
+	a := Admission{Origin: &origin, Project: "/work"}
+	args := json.RawMessage(`{"action_id":"delegation","agent":"opencode","cwd":"/work","prompt":"inspect the test"}`)
+	if _, err := c.managerEffect(context.Background(), "swarm_create", args, a); !errors.Is(err, ErrControllerUnsupported) || workers.launches != 0 {
+		t.Fatalf("unsupported worker reached launch: %v launches=%d", err, workers.launches)
+	}
+}
+
+func TestDiscussionJournalGapWithTrackedJobUsesPassiveRecovery(t *testing.T) {
+	c, s, runtime, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{}
+	trackControllerFixtureWorker(t, s, b)
+	workerKey := key(b.ConversationID, key("machine/worker", "instance"))
+	if err := s.update(func(st *State) error {
+		worker := st.Workers[workerKey]
+		worker.JobID, worker.AttemptID = "job", "attempt"
+		putRecord(st, "workers", &st.Workers, workerKey, worker)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	source := &controllerJournalFixture{
+		resume:  protocol.JournalResume{SourceID: fixtureJournalSource, Cursor: 21, FullResync: true, HistoryGap: true},
+		records: closedControllerJournal(),
+	}
+	if err := c.consumeDaemonJournal(context.Background(), source); !errors.Is(err, ErrControllerJournalResync) {
+		t.Fatal(err)
+	}
+	st, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Wakes) != 0 || len(st.Admissions) != 0 || len(runtime.sent) != 0 || st.Workers[workerKey].RecoveryRequired ||
+		st.Journal[b.ConversationID].Sequence != 21 {
+		t.Fatalf("journal recovery became a manager turn or altered the exact worker grant: wakes=%d admissions=%d worker=%+v",
+			len(st.Wakes), len(st.Admissions), st.Workers[workerKey])
 	}
 }

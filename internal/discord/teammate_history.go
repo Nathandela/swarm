@@ -107,7 +107,7 @@ func (t *teammateConnector) history(d TeammateDiscussion, threadAnchor ...string
 }
 
 func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, threadAnchor string) (out TeammateHistoryPage, err error) {
-	if q.Source == "admission" {
+	if q.Source == "admission" || q.Source == "grant" {
 		return out, t.verifyAdmission(ctx, d, q)
 	}
 	if q.Source == "audience" {
@@ -165,6 +165,7 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		return t.historyFragment(ctx, route, out, cursor)
 	}
 	var leading []*discordgo.Message
+	var topicStart string
 	if q.Cursor == "" && d.Starter.MessageID != "" {
 		starter, e := t.client.teammateMessage(ctx, d.Starter)
 		if teammateAPIStatus(e, http.StatusNotFound) {
@@ -187,11 +188,8 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 					out.Notice += " An earlier reply is unavailable."
 				}
 				if len(chain) > 0 {
-					cursor.Before = chain[len(chain)-1].ID
-					leading = append(leading, chain...)
-				}
-				if len(leading) > 1 {
-					out.ReplyChain = teammateHistoryRows(append([]*discordgo.Message(nil), leading...))
+					topicStart = chain[len(chain)-1].ID
+					out.ReplyChain = teammateHistoryRows(append(chain, starter))
 				}
 			}
 		}
@@ -232,12 +230,22 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		leading = []*discordgo.Message{anchor}
 	}
 	const pageLimit = 20
-	var raw []*discordgo.Message
-	if len(leading) <= 1 || q.Cursor != "" {
-		raw, err = t.client.teammateMessages(ctx, route, cursor.Before, pageLimit)
-		if err != nil {
-			return out, err
+	raw, err := t.client.teammateMessages(ctx, route, cursor.Before, pageLimit)
+	if err != nil {
+		return out, err
+	}
+	more := len(raw) == pageLimit || q.Anchor != ""
+	if topicStart != "" && q.Anchor == "" {
+		// The reply chain locates the topic but other speakers can contribute between its links.
+		page := raw[:0]
+		for _, m := range raw {
+			if snowflakeLess(m.ID, topicStart) {
+				more = true
+				continue
+			}
+			page = append(page, m)
 		}
+		raw = page
 	}
 	raw = append(raw, leading...)
 	rows := teammateHistoryRows(raw)
@@ -250,7 +258,7 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		}
 	}
 	out.HighWater = cursor.Upper
-	more := len(raw) >= pageLimit || len(leading) > 1 || q.Anchor != ""
+
 	separateStarter := func() {
 		if out.Starter == nil {
 			return
@@ -436,8 +444,14 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 		return ErrInvalid
 	}
 	var record teammateCandidate
+	var guard teammateIngressGuard
 	err := t.service.Store.db.View(func(tx *bolt.Tx) error {
-		return teammateGet(tx.Bucket([]byte(teammateIngressBucket)), teammateKey(d.InstallationID, q.MessageID), &record)
+		key := teammateKey(d.InstallationID, q.MessageID)
+		err := teammateGet(tx.Bucket([]byte(teammateIngressBucket)), key, &record)
+		if !errors.Is(err, ErrNotFound) || q.Source != "grant" {
+			return err
+		}
+		return teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)), key, &guard)
 	})
 	if errors.Is(err, ErrNotFound) {
 		return ErrTeammateSourceChanged
@@ -445,23 +459,44 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 	if err != nil {
 		return err
 	}
-	a := record.Admission
-	if a == nil || a.Discussion.ID != d.ID || a.Discussion.Route != d.Route || a.OperationID != q.AdmissionID ||
-		a.Revision != q.Revision || a.Author.ID != q.AuthorID || record.State != StateSending && record.State != StateSent {
+	if a := record.Admission; a != nil {
+		if a.Discussion.ID != d.ID || a.Discussion.Route != d.Route || a.OperationID != q.AdmissionID ||
+			a.Revision != q.Revision || a.Author.ID != q.AuthorID || record.Deleted ||
+			record.State != StateSending && record.State != teammateStateAccepted && record.State != StateSent {
+			return ErrTeammateSourceChanged
+		}
+		if q.Source == "grant" && record.State != StateSent {
+			phase, err := t.manager.AdmissionState(ctx, *a)
+			if err != nil {
+				return err
+			}
+			if phase != TeammateAdmissionCutover {
+				return ErrTeammateSourceChanged
+			}
+		}
+		if q.Source == "admission" && record.State == StateSent {
+			return ErrTeammateSourceChanged
+		}
+	} else {
+		if q.Source != "grant" || guard.DiscussionID != d.ID || guard.Disposition != StateSent || guard.OperationID != q.AdmissionID ||
+			guard.Revision != q.Revision || guard.ActorID != q.AuthorID || guard.LastChange == "deleted" {
+			return ErrTeammateSourceChanged
+		}
+		record.Admission = &TeammateAdmission{Route: guard.Route, Author: Actor{ID: guard.ActorID}, RequireMention: guard.RequireMention}
+	}
+	route := record.Admission.Route
+	if route.MessageID != q.MessageID || route.GuildID != d.Route.GuildID ||
+		route.ChannelID != d.Route.ChannelID && route != d.Starter {
 		return ErrTeammateSourceChanged
 	}
 	if err = t.checkDiscussion(ctx, d); err != nil {
 		return err
 	}
-	m, err := t.client.teammateMessage(ctx, a.Route)
-	if teammateAPIStatus(err, http.StatusNotFound) || errors.Is(err, ErrConflict) {
-		return ErrTeammateSourceChanged
-	}
+	m, err := t.readAdmissionSource(ctx, record)
 	if err != nil {
 		return err
 	}
-	if !teammateHuman(m, t.service.botUserID()) || m.Author.ID != a.Author.ID || teammateRevision(m) != a.Revision ||
-		a.RequireMention && !teammateMention(m, t.service.botUserID()) {
+	if teammateRevision(m) != q.Revision {
 		return ErrTeammateSourceChanged
 	}
 	return nil

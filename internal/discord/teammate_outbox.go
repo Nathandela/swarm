@@ -15,9 +15,17 @@ import (
 )
 
 const teammateNonceWindow = time.Minute
+const teammateStartupNotice = "manager_startup_unavailable"
 
 func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
-	if d.ID == "" || d.Route.MessageID != "" || p.AdmissionID == "" && p.JobID == "" {
+	if d.ID == "" || d.Route.MessageID != "" || strings.HasPrefix(p.ID, teammateStartupNotice+"_") {
+		return ErrInvalid
+	}
+	if p.SystemCause != "" {
+		if p.SystemCause != TeammateSystemContinuityGap || p.AdmissionID != "" || p.JobID != "" || p.AttemptID != "" || p.QuestionID != "" || p.QuestionHash != "" {
+			return ErrInvalid
+		}
+	} else if p.AdmissionID == "" && p.JobID == "" {
 		return ErrInvalid
 	}
 	return s.teammateQueue(d.InstallationID, d.ID, d.Route, p, now, false)
@@ -31,6 +39,79 @@ func (s *Store) teammateQueueNotice(route Route, install, text string, now time.
 func (t *teammateConnector) queueGap(d TeammateDiscussion) error {
 	p := TeammatePublication{ID: "gap_" + digest([]any{d.ID, d.Gap})[:32], Body: "I may have missed requests while disconnected. Please restate anything you still want me to do."}
 	return t.service.Store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true)
+}
+
+func teammateStartupNoticeID(d TeammateDiscussion) string {
+	return teammateStartupNotice + "_" + digest(d.ID)[:32]
+}
+
+func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion) error {
+	key := teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d))
+	var out teammateOutput
+	err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), key, &out)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !out.Internal || out.Publication.SystemCause != teammateStartupNotice {
+		return ErrConflict
+	}
+	for _, part := range out.Chunks {
+		if part.State != StatePrepared {
+			return nil
+		}
+	}
+	if err = teammateOutboxCount(tx, d.InstallationID, -1); err != nil {
+		return err
+	}
+	return teammateCompactOutput(tx, key, d, out)
+}
+
+func (t *teammateConnector) managerStartupError(ctx context.Context, d TeammateDiscussion, managerErr error) error {
+	if !errors.Is(managerErr, ErrTeammateManagerUnavailable) {
+		return managerErr
+	}
+	p := TeammatePublication{
+		ID:          teammateStartupNoticeID(d),
+		Body:        "I couldn’t start my configured manager. Ask the Swarm operator to check the teammate status for details.",
+		SystemCause: teammateStartupNotice,
+	}
+	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, &p))
+}
+
+func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, prepare *TeammatePublication) error {
+	store := t.service.Store
+	var binding teammateBinding
+	err := store.db.View(func(tx *bolt.Tx) error {
+		return teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &binding)
+	})
+	if err != nil {
+		return err
+	}
+	if binding.ID != d.ID || binding.Route != d.Route {
+		return ErrConflict
+	}
+	if binding.Opened || binding.ProvisionalCancelled {
+		return nil
+	}
+	if prepare != nil {
+		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, *prepare, t.service.Now(), true); err != nil {
+			return err
+		}
+	}
+	var pending teammateOutput
+	err = store.db.View(func(tx *bolt.Tx) error {
+		return teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d)), &pending)
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return t.sendOutput(ctx, d.InstallationID, pending)
 }
 
 func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublication, now time.Time, internal bool) error {
@@ -227,6 +308,9 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 		return err
 	}
 	for _, out := range outputs {
+		if out.Publication.SystemCause == teammateStartupNotice {
+			continue
+		}
 		if err = t.sendOutput(ctx, d.InstallationID, out); err != nil {
 			return err
 		}
@@ -424,27 +508,33 @@ func (s *Store) teammateCompactOutbox(d TeammateDiscussion, now time.Time, ackno
 		}
 		err = s.db.Update(func(tx *bolt.Tx) error {
 			key := teammateOutputKey(d.InstallationID, d.ID, out.Publication.ID)
-			meta := tx.Bucket([]byte(teammateMetaBucket))
-			receipt := teammateReceipt{PublicationHash: digest(out.Publication), BodyHash: out.BodyHash, Route: out.Route}
-			for _, part := range out.Chunks {
-				receipt.DiscordMessageIDs = append(receipt.DiscordMessageIDs, part.MessageID)
-				if err := meta.Delete(teammateKey(d.InstallationID, "nonce:"+part.ID)); err != nil {
-					return err
-				}
-				if out.Publication.QuestionID != "" {
-					if err := meta.Delete(teammateKey(d.InstallationID, "question:"+d.ID+":"+part.MessageID)); err != nil {
-						return err
-					}
-				}
-			}
-			if err := putJSON(tx, teammateReceiptBucket, key, receipt); err != nil {
-				return err
-			}
-			return tx.Bucket([]byte(teammateOutboxBucket)).Delete(key)
+			return teammateCompactOutput(tx, key, d, out)
 		})
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out teammateOutput) error {
+	meta := tx.Bucket([]byte(teammateMetaBucket))
+	receipt := teammateReceipt{PublicationHash: digest(out.Publication), BodyHash: out.BodyHash, Route: out.Route}
+	for _, part := range out.Chunks {
+		if part.MessageID != "" {
+			receipt.DiscordMessageIDs = append(receipt.DiscordMessageIDs, part.MessageID)
+		}
+		if err := meta.Delete(teammateKey(d.InstallationID, "nonce:"+part.ID)); err != nil {
+			return err
+		}
+		if out.Publication.QuestionID != "" {
+			if err := meta.Delete(teammateKey(d.InstallationID, "question:"+d.ID+":"+part.MessageID)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := putJSON(tx, teammateReceiptBucket, key, receipt); err != nil {
+		return err
+	}
+	return tx.Bucket([]byte(teammateOutboxBucket)).Delete(key)
 }

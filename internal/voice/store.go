@@ -1049,7 +1049,7 @@ func settleAdmission(st *State, b ManagerBinding, seq uint64) error {
 		return ErrInvalid
 	}
 	for _, action := range st.Actions {
-		if action.ConversationID == b.ConversationID && action.Admission == seq && action.State != "settled" {
+		if action.ConversationID == b.ConversationID && action.Admission == seq && action.State != "settled" && action.State != discussionQueuedSend {
 			return ErrInvalid
 		}
 	}

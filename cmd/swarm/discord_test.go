@@ -289,3 +289,26 @@ func TestDiscordTeammateScopeCanClearLegacyChannels(t *testing.T) {
 		t.Fatal("saved an ambiguous project name")
 	}
 }
+
+func TestDiscordResumeManualRequiresExactLocalCoordinates(t *testing.T) {
+	dir, _ := discordCLIRig(t)
+	old := discordLocalCall
+	t.Cleanup(func() { discordLocalCall = old })
+	calls := 0
+	discordLocalCall = func(_ context.Context, path, op string, in, out any) error {
+		calls++
+		raw, _ := json.Marshal(in)
+		var v map[string]any
+		_ = json.Unmarshal(raw, &v)
+		if path != dir || op != "resume-manual" || v["instance"] != "inst" || v["session"] != "ep/session" || v["discussion"] != "discussion" || v["external_input"] != float64(0) {
+			t.Fatal(path, op, v)
+		}
+		return nil
+	}
+	if code, _, _ := cliDiscord(t, "resume-manual", "discussion", "--session", "ep/session", "--instance", "inst"); code != misuseExit || calls != 0 {
+		t.Fatal(code, calls)
+	}
+	if code, _, msg := cliDiscord(t, "resume-manual", "discussion", "--session", "ep/session", "--instance", "inst", "--external-input", "0"); code != 0 || calls != 1 {
+		t.Fatal(code, calls, msg)
+	}
+}

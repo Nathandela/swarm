@@ -9,8 +9,23 @@ import (
 	"github.com/Nathandela/swarm/internal/discord"
 )
 
+func privateTestSockets(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("/tmp", "swt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestDiscussionSocketsArePrivateShortStableAndIndependent(t *testing.T) {
 	state := t.TempDir()
+	socketRoot := privateTestSockets(t)
 	for i := 0; i < 4; i++ {
 		state = filepath.Join(state, "a-long-installation-directory")
 	}
@@ -23,6 +38,7 @@ func TestDiscussionSocketsArePrivateShortStableAndIndependent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		r.socketRoot = socketRoot
 		return r
 	}
 	open := func(r *Runtime, thread string) string {
@@ -59,6 +75,7 @@ func TestDormantDiscussionClosesSocketAndSkipsIdleSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.socketRoot = privateTestSockets(t)
 	t.Cleanup(func() { _ = r.Close() })
 	thread := discord.TeammateDiscussion{ID: "thread", InstallationID: "install", Route: discord.Route{GuildID: "guild", ChannelID: "thread"}}
 	entry, err := r.discussion(thread, nil, false)

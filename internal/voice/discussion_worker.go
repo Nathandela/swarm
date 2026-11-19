@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"unicode/utf8"
 
-	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
+
+var ErrControllerWorkerEvidenceLimit = errors.New("voice: exact worker evidence exceeds the verified transcript scan limit")
 
 func (c *Controller) discussionWorkerEvidence(ctx context.Context, worker WorkerAssociation, action Action) (*schema.WorkerTurnEvidence, error) {
 	if action.ID == "" || action.ID != worker.ActionID || action.State != "settled" || worker.JobID == "" || worker.AttemptID == "" {
@@ -20,8 +22,7 @@ func (c *Controller) discussionWorkerEvidence(ctx context.Context, worker Worker
 	if intent.Origin == nil {
 		return nil, ErrControllerNativeUnavailable
 	}
-	_, parent, valid := protocol.ParseID(c.binding.SessionID)
-	scope := schema.WorkerHistoryScope{Parent: parent, SessionInstance: worker.SessionInstance}
+	scope := schema.WorkerHistoryScope{Parent: worker.Parent, SessionInstance: worker.SessionInstance, ManagerConversation: c.binding.ConversationID}
 	switch intent.Tool {
 	case "swarm_create":
 		var receipt createdWorkerResult
@@ -29,6 +30,7 @@ func (c *Controller) discussionWorkerEvidence(ctx context.Context, worker Worker
 			receipt.State != "created" || receipt.Session != worker.Session || receipt.SessionInstance != worker.SessionInstance {
 			return nil, ErrControllerNativeUnavailable
 		}
+		scope.Parent = intent.Launch.SpawnedFrom
 		scope.PromptHash = hashBytes([]byte(intent.Launch.InitialPrompt))
 	case "swarm_send":
 		var receipt schema.SemanticMessageReceipt
@@ -44,7 +46,7 @@ func (c *Controller) discussionWorkerEvidence(ctx context.Context, worker Worker
 			}
 		}
 		if receipt.OperationID != action.OperationID || receipt.Session != worker.Session || receipt.SessionInstance != worker.SessionInstance ||
-			receipt.NativeInputID == "" || receipt.NativeTurnID == "" ||
+			receipt.Origin == nil || *receipt.Origin != *intent.Origin || receipt.NativeInputID == "" || receipt.NativeTurnID == "" ||
 			(receipt.State != "admitted" && receipt.State != "completed" && receipt.State != "failed" && receipt.State != "cancelled") {
 			return nil, ErrControllerNativeUnavailable
 		}
@@ -53,13 +55,16 @@ func (c *Controller) discussionWorkerEvidence(ctx context.Context, worker Worker
 	default:
 		return nil, ErrControllerNativeUnavailable
 	}
-	if c.workers == nil || !valid || ctx.Err() != nil {
+	if c.workers == nil || scope.Parent == "" || ctx.Err() != nil {
 		return nil, ErrControllerNativeUnavailable
 	}
 	page, err := c.workers.NativeHistoryPage(schema.InteractionHistoryReq{Native: true, Session: worker.Session, Limit: 1, Worker: &scope})
 	if err != nil || page.Scope != "authorized_worker_turn" || len(page.Items) != 0 ||
 		page.Worker != nil && (page.Worker.TurnID == "" || scope.TurnID != "" && page.Worker.TurnID != scope.TurnID) {
 		return nil, ErrControllerNativeUnavailable
+	}
+	if page.WorkerEvidenceLimited {
+		return nil, ErrControllerWorkerEvidenceLimit
 	}
 	return page.Worker, nil
 }
@@ -71,7 +76,7 @@ func (c *Controller) reconcileDiscussionWorkerEvidence(ctx context.Context) erro
 		return err
 	}
 	for _, worker := range st.Workers {
-		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.ActionID == "" || worker.JobID == "" {
+		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.EvidenceLimited || worker.ActionID == "" || worker.JobID == "" {
 			continue
 		}
 		id := discussionEvidenceID(worker)
@@ -79,6 +84,12 @@ func (c *Controller) reconcileDiscussionWorkerEvidence(ctx context.Context) erro
 			continue
 		}
 		proof, err := c.discussionWorkerEvidence(ctx, worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
+		if errors.Is(err, ErrControllerWorkerEvidenceLimit) {
+			if err = c.store.noteDiscussionWorkerEvidenceLimit(c.binding, worker); err != nil && !errors.Is(err, ErrStale) {
+				return err
+			}
+			continue
+		}
 		if errors.Is(err, ErrControllerNativeUnavailable) || proof == nil && err == nil {
 			continue
 		}
@@ -113,15 +124,28 @@ func (c *Controller) readDiscussionWorker(input ReadInput) (json.RawMessage, err
 	if !ok {
 		return nil, ErrNotFound
 	}
-	if _, err = c.workerTarget(input.SessionInput, false); err != nil {
-		return nil, err
-	}
 	if input.JobID != "" && input.JobID != worker.JobID || input.AttemptID != "" && input.AttemptID != worker.AttemptID {
 		return nil, ErrStale
 	}
-	proof, err := c.discussionWorkerEvidence(context.Background(), worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
-	if err != nil {
-		return nil, err
+	if worker.EvidenceLimited {
+		return nil, ErrControllerWorkerEvidenceLimit
+	}
+	var proof *schema.WorkerTurnEvidence
+	if event, exists := st.Events[key(c.binding.ConversationID, discussionEvidenceID(worker))]; exists {
+		var metadata struct{ Data schema.WorkerTurnEvidence }
+		if json.Unmarshal(event.Metadata, &metadata) != nil || !event.WorkerProof || metadata.Data.TurnID != event.NativeTurnID ||
+			event.JobID != worker.JobID || event.AttemptID != worker.AttemptID {
+			return nil, ErrCorrupt
+		}
+		proof = &metadata.Data
+	} else {
+		if _, err = c.workerTarget(input.SessionInput, false); err != nil {
+			return nil, err
+		}
+		proof, err = c.discussionWorkerEvidence(context.Background(), worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
+		if err != nil {
+			return nil, err
+		}
 	}
 	current, err := c.store.readView()
 	if err != nil {
@@ -138,4 +162,30 @@ func (c *Controller) readDiscussionWorker(input ReadInput) (json.RawMessage, err
 		AttemptID string                     `json:"attempt_id"`
 		Evidence  *schema.WorkerTurnEvidence `json:"evidence"`
 	}{"authorized_worker_turn", worker.Session, worker.SessionInstance, worker.JobID, worker.AttemptID, proof})
+}
+
+func truncateDiscussionWakeEvidence(text string) string {
+	end := min(len(text), 1024)
+	for end < len(text) && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
+}
+
+func (s *Store) noteDiscussionWorkerEvidenceLimit(b ManagerBinding, expected WorkerAssociation) error {
+	return s.update(func(st *State) error {
+		if err := checkBinding(st, b); err != nil {
+			return err
+		}
+		k := key(b.ConversationID, key(expected.Session, expected.SessionInstance))
+		worker := st.Workers[k]
+		if discussionEvidenceID(worker) != discussionEvidenceID(expected) {
+			return ErrStale
+		}
+		if !worker.EvidenceLimited {
+			worker.EvidenceLimited = true
+			putRecord(st, "workers", &st.Workers, k, worker)
+		}
+		return nil
+	})
 }

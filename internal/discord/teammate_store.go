@@ -11,14 +11,15 @@ import (
 )
 
 const (
-	teammatePendingBucket    = "teammate_pending"
-	teammateIngressBucket    = "teammate_ingress"
-	teammateDiscussionBucket = "teammate_discussions"
-	teammateMetaBucket       = "teammate_meta"
-	teammateOutboxBucket     = "teammate_outbox"
-	teammateReceiptBucket    = "teammate_receipts"
-	teammateIngressLimit     = 32768
-	teammateDiscussionLimit  = 1024
+	teammatePendingBucket      = "teammate_pending"
+	teammateIngressBucket      = "teammate_ingress"
+	teammateIngressGuardBucket = "teammate_ingress_guard"
+	teammateDiscussionBucket   = "teammate_discussions"
+	teammateMetaBucket         = "teammate_meta"
+	teammateOutboxBucket       = "teammate_outbox"
+	teammateReceiptBucket      = "teammate_receipts"
+	teammateIngressLimit       = 32768
+	teammateDiscussionLimit    = 1024
 )
 
 type teammateCandidate struct {
@@ -28,13 +29,22 @@ type teammateCandidate struct {
 	Author        Actor
 	Opening       bool
 	Edited        bool
+	Deleted       bool
 	Sequence      uint64
 	State         string
 	Error         string
 	Admission     *TeammateAdmission
 }
 
+type teammateIngressGuard struct {
+	RequireMention                                            bool `json:",omitempty"`
+	Route                                                     Route
+	ActorID, OperationID, Revision, DiscussionID, Disposition string
+	LastChange                                                string
+}
+
 type teammateBinding struct {
+	ProvisionalCancelled bool
 	TeammateDiscussion
 	Opened            bool
 	Boundary          string
@@ -79,9 +89,14 @@ func teammateEach(b *bolt.Bucket, installation string, fn func([]byte, []byte) e
 
 func (s *Store) teammateInterested(installation, id string) (candidate bool, err error) {
 	err = s.db.View(func(tx *bolt.Tx) error {
-		if tx.Bucket([]byte(teammateDiscussionBucket)).Get(teammateKey(installation, id)) != nil {
-			candidate = true
+		var binding teammateBinding
+		err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(installation, id), &binding)
+		if err == nil {
+			candidate = !binding.ProvisionalCancelled
 			return nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
 		}
 		meta := tx.Bucket([]byte(teammateMetaBucket))
 		candidate = meta.Get(teammateOpeningKey(installation, id)) != nil && meta.Get(teammateKey(installation, "parent:"+id)) == nil
@@ -102,20 +117,43 @@ func (s *Store) teammateRecord(installation, session string, sequence int64, rec
 				if (deleted || record.Edited) && record.Route.GuildID == "" {
 					record.Route.GuildID = prior.Route.GuildID
 				}
-				if prior.Route != record.Route {
+				if prior.Route != record.Route || !deleted && !record.Edited && prior.Author.ID != record.Author.ID {
 					return ErrConflict
 				}
 				if deleted || record.Edited {
 					prior.Edited = true
 					prior.Mutation++
+					prior.Deleted = prior.Deleted || deleted
 					if deleted && prior.State == StatePrepared {
-						prior.State = StateFailed
-						prior.Error = "source deleted before submission"
-						if err := queue.Delete(teammatePendingKey(installation, prior.Sequence)); err != nil {
+						if err := teammateSettleCandidate(tx, installation, key, prior, StateFailed); err != nil {
 							return err
 						}
+						continue
 					}
 					if err = putJSON(tx, teammateIngressBucket, key, prior); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			var guard teammateIngressGuard
+			err = teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)), key, &guard)
+			if err == nil {
+				if (record.Edited || deleted) && record.Route.GuildID == "" {
+					record.Route.GuildID = guard.Route.GuildID
+				}
+				if record.Route != guard.Route || !deleted && !record.Edited && guard.ActorID != record.Author.ID {
+					return ErrConflict
+				}
+				if deleted || record.Edited && guard.LastChange != "deleted" {
+					guard.LastChange = "edited"
+					if deleted {
+						guard.LastChange = "deleted"
+					}
+					if err = putJSON(tx, teammateIngressGuardBucket, key, guard); err != nil {
 						return err
 					}
 				}
@@ -132,6 +170,9 @@ func (s *Store) teammateRecord(installation, session string, sequence int64, rec
 			if err != nil && !errors.Is(err, ErrNotFound) {
 				return err
 			}
+			if !record.Opening && binding.ProvisionalCancelled {
+				continue
+			}
 			if !record.Opening && err != nil {
 				// Hold early, untagged posts only after an opener has been durably observed.
 				openingKey := teammateOpeningKey(installation, record.Route.ChannelID)
@@ -140,8 +181,8 @@ func (s *Store) teammateRecord(installation, session string, sequence int64, rec
 					continue
 				}
 			}
-			if b.Stats().KeyN >= teammateIngressLimit {
-				return ErrCapacity
+			if err = teammateIngressCount(tx, 1); err != nil {
+				return err
 			}
 			record.Sequence, err = b.NextSequence()
 			if err != nil {
@@ -291,15 +332,10 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 		if err := teammateGet(tx.Bucket([]byte(teammateIngressBucket)), key, &record); err != nil {
 			return err
 		}
-		if record.State != prior.State || record.Mutation != prior.Mutation && record.State == StatePrepared {
+		if record.State != prior.State || record.Mutation != prior.Mutation && (record.State == StatePrepared || state == StateSending) {
 			return ErrConflict
 		}
 		record.State, record.Error = state, detail
-		if state == StateSent || state == StateFailed {
-			if err := tx.Bucket([]byte(teammatePendingBucket)).Delete(teammatePendingKey(installation, record.Sequence)); err != nil {
-				return err
-			}
-		}
 		if state == StatePrepared {
 			record.Admission = nil
 		}
@@ -309,27 +345,85 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 			}
 		}
 		if admission != nil {
-			record.Admission = admission
+			persisted := *admission
+			persisted.Text = ""
+			record.Admission = &persisted
 		}
-		if state == StateSent && record.Admission != nil {
-			record.Admission.Text = ""
-			record.Admission.Author.Name = ""
+		if (state == StateSent || state == StateFailed) && record.Admission != nil {
+
 			d := record.Admission.Discussion
 			k := teammateKey(installation, d.Route.ChannelID)
 			var binding teammateBinding
 			if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), k, &binding); err != nil {
 				return err
 			}
-			binding.Opened = true
-			if record.Route.ChannelID == d.Route.ChannelID && snowflakeLess(binding.Boundary, record.Route.MessageID) {
-				binding.Boundary = record.Route.MessageID
+			if state == StateSent {
+				binding.Opened = true
+				binding.ProvisionalCancelled = false
+				if record.Route.ChannelID == d.Route.ChannelID && snowflakeLess(binding.Boundary, record.Route.MessageID) {
+					binding.Boundary = record.Route.MessageID
+				}
+			} else if !binding.Opened {
+				binding.ProvisionalCancelled = true
+			}
+			if binding.Opened || binding.ProvisionalCancelled {
+				if err := teammateCancelUnsentStartupNotice(tx, d); err != nil {
+					return err
+				}
 			}
 			if err := putJSON(tx, teammateDiscussionBucket, k, binding); err != nil {
 				return err
 			}
 		}
+		if state == StateSent || state == StateFailed {
+			return teammateSettleCandidate(tx, installation, key, record, state)
+		}
 		return putJSON(tx, teammateIngressBucket, key, record)
 	})
+}
+
+func teammateIngressCount(tx *bolt.Tx, delta int) error {
+	meta := tx.Bucket([]byte(teammateMetaBucket))
+	key := []byte("active_ingress_count")
+	raw := meta.Get(key)
+	var count int
+	if len(raw) == 8 {
+		count = int(binary.BigEndian.Uint64(raw))
+	} else {
+		count = tx.Bucket([]byte(teammatePendingBucket)).Stats().KeyN
+	}
+	count += delta
+	if count > teammateIngressLimit {
+		return ErrCapacity
+	}
+	if count < 0 {
+		return ErrConflict
+	}
+	return meta.Put(key, binary.BigEndian.AppendUint64(nil, uint64(count)))
+}
+
+func teammateSettleCandidate(tx *bolt.Tx, install string, key []byte, record teammateCandidate, state string) error {
+	guard := teammateIngressGuard{Route: record.Route, ActorID: record.Author.ID, Disposition: state}
+	if record.Admission != nil {
+		guard.OperationID, guard.Revision, guard.DiscussionID = record.Admission.OperationID, record.Admission.Revision, record.Admission.Discussion.ID
+		guard.RequireMention = record.Admission.RequireMention
+	}
+	if record.Edited {
+		guard.LastChange = "edited"
+	}
+	if record.Deleted {
+		guard.LastChange = "deleted"
+	}
+	if err := putJSON(tx, teammateIngressGuardBucket, key, guard); err != nil {
+		return err
+	}
+	if err := teammateIngressCount(tx, -1); err != nil {
+		return err
+	}
+	if err := tx.Bucket([]byte(teammatePendingBucket)).Delete(teammatePendingKey(install, record.Sequence)); err != nil {
+		return err
+	}
+	return tx.Bucket([]byte(teammateIngressBucket)).Delete(key)
 }
 
 type teammateOutput struct {

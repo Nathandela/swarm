@@ -55,6 +55,12 @@ type LocalReply struct {
 	ID   string `json:"id"`
 	Body string `json:"body"`
 }
+type LocalTeammateResumeManual struct {
+	Discussion    string `json:"discussion"`
+	Session       string `json:"session"`
+	Instance      string `json:"instance"`
+	ExternalInput uint64 `json:"external_input"`
+}
 type LocalTarget struct {
 	TargetID string `json:"target_id"`
 }
@@ -69,7 +75,7 @@ func localMethod(operation string) string {
 	switch operation {
 	case "context", "status", "roster":
 		return http.MethodGet
-	case "reply", "include", "exclude", "propose", "shutdown":
+	case "reply", "include", "exclude", "propose", "shutdown", "resume-manual":
 		return http.MethodPost
 	}
 	return ""
@@ -205,12 +211,28 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	var err error
-	if s.Config.Mode == "teammate" && operation != "status" && operation != "shutdown" {
+	if s.Config.Mode == "teammate" && operation != "status" && operation != "shutdown" && operation != "resume-manual" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "discord: this operation requires legacy mode"})
 		return
 	}
 	switch operation {
+	case "resume-manual":
+		var input struct {
+			LocalTeammateResumeManual
+			Expected *uint64 `json:"external_input"`
+		}
+		if err = decodeLocal(w, r, &input); err == nil {
+			if input.Expected == nil {
+				err = ErrInvalid
+			} else {
+				input.ExternalInput = *input.Expected
+				err = s.resumeTeammateManual(r.Context(), input.LocalTeammateResumeManual)
+			}
+		}
+		result = struct {
+			Resumed bool `json:"resumed"`
+		}{err == nil}
 	case "shutdown":
 		if err = decodeLocal(w, r, &struct{}{}); err != nil {
 			break
@@ -308,6 +330,28 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+func (s *Service) resumeTeammateManual(ctx context.Context, input LocalTeammateResumeManual) error {
+	if s.Config.Mode != "teammate" || input.Discussion == "" || input.Session == "" || input.Instance == "" {
+		return ErrInvalid
+	}
+	manager, ok := s.teammateManager.(interface {
+		ResumeManual(context.Context, TeammateDiscussion, string, string, uint64) error
+	})
+	if !ok {
+		return ErrTeammateManagerUnavailable
+	}
+	bindings, err := s.Store.teammateBindings(s.Config.InstallationID)
+	if err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		if binding.ID == input.Discussion {
+			return manager.ResumeManual(ctx, binding.TeammateDiscussion, input.Session, input.Instance, input.ExternalInput)
+		}
+	}
+	return ErrNotFound
 }
 
 // ServeLocal exposes the connector only through an owner-private Unix socket.

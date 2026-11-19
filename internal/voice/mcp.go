@@ -100,12 +100,16 @@ func newManagerMCP(call ManagerToolCaller, discussion bool) *mcp.Server {
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "swarm_voice", Version: "1"}, &mcp.ServerOptions{Instructions: instructions})
 	addManagerTool[ListInput](s, "swarm_list", "List a bounded page of workers with exact identities, states and capabilities; use after_session_id for the next page.", call)
-	readDescription := "Read available worker output with explicit source and retention limits; keep the returned source-bound cursor. Native and retained structured output are distinct."
+	readDescription := "Read worker output. In a Discord discussion this returns only the verified turn for the current job and attempt. Otherwise use the returned source-bound history cursor."
 	if discussion {
 		readDescription = "Read verified assistant output from the exact authorized worker attempt, using the session and instance from the worker receipt. Use the default source. Pending or unconfirmed evidence does not prove completion. Do not substitute an ambient provider read."
 	}
 	addManagerTool[ReadInput](s, "swarm_read", readDescription, call)
-	addManagerTool[CreateInput](s, "swarm_create", "Create an ordinary worker with a retry-stable action ID. Creation is not task completion; inspect observed status and available output, including when a fast worker has already ended.", call)
+	createDescription := "Create an ordinary worker with a retry-stable action ID. Creation is not task completion; inspect observed status and available output, including when a fast worker has already ended."
+	if discussion {
+		createDescription = "Create an authorized Codex worker in the approved project with a retry-stable action ID. Inspect its exact scoped output before reporting success."
+	}
+	addManagerTool[CreateInput](s, "swarm_create", createDescription, call)
 	addManagerTool[ResumeInput](s, "swarm_resume", "Resume an exited worker by exact session instance with a retry-stable action ID.", call)
 	addManagerTool[SendInput](s, "swarm_send", "Send an instruction using the worker's qualified native input; unsupported actions require terminal attention.", call)
 	addManagerTool[StatusInput](s, "swarm_status", "Reconcile a previously submitted action; uncertainty is not permission to repeat it with a new ID.", call)
@@ -170,7 +174,7 @@ func validateManagerToolInput(input any) error {
 	case SessionInput:
 		valid = target(v)
 	case ReadInput:
-		valid = target(v.SessionInput) && v.Limit >= 0 && v.Limit <= 100 && len(v.Cursor) <= MaxReadCursorBytes && (v.Source == "" || v.Source == "native" || v.Source == "retained")
+		valid = target(v.SessionInput) && v.Limit >= 0 && v.Limit <= 100 && len(v.Cursor) <= MaxReadCursorBytes && (v.Source == "" || v.Source == "native" || v.Source == "retained") && (v.JobID == "" || id(v.JobID)) && (v.AttemptID == "" || id(v.AttemptID))
 	case CreateInput:
 		valid = id(v.ActionID) && configText(v.Cwd, 4096) && text(v.Prompt, MaxUtteranceBytes) && len(v.Name) <= 256 && len(v.Model) <= 256 && (v.Agent == "codex" || v.Agent == "claude" || v.Agent == "agy" || v.Agent == "hermes" || v.Agent == "opencode")
 	case ResumeInput:

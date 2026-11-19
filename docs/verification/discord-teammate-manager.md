@@ -48,3 +48,12 @@ Sol and Astra re-read the revised plan and evidence. Astra approved the revised 
 ## Remaining empirical gates
 
 Production two-human admission and conversational quality, new native capability qualification on the actual home VM, long-context access with effective permissions, independent discussion isolation, manager retirement/reopen, lost-ACK recovery across both ledgers and delayed child reporting require the implementation. Measure cold and warm response latency, wake-to-result delay, idle process/model counts and the number of native effects in the real rehearsal. Mock receipts, a bot echo or an empty thread cannot substitute for a human-input end-to-end run.
+
+## Scoped worker result and send qualification
+
+| Worker path | Native evidence | Availability |
+|---|---|---|
+| Codex fresh worker | Match the first rollout turn's exact authorized input and a terminal event with that native turn ID. Codex 0.170.0 wrote `item_completed.UserMessage` followed by `task_complete` in an isolated local Responses probe and the scoped Linux rehearsal worker. | A verified transcript can report a result when the app-server journal join is unavailable. Resumable 8 MiB reads verify every record up to a 64 MiB evidence limit. |
+| Codex follow-up | Queue the immutable operation and bind it to the existing job, attempt, worker instance and project. Once the exact worker is idle and its native input route is available, retain the native turn receipt and verify the matching rollout input and terminal event. | Queued locally while busy. Delivery requires the native app-server input route. An unsupported join can leave that worker read-only. A queued operation expires at the native semantic replay limit if readiness never becomes verifiable. |
+| Claude Code fresh worker | Match the first exact prompt in the verified JSONL transcript and follow its mainline UUID ancestry through attachments and tool results to a terminal assistant message. An isolated interactive 2.1.326 probe with a loopback provider produced `promptId`, mainline attachments and an assistant `end_turn`. | Fresh-worker read only. The home VM’s installed Claude version still requires a live worker rehearsal. |
+| Claude Code follow-up, OpenCode, agy and Hermes workers | The Discord job path has no qualified exact native turn receipt for these operations. | Unavailable on this surface. |

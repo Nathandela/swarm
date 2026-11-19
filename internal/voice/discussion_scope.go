@@ -17,14 +17,16 @@ var ErrDiscussionSourceChanged = errors.New("voice: verified Discord source chan
 
 // DiscussionScope comes from the verified connector destination and local enrollment.
 type DiscussionScope struct {
-	DiscussionID   string
-	InstallationID string
-	GuildID        string
-	ThreadID       string
-	VerifyAudience func(context.Context) error
-	VerifyOrigin   func(context.Context, schema.MessageOrigin) error
-	journalReady   func() bool
-	History        func(context.Context, DiscussionHistoryInput) (json.RawMessage, error)
+	DiscussionID    string
+	InstallationID  string
+	GuildID         string
+	ThreadID        string
+	VerifyAudience  func(context.Context) error
+	ProjectEnrolled func(string) bool
+	VerifyOrigin    func(context.Context, schema.MessageOrigin) error
+	VerifyGrant     func(context.Context, schema.MessageOrigin) error
+	journalReady    func() bool
+	History         func(context.Context, DiscussionHistoryInput) (json.RawMessage, error)
 }
 
 type DiscussionHistoryInput struct {
@@ -39,10 +41,10 @@ func (s *DiscussionScope) validateOrigin(origin schema.MessageOrigin) bool {
 }
 
 func (c *Controller) submitDiscussion(origin schema.MessageOrigin, text, questionID, questionHash string) (Admission, error) {
-	return c.submitDiscussionInProject(origin, text, text, questionID, questionHash, "")
+	return c.submitDiscussionInProject(origin, text, text, questionID, questionHash, "", false)
 }
 
-func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text, answer, questionID, questionHash, project string) (Admission, error) {
+func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text, answer, questionID, questionHash, project string, explicit bool) (Admission, error) {
 	if c.discussion == nil || !c.discussion.validateOrigin(origin) || (text == "" || len(text) > MaxUtteranceBytes || !utf8.ValidString(text) || strings.ContainsRune(text, 0)) {
 		return Admission{}, ErrInvalid
 	}
@@ -51,7 +53,7 @@ func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text
 		if err != nil {
 			return Admission{}, err
 		}
-		a, err := c.answerDiscussionQuestion(questionID, questionHash, origin, project, raw)
+		a, err := c.answerDiscussionQuestion(questionID, questionHash, origin, project, explicit, raw)
 		if !errors.Is(err, ErrExpired) && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrNotFound) {
 			return a, err
 		}
@@ -62,32 +64,38 @@ func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text
 			return err
 		}
 		source := "discussion:" + origin.RequestID
-		for _, a := range st.Admissions {
-			if a.ConversationID != c.binding.ConversationID || a.SourceID != source {
-				continue
-			}
-			if a.Origin == nil || *a.Origin != origin {
-				return ErrConflict
-			}
-			result = a
-			return nil
-		}
-		a, err := allocateAdmission(st, c.binding, source)
+		a, err := findDiscussionAdmission(*st, origin)
 		if err != nil {
 			return err
 		}
-		a.QuestionBoundary = st.Conversations[c.binding.ConversationID].LastOutput
-		if a.QuestionBoundary != 0 {
-			a.HumanReply = answer
+		if a.Origin != nil && *a.Origin == origin {
+			result = a
+			return nil
+		}
+		a, err = admitDiscussionRevision(st, c.binding, a, source)
+		if err != nil {
+			return err
 		}
 		a.Origin = &origin
 		a.InputText = text
-		a.Project = project
+		a.HumanReply = answer
+		a.QuestionBoundary = st.Conversations[c.binding.ConversationID].LastOutput
+		a.Project, a.ProjectExplicit = project, explicit
 		putRecord(st, "admissions", &st.Admissions, admissionKey(c.binding.ConversationID, a.Sequence), a)
 		result = a
 		return nil
 	})
 	return cloneAdmission(result), err
+}
+
+func admitDiscussionRevision(st *State, b ManagerBinding, previous Admission, source string) (Admission, error) {
+	if previous.Origin == nil {
+		return allocateAdmission(st, b, source)
+	}
+	if previous.Phase != "superseded" || previous.SourceCutover || !previous.SettledAt.IsZero() {
+		return Admission{}, ErrConflict
+	}
+	return Admission{ConversationID: b.ConversationID, Sequence: previous.Sequence, SourceID: source}, nil
 }
 
 func (c *Controller) discussionEffect(admission Admission, name string) error {
@@ -146,9 +154,34 @@ func (c *Controller) discussionContinuation(st State, admission Admission, targe
 }
 
 func (c *Controller) projectPath(root, candidate string) bool {
-	if !filepath.IsAbs(root) || root != candidate {
+	if !filepath.IsAbs(root) || root != candidate || c.discussion != nil && c.discussion.ProjectEnrolled != nil && !c.discussion.ProjectEnrolled(root) {
 		return false
 	}
 	resolved, err := filepath.EvalSymlinks(root)
 	return err == nil && resolved == root
+}
+
+// Only an explicit switch overrides a project selected by an earlier queued human.
+func (c *Controller) prepareDiscussionProject(expected Admission) (Admission, error) {
+	result := expected
+	err := c.store.update(func(st *State) error {
+		if err := checkBinding(st, c.binding); err != nil {
+			return err
+		}
+		k := admissionKey(c.binding.ConversationID, expected.Sequence)
+		current, ok := st.Admissions[k]
+		if !ok || current.Phase != "" || current.Origin == nil || *current.Origin != *expected.Origin {
+			return ErrConflict
+		}
+		inherited := st.Conversations[c.binding.ConversationID].Project
+		if !current.ProjectExplicit && c.projectPath(inherited, inherited) {
+			current.Project = inherited
+		} else if !c.projectPath(current.Project, current.Project) {
+			current.Project = ""
+		}
+		putRecord(st, "admissions", &st.Admissions, k, current)
+		result = current
+		return nil
+	})
+	return result, err
 }

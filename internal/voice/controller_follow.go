@@ -97,28 +97,28 @@ func (c *Controller) consumeJournal(ctx context.Context, source controllerJourna
 		}{false, "initial_gap_or_namespace_recovery", len(st.Workers)})
 		cursor := JournalCursor{Binding: resume.SourceID, Sequence: resume.Cursor}
 		snapshot := JournalSnapshot{Previous: previous, Metadata: metadata}
-		owned := false
-		for _, worker := range st.Workers {
-			if worker.ConversationID == c.binding.ConversationID &&
-				(c.discussion == nil || !worker.Reserved && !worker.RecoveryRequired) {
-				owned = true
-				break
+		if c.discussion != nil {
+			// Scoped native turn verification independently reconciles discussion jobs.
+			err = c.ReconcileJournal(cursor, snapshot)
+		} else {
+			owned := false
+			for _, worker := range st.Workers {
+				if worker.ConversationID == c.binding.ConversationID {
+					owned = true
+					break
+				}
 			}
-		}
-		if c.discussion == nil {
 			for _, input := range st.Admissions {
 				if input.ConversationID == c.binding.ConversationID && input.SettledAt.IsZero() {
 					owned = true
 					break
 				}
 			}
-		}
-		if owned {
-			_, err = c.AcceptRecoverySnapshot(cursor, snapshot)
-		} else if c.discussion != nil {
-			err = c.ReconcileJournal(cursor, snapshot)
-		} else {
-			err = c.store.checkpointControllerRecovery(c.binding, cursor, snapshot)
+			if owned {
+				_, err = c.AcceptRecoverySnapshot(cursor, snapshot)
+			} else {
+				err = c.store.checkpointControllerRecovery(c.binding, cursor, snapshot)
+			}
 		}
 		if err != nil {
 			return err
@@ -175,7 +175,7 @@ func (c *Controller) consumeJournal(ctx context.Context, source controllerJourna
 }
 func (c *Controller) qualifiedJournalRecord(st State, endpoint string, record protocol.JournalRecord) (bool, error) {
 	relevant, _ := journalWorkerSignal(record)
-	if !relevant || (c.discussion != nil && record.SessionID == "") {
+	if !relevant || (c.discussion != nil && (record.SessionID == "" || record.Type != "exited")) {
 		return false, nil
 	}
 	session, err := journalSession(endpoint, record.SessionID)
@@ -199,13 +199,16 @@ func (c *Controller) qualifiedJournalRecord(st State, endpoint string, record pr
 		return false, nil
 	}
 	if record.SessionInstance == "" || !exact {
+		if c.discussion != nil {
+			return false, nil
+		}
 		return false, ErrControllerJournalResync
 	}
 	return true, nil
 }
 func (c *Controller) consumeJournalRecord(endpoint, sourceID string, examined uint64, record protocol.JournalRecord) error {
 	relevantSignal, _ := journalWorkerSignal(record)
-	if !relevantSignal || (c.discussion != nil && record.SessionID == "") {
+	if !relevantSignal || (c.discussion != nil && (record.SessionID == "" || record.Type != "exited")) {
 		return nil
 	}
 	normalized, err := journalSession(endpoint, record.SessionID)
@@ -233,9 +236,6 @@ func (c *Controller) consumeJournalRecord(endpoint, sourceID string, examined ui
 	}
 	if c.discussion != nil {
 		// Session-wide activity may belong to a private turn. Exit is lifecycle only.
-		if record.Type != "exited" {
-			return nil
-		}
 		return c.store.noteDiscussionWorkerExit(c.binding, normalized, record.SessionInstance)
 	}
 	session, err := journalSession(endpoint, record.SessionID)
@@ -272,7 +272,7 @@ func (c *Controller) consumeJournalRecord(endpoint, sourceID string, examined ui
 		Source string
 		Cursor uint64
 	}{sourceID, record.Cursor})
-	event := Event{ID: id, Cursor: JournalCursor{Binding: sourceID, Sequence: record.Cursor}, Metadata: metadata, RecoveryOnly: recovery, WorkerExited: c.discussion != nil && record.Type == "exited"}
+	event := Event{ID: id, Cursor: JournalCursor{Binding: sourceID, Sequence: record.Cursor}, Metadata: metadata, RecoveryOnly: recovery}
 	if record.Cursor > 0 {
 		event.ExaminedThrough = JournalCursor{Binding: sourceID, Sequence: examined}
 	}

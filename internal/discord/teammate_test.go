@@ -79,14 +79,31 @@ func TestTeammateIngressExceedsLegacyBurstAndKeepsDeletes(t *testing.T) {
 
 type teammateTestManager struct {
 	known    bool
+	phase    string
+	canceled bool
 	admitted []TeammateAdmission
 }
 
-func (m *teammateTestManager) AdmissionKnown(context.Context, TeammateAdmission) (bool, error) {
-	return m.known, nil
+func (m *teammateTestManager) AdmissionState(context.Context, TeammateAdmission) (string, error) {
+	if m.phase != "" {
+		return m.phase, nil
+	}
+	if m.known || len(m.admitted) > 0 {
+		return TeammateAdmissionCutover, nil
+	}
+	return TeammateAdmissionMissing, nil
 }
+func (m *teammateTestManager) CancelAdmission(context.Context, TeammateAdmission) error {
+	m.canceled = true
+	m.phase = TeammateAdmissionCancelled
+	return nil
+}
+
 func (m *teammateTestManager) Admit(_ context.Context, a TeammateAdmission, _ TeammateHistoryReader) error {
 	m.admitted = append(m.admitted, a)
+	if m.phase == TeammateAdmissionSuperseded {
+		m.phase = TeammateAdmissionAccepted
+	}
 	return nil
 }
 func (*teammateTestManager) Sync(context.Context, TeammateDiscussion, TeammateHistoryReader, func(TeammatePublication) error) error {
@@ -732,6 +749,7 @@ func TestTeammateLastMileRechecksOriginalParentMessage(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
+	mgr.phase = TeammateAdmissionAccepted
 	teammateTestEvent(t, bridge, 1, "MESSAGE_CREATE", opener)
 	pending, err := bridge.service.Store.teammatePending("install")
 	if err != nil || len(pending) != 1 {
@@ -748,5 +766,153 @@ func TestTeammateLastMileRechecksOriginalParentMessage(t *testing.T) {
 	changed = true
 	if _, err = bridge.history(a.Discussion)(ctx, q); !errors.Is(err, ErrTeammateSourceChanged) {
 		t.Fatalf("changed source: %v", err)
+	}
+}
+
+func TestTeammateSupersedesQueuedOpeningWithoutOpeningBeforeCutover(t *testing.T) {
+	original := teammateTestMessage("202", "201", "77", "<@99> old scope", true)
+	content := original.Content
+	c, m := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages/202":
+			current := *original
+			current.Content = content
+			_ = json.NewEncoder(w).Encode(current)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	ctx := context.Background()
+	m.phase = TeammateAdmissionAccepted
+	teammateTestEvent(t, c, 1, "MESSAGE_CREATE", original)
+	pending, _ := c.service.Store.teammatePending("install")
+	if err := c.process(ctx, pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := c.service.Store.teammateBindings("install")
+	if len(rows) != 1 || rows[0].Opened {
+		t.Fatalf("premature discussion open: %+v", rows)
+	}
+	content = "<@99> revised scope"
+	m.phase = TeammateAdmissionSuperseded
+	pending, _ = c.service.Store.teammatePending("install")
+	if err := c.reconcileAccepted(ctx, pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.admitted) != 2 || m.admitted[0].OperationID != m.admitted[1].OperationID || m.admitted[0].Sequence != m.admitted[1].Sequence ||
+		m.admitted[0].Revision == m.admitted[1].Revision || m.admitted[1].Text != content {
+		t.Fatalf("replacement %+v", m.admitted)
+	}
+	rows, _ = c.service.Store.teammateBindings("install")
+	if rows[0].Opened {
+		t.Fatal("replacement opened prematurely")
+	}
+	m.phase = TeammateAdmissionCutover
+	pending, _ = c.service.Store.teammatePending("install")
+	if err := c.reconcileAccepted(ctx, pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = c.service.Store.teammateBindings("install")
+	if !rows[0].Opened {
+		t.Fatal("verified cutover did not open discussion")
+	}
+	pending, _ = c.service.Store.teammatePending("install")
+	if len(pending) != 0 {
+		t.Fatal(pending)
+	}
+}
+
+func TestTeammateWithdrawnQueuedTagCancelsProvisionalBinding(t *testing.T) {
+	original := teammateTestMessage("202", "201", "77", "<@99> check this", true)
+	content := original.Content
+	c, m := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages/202":
+			current := *original
+			current.Content = content
+			_ = json.NewEncoder(w).Encode(current)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	ctx := context.Background()
+	m.phase = TeammateAdmissionAccepted
+	teammateTestEvent(t, c, 1, "MESSAGE_CREATE", original)
+	pending, _ := c.service.Store.teammatePending("install")
+	if err := c.process(ctx, pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	content = "Never mind"
+	m.phase = TeammateAdmissionSuperseded
+	pending, _ = c.service.Store.teammatePending("install")
+	if err := c.reconcileAccepted(ctx, pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !m.canceled {
+		t.Fatal("native FIFO was left occupied")
+	}
+	rows, err := c.service.Store.teammateBindings("install")
+	if err != nil || len(rows) != 1 || rows[0].Opened || !rows[0].ProvisionalCancelled {
+		t.Fatalf("cancelled binding %+v %v", rows, err)
+	}
+	teammateTestEvent(t, c, 2, "MESSAGE_CREATE", teammateTestMessage("203", "201", "88", "untagged", false))
+	pending, err = c.service.Store.teammatePending("install")
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("cancelled binding accepts chatter %+v %v", pending, err)
+	}
+}
+
+func TestTeammateIngressGuardsDoNotConsumeActiveCapacity(t *testing.T) {
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	const installation = "install"
+	candidate := teammateCandidate{Route: Route{GuildID: "10", ChannelID: "20", MessageID: "201"}, Author: Actor{ID: "77"}, Opening: true}
+	if err = s.teammateRecord(installation, "session", 1, []teammateCandidate{candidate}, false); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.teammatePending(installation)
+	if err = s.teammateCandidateChange(installation, rows[0], StateFailed, "withdrawn", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.db.Update(func(tx *bolt.Tx) error {
+		if tx.Bucket([]byte(teammateIngressBucket)).Get(teammateKey(installation, candidate.Route.MessageID)) != nil {
+			return ErrConflict
+		}
+		guards := tx.Bucket([]byte(teammateIngressGuardBucket))
+		guard := guards.Get(teammateKey(installation, candidate.Route.MessageID))
+		for i := range teammateIngressLimit + 1 {
+			if err := guards.Put(teammateKey(installation, strconv.Itoa(i+1000)), guard); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.teammateRecord(installation, "session", 2, []teammateCandidate{candidate}, false); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Route.MessageID = "202"
+	if err = s.teammateRecord(installation, "session", 3, []teammateCandidate{candidate}, false); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = s.teammatePending(installation)
+	if err != nil || len(rows) != 1 || rows[0].Route.MessageID != "202" {
+		t.Fatalf("replay or quota %+v %v", rows, err)
 	}
 }

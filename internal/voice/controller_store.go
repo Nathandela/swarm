@@ -208,14 +208,14 @@ func (s *Store) RebindManager(previous, next ManagerBinding) (ManagerBinding, er
 }
 
 func (s *Store) answerControllerQuestion(b ManagerBinding, id, expectedHash, answerID string, answer json.RawMessage, now time.Time) (Admission, error) {
-	return s.answerQuestion(b, id, expectedHash, answerID, answer, now, nil, "")
+	return s.answerQuestion(b, id, expectedHash, answerID, answer, now, nil, "", false)
 }
 
-func (c *Controller) answerDiscussionQuestion(id, expectedHash string, origin schema.MessageOrigin, project string, answer json.RawMessage) (Admission, error) {
-	return c.store.answerQuestion(c.binding, id, expectedHash, origin.RequestID, answer, time.Now(), &origin, project)
+func (c *Controller) answerDiscussionQuestion(id, expectedHash string, origin schema.MessageOrigin, project string, explicit bool, answer json.RawMessage) (Admission, error) {
+	return c.store.answerQuestion(c.binding, id, expectedHash, origin.RequestID, answer, time.Now(), &origin, project, explicit)
 }
 
-func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID string, answer json.RawMessage, now time.Time, origin *schema.MessageOrigin, project string) (Admission, error) {
+func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID string, answer json.RawMessage, now time.Time, origin *schema.MessageOrigin, project string, explicit bool) (Admission, error) {
 	var result Admission
 	err := s.update(func(st *State) error {
 		if err := checkBinding(st, b); err != nil {
@@ -252,7 +252,14 @@ func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID stri
 		if r.State != "pending" || !now.Before(r.ExpiresAt) || st.CancelledTasks[key(b.ConversationID, r.TaskID)] {
 			return ErrExpired
 		}
-		a, err := allocateAdmission(st, b, source)
+		var previous Admission
+		if origin != nil {
+			previous, err = findDiscussionAdmission(*st, *origin)
+			if err != nil {
+				return err
+			}
+		}
+		a, err := admitDiscussionRevision(st, b, previous, source)
 		if err != nil {
 			return err
 		}
@@ -271,15 +278,12 @@ func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID stri
 				}
 			}
 		}
-		a.Origin, a.Project = origin, project
+		a.Origin, a.Project, a.ProjectExplicit = origin, project, explicit
 		a.InputText = "Human answer to the exact pending clarification: " + string(text)
 		if origin != nil {
 			speaker, _ := json.Marshal(origin)
 			a.InputText += "\nVerified Discord author " + string(speaker) + ". Use publish to respond in the thread."
-			if project != "" {
-				path, _ := json.Marshal(project)
-				a.InputText += " Approved project for new work " + string(path)
-			}
+
 		}
 		if len(a.InputText) > MaxUtteranceBytes {
 			return ErrInvalid
@@ -324,7 +328,7 @@ func settleControllerInputState(st *State, b ManagerBinding, seq uint64) error {
 	}
 	return nil
 }
-func (s *Store) controllerActionExecuting(b ManagerBinding, id string) error {
+func (s *Store) controllerActionExecuting(b ManagerBinding, id string, queue bool) error {
 	return s.update(func(st *State) error {
 		if err := checkBinding(st, b); err != nil {
 			return err
@@ -348,6 +352,9 @@ func (s *Store) controllerActionExecuting(b ManagerBinding, id string) error {
 			return ErrExpired
 		}
 		a.State = "executing"
+		if queue {
+			a.State = discussionQueuedSend
+		}
 		putRecord(st, "actions", &st.Actions, k, a)
 		return nil
 	})
@@ -371,8 +378,8 @@ func (s *Store) rejectQueuedControllerInput(b ManagerBinding, expected Admission
 			if a.OperationID != "" || a.NativeInputID != "" || len(a.Request) != 0 {
 				return ErrConflict
 			}
-		case "prepared":
-			if a.OperationID != expected.OperationID || a.NativeInputID != expected.NativeInputID || string(a.Request) != string(expected.Request) {
+		case "prepared", "superseded":
+			if a.SourceCutover || a.OperationID != expected.OperationID || a.NativeInputID != expected.NativeInputID || string(a.Request) != string(expected.Request) {
 				return ErrConflict
 			}
 		default:
@@ -391,8 +398,13 @@ func (s *Store) rejectQueuedControllerInput(b ManagerBinding, expected Admission
 				putRecord(st, "requests", &st.Requests, rk, question)
 			}
 		}
-		a.Phase = "rejected"
 		a.Reason = reason
+		if reason == ErrDiscussionSourceChanged.Error() {
+			a.Phase = "superseded"
+			putRecord(st, "admissions", &st.Admissions, k, a)
+			return nil
+		}
+		a.Phase = "rejected"
 		putRecord(st, "admissions", &st.Admissions, k, a)
 		return settleControllerInputState(st, b, a.Sequence)
 	})
@@ -493,6 +505,7 @@ func (s *Store) beginControllerInput(b ManagerBinding, expected Admission) error
 			putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
 		}
 		a.Phase = "executing"
+		a.SourceCutover = a.Origin != nil
 		putRecord(st, "admissions", &st.Admissions, k, a)
 		return nil
 	})
@@ -522,6 +535,21 @@ func (s *Store) settleControllerWorkerAction(b ManagerBinding, action Action, se
 		if err != nil {
 			return err
 		}
+		var grant controllerActionRequest
+		if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
+			if json.Unmarshal(stored.Request, &grant) != nil {
+				return ErrCorrupt
+			}
+			if grant.Tool == "swarm_send" {
+				var result schema.SemanticMessageReceipt
+				if json.Unmarshal(raw, &result) != nil {
+					return ErrCorrupt
+				}
+				if result.State == "rejected" {
+					session, instance = "", ""
+				}
+			}
+		}
 		wk := key(b.ConversationID, key(session, instance))
 		reservation := key(b.ConversationID, "reservation:"+stored.ID)
 		reservationRecovery := st.Workers[reservation].RecoveryRequired
@@ -535,27 +563,24 @@ func (s *Store) settleControllerWorkerAction(b ManagerBinding, action Action, se
 				recovery = false
 			}
 			worker := WorkerAssociation{RecoveryRequired: recovery, ConversationID: b.ConversationID, Session: session, SessionInstance: instance, Admission: source.Sequence, SourceID: source.SourceID, ActionID: stored.ID}
-			if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
-				var grant controllerActionRequest
-				if json.Unmarshal(stored.Request, &grant) != nil {
-					return ErrCorrupt
+			if grant.Origin != nil {
+				original := existing
+				if grant.Tool == "swarm_resume" {
+					original = st.Workers[key(b.ConversationID, stored.Target)]
 				}
-				if grant.Origin != nil {
-
-					original := existing
-					if grant.Tool == "swarm_resume" {
-						original = st.Workers[key(b.ConversationID, stored.Target)]
-					}
-					worker.Project = grant.Project
-					worker.Ended = existing.Ended
-					worker.JobID, worker.InitialSourceID = original.JobID, original.InitialSourceID
-					if worker.JobID == "" {
-						worker.JobID, worker.InitialSourceID = stored.ID, source.SourceID
-					}
-					worker.AttemptID = stored.ID
-					if grant.Tool == "swarm_send" && original.AttemptID != "" {
-						worker.AttemptID = original.AttemptID
-					}
+				worker.Project = grant.Project
+				worker.Parent = original.Parent
+				if grant.Launch != nil {
+					worker.Parent = grant.Launch.SpawnedFrom
+				}
+				worker.Ended = existing.Ended
+				worker.JobID, worker.InitialSourceID = original.JobID, original.InitialSourceID
+				if worker.JobID == "" {
+					worker.JobID, worker.InitialSourceID = stored.ID, source.SourceID
+				}
+				worker.AttemptID = stored.ID
+				if grant.Tool == "swarm_send" && original.AttemptID != "" {
+					worker.AttemptID = original.AttemptID
 				}
 			}
 			putRecord(st, "workers", &st.Workers, wk, worker)
@@ -893,15 +918,7 @@ func (s *Store) acceptControllerWorkerEvent(b ManagerBinding, session, instance 
 		if err := acceptEventState(st, b, e, w, &result); err != nil {
 			return err
 		}
-		if !exists && e.WorkerExited {
-			k := key(b.ConversationID, key(session, instance))
-			worker, ok := st.Workers[k]
-			if !ok {
-				return ErrStale
-			}
-			worker.Ended = true
-			putRecord(st, "workers", &st.Workers, k, worker)
-		}
+
 		if !exists && e.RecoveryOnly {
 			return quarantineControllerState(st, b, session, instance)
 		}
