@@ -213,7 +213,11 @@ func probeColdTick(t *testing.T, swarm, binDir string, properties []string, surv
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer client.Close()
+		defer func() {
+			if err := client.Close(); err != nil {
+				t.Errorf("close probe client: %v", err)
+			}
+		}()
 		sessions, err := client.List()
 		if err != nil || len(sessions) != 1 || sessions[0].ID != attempt.SessionID || sessions[0].Status.Process != status.ProcessRunning {
 			t.Fatalf("direct daemon connection did not see the running scheduled worker: %+v, %v", sessions, err)
