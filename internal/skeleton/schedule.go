@@ -359,7 +359,7 @@ func (d *Daemon) observeScheduledClaudeFailure(cb engine.Callback) error {
 	if err != nil {
 		return errLoginObservationPending
 	}
-	defer transcript.Close()
+	defer func() { _ = transcript.Close() }()
 	reader, err := nativeTranscriptTail(transcript)
 	if err != nil {
 		return errLoginObservationPending
