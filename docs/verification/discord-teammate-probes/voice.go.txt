@@ -1,0 +1,30 @@
+package voice
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+func TestTeammateAdmissionSpike(t *testing.T) {
+	c, s, r, b := newControllerFixture(t)
+	r.failSend = errors.New("lost receipt")
+	if _, e := c.SubmitText(Utterance{ID: "discord-mid", DeviceID: "discord-spike", VoiceSessionID: "thread", MediaEpoch: 1}, "colleague work instruction"); e != nil {
+		t.Fatal(e)
+	}
+	_ = c.Tick(context.Background())
+	if len(r.sent) != 1 || r.sent[0].Origin != nil || r.sent[0].ManagerAdmission == nil {
+		t.Fatal("unexpected native input shape")
+	}
+	c2, e := NewController(s, r, b, ManagerBridgeRefs{Socket: r.status.BridgeSocket, AuthFile: r.status.AuthFile})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = c2.Tick(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	if len(r.sent) != 1 {
+		t.Fatal("duplicate native operation after restart")
+	}
+	t.Log("SubmitText followed by lost reply and controller reconstruction yielded one native send with manager proof but no Discord Origin")
+}

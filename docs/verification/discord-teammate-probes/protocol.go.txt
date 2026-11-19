@@ -1,0 +1,66 @@
+package protocol
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+type combinedPlanStub struct{ *durableComposerStub }
+
+func (s combinedPlanStub) ManagerInputStatus(context.Context, string, ManagerAdmission) (ManagerNativeTurn, error) {
+	return ManagerNativeTurn{}, nil
+}
+func (s combinedPlanStub) ManagerRuntime(string, string) (ManagerRuntimeStatus, error) {
+	return ManagerRuntimeStatus{}, nil
+}
+func (s combinedPlanStub) ResolveManagerCall(context.Context, string, ManagerCallReq) (ManagerCallProof, error) {
+	return ManagerCallProof{}, nil
+}
+func TestTeammateCombinedWireSpike(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		caps []string
+		ok   bool
+	}{
+		{"both", []string{CapSemanticSend, CapManagerProvenance, CapMessageOrigin}, true},
+		{"no_origin", []string{CapSemanticSend, CapManagerProvenance}, false},
+		{"no_manager", []string{CapSemanticSend, CapMessageOrigin}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := combinedPlanStub{newDurableComposerStub()}
+			rc := rawDial(t, serveOwnerAPI(t, stub))
+			hello := rc.hello(Version, test.caps)
+			id := semanticTestID(time.Now(), "a")
+			frame := semanticTestFrame(hello, id, "test")
+			req := frame.ComposerSend
+			req.ManagerAdmission = &ManagerAdmission{Binding: ManagerRuntimeBinding{Session: req.Session, SessionInstance: req.SessionInstance, ConversationID: "scope", Provider: "codex", NativeSessionID: "native", NativeGeneration: "generation", ObservationGeneration: "observer", LoginEpoch: "epoch"}, Nonce: strings.Repeat("f", 64)}
+			req.Origin = &MessageOrigin{Kind: "external", InstallationID: "install", RequestID: "request", ActorID: "alice", GuildID: "guild", ChannelID: "thread", MessageID: "msg"}
+			rc.writeControl(frame)
+			reply := rc.readControl()
+			if !test.ok {
+				if reply.Op != OpError || reply.ErrorCode != CodeNotImplemented {
+					t.Fatalf("bad refusal %+v", reply)
+				}
+				if _, sends, claims := stub.snapshot(id); sends != 0 || claims != 0 {
+					t.Fatal("claimed unnegotiated request")
+				}
+				return
+			}
+			if reply.Op != OpOK {
+				t.Fatalf("failed combined send: %+v", reply)
+			}
+			for _, change := range []func(){func() { req.Origin.ActorID = "bob" }, func() { req.Origin.ActorID = "alice"; req.ManagerAdmission.Nonce = strings.Repeat("a", 64) }} {
+				change()
+				rc.writeControl(frame)
+				if got := rc.readControl(); got.Op != OpError {
+					t.Fatalf("changed request was accepted: %+v", got)
+				}
+			}
+			if _, sends, _ := stub.snapshot(id); sends != 1 {
+				t.Fatal("expected single original call", sends)
+			}
+		})
+	}
+}
