@@ -59,7 +59,7 @@ func (d *Daemon) OwnerLaunchReplay(operationID, requestHash string) (persist.Met
 		m = cloneOpenCodeMeta(s.meta)
 	}
 	d.mu.Unlock()
-	if present && m.ShimPID != 0 && m.Status.Process != status.ProcessLost && openCodeLaunchComplete(m) {
+	if present && m.ShimPID != 0 && m.Status.Process != status.ProcessLost && openCodeLaunchComplete(m) && d.scheduledLaunchApplied(m) {
 		if rec.Phase != idempotency.PhaseCompleted {
 			if err := d.idem.Complete(operationID, nil); err != nil {
 				return persist.Meta{}, true, err

@@ -96,11 +96,12 @@ func (d *Daemon) reconcileRunning(m persist.Meta) {
 	}
 
 	// 2. Verify identity: the recorded PID is alive AND its start time matches, and
-	//    the shim answers the G2 hello. Reconnect WITHOUT any meta write, so a live
-	//    shim is never transiently persisted as lost (E5.3, reconnect-before-lost).
+	//    the shim answers the G2 hello. For scheduled launches, a matching shim
+	//    can still be starting after the daemon released its gate. Monitor that
+	//    identity without classifying it as lost or reaping its backend.
 	if m.ShimPID > 0 && pidAlive(m.ShimPID) {
 		if st, err := processStartTime(m.ShimPID); err == nil && st == m.ShimStartTime {
-			if confirmShimServing(shimSocketPath(d.cfg.StateDir, m.ID)) {
+			if m.ScheduleAttempt != "" || confirmShimServing(shimSocketPath(d.cfg.StateDir, m.ID)) {
 				d.registerRunning(m)
 				return
 			}

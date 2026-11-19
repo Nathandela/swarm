@@ -8,6 +8,12 @@ import (
 )
 
 func validateManagerShimRuntime(lc shimLaunchConfig, required bool) error {
+	if lc.ScheduledCodexBackend {
+		if required || lc.NativeProvider != "codex" || !lc.BackendRequired || lc.BackendProgram == "" || lc.BackendSocketPath == "" {
+			return fmt.Errorf("scheduled Codex launch requires its native app-server backend")
+		}
+		return nil
+	}
 	if !required {
 		if lc.BackendRequired {
 			return fmt.Errorf("manager launch requires matching --require-manager and runtime configuration")

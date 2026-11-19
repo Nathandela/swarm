@@ -100,6 +100,7 @@ type Config struct {
 type Daemon struct {
 	core        *daemon.Daemon
 	srv         *protocol.Server
+	scheduleSrv *protocol.Server
 	remoteSrv   *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
 	api         *coreAPI
 	eng         *engine.Engine
@@ -398,6 +399,9 @@ func Serve(cfg Config) (*Daemon, error) {
 			if d.remoteSrv != nil {
 				_ = d.remoteSrv.Close()
 			}
+			if d.scheduleSrv != nil {
+				_ = d.scheduleSrv.Close()
+			}
 			if d.srv != nil {
 				_ = d.srv.Close()
 			}
@@ -564,6 +568,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	// Owner lifecycle requests and automatic auth recycling share the session's
 	// end fence. Authwatch receives the raw core actions below; every protocol
 	// caller reaches these owner-aware wrappers through coreAPI.
+	d.api.scheduleStateDir = cfg.StateDir
+	d.startScheduleCompletionSocket(cfg.SocketPath, epID)
 	d.api.killFn = d.ownerKill
 	d.api.deleteFn = d.ownerDelete
 	d.srv = protocol.NewServer(d.api, epID)
@@ -662,6 +668,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	// recycleRestored rather than recycleCommitted, so their one crash-recovery
 	// redrive can still reach the claimed fence.
 	authRecycleUnsafeSource := func(local string) bool {
+		if m, ok := d.core.Get(local); ok && m.ScheduleAttempt != "" {
+			return true
+		}
 		return baseUnsafeSource(local) || d.composerRecycleCommitted(local)
 	}
 	// The same gate at each typed-input choke point: `swarm send`, raw attached
@@ -1348,6 +1357,9 @@ func (d *Daemon) Close() error {
 		}
 		if d.logins != nil {
 			_ = d.logins.store.Close()
+		}
+		if d.scheduleSrv != nil {
+			_ = d.scheduleSrv.Close()
 		}
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
+	"github.com/Nathandela/swarm/internal/scheduledexec"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -47,6 +49,10 @@ const (
 // here (not FromDaemon) so its poller is stopped deterministically on Close — the
 // daemon owns the socket, so the Server never runs FromDaemon's own stop path.
 type coreAPI struct {
+	scheduleMu           sync.Mutex
+	scheduler            *scheduledexec.Engine
+	scheduleStateDir     string
+	scheduleSocket       string
 	matchResumeInstance  func(persist.Meta, string) bool
 	managerInterruptTurn func(context.Context, string, string, protocol.ManagerInterruptReq, func() error) error
 	managerInputStatus   func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
@@ -1077,6 +1083,13 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 	}
 	var handoff *handoffHistoryResolver
 	coreAttempted := false
+	if spec.Scheduled != nil {
+		defer func() {
+			if launchErr != nil && (!coreAttempted || errors.Is(launchErr, daemon.ErrMaxSessions) || errors.Is(launchErr, daemon.ErrScheduledWorkspaceInvalid)) {
+				launchErr = errors.Join(scheduledexec.ErrAdmission, launchErr)
+			}
+		}()
+	}
 	resolver := a.historyResolver
 	if _, present := spec.Options[protocol.OptionHandoffFrom]; present {
 		a.handoffMu.Lock()
@@ -1354,6 +1367,20 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 			return persist.Meta{}, daemon.ErrResumeSourceChanged
 		}
 	}
+	if len(resolved.CodexPolicy) != 0 && resolved.AgentType == "codex" {
+		// The standalone and app-server paths must use the same policy.
+		end := len(resolved.Argv)
+		if resolved.InitialPrompt != "" && resolved.Argv[end-1] == resolved.InitialPrompt {
+			end--
+		}
+		args := slices.Clone(resolved.Argv[:end])
+		for i := 0; i < len(resolved.CodexPolicy); i += 2 {
+			if !strings.HasPrefix(resolved.CodexPolicy[i+1], "sandbox_workspace_write.writable_roots=") {
+				args = append(args, resolved.CodexPolicy[i:i+2]...)
+			}
+		}
+		resolved.Argv = append(args, resolved.Argv[end:]...)
+	}
 	if coreAttempted != nil {
 		*coreAttempted = true
 	}
@@ -1551,6 +1578,19 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		// that was itself resumed persisted its own resume_from, and inheriting
 		// it would point the new session at the wrong generation.
 		spec.Options = mergeResumeOptions(spec.Options, srcMeta.LaunchOptions)
+		if spec.AgentType == "codex" {
+			sandbox := srcMeta.ScheduledCodexSandbox
+			if sandbox == "" && srcMeta.ScheduleAttempt != "" {
+				sandbox = srcMeta.LaunchOptions["sandbox"]
+			}
+			if policy := scheduledCodexSandboxPolicy(sandbox); len(policy) != 0 {
+				if spec.Options == nil {
+					spec.Options = make(map[string]string)
+				}
+				spec.Options["sandbox"] = sandbox
+				spec.ScheduledCodexSandbox, spec.CodexPolicy = sandbox, policy
+			}
+		}
 		ad, ok := registry.New(spec.AgentType)
 		if !ok {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
@@ -2180,6 +2220,7 @@ type rosterSnap struct {
 	name               string
 	tag                string
 	rosterHidden       bool
+	scheduledCompleted bool
 	controlled         bool
 	supervisionPending bool
 	// backendPlanError joins the key because launch persists it in phase TWO,
@@ -2208,7 +2249,7 @@ func (a *coreAPI) watch() {
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
 			guard, hasGuard := a.ContextGuardView(m.ID)
-			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, rosterHidden: m.RosterHidden, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError, contextGuard: guard, hasContextGuard: hasGuard}
+			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, scheduledCompleted: m.ScheduledCompleted, rosterHidden: m.RosterHidden, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError, contextGuard: guard, hasContextGuard: hasGuard}
 			cur.openCodeHash = a.openCodeObservationHash(m.ID)
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue

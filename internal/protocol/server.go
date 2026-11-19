@@ -291,6 +291,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
+	CapSchedule, CapScheduleRunID,
 	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt,
 }
 
@@ -312,7 +313,8 @@ type Server struct {
 	// remoteTier marks a Server bound on the dedicated remote socket (ServeRemote):
 	// every connection is unconditionally remote-origin, so every remote mutating op
 	// must carry an operation_id (amendment D.0-A1/A4).
-	remoteTier bool
+	remoteTier     bool
+	completionTier bool
 
 	// composerFallback caches exact outcomes only for legacy/test backends that expose the
 	// old bool idempotency seam but not ComposerOperationExecutor. Production coreAPI uses
@@ -1313,7 +1315,9 @@ func (cc *clientConn) serve() {
 			}
 			cc.handleControl(ctrl)
 		case wire.TDataIn:
-			cc.handleDataIn(payload)
+			if !cc.srv.completionTier {
+				cc.handleDataIn(payload)
+			}
 		default:
 			// TDataOut/TSnapshot are server->client only; ignore from a client.
 		}
@@ -1339,6 +1343,10 @@ func (cc *clientConn) handleControl(c Control) {
 	// F-1: every post-hello message must carry this connection's endpoint id.
 	if c.EndpointID != cc.endpointID {
 		cc.replyError("foreign endpoint id")
+		return
+	}
+	if cc.srv.completionTier && c.Op != OpScheduleComplete {
+		cc.replyErrorCode("only scheduled worker completion is available on this socket", CodeNotAuthorized)
 		return
 	}
 	switch c.Op {
@@ -1410,6 +1418,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleSemanticSend(c)
 	case OpOwnerLaunch:
 		cc.handleOwnerLaunch(c)
+	case OpScheduleTick, OpScheduleRun, OpScheduleComplete:
+		cc.handleSchedule(c)
 	case OpOwnerLaunchStatus:
 		cc.handleOwnerLaunchStatus(c)
 	case OpSemanticStatus:
@@ -1500,8 +1510,12 @@ func (cc *clientConn) handleHello(c Control) {
 // DaemonAPI may still satisfy JournalBackend and serve the legacy read+subscribe path; advertising
 // subscribe-from to it would make a new gateway select an operation the server must then refuse.
 func (s *Server) supportedCaps() []string {
+	if s.completionTier {
+		return []string{CapSchedule}
+	}
 	managerSource, managerLaunch := s.d.(ManagerLaunchSource)
 	boundResume, hasBoundResume := s.d.(OwnerBoundResumeSource)
+	_, scheduled := s.d.(ScheduleSource)
 	_, ownerLaunch := s.d.(OwnerLaunchSource)
 	_, journalFrom := s.d.(JournalSubscribeFromBackend)
 	journalIdentity, hasJournalIdentity := s.d.(JournalIdentityBackend)
@@ -1528,6 +1542,9 @@ func (s *Server) supportedCaps() []string {
 			continue
 		}
 		if cap == CapOwnerBoundResume && (s.remoteTier || !ownerLaunch || !hasBoundResume || !boundResume.OwnerBoundResumeSupported()) {
+			continue
+		}
+		if (cap == CapSchedule || cap == CapScheduleRunID) && (s.remoteTier || !scheduled) {
 			continue
 		}
 		if cap == CapOwnerLaunch && (s.remoteTier || !ownerLaunch) {
@@ -3615,18 +3632,19 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 	}
 	return &SessionView{
 		Role: m.Role, ManagerConversationID: m.ManagerConversationID,
-		RosterHidden:   m.RosterHidden,
-		EndpointID:     endpointID,
-		ID:             NamespacedID(endpointID, m.ID),
-		Agent:          m.AgentType,
-		Name:           m.Name, // P2: carry the persisted label; "" degrades to Agent at display
-		Tag:            m.Tag,
-		Cwd:            m.Cwd,
-		Status:         m.Status,
-		Group:          group,
-		GroupEnteredAt: m.EffectiveGroupEnteredAt(),
-		LastActivity:   m.LastActivity,
-		CreatedAt:      m.CreatedAt,
+		RosterHidden:       m.RosterHidden,
+		EndpointID:         endpointID,
+		ID:                 NamespacedID(endpointID, m.ID),
+		Agent:              m.AgentType,
+		Name:               m.Name, // P2: carry the persisted label; "" degrades to Agent at display
+		Tag:                m.Tag,
+		ScheduledCompleted: m.ScheduledCompleted,
+		Cwd:                m.Cwd,
+		Status:             m.Status,
+		Group:              group,
+		GroupEnteredAt:     m.EffectiveGroupEnteredAt(),
+		LastActivity:       m.LastActivity,
+		CreatedAt:          m.CreatedAt,
 		// Summary (V-4 one-line last-output) is derived from the session's grid by
 		// the status engine (Epic 7/10), which persist.Meta does not yet carry. Left
 		// "" until then rather than presented as a stale/empty live summary (F12).

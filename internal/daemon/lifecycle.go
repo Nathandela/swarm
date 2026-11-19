@@ -24,6 +24,10 @@ func (d *Daemon) Kill(id string) error {
 		d.mu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
 	}
+	if s.scheduledLaunching {
+		d.mu.Unlock()
+		return ErrLaunchOutcomeUnknown
+	}
 	m := s.meta
 	running := m.Status.Process == status.ProcessRunning
 	d.mu.Unlock()
@@ -75,6 +79,10 @@ func (d *Daemon) Delete(id string) error {
 	s, ok := d.sessions[id]
 	var meta persist.Meta
 	if ok {
+		if s.scheduledLaunching {
+			d.mu.Unlock()
+			return ErrLaunchOutcomeUnknown
+		}
 		meta = s.meta
 	}
 	d.mu.Unlock()

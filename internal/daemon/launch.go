@@ -25,6 +25,7 @@ import (
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/worktree"
 )
 
 // ErrMaxSessions is returned by Launch when the daemon is at its configured
@@ -125,6 +126,7 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	RequireLaunchIdentity bool                       `json:"require_launch_identity,omitempty"`
 	ManagerReplayID       string                     `json:"manager_replay_id,omitempty"`
 	HermesInput           *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
 	AgyInput              *agyinput.Config           `json:"agy_input,omitempty"`
@@ -168,6 +170,7 @@ type shimSpawnConfig struct {
 	// in particular is the RESOLVED absolute path, so a restart never re-resolves a bare
 	// name through a PATH that may now point at a different CLI version.
 	BackendCwd              string   `json:"backend_cwd,omitempty"`
+	ScheduledCodexBackend   bool     `json:"scheduled_codex_backend,omitempty"`
 	BackendRequired         bool     `json:"backend_required,omitempty"`
 	BackendProgram          string   `json:"backend_program,omitempty"`
 	BackendArgs             []string `json:"backend_args,omitempty"`
@@ -340,6 +343,10 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+	scheduled := spec.Scheduled != nil
+	if scheduled && (spec.Scheduled.AttemptID == "" || spec.OperationID == "" || spec.OwnerLaunchHash == "") {
+		return persist.Meta{}, errors.New("daemon: scheduled launch requires an attempt and a bound owner operation")
+	}
 	if spec.OwnerLaunchHash != "" {
 		if spec.OperationID == "" {
 			return persist.Meta{}, errors.New("daemon: owner launch requires operation ID")
@@ -377,7 +384,13 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		}
 	}
 	if err := d.validateWorkspace(spec.Cwd); err != nil {
+		if scheduled {
+			err = errors.Join(ErrScheduledWorkspaceInvalid, err)
+		}
 		return persist.Meta{}, err
+	}
+	if scheduled && worktree.PathsOverlap(spec.Cwd, d.cfg.StateDir) {
+		return persist.Meta{}, fmt.Errorf("%w: choose a directory outside the Swarm state and its ancestors", ErrScheduledWorkspaceInvalid)
 	}
 	// The launch ENVIRONMENT is resolved ONCE here, so the persisted meta and the env
 	// the shim actually execs the agent with cannot disagree (ADR-007 D8's daemon-policy
@@ -402,6 +415,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			d.mu.Unlock()
 			return persist.Meta{}, ErrResumeSourceChanged
 		}
+	}
+	if d.scheduledWorkspaceConflictLocked(spec.Cwd, scheduled) {
+		d.mu.Unlock()
+		return persist.Meta{}, ErrScheduledWorkspaceBusy
 	}
 	if d.liveCountLocked() >= d.cfg.MaxSessions {
 		d.mu.Unlock()
@@ -435,6 +452,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		Supervision:     spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
 		Status:          status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
+	m.ScheduledCodexSandbox = spec.ScheduledCodexSandbox
+	if spec.Scheduled != nil {
+		m.ScheduleAttempt = spec.Scheduled.AttemptID
+	}
 	if spec.Manager != nil {
 		m.Role = "manager"
 		m.ManagerConversationID = spec.Manager.ConversationID
@@ -444,9 +465,16 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			m.ManagerClaudeConfigDir = *spec.Manager.ClaudeConfigDir
 		}
 	}
-	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{})}
+	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{}), scheduledLaunching: scheduled}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
+	if scheduled {
+		defer func() {
+			d.mu.Lock()
+			s.scheduledLaunching = false
+			d.mu.Unlock()
+		}()
+	}
 
 	// Launch idempotency (R-IDP.2/.3, A3): persist the operation_id as part of
 	// the reservation so a replayed launch reuses the reserved session and spawns
@@ -598,9 +626,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, err
 	}
 	// Phase 1 — reserve: persist the running meta before any shim exists.
-	if err := d.saveMeta(m); err != nil {
+	var reserveErr error
+	if scheduled {
+		reserveErr = d.persistScheduledLaunch(&m)
+	} else {
+		reserveErr = d.saveMeta(m)
+	}
+	if reserveErr != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
-		return persist.Meta{}, err
+		return persist.Meta{}, reserveErr
 	}
 	if probe != nil {
 		if err := probe(phaseReserved, cloneOpenCodeMeta(m)); err != nil {
@@ -616,7 +650,20 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, terr
 	}
-	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token, m.ManagerReplayID)
+	var gateRead, gateWrite *os.File
+	if scheduled {
+		var err error
+		gateRead, gateWrite, err = os.Pipe()
+		if err != nil {
+			d.rollbackReserved(id, m, preLaunchOK)
+			return persist.Meta{}, fmt.Errorf("daemon: create scheduled launch gate: %w", err)
+		}
+		defer func() { _ = gateWrite.Close() }()
+	}
+	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token, m.ManagerReplayID, gateRead)
+	if gateRead != nil {
+		_ = gateRead.Close()
+	}
 	if err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
@@ -633,18 +680,16 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// describe a shim the swap re-versioned underneath it.
 	m.ShimWireVersion = shimwire.Version
 
-	// Record the shim identity as EARLY as possible — before the shim spawns its
-	// agent — so a daemon crash any time after the agent exists still leaves a
-	// reconnectable meta (S1/L2: reconcile matches by (PID, start-time)). Deferring
-	// this until after waitShimServing would open a window where a LIVE agent has no
-	// persisted identity and is wrongly marked lost on the next Open.
+	// Record the shim identity before waiting for its socket. A scheduled shim
+	// cannot start any worker until the daemon explicitly releases its pipe.
 	//
-	// A read/persist failure makes the shim un-trackable (persisting ShimStartTime=0
-	// would let a later Open mark this live shim lost), so we abort and clean up. The
-	// cleanup is race-free even this early: killSpawnedShim SIGTERMs the shim, whose
-	// own signal handler contains its agent group before exiting (F2/N2).
+	// Scheduled failure closes the pipe and retains the reservation. Ordinary
+	// launches still use the shim's TERM containment path (F2/N2).
 	st, sterr := procStartTimeFn(m.ShimPID)
 	if sterr != nil {
+		if scheduled {
+			return d.abortScheduledShim(m, cmd, s, gateWrite, fmt.Errorf("read shim identity: %w", sterr))
+		}
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
 			d.logf("launch %s: abort cleanup: %v", id, kerr)
 		}
@@ -652,7 +697,12 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
-	if err := d.saveMeta(m); err != nil {
+	if scheduled {
+		if err := d.admitScheduledShim(&m, gateWrite); err != nil {
+			return d.abortScheduledShim(m, cmd, s, gateWrite, err)
+		}
+		_ = gateWrite.Close()
+	} else if err := d.saveMeta(m); err != nil {
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
 			d.logf("launch %s: abort cleanup: %v", id, kerr)
 		}
@@ -737,7 +787,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // error: the launch proceeds (playbook §6.1), and the caller persists the reason
 // onto the meta so the degradation is visible in ls/TUI/doctor rather than only
 // in the daemon log.
-func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayID string) (cmd *exec.Cmd, backendPlanErr string, err error) {
+func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayID string, gate *os.File) (cmd *exec.Cmd, backendPlanErr string, err error) {
 	// The structured-capture channel (playbook §6.1): the shim binds its own hook
 	// socket beside its control socket, the agent's `swarm hook` is pointed at it, and
 	// the DRAIN verb is gated by a secret minted here and persisted only in this 0600
@@ -756,6 +806,12 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		agentEnv = mergeOpenCodeEnv(agentEnv, spec.OpenCodeEnv)
 		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(filepath.Dir(spec.OpenCodeLaunch.BindingFile), "opencode-tui.json"))
 	}
+	hookDaemonSocket := d.cfg.SocketPath
+	if spec.Scheduled != nil && spec.AgentType == "codex" {
+		// Codex's native backend supplies its event stream. Scheduled Codex
+		// workers do not receive the general owner socket as a hook fallback.
+		hookDaemonSocket = ""
+	}
 	lc := shimSpawnConfig{
 		HermesInput:  spec.HermesInput,
 		LogPath:      d.cfg.LogPath,
@@ -767,7 +823,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		SessionID:      id,
 		Argv:           spec.Argv,
 		Cwd:            spec.Cwd,
-		Env:            injectHookEnv(agentEnv, id, token, d.cfg.SocketPath, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
+		Env:            injectHookEnv(agentEnv, id, token, hookDaemonSocket, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
 		SocketPath:     sock,
 		SessionDir:     dir,
 		Cols:           spec.Cols,
@@ -777,6 +833,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		HookDrainToken: drainToken,
 	}
 
+	if spec.Scheduled != nil {
+		lc.Env = append(lc.Env, d.scheduledEnvironment(spec.Scheduled, id)...)
+	}
 	if d.NativeInputEnabled() && spec.AgentType == "agy" && spec.CLIIdentity != nil && agyinput.SupportedVersion(spec.CLIIdentity.Version) {
 		command := agyinput.BootstrapCommand(d.cfg.ShimBinary, filepath.Join(dir, agyinput.DescriptorFile))
 		lc.AgyInput = &agyinput.Config{SessionID: id, Executable: spec.CLIIdentity.Path, Version: spec.CLIIdentity.Version, Fingerprint: spec.CLIIdentity.Fingerprint, Cwd: spec.Cwd, BootstrapCommand: command}
@@ -831,8 +890,12 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 			spec.Backend = plan
 		}
 	}
+	lc.ScheduledCodexBackend = spec.AgentType == "codex" && (spec.Scheduled != nil || spec.ScheduledCodexSandbox != "")
+	if lc.ScheduledCodexBackend && (spec.Backend == nil || spec.Backend.Program == "") {
+		return nil, "", errors.New("scheduled Codex requires its native app-server backend")
+	}
 	if spec.Backend != nil {
-		lc.BackendRequired = spec.Manager != nil && spec.AgentType == "codex"
+		lc.BackendRequired = lc.ScheduledCodexBackend || (spec.Manager != nil && spec.AgentType == "codex")
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
 		// Codex records the app-server's cwd as the thread's and roots its sandbox there, so
@@ -842,10 +905,17 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock
 		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
+		lc.BackendArgs = append(lc.BackendArgs, spec.CodexPolicy...)
+		if spec.Scheduled != nil {
+			if len(lc.BackendEnv) != 0 {
+				lc.BackendEnv = append(lc.BackendEnv, d.scheduledEnvironment(spec.Scheduled, id)...)
+			}
+		}
 	}
 	if spec.Manager != nil && spec.AgentType == "codex" && (spec.Backend == nil || spec.Backend.Program == "") {
 		return nil, "", errors.New("manager requires its native app-server backend; standalone fallback refused")
 	}
+	lc.RequireLaunchIdentity = gate != nil
 	data, err := json.Marshal(lc)
 	if err != nil {
 		return nil, "", err
@@ -856,6 +926,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 	}
 
 	shimArgs := []string{"shim"}
+	if gate != nil {
+		shimArgs = append(shimArgs, "--"+shim.LaunchIdentityGateFlag)
+	}
 	if spec.Manager != nil {
 		shimArgs = append(shimArgs, "--require-manager")
 	}
@@ -864,6 +937,11 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 	}
 	shimArgs = append(shimArgs, "--config", cfgPath)
 	cmd = exec.Command(d.cfg.ShimBinary, shimArgs...)
+	if gate != nil {
+		cmd.ExtraFiles = []*os.File{gate}
+		// Keep the PID returned by Start as the session leader and gate reader.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 	cmd.Env = os.Environ() // the shim PROCESS env; the agent env is lc.Env (filtered)
 	logf, err := openDaemonLog(d.cfg.LogPath)
 	if err != nil {

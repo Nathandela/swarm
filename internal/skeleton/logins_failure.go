@@ -130,40 +130,7 @@ func (m *loginManager) observeNativeFailure(local, instance string, feed *backen
 		}
 		return
 	}
-	var envelope struct {
-		Params struct {
-			ThreadID  string `json:"threadId"`
-			WillRetry *bool  `json:"willRetry"`
-			Error     *struct {
-				Info string `json:"codexErrorInfo"`
-			} `json:"error"`
-			Turn struct {
-				Status string `json:"status"`
-				Error  *struct {
-					Info string `json:"codexErrorInfo"`
-				} `json:"error"`
-			} `json:"turn"`
-		} `json:"params"`
-	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Params.ThreadID != meta.ConversationID {
-		return
-	}
-	if method == "error" && (envelope.Params.WillRetry == nil || *envelope.Params.WillRetry) {
-		return
-	}
-	if envelope.Params.WillRetry != nil && *envelope.Params.WillRetry {
-		return
-	}
-	code := ""
-	if envelope.Params.Error != nil {
-		code = envelope.Params.Error.Info
-	}
-	if method == "turn/completed" {
-		if envelope.Params.Turn.Status != "failed" || envelope.Params.Turn.Error == nil {
-			return
-		}
-		code = envelope.Params.Turn.Error.Info
-	}
+	code := codexTerminalFailure(meta.ConversationID, method, raw)
 	if code == "unauthorized" {
 		if err := m.recordAuthFailure(meta); err != nil {
 			log.Printf("login: native sign-in failure could not be saved; recovery deferred: %v", err)
@@ -181,4 +148,46 @@ func (m *loginManager) observeNativeFailure(local, instance string, feed *backen
 	if err := m.recordExhaustionFact(meta, reset, true, nonRolling); err != nil {
 		log.Printf("login: native subscription exhaustion could not be saved; switch deferred: %v", err)
 	}
+}
+
+// codexTerminalFailure evaluates only a final, exact-thread error from the authenticated app-server.
+func codexTerminalFailure(threadID, method string, raw []byte) string {
+	if threadID == "" || (method != "error" && method != "turn/completed") {
+		return ""
+	}
+	var envelope struct {
+		Params struct {
+			ThreadID  string `json:"threadId"`
+			WillRetry *bool  `json:"willRetry"`
+			Error     *struct {
+				Info string `json:"codexErrorInfo"`
+			} `json:"error"`
+			Turn struct {
+				Status string `json:"status"`
+				Error  *struct {
+					Info string `json:"codexErrorInfo"`
+				} `json:"error"`
+			} `json:"turn"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Params.ThreadID != threadID {
+		return ""
+	}
+	if method == "error" && (envelope.Params.WillRetry == nil || *envelope.Params.WillRetry) {
+		return ""
+	}
+	if envelope.Params.WillRetry != nil && *envelope.Params.WillRetry {
+		return ""
+	}
+	code := ""
+	if envelope.Params.Error != nil {
+		code = envelope.Params.Error.Info
+	}
+	if method == "turn/completed" {
+		if envelope.Params.Turn.Status != "failed" || envelope.Params.Turn.Error == nil {
+			return ""
+		}
+		code = envelope.Params.Turn.Error.Info
+	}
+	return code
 }

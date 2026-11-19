@@ -164,25 +164,27 @@ type ResumeSourceFence struct {
 }
 
 type LaunchSpec struct {
-	managerLogin      *managerLoginBinding
-	Manager           *ManagerLaunchSpec
-	HermesOrigins     []string                   `json:"-"`
-	HermesInput       *hermesinput.SessionConfig `json:"-"`
-	RequiredRuntime   string                     `json:"-"`
-	OpenCodeBinding   *persist.OpenCodeBinding   `json:"-"`
-	OpenCodeEnv       []string                   `json:"-"`
-	OpenCodeLaunch    *shim.OpenCodeConfig       `json:"-"`
-	LoginRuntime      *logins.Runtime
-	LoginStateRoot    string
-	LoginSwitchID     string
-	LoginSwitchSource string
-	InputEmbargo      string
-	AgentType         string
-	Argv              []string
-	Cwd               string
-	ClientEnv         []string
-	Cols, Rows        int
-	Options           map[string]string
+	ScheduledCodexSandbox string   `json:"-"`
+	CodexPolicy           []string `json:"-"`
+	managerLogin          *managerLoginBinding
+	Manager               *ManagerLaunchSpec
+	HermesOrigins         []string                   `json:"-"`
+	HermesInput           *hermesinput.SessionConfig `json:"-"`
+	RequiredRuntime       string                     `json:"-"`
+	OpenCodeBinding       *persist.OpenCodeBinding   `json:"-"`
+	OpenCodeEnv           []string                   `json:"-"`
+	OpenCodeLaunch        *shim.OpenCodeConfig       `json:"-"`
+	LoginRuntime          *logins.Runtime
+	LoginStateRoot        string
+	LoginSwitchID         string
+	LoginSwitchSource     string
+	InputEmbargo          string
+	AgentType             string
+	Argv                  []string
+	Cwd                   string
+	ClientEnv             []string
+	Cols, Rows            int
+	Options               map[string]string
 	// Name is the optional user-provided session label. The daemon only stamps it
 	// into the session meta; an empty name falls back to the agent name at display
 	// time (P2 / bd agents-tracker-4e2).
@@ -234,6 +236,8 @@ type LaunchSpec struct {
 	// OwnerLaunchHash binds an owner operation to its exact wire request. Unlike
 	// signed remote launches, uncertain owner launches must never be re-driven.
 	OwnerLaunchHash string
+	// Scheduled is available only to trusted local daemon assembly.
+	Scheduled *ScheduledLaunch
 	// AuthIdentity is the provider-account identity the agent is being launched
 	// under (ADR-024). The assembly resolves it from the adapter's AuthProbe and
 	// the credentials on disk — exactly as it resolves Argv — and the daemon only
@@ -257,6 +261,8 @@ type session struct {
 	// running->running status tick, so exactly one `launched` record is written even
 	// though the reservation already occupies the registry slot before that write.
 	persisted bool
+	// Guarded by mu. Hold off Kill and Delete while the launch owns the reservation.
+	scheduledLaunching bool
 }
 
 // Daemon is the running lifecycle authority. Exactly one holds the flock + bound
@@ -707,6 +713,7 @@ func (d *Daemon) SetTag(id, tag string) error {
 		return nil
 	}
 	m.Tag = tag
+	m.ScheduledCompleted = false
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = d.store.MetaEnv(m)
 	written, err := d.saveMetaLocked(&m)

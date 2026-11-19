@@ -61,7 +61,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|schedule|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -69,6 +69,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|voice|handof
   swarm daemon     run the session daemon
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
+  swarm schedule   create, manage, and run scheduled agent jobs (schedule help)
   swarm discord    connect this Swarm to Discord, or operate its local bridge
   swarm voice      configure OpenAI speech, stream live audio, or transcribe an utterance
   swarm handoff    launch a supervised cross-CLI handoff
@@ -149,6 +150,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
+	case "schedule-receipt-bridge":
+		return runScheduleReceiptBridge(os.Stdin, stdout, stderr)
+	case "schedule":
+		return dispatchSchedule(args[1:], stdout, stderr)
 	case "discord":
 		return dispatchDiscord(args[1:], stdout, stderr)
 	case "voice":
@@ -248,7 +253,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	opts := []tui.Option{tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
+	opts := []tui.Option{scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
 	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
 		return dialClient(tuiCaps())
 	}), tui.WithLoginRunner(loginRunner(tui.TerminalHandoff{
@@ -330,7 +335,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation}
+	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation, protocol.CapSchedule, protocol.CapScheduleRunID}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
@@ -674,6 +679,9 @@ type shimLaunchConfig struct {
 	Cols              int                        `json:"cols"`
 	Rows              int                        `json:"rows"`
 	GraceMS           int                        `json:"grace_ms"`
+
+	RequireLaunchIdentity bool `json:"require_launch_identity,omitempty"`
+
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
 	// old, pre-R6 launch config with no such key) disables it entirely (requirement
 	// 7's compat), leaving shim.Run's behavior exactly what it is today.
@@ -695,13 +703,14 @@ type shimLaunchConfig struct {
 	// the pre-R7 session and shim.Run's spawn path is then byte-for-byte what it is today.
 	// BackendProgram is the RESOLVED absolute path the daemon obtained through the adapter
 	// contract's LookPath discipline, so the shim never searches PATH itself.
-	BackendCwd        string   `json:"backend_cwd,omitempty"`
-	BackendRequired   bool     `json:"backend_required,omitempty"`
-	BackendProgram    string   `json:"backend_program"`
-	BackendArgs       []string `json:"backend_args"`
-	BackendAgentArgs  []string `json:"backend_agent_args"`
-	BackendSocketPath string   `json:"backend_socket_path"`
-	BackendEnv        []string `json:"backend_env"`
+	BackendCwd            string   `json:"backend_cwd,omitempty"`
+	ScheduledCodexBackend bool     `json:"scheduled_codex_backend,omitempty"`
+	BackendRequired       bool     `json:"backend_required,omitempty"`
+	BackendProgram        string   `json:"backend_program"`
+	BackendArgs           []string `json:"backend_args"`
+	BackendAgentArgs      []string `json:"backend_agent_args"`
+	BackendSocketPath     string   `json:"backend_socket_path"`
+	BackendEnv            []string `json:"backend_env"`
 }
 
 // shimConfigFromLaunch maps a decoded launch config onto shim.Config -- the pure
@@ -778,6 +787,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	configPath := fs.String("config", "", "path to the JSON launch config")
 	requireOpenCode := fs.Bool("require-opencode-tui", false, "require a managed OpenCode TUI launch")
 	requireManager := fs.Bool("require-manager", false, "require native manager runtime configuration")
+	requireLaunchIdentity := fs.Bool(shim.LaunchIdentityGateFlag, false, "require durable shim identity before starting the worker")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
@@ -805,18 +815,31 @@ func runShim(args []string, _, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "shim:", err)
 		return 2
 	}
-
-	// Guarantee the shim leads its own session so it outlives the launching
-	// terminal (E4.1 "Shim setsids", D-3). On success we proceed; if a re-exec
-	// was needed to acquire the session, we return its child's exit code; any
-	// unexpected failure is fatal.
-	code, reexeced, err := ensureSession()
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "shim: %v\n", err)
-		return 1
+	if lc.RequireLaunchIdentity != *requireLaunchIdentity {
+		_, _ = fmt.Fprintln(stderr, "shim: mismatched launch identity gate configuration")
+		return 2
 	}
-	if reexeced {
-		return code
+	if *requireLaunchIdentity {
+		// Re-exec would change the PID the daemon recorded and lose the inherited gate.
+		if sid, err := unix.Getsid(0); err != nil || sid != os.Getpid() {
+			_, _ = fmt.Fprintln(stderr, "shim: scheduled launch requires its own session")
+			return 1
+		}
+		if err := shim.AwaitLaunchIdentity(); err != nil {
+			_, _ = fmt.Fprintln(stderr, "shim:", err)
+			return 1
+		}
+	} else {
+		// Ordinary shims acquire their own session so they outlive the
+		// launching terminal (E4.1, D-3).
+		code, reexeced, err := ensureSession()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "shim: %v\n", err)
+			return 1
+		}
+		if reexeced {
+			return code
+		}
 	}
 
 	cfg := shimConfigFromLaunch(lc)

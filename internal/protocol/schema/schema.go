@@ -31,6 +31,8 @@ import (
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
+	ScheduleCompletion      *ScheduleCompletion      `json:"schedule_completion,omitempty"`
+	ScheduleID              string                   `json:"schedule_id,omitempty"`
 	ManagerInterruptRequest *ManagerInterruptReq     `json:"manager_interrupt_request,omitempty"`
 	ManagerInterrupt        *ManagerInterruptReceipt `json:"manager_interrupt,omitempty"`
 	JournalSourceID         string                   `json:"journal_source_id,omitempty"`
@@ -256,6 +258,7 @@ type AgentInstanceRef struct {
 // namespaced id + endpoint id + the daemon-computed status Group (E6.9 — clients
 // never call status.Derive), alongside the three raw status dimensions.
 type SessionView struct {
+	ScheduledCompleted    bool   `json:"scheduled_completed,omitempty"`
 	Role                  string `json:"role,omitempty"`
 	ManagerConversationID string `json:"manager_conversation_id,omitempty"`
 	// Resume projection affects roster visibility, never the raw event identity.
@@ -455,3 +458,12 @@ const (
 	SupervisionManual  = "manual"
 	SupervisionNone    = "none"
 )
+
+// ScheduleCompletion is the worker's local, attempt-scoped final receipt.
+type ScheduleCompletion struct {
+	RunID     string   `json:"run_id"`
+	AttemptID string   `json:"attempt_id"`
+	Token     string   `json:"token"`
+	Summary   string   `json:"summary"`
+	Links     []string `json:"links,omitempty"`
+}

@@ -247,6 +247,10 @@ func TestMain(m *testing.M) {
 	if code, parent := testbin.Supervise(); parent {
 		os.Exit(code)
 	}
+	// The crash-boundary host inherits the shim built by its test parent.
+	if os.Getenv(scheduledGateHost) != "" {
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "swarm-daemon-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mktemp:", err)

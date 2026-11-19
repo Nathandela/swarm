@@ -44,6 +44,11 @@ var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
 type Meta struct {
+	ScheduledCodexSandbox  string `json:"scheduled_codex_sandbox,omitempty"`
+	ScheduleAttempt        string `json:"schedule_attempt,omitempty"`
+	ScheduledCompleted     bool   `json:"scheduled_completed,omitempty"`
+	ScheduleProjected      bool   `json:"schedule_projected,omitempty"`
+	ScheduleExhausted      bool   `json:"schedule_exhausted,omitempty"`
 	Role                   string `json:"role,omitempty"`
 	ManagerConversationID  string `json:"manager_conversation_id,omitempty"`
 	ManagerReplayID        string `json:"manager_replay_id,omitempty"`

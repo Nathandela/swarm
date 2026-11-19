@@ -903,6 +903,7 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 		guardFrame = guardProjection[0]
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, guardFrame, at)
+	d.observeScheduledCodexFailure(local, method, frame)
 	if d.logins != nil {
 		d.logins.observeCodexUsage(local, method, frame, at)
 		d.logins.observeNativeFailure(local, expectedInstance, feed, method, frame)
