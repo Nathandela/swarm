@@ -18,13 +18,14 @@ type TeammateManager interface {
 }
 
 const (
-	TeammateAdmissionMissing    = "missing"
-	TeammateAdmissionAccepted   = "accepted"
-	TeammateAdmissionCutover    = "cutover"
-	TeammateAdmissionSuperseded = "superseded"
-	TeammateAdmissionCancelled  = "cancelled"
-	TeammateSystemContinuityGap = "manager_continuity_gap"
-	teammateStateAccepted       = "accepted"
+	TeammateAdmissionMissing            = "missing"
+	TeammateAdmissionAccepted           = "accepted"
+	TeammateAdmissionCutover            = "cutover"
+	TeammateAdmissionSuperseded         = "superseded"
+	TeammateAdmissionCancelled          = "cancelled"
+	TeammateSystemContinuityGap         = "manager_continuity_gap"
+	TeammateSystemWorkerEvidenceLimited = "worker_evidence_limited"
+	teammateStateAccepted               = "accepted"
 )
 
 type TeammateNativeStatus struct {
@@ -39,12 +40,13 @@ type TeammateNativeStatus struct {
 }
 
 type TeammateJobStatus struct {
-	ID        string `json:"id"`
-	AttemptID string `json:"attempt_id,omitempty"`
-	Session   string `json:"session,omitempty"`
-	Instance  string `json:"instance,omitempty"`
-	Project   string `json:"project,omitempty"`
-	State     string `json:"state"`
+	ID         string `json:"id"`
+	AttemptID  string `json:"attempt_id,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Instance   string `json:"instance,omitempty"`
+	Project    string `json:"project,omitempty"`
+	State      string `json:"state"`
+	Diagnostic string `json:"diagnostic,omitempty"`
 }
 
 type TeammateDiscussion struct {
@@ -68,10 +70,14 @@ type TeammateAdmission struct {
 }
 
 type TeammatePublication struct {
+	BodyHash                                                          string `json:",omitempty"`
+	ActivationGeneration                                              uint64 `json:",omitempty"`
 	SystemCause                                                       string
 	ID, Body, AdmissionID, JobID, AttemptID, QuestionID, QuestionHash string
 	Sequence                                                          uint64
 }
+
+func PublicationBodyHash(body string) string { return digest(body) }
 
 type TeammateHistoryReader func(context.Context, TeammateHistoryQuery) (TeammateHistoryPage, error)
 

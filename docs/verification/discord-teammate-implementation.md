@@ -17,3 +17,21 @@ Target v0.29.0. The [implementation contract](../specifications/discord-teammate
 ## Scope of the release decision
 
 Keep the feature branch untagged until integrated source passes the repository's normal and race gates, the final independent review closes its findings, and the dedicated-channel home-VM rehearsal proves human mention, ordinary cross-author steering, delayed result, retirement and continuation. Synthetic authors, a bot echo, and an app-server launch receipt are different observations. Record the final disposition here when those checks have run.
+
+## Candidate integration and review
+
+Two independent Astra reviews covered native custody/lifecycle and Discord admission/publication. Follow-up reviews checked the incoming and outgoing grant boundaries, revision ordering, scope revocation, passive worker recovery, question provenance, bounded history pages, and parked readiness notices. The reviewers approved the resulting source in those areas. Review approval and real-user acceptance are recorded separately.
+
+The opt-in [native lifecycle rehearsal](../../internal/teammatemanager/hosted_test.go) uses a real installed Codex account with a private daemon and a disposable worker checkout. Supply an absolute production-binary path and an already trusted manager directory. It does not connect to Discord. Each run uses two synthetic speakers and a random file value outside the manager prompt.
+
+```sh
+SWARM_TEAMMATE_TEST_BINARY=/absolute/path/to/swarm \
+SWARM_TEAMMATE_TEST_MANAGER_DIR=/absolute/trusted/workspace \
+go test ./internal/teammatemanager -run '^TestHostedTeammateLifecycle$' -count=1 -timeout 15m -v
+```
+
+On the Linux VM, one rehearsal observed a prior-context answer in 9 seconds after admission, a worker launch in 13 seconds, and a job/attempt-bound verified file result 35 seconds after closing and reopening the controller. The native process retired after 2 minutes 2 seconds of quiescence and returned the same conversation's answer on an untagged continuation in 11 seconds. The complete run passed in 200.56 seconds. The later steering variant additionally requires another participant to obtain a second random value from the same worker.
+
+A separate Linux app-server probe issued the same metadata-only resume against the same authenticated synthetic worker three times. Two attempts returned `-32601 list_turns is not supported yet`; eight seconds after the first attempt, the server returned the requested thread identity. Swarm retries only this exact code/message combination within its existing join deadline. Transport faults, other missing methods and wrong thread IDs retain their existing handling.
+
+The dedicated live server connector passed read-only identity, Gateway, effective channel permission, daemon capability, native CLI and login checks. Immediately after the connector reached READY, the isolated supervisor roster contained zero sessions. A synthetic bot message in the channel did not create an agent. No ordinary server permissions or installed release binaries were changed for this rehearsal.

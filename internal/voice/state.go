@@ -72,6 +72,8 @@ type Utterance struct {
 }
 
 type Admission struct {
+	WorkerAttempts       string                `json:"worker_attempts,omitempty"`
+	WorkerProjects       string                `json:"worker_projects,omitempty"`
 	SourceCutover        bool                  `json:"source_cutover,omitempty"`
 	ProjectExplicit      bool                  `json:"project_explicit,omitempty"`
 	QuestionBoundary     uint64                `json:"question_boundary,omitempty"`
@@ -110,22 +112,24 @@ type Action struct {
 }
 
 type Request struct {
-	DiscussionSource DiscussionOutputSource `json:"discussion_source,omitzero"`
-	OutputSequence   uint64                 `json:"output_sequence,omitempty"`
-	Exported         bool                   `json:"exported,omitempty"`
-	RecoveryContext  bool                   `json:"recovery_context,omitempty"`
-	ID               string                 `json:"id"`
-	ConversationID   string                 `json:"conversation_id"`
-	Kind             string                 `json:"kind"` // manager or native
-	NativeInputID    string                 `json:"native_input_id"`
-	NativeTurnID     string                 `json:"native_turn_id"`
-	TaskID           string                 `json:"task_id"`
-	Payload          json.RawMessage        `json:"payload"`
-	Hash             string                 `json:"hash"`
-	ExpiresAt        time.Time              `json:"expires_at"`
-	State            string                 `json:"state"`
-	AnswerID         string                 `json:"answer_id,omitempty"`
-	Answer           json.RawMessage        `json:"answer,omitempty"`
+	DiscussionAttempts string                 `json:"discussion_attempts,omitempty"`
+	DiscussionProjects string                 `json:"discussion_projects,omitempty"`
+	DiscussionSource   DiscussionOutputSource `json:"discussion_source,omitzero"`
+	OutputSequence     uint64                 `json:"output_sequence,omitempty"`
+	Exported           bool                   `json:"exported,omitempty"`
+	RecoveryContext    bool                   `json:"recovery_context,omitempty"`
+	ID                 string                 `json:"id"`
+	ConversationID     string                 `json:"conversation_id"`
+	Kind               string                 `json:"kind"` // manager or native
+	NativeInputID      string                 `json:"native_input_id"`
+	NativeTurnID       string                 `json:"native_turn_id"`
+	TaskID             string                 `json:"task_id"`
+	Payload            json.RawMessage        `json:"payload"`
+	Hash               string                 `json:"hash"`
+	ExpiresAt          time.Time              `json:"expires_at"`
+	State              string                 `json:"state"`
+	AnswerID           string                 `json:"answer_id,omitempty"`
+	Answer             json.RawMessage        `json:"answer,omitempty"`
 }
 
 type SpeechPermit struct {
@@ -138,19 +142,21 @@ type SpeechPermit struct {
 }
 
 type Publication struct {
-	DiscussionSource DiscussionOutputSource `json:"discussion_source,omitzero"`
-	OutputSequence   uint64                 `json:"output_sequence,omitempty"`
-	Exported         bool                   `json:"exported,omitempty"`
-	Admission        uint64                 `json:"admission"`
-	SpeechEpoch      uint64                 `json:"speech_epoch"`
-	ID               string                 `json:"id"`
-	ConversationID   string                 `json:"conversation_id"`
-	NativeTurnID     string                 `json:"native_turn_id"`
-	Sequence         uint64                 `json:"sequence"`
-	Text             string                 `json:"text"`
-	TextHash         string                 `json:"text_hash"`
-	Final            bool                   `json:"final"`
-	Speak            bool                   `json:"speak"`
+	DiscussionAttempts string                 `json:"discussion_attempts,omitempty"`
+	DiscussionProjects string                 `json:"discussion_projects,omitempty"`
+	DiscussionSource   DiscussionOutputSource `json:"discussion_source,omitzero"`
+	OutputSequence     uint64                 `json:"output_sequence,omitempty"`
+	Exported           bool                   `json:"exported,omitempty"`
+	Admission          uint64                 `json:"admission"`
+	SpeechEpoch        uint64                 `json:"speech_epoch"`
+	ID                 string                 `json:"id"`
+	ConversationID     string                 `json:"conversation_id"`
+	NativeTurnID       string                 `json:"native_turn_id"`
+	Sequence           uint64                 `json:"sequence"`
+	Text               string                 `json:"text"`
+	TextHash           string                 `json:"text_hash"`
+	Final              bool                   `json:"final"`
+	Speak              bool                   `json:"speak"`
 }
 
 type JournalCursor struct {

@@ -1175,6 +1175,8 @@ func (s *Store) PutRequest(b ManagerBinding, r Request) (Request, error) {
 			for _, admission := range st.Admissions {
 				if admission.ConversationID == b.ConversationID && admission.NativeInputID == r.NativeInputID {
 					r.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
+					r.DiscussionProjects = addDiscussionScopeValue(admission.WorkerProjects, admission.Project)
+					r.DiscussionAttempts = admission.WorkerAttempts
 					break
 				}
 			}
@@ -1360,6 +1362,7 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 		if old, ok := st.Publications[k]; ok {
 			old.Speak = p.Speak
 			p.Exported, p.OutputSequence, p.DiscussionSource = old.Exported, old.OutputSequence, old.DiscussionSource
+			p.DiscussionProjects, p.DiscussionAttempts = old.DiscussionProjects, old.DiscussionAttempts
 			if old != p {
 				return ErrConflict
 			}
@@ -1373,7 +1376,10 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 		}
 		if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
 			var err error
-			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, st.Admissions[admissionKey(b.ConversationID, p.Admission)])
+			admission := st.Admissions[admissionKey(b.ConversationID, p.Admission)]
+			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
+			p.DiscussionProjects = addDiscussionScopeValue(admission.WorkerProjects, admission.Project)
+			p.DiscussionAttempts = admission.WorkerAttempts
 			p.OutputSequence, err = nextDiscussionOutput(st, b.ConversationID)
 			if err != nil {
 				return err

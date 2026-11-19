@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -47,9 +48,13 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 	c.discussion = &DiscussionScope{}
 	workers := &discussionEvidenceWorker{}
 	c.workers = workers
-	worker := WorkerAssociation{ConversationID: binding.ConversationID, Session: "machine/created", SessionInstance: "created-instance", JobID: "job", AttemptID: "attempt", ActionID: "action"}
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := WorkerAssociation{Project: project, ConversationID: binding.ConversationID, Session: "machine/created", SessionInstance: "created-instance", JobID: "job", AttemptID: "action", ActionID: "action"}
 	created, _ := json.Marshal(createdWorkerResult{State: "created", Session: worker.Session, SessionInstance: worker.SessionInstance})
-	intent, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Origin: &schema.MessageOrigin{}, Launch: &protocol.LaunchReq{InitialPrompt: "authorized prompt", SpawnedFrom: "previous-manager"}})
+	intent, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Project: project, Origin: &schema.MessageOrigin{}, Launch: &protocol.LaunchReq{InitialPrompt: "authorized prompt", SpawnedFrom: "previous-manager"}})
 	action := Action{ID: worker.ActionID, State: "settled", Request: intent, Receipt: created}
 	workerKey := key(binding.ConversationID, key(worker.Session, worker.SessionInstance))
 	if err := s.update(func(st *State) error {
@@ -103,6 +108,31 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 	}
 	if _, err := c.readWorker(ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}, Source: "retained"}); !errors.Is(err, ErrControllerNativeUnavailable) {
 		t.Fatalf("retained history available: %v", err)
+	}
+	replacement, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.update(func(st *State) error {
+		rebound := worker
+		rebound.Project = replacement
+		putRecord(st, "workers", &st.Workers, workerKey, rebound)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if read, err := c.readWorker(ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}); !errors.Is(err, ErrStale) || len(read) > 0 {
+		t.Fatalf("rebound worker read cached proof: %s, %v", read, err)
+	}
+	if err := s.update(func(st *State) error {
+		putRecord(st, "workers", &st.Workers, workerKey, worker)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.discussion.ProjectEnrolled = func(string) bool { return false }
+	if read, err := c.readWorker(ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}); !errors.Is(err, ErrExpired) || len(read) > 0 {
+		t.Fatalf("cached proof after revocation: %s, %v", read, err)
 	}
 }
 

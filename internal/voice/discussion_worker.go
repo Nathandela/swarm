@@ -76,7 +76,8 @@ func (c *Controller) reconcileDiscussionWorkerEvidence(ctx context.Context) erro
 		return err
 	}
 	for _, worker := range st.Workers {
-		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.EvidenceLimited || worker.ActionID == "" || worker.JobID == "" {
+		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.EvidenceLimited || worker.ActionID == "" || worker.JobID == "" ||
+			!c.projectPath(worker.Project, worker.Project) {
 			continue
 		}
 		id := discussionEvidenceID(worker)
@@ -111,7 +112,7 @@ func discussionEvidenceID(worker WorkerAssociation) string {
 	})
 }
 
-func (c *Controller) readDiscussionWorker(input ReadInput) (json.RawMessage, error) {
+func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) (json.RawMessage, error) {
 	if input.Cursor != "" || input.Source != "" && input.Source != "native" {
 		return nil, ErrControllerNativeUnavailable
 	}
@@ -125,6 +126,14 @@ func (c *Controller) readDiscussionWorker(input ReadInput) (json.RawMessage, err
 		return nil, ErrNotFound
 	}
 	if input.JobID != "" && input.JobID != worker.JobID || input.AttemptID != "" && input.AttemptID != worker.AttemptID {
+		return nil, ErrStale
+	}
+	if !c.projectPath(worker.Project, worker.Project) {
+		return nil, ErrExpired
+	}
+	var original controllerActionRequest
+	attempt := st.Actions[key(c.binding.ConversationID, worker.AttemptID)]
+	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &original) != nil || original.Project != worker.Project {
 		return nil, ErrStale
 	}
 	if worker.EvidenceLimited {
@@ -154,6 +163,28 @@ func (c *Controller) readDiscussionWorker(input ReadInput) (json.RawMessage, err
 	if worker != current.Workers[workerKey] {
 		return nil, ErrStale
 	}
+	if !c.projectPath(worker.Project, worker.Project) {
+		return nil, ErrExpired
+	}
+	if proof != nil && admission.Sequence != 0 {
+		err := c.store.update(func(st *State) error {
+			if err := checkBinding(st, c.binding); err != nil {
+				return err
+			}
+			k := admissionKey(c.binding.ConversationID, admission.Sequence)
+			a := st.Admissions[k]
+			if st.Workers[workerKey] != worker || a.NativeInputID != admission.NativeInputID || a.NativeTurnID != admission.NativeTurnID || !a.SettledAt.IsZero() || a.Phase != "running" {
+				return ErrStale
+			}
+			a.WorkerProjects = addDiscussionScopeValue(a.WorkerProjects, worker.Project)
+			a.WorkerAttempts = addDiscussionScopeValue(a.WorkerAttempts, worker.AttemptID)
+			putRecord(st, "admissions", &st.Admissions, k, a)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	return controllerResult(struct {
 		Source    string                     `json:"source"`
 		Session   string                     `json:"session"`
@@ -182,10 +213,23 @@ func (s *Store) noteDiscussionWorkerEvidenceLimit(b ManagerBinding, expected Wor
 		if discussionEvidenceID(worker) != discussionEvidenceID(expected) {
 			return ErrStale
 		}
-		if !worker.EvidenceLimited {
-			worker.EvidenceLimited = true
-			putRecord(st, "workers", &st.Workers, k, worker)
+		if worker.EvidenceLimited {
+			return nil
 		}
+		worker.EvidenceLimited = true
+		putRecord(st, "workers", &st.Workers, k, worker)
+		id := "evidence-limit-" + hashValue([]string{worker.JobID, worker.AttemptID})
+		publicationKey := key(b.ConversationID, id)
+		if _, exists := st.Publications[publicationKey]; exists {
+			return nil
+		}
+		sequence, err := nextDiscussionOutput(st, b.ConversationID)
+		if err != nil {
+			return err
+		}
+		p := Publication{ID: id, ConversationID: b.ConversationID, OutputSequence: sequence, Text: discussionEvidenceLimitNotice,
+			TextHash: hashBytes([]byte(discussionEvidenceLimitNotice)), DiscussionSource: DiscussionOutputSource{SystemCause: "worker_evidence_limited", JobID: worker.JobID, AttemptID: worker.AttemptID}}
+		putRecord(st, "publications", &st.Publications, publicationKey, p)
 		return nil
 	})
 }

@@ -15,6 +15,7 @@ import (
 
 // Config contains non-secret configuration for one local installation.
 type Config struct {
+	Supervisor        *SupervisorPaths  `json:"supervisor,omitempty"`
 	Mode              string            `json:"mode,omitempty"`
 	ManagerCLI        string            `json:"manager_cli,omitempty"`
 	Projects          map[string]string `json:"projects,omitempty"`
@@ -32,6 +33,13 @@ type Config struct {
 	ReceptionistCLI   string            `json:"receptionist_cli"`
 	ReceptionistModel string            `json:"receptionist_model"`
 	WorkDir           string            `json:"work_dir"`
+}
+
+// SupervisorPaths retain the operator's chosen place when the user service starts after logout.
+type SupervisorPaths struct {
+	StateDir string `json:"state_dir"`
+	Lock     string `json:"lock"`
+	Log      string `json:"log"`
 }
 
 func ConfigPath(dir string) string { return filepath.Join(dir, "config.json") }
@@ -111,6 +119,9 @@ func (c Config) Validate() error {
 			return errors.New("discord: invalid owner ID")
 		}
 	case "teammate":
+		if p := c.Supervisor; p != nil && (!validStatePath(p.StateDir) || !validStatePath(p.Lock) || !validStatePath(p.Log)) {
+			return errors.New("discord: invalid enrolled supervisor paths")
+		}
 		if len(c.GuildIDs) == 0 || (c.ManagerCLI != "codex" && c.ManagerCLI != "claude") {
 			return errors.New("discord: teammate requires an enrolled server and a Codex or Claude manager")
 		}

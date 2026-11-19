@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
+	bolt "go.etcd.io/bbolt"
 )
 
 type teammateControlManager struct {
@@ -177,5 +178,214 @@ func TestTeammateStartupBlockPostsOneNoticeWhileProvisional(t *testing.T) {
 	rows, err := c.service.Store.teammateBindings("install")
 	if err != nil || len(rows) != 1 || rows[0].Opened || posts != 1 {
 		t.Fatalf("bindings %+v posts=%d err=%v", rows, posts, err)
+	}
+}
+
+type teammatePublicationManager struct {
+	teammateControlManager
+	generation uint64
+	grantErr   error
+	last       TeammatePublication
+	validated  []TeammatePublication
+}
+
+func (m *teammatePublicationManager) Status(TeammateDiscussion) (TeammateNativeStatus, error) {
+	return TeammateNativeStatus{State: "parked", Generation: m.generation}, nil
+}
+func (m *teammatePublicationManager) ValidatePublication(_ context.Context, _ TeammateDiscussion, p TeammatePublication) error {
+	m.last = p
+	m.validated = append(m.validated, p)
+	return m.grantErr
+}
+
+func TestTeammateParkedStartupNoticeIsBoundToGeneration(t *testing.T) {
+	posts := 0
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages":
+			posts++
+			var p struct{ Content string }
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				t.Error(err)
+			}
+			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: fmt.Sprint(400 + posts), ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	m := &teammatePublicationManager{generation: 3, grantErr: ErrNotAuthorized}
+	c.manager = m
+	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	if err := c.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, generation := range []uint64{3, 3, 4, 4} {
+		m.generation = generation
+		if err := c.managerStartupError(ctx, d, ErrTeammateManagerUnavailable); !errors.Is(err, ErrTeammateManagerUnavailable) {
+			t.Fatal(err)
+		}
+	}
+	if posts != 2 || len(m.validated) != 0 {
+		t.Fatalf("posted %d connector notices, made %d native grant checks", posts, len(m.validated))
+	}
+}
+
+func TestTeammateWorkerPublicationHoldsRevokedGrantAndNeverRepostsUncertainChunk(t *testing.T) {
+	posts := 0
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages":
+			posts++
+			w.WriteHeader(500)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	if err := c.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	p := TeammatePublication{ID: "late-result", JobID: "job", AttemptID: "attempt", AdmissionID: "wake", Body: "verified result"}
+	if err := c.service.Store.teammateQueueOutput(d, p, c.service.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	restarted := &teammatePublicationManager{grantErr: ErrNotAuthorized}
+	c.manager = restarted
+	if err := c.sendPending(ctx, d); !errors.Is(err, ErrNotAuthorized) || posts != 0 {
+		t.Fatalf("revoked effect posts=%d err=%v", posts, err)
+	}
+	if restarted.last.JobID != p.JobID || restarted.last.AttemptID != p.AttemptID || restarted.last.BodyHash != PublicationBodyHash(p.Body) {
+		t.Fatalf("wrong native authority %v", restarted.last)
+	}
+	restarted.grantErr = nil
+	if err := c.sendPending(ctx, d); !teammateAPIStatus(err, http.StatusInternalServerError) || posts != 1 {
+		t.Fatalf("initial post count %d err %v", posts, err)
+	}
+	restarted.grantErr = ErrNotAuthorized
+	if err := c.sendPending(ctx, d); !errors.Is(err, ErrDeliveryUncertain) || posts != 1 {
+		t.Fatalf("reposted uncertain result posts=%d err=%v", posts, err)
+	}
+	pending, err := c.service.Store.teammateOutputs("install", d.ID)
+	if err != nil || len(pending) != 1 {
+		t.Fatal(pending, err)
+	}
+	if err = c.service.Store.teammateObserve("install", d.Route, "500", pending[0].Chunks[0].ID, p.Body, c.service.Now()); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = c.service.Store.teammateOutputs("install", d.ID)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("reconciled result %+v %v", pending, err)
+	}
+}
+
+func TestTeammateNonJobPublicationsStillRevalidateNativeAuthority(t *testing.T) {
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		default:
+			t.Errorf("publication bypassed native grant before %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(403)
+		}
+	})
+	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	if err := c.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	responses := []TeammatePublication{
+		{ID: "reply", AdmissionID: "input", Sequence: 1, Body: "Here are the cached results from both workers."},
+		{ID: "question", AdmissionID: "input", Sequence: 2, QuestionID: "question", QuestionHash: "hash", Body: "Should I continue?"},
+		{ID: "continuity", SystemCause: TeammateSystemContinuityGap, Sequence: 3, Body: "The manager recovered a discussion gap."},
+	}
+	for _, p := range responses {
+		if err := c.service.Store.teammateQueueOutput(d, p, c.service.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restarted := &teammatePublicationManager{grantErr: ErrNotAuthorized}
+	c.manager = restarted
+	if err := c.sendPending(context.Background(), d); !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("grant after reconnect: %v", err)
+	}
+	if len(restarted.validated) != len(responses) {
+		t.Fatalf("proof checks = %+v", restarted.validated)
+	}
+	for i, p := range restarted.validated {
+		if p.ID != responses[i].ID || p.BodyHash != PublicationBodyHash(responses[i].Body) || p.JobID != "" {
+			t.Fatalf("proof check %+v expected publication %s", p, responses[i].ID)
+		}
+	}
+}
+
+func TestTeammateDormantRoutesDoNotExhaustActiveQuota(t *testing.T) {
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })
+	s := c.service.Store
+	first := TeammateDiscussion{InstallationID: "install", ID: "discussion-0", Route: Route{GuildID: "10", ChannelID: "200", ParentID: "20"}}
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		for i := range teammateDiscussionLimit + 2 {
+			d := first
+			d.ID = fmt.Sprint("discussion-", i)
+			d.Route.ChannelID = fmt.Sprint(200 + i)
+			b := teammateBinding{TeammateDiscussion: d, Opened: true, Boundary: "150"}
+			k := teammateKey(d.InstallationID, d.Route.ChannelID)
+			if err := putJSON(tx, teammateDiscussionBucket, k, b); err != nil {
+				return err
+			}
+			if err := teammateIndexBindingID(tx, b, k); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := TeammateDiscussion{InstallationID: "install", ID: "fresh", Route: Route{GuildID: "10", ChannelID: "9000", ParentID: "20"}}
+	if err := s.teammateBind(teammateBinding{TeammateDiscussion: fresh, Opened: true}); err != nil {
+		t.Fatalf("new binding after historical quota: %v", err)
+	}
+	if err := s.teammatePark(fresh, 0); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.teammateActiveBindings("install")
+	if err != nil || len(active) != 0 {
+		t.Fatalf("active historical discussions=%d err=%v", len(active), err)
+	}
+	ready := map[string]any{"session_id": "old", "application": map[string]string{"id": "99"}, "user": map[string]string{"id": "99"}}
+	teammateTestEvent(t, c, 1, "READY", ready)
+	ready["session_id"] = "new"
+	teammateTestEvent(t, c, 2, "READY", ready)
+	parked, err := s.teammateBindingByID("install", first.ID)
+	if err != nil || parked.Route != first.Route || parked.RepairTargetEpoch != 0 {
+		t.Fatalf("parked binding %+v err=%v", parked, err)
+	}
+	teammateTestEvent(t, c, 3, "MESSAGE_CREATE", teammateTestMessage("400", first.Route.ChannelID, "88", "ordinary follow-up", false))
+	if err = s.teammatePark(first, 0); err != nil {
+		t.Fatal(err)
+	}
+	active, err = s.teammateActiveBindings("install")
+	if err != nil || len(active) != 1 || active[0].ID != first.ID || active[0].RepairTargetEpoch != 1 || active[0].RepairLower != "150" {
+		t.Fatalf("reactivation %+v err=%v", active, err)
+	}
+	pending, err := s.teammatePending("install")
+	if err != nil || len(pending) != 1 || pending[0].Opening || pending[0].Route.ChannelID != first.Route.ChannelID {
+		t.Fatalf("untagged input %+v err=%v", pending, err)
 	}
 }

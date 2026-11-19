@@ -116,3 +116,17 @@ Modern Hermes keeps uncertain native work and its workspace after viewer loss un
 ## Verification status
 
 The owner authorized a local mock Discord server for this delivery. Its real Gateway/REST protocol tests cover connection, source context, endorsement, explicit publication, cancellation and fault recovery. [Integration evidence](../verification/discord-integration.md) distinguishes those tests, actual native CLI fixtures, independent reviews, release gates and installed-host checks. No live Discord server configuration is implied until actual bot credentials are configured.
+
+### Teammate recovery and worker capability
+
+The current native manager options are Codex and Claude on qualified versions. The teammate can obtain exact results from newly created Codex and qualified Claude workers. Use Codex for follow-up steering. A busy Codex worker can receive a queued instruction when its original attempt can safely accept a fresh native input. Unsupported providers or an ambiguous worker turn require operator attention. The legacy adapter roster is independent of this qualification.
+
+If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:
+
+```sh
+swarm discord status
+swarm discord resume-manual DISCUSSION_ID \
+  --session EXACT_MANAGER_SESSION --instance EXACT_INSTANCE --external-input OBSERVED_COUNT
+```
+
+A changed counter, replacement instance, lost custody or ambiguous native effect refuses reconciliation. Inspect the specific manager on the home dashboard before taking further action. For a native workspace trust prompt, use the provider's own terminal; a Discord instruction cannot grant trust. Installed connectors start the supervisor using its saved owner environment. Run the first teammate installation from the owner's login shell.

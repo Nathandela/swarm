@@ -18,14 +18,24 @@ const teammateNonceWindow = time.Minute
 const teammateStartupNotice = "manager_startup_unavailable"
 
 func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
-	if d.ID == "" || d.Route.MessageID != "" || strings.HasPrefix(p.ID, teammateStartupNotice+"_") {
+	if d.ID == "" || d.Route.MessageID != "" || p.BodyHash != "" || p.ActivationGeneration != 0 ||
+		strings.HasPrefix(p.ID, teammateStartupNotice+"_") {
 		return ErrInvalid
 	}
-	if p.SystemCause != "" {
-		if p.SystemCause != TeammateSystemContinuityGap || p.AdmissionID != "" || p.JobID != "" || p.AttemptID != "" || p.QuestionID != "" || p.QuestionHash != "" {
+	switch p.SystemCause {
+	case "":
+		if p.AdmissionID == "" && p.JobID == "" {
 			return ErrInvalid
 		}
-	} else if p.AdmissionID == "" && p.JobID == "" {
+	case TeammateSystemContinuityGap:
+		if p.AdmissionID != "" || p.JobID != "" || p.AttemptID != "" || p.QuestionID != "" || p.QuestionHash != "" {
+			return ErrInvalid
+		}
+	case TeammateSystemWorkerEvidenceLimited:
+		if p.AdmissionID != "" || p.JobID == "" || p.AttemptID == "" || p.QuestionID != "" || p.QuestionHash != "" {
+			return ErrInvalid
+		}
+	default:
 		return ErrInvalid
 	}
 	return s.teammateQueue(d.InstallationID, d.ID, d.Route, p, now, false)
@@ -41,12 +51,15 @@ func (t *teammateConnector) queueGap(d TeammateDiscussion) error {
 	return t.service.Store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true)
 }
 
-func teammateStartupNoticeID(d TeammateDiscussion) string {
-	return teammateStartupNotice + "_" + digest(d.ID)[:32]
+func teammateStartupNoticeID(d TeammateDiscussion, generation uint64) string {
+	if generation == 0 {
+		return teammateStartupNotice + "_" + digest(d.ID)[:32]
+	}
+	return teammateStartupNotice + "_" + digest([]any{d.ID, d.Route, generation})[:32]
 }
 
-func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion) error {
-	key := teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d))
+func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion, generation uint64) error {
+	key := teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d, generation))
 	var out teammateOutput
 	err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), key, &out)
 	if errors.Is(err, ErrNotFound) {
@@ -73,15 +86,10 @@ func (t *teammateConnector) managerStartupError(ctx context.Context, d TeammateD
 	if !errors.Is(managerErr, ErrTeammateManagerUnavailable) {
 		return managerErr
 	}
-	p := TeammatePublication{
-		ID:          teammateStartupNoticeID(d),
-		Body:        "I couldn’t start my configured manager. Ask the Swarm operator to check the teammate status for details.",
-		SystemCause: teammateStartupNotice,
-	}
-	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, &p))
+	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, true))
 }
 
-func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, prepare *TeammatePublication) error {
+func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, prepare bool) error {
 	store := t.service.Store
 	var binding teammateBinding
 	err := store.db.View(func(tx *bolt.Tx) error {
@@ -93,17 +101,60 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	if binding.ID != d.ID || binding.Route != d.Route {
 		return ErrConflict
 	}
-	if binding.Opened || binding.ProvisionalCancelled {
+	if binding.ProvisionalCancelled || !prepare && !binding.StartupNoticePending {
 		return nil
 	}
-	if prepare != nil {
-		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, *prepare, t.service.Now(), true); err != nil {
+	var gen uint64
+	if binding.Opened {
+		provider, ok := t.manager.(interface {
+			Status(TeammateDiscussion) (TeammateNativeStatus, error)
+		})
+		if !ok {
+			return ErrTeammateManagerUnavailable
+		}
+		status, err := provider.Status(d)
+		if err != nil {
+			return err
+		}
+		if status.Generation == 0 {
+			return ErrInvalid
+		}
+		gen = status.Generation
+	}
+	if binding.StartupNoticePending && binding.StartupNoticeGeneration != gen {
+		err = store.db.Update(func(tx *bolt.Tx) error {
+			key := teammateKey(d.InstallationID, d.Route.ChannelID)
+			var current teammateBinding
+			if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &current); err != nil {
+				return err
+			}
+			if current.ID != d.ID || current.Route != d.Route {
+				return ErrConflict
+			}
+			if !current.StartupNoticePending || current.StartupNoticeGeneration != binding.StartupNoticeGeneration {
+				return nil
+			}
+			if err := teammateCancelUnsentStartupNotice(tx, d, current.StartupNoticeGeneration); err != nil {
+				return err
+			}
+			current.StartupNoticePending = false
+			return putJSON(tx, teammateDiscussionBucket, key, current)
+		})
+		if err != nil || !prepare {
+			return err
+		}
+	}
+	id := teammateStartupNoticeID(d, gen)
+	if prepare {
+		p := TeammatePublication{ID: id, Body: "I couldn’t start my configured manager. Ask the Swarm operator to check the teammate status for details.",
+			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
+		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
 			return err
 		}
 	}
 	var pending teammateOutput
 	err = store.db.View(func(tx *bolt.Tx) error {
-		return teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d)), &pending)
+		return teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), teammateOutputKey(d.InstallationID, d.ID, id), &pending)
 	})
 	if errors.Is(err, ErrNotFound) {
 		return nil
@@ -124,7 +175,7 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		k := teammateOutputKey(install, id, p.ID)
 		var old teammateOutput
 		err := teammateGet(b, k, &old)
-		bodyHash := digest(p.Body)
+		bodyHash := PublicationBodyHash(p.Body)
 		if err == nil {
 			p.Body = ""
 			prior := old.Publication
@@ -159,6 +210,16 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 			}
 			if binding.ID != id || binding.Route != route {
 				return ErrConflict
+			}
+			if err = teammateActivate(tx, &binding); err != nil {
+				return err
+			}
+			if internal && p.SystemCause == teammateStartupNotice {
+				binding.StartupNoticePending = true
+				binding.StartupNoticeGeneration = p.ActivationGeneration
+				if err = putJSON(tx, teammateDiscussionBucket, teammateKey(install, route.ChannelID), binding); err != nil {
+					return err
+				}
 			}
 		}
 		out := teammateOutput{Publication: p, Route: route, DiscussionID: id, BodyHash: bodyHash, Created: now, Internal: internal}
@@ -228,6 +289,22 @@ func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateO
 		}
 		if settled {
 			out.SettledAt = now
+			if out.Internal && out.Publication.SystemCause == teammateStartupNotice {
+				k := teammateKey(install, out.Route.ChannelID)
+				var binding teammateBinding
+				if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), k, &binding); err != nil {
+					return err
+				}
+				if binding.ID != out.DiscussionID || binding.Route != out.Route {
+					return ErrConflict
+				}
+				if binding.StartupNoticeGeneration == out.Publication.ActivationGeneration {
+					binding.StartupNoticePending = false
+					if err := putJSON(tx, teammateDiscussionBucket, k, binding); err != nil {
+						return err
+					}
+				}
+			}
 			return teammateOutboxCount(tx, install, -1)
 		}
 	}
@@ -307,21 +384,43 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 	if err != nil {
 		return err
 	}
+	var sendErr error
 	for _, out := range outputs {
-		if out.Publication.SystemCause == teammateStartupNotice {
-			continue
+		if err := ctx.Err(); err != nil {
+			return errors.Join(sendErr, err)
 		}
-		if err = t.sendOutput(ctx, d.InstallationID, out); err != nil {
-			return err
+		if out.Publication.SystemCause != teammateStartupNotice {
+			sendErr = errors.Join(sendErr, t.sendOutput(ctx, d.InstallationID, out))
 		}
 	}
-	return nil
+	return sendErr
 }
 
 func (t *teammateConnector) sendOutput(ctx context.Context, install string, out teammateOutput) error {
 	store := t.service.Store
 	for n, chunk := range out.Chunks {
 		if chunk.State == StateSent {
+			continue
+		}
+		if out.Publication.JobID != "" && (chunk.State == StateSending || chunk.State == StateUncertain) {
+			const awaitingReceipt = "Worker publication awaiting an authenticated Discord receipt"
+			if out.Error == awaitingReceipt {
+				return ErrDeliveryUncertain
+			}
+			held := false
+			if err := store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error {
+				if p.Chunks[n].State != StateSent {
+					held = true
+					p.Chunks[n].State = StateUncertain
+					p.Error = awaitingReceipt
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			if held {
+				return ErrDeliveryUncertain
+			}
 			continue
 		}
 		if (chunk.State == StateSending || chunk.State == StateUncertain) && t.service.Now().Sub(out.Attempted) >= teammateNonceWindow {
@@ -333,7 +432,7 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 				return nil
 			})
 		}
-		if err := t.checkAudience(ctx, out); err != nil {
+		if err := t.checkPublication(ctx, install, out); err != nil {
 			if e := store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error { p.Error = err.Error(); return nil }); e != nil {
 				return e
 			}
@@ -400,6 +499,24 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 		}
 	}
 	return nil
+}
+
+func (t *teammateConnector) checkPublication(ctx context.Context, install string, out teammateOutput) error {
+	if err := t.checkAudience(ctx, out); err != nil {
+		return err
+	}
+	if out.Internal {
+		return nil
+	}
+	validator, ok := t.manager.(interface {
+		ValidatePublication(context.Context, TeammateDiscussion, TeammatePublication) error
+	})
+	if !ok || out.Publication.JobID != "" && out.Publication.AttemptID == "" {
+		return ErrNotAuthorized
+	}
+	p := out.Publication
+	p.BodyHash = out.BodyHash
+	return validator.ValidatePublication(ctx, TeammateDiscussion{ID: out.DiscussionID, InstallationID: install, Route: out.Route}, p)
 }
 
 func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutput) error {

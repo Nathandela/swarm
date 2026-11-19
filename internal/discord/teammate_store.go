@@ -11,15 +11,17 @@ import (
 )
 
 const (
-	teammatePendingBucket      = "teammate_pending"
-	teammateIngressBucket      = "teammate_ingress"
-	teammateIngressGuardBucket = "teammate_ingress_guard"
-	teammateDiscussionBucket   = "teammate_discussions"
-	teammateMetaBucket         = "teammate_meta"
-	teammateOutboxBucket       = "teammate_outbox"
-	teammateReceiptBucket      = "teammate_receipts"
-	teammateIngressLimit       = 32768
-	teammateDiscussionLimit    = 1024
+	teammatePendingBucket       = "teammate_pending"
+	teammateIngressBucket       = "teammate_ingress"
+	teammateIngressGuardBucket  = "teammate_ingress_guard"
+	teammateDiscussionBucket    = "teammate_discussions"
+	teammateActiveBindingBucket = "teammate_active_discussions"
+	teammateBindingIDBucket     = "teammate_discussion_ids"
+	teammateMetaBucket          = "teammate_meta"
+	teammateOutboxBucket        = "teammate_outbox"
+	teammateReceiptBucket       = "teammate_receipts"
+	teammateIngressLimit        = 32768
+	teammateDiscussionLimit     = 1024
 )
 
 type teammateCandidate struct {
@@ -44,18 +46,21 @@ type teammateIngressGuard struct {
 }
 
 type teammateBinding struct {
-	ProvisionalCancelled bool
+	ProvisionalCancelled    bool
+	StartupNoticePending    bool
+	StartupNoticeGeneration uint64
 	TeammateDiscussion
-	Opened            bool
-	Boundary          string
-	RepairUpper       string
-	RepairLower       string
-	RepairAfter       string
-	RepairEpoch       uint64
-	RepairTargetEpoch uint64
-	NotifiedEpoch     uint64
-	ParentLow         string
-	Error             string
+	Opened              bool
+	LastIngressSequence uint64
+	Boundary            string
+	RepairUpper         string
+	RepairLower         string
+	RepairAfter         string
+	RepairEpoch         uint64
+	RepairTargetEpoch   uint64
+	NotifiedEpoch       uint64
+	ParentLow           string
+	Error               string
 }
 
 type teammateCheckpoint struct {
@@ -92,7 +97,7 @@ func (s *Store) teammateInterested(installation, id string) (candidate bool, err
 		var binding teammateBinding
 		err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(installation, id), &binding)
 		if err == nil {
-			candidate = !binding.ProvisionalCancelled
+			candidate = !binding.ProvisionalCancelled && (binding.Opened || tx.Bucket([]byte(teammateActiveBindingBucket)).Get(teammateKey(installation, id)) != nil)
 			return nil
 		}
 		if !errors.Is(err, ErrNotFound) {
@@ -166,14 +171,24 @@ func (s *Store) teammateRecord(installation, session string, sequence int64, rec
 				continue
 			}
 			var binding teammateBinding
-			err = teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(installation, record.Route.ChannelID), &binding)
+			bindingKey := teammateKey(installation, record.Route.ChannelID)
+			err = teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), bindingKey, &binding)
 			if err != nil && !errors.Is(err, ErrNotFound) {
 				return err
 			}
-			if !record.Opening && binding.ProvisionalCancelled {
-				continue
+			knownBinding := err == nil
+			if knownBinding {
+				if binding.Route.GuildID != record.Route.GuildID {
+					return ErrConflict
+				}
+				if !record.Opening && (binding.ProvisionalCancelled || !binding.Opened && tx.Bucket([]byte(teammateActiveBindingBucket)).Get(teammateKey(installation, record.Route.ChannelID)) == nil) {
+					continue
+				}
+				if err = teammateActivate(tx, &binding); err != nil {
+					return err
+				}
 			}
-			if !record.Opening && err != nil {
+			if !record.Opening && errors.Is(err, ErrNotFound) {
 				// Hold early, untagged posts only after an opener has been durably observed.
 				openingKey := teammateOpeningKey(installation, record.Route.ChannelID)
 				meta := tx.Bucket([]byte(teammateMetaBucket))
@@ -189,6 +204,12 @@ func (s *Store) teammateRecord(installation, session string, sequence int64, rec
 				return err
 			}
 			record.State = StatePrepared
+			if knownBinding {
+				binding.LastIngressSequence = record.Sequence
+				if err = putJSON(tx, teammateDiscussionBucket, bindingKey, binding); err != nil {
+					return err
+				}
+			}
 			if err = putJSON(tx, teammateIngressBucket, key, record); err != nil {
 				return err
 			}
@@ -220,16 +241,12 @@ func teammateCheckpointUpdate(tx *bolt.Tx, installation, session string, sequenc
 	}
 	if gap && p.Session != "" {
 		p.GapEpoch++
-		if err := teammateEach(tx.Bucket([]byte(teammateDiscussionBucket)), installation, func(k, raw []byte) error {
+		if err := teammateEach(tx.Bucket([]byte(teammateActiveBindingBucket)), installation, func(k, _ []byte) error {
 			var b teammateBinding
-			if err := json.Unmarshal(raw, &b); err != nil {
+			if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), k, &b); err != nil {
 				return err
 			}
-			if b.RepairEpoch == p.GapEpoch-1 {
-				b.RepairLower = b.Boundary
-			}
-			b.RepairAfter, b.RepairUpper = "", ""
-			b.RepairTargetEpoch = p.GapEpoch
+			teammatePrepareRepair(&b, p.GapEpoch)
 			return putJSON(tx, teammateDiscussionBucket, k, b)
 		}); err != nil {
 			return err
@@ -257,9 +274,15 @@ func (s *Store) teammateCheckpoint(installation string) (out teammateCheckpoint,
 	return
 }
 
-func (s *Store) teammatePending(installation string) (out []teammateCandidate, err error) {
+func (s *Store) teammatePending(installation string) ([]teammateCandidate, error) {
+	rows, _, err := s.teammatePendingSnapshot(installation)
+	return rows, err
+}
+
+func (s *Store) teammatePendingSnapshot(installation string) (out []teammateCandidate, through uint64, err error) {
 	err = s.db.View(func(tx *bolt.Tx) error {
 		ingress := tx.Bucket([]byte(teammateIngressBucket))
+		through = ingress.Sequence()
 		meta := tx.Bucket([]byte(teammateMetaBucket))
 		return teammateEach(tx.Bucket([]byte(teammatePendingBucket)), installation, func(_ []byte, key []byte) error {
 			var record teammateCandidate
@@ -274,16 +297,33 @@ func (s *Store) teammatePending(installation string) (out []teammateCandidate, e
 	return
 }
 
-func (s *Store) teammateBindings(installation string) (out []teammateBinding, err error) {
+func (s *Store) teammateActiveBindings(installation string) (out []teammateBinding, err error) {
 	err = s.db.View(func(tx *bolt.Tx) error {
-		return teammateEach(tx.Bucket([]byte(teammateDiscussionBucket)), installation, func(_ []byte, raw []byte) error {
-			var binding teammateBinding
-			if e := json.Unmarshal(raw, &binding); e != nil {
-				return e
+		return teammateEach(tx.Bucket([]byte(teammateActiveBindingBucket)), installation, func(k, _ []byte) error {
+			var b teammateBinding
+			if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), k, &b); err != nil {
+				return err
 			}
-			out = append(out, binding)
+			out = append(out, b)
 			return nil
 		})
+	})
+	return
+}
+
+func (s *Store) teammateBindingByID(installation, id string) (binding teammateBinding, err error) {
+	err = s.db.View(func(tx *bolt.Tx) error {
+		k := tx.Bucket([]byte(teammateBindingIDBucket)).Get(teammateKey(installation, id))
+		if k == nil {
+			return ErrNotFound
+		}
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), k, &binding); err != nil {
+			return err
+		}
+		if binding.ID != id || binding.InstallationID != installation {
+			return ErrConflict
+		}
+		return nil
 	})
 	return
 }
@@ -298,15 +338,108 @@ func (s *Store) teammateBind(binding teammateBinding) error {
 			if old.ID != binding.ID || old.Route != binding.Route {
 				return ErrConflict
 			}
-			return nil
+			return teammateActivate(tx, &old)
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		if b.Stats().KeyN >= teammateDiscussionLimit {
+		if err := teammateIndexBindingID(tx, binding, key); err != nil {
+			return err
+		}
+		return teammateActivate(tx, &binding)
+	})
+}
+
+func teammateIndexBindingID(tx *bolt.Tx, b teammateBinding, key []byte) error {
+	ids := tx.Bucket([]byte(teammateBindingIDBucket))
+	id := teammateKey(b.InstallationID, b.ID)
+	if old := ids.Get(id); old != nil && !bytes.Equal(old, key) {
+		return ErrConflict
+	}
+	return ids.Put(id, key)
+}
+
+func teammatePrepareRepair(b *teammateBinding, epoch uint64) {
+	if epoch <= b.RepairTargetEpoch || epoch <= b.RepairEpoch {
+		return
+	}
+	if b.RepairTargetEpoch <= b.RepairEpoch {
+		b.RepairLower = b.Boundary
+	}
+	b.RepairAfter, b.RepairUpper = "", ""
+	b.RepairTargetEpoch = epoch
+}
+
+func teammateActivate(tx *bolt.Tx, b *teammateBinding) error {
+	key := teammateKey(b.InstallationID, b.Route.ChannelID)
+	active := tx.Bucket([]byte(teammateActiveBindingBucket))
+	if active.Get(key) != nil {
+		return nil
+	}
+	count := 0
+	if err := teammateEach(active, b.InstallationID, func(_, _ []byte) error {
+		count++
+		if count >= teammateDiscussionLimit {
 			return ErrCapacity
 		}
-		return putJSON(tx, teammateDiscussionBucket, key, binding)
+		return nil
+	}); err != nil {
+		return err
+	}
+	var p teammateCheckpoint
+	err := teammateGet(tx.Bucket([]byte(teammateMetaBucket)), teammateKey(b.InstallationID, "checkpoint"), &p)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	teammatePrepareRepair(b, p.GapEpoch)
+	if err = putJSON(tx, teammateDiscussionBucket, key, *b); err != nil {
+		return err
+	}
+	return active.Put(key, []byte{1})
+}
+
+func (s *Store) teammatePark(d TeammateDiscussion, through uint64) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		key := teammateKey(d.InstallationID, d.Route.ChannelID)
+		var binding teammateBinding
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &binding); err != nil {
+			return err
+		}
+		if binding.ID != d.ID || binding.Route != d.Route {
+			return ErrConflict
+		}
+		// A concurrent new message to this thread supersedes the scheduler's drain snapshot.
+		if binding.LastIngressSequence > through || binding.StartupNoticePending || binding.Opened && binding.RepairTargetEpoch > binding.RepairEpoch {
+			return nil
+		}
+		hasOutput := false
+		if err := teammateEach(tx.Bucket([]byte(teammateOutboxBucket)), d.InstallationID+"\x00"+d.ID, func(_, raw []byte) error {
+			var output teammateOutput
+			if err := json.Unmarshal(raw, &output); err != nil {
+				return err
+			}
+			hasOutput = hasOutput || output.SettledAt.IsZero()
+			return nil
+		}); err != nil {
+			return err
+		}
+		if hasOutput {
+			return nil
+		}
+		return tx.Bucket([]byte(teammateActiveBindingBucket)).Delete(key)
+	})
+}
+
+func initializeTeammateBindingIndices(tx *bolt.Tx) error {
+	return tx.Bucket([]byte(teammateDiscussionBucket)).ForEach(func(k, raw []byte) error {
+		var b teammateBinding
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return err
+		}
+		if err := teammateIndexBindingID(tx, b, k); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte(teammateActiveBindingBucket)).Put(k, []byte{1})
 	})
 }
 
@@ -366,10 +499,11 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 			} else if !binding.Opened {
 				binding.ProvisionalCancelled = true
 			}
-			if binding.Opened || binding.ProvisionalCancelled {
-				if err := teammateCancelUnsentStartupNotice(tx, d); err != nil {
+			if binding.StartupNoticePending && binding.StartupNoticeGeneration == 0 && (binding.Opened || binding.ProvisionalCancelled) {
+				if err := teammateCancelUnsentStartupNotice(tx, d, 0); err != nil {
 					return err
 				}
+				binding.StartupNoticePending = false
 			}
 			if err := putJSON(tx, teammateDiscussionBucket, k, binding); err != nil {
 				return err
@@ -479,7 +613,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 		return status, err
 	}
 	status.GatewaySequence, status.GapEpoch, status.IngressIssue = checkpoint.GatewaySequence, checkpoint.GapEpoch, checkpoint.Error
-	rows, err := s.teammateBindings(install)
+	rows, err := s.teammateActiveBindings(install)
 	if err != nil {
 		return status, err
 	}

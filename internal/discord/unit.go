@@ -48,7 +48,7 @@ func RenderUnit(goos, binary, stateDir, logPath string) (string, error) {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>com.swarm.discord</string>
-<key>ProgramArguments</key><array><string>%s</string><string>discord</string><string>run</string><string>--state-dir</string><string>%s</string></array>
+<key>ProgramArguments</key><array><string>%s</string><string>discord</string><string>run</string><string>--state-dir</string><string>%s</string><string>--unattended</string></array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
 <key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
@@ -63,7 +63,7 @@ func RenderUnit(goos, binary, stateDir, logPath string) (string, error) {
 			s = strings.ReplaceAll(s, `"`, `\"`)
 			return `"` + s + `"`
 		}
-		return fmt.Sprintf("[Unit]\nDescription=Swarm Discord\nStartLimitIntervalSec=0\n[Service]\nExecStart=:%s discord run --state-dir %s\nRestart=always\nRestartSec=10\nStandardOutput=append:%s\nStandardError=append:%s\n[Install]\nWantedBy=default.target\n", quote(binary), quote(stateDir), strings.ReplaceAll(logPath, "%", "%%"), strings.ReplaceAll(logPath, "%", "%%")), nil
+		return fmt.Sprintf("[Unit]\nDescription=Swarm Discord\nStartLimitIntervalSec=0\n[Service]\nExecStart=:%s discord run --state-dir %s --unattended\nRestart=always\nRestartSec=10\nStandardOutput=append:%s\nStandardError=append:%s\n[Install]\nWantedBy=default.target\n", quote(binary), quote(stateDir), strings.ReplaceAll(logPath, "%", "%%"), strings.ReplaceAll(logPath, "%", "%%")), nil
 	default:
 		return "", errors.New("discord: unsupported service platform")
 	}

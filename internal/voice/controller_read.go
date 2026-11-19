@@ -61,7 +61,7 @@ func encodeWorkerReadCursor(source string, input ReadInput, value string) (strin
 }
 func (c *Controller) readWorker(input ReadInput) (json.RawMessage, error) {
 	if c.discussion != nil {
-		return c.readDiscussionWorker(input)
+		return c.readDiscussionWorker(input, Admission{})
 	}
 	row, err := c.workerTarget(input.SessionInput, false)
 	if err != nil {

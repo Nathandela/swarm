@@ -14,7 +14,7 @@ type DiscussionNativeStatus struct {
 }
 
 type DiscussionJobStatus struct {
-	ID, AttemptID, Session, Instance, Project, State string
+	ID, AttemptID, Session, Instance, Project, State, Diagnostic string
 }
 
 // Status reads the controller ledger without launching or contacting the model.
@@ -57,6 +57,8 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 		switch {
 		case worker.Reserved:
 			job.ID, job.AttemptID, job.State = worker.ActionID, worker.ActionID, "pending_launch"
+		case worker.EvidenceLimited:
+			job.State, job.Diagnostic = "evidence_limited", discussionEvidenceLimitNotice
 		case worker.RecoveryRequired:
 			job.State = "uncertain"
 		case worker.Ended:

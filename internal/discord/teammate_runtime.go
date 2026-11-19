@@ -262,7 +262,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 			}
 			a.Text = current.Content
 			noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			noticeErr = t.sendStartupNotice(noticeCtx, a.Discussion, nil)
+			noticeErr = t.sendStartupNotice(noticeCtx, a.Discussion, false)
 			cancel()
 		case TeammateAdmissionSuperseded:
 			return t.refreshAdmission(ctx, c)
@@ -440,7 +440,7 @@ func (t *teammateConnector) run(ctx context.Context) error {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
 	for {
-		if t.client.Connected() && len(active) < parallel {
+		if t.service.botUserID() != "" && len(active) < parallel {
 			if err := t.schedule(ctx, parallel, active, reserved, retryAfter, syncAfter, done, &tasks); err != nil {
 				return err
 			}
@@ -468,11 +468,11 @@ func (t *teammateConnector) run(ctx context.Context) error {
 
 func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, reserved map[string]bool, retryAfter, syncAfter map[string]time.Time, done chan<- teammateTaskResult, tasks *sync.WaitGroup) error {
 	store, install := t.service.Store, t.service.Config.InstallationID
-	pending, err := store.teammatePending(install)
+	pending, through, err := store.teammatePendingSnapshot(install)
 	if err != nil {
 		return err
 	}
-	bindings, err := store.teammateBindings(install)
+	bindings, err := store.teammateActiveBindings(install)
 	if err != nil {
 		return err
 	}
@@ -486,6 +486,11 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	bound := make(map[string]teammateBinding, len(bindings))
 	for _, b := range bindings {
 		bound[b.Route.ChannelID] = b
+	}
+	for id := range syncAfter {
+		if _, known := bound[id]; !known && id != "notices" {
+			delete(syncAfter, id)
+		}
 	}
 	launch := func(id, reservation string, syncing bool, work func(context.Context) error) {
 		active[id] = true
@@ -550,6 +555,11 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		}
 		waiting, hasAccepted := accepted[b.Route.ChannelID]
 		if !b.Opened && !hasAccepted && !b.ProvisionalCancelled {
+			if !predecessors[b.Route.ChannelID] {
+				if err := store.teammatePark(b.TeammateDiscussion, through); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		launch(b.Route.ChannelID, "", true, func(ctx context.Context) error {
@@ -563,9 +573,9 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				b.Gap = checkpoint.GapEpoch
 			}
 			var noticeErr error
-			if !b.Opened && !b.ProvisionalCancelled {
+			if b.StartupNoticePending && !b.ProvisionalCancelled {
 				noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				noticeErr = t.sendStartupNotice(noticeCtx, b.TeammateDiscussion, nil)
+				noticeErr = t.sendStartupNotice(noticeCtx, b.TeammateDiscussion, false)
 				cancel()
 			}
 			var emitted []string
@@ -596,7 +606,22 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				return err
 			}
 			if b.Error != "" {
-				return store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) { current.Error = "" })
+				if err := store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) { current.Error = "" }); err != nil {
+					return err
+				}
+			}
+			if !predecessors[b.Route.ChannelID] {
+				if native, ok := t.manager.(interface {
+					Dormant(TeammateDiscussion) (bool, error)
+				}); ok {
+					dormant, err := native.Dormant(b.TeammateDiscussion)
+					if err != nil {
+						return err
+					}
+					if dormant {
+						return store.teammatePark(b.TeammateDiscussion, through)
+					}
+				}
 			}
 			return nil
 		})

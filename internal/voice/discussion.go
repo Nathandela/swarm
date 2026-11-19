@@ -17,6 +17,15 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
+var ErrDiscussionActivationUnavailable = errors.New("voice: discussion manager could not become ready")
+
+func discussionActivationError(err error) error {
+	if errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrControllerNativeUnavailable) {
+		return errors.Join(ErrDiscussionActivationUnavailable, err)
+	}
+	return err
+}
+
 const DiscussionIdleGrace = 2 * time.Minute
 
 type discussionRuntime interface {
@@ -298,7 +307,7 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 	}
 	if runtime, ok := d.runtime.(*ProtocolControllerClient); ok {
 		if err := runtime.discussionSupported(ctx); err != nil {
-			return err
+			return discussionActivationError(err)
 		}
 	}
 	req := managerLaunchRequest(d.cfg, d.refs())
@@ -316,7 +325,7 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 	}
 	selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, retiredSource)
 	if err != nil {
-		return err
+		return discussionActivationError(err)
 	}
 	var binding ManagerBinding
 	if conv.Parked {
@@ -664,19 +673,13 @@ func (d *DiscussionController) export(st State, emit func(DiscussionOutput) erro
 		if r.Exported || r.Kind != "manager" || r.State != "pending" || !d.now().Before(r.ExpiresAt) {
 			continue
 		}
-		var question struct {
-			Question string
-			Choices  []string
-		}
-		if json.Unmarshal(r.Payload, &question) != nil {
-			return ErrCorrupt
+		question, err := discussionQuestionText(r)
+		if err != nil {
+			return err
 		}
 		output := DiscussionOutput{DiscussionOutputSource: r.DiscussionSource}
-		output.ID, output.QuestionID, output.QuestionHash, output.Text = r.ID, r.ID, r.Hash, question.Question
+		output.ID, output.QuestionID, output.QuestionHash, output.Text = r.ID, r.ID, r.Hash, question
 		output.Sequence = r.OutputSequence
-		if len(question.Choices) > 0 {
-			output.Text += "\n" + strings.Join(question.Choices, "\n")
-		}
 		outputs = append(outputs, output)
 	}
 	sort.Slice(outputs, func(i, j int) bool {

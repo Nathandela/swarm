@@ -18,7 +18,6 @@ import (
 	"unicode"
 
 	"github.com/Nathandela/swarm/internal/discord"
-	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/voice"
 )
@@ -256,7 +255,11 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 		},
 		Text: r.prompt(input, page, source, historyErr),
 	})
-	if errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, voice.ErrControllerUnsupported) || errors.Is(err, voice.ErrControllerNativeUnavailable) {
+	return activationNotice(err)
+}
+
+func activationNotice(err error) error {
+	if errors.Is(err, voice.ErrDiscussionActivationUnavailable) {
 		return errors.Join(discord.ErrTeammateManagerUnavailable, err)
 	}
 	return err
@@ -287,7 +290,7 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 	}
 	for _, job := range status.Jobs {
 		result.Jobs = append(result.Jobs, discord.TeammateJobStatus{ID: job.ID, AttemptID: job.AttemptID, Session: job.Session,
-			Instance: job.Instance, Project: job.Project, State: job.State})
+			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic})
 	}
 	return result, nil
 }
@@ -299,6 +302,21 @@ func (r *Runtime) PublicationExported(bound discord.TeammateDiscussion, id strin
 	}
 	defer r.release(entry)
 	return entry.voice.PublicationExported(id, question)
+}
+
+func (r *Runtime) ValidatePublication(ctx context.Context, bound discord.TeammateDiscussion, p discord.TeammatePublication) error {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return err
+	}
+	defer r.release(entry)
+	source := voice.DiscussionOutputSource{AdmissionID: p.AdmissionID, JobID: p.JobID, AttemptID: p.AttemptID, SystemCause: p.SystemCause}
+	output := voice.DiscussionOutput{DiscussionOutputSource: source, ID: p.ID, QuestionID: p.QuestionID, QuestionHash: p.QuestionHash, Sequence: p.Sequence}
+	err = entry.voice.ValidatePublication(ctx, output, p.BodyHash)
+	if errors.Is(err, voice.ErrExpired) {
+		return discord.ErrNotAuthorized
+	}
+	return err
 }
 
 func discussionOrigin(input discord.TeammateAdmission) schema.MessageOrigin {
@@ -354,12 +372,13 @@ func (r *Runtime) Sync(ctx context.Context, bound discord.TeammateDiscussion, re
 		return nil
 	}
 	defer r.release(entry)
-	return entry.voice.Sync(ctx, func(output voice.DiscussionOutput) error {
+	err = entry.voice.Sync(ctx, func(output voice.DiscussionOutput) error {
 		return emit(discord.TeammatePublication{
 			ID: output.ID, Body: output.Text, AdmissionID: output.AdmissionID, JobID: output.JobID, AttemptID: output.AttemptID,
 			QuestionID: output.QuestionID, QuestionHash: output.QuestionHash, Sequence: output.Sequence, SystemCause: output.SystemCause,
 		})
 	})
+	return activationNotice(err)
 }
 
 func projectWords(value string) string {

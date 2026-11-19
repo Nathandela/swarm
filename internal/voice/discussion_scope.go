@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -14,6 +15,7 @@ import (
 const DiscussionConversationPrefix = "discord-teammate-"
 
 var ErrDiscussionSourceChanged = errors.New("voice: verified Discord source changed before dispatch")
+var errDiscussionGrantUnverified = errors.New("voice: Discord authority could not be verified before dispatch; retry the same request after access is restored")
 
 // DiscussionScope comes from the verified connector destination and local enrollment.
 type DiscussionScope struct {
@@ -154,7 +156,11 @@ func (c *Controller) discussionContinuation(st State, admission Admission, targe
 }
 
 func (c *Controller) projectPath(root, candidate string) bool {
-	if !filepath.IsAbs(root) || root != candidate || c.discussion != nil && c.discussion.ProjectEnrolled != nil && !c.discussion.ProjectEnrolled(root) {
+	return c.discussion.projectPath(root, candidate)
+}
+
+func (s *DiscussionScope) projectPath(root, candidate string) bool {
+	if !filepath.IsAbs(root) || root != candidate || s != nil && s.ProjectEnrolled != nil && !s.ProjectEnrolled(root) {
 		return false
 	}
 	resolved, err := filepath.EvalSymlinks(root)
@@ -184,4 +190,37 @@ func (c *Controller) prepareDiscussionProject(expected Admission) (Admission, er
 		return nil
 	})
 	return result, err
+}
+
+func (c *Controller) verifyDiscussionLaunch(ctx context.Context, request controllerActionRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if request.Origin == nil || !c.discussion.validateOrigin(*request.Origin) || request.Launch == nil {
+		return ErrExpired
+	}
+	path := request.Project
+	if request.Tool == "swarm_create" {
+		path = request.Launch.Cwd
+		if path != request.Project {
+			return fmt.Errorf("%w: select an enrolled project before dispatching work", ErrInvalid)
+		}
+	}
+	if !c.projectPath(request.Project, path) {
+		return fmt.Errorf("%w: select a currently enrolled project for delegated work", ErrExpired)
+	}
+	if c.discussion.VerifyAudience != nil {
+		if err := c.discussion.VerifyAudience(ctx); err != nil {
+			return errDiscussionGrantUnverified
+		}
+	}
+	if c.discussion.VerifyGrant != nil {
+		if err := c.discussion.VerifyGrant(ctx, *request.Origin); err != nil {
+			if errors.Is(err, ErrDiscussionSourceChanged) {
+				return ErrDiscussionSourceChanged
+			}
+			return errDiscussionGrantUnverified
+		}
+	}
+	return nil
 }

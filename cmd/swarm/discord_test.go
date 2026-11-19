@@ -179,7 +179,7 @@ func TestDiscordRunAndProposalDelegateOnlyExplicitInputs(t *testing.T) {
 	previousCall := discordLocalCall
 	t.Cleanup(func() { discordServiceRun = previousRun; discordLocalCall = previousCall })
 	ran := false
-	discordServiceRun = func(ctx context.Context, path string) error {
+	discordServiceRun = func(ctx context.Context, path string, unattended bool) error {
 		if path != dir || ctx.Err() != nil {
 			t.Fatal(path, ctx.Err())
 		}
@@ -310,5 +310,19 @@ func TestDiscordResumeManualRequiresExactLocalCoordinates(t *testing.T) {
 	}
 	if code, _, msg := cliDiscord(t, "resume-manual", "discussion", "--session", "ep/session", "--instance", "inst", "--external-input", "0"); code != 0 || calls != 1 {
 		t.Fatal(code, calls, msg)
+	}
+}
+
+func TestTeammateInstallPinsSupervisorIdentity(t *testing.T) {
+	dir, token := discordCLIRig(t)
+	if code, _, err := cliDiscord(t, "connect", "--mode", "teammate", "--name", "W", "--application-id", "100", "--token-file", token, "--guild", "10"); code != 0 {
+		t.Fatal(code, err)
+	}
+	raw, err := os.ReadFile(discord.ConfigPath(dir))
+	var saved struct {
+		Supervisor *discord.SupervisorPaths `json:"supervisor"`
+	}
+	if err != nil || json.Unmarshal(raw, &saved) != nil || saved.Supervisor == nil || saved.Supervisor.StateDir != os.Getenv(daemon.EnvStateDir) {
+		t.Fatalf("teammate service would rediscover the supervisor under its launch environment: %v", err)
 	}
 }

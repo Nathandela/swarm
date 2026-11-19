@@ -186,6 +186,9 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		if err != nil {
 			return nil, err
 		}
+		if c.discussion != nil {
+			return c.readDiscussionWorker(input, admission)
+		}
 		return c.readWorker(input)
 
 	case "swarm_current_request":
@@ -360,9 +363,6 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 			if input.Agent != "codex" && input.Agent != "claude" {
 				return nil, fmt.Errorf("%w: use Codex for delegated Discord work with verified results", ErrControllerUnsupported)
 			}
-			if !c.projectPath(admission.Project, input.Cwd) {
-				return nil, fmt.Errorf("%w: select an enrolled project before dispatching work", ErrInvalid)
-			}
 		}
 		id = input.ActionID
 		target = "new-worker:" + id
@@ -430,7 +430,7 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		target = key(input.Request.Session, input.Request.SessionInstance)
 		request.Decision = &input.Request
 	}
-	action, err := c.prepareManagerAction(name, id, target, request, admission)
+	action, err := c.prepareManagerAction(ctx, name, id, target, request, admission)
 	if err != nil {
 		return nil, err
 	}
@@ -447,6 +447,18 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 	if name == "swarm_resume" && !protocol.LaunchOperationReplayable(operation, time.Now()) {
 		return nil, c.rejectWorkerResume(action, ErrExpired)
 	}
+	if c.discussion != nil && request.Launch != nil {
+		var prepared controllerActionRequest
+		if json.Unmarshal(action.Request, &prepared) != nil {
+			return nil, ErrCorrupt
+		}
+		if err := c.verifyDiscussionLaunch(ctx, prepared); err != nil {
+			if errors.Is(err, ErrDiscussionSourceChanged) || errors.Is(err, ErrExpired) {
+				return nil, c.rejectWorkerResume(action, err)
+			}
+			return nil, err
+		}
+	}
 	status, err := c.nativeStatus(ctx)
 	if err != nil {
 		return nil, err
@@ -454,6 +466,7 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 	if status.Turn.ExternallySteered || status.Turn.NativeInputID != admission.NativeInputID || status.Turn.ExternalInput != admission.ExternalInput || status.Turn.State != "running" || status.Turn.NativeTurnID != admission.NativeTurnID {
 		return nil, ErrStale
 	}
+
 	queueSend := c.discussion != nil && name == "swarm_send"
 	if err = c.store.controllerActionExecuting(c.binding, id, queueSend); err != nil {
 		if errors.Is(err, ErrConflict) {
@@ -672,7 +685,7 @@ func (c *Controller) managerQuestion(input AskInput, _ json.RawMessage, proof pr
 	return controllerResult(request)
 }
 
-func (c *Controller) prepareManagerAction(name, id, target string, request controllerActionRequest, admission Admission) (Action, error) {
+func (c *Controller) prepareManagerAction(ctx context.Context, name, id, target string, request controllerActionRequest, admission Admission) (Action, error) {
 	c.metadata.Lock()
 	defer c.metadata.Unlock()
 	st, err := c.store.Snapshot()
@@ -687,6 +700,18 @@ func (c *Controller) prepareManagerAction(name, id, target string, request contr
 	request.Arguments, err = withoutBusinessID(request.Arguments, "action_id")
 	if err != nil {
 		return Action{}, err
+	}
+	prior, exists := st.Actions[key(c.binding.ConversationID, id)]
+	if c.discussion != nil && request.Launch != nil && exists && prior.State != "prepared" {
+		var old controllerActionRequest
+		if json.Unmarshal(prior.Request, &old) != nil {
+			return Action{}, ErrCorrupt
+		}
+		if old.Tool != name || !bytes.Equal(old.Arguments, request.Arguments) || old.Origin == nil || request.Origin == nil ||
+			*old.Origin != *request.Origin || prior.NativeInputID != admission.NativeInputID {
+			return Action{}, ErrConflict
+		}
+		return prior, nil
 	}
 	if name == "swarm_create" {
 		target = "new-worker:" + id
@@ -710,8 +735,12 @@ func (c *Controller) prepareManagerAction(name, id, target string, request contr
 			}
 		}
 	}
+	if c.discussion != nil && request.Launch != nil && !exists {
+		if err := c.verifyDiscussionLaunch(ctx, request); err != nil {
+			return Action{}, err
+		}
+	}
 	var operation string
-	prior, exists := st.Actions[key(c.binding.ConversationID, id)]
 	if exists {
 		operation = prior.OperationID
 	} else {

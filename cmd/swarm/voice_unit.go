@@ -209,6 +209,10 @@ func ensureVoiceDaemon(cc daemon.ClientConfig, cfg voice.Config, unattended bool
 	cc.SocketPath = cfg.DaemonSocket
 	cc.LockPath = filepath.Join(cc.StateDir, "daemon.lock")
 	cc.LogPath = filepath.Join(cc.StateDir, "daemon.log")
+	return ensureManagerDaemon(cc, unattended, dial, ensure)
+}
+
+func ensureManagerDaemon(cc daemon.ClientConfig, unattended bool, dial func(string, int) (net.Conn, error), ensure func(daemon.ClientConfig) (net.Conn, error)) error {
 	if unattended {
 		conn, err := dial(cc.SocketPath, daemon.ProtocolVersion)
 		if err == nil {
@@ -219,7 +223,7 @@ func ensureVoiceDaemon(cc daemon.ClientConfig, cfg voice.Config, unattended bool
 		}
 		saved, err := daemon.LoadSavedEnv(cc.StateDir)
 		if err != nil || len(saved) == 0 {
-			return errors.New("voice: no saved supervisor environment; run swarm voice start from your shell")
+			return errors.New("no saved supervisor environment; start Swarm from the owner’s login shell")
 		}
 		cc.Env = saved
 	}

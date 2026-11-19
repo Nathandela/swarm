@@ -342,16 +342,11 @@ func (s *Service) resumeTeammateManual(ctx context.Context, input LocalTeammateR
 	if !ok {
 		return ErrTeammateManagerUnavailable
 	}
-	bindings, err := s.Store.teammateBindings(s.Config.InstallationID)
+	binding, err := s.Store.teammateBindingByID(s.Config.InstallationID, input.Discussion)
 	if err != nil {
 		return err
 	}
-	for _, binding := range bindings {
-		if binding.ID == input.Discussion {
-			return manager.ResumeManual(ctx, binding.TeammateDiscussion, input.Session, input.Instance, input.ExternalInput)
-		}
-	}
-	return ErrNotFound
+	return manager.ResumeManual(ctx, binding.TeammateDiscussion, input.Session, input.Instance, input.ExternalInput)
 }
 
 // ServeLocal exposes the connector only through an owner-private Unix socket.

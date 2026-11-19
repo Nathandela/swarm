@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/teammatemanager"
@@ -30,7 +31,7 @@ const discordUsage = "swarm discord connect|run|status|doctor|resume-manual <dis
 
 var discordLocalCall = discord.CallLocal
 var discordUnitRun = runDiscordUnit
-var discordServiceRun = func(ctx context.Context, dir string) error {
+var discordServiceRun = func(ctx context.Context, dir string, unattended bool) error {
 	if testing.Testing() {
 		return errors.New("discord: refusing live service inside a test binary")
 	}
@@ -43,6 +44,13 @@ var discordServiceRun = func(ctx context.Context, dir string) error {
 	}
 	cc, err := clientConfig()
 	if err != nil {
+		return err
+	}
+	cc.SocketPath = cfg.DaemonSocket
+	if p := cfg.Supervisor; p != nil {
+		cc.StateDir, cc.LockPath, cc.LogPath = p.StateDir, p.Lock, p.Log
+	}
+	if err = ensureManagerDaemon(cc, unattended, daemon.Dial, daemon.EnsureDaemon); err != nil {
 		return err
 	}
 	manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir), cfg)
@@ -85,7 +93,10 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	var guilds, channels, users []string
 	var mode, manager string
 	projects := map[string]string{}
-	var install, allChannels bool
+	var install, allChannels, unattended bool
+	if command == "run" {
+		fs.BoolVar(&unattended, "unattended", false, "start the home supervisor only from its saved environment")
+	}
 	var offset int
 	var checkChannel, session, instance, counter string
 	if command == "resume-manual" {
@@ -238,6 +249,21 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			config.ChannelIDs = nil
 		}
 		if config.Mode == "teammate" {
+			if config.Supervisor == nil {
+				state, e := filepath.Abs(cc.StateDir)
+				if e != nil {
+					return discordCLIError(stderr, e)
+				}
+				lock, e := filepath.Abs(cc.LockPath)
+				if e != nil {
+					return discordCLIError(stderr, e)
+				}
+				log, e := filepath.Abs(cc.LogPath)
+				if e != nil {
+					return discordCLIError(stderr, e)
+				}
+				config.Supervisor = &discord.SupervisorPaths{StateDir: state, Lock: lock, Log: log}
+			}
 			if len(users) > 0 {
 				return discordCLIError(stderr, errors.New("every human participant can direct a teammate; --allow-user is a legacy setting"))
 			}
@@ -258,7 +284,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				return discordCLIError(stderr, errors.New("--manager and --project require teammate mode"))
 			}
 			if config.Mode == "legacy" {
-				config.Mode, config.ManagerCLI, config.Projects = "", "", nil
+				config.Mode, config.ManagerCLI, config.Projects, config.Supervisor = "", "", nil, nil
 			}
 		}
 		config.Enabled = true
@@ -278,6 +304,12 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			return discordCLIError(stderr, err)
 		}
 		if install {
+			if config.Mode == "teammate" {
+				cc.SocketPath, cc.StateDir, cc.LockPath, cc.LogPath = config.DaemonSocket, config.Supervisor.StateDir, config.Supervisor.Lock, config.Supervisor.Log
+				if err = ensureManagerDaemon(cc, false, daemon.Dial, daemon.EnsureDaemon); err != nil {
+					return discordCLIError(stderr, err)
+				}
+			}
 			home, e := os.UserHomeDir()
 			if e != nil {
 				return discordCLIError(stderr, e)
@@ -303,7 +335,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	case "run":
 		runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err = discordServiceRun(runCtx, *stateDir); err != nil {
+		if err = discordServiceRun(runCtx, *stateDir, unattended); err != nil {
 			return discordCLIError(stderr, err)
 		}
 		return 0

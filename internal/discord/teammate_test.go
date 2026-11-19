@@ -106,6 +106,10 @@ func (m *teammateTestManager) Admit(_ context.Context, a TeammateAdmission, _ Te
 	}
 	return nil
 }
+func (*teammateTestManager) ValidatePublication(context.Context, TeammateDiscussion, TeammatePublication) error {
+	return nil
+}
+
 func (*teammateTestManager) Sync(context.Context, TeammateDiscussion, TeammateHistoryReader, func(TeammatePublication) error) error {
 	return nil
 }
@@ -915,4 +919,18 @@ func TestTeammateIngressGuardsDoNotConsumeActiveCapacity(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].Route.MessageID != "202" {
 		t.Fatalf("replay or quota %+v %v", rows, err)
 	}
+}
+
+func (s *Store) teammateBindings(installation string) (out []teammateBinding, err error) {
+	err = s.db.View(func(tx *bolt.Tx) error {
+		return teammateEach(tx.Bucket([]byte(teammateDiscussionBucket)), installation, func(_ []byte, raw []byte) error {
+			var binding teammateBinding
+			if e := json.Unmarshal(raw, &binding); e != nil {
+				return e
+			}
+			out = append(out, binding)
+			return nil
+		})
+	})
+	return
 }
