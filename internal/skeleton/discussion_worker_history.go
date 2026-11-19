@@ -34,7 +34,7 @@ func (d *Daemon) discussionWorkerHistory(meta persist.Meta, req schema.Interacti
 	parent, ok := d.core.Get(scope.Parent)
 	instance, exact := d.sessionInstance(meta.ID)
 	if req.Limit != 1 || req.NativeCursor != "" || req.BeforeItem != "" ||
-		len(scope.PromptHash) != sha256.Size*2 || scope.TurnID != "" && !adapter.IsCanonicalConversationID(scope.TurnID) ||
+		len(scope.PromptHash) != sha256.Size*2 || len(scope.InputID) > 128 || scope.TurnID != "" && (!adapter.IsCanonicalConversationID(scope.TurnID) || scope.InputID == "") || scope.TurnID == "" && scope.InputID != "" ||
 		!ok || parent.Role != "manager" || parent.ManagerConversationID != scope.ManagerConversation || !strings.HasPrefix(parent.ManagerConversationID, "discord-teammate-") ||
 		meta.Role == "manager" || (meta.AgentType != "codex" && (meta.AgentType != "claude" || scope.TurnID != "")) || meta.SpawnedFrom != parent.ID || meta.SpawnIntent != schema.SpawnIntentDelegate ||
 		!exact || instance != scope.SessionInstance || !adapter.IsCanonicalConversationID(meta.ConversationID) {
@@ -67,14 +67,14 @@ func (d *Daemon) discussionWorkerHistory(meta persist.Meta, req schema.Interacti
 
 func readDiscussionCodexEvidence(reader *bufio.Reader, targetTurn, promptHash string) (schema.WorkerTurnEvidence, error) {
 	scan := discussionTranscriptScan{windowEnd: discussionTranscriptMaxBytes}
-	proof, err := scan.readCodex(reader, targetTurn, promptHash)
+	proof, err := scan.readCodex(reader, targetTurn, "", promptHash)
 	if err == io.EOF {
 		err = nil
 	}
 	return proof, err
 }
 
-func (scan *discussionTranscriptScan) readCodex(reader *bufio.Reader, targetTurn, promptHash string) (schema.WorkerTurnEvidence, error) {
+func (scan *discussionTranscriptScan) readCodex(reader *bufio.Reader, targetTurn, inputID, promptHash string) (schema.WorkerTurnEvidence, error) {
 	var result schema.WorkerTurnEvidence
 	for {
 		line, err := scan.readLine(reader)
@@ -87,6 +87,7 @@ func (scan *discussionTranscriptScan) readCodex(reader *bufio.Reader, targetTurn
 				Type             string            `json:"type"`
 				TurnID           string            `json:"turn_id"`
 				Message          string            `json:"message"`
+				ClientID         string            `json:"client_id"`
 				LastAgentMessage string            `json:"last_agent_message"`
 				Error            json.RawMessage   `json:"error"`
 				Images           []json.RawMessage `json:"images"`
@@ -94,9 +95,10 @@ func (scan *discussionTranscriptScan) readCodex(reader *bufio.Reader, targetTurn
 				LocalImages      []string          `json:"local_images"`
 				Audio            []json.RawMessage `json:"audio"`
 				Item             struct {
-					Type    string `json:"type"`
-					ID      string `json:"id"`
-					Content []struct {
+					Type     string `json:"type"`
+					ID       string `json:"id"`
+					ClientID string `json:"client_id"`
+					Content  []struct {
 						Type         string            `json:"type"`
 						Text         string            `json:"text"`
 						TextElements []json.RawMessage `json:"text_elements"`
@@ -124,7 +126,7 @@ func (scan *discussionTranscriptScan) readCodex(reader *bufio.Reader, targetTurn
 			if p.Item.Type != "UserMessage" || scan.turn == "" || targetTurn != "" && scan.turn != targetTurn {
 				continue
 			}
-			if p.TurnID != scan.turn || p.Item.ID == "" || len(p.Item.Content) != 1 || p.Item.Content[0].Type != "text" ||
+			if p.TurnID != scan.turn || p.Item.ID == "" || inputID != "" && p.Item.ClientID != inputID || len(p.Item.Content) != 1 || p.Item.Content[0].Type != "text" ||
 				len(p.Item.Content[0].TextElements) != 0 || scan.matched || discussionInputHash(p.Item.Content[0].Text) != promptHash {
 				return result, nil
 			}
@@ -133,7 +135,7 @@ func (scan *discussionTranscriptScan) readCodex(reader *bufio.Reader, targetTurn
 			if scan.turn == "" || targetTurn != "" && scan.turn != targetTurn {
 				continue
 			}
-			if scan.matched || discussionInputHash(p.Message) != promptHash || len(p.Images)+len(p.FileIDs)+len(p.LocalImages)+len(p.Audio) != 0 {
+			if scan.matched || inputID != "" && p.ClientID != inputID || discussionInputHash(p.Message) != promptHash || len(p.Images)+len(p.FileIDs)+len(p.LocalImages)+len(p.Audio) != 0 {
 				return result, nil
 			}
 			scan.matched = true

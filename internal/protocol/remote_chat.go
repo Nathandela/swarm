@@ -203,6 +203,11 @@ func (cc *clientConn) handleComposerSend(c Control) {
 		cc.replyErrorCode("composer_send: missing session_instance; refresh the session and upgrade the phone before retrying", CodeInvalidField)
 		return
 	}
+	if body.WorkerManagerConversation != "" && (cc.srv.remoteTier || c.Op != OpSemanticSend || body.ManagerAdmission != nil ||
+		body.Origin == nil || body.Origin.DiscussionID == "" || len(body.WorkerManagerConversation) > 128) {
+		cc.replyErrorCode("worker manager provenance requires local owner semantic input", CodeNotAuthorized)
+		return
+	}
 	if body.ManagerAdmission != nil {
 		if cc.srv.remoteTier || c.Op != OpSemanticSend {
 			cc.replyErrorCode("manager admission is owner semantic input only", CodeNotAuthorized)
@@ -308,7 +313,7 @@ func (cc *clientConn) handleComposerSend(c Control) {
 				cc.replyErrorCode("composer_send: "+sendErr.Error(), schema.CodeOutcomeUnknown)
 				return
 			}
-			if !begun && !cc.srv.remoteTier && c.Op == OpSemanticSend && body.Origin != nil && body.Origin.DiscussionID != "" &&
+			if !begun && !cc.srv.remoteTier && c.Op == OpSemanticSend && body.WorkerManagerConversation != "" &&
 				sendErr != nil && code == CodeInputBusy {
 				cc.replyErrorCode("composer_send: "+sendErr.Error(), code)
 				return

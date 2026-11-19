@@ -34,9 +34,10 @@ type SessionInput struct {
 	SessionInstance string `json:"session_instance"`
 }
 type ReadInput struct {
-	JobID     string `json:"job_id,omitempty"`
-	AttemptID string `json:"attempt_id,omitempty"`
-	Source    string `json:"source,omitempty"`
+	NativeTurnID string `json:"native_turn_id,omitempty"`
+	JobID        string `json:"job_id,omitempty"`
+	AttemptID    string `json:"attempt_id,omitempty"`
+	Source       string `json:"source,omitempty"`
 	SessionInput
 	Limit  int    `json:"limit,omitempty"`
 	Cursor string `json:"cursor,omitempty"`
@@ -174,7 +175,7 @@ func validateManagerToolInput(input any) error {
 	case SessionInput:
 		valid = target(v)
 	case ReadInput:
-		valid = target(v.SessionInput) && v.Limit >= 0 && v.Limit <= 100 && len(v.Cursor) <= MaxReadCursorBytes && (v.Source == "" || v.Source == "native" || v.Source == "retained") && (v.JobID == "" || id(v.JobID)) && (v.AttemptID == "" || id(v.AttemptID))
+		valid = target(v.SessionInput) && v.Limit >= 0 && v.Limit <= 100 && len(v.Cursor) <= MaxReadCursorBytes && (v.Source == "" || v.Source == "native" || v.Source == "retained") && (v.JobID == "" || id(v.JobID)) && (v.AttemptID == "" || id(v.AttemptID)) && (v.NativeTurnID == "" || id(v.NativeTurnID))
 	case CreateInput:
 		valid = id(v.ActionID) && configText(v.Cwd, 4096) && text(v.Prompt, MaxUtteranceBytes) && len(v.Name) <= 256 && len(v.Model) <= 256 && (v.Agent == "codex" || v.Agent == "claude" || v.Agent == "agy" || v.Agent == "hermes" || v.Agent == "opencode")
 	case ResumeInput:

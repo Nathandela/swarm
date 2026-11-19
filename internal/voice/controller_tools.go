@@ -322,7 +322,7 @@ func (c *Controller) workerResumeRequest(input ResumeInput, admission uint64) (*
 	if c.discussion != nil && row.Agent != "codex" {
 		return nil, fmt.Errorf("%w: this Discord worker provider cannot supply exact result evidence", ErrControllerUnsupported)
 	}
-	if !registry.IsProduction(row.Agent) || (c.discussion != nil && row.Agent != "codex") {
+	if !registry.IsProduction(row.Agent) {
 		return nil, ErrControllerUnsupported
 	}
 	return &protocol.LaunchReq{Agent: row.Agent, Name: row.Name, Tag: row.Tag, Cwd: row.Cwd, Cols: 120, Rows: 32,
@@ -391,17 +391,19 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		if err != nil {
 			return nil, err
 		}
-		worker, err := c.workerTarget(input.SessionInput, c.discussion == nil)
+		if c.discussion != nil {
+			_, err = c.discussionWorkerForSend(input.SessionInput)
+		} else {
+			_, err = c.workerTarget(input.SessionInput, true)
+		}
 		if err != nil {
 			return nil, err
-		}
-		if c.discussion != nil && worker.Agent != "codex" {
-			return nil, ErrControllerUnsupported
 		}
 		id = input.ActionID
 		target = key(input.Session, input.SessionInstance)
 		request.Send = &protocol.ComposerSendReq{Session: input.Session, SessionInstance: input.SessionInstance, Text: input.Text, Origin: admission.Origin}
 		if c.discussion != nil {
+			request.Send.WorkerManagerConversation = c.binding.ConversationID
 			st, err := c.store.readView()
 			if err != nil {
 				return nil, err

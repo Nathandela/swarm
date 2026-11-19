@@ -18,12 +18,13 @@ import (
 // advisory for message delivery: the daemon orders accepted messages per session and applies
 // each queue head to current provider state. TurnInterruptReq remains strictly turn-scoped.
 type ComposerSendReq struct {
-	ManagerAdmission *ManagerAdmission `json:"manager_admission,omitempty"`
-	Session          string            `json:"session"`
-	SessionInstance  string            `json:"session_instance,omitempty"`
-	ExpectedTurn     string            `json:"expected_turn,omitempty"`
-	Text             string            `json:"text"`
-	Origin           *MessageOrigin    `json:"origin,omitempty"`
+	WorkerManagerConversation string            `json:"worker_manager_conversation,omitempty"`
+	ManagerAdmission          *ManagerAdmission `json:"manager_admission,omitempty"`
+	Session                   string            `json:"session"`
+	SessionInstance           string            `json:"session_instance,omitempty"`
+	ExpectedTurn              string            `json:"expected_turn,omitempty"`
+	Text                      string            `json:"text"`
+	Origin                    *MessageOrigin    `json:"origin,omitempty"`
 }
 
 // TurnInterruptReq is the turn_interrupt body (Mirror M2.4).
@@ -166,6 +167,10 @@ func ComposerSendContentHash(req *ComposerSendReq) []byte {
 		writeHashField(h, []byte("manager-admission-v1"))
 		raw, _ := json.Marshal(req.ManagerAdmission)
 		writeHashField(h, raw)
+	}
+	if req.WorkerManagerConversation != "" {
+		writeHashField(h, []byte("discussion-worker-manager-v1"))
+		writeHashField(h, []byte(req.WorkerManagerConversation))
 	}
 	return h.Sum(nil)
 }

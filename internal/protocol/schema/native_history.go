@@ -25,6 +25,7 @@ type WorkerHistoryScope struct {
 	SessionInstance     string `json:"session_instance"`
 	Parent              string `json:"parent"`
 	TurnID              string `json:"turn_id,omitempty"`
+	InputID             string `json:"input_id,omitempty"`
 	PromptHash          string `json:"prompt_hash"`
 }
 

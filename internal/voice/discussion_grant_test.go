@@ -212,7 +212,7 @@ func TestDiscussionHumanFollowupCarriesEveryReadProjectGrant(t *testing.T) {
 			receipt, _ := json.Marshal(createdWorkerResult{State: "created", Session: w.Session, SessionInstance: w.SessionInstance})
 			effect := Action{ID: w.AttemptID, ConversationID: b.ConversationID, State: "settled", Request: intent, Receipt: receipt}
 			putRecord(st, "actions", &st.Actions, key(b.ConversationID, effect.ID), effect)
-			e := Event{ID: discussionEvidenceID(w), WorkerProof: true, NativeTurnID: "exact-turn", JobID: w.JobID, AttemptID: w.AttemptID, Metadata: json.RawMessage(`{"data":{"turn_id":"exact-turn","text":"verified result"}}`)}
+			e := Event{ID: discussionEvidenceID(w), WorkerProof: true, NativeTurnID: "exact-turn", JobID: w.JobID, AttemptID: w.AttemptID, Metadata: json.RawMessage(fmt.Sprintf(`{"session":%q,"instance":%q,"data":{"turn_id":"exact-turn","state":"completed","text":"verified result"}}`, w.Session, w.SessionInstance))}
 			putRecord(st, "events", &st.Events, key(b.ConversationID, e.ID), e)
 		}
 		return nil
@@ -220,8 +220,10 @@ func TestDiscussionHumanFollowupCarriesEveryReadProjectGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 2 {
-		if _, err := c.readDiscussionWorker(ReadInput{SessionInput: SessionInput{fmt.Sprintf("machine/w%d", i), "instance"}}, a); err != nil {
-			t.Fatal(err)
+		raw, err := c.readDiscussionWorker(ReadInput{SessionInput: SessionInput{fmt.Sprintf("machine/w%d", i), "instance"}}, a)
+		var read struct{ Evidence *schema.WorkerTurnEvidence }
+		if err != nil || json.Unmarshal(raw, &read) != nil || read.Evidence == nil || read.Evidence.Text != "verified result" {
+			t.Fatalf("worker %d evidence missing: %s, %v", i, raw, err)
 		}
 	}
 	permit, err := s.GrantSpeech(b, a.Sequence, a.NativeInputID, a.NativeTurnID, 1)

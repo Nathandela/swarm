@@ -84,14 +84,14 @@ func (c *Controller) advanceDiscussionSend(ctx context.Context, action Action) e
 		worker.Project != request.Project || !c.projectPath(request.Project, request.Project) {
 		return reject("queued worker or job binding changed before native submission")
 	}
-	row, err := c.workerTarget(SessionInput{worker.Session, worker.SessionInstance}, false)
+	row, err := c.discussionWorkerForSend(SessionInput{worker.Session, worker.SessionInstance})
 	if errors.Is(err, ErrStale) || errors.Is(err, ErrNotFound) {
 		return reject("queued worker instance no longer exists")
 	}
 	if err == nil && row.Status.Process == status.ProcessExited {
 		return reject("queued worker exited before native submission")
 	}
-	if err != nil || row.Status.Process != status.ProcessRunning || row.Status.Turn != status.TurnIdle || !row.Capabilities.NativeOwnerInput {
+	if err != nil || row.Status.Process != status.ProcessRunning || row.Status.Turn != status.TurnIdle {
 		return nil
 	}
 	if c.discussion.VerifyAudience != nil {
@@ -116,6 +116,9 @@ func (c *Controller) advanceDiscussionSend(ctx context.Context, action Action) e
 		}
 		return err
 	}
+	if request.Send.WorkerManagerConversation == "" {
+		request.Send.WorkerManagerConversation = action.ConversationID
+	}
 	if err = c.workers.SemanticSend(action.OperationID, *request.Send); err != nil {
 		if retry, err := c.requeuePreparedDiscussionSend(action, *request.Send); retry || err != nil {
 			return err
@@ -126,6 +129,19 @@ func (c *Controller) advanceDiscussionSend(ctx context.Context, action Action) e
 		return nil
 	}
 	return err
+}
+
+// A cold owner-roster capability is a hint. The exact session instance
+// was admitted by the discussion, and the daemon revalidates it before writing.
+func (c *Controller) discussionWorkerForSend(target SessionInput) (protocol.SessionView, error) {
+	row, err := c.workerTarget(target, false)
+	if row.Agent == "codex" && errors.Is(err, ErrControllerNativeUnavailable) {
+		return row, nil
+	}
+	if err == nil && row.Agent != "codex" {
+		return row, ErrControllerUnsupported
+	}
+	return row, err
 }
 
 func (c *Controller) requeuePreparedDiscussionSend(action Action, request protocol.ComposerSendReq) (bool, error) {

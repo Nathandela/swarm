@@ -89,7 +89,7 @@ func (d *Daemon) readDiscussionTranscript(file *os.File, meta persist.Meta, scop
 	case "claude":
 		scan.evidence, err = scan.readClaude(reader, meta.ConversationID, scope.TurnID, scope.PromptHash)
 	default:
-		scan.evidence, err = scan.readCodex(reader, scope.TurnID, scope.PromptHash)
+		scan.evidence, err = scan.readCodex(reader, scope.TurnID, scope.InputID, scope.PromptHash)
 	}
 	switch err {
 	case nil:

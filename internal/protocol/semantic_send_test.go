@@ -236,6 +236,7 @@ func TestDiscussionSemanticBusyLeavesExactOperationPrepared(t *testing.T) {
 	rep := rc.hello(Version, []string{CapSemanticSend, CapMessageOrigin})
 	id := semanticTestID(time.Now(), "a")
 	frame := semanticTestFrame(rep, id, "correction")
+	frame.ComposerSend.WorkerManagerConversation = "discord-teammate-bound-conversation"
 	frame.ComposerSend.Origin = &MessageOrigin{
 		Kind: "external", InstallationID: "install", RequestID: "request", ActorID: "author", RequesterID: "author",
 		DiscussionID: "discussion", Revision: "revision", GuildID: "guild", ChannelID: "thread", MessageID: "message",
@@ -246,6 +247,14 @@ func TestDiscussionSemanticBusyLeavesExactOperationPrepared(t *testing.T) {
 	}
 	if rec, sends, _ := stub.snapshot(id); rec.phase != composerPhasePrepared || sends != 0 {
 		t.Fatalf("busy request consumed receipt: %+v, sends=%d", rec, sends)
+	}
+	changed := *frame.ComposerSend
+	changed.WorkerManagerConversation = "discord-teammate-another-conversation"
+	swapped := frame
+	swapped.ComposerSend = &changed
+	rc.writeControl(swapped)
+	if reply := rc.readControl(); reply.Op != OpError || reply.ErrorCode == CodeInputBusy {
+		t.Fatalf("operation accepted a different native manager conversation: %+v", reply)
 	}
 	stub.busy.Store(false)
 	rc.writeControl(frame)

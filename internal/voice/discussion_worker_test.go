@@ -130,6 +130,28 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 	}); err != nil {
 		t.Fatal(err)
 	}
+	updated := worker
+	updated.ActionID = "newer-authorized-action"
+	if err := s.update(func(st *State) error {
+		putRecord(st, "workers", &st.Workers, workerKey, updated)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next := Event{ID: discussionEvidenceID(updated), WorkerProof: true, NativeTurnID: "newer-turn", JobID: worker.JobID, AttemptID: worker.AttemptID,
+		Metadata: json.RawMessage(`{"turn_id":"newer-turn","state":"completed","text":"newer result"}`)}
+	if _, err := c.AcceptWorkerEvent(worker.Session, worker.SessionInstance, next); err != nil {
+		t.Fatal(err)
+	}
+	input := ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}
+	read, err = c.readDiscussionWorker(input, Admission{SourceID: "wake:" + event.WakeID})
+	if err != nil || !strings.Contains(string(read), "verified result") || strings.Contains(string(read), "newer result") {
+		t.Fatalf("earlier wake read the newer turn: %s, %v", read, err)
+	}
+	input.NativeTurnID = "private-turn"
+	if _, err := c.readWorker(input); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unattested private turn could be read by ID: %v", err)
+	}
 	c.discussion.ProjectEnrolled = func(string) bool { return false }
 	if read, err := c.readWorker(ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}); !errors.Is(err, ErrExpired) || len(read) > 0 {
 		t.Fatalf("cached proof after revocation: %s, %v", read, err)

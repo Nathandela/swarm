@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -51,6 +52,7 @@ func (c *Controller) discussionWorkerEvidence(ctx context.Context, worker Worker
 			return nil, ErrControllerNativeUnavailable
 		}
 		scope.TurnID = receipt.NativeTurnID
+		scope.InputID = receipt.NativeInputID
 		scope.PromptHash = hashBytes([]byte(intent.Send.Text))
 	default:
 		return nil, ErrControllerNativeUnavailable
@@ -136,18 +138,42 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &original) != nil || original.Project != worker.Project {
 		return nil, ErrStale
 	}
-	if worker.EvidenceLimited {
-		return nil, ErrControllerWorkerEvidenceLimit
+	turn := input.NativeTurnID
+	if wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:"); fromWake && turn == "" {
+		wake := st.Wakes[key(c.binding.ConversationID, wakeID)]
+		event := st.Events[key(c.binding.ConversationID, wake.EventID)]
+		if proof, err := storedDiscussionWorkerProof(event, worker); err != nil {
+			return nil, err
+		} else if proof != nil {
+			turn = proof.TurnID
+		}
 	}
 	var proof *schema.WorkerTurnEvidence
-	if event, exists := st.Events[key(c.binding.ConversationID, discussionEvidenceID(worker))]; exists {
-		var metadata struct{ Data schema.WorkerTurnEvidence }
-		if json.Unmarshal(event.Metadata, &metadata) != nil || !event.WorkerProof || metadata.Data.TurnID != event.NativeTurnID ||
-			event.JobID != worker.JobID || event.AttemptID != worker.AttemptID {
-			return nil, ErrCorrupt
+	if turn != "" {
+		for _, event := range st.Events {
+			if event.NativeTurnID != turn || event.ConversationID != c.binding.ConversationID {
+				continue
+			}
+			proof, err = storedDiscussionWorkerProof(event, worker)
+			if err != nil {
+				return nil, err
+			}
+			if proof != nil {
+				break
+			}
 		}
-		proof = &metadata.Data
+		if proof == nil {
+			return nil, ErrNotFound
+		}
+	} else if event, exists := st.Events[key(c.binding.ConversationID, discussionEvidenceID(worker))]; exists {
+		proof, err = storedDiscussionWorkerProof(event, worker)
+		if err != nil {
+			return nil, err
+		}
 	} else {
+		if worker.EvidenceLimited {
+			return nil, ErrControllerWorkerEvidenceLimit
+		}
 		if _, err = c.workerTarget(input.SessionInput, false); err != nil {
 			return nil, err
 		}
@@ -193,6 +219,23 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 		AttemptID string                     `json:"attempt_id"`
 		Evidence  *schema.WorkerTurnEvidence `json:"evidence"`
 	}{"authorized_worker_turn", worker.Session, worker.SessionInstance, worker.JobID, worker.AttemptID, proof})
+}
+
+func storedDiscussionWorkerProof(event Event, worker WorkerAssociation) (*schema.WorkerTurnEvidence, error) {
+	if !event.WorkerProof || event.JobID != worker.JobID || event.AttemptID != worker.AttemptID {
+		return nil, nil
+	}
+	var metadata struct {
+		Session, Instance string
+		Data              schema.WorkerTurnEvidence
+	}
+	if json.Unmarshal(event.Metadata, &metadata) != nil || metadata.Data.TurnID != event.NativeTurnID || metadata.Data.TurnID == "" {
+		return nil, ErrCorrupt
+	}
+	if metadata.Session != worker.Session || metadata.Instance != worker.SessionInstance {
+		return nil, nil
+	}
+	return &metadata.Data, nil
 }
 
 func truncateDiscussionWakeEvidence(text string) string {

@@ -72,6 +72,7 @@ func TestDiscussionSendWaitsForExactIdleWorker(t *testing.T) {
 		t.Fatalf("busy worker: writes=%v, err=%v", workers.sent, err)
 	}
 	workers.rows[0].Status.Turn = status.TurnIdle
+	workers.rows[0].Capabilities = nil
 	if err := c.advanceDiscussionSend(ctx, action); err != nil || len(workers.sent) != 1 || workers.sent[0] != operation || grants != 1 {
 		t.Fatalf("verified idle worker: writes=%v, err=%v", workers.sent, err)
 	}
