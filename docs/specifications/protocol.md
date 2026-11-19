@@ -207,6 +207,7 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `native_generation` | string | Actual owning native process generation; reconnect does not fabricate preserved evidence |
 | `observation_generation` | string | Exact authenticated observer epoch: current Codex feed ID or retained Claude broker/guard scope; changed observation requires explicit reconciliation even when the physical process survives |
 | `login_epoch` | string | Server-derived managed runtime epoch or selected native account digest; caller text cannot create an identity |
+| `worker_manager_conversation` | string | Owner-only semantic send to a discussion worker. Binds the durable operation digest to the delegated worker’s native parent manager conversation. The Discord discussion ID is carried separately in origin. |
 | `manager_admission` | `*ManagerAdmission` | Optional owner `semantic_send` admission; requires `manager-provenance`, typed manager role and exact binding; participates in the semantic content hash |
 | `nonce` | string | One-use 256-bit lowercase hexadecimal input identity, separate from human text and operation ID |
 | `expected_external_input` | uint64 | Native external-input counter compared at admission/write boundary; stale baselines cannot submit unsolicited manager input |
