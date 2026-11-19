@@ -254,14 +254,7 @@ func (e *Engine) recoverUnknown(run schedule.Occurrence, now time.Time) error {
 
 func (e *Engine) stop(run schedule.Occurrence, a schedule.Attempt, session Session, now time.Time) error {
 	if session.Stopped {
-		if err := e.update(run, a, schedule.OccurrenceQueued, schedule.AttemptStopped, "", "Provider usage limit reached; worker stop verified.", now); err != nil {
-			return err
-		}
-		latest, err := e.store.Occurrence(run.ID)
-		if err != nil {
-			return err
-		}
-		return e.dispatchRun(latest, now)
+		return e.advanceRoute(run, a, "Provider usage limit reached; worker stop verified.", now)
 	}
 	if now.Sub(a.UpdatedAt) > 2*time.Minute {
 		return e.update(run, a, schedule.OccurrenceAttention, schedule.AttemptUnknown, "", "Could not verify worker stop. Inspect the previous session before continuing.", now)
@@ -274,6 +267,17 @@ func (e *Engine) stop(run schedule.Occurrence, a schedule.Attempt, session Sessi
 	// Keep the recorded stop intent and wait for independent exit evidence.
 	_ = e.backend.Stop(a.SessionID, a.ID)
 	return nil
+}
+
+func (e *Engine) advanceRoute(run schedule.Occurrence, a schedule.Attempt, detail string, now time.Time) error {
+	if err := e.update(run, a, schedule.OccurrenceQueued, schedule.AttemptStopped, "", detail, now); err != nil {
+		return err
+	}
+	latest, err := e.store.Occurrence(run.ID)
+	if err != nil {
+		return err
+	}
+	return e.dispatchRun(latest, now)
 }
 
 // A reservation lost to a competing workspace launch did not use a provider.

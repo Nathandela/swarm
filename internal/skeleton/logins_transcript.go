@@ -29,15 +29,19 @@ func openLoginTranscript(meta persist.Meta) (*os.File, error) {
 	}
 	resolver := newFilesystemResumeHistoryResolver(meta.LoginRuntime.Home, defaultResumeHistoryLimits)
 	resolver.privateProvider = meta.AgentType
+	return openVerifiedNativeTranscript(meta, meta.LoginRuntime.Home, resolver)
+}
+
+func openVerifiedNativeTranscript(meta persist.Meta, home string, resolver resumeHistoryResolver) (*os.File, error) {
 	path, outcome := resolver.LocateTranscript(meta, meta.ConversationID)
 	if outcome != resumeHistoryFound {
 		return nil, errLoginObservationPending
 	}
-	rel, err := filepath.Rel(meta.LoginRuntime.Home, path)
+	rel, err := filepath.Rel(home, path)
 	if err != nil || !filepath.IsLocal(rel) {
 		return nil, logins.ErrUnsafePath
 	}
-	root, err := os.OpenRoot(meta.LoginRuntime.Home)
+	root, err := os.OpenRoot(home)
 	if err != nil {
 		return nil, err
 	}

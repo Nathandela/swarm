@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,5 +131,25 @@ func TestScheduleNativeQuotaFallbackAfterVerifiedShimStop(t *testing.T) {
 	if len(f.attempts) != 2 || f.attempts[1].Agent != schedule.RouteClaude ||
 		f.attempts[1].Workspace != f.attempts[0].Workspace || !reopened.ScheduledExit(local, attempt.ID) {
 		t.Fatalf("successor did not start after verified stop in the saved workspace: attempts=%d", len(f.attempts))
+	}
+}
+
+func TestScheduleClosingMessageOnlyMatchesLatestCompletedAssistant(t *testing.T) {
+	row := func(id, kind, state, message string) protocol.JournalRecord {
+		return protocol.JournalRecord{Type: "interaction", Item: json.RawMessage(fmt.Sprintf(
+			`{"item_id":%q,"kind":%q,"status":%q,"text":%q}`, id, kind, state, message))}
+	}
+	history := []protocol.JournalRecord{
+		row("first", "agent_message", "in_progress", "Build "),
+		row("first", "agent_message", "completed", "passed."),
+		row("second", "agent_message", "in_progress", "Correction: "),
+		row("second", "agent_message", "completed", "Build failed."),
+		row("tool", "tool_run", "completed", "Build passed."),
+	}
+	if closingMessageInHistory(history, "Build passed.") {
+		t.Fatal("an earlier assistant message or later tool result satisfied completion")
+	}
+	if !closingMessageInHistory(history, "Correction: Build failed.") {
+		t.Fatal("latest assistant message lost its streamed prefix")
 	}
 }

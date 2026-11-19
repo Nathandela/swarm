@@ -115,17 +115,22 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 		}
 	}
 
-	if d.logins != nil && cb.Event == "StopFailure" {
+	if cb.Event == "StopFailure" {
 		if err := d.eng.AuthenticateCallback(cb); err != nil {
 			return errors.Join(errHookIngestRejected, err)
 		}
-		if err := d.logins.observeClaudeFailure(cb); err != nil {
+		if err := d.observeScheduledClaudeFailure(cb); err != nil {
 			return err
+		}
+		if d.logins != nil {
+			if err := d.logins.observeClaudeFailure(cb); err != nil {
+				return err
+			}
 		}
 	}
 	statusCallback := cb
-	if d.logins != nil && cb.Event == "StopFailure" {
-		if meta, ok := d.core.Get(cb.SessionID); ok && meta.LoginRuntime != nil && meta.AgentType == "claude" {
+	if cb.Event == "StopFailure" {
+		if meta, ok := d.core.Get(cb.SessionID); ok && (meta.LoginRuntime != nil || meta.ScheduleAttempt != "") && meta.AgentType == "claude" {
 			var body struct {
 				AgentID   string `json:"agent_id"`
 				SessionID string `json:"session_id"`

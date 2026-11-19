@@ -16,7 +16,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -174,7 +176,12 @@ func (b scheduleBackend) ClosingMessage(sessionID, attemptID, summary string) bo
 	if b.api.history == nil {
 		return false
 	}
-	if _, found := b.Session(sessionID, attemptID); !found {
+	endpoint, local, valid := protocol.ParseID(sessionID)
+	if !valid || endpoint != b.api.endpointID {
+		return false
+	}
+	m, found := b.api.core.Get(local)
+	if !found || m.ScheduleAttempt != attemptID || m.Status.Turn != status.TurnIdle && !b.api.core.ScheduledExit(local, attemptID) {
 		return false
 	}
 	items, _, _, err := b.api.history(sessionID, "", 64)
@@ -186,6 +193,7 @@ func (b scheduleBackend) ClosingMessage(sessionID, attemptID, summary string) bo
 
 func closingMessageInHistory(items []protocol.JournalRecord, summary string) bool {
 	texts := make(map[string]string)
+	var latest string
 	for _, row := range items {
 		if row.Type != "interaction" {
 			continue
@@ -200,11 +208,11 @@ func closingMessageInHistory(items []protocol.JournalRecord, summary string) boo
 			continue
 		}
 		texts[message.ID] += message.Text
-		if message.Status == "completed" && strings.Contains(strings.Join(strings.Fields(texts[message.ID]), " "), strings.Join(strings.Fields(summary), " ")) {
-			return true
+		if message.Status == "completed" {
+			latest = texts[message.ID]
 		}
 	}
-	return false
+	return strings.Contains(strings.Join(strings.Fields(latest), " "), strings.Join(strings.Fields(summary), " "))
 }
 
 func (b scheduleBackend) HandoffEvidence(sessionID, attemptID string) string {
@@ -318,6 +326,49 @@ func (a *coreAPI) ScheduleComplete(localSession string, receipt schema.ScheduleC
 	return engine.Complete(receipt.RunID, receipt.AttemptID, id, receipt.Token, schedule.Completion{
 		Summary: receipt.Summary, Links: receipt.Links,
 	}, time.Now())
+}
+
+func (d *Daemon) observeScheduledClaudeFailure(cb engine.Callback) error {
+	meta, found := d.core.Get(cb.SessionID)
+	if !found || meta.ScheduleAttempt == "" || meta.AgentType != schedule.RouteClaude {
+		return nil
+	}
+	var body struct {
+		SessionID string `json:"session_id"`
+		PromptID  string `json:"prompt_id"`
+		AgentID   string `json:"agent_id"`
+		Error     string `json:"error"`
+		Details   string `json:"error_details"`
+	}
+	if len(cb.Raw) > 1<<20 || rejectDuplicateJSONKeys(cb.Raw) != nil ||
+		json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" || body.Error != "rate_limit" ||
+		body.Details != "" || body.SessionID != meta.ConversationID || !adapter.IsCanonicalConversationID(body.PromptID) {
+		return nil
+	}
+	var transcript *os.File
+	var err error
+	if meta.LoginRuntime != nil {
+		transcript, err = openLoginTranscript(meta)
+	} else {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil || d.api.historyResolver == nil {
+			return nil
+		}
+		transcript, err = openVerifiedNativeTranscript(meta, home, d.api.historyResolver)
+	}
+	if err != nil {
+		return errLoginObservationPending
+	}
+	defer transcript.Close()
+	reader, err := nativeTranscriptTail(transcript)
+	if err != nil {
+		return errLoginObservationPending
+	}
+	reset, _, err := readClaudeTerminalEvidence(reader, meta.ConversationID, body.PromptID, time.Now())
+	if err != nil || reset.IsZero() {
+		return err
+	}
+	return d.core.MarkScheduledExhaustion(cb.SessionID, true)
 }
 
 func (d *Daemon) observeScheduledCodexFailure(local, method string, raw []byte) {
