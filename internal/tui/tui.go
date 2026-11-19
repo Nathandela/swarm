@@ -459,6 +459,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resumeResultMsg:
 		if msg.result.err != nil {
+			if msg.source.ScheduledCompleted {
+				return m, m.general.setBanner("Unable to reopen scheduled conversation: " + msg.result.err.Error())
+			}
 			reason := msg.source.ResumeError
 			if reason == "" {
 				reason = "launch failed: " + msg.result.err.Error()
@@ -565,6 +568,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.handoff.refreshAgents(msg.agents)
 		}
 		return m, nil
+
+	case scheduleOpenResultMsg:
+		return m.applyScheduledChat(msg)
 
 	case scheduleResultMsg:
 		return m.applyScheduleResult(msg)

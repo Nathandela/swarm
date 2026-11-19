@@ -31,7 +31,7 @@ func (b actionButton) text() string {
 
 func sessionButtons(s protocol.SessionView) []actionButton {
 	buttons := []actionButton{{label: "Rename", key: "e"}, {label: "Tag", key: "t"}}
-	if s.Status.Process != status.ProcessRunning {
+	if s.Status.Process != status.ProcessRunning && !scheduledReviewMarked(s) {
 		buttons = append(buttons, actionButton{label: "Resume", key: "r"})
 	}
 	buttons = append(buttons, actionButton{label: "Handoff", key: "h"})
@@ -47,7 +47,7 @@ func (m rootModel) boardButtons() []actionButton {
 	buttons := []actionButton{{label: "New", key: "n"}}
 	if label := m.boardOpenLabel(); label != "—" {
 		key := "enter"
-		if s, ok := m.general.selected(); ok && m.general.focusVisible() && s.Status.Process != status.ProcessRunning {
+		if s, ok := m.general.selected(); ok && m.general.focusVisible() && s.Status.Process != status.ProcessRunning && !scheduledReviewMarked(s) {
 			label, key = "Resume", "r"
 		}
 		buttons = append(buttons, actionButton{label: label, key: key})

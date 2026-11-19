@@ -658,6 +658,9 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	// attach and swallow the error (the field-test silent no-op), surface an
 	// actionable banner and never attempt it.
 	if s.Status.Process != status.ProcessRunning {
+		if scheduledReviewMarked(s) {
+			return m.beginResume(s)
+		}
 		return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
 	}
 	if m.attachRunner != nil {

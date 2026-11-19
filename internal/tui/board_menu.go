@@ -54,7 +54,7 @@ func (m rootModel) moreLines() []menuLine {
 			}
 		}
 		sameProcess := (s.Status.Process == status.ProcessRunning) == m.general.more.running
-		if sameProcess && m.general.more.running {
+		if sameProcess && (m.general.more.running || scheduledReviewMarked(s)) {
 			lines = append(lines, menuLine{"Open", "enter"})
 		}
 		for _, b := range sessionButtons(s) {

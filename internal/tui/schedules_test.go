@@ -236,3 +236,56 @@ func TestScheduleTimerEnableRequiresConfirmation(t *testing.T) {
 		t.Fatalf("narrow screen lost navigation: %q", lines)
 	}
 }
+
+func TestScheduleCompletedWorkerReopensNativeConversation(t *testing.T) {
+	session := sCompleted("endpoint/completed-worker", "codex", t.TempDir(), "worker exited", time.Minute)
+	session.ScheduledCompleted = true
+	session.Tag = "automation"
+	fake := newFakeClient(session)
+	m := send(New(fake, nil), tea.WindowSizeMsg{Width: 80, Height: 18}).(rootModel)
+	if !strings.Contains(ansi.Strip(m.View().Content), "[Open (⏎)]") {
+		t.Fatal("ended completed worker is missing the board Open action")
+	}
+	board, cmd := m.Update(keyEnter)
+	if cmd == nil {
+		t.Fatal("board Open did not request the native conversation")
+	}
+	board, _ = board.Update(cmd())
+	if board.(rootModel).screen != screenAttach {
+		t.Fatal("board Open did not attach native resume")
+	}
+
+	db, err := schedule.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.screen = screenSchedules
+	m.schedules = scheduleModel{
+		catalog: db, page: scheduleRun,
+		run: schedule.Occurrence{
+			ID: "saved-run", State: schedule.OccurrenceReady,
+			Attempts: []schedule.Attempt{{Agent: session.Agent, SessionID: session.ID}},
+		},
+	}
+	next, cmd := m.Update(keyRune('o'))
+	if cmd == nil {
+		t.Fatal("history Open did not request the native conversation")
+	}
+	next, _ = next.Update(cmd())
+	resumed := next.(rootModel)
+	if resumed.screen != screenAttach || resumed.attach.session.ID != fake.launchID {
+		t.Fatalf("history Open did not attach native resume: %+v", resumed.attach.session)
+	}
+	if len(fake.launched) != 2 {
+		t.Fatalf("native resume requests = %d", len(fake.launched))
+	}
+	for _, request := range fake.launched {
+		if request.Options[protocol.OptionResumeFrom] != session.ID || request.Cwd != session.Cwd {
+			t.Fatalf("request did not pin original conversation and checkout: %+v", request)
+		}
+	}
+	resumed = send(resumed, keyEsc).(rootModel)
+	if resumed.screen != screenSchedules || resumed.schedules.run.ID != "saved-run" || scheduleSession(resumed.schedules.run) != session.ID {
+		t.Fatal("review continuation overwrote run history identity")
+	}
+}

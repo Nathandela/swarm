@@ -27,6 +27,9 @@ type resumeResultMsg struct {
 }
 
 func (m rootModel) beginResume(s protocol.SessionView) (tea.Model, tea.Cmd) {
+	if s.ScheduledCompleted {
+		return m, resumeCmd(m.client, s, m.width, m.height, false)
+	}
 	directory := expandTilde(strings.TrimSpace(s.Cwd))
 	info, err := os.Stat(directory)
 	if err != nil || !info.IsDir() {

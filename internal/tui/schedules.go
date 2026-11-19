@@ -69,7 +69,7 @@ type scheduleModel struct {
 	job                          schedule.Job
 	runs                         []schedule.Occurrence
 	run                          schedule.Occurrence
-	pendingRuns                  map[string]string // Job ID to unacknowledged operation ID.
+	pendingRuns                  map[string]string // Job ID to operation ID awaiting a run record.
 	templates                    []schedule.Template
 	template                     schedule.Template
 	templateName, templatePrompt lineEditor
@@ -81,6 +81,11 @@ type scheduleModel struct {
 	sel, top                     int
 	mouseTarget                  string
 	mouseX, mouseY               int
+}
+
+type scheduleOpenResultMsg struct {
+	result     launchResultMsg
+	connection uint64
 }
 
 type scheduleResultMsg struct {
@@ -276,9 +281,23 @@ func scheduleSession(run schedule.Occurrence) string {
 func (m rootModel) openScheduledSession() (tea.Model, tea.Cmd) {
 	id := scheduleSession(m.schedules.run)
 	s, ok := m.general.sessionByID(id)
-	if m.connectionLost || !ok || s.Status.Process != status.ProcessRunning {
+	if m.connectionLost || !ok {
 		m.schedules.errorText = "Recorded session is unavailable for attach."
 		return m, nil
+	}
+	if s.Status.Process != status.ProcessRunning {
+		if m.schedules.run.State != schedule.OccurrenceReady {
+			m.schedules.errorText = "Recorded session has ended."
+			return m, nil
+		}
+		resume := resumeCmd(m.client, s, m.width, m.height, false)
+		generation := m.reconnectGeneration
+		m.schedules.busy = true
+		m.schedules.errorText = ""
+		return m, func() tea.Msg {
+			result := resume().(resumeResultMsg)
+			return scheduleOpenResultMsg{result: result.result, connection: generation}
+		}
 	}
 	m.general.restoreSel(id)
 	m.schedules.returnFromAttach = true
@@ -290,6 +309,27 @@ func (m rootModel) openScheduledSession() (tea.Model, tea.Cmd) {
 		updated.schedules.returnFromAttach = false
 	}
 	return updated, cmd
+}
+
+func (m rootModel) applyScheduledChat(msg scheduleOpenResultMsg) (tea.Model, tea.Cmd) {
+	if m.screen != screenSchedules || m.schedules.page != scheduleRun || !m.schedules.busy {
+		return m, nil
+	}
+	m.schedules.busy = false
+	if msg.connection != m.reconnectGeneration || m.connectionLost {
+		m.schedules.errorText = "Connection changed while opening the conversation. Refresh the run and try again."
+		return m, nil
+	}
+	if msg.result.err != nil {
+		m.schedules.errorText = msg.result.err.Error()
+		return m, nil
+	}
+	if msg.result.id == "" {
+		m.schedules.errorText = "The daemon did not return the resumed session."
+		return m, nil
+	}
+	m.schedules.returnFromAttach = true
+	return m.update(msg.result)
 }
 
 type scheduleRow struct {
@@ -341,7 +381,7 @@ func (s scheduleModel) controls() []scheduleControl {
 		if s.job.State == schedule.JobPaused {
 			toggle = "Resume"
 		}
-		return scheduleControls("r", runLabel, "h", "History", "e", "Edit", "p", toggle, "x", "Archive", "esc", "Back")
+		return scheduleControls("e", "Edit", "p", toggle, "r", runLabel, "h", "History", "x", "Archive", "esc", "Back")
 	case scheduleTask:
 		return scheduleControls("enter", "Next", "ctrl+t", "Use template", "ctrl+s", "Save prompt as template", "esc", "Back")
 	case scheduleCalendar:

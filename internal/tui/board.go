@@ -214,8 +214,12 @@ func (m generalModel) compactRows() bool {
 	c := rowColumnsFor(m.width, 2)
 	return c.name < 16 || c.cwd < 12 || c.summary < 12
 }
+func scheduledReviewMarked(s protocol.SessionView) bool {
+	return s.ScheduledCompleted && s.Tag == "automation"
+}
+
 func sessionBoardIcon(s protocol.SessionView, group status.Group, frame uint64) string {
-	if s.ScheduledCompleted && s.Tag == "automation" {
+	if scheduledReviewMarked(s) {
 		return "◆"
 	}
 	return groupIcon(group, frame)
