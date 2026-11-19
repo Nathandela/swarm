@@ -183,7 +183,10 @@ func TestScheduleHistoryOpenUsesBoardAttachAndTagControlsMarker(t *testing.T) {
 	model.screen = screenSchedules
 	model.schedules = scheduleModel{
 		catalog: db, page: scheduleRun, job: job,
-		run: schedule.Occurrence{State: schedule.OccurrenceReady, Attempts: []schedule.Attempt{{Agent: "codex", SessionID: session.ID}}},
+		run: schedule.Occurrence{State: schedule.OccurrenceNeedsInput, Attempts: []schedule.Attempt{{Agent: "codex", SessionID: session.ID}}},
+	}
+	if !strings.Contains(ansi.Strip(model.View().Content), "Open worker") {
+		t.Fatal("run detail omitted the control for addressing native input")
 	}
 	model = send(model, keyRune('o')).(rootModel)
 	if model.screen != screenAttach || model.attach.session.ID != session.ID {

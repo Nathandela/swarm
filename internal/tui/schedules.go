@@ -394,7 +394,7 @@ func (s scheduleModel) controls() []scheduleControl {
 		return scheduleControls("enter", "Open", "r", "Refresh", "esc", "Back")
 	case scheduleRun:
 		if scheduleSession(s.run) != "" {
-			return scheduleControls("o", "Open session", "r", "Refresh", "g", "Board", "esc", "Back")
+			return scheduleControls("o", "Open worker", "r", "Refresh", "g", "Board", "esc", "Back")
 		}
 		return scheduleControls("r", "Refresh", "g", "Board", "esc", "Back")
 	case scheduleArchive:
