@@ -51,7 +51,12 @@ func ActiveState(daemonDir string) (string, error) {
 	} else if err != nil {
 		return "", err
 	}
-	f, err := openPrivateFile(path)
+	return SelectedState(daemonDir)
+}
+
+// SelectedState requires a persisted selection for a place migration.
+func SelectedState(daemonDir string) (string, error) {
+	f, err := openPrivateFile(filepath.Join(daemonDir, "discord-active.json"))
 	if err != nil {
 		return "", err
 	}

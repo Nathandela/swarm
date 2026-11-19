@@ -46,9 +46,9 @@ var discordServiceRun = func(ctx context.Context, dir string, unattended bool) e
 	if err != nil {
 		return err
 	}
-	cc.SocketPath = cfg.DaemonSocket
-	if p := cfg.Supervisor; p != nil {
-		cc.StateDir, cc.LockPath, cc.LogPath = p.StateDir, p.Lock, p.Log
+	cc, err = discordSupervisorConfig(cc, cfg, dir, true)
+	if err != nil {
+		return err
 	}
 	if err = ensureManagerDaemon(cc, unattended, daemon.Dial, daemon.EnsureDaemon); err != nil {
 		return err
@@ -182,7 +182,9 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		return runDiscordDoctor(ctx, cc, *stateDir, checkChannel, stdout, stderr)
 	case "connect":
 		var config discord.Config
+		existing := false
 		if _, e := os.Lstat(discord.ConfigPath(*stateDir)); e == nil {
+			existing = true
 			config, err = discord.LoadConfig(*stateDir)
 			if err != nil {
 				return discordCLIError(stderr, err)
@@ -203,6 +205,10 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				return discordCLIError(stderr, e)
 			}
 			config = discord.Config{Version: 1, InstallationID: hex.EncodeToString(random[:]), DaemonSocket: socket, WorkDir: cwd, ReceptionistCLI: "codex"}
+		}
+		cc, err = discordSupervisorConfig(cc, config, *stateDir, existing)
+		if err != nil {
+			return discordCLIError(stderr, err)
 		}
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
@@ -305,7 +311,6 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		}
 		if install {
 			if config.Mode == "teammate" {
-				cc.SocketPath, cc.StateDir, cc.LockPath, cc.LogPath = config.DaemonSocket, config.Supervisor.StateDir, config.Supervisor.Lock, config.Supervisor.Log
 				if err = ensureManagerDaemon(cc, false, daemon.Dial, daemon.EnsureDaemon); err != nil {
 					return discordCLIError(stderr, err)
 				}
@@ -460,6 +465,26 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		return discordCLIError(stderr, err)
 	}
 	return 0
+}
+
+func discordSupervisorConfig(cc daemon.ClientConfig, cfg discord.Config, dir string, existing bool) (daemon.ClientConfig, error) {
+	if p := cfg.Supervisor; p != nil {
+		cc.StateDir, cc.LockPath, cc.LogPath = p.StateDir, p.Lock, p.Log
+	} else {
+		socket, err := filepath.Abs(cc.SocketPath)
+		if err != nil || socket != cfg.DaemonSocket {
+			return cc, errors.New("discord: select the original supervisor environment before migrating this connection")
+		}
+		if existing {
+			// Even a default-looking socket may belong to a place configured with a custom path.
+			selected, err := discord.SelectedState(cc.StateDir)
+			if err != nil || selected != dir {
+				return cc, errors.New("discord: the original supervisor must have a saved selection for this connector")
+			}
+		}
+	}
+	cc.SocketPath = cfg.DaemonSocket
+	return cc, nil
 }
 
 func discordNativeInputEnabled(stateDir string) bool {

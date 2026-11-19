@@ -21,6 +21,7 @@ import (
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -34,6 +35,10 @@ func runDiscordDoctor(ctx context.Context, cc daemon.ClientConfig, dir, channel 
 	}
 	if cfg.Mode != "teammate" {
 		return discordCLIError(errout, errors.New("this place uses the legacy connector; teammate checks require --mode teammate"))
+	}
+	cc, err = discordSupervisorConfig(cc, cfg, dir, true)
+	if err != nil {
+		return discordCLIError(errout, err)
 	}
 	var findings []doctorFinding
 	check := func(name, detail string, err error) {
@@ -71,6 +76,13 @@ func runDiscordDoctor(ctx context.Context, cc daemon.ClientConfig, dir, channel 
 	managed := false
 	if err == nil {
 		defer func() { _ = c.Close() }()
+		if c.EndpointID() != skeleton.EndpointIDForStateDir(cc.StateDir) {
+			check("home daemon identity", "", errors.New("socket answered for a different enrolled supervisor"))
+			if e := writeJSON(out, findings); e != nil {
+				return discordCLIError(errout, e)
+			}
+			return 1
+		}
 		for _, capability := range caps {
 			if !slices.Contains(c.Capabilities(), capability) {
 				err = fmt.Errorf("daemon lacks %s; upgrade the supervisor", capability)

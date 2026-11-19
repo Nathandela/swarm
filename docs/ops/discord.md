@@ -129,4 +129,4 @@ swarm discord resume-manual DISCUSSION_ID \
   --session EXACT_MANAGER_SESSION --instance EXACT_INSTANCE --external-input OBSERVED_COUNT
 ```
 
-A changed counter, replacement instance, lost custody or ambiguous native effect refuses reconciliation. Inspect the specific manager on the home dashboard before taking further action. For a native workspace trust prompt, use the provider's own terminal; a Discord instruction cannot grant trust. Installed connectors start the supervisor using its saved owner environment. Run the first teammate installation from the owner's login shell.
+Find DISCUSSION_ID, the manager session and instance, and the numeric external input count in the discussion’s native status. A changed counter, replacement instance, lost custody or ambiguous native effect refuses reconciliation. Inspect the specific manager on the home dashboard before taking further action. For a native workspace trust prompt, use the provider's own terminal; a Discord instruction cannot grant trust. Installed connectors start the supervisor using its saved owner environment. Run the first teammate installation from the owner's login shell.

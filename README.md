@@ -31,7 +31,7 @@ Inspired by Claude Code's Agent View, but agent-agnostic and open source.
 - **Agent CLI refresh.** Resume eligible idle Claude, Codex, and agy sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
 - **Scheduled agents.** Define recurring or one-time local jobs, review their run history, and inspect completion in the session board. A per-user host timer drives eligible runs; supported routes and setup steps are in the [scheduled agents operator guide](docs/operations/scheduled-agents.md).
 - **Provider logins.** Save native Claude Code and Codex logins in Options → Logins; one selected login is shared by that provider's Swarm sessions. See the [provider login guide](docs/operations/provider-logins.md).
-- **Team discussions in Discord.** Connect the whole local Swarm through your own named bot. Teammates can ask existing agents, owners can endorse a message, and agents publish deliberate replies. Each computer or VM keeps its own integration. See the [Discord guide](docs/ops/discord.md).
+- **A teammate in Discord.** Mention your named Swarm app to bring a native manager into a discussion. Everyone in the thread can ask questions, direct workers on the connected machine, and receive their results there. The manager starts on demand. The original agent directory remains available in legacy mode. [Discord guide](docs/ops/discord.md)
 - **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
 - **Remote companion.** The Android app in this repository can securely watch and control agents running on your computer.
 

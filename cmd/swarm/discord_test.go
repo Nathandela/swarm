@@ -326,3 +326,54 @@ func TestTeammateInstallPinsSupervisorIdentity(t *testing.T) {
 		t.Fatalf("teammate service would rediscover the supervisor under its launch environment: %v", err)
 	}
 }
+
+func TestDiscordLegacyMigrationCannotCrossPlaceAtSharedConnectorPath(t *testing.T) {
+	a, token := discordCLIRig(t)
+	homeA := os.Getenv(daemon.EnvStateDir)
+	base := []string{"connect", "--state-dir", a, "--name", "Place A", "--application-id", "100", "--owner-id", "1", "--guild", "10", "--token-file", token}
+	if code, _, text := cliDiscord(t, base...); code != 0 {
+		t.Fatal(text)
+	}
+	homeB := t.TempDir()
+	t.Setenv(daemon.EnvStateDir, homeB)
+	migrate := []string{"connect", "--state-dir", a, "--mode", "teammate"}
+	if code, _, _ := cliDiscord(t, migrate...); code == 0 {
+		t.Fatal("stored A's socket with B's state and credentials")
+	}
+	cfg, err := discord.LoadConfig(a)
+	if err != nil || cfg.Supervisor != nil || cfg.Mode != "" {
+		t.Fatal(cfg, err)
+	}
+	t.Setenv(daemon.EnvStateDir, homeA)
+	if code, _, text := cliDiscord(t, migrate...); code != 0 {
+		t.Fatal(text)
+	}
+	t.Setenv(daemon.EnvStateDir, homeB)
+	if code, _, text := cliDiscord(t, migrate...); code != 0 {
+		t.Fatal(text)
+	}
+	if _, err := os.Stat(filepath.Join(homeB, "discord-active.json")); !os.IsNotExist(err) {
+		t.Fatalf("modified B's connector selection: %v", err)
+	}
+}
+
+func TestDiscordMigrationDoesNotTrustSocketLayoutOrMissingSelection(t *testing.T) {
+	a, token := discordCLIRig(t)
+	homeA := os.Getenv(daemon.EnvStateDir)
+	homeB := t.TempDir()
+	t.Setenv(daemon.EnvSocket, filepath.Join(homeB, "daemon.sock"))
+	if code, _, msg := cliDiscord(t, "connect", "--state-dir", a, "--name", "A", "--application-id", "100", "--owner-id", "1", "--token-file", token, "--guild", "10"); code != 0 {
+		t.Fatal(msg)
+	}
+	t.Setenv(daemon.EnvStateDir, homeB)
+	if code, _, _ := cliDiscord(t, "connect", "--state-dir", a, "--mode", "teammate"); code == 0 {
+		t.Fatal("foreign default socket adopted unpinned place A")
+	}
+	t.Setenv(daemon.EnvStateDir, homeA)
+	if err := os.Remove(filepath.Join(homeA, "discord-active.json")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--state-dir", a, "--mode", "teammate"); code == 0 {
+		t.Fatal("default directory substituted for missing persisted selection")
+	}
+}
