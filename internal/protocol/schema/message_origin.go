@@ -19,10 +19,16 @@ type MessageOrigin struct {
 	ChannelID      string `json:"channel_id,omitempty"`
 	MessageID      string `json:"message_id,omitempty"`
 	EndorserID     string `json:"endorser_id,omitempty"`
+	DiscussionID   string `json:"discussion_id,omitempty"`
+	Revision       string `json:"revision,omitempty"`
 }
 
 func (o MessageOrigin) fields() []string {
-	return []string{o.Kind, o.InstallationID, o.RequestID, o.ActorID, o.ActorName, o.GuildID, o.ChannelID, o.MessageID, o.EndorserID, o.RequesterID}
+	fields := []string{o.Kind, o.InstallationID, o.RequestID, o.ActorID, o.ActorName, o.GuildID, o.ChannelID, o.MessageID, o.EndorserID, o.RequesterID}
+	if o.DiscussionID != "" || o.Revision != "" {
+		fields = append(fields, o.DiscussionID, o.Revision)
+	}
+	return fields
 }
 
 func (o MessageOrigin) Validate() error {
@@ -34,6 +40,11 @@ func (o MessageOrigin) Validate() error {
 	}
 	if (o.Kind == "owner_endorsed") != (o.EndorserID != "") {
 		return errors.New("message origin requires an endorser only for owner_endorsed")
+	}
+	if o.DiscussionID != "" || o.Revision != "" {
+		if o.DiscussionID == "" || o.Revision == "" || o.RequesterID == "" || o.MessageID == "" || o.GuildID == "" || o.ChannelID == "" || o.Kind == "owner_endorsed" {
+			return errors.New("message origin requires the complete discussion coordinate")
+		}
 	}
 	for _, field := range o.fields() {
 		if len(field) > 512 || !utf8.ValidString(field) {

@@ -2,7 +2,12 @@
 
 package daemon
 
-import "github.com/Nathandela/swarm/internal/procstart"
+import (
+	"net"
+
+	"github.com/Nathandela/swarm/internal/procstart"
+	"golang.org/x/sys/unix"
+)
 
 // processStartTime returns a stable, monotonic-per-process identity token for
 // pid: the process creation time in microseconds since the epoch, read from the
@@ -18,3 +23,18 @@ import "github.com/Nathandela/swarm/internal/procstart"
 // be a fact the two sides could silently disagree about, and the disagreement's
 // symptom is a daemon that reaps a healthy app-server or adopts a stranger's.
 func processStartTime(pid int) (int64, error) { return procstart.StartTime(pid) }
+
+func retirementPeerPID(conn *net.UnixConn) (int, error) {
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	var sockErr error
+	if err := raw.Control(func(fd uintptr) {
+		pid, sockErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
+	}); err != nil {
+		return 0, err
+	}
+	return pid, sockErr
+}

@@ -48,10 +48,21 @@ import (
 
 func (a *coreAPI) OwnerBoundResumeSupported() bool { return a.matchResumeInstance != nil }
 
-func (a *coreAPI) validateBoundWorkerResume(spec daemon.LaunchSpec, local string, source persist.Meta) error {
+func (a *coreAPI) validateBoundResume(spec daemon.LaunchSpec, local string, source persist.Meta) error {
 	if spec.OwnerLaunchHash == "" || spec.OperationID == "" || spec.ResumeSource.Instance == "" || local != source.ID ||
-		source.Role == "manager" || source.AgentType != spec.AgentType || source.RosterHidden || source.Status.Process != status.ProcessExited ||
+		source.AgentType != spec.AgentType || source.RosterHidden || source.Status.Process != status.ProcessExited ||
 		a.matchResumeInstance == nil || !a.matchResumeInstance(source, spec.ResumeSource.Instance) {
+		return daemon.ErrResumeSourceChanged
+	}
+	if spec.Manager == nil && source.Role != "manager" {
+		return nil
+	}
+	retirement := source.ManagerRetirement
+	if spec.Manager == nil || validateManagerSelection(spec, source) != nil ||
+		retirement.OperationID == "" || retirement.OperationID != spec.Manager.RetireOperationID ||
+		retirement.Instance != spec.ResumeSource.Instance ||
+		source.ManagerResumeOperationID != "" && (source.ManagerResumeOperationID != spec.OperationID || source.ManagerResumeRequestHash != spec.OwnerLaunchHash) ||
+		a.core.ManagerRetirementStatus(source, retirement) != "retired" {
 		return daemon.ErrResumeSourceChanged
 	}
 	return nil

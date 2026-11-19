@@ -85,12 +85,19 @@ func confirmShimServing(sock string) bool {
 // first (the shim ignores ops before hello), sends the signal, then briefly reads
 // so the shim consumes the frame before the connection closes.
 func signalShim(sock, sig string) error {
+	return signalShimChecked(sock, sig, nil)
+}
+
+func signalShimChecked(sock, sig string, check func(net.Conn) bool) error {
 	conn, _, err := dialShimHello(sock)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 
+	if check != nil && !check(conn) {
+		return fmt.Errorf("shim identity changed before signal")
+	}
 	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSignal, Sig: sig})
 	if err != nil {
 		return err

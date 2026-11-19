@@ -373,6 +373,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	locals := make([]string, 0, len(core.List()))
 	for _, m := range core.List() {
 		locals = append(locals, m.ID)
+		if m.Status.Process == status.ProcessRunning && m.ManagerRetirement.OperationID != "" {
+			d.restoreSessionStop(m.ID, managerRetireReason)
+		}
 	}
 	d.restoreDirectInputState(locals)
 	d.api = newCoreAPIUnstarted(core, cfg.FakeAgentBin, epID)
@@ -553,6 +556,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.semanticComposer = d.semanticSendTransactional
 	d.api.semanticStatus = d.semanticOperation
 	d.api.managerInterruptTurn = d.interruptManagerTurn
+	d.api.managerRetire = d.retireManager
 	d.api.managerInputStatus = d.managerInputStatus
 	d.api.managerRuntime = d.managerRuntime
 	d.api.managerCall = d.resolveManagerCall
@@ -677,6 +681,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	// input, and supervisor delivery refuse before bytes while compaction or auth
 	// recycling owns the session (the supervisor avoids even attempting).
 	inputGate := func(local string) error {
+		if m, ok := d.core.Get(local); ok && m.ManagerRetirement.OperationID != "" {
+			return fmt.Errorf("session %q is retiring its manager", local)
+		}
 		if reason := d.composerRecycleRefusal(local); reason != "" {
 			return fmt.Errorf("session %q %s; nothing was typed", local, reason)
 		}

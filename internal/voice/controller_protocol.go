@@ -67,6 +67,9 @@ func (p *ProtocolControllerClient) ManagerInputStatus(ctx context.Context, bindi
 }
 func (p *ProtocolControllerClient) SemanticSend(operation string, req protocol.ComposerSendReq) error {
 	caps := []string{protocol.CapSemanticSend}
+	if req.Origin != nil {
+		caps = append(caps, protocol.CapMessageOrigin)
+	}
 	if req.ManagerAdmission != nil {
 		caps = append(caps, protocol.CapManagerProvenance)
 	}
@@ -93,6 +96,9 @@ func (p *ProtocolControllerClient) LaunchOperation(operation string, req protoco
 	caps := []string{protocol.CapOwnerLaunch}
 	if req.Manager != nil {
 		caps = append(caps, protocol.CapManagerLaunch)
+		if req.Manager.RetireOperationID != "" {
+			caps = append(caps, protocol.CapManagerRetire)
+		}
 	}
 	if req.ResumeSourceInstance != "" {
 		caps = append(caps, protocol.CapOwnerBoundResume)
@@ -127,4 +133,22 @@ var _ ControllerWorkers = (*ProtocolControllerClient)(nil)
 
 func (p *ProtocolControllerClient) RetainedHistoryPage(req schema.InteractionHistoryReq) (protocol.RetainedHistoryPage, error) {
 	return controllerOwnerCall(p, p.ctx, 10*time.Second, []string{protocol.CapJournal}, func(c *protocol.Client) (protocol.RetainedHistoryPage, error) { return c.RetainedHistoryPage(req) })
+}
+
+func (p *ProtocolControllerClient) ManagerRetire(ctx context.Context, req protocol.ManagerRetireReq, statusOnly bool) (protocol.ManagerRetireReceipt, error) {
+	return controllerOwnerCall(p, ctx, 20*time.Second, []string{protocol.CapManagerRetire}, func(c *protocol.Client) (protocol.ManagerRetireReceipt, error) {
+		return c.ManagerRetire(ctx, req, statusOnly)
+	})
+}
+
+// discussionSupported fences connector work before any native launch on an older daemon.
+func (p *ProtocolControllerClient) discussionSupported(ctx context.Context) error {
+	caps := append([]string{
+		protocol.CapOwnerLaunch, protocol.CapOwnerBoundResume, protocol.CapManagerLaunch, protocol.CapManagerProvenance,
+		protocol.CapManagerRetire, protocol.CapMessageOrigin, protocol.CapSemanticSend,
+	}, controllerJournalCaps...)
+	_, err := controllerOwnerCall(p, ctx, 3*time.Second, caps, func(*protocol.Client) (struct{}, error) {
+		return struct{}{}, nil
+	})
+	return err
 }

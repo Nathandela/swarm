@@ -71,6 +71,8 @@ func wireJSONTags() []string {
 		reflect.TypeOf(ManagerRuntimeStatus{}),
 		reflect.TypeOf(ManagerCallReq{}),
 		reflect.TypeOf(ManagerCallProof{}),
+		reflect.TypeOf(ManagerRetireReq{}),
+		reflect.TypeOf(ManagerRetireReceipt{}),
 		reflect.TypeOf(ComposerSendReq{}),
 		reflect.TypeOf(SemanticMessageReceipt{}),
 		reflect.TypeOf(TerminalSnapshot{}),
@@ -107,6 +109,7 @@ func allOps() []string {
 		OpSemanticSend, OpSemanticStatus,
 		OpOwnerLaunch, OpOwnerLaunchStatus,
 		OpManagerRuntime, OpManagerResolveCall, OpManagerInputStatus,
+		OpManagerRetire, OpManagerRetireStatus,
 	}
 }
 

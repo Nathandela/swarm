@@ -33,12 +33,12 @@ func (a *coreAPI) ResolveManagerCall(ctx context.Context, local string, req prot
 	}
 	return a.managerCall(ctx, local, req)
 }
-func (d *Daemon) managerMeta(local, instance string) (persist.Meta, string, error) {
+func (d *Daemon) managerMeta(local, instance, retirement string) (persist.Meta, string, error) {
 	if d.core == nil {
 		return persist.Meta{}, "", managerproof.ErrUnavailable
 	}
 	meta, ok := d.core.Get(local)
-	if !ok || meta.Role != "manager" || meta.ManagerConversationID == "" || meta.ManagerBridgeSocket == "" || meta.ManagerAuthFile == "" || meta.CLIIdentity == nil || meta.Status.Process != status.ProcessRunning || meta.ResumeError != "" {
+	if !ok || meta.Role != "manager" || meta.ManagerConversationID == "" || meta.ManagerBridgeSocket == "" || meta.ManagerAuthFile == "" || meta.CLIIdentity == nil || meta.Status.Process != status.ProcessRunning || meta.ResumeError != "" || meta.ManagerRetirement.OperationID != retirement {
 		return persist.Meta{}, "", managerproof.ErrUnavailable
 	}
 	if meta.ManagerReplayID == "" {
@@ -80,10 +80,10 @@ func (d *Daemon) managerMeta(local, instance string) (persist.Meta, string, erro
 func (d *Daemon) managerRuntime(local, instance string) (managerproof.Status, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return d.managerRuntimeContext(ctx, local, instance)
+	return d.managerRuntimeContext(ctx, local, instance, "")
 }
-func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance string) (managerproof.Status, error) {
-	meta, epoch, err := d.managerMeta(local, instance)
+func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance, retirement string) (managerproof.Status, error) {
+	meta, epoch, err := d.managerMeta(local, instance, retirement)
 	if err != nil {
 		return managerproof.Status{}, err
 	}
@@ -177,7 +177,7 @@ func (d *Daemon) checkedManagerBindingContext(ctx context.Context, local string,
 		return managerproof.Status{}, managerproof.ErrStale
 	}
 	supplied.Session = local
-	current, err := d.managerRuntimeContext(ctx, local, supplied.SessionInstance)
+	current, err := d.managerRuntimeContext(ctx, local, supplied.SessionInstance, "")
 	if err != nil {
 		return current, err
 	}

@@ -15,20 +15,23 @@ import (
 
 // Config contains non-secret configuration for one local installation.
 type Config struct {
-	Enabled           bool     `json:"enabled"`
-	Version           int      `json:"version"`
-	InstallationID    string   `json:"installation_id"`
-	Name              string   `json:"name"`
-	ApplicationID     string   `json:"application_id"`
-	OwnerID           string   `json:"owner_id"`
-	TokenFile         string   `json:"token_file"`
-	DaemonSocket      string   `json:"daemon_socket"`
-	GuildIDs          []string `json:"guild_ids"`
-	ChannelIDs        []string `json:"channel_ids"`
-	UserIDs           []string `json:"user_ids"`
-	ReceptionistCLI   string   `json:"receptionist_cli"`
-	ReceptionistModel string   `json:"receptionist_model"`
-	WorkDir           string   `json:"work_dir"`
+	Mode              string            `json:"mode,omitempty"`
+	ManagerCLI        string            `json:"manager_cli,omitempty"`
+	Projects          map[string]string `json:"projects,omitempty"`
+	Enabled           bool              `json:"enabled"`
+	Version           int               `json:"version"`
+	InstallationID    string            `json:"installation_id"`
+	Name              string            `json:"name"`
+	ApplicationID     string            `json:"application_id"`
+	OwnerID           string            `json:"owner_id"`
+	TokenFile         string            `json:"token_file"`
+	DaemonSocket      string            `json:"daemon_socket"`
+	GuildIDs          []string          `json:"guild_ids"`
+	ChannelIDs        []string          `json:"channel_ids"`
+	UserIDs           []string          `json:"user_ids"`
+	ReceptionistCLI   string            `json:"receptionist_cli"`
+	ReceptionistModel string            `json:"receptionist_model"`
+	WorkDir           string            `json:"work_dir"`
 }
 
 func ConfigPath(dir string) string { return filepath.Join(dir, "config.json") }
@@ -102,7 +105,30 @@ func (c Config) Validate() error {
 		}
 		return true
 	}
-	if !id(c.ApplicationID) || !id(c.OwnerID) {
+	switch c.Mode {
+	case "", "legacy":
+		if !id(c.OwnerID) {
+			return errors.New("discord: invalid owner ID")
+		}
+	case "teammate":
+		if len(c.GuildIDs) == 0 || (c.ManagerCLI != "codex" && c.ManagerCLI != "claude") {
+			return errors.New("discord: teammate requires an enrolled server and a Codex or Claude manager")
+		}
+		if c.OwnerID != "" && !id(c.OwnerID) {
+			return errors.New("discord: invalid owner ID")
+		}
+		if len(c.Projects) > 32 {
+			return errors.New("discord: too many teammate projects")
+		}
+		for name, root := range c.Projects {
+			if !validText(name, 128) || strings.TrimSpace(name) != name || !validStatePath(root) || filepath.Clean(root) != root {
+				return errors.New("discord: invalid named project")
+			}
+		}
+	default:
+		return errors.New("discord: unknown connection mode")
+	}
+	if !id(c.ApplicationID) {
 		return errors.New("discord: invalid application or owner ID")
 	}
 	for _, ids := range [][]string{c.GuildIDs, c.ChannelIDs, c.UserIDs} {

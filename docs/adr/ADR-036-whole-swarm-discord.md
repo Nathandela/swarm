@@ -70,3 +70,12 @@ A shared hosted bot with cross-machine routing adds central credentials, infrast
 ## Verification
 
 [Integration evidence](../verification/discord-integration.md) tracks actual tests, independent reviews and outstanding release/installation gates. [Operator instructions](../ops/discord.md) describe setup and day-to-day flows. Mock Discord protocol evidence is recorded as mock evidence, as explicitly authorized by the owner; it does not claim a live Discord deployment.
+
+
+## Amendment — explicitly selected discussion teammate
+
+The operator may enroll a place in teammate mode. Every human participant in a visible enrolled guild discussion has equal authority to instruct the discussion's manager. The manager and its registered workers run on the place with the configured native account. The app identifies genuine mentions and verified thread activity before any model turn. Ordinary legacy route selection, private sessions and native permission decisions retain separate entry points.
+
+A durable conversation belongs to the installation, server and verified Discord thread. Accepted turns preserve the original speaker. Worker operations, wake receipts, pending questions and explicit publications remain correlated with the authorized discussion and exact worker attempt. Lost acknowledgements require reconciliation. A quiescent manager may retire under an instance fence and reopen its conversation on demand. The connector is supervised independently of its managers.
+
+See the [implementation contract](../specifications/discord-teammate-manager.md) and [operating instructions](../ops/discord.md#connect-a-teammate).

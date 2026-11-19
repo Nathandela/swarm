@@ -394,6 +394,9 @@ func (d *Daemon) nativeInteractionHistory(req schema.InteractionHistoryReq) (sch
 		return empty, protocol.CodeUnavailable, errors.New("native history is unavailable")
 	}
 	meta, ok := d.core.Get(local)
+	if ok && req.Worker != nil {
+		return d.discussionWorkerHistory(meta, req)
+	}
 	if !ok || meta.AgentType != "opencode" || meta.RequiredRuntime != persist.RequiredRuntimeOpenCode || meta.OpenCodeBinding == nil || meta.OpenCodeBinding.NativeCreatedAtMS <= 0 || !adapter.IsOpenCodeConversationID(meta.ConversationID) {
 		return empty, protocol.CodeUnavailable, errors.New("native history root is unconfirmed")
 	}

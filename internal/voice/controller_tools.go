@@ -32,11 +32,14 @@ type ControllerWorkers interface {
 var _ ControllerWorkers = (*protocol.Client)(nil)
 
 type controllerActionRequest struct {
-	Tool      string                      `json:"tool"`
-	Arguments json.RawMessage             `json:"arguments"`
-	Launch    *protocol.LaunchReq         `json:"launch,omitempty"`
-	Send      *protocol.ComposerSendReq   `json:"send,omitempty"`
-	Decision  *protocol.NativeDecisionReq `json:"decision,omitempty"`
+	WorkerWakeID string                      `json:"worker_wake_id,omitempty"`
+	Origin       *schema.MessageOrigin       `json:"origin,omitempty"`
+	Project      string                      `json:"project,omitempty"`
+	Tool         string                      `json:"tool"`
+	Arguments    json.RawMessage             `json:"arguments"`
+	Launch       *protocol.LaunchReq         `json:"launch,omitempty"`
+	Send         *protocol.ComposerSendReq   `json:"send,omitempty"`
+	Decision     *protocol.NativeDecisionReq `json:"decision,omitempty"`
 }
 
 func decodeControllerInput[T any](raw json.RawMessage) (T, error) {
@@ -112,6 +115,9 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		return nil, err
 	}
 	admission.NativeTurnID = proof.NativeTurnID
+	if err := c.discussionEffect(admission, call.Name); err != nil {
+		return nil, err
+	}
 	if admission.RecoveryOnly {
 		switch call.Name {
 		case "swarm_create", "swarm_resume", "swarm_send", "swarm_decision", "swarm_interrupt":
@@ -144,6 +150,28 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		}
 		return c.managerQuestion(input, args, proof, admission)
 
+	case "swarm_discussion_answer":
+		input, err := decodeControllerInput[DiscussionAnswerInput](args)
+		if err != nil {
+			return nil, err
+		}
+		if input.RequestID == "" {
+			return c.discussionQuestions(st, admission, input.After)
+		}
+		answer, err := c.settleDiscussionAnswer(admission, input)
+		if err != nil {
+			return nil, err
+		}
+		return controllerResult(answer)
+	case "swarm_discussion_history":
+		if c.discussion == nil || c.discussion.History == nil {
+			return nil, ErrControllerUnsupported
+		}
+		input, err := decodeControllerInput[DiscussionHistoryInput](args)
+		if err != nil {
+			return nil, err
+		}
+		return c.discussion.History(ctx, input)
 	case "swarm_list":
 		input, err := decodeControllerInput[ListInput](args)
 		if err != nil {
@@ -217,6 +245,15 @@ func (c *Controller) workerTarget(target SessionInput, nativeComposer bool) (pro
 	if c.workers == nil {
 		return protocol.SessionView{}, ErrControllerUnsupported
 	}
+	if c.discussion != nil {
+		tracked, err := c.TrackedWorker(target.Session, target.SessionInstance)
+		if err != nil {
+			return protocol.SessionView{}, err
+		}
+		if !tracked {
+			return protocol.SessionView{}, ErrNotFound
+		}
+	}
 	if target.Session == c.binding.SessionID {
 		return protocol.SessionView{}, ErrInvalid
 	}
@@ -286,6 +323,13 @@ func (c *Controller) workerResumeRequest(input ResumeInput, admission uint64) (*
 }
 
 func (c *Controller) managerEffect(ctx context.Context, name string, args json.RawMessage, admission Admission) (result json.RawMessage, effectErr error) {
+	if c.discussion != nil {
+		c.discussionEffects.Lock()
+		defer c.discussionEffects.Unlock()
+		if err := c.discussionEffect(admission, name); err != nil {
+			return nil, err
+		}
+	}
 	var reference string
 	defer func() {
 		if errors.Is(effectErr, ErrControllerUncertain) && reference != "" {
@@ -296,7 +340,7 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		return nil, ErrControllerUnsupported
 	}
 	var id, target, operation string
-	request := controllerActionRequest{Tool: name, Arguments: args}
+	request := controllerActionRequest{Tool: name, Arguments: args, Origin: admission.Origin, Project: admission.Project}
 	switch name {
 	case "swarm_create":
 		input, err := decodeControllerInput[CreateInput](args)
@@ -307,13 +351,21 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		if !valid {
 			return nil, ErrStale
 		}
+		if c.discussion != nil && !c.projectPath(admission.Project, input.Cwd) {
+			return nil, fmt.Errorf("%w: select an enrolled project before dispatching work", ErrInvalid)
+		}
 		id = input.ActionID
 		target = "new-worker:" + id
 		options := map[string]string{}
 		if input.Model != "" {
 			options["model"] = input.Model
 		}
-		request.Launch = &protocol.LaunchReq{Agent: input.Agent, Name: input.Name, Cwd: input.Cwd, Options: options, InitialPrompt: input.Prompt, Worktree: input.Worktree, Cols: 120, Rows: 32, SpawnedFrom: parent, SpawnIntent: schema.SpawnIntentDelegate}
+		prompt := input.Prompt
+		if c.discussion != nil {
+			provenance, _ := json.Marshal(admission.Origin)
+			prompt = "Supervisor-verified Discord work attribution " + string(provenance) + "\n\n" + prompt
+		}
+		request.Launch = &protocol.LaunchReq{Agent: input.Agent, Name: input.Name, Cwd: input.Cwd, Options: options, InitialPrompt: prompt, Worktree: input.Worktree, Cols: 120, Rows: 32, SpawnedFrom: parent, SpawnIntent: schema.SpawnIntentDelegate}
 	case "swarm_resume":
 		input, err := decodeControllerInput[ResumeInput](args)
 		if err != nil {
@@ -334,7 +386,26 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		}
 		id = input.ActionID
 		target = key(input.Session, input.SessionInstance)
-		request.Send = &protocol.ComposerSendReq{Session: input.Session, SessionInstance: input.SessionInstance, Text: input.Text}
+		request.Send = &protocol.ComposerSendReq{Session: input.Session, SessionInstance: input.SessionInstance, Text: input.Text, Origin: admission.Origin}
+		if c.discussion != nil {
+			st, err := c.store.readView()
+			if err != nil {
+				return nil, err
+			}
+			if admission.Origin == nil {
+				origin, wakeID, err := c.discussionContinuation(st, admission, target, id)
+				if err != nil {
+					return nil, err
+				}
+				request.Origin, request.Send.Origin, request.WorkerWakeID = origin, origin, wakeID
+				request.Send.Text = "System continuation under the previously authorized Discord job. Only continue the original scope.\n\n" + request.Send.Text
+			}
+			for _, effect := range st.Actions {
+				if effect.Target == target && effect.State == "executing" {
+					return nil, ErrControllerUncertain
+				}
+			}
+		}
 	case "swarm_decision":
 		input, err := decodeControllerInput[DecisionInput](args)
 		if err != nil {
@@ -603,6 +674,16 @@ func (c *Controller) prepareManagerAction(name, id, target string, request contr
 	}
 	if name == "swarm_create" {
 		target = "new-worker:" + id
+	} else if c.discussion != nil {
+		if request.Launch != nil {
+			source := request.Launch.Options[protocol.OptionResumeFrom]
+			target = key(source, request.Launch.ResumeSourceInstance)
+		}
+		association, ok := st.Workers[key(c.binding.ConversationID, target)]
+		if !ok || association.JobID == "" || !c.projectPath(association.Project, association.Project) {
+			return Action{}, ErrStale
+		}
+		request.Project = association.Project
 	}
 	var operation string
 	prior, exists := st.Actions[key(c.binding.ConversationID, id)]
@@ -667,9 +748,15 @@ func (c *Controller) createdWorkerReceipt(ctx context.Context, action Action, se
 	if intent.Tool == "swarm_resume" {
 		resultState = "resumed"
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	receiptWindow := time.Second
+	pollInterval := 50 * time.Millisecond
+	if c.discussion != nil {
+		receiptWindow = 15 * time.Second
+		pollInterval = 250 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, receiptWindow)
 	defer cancel()
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		var rows []protocol.SessionView
@@ -688,7 +775,8 @@ func (c *Controller) createdWorkerReceipt(ctx context.Context, action Action, se
 			if row.ID != session {
 				continue
 			}
-			if row.Role == "manager" || row.Agent != intent.Launch.Agent {
+			if row.Role == "manager" || row.Agent != intent.Launch.Agent ||
+				c.discussion != nil && (row.SpawnedFrom != intent.Launch.SpawnedFrom || row.SpawnIntent != schema.SpawnIntentDelegate) {
 				return nil, ErrControllerUncertain
 			}
 			if row.Capabilities == nil || row.Capabilities.SessionInstance == "" {

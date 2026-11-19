@@ -156,7 +156,7 @@ func TestDiscordInstallCommandsAreShellFreeAndRealRunnerRefusesTests(t *testing.
 	if e := installDiscordUnit("linux", home, binary, dir); e != nil {
 		t.Fatal(e)
 	}
-	want := [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "--now", "swarm-discord.service"}}
+	want := [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "swarm-discord.service"}, {"systemctl", "--user", "restart", "swarm-discord.service"}}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatal(commands)
 	}
@@ -211,5 +211,81 @@ func TestDiscordRunAndProposalDelegateOnlyExplicitInputs(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("invalid proposal admitted", calls)
+	}
+}
+
+func TestDiscordConnectTeammateAndLegacyRollback(t *testing.T) {
+	dir, token := discordCLIRig(t)
+	project := t.TempDir()
+	code, _, msg := cliDiscord(t, "connect", "--mode", "teammate", "--manager", "codex", "--name", "Workshop", "--application-id", "100", "--token-file", token, "--guild", "10", "--project", "app="+project)
+	if code != 0 {
+		t.Fatal(msg)
+	}
+	raw, err := os.ReadFile(discord.ConfigPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Mode     string
+		Projects map[string]string
+	}
+	var encoded map[string]any
+	if err = json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(project)
+	if err != nil || cfg.Mode != "teammate" || encoded["manager_cli"] != "codex" || cfg.Projects["app"] != root {
+		t.Fatal(cfg, encoded, err)
+	}
+	installation := encoded["installation_id"]
+	if code, _, _ := cliDiscord(t, "connect", "--manager", "unknown"); code == 0 {
+		t.Fatal("saved unknown manager")
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--project", "lost="+filepath.Join(project, "missing")); code == 0 {
+		t.Fatal("accepted missing project")
+	}
+	if code, _, msg := cliDiscord(t, "connect", "--mode", "legacy", "--owner-id", "1"); code != 0 {
+		t.Fatal(msg)
+	}
+	legacy, err := discord.LoadConfig(dir)
+	if err != nil || legacy.InstallationID != installation || legacy.OwnerID != "1" {
+		t.Fatal(legacy, err)
+	}
+}
+
+func TestDiscordDoctorUnconfiguredLeavesNoState(t *testing.T) {
+	dir, _ := discordCLIRig(t)
+	code, _, msg := cliDiscord(t, "doctor", "--state-dir", dir)
+	if code != 1 || !strings.Contains(msg, "configure") {
+		t.Fatal(code, msg)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscordTeammateScopeCanClearLegacyChannels(t *testing.T) {
+	dir, token := discordCLIRig(t)
+	if code, _, msg := cliDiscord(t, "connect", "--name", "Work", "--application-id", "100", "--owner-id", "1", "--token-file", token, "--guild", "10", "--channel", "20"); code != 0 {
+		t.Fatal(msg)
+	}
+	if code, _, msg := cliDiscord(t, "connect", "--mode", "teammate", "--all-channels"); code != 0 {
+		t.Fatal(msg)
+	}
+	cfg, err := discord.LoadConfig(dir)
+	if err != nil || len(cfg.ChannelIDs) != 0 || cfg.ManagerCLI != "codex" {
+		t.Fatal(cfg, err)
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--allow-user", "3"); code == 0 {
+		t.Fatal("accepted a misleading teammate user allowlist")
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--channel", "21", "--all-channels"); code == 0 {
+		t.Fatal("accepted conflicting channel scope")
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--project", "App="+t.TempDir(), "--project", "app="+t.TempDir()); code == 0 {
+		t.Fatal("saved an ambiguous project name")
 	}
 }

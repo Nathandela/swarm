@@ -43,10 +43,12 @@ type LocalWorker struct {
 	Excluded bool `json:"excluded"`
 }
 type LocalStatus struct {
-	Name           string        `json:"name"`
-	InstallationID string        `json:"installation_id"`
-	Connected      bool          `json:"connected"`
-	Workers        []LocalWorker `json:"workers"`
+	Name           string          `json:"name"`
+	InstallationID string          `json:"installation_id"`
+	Connected      bool            `json:"connected"`
+	Workers        []LocalWorker   `json:"workers"`
+	Mode           string          `json:"mode,omitempty"`
+	Teammate       *TeammateStatus `json:"teammate,omitempty"`
 }
 type LocalReply struct {
 	Ref  string `json:"ref"`
@@ -147,9 +149,20 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 }
 
 func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
-	status := LocalStatus{Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true}
+	status := LocalStatus{Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true, Mode: s.Config.Mode}
 	if connection, ok := s.Messenger.(interface{ Connected() bool }); ok {
 		status.Connected = connection.Connected()
+	}
+	if s.Config.Mode == "teammate" {
+		var native func(TeammateDiscussion) (TeammateNativeStatus, error)
+		if manager, ok := s.teammateManager.(interface {
+			Status(TeammateDiscussion) (TeammateNativeStatus, error)
+		}); ok {
+			native = manager.Status
+		}
+		teammate, err := s.Store.teammateStatus(s.Config.InstallationID, native)
+		status.Teammate = &teammate
+		return status, err
 	}
 	rows, err := s.Workers.Roster(ctx)
 	if err != nil {
@@ -192,6 +205,11 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	var err error
+	if s.Config.Mode == "teammate" && operation != "status" && operation != "shutdown" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "discord: this operation requires legacy mode"})
+		return
+	}
 	switch operation {
 	case "shutdown":
 		if err = decodeLocal(w, r, &struct{}{}); err != nil {

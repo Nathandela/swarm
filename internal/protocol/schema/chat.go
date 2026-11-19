@@ -70,11 +70,12 @@ func TurnInterruptContentHash(req *TurnInterruptReq) []byte {
 // Limit bounds the page. The reply rides the EXISTING Control.Journal carrier plus
 // Control.HistoryFloor.
 type InteractionHistoryReq struct {
-	Native       bool   `json:"native,omitempty"`
-	NativeCursor string `json:"native_cursor,omitempty"`
-	Session      string `json:"session"`
-	BeforeItem   string `json:"before_item"`
-	Limit        int    `json:"limit"`
+	Worker       *WorkerHistoryScope `json:"worker,omitempty"`
+	Native       bool                `json:"native,omitempty"`
+	NativeCursor string              `json:"native_cursor,omitempty"`
+	Session      string              `json:"session"`
+	BeforeItem   string              `json:"before_item"`
+	Limit        int                 `json:"limit"`
 }
 
 // InteractionDetailReq is the interaction_detail body (Mirror M3.3, IS-CAP-2): the unsigned

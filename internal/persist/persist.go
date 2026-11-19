@@ -40,6 +40,20 @@ const metaFile = "meta.json"
 // uses the default; behavior is identical.
 var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data) }
 
+// ManagerRetirement retains the controller's last quiescent checkpoint with the
+// native source, for as long as that source can be used for a parked resume.
+type ManagerRetirement struct {
+	OperationID      string    `json:"operation_id"`
+	Instance         string    `json:"instance"`
+	NativeSessionID  string    `json:"native_session_id"`
+	NativeGeneration string    `json:"native_generation"`
+	Generation       uint64    `json:"generation"`
+	Checkpoint       string    `json:"checkpoint"`
+	ShimPID          int       `json:"shim_pid"`
+	ShimStartTime    int64     `json:"shim_start_time"`
+	ClaimedAt        time.Time `json:"claimed_at"`
+}
+
 // Meta is the persisted state of a single session (S-2). Every field carries an
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
@@ -64,6 +78,11 @@ type Meta struct {
 	// schema-version bump for the same rollback reason as AgentCwd below; a zero value
 	// on an older record means "never stamped", which any CLI-published name beats.
 	NameSetAt time.Time `json:"name_set_at"`
+
+	ManagerResumeRequestHash string            `json:"manager_resume_request_hash,omitempty"`
+	ManagerResumeOperationID string            `json:"manager_resume_operation_id,omitempty"`
+	ManagerRetirement        ManagerRetirement `json:"manager_retirement,omitzero"`
+
 	// agy reports its current title on every tick, including after a manual rename.
 	AgyTitle           string    `json:"agy_title,omitempty"`
 	AgyTitleObservedAt time.Time `json:"agy_title_observed_at,omitzero"`

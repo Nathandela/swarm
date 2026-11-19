@@ -54,6 +54,7 @@ type coreAPI struct {
 	scheduleStateDir     string
 	scheduleSocket       string
 	matchResumeInstance  func(persist.Meta, string) bool
+	managerRetire        func(context.Context, string, protocol.ManagerRetireReq, persist.ManagerRetirement) (bool, error)
 	managerInterruptTurn func(context.Context, string, string, protocol.ManagerInterruptReq, func() error) error
 	managerInputStatus   func(context.Context, string, protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error)
 	managerRuntime       func(string, string) (protocol.ManagerRuntimeStatus, error)
@@ -1056,12 +1057,6 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return m, err
 		}
 	}
-	if spec.ResumeSource != nil {
-		local, source, err := validateResumeSource(spec.Options[protocol.OptionResumeFrom], spec.AgentType, a.endpointID, a.core.Get)
-		if err != nil || a.validateBoundWorkerResume(spec, local, source) != nil {
-			return persist.Meta{}, daemon.ErrResumeSourceChanged
-		}
-	}
 	if spec.Manager != nil {
 		manager := *spec.Manager
 		manager.Command = a.core.ManagerBridgeCommand()
@@ -1077,6 +1072,12 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			manager.ClaudeConfigDir = &config
 		}
 		spec.Manager = &manager
+	}
+	if spec.ResumeSource != nil {
+		local, source, err := validateResumeSource(spec.Options[protocol.OptionResumeFrom], spec.AgentType, a.endpointID, a.core.Get)
+		if err != nil || a.validateBoundResume(spec, local, source) != nil {
+			return persist.Meta{}, daemon.ErrResumeSourceChanged
+		}
 	}
 	if err := validateManagerSource(spec, a.endpointID, a.core.Get); err != nil {
 		return persist.Meta{}, err
@@ -1256,7 +1257,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return persist.Meta{}, fmt.Errorf("resume: source discussion was deleted or archived")
 		}
 		if spec.ResumeSource != nil {
-			if err := a.validateBoundWorkerResume(spec, local, source); err != nil {
+			if err := a.validateBoundResume(spec, local, source); err != nil {
 				return persist.Meta{}, err
 			}
 			spec.ResumeSource = &daemon.ResumeSourceFence{Instance: spec.ResumeSource.Instance, ShimPID: source.ShimPID, ShimStartTime: source.ShimStartTime}
@@ -1361,9 +1362,9 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 	}
 	if expected := resolved.ResumeSource; expected != nil {
 		source, ok := a.core.Get(resolved.ResumedFrom)
-		if !ok || a.validateBoundWorkerResume(resolved, resolved.ResumedFrom, source) != nil ||
+		if !ok || a.validateBoundResume(resolved, resolved.ResumedFrom, source) != nil ||
 			source.ShimPID != expected.ShimPID || source.ShimStartTime != expected.ShimStartTime ||
-			source.ConversationID != resolved.ConversationID {
+			source.ConversationID != resolved.ConversationID || (resolved.Manager != nil && !sameParkedManagerAccount(source, resolved)) {
 			return persist.Meta{}, daemon.ErrResumeSourceChanged
 		}
 	}
@@ -1391,6 +1392,11 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 			}
 		}
 		resolved.Argv = append(args, resolved.Argv[end:]...)
+	}
+	if resolved.ResumeSource != nil && resolved.Manager != nil {
+		if err := a.core.BindParkedManagerResume(resolved); err != nil {
+			return persist.Meta{}, err
+		}
 	}
 	if coreAttempted != nil {
 		*coreAttempted = true

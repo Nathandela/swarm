@@ -9,6 +9,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 func (s *Store) observeController(b ManagerBinding, external uint64, steered bool) error {
@@ -207,6 +208,14 @@ func (s *Store) RebindManager(previous, next ManagerBinding) (ManagerBinding, er
 }
 
 func (s *Store) answerControllerQuestion(b ManagerBinding, id, expectedHash, answerID string, answer json.RawMessage, now time.Time) (Admission, error) {
+	return s.answerQuestion(b, id, expectedHash, answerID, answer, now, nil, "")
+}
+
+func (c *Controller) answerDiscussionQuestion(id, expectedHash string, origin schema.MessageOrigin, project string, answer json.RawMessage) (Admission, error) {
+	return c.store.answerQuestion(c.binding, id, expectedHash, origin.RequestID, answer, time.Now(), &origin, project)
+}
+
+func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID string, answer json.RawMessage, now time.Time, origin *schema.MessageOrigin, project string) (Admission, error) {
 	var result Admission
 	err := s.update(func(st *State) error {
 		if err := checkBinding(st, b); err != nil {
@@ -262,7 +271,16 @@ func (s *Store) answerControllerQuestion(b ManagerBinding, id, expectedHash, ans
 				}
 			}
 		}
+		a.Origin, a.Project = origin, project
 		a.InputText = "Human answer to the exact pending clarification: " + string(text)
+		if origin != nil {
+			speaker, _ := json.Marshal(origin)
+			a.InputText += "\nVerified Discord author " + string(speaker) + ". Use publish to respond in the thread."
+			if project != "" {
+				path, _ := json.Marshal(project)
+				a.InputText += " Approved project for new work " + string(path)
+			}
+		}
 		if len(a.InputText) > MaxUtteranceBytes {
 			return ErrInvalid
 		}
@@ -359,6 +377,19 @@ func (s *Store) rejectQueuedControllerInput(b ManagerBinding, expected Admission
 			}
 		default:
 			return ErrConflict
+		}
+		if a.Origin != nil && reason == ErrDiscussionSourceChanged.Error() {
+			for rk, question := range st.Requests {
+				if question.ConversationID != b.ConversationID || question.Kind != "manager" || question.State != "answered" || question.AnswerID != a.Origin.RequestID {
+					continue
+				}
+				question.State = "pending"
+				if !time.Now().Before(question.ExpiresAt) {
+					question.State = "expired"
+				}
+				question.AnswerID, question.Answer = "", nil
+				putRecord(st, "requests", &st.Requests, rk, question)
+			}
 		}
 		a.Phase = "rejected"
 		a.Reason = reason
@@ -457,6 +488,10 @@ func (s *Store) beginControllerInput(b ManagerBinding, expected Admission) error
 		if !protocol.SemanticOperationReplayable(a.OperationID, time.Now()) {
 			return ErrExpired
 		}
+		if a.Origin != nil && a.Project != "" && c.Project != a.Project {
+			c.Project = a.Project
+			putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
+		}
 		a.Phase = "executing"
 		putRecord(st, "admissions", &st.Admissions, k, a)
 		return nil
@@ -496,10 +531,33 @@ func (s *Store) settleControllerWorkerAction(b ManagerBinding, action Action, se
 		if existing, exists := st.Workers[wk]; session != "" && (!exists || existing.Admission <= source.Sequence) {
 			recovery := existing.RecoveryRequired
 			recovery = recovery || reservationRecovery
-			if !source.RecoveryOnly && (strings.HasPrefix(source.SourceID, "utterance:") || strings.HasPrefix(source.SourceID, "answer:")) && source.Sequence > existing.Admission {
+			if !source.RecoveryOnly && (source.Origin != nil || strings.HasPrefix(source.SourceID, "utterance:") || strings.HasPrefix(source.SourceID, "answer:")) && source.Sequence > existing.Admission {
 				recovery = false
 			}
 			worker := WorkerAssociation{RecoveryRequired: recovery, ConversationID: b.ConversationID, Session: session, SessionInstance: instance, Admission: source.Sequence, SourceID: source.SourceID, ActionID: stored.ID}
+			if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
+				var grant controllerActionRequest
+				if json.Unmarshal(stored.Request, &grant) != nil {
+					return ErrCorrupt
+				}
+				if grant.Origin != nil {
+
+					original := existing
+					if grant.Tool == "swarm_resume" {
+						original = st.Workers[key(b.ConversationID, stored.Target)]
+					}
+					worker.Project = grant.Project
+					worker.Ended = existing.Ended
+					worker.JobID, worker.InitialSourceID = original.JobID, original.InitialSourceID
+					if worker.JobID == "" {
+						worker.JobID, worker.InitialSourceID = stored.ID, source.SourceID
+					}
+					worker.AttemptID = stored.ID
+					if grant.Tool == "swarm_send" && original.AttemptID != "" {
+						worker.AttemptID = original.AttemptID
+					}
+				}
+			}
 			putRecord(st, "workers", &st.Workers, wk, worker)
 		}
 
@@ -792,7 +850,8 @@ func quarantineControllerState(st *State, b ManagerBinding, session, instance st
 	}
 	if session == "" {
 		for _, a := range st.Admissions {
-			if a.ConversationID == b.ConversationID && a.SettledAt.IsZero() {
+			// Discord human proof is independent of worker journal coverage.
+			if a.ConversationID == b.ConversationID && a.SettledAt.IsZero() && a.Origin == nil {
 				if err := restrictRecoveryState(st, b, a.Sequence); err != nil {
 					return err
 				}
@@ -807,12 +866,41 @@ func quarantineControllerState(st *State, b ManagerBinding, session, instance st
 	}
 	return nil
 }
+func (s *Store) noteDiscussionWorkerExit(b ManagerBinding, session, instance string) error {
+	return s.update(func(st *State) error {
+		if err := checkBinding(st, b); err != nil {
+			return err
+		}
+		k := key(b.ConversationID, key(session, instance))
+		if worker, ok := st.Workers[k]; ok && !worker.Ended {
+			worker.Ended = true
+			putRecord(st, "workers", &st.Workers, k, worker)
+		}
+		return nil
+	})
+}
+
 func (s *Store) acceptControllerWorkerEvent(b ManagerBinding, session, instance string, e Event, w Wake) (Wake, error) {
 	var result Wake
 	err := s.update(func(st *State) error {
+		if e.WorkerProof {
+			worker, ok := st.Workers[key(b.ConversationID, key(session, instance))]
+			if !ok || e.ID != discussionEvidenceID(worker) || e.JobID != worker.JobID || e.AttemptID != worker.AttemptID || worker.RecoveryRequired && !e.RecoveryOnly {
+				return ErrStale
+			}
+		}
 		_, exists := st.Events[key(b.ConversationID, e.ID)]
 		if err := acceptEventState(st, b, e, w, &result); err != nil {
 			return err
+		}
+		if !exists && e.WorkerExited {
+			k := key(b.ConversationID, key(session, instance))
+			worker, ok := st.Workers[k]
+			if !ok {
+				return ErrStale
+			}
+			worker.Ended = true
+			putRecord(st, "workers", &st.Workers, k, worker)
 		}
 		if !exists && e.RecoveryOnly {
 			return quarantineControllerState(st, b, session, instance)

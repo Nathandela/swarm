@@ -472,6 +472,10 @@ func (cc *clientConn) handleInteractionHistory(c Control) {
 		cc.replyErrorCode("interaction_history: missing interaction_history body", CodeInvalidField)
 		return
 	}
+	if req.Worker != nil && (cc.srv.remoteTier || !req.Native) {
+		cc.replyErrorCode("interaction_history: worker evidence requires the local owner socket", CodeInvalidField)
+		return
+	}
 	if req.Native {
 		if req.Limit <= 0 || len(req.NativeCursor) > schema.MaxNativeHistoryCursorBytes || len(req.BeforeItem) > 128 {
 			cc.replyErrorCode("interaction_history: invalid native page bounds", CodeInvalidField)

@@ -15,7 +15,7 @@ import (
 )
 
 // Run owns the connector lifetime, leaving the local daemon and agents independent.
-func Run(parent context.Context, stateDir string) error {
+func Run(parent context.Context, stateDir string, managers ...TeammateManager) error {
 	cfg, err := LoadConfig(stateDir)
 	if err != nil {
 		return err
@@ -44,6 +44,12 @@ func Run(parent context.Context, stateDir string) error {
 	}
 	s := NewService(cfg, store, SwarmClient{Socket: cfg.DaemonSocket}, ScopedMessenger{Client: client, Config: cfg})
 	s.StateDir = stateDir
+	if cfg.Mode == "teammate" {
+		if len(managers) != 1 || managers[0] == nil {
+			return errors.New("discord: native teammate manager is unavailable")
+		}
+		return runTeammateConnected(parent, s, client, managers[0])
+	}
 	return runConnected(parent, s, client)
 }
 

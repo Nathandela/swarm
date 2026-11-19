@@ -1,0 +1,541 @@
+package discord
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+	bolt "go.etcd.io/bbolt"
+)
+
+type teammateConnector struct {
+	service   *Service
+	client    *DiscordClient
+	manager   TeammateManager
+	cursorKey []byte
+	wake      chan struct{}
+}
+
+func (t *teammateConnector) signal() {
+	select {
+	case t.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (t *teammateConnector) gateway(f gatewayFrame, session string) error {
+	cfg := t.service.Config
+	var sequence int64
+	if f.Sequence != nil {
+		sequence = *f.Sequence
+	}
+	if f.Type == "READY" {
+		var ready discordgo.Ready
+		if json.Unmarshal(f.Data, &ready) != nil || ready.Application == nil || ready.Application.ID != cfg.ApplicationID || ready.User == nil || !snowflake(ready.User.ID) {
+			return errors.New("discord: bot token does not match configured application")
+		}
+		t.service.SetBotID(ready.User.ID)
+		err := t.service.Store.db.Update(func(tx *bolt.Tx) error {
+			return teammateCheckpointUpdate(tx, cfg.InstallationID, session, sequence, true, "")
+		})
+		t.signal()
+		return err
+	}
+	if f.Type != "MESSAGE_CREATE" && f.Type != "MESSAGE_UPDATE" && f.Type != "MESSAGE_DELETE" && f.Type != "MESSAGE_DELETE_BULK" {
+		return nil
+	}
+	var envelope struct {
+		ID        string
+		IDs       []string
+		GuildID   string `json:"guild_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	if json.Unmarshal(f.Data, &envelope) != nil || !snowflake(envelope.ChannelID) ||
+		envelope.GuildID != "" && !containsID(cfg.GuildIDs, envelope.GuildID) ||
+		f.Type == "MESSAGE_CREATE" && envelope.GuildID == "" {
+		return nil
+	}
+	route := Route{GuildID: envelope.GuildID, ChannelID: envelope.ChannelID}
+	var records []teammateCandidate
+	switch f.Type {
+	case "MESSAGE_CREATE":
+		var m discordgo.Message
+		if json.Unmarshal(f.Data, &m) != nil {
+			return ErrInvalid
+		}
+		if m.Author != nil && m.Author.ID == t.service.botUserID() && m.WebhookID == "" {
+			if nonce := messageNonce(f.Data); nonce != "" && snowflake(m.ID) {
+				return t.service.Store.teammateObserve(cfg.InstallationID, route, m.ID, nonce, m.Content, t.service.Now())
+			}
+		}
+		if !teammateHuman(&m, t.service.botUserID()) || !snowflake(m.ID) {
+			return nil
+		}
+		route.MessageID = m.ID
+		opening := teammateMention(&m, t.service.botUserID())
+		if !opening {
+			relevant, err := t.service.Store.teammateInterested(cfg.InstallationID, route.ChannelID)
+			if err != nil {
+				return err
+			}
+			if !relevant {
+				return nil
+			}
+		}
+		records = append(records, teammateCandidate{Route: route, Author: Actor{ID: m.Author.ID, Name: m.Author.Username}, Opening: opening})
+	case "MESSAGE_DELETE_BULK":
+		for _, id := range envelope.IDs {
+			if !snowflake(id) {
+				return ErrInvalid
+			}
+			route.MessageID = id
+			records = append(records, teammateCandidate{Route: route})
+		}
+	default:
+		if !snowflake(envelope.ID) {
+			return ErrInvalid
+		}
+		route.MessageID = envelope.ID
+		records = append(records, teammateCandidate{Route: route, Edited: f.Type == "MESSAGE_UPDATE"})
+	}
+	err := t.service.Store.teammateRecord(cfg.InstallationID, session, sequence, records, f.Type == "MESSAGE_DELETE" || f.Type == "MESSAGE_DELETE_BULK")
+	if err != nil {
+		_ = t.service.Store.db.Update(func(tx *bolt.Tx) error {
+			return teammateCheckpointUpdate(tx, cfg.InstallationID, "", 0, false, "Discord ingress paused: "+err.Error())
+		})
+		return err
+	}
+	t.signal()
+	return nil
+}
+
+func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (teammateBinding, *discordgo.Message, error) {
+	cfg := t.service.Config
+	botID := t.service.botUserID()
+	channel, parent, bits, err := teammateChannelScope(ctx, t.client, cfg, c.Route, botID)
+	if err != nil {
+		return teammateBinding{}, nil, err
+	}
+	if channel.Type == discordgo.ChannelTypeGuildText {
+		// An untagged parent-channel message can race classification of an earlier opener.
+		err = t.service.Store.db.Update(func(tx *bolt.Tx) error {
+			return tx.Bucket([]byte(teammateMetaBucket)).Put(teammateKey(cfg.InstallationID, "parent:"+channel.ID), []byte{1})
+		})
+		if err != nil {
+			return teammateBinding{}, nil, err
+		}
+		if !c.Opening {
+			return teammateBinding{}, nil, ErrNotAuthorized
+		}
+	}
+	if !channel.IsThread() && channel.Type != discordgo.ChannelTypeGuildText {
+		return teammateBinding{}, nil, errTeammateUnsupported
+	}
+	if channel.IsThread() && parent.Type != discordgo.ChannelTypeGuildText && parent.Type != discordgo.ChannelTypeGuildNews && parent.Type != discordgo.ChannelTypeGuildForum {
+		return teammateBinding{}, nil, errTeammateUnsupported
+	}
+	if bits&discordgo.PermissionReadMessageHistory == 0 {
+		return teammateBinding{}, nil, errors.New("discord: teammate needs permission to read message history")
+	}
+	m, err := t.client.teammateMessage(ctx, c.Route)
+	if err != nil {
+		return teammateBinding{}, nil, err
+	}
+	if !teammateHuman(m, botID) || m.Author.ID != c.Author.ID {
+		return teammateBinding{}, nil, ErrConflict
+	}
+	route := Route{GuildID: c.Route.GuildID, ChannelID: channel.ID, ParentID: channel.ParentID}
+	var binding teammateBinding
+	if channel.IsThread() {
+		err = t.service.Store.db.View(func(tx *bolt.Tx) error {
+			return teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(cfg.InstallationID, channel.ID), &binding)
+		})
+		if err == nil {
+			if binding.Route != route {
+				return binding, nil, ErrConflict
+			}
+			if channel.ThreadMetadata.Locked || bits&discordgo.PermissionSendMessagesInThreads == 0 {
+				return binding, nil, ErrNotAuthorized
+			}
+			if !binding.Opened && (!c.Opening || !teammateMention(m, botID)) {
+				return binding, nil, ErrConflict
+			}
+			return binding, m, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return binding, nil, err
+		}
+	}
+	if !c.Opening || !teammateMention(m, botID) {
+		return binding, nil, ErrConflict
+	}
+	if bits&discordgo.PermissionSendMessagesInThreads == 0 {
+		return binding, nil, ErrNotAuthorized
+	}
+	starter := Route{GuildID: c.Route.GuildID, ChannelID: parent.ID, MessageID: channel.ID}
+	anchor := ""
+	if channel.Type == discordgo.ChannelTypeGuildText {
+		route, err = t.client.teammateThread(ctx, c.Route, clipUTF16(cfg.Name+" discussion", 95), bits&discordgo.PermissionCreatePublicThreads != 0)
+		if err != nil {
+			return binding, nil, err
+		}
+		channel, _, bits, err = teammateChannelScope(ctx, t.client, cfg, route, botID)
+		if err != nil {
+			return binding, nil, err
+		}
+		starter, anchor = c.Route, c.Route.MessageID
+	} else {
+		if parent.Type == discordgo.ChannelTypeGuildForum {
+			starter.ChannelID = channel.ID
+		}
+		if _, e := t.client.teammateMessage(ctx, starter); teammateAPIStatus(e, http.StatusNotFound) {
+			starter = Route{}
+		} else if e != nil {
+			return binding, nil, e
+		}
+	}
+	if channel.ThreadMetadata.Locked || bits&discordgo.PermissionSendMessagesInThreads == 0 {
+		return binding, nil, ErrNotAuthorized
+	}
+	p, err := t.service.Store.teammateCheckpoint(cfg.InstallationID)
+	if err != nil {
+		return binding, nil, err
+	}
+	binding = teammateBinding{TeammateDiscussion: TeammateDiscussion{
+		ID:             "dt_" + digest([]string{cfg.InstallationID, route.GuildID, route.ChannelID})[:32],
+		InstallationID: cfg.InstallationID, Route: route, Starter: starter, ParentAnchor: anchor,
+	}, RepairEpoch: p.GapEpoch, NotifiedEpoch: p.GapEpoch}
+	// For a newly bound thread, the invoking message forms the first context boundary.
+	if route.ChannelID == c.Route.ChannelID {
+		binding.Boundary = m.ID
+	}
+	if err = t.service.Store.teammateBind(binding); err != nil {
+		return binding, nil, err
+	}
+	return binding, m, nil
+}
+
+func teammateRevision(m *discordgo.Message) string {
+	return digest([]any{m.Author.ID, m.Content, m.ChannelID, m.GuildID, m.ID, m.EditedTimestamp, teammateReply(m), teammateEvidence(m).Attachments})
+}
+
+func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) error {
+	cfg := t.service.Config
+	store := t.service.Store
+	var a TeammateAdmission
+	if c.State == StateSending && c.Admission != nil {
+		a = *c.Admission
+		if err := t.checkDiscussion(ctx, a.Discussion); err != nil {
+			return err
+		}
+		known, err := t.manager.AdmissionKnown(ctx, a)
+		if err != nil {
+			return err
+		}
+		if !known {
+			current, err := t.client.teammateMessage(ctx, a.Route)
+			if teammateAPIStatus(err, http.StatusNotFound) {
+				return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "source deleted before native submission", nil)
+			}
+			if err != nil {
+				return err
+			}
+			if !teammateHuman(current, t.service.botUserID()) || current.Author.ID != a.Author.ID {
+				return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "verified author changed", nil)
+			}
+			if teammateRevision(current) != a.Revision {
+				return store.teammateCandidateChange(cfg.InstallationID, c, StatePrepared, "source changed before native submission", nil)
+			}
+		}
+	} else {
+		b, m, err := t.resolve(ctx, c)
+		if err != nil {
+			if errors.Is(err, ErrConflict) || errors.Is(err, ErrNotAuthorized) || errors.Is(err, errTeammateUnsupported) || teammateAPIStatus(err, http.StatusForbidden) || teammateAPIStatus(err, http.StatusNotFound) {
+				if c.Opening && !errors.Is(err, ErrConflict) && !teammateAPIStatus(err, http.StatusNotFound) {
+					if e := t.explainOpening(ctx, c.Route); e != nil {
+						return e
+					}
+				}
+				return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, err.Error(), nil)
+			}
+			return err
+		}
+		botID := t.service.botUserID()
+		// Read again after routing so edits and deletes during thread creation cannot enter a native turn.
+		current, err := t.client.teammateMessage(ctx, c.Route)
+		if teammateAPIStatus(err, http.StatusNotFound) {
+			return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "source deleted before submission", nil)
+		}
+		if err != nil {
+			return err
+		}
+		if !teammateHuman(current, botID) || current.Author.ID != m.Author.ID || !b.Opened && (!c.Opening || !teammateMention(current, botID)) {
+			return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "verified opening message changed", nil)
+		}
+		p, err := store.teammateCheckpoint(cfg.InstallationID)
+		if err != nil {
+			return err
+		}
+		if p.GapEpoch > b.NotifiedEpoch {
+			b.Gap = p.GapEpoch
+			if err = t.queueGap(b.TeammateDiscussion); err != nil {
+				return err
+			}
+			if err = store.teammateChangeBinding(b.TeammateDiscussion, func(binding *teammateBinding) { binding.NotifiedEpoch = p.GapEpoch; binding.Gap = p.GapEpoch }); err != nil {
+				return err
+			}
+		}
+		authority := AuthorityExternal
+		if current.Author.ID == cfg.OwnerID {
+			authority = AuthorityOwnerDirect
+		}
+		reply := teammateReply(current)
+		a = TeammateAdmission{RequireMention: !b.Opened, Discussion: b.TeammateDiscussion, OperationID: "da_" + digest([]string{cfg.InstallationID, current.ID})[:32],
+			Revision: teammateRevision(current), Text: current.Content, ReplyTo: reply, Route: c.Route, Author: Actor{ID: current.Author.ID, Name: current.Author.Username},
+			InvokerID: current.Author.ID, Authority: authority, Sequence: c.Sequence,
+		}
+		if reply != "" {
+			a.QuestionID, a.QuestionHash, err = store.teammateQuestion(b.TeammateDiscussion, reply)
+			if err != nil {
+				return err
+			}
+		}
+		if err = store.teammateCandidateChange(cfg.InstallationID, c, StateSending, "", &a); err != nil {
+			return err
+		}
+		c.State = StateSending
+		c.Admission = &a
+	}
+	anchor := ""
+	if a.Route.ChannelID == a.Discussion.Route.ChannelID {
+		anchor = a.Route.MessageID
+	}
+	if err := t.manager.Admit(ctx, a, t.history(a.Discussion, anchor)); err != nil {
+		return err
+	}
+	return store.teammateCandidateChange(cfg.InstallationID, c, StateSent, "", nil)
+}
+
+type teammateTaskResult struct {
+	id, reservation string
+	retry, sync     bool
+}
+
+func (t *teammateConnector) run(ctx context.Context) error {
+	const parallel = 4
+	active := make(map[string]bool)
+	reserved := make(map[string]bool)
+	retryAfter := make(map[string]time.Time)
+	syncAfter := make(map[string]time.Time)
+	done := make(chan teammateTaskResult, parallel)
+	var tasks sync.WaitGroup
+	defer tasks.Wait()
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		if t.client.Connected() && len(active) < parallel {
+			if err := t.schedule(ctx, parallel, active, reserved, retryAfter, syncAfter, done, &tasks); err != nil {
+				return err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case result := <-done:
+			delete(active, result.id)
+			delete(reserved, result.reservation)
+			if result.sync {
+				syncAfter[result.id] = time.Now().Add(2 * time.Second)
+			}
+			if !result.sync && result.retry {
+				retryAfter[result.id] = time.Now().Add(3 * time.Second)
+			}
+			if !result.sync && !result.retry {
+				delete(retryAfter, result.id)
+			}
+		case <-t.wake:
+		case <-tick.C:
+		}
+	}
+}
+
+func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, reserved map[string]bool, retryAfter, syncAfter map[string]time.Time, done chan<- teammateTaskResult, tasks *sync.WaitGroup) error {
+	store, install := t.service.Store, t.service.Config.InstallationID
+	pending, err := store.teammatePending(install)
+	if err != nil {
+		return err
+	}
+	bindings, err := store.teammateBindings(install)
+	if err != nil {
+		return err
+	}
+	checkpoint, err := store.teammateCheckpoint(install)
+	if err != nil {
+		return err
+	}
+	sort.Slice(bindings, func(i, j int) bool {
+		return syncAfter[bindings[i].Route.ChannelID].Before(syncAfter[bindings[j].Route.ChannelID])
+	})
+	bound := make(map[string]teammateBinding, len(bindings))
+	for _, b := range bindings {
+		bound[b.Route.ChannelID] = b
+	}
+	launch := func(id, reservation string, syncing bool, work func(context.Context) error) {
+		active[id] = true
+		if reservation != "" {
+			reserved[reservation] = true
+		}
+		tasks.Go(func() {
+			attempt, cancel := context.WithTimeout(ctx, 90*time.Second)
+			err := work(attempt)
+			cancel()
+			if err != nil && ctx.Err() == nil && !errors.Is(err, ErrConflict) {
+				if b, ok := bound[id]; ok {
+					_ = store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) { current.Error = err.Error() })
+				} else {
+					_ = store.db.Update(func(tx *bolt.Tx) error { return teammateCheckpointUpdate(tx, install, "", 0, false, err.Error()) })
+				}
+			}
+			select {
+			case done <- teammateTaskResult{id, reservation, err != nil, syncing}:
+			case <-ctx.Done():
+			}
+		})
+	}
+	now := time.Now()
+	predecessors := make(map[string]bool)
+	for _, c := range pending {
+		id := c.Route.ChannelID
+		if c.ParentChannel && c.Opening {
+			id = c.Route.MessageID
+		}
+		if c.Admission != nil {
+			id = c.Admission.Discussion.Route.ChannelID
+		}
+		if predecessors[id] {
+			continue
+		}
+		predecessors[id] = true
+		if c.Opening {
+			predecessors[c.Route.MessageID] = true
+		}
+		if active[id] || reserved[id] || active[c.Route.MessageID] || reserved[c.Route.MessageID] || now.Before(retryAfter[id]) ||
+			bound[id].Opened && !now.Before(syncAfter[id]) {
+			continue
+		}
+		reservation := c.Route.MessageID
+		if reservation == id {
+			reservation = ""
+		}
+		launch(id, reservation, false, func(ctx context.Context) error { return t.process(ctx, c) })
+		if len(active) >= parallel {
+			return nil
+		}
+	}
+	for _, b := range bindings {
+		if active[b.Route.ChannelID] || reserved[b.Route.ChannelID] || now.Before(syncAfter[b.Route.ChannelID]) {
+			continue
+		}
+		launch(b.Route.ChannelID, "", true, func(ctx context.Context) error {
+			repairErr := t.repair(ctx, b, checkpoint.GapEpoch)
+			if !b.Opened {
+				return nil
+			}
+			if checkpoint.GapEpoch > b.NotifiedEpoch {
+				b.Gap = checkpoint.GapEpoch
+			}
+			var emitted []string
+			managerErr := t.manager.Sync(ctx, b.TeammateDiscussion, t.history(b.TeammateDiscussion), func(p TeammatePublication) error {
+				if err := store.teammateQueueOutput(b.TeammateDiscussion, p, t.service.Now()); err != nil {
+					return err
+				}
+				emitted = append(emitted, p.ID)
+				return nil
+			})
+			var ackErr error
+			if managerErr == nil {
+				ackErr = store.teammateAckOutputs(b.TeammateDiscussion, emitted)
+			}
+			var acknowledged func(TeammateDiscussion, string, bool) (bool, error)
+			if manager, ok := t.manager.(interface {
+				PublicationExported(TeammateDiscussion, string, bool) (bool, error)
+			}); ok {
+				acknowledged = manager.PublicationExported
+			}
+			compactErr := store.teammateCompactOutbox(b.TeammateDiscussion, t.service.Now(), acknowledged)
+			outputErr := t.sendPending(ctx, b.TeammateDiscussion)
+			if err := errors.Join(repairErr, managerErr, ackErr, compactErr, outputErr); err != nil {
+				return err
+			}
+			if b.Error != "" {
+				return store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) { current.Error = "" })
+			}
+			return nil
+		})
+		if len(active) >= parallel {
+			return nil
+		}
+	}
+	if !active["notices"] && !now.Before(syncAfter["notices"]) {
+		launch("notices", "", true, func(ctx context.Context) error {
+			pending, err := store.teammateOutputs(install, "")
+			if err != nil {
+				return err
+			}
+			var failure error
+			for _, out := range pending {
+				if e := t.sendOutput(ctx, install, out); e != nil {
+					failure = e
+				}
+			}
+			return errors.Join(failure, store.teammateCompactOutbox(TeammateDiscussion{InstallationID: install}, t.service.Now(), nil))
+		})
+	}
+	return nil
+}
+
+func (t *teammateConnector) explainOpening(ctx context.Context, route Route) error {
+	channel, _, bits, err := teammateChannelScope(ctx, t.client, t.service.Config, route, t.service.botUserID())
+	if err != nil || channel.IsThread() || bits&discordgo.PermissionSendMessages == 0 {
+		return nil
+	}
+	text := "I couldn’t open a public thread here. Mention me in a server text thread or ask a moderator to check my thread and history permissions."
+	return t.service.Store.teammateQueueNotice(route, t.service.Config.InstallationID, strings.TrimSpace(text), t.service.Now())
+}
+
+func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, m TeammateManager) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	s.Stop = cancel
+	s.teammateManager = m
+	key, err := s.Store.teammateCursorKey()
+	if err != nil {
+		return err
+	}
+	t := &teammateConnector{service: s, client: c, manager: m, cursorKey: key, wake: make(chan struct{}, 1)}
+	c.onDispatch = t.gateway
+	failures := make(chan error, 3)
+	c.OnError = func(err error) { failures <- err }
+	var tasks sync.WaitGroup
+	defer func() { cancel(); _ = c.Close(); tasks.Wait() }()
+	tasks.Go(func() { failures <- s.ServeLocal(ctx, s.StateDir) })
+	if err = waitLocal(ctx, s.StateDir, failures); err != nil {
+		return err
+	}
+	if err = c.Open(ctx); err != nil {
+		return err
+	}
+	tasks.Go(func() { failures <- t.run(ctx) })
+	select {
+	case <-ctx.Done():
+		return nil
+	case err = <-failures:
+		return err
+	}
+}

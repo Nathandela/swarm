@@ -6,6 +6,7 @@ type ManagerLaunchSpec struct {
 	// Nil selects the daemon's native origin; an empty value explicitly selects HOME.
 	ClaudeConfigDir   *string
 	UnsupportedOrigin bool
+	RetireOperationID string
 	ConversationID    string
 	BridgeSocket      string
 	AuthFile          string

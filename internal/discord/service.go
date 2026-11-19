@@ -49,6 +49,7 @@ type Outbound struct {
 	Text    string
 	Actions []Action
 	Nonce   string
+	ReplyTo string
 }
 type Messenger interface {
 	Post(context.Context, Outbound) (string, error)
@@ -70,6 +71,7 @@ type Service struct {
 	reconcileAfter  string
 	publicationMu   sync.RWMutex
 	botID           string
+	teammateManager TeammateManager
 }
 
 func NewService(c Config, store *Store, workers Workers, messenger Messenger) *Service {

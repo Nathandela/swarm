@@ -1,6 +1,27 @@
 # Connect a local Swarm to Discord
 
-Each local Swarm gets its own Discord application, token, installation ID and user-chosen name. Connecting a VM does not connect or control another computer. Existing and future registered Swarm discussions appear automatically; exclude individual discussions when needed.
+Each connection belongs to one local Swarm place and uses a guild-installed app identity. Choose teammate mode for a colleague who joins a discussion on demand. Existing configurations start in legacy directory mode.
+
+## Connect a teammate
+
+On the machine where workers should run, open the default checkout and use the existing app credential:
+
+```sh
+swarm discord connect --mode teammate --manager codex \
+  --token-file /absolute/private/bot-token --workdir "$PWD" --install
+swarm discord doctor --channel CHANNEL_ID
+swarm discord status
+```
+
+For a previously configured installation, `connect --mode teammate --manager codex --install` reuses its identity and credentials. When the credential belongs to a bot installed in exactly one server, setup can discover the application ID, name and server. Use `--guild` to choose among servers. `--channel` can limit a rehearsal to a dedicated channel. To remove an old channel restriction, explicitly reconnect with `--all-channels --install`. Discord still controls which discussions the app can see. Keep private conversations in their intended audiences.
+
+Enable Message Content on the app and grant View Channel, Read Message History, Send Messages, Send Messages in Threads, and Create Public Threads where you want to invite the teammate. Private threads require native access. Granting visibility to a parent channel is a Discord server administration action. Starting the local service alone cannot grant that permission.
+
+Mention the app in a discussion. A regular channel mention starts a thread on that message. In an existing thread or forum post the teammate answers there. Every human participant can direct work and continue without another mention. The manager starts on demand and uses the selected native account on this place. A discussion can use its available history, including text written before the mention. Quotes, history and worker results remain attributed. If you supply several named workspaces, repeat `--project 'name=/absolute/checkout'` during setup. Each discussion remembers its chosen project; a later project switch affects new work.
+
+Only deliberately published manager replies and clarifications appear in the thread. Workers appear in the local dashboard. Tool approvals stay on their authorized native surfaces. An inaccessible destination or uncertain send is visible through local status. An outage can leave a gap; a fresh instruction in the thread resumes work. The operator and all admitted participants should understand that discussion material can reach the configured native model provider, and that native workers use the machine's execution permissions.
+
+Use `swarm discord disconnect` to stop the connector. To go back to the legacy directory, run `swarm discord connect --mode legacy --owner-id OWNER_USER_ID --install`. Check the saved channel/user scope before bringing the legacy behavior back online. The old commands below describe that mode.
 
 ## Set up a place
 

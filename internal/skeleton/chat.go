@@ -221,17 +221,17 @@ func (d *Daemon) composerLaneFor(local string) *composerLane {
 // send waits until attempt has either refused or issued the kill. The attempt itself performs
 // the final status/controller/ContextGuard revalidation at this queue head.
 func (d *Daemon) withAuthRecycleFence(local string, attempt func() error) error {
-	return d.withAuthRecycleFenceState(local, false, attempt)
+	return d.withSessionStopFence(local, false, "", attempt)
 }
 
 // withClaimedAuthRecycleFence redrives a durable pre-signal claim restored by a
 // new daemon incarnation. It is the only path allowed to consume a restored
 // embargo; a committed in-process kill still refuses duplicate signalling.
 func (d *Daemon) withClaimedAuthRecycleFence(local string, attempt func() error) error {
-	return d.withAuthRecycleFenceState(local, true, attempt)
+	return d.withSessionStopFence(local, true, "", attempt)
 }
 
-func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt func() error) error {
+func (d *Daemon) withSessionStopFence(local string, claimed bool, reason string, attempt func() error) error {
 	lane := d.composerLaneFor(local)
 	alreadyRecycling := lane.enterRecycle(claimed)
 	defer lane.leave()
@@ -244,7 +244,10 @@ func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt f
 	lane.endMu.Lock()
 	defer lane.endMu.Unlock()
 	lane.mu.Lock()
-	ownerEnding := lane.ownerEnding
+	ownerEnding := lane.ownerEnding || lane.retired
+	if !ownerEnding && reason != "" {
+		lane.recycleReason = reason
+	}
 	if ownerEnding {
 		lane.recycling = false
 		lane.recycleCommitted = false
@@ -314,11 +317,18 @@ func (l *composerLane) enterRecycle(claimed bool) (alreadyRecycling bool) {
 // durable Killed claim after restart: Running rows may need a signal redrive;
 // terminal rows are still owed a serialized replacement launch.
 func (d *Daemon) restoreAuthRecycle(local string) {
+	d.restoreSessionStop(local, "")
+}
+
+func (d *Daemon) restoreSessionStop(local, reason string) {
 	lane := d.composerLaneFor(local)
 	lane.mu.Lock()
 	lane.recycling = true
 	lane.recycleCommitted = false
 	lane.recycleRestored = true
+	if reason != "" {
+		lane.recycleReason = reason
+	}
 	lane.mu.Unlock()
 }
 
@@ -429,7 +439,9 @@ func (d *Daemon) retireComposerLane(local string) {
 	lane := value.(*composerLane)
 	lane.mu.Lock()
 	lane.retired = true
-	retain := lane.recycling || lane.ownerActive
+	// Only an auth recycle owes a replacement after exit. A manager's
+	// checkpoint remains on disk without retaining its old input lane.
+	retain := (lane.recycling && lane.recycleReason != managerRetireReason) || lane.ownerActive
 	lane.mu.Unlock()
 	if !retain {
 		d.composerLanes.CompareAndDelete(local, lane)

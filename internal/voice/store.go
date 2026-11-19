@@ -628,6 +628,13 @@ func (s *Store) Snapshot() (State, error) {
 func cloneState(st State) State {
 	st.Workers = maps.Clone(st.Workers)
 	st.Conversations = maps.Clone(st.Conversations)
+	for k, c := range st.Conversations {
+		if c.Retirement != nil {
+			req := *c.Retirement
+			c.Retirement = &req
+			st.Conversations[k] = c
+		}
+	}
 	st.Utterances = maps.Clone(st.Utterances)
 	st.Admissions = maps.Clone(st.Admissions)
 	for k, v := range st.Admissions {
@@ -662,7 +669,14 @@ func cloneState(st State) State {
 	}
 	return st
 }
-func cloneAdmission(a Admission) Admission { a.Request = bytes.Clone(a.Request); return a }
+func cloneAdmission(a Admission) Admission {
+	a.Request = bytes.Clone(a.Request)
+	if a.Origin != nil {
+		origin := *a.Origin
+		a.Origin = &origin
+	}
+	return a
+}
 func cloneAction(a Action) Action {
 	a.Request = bytes.Clone(a.Request)
 	a.Receipt = bytes.Clone(a.Receipt)
@@ -1157,6 +1171,18 @@ func (s *Store) PutRequest(b ManagerBinding, r Request) (Request, error) {
 		if (r.Kind == "native" && st.ClosedTurns[key(b.ConversationID, r.NativeTurnID)]) || (r.TaskID != "" && st.CancelledTasks[key(b.ConversationID, r.TaskID)]) {
 			return ErrExpired
 		}
+		if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
+			for _, admission := range st.Admissions {
+				if admission.ConversationID == b.ConversationID && admission.NativeInputID == r.NativeInputID {
+					r.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
+					break
+				}
+			}
+			r.OutputSequence, err = nextDiscussionOutput(st, b.ConversationID)
+			if err != nil {
+				return err
+			}
+		}
 		putRecord(st, "requests", &st.Requests, k, r)
 		result = r
 		return nil
@@ -1333,6 +1359,7 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 		k := key(b.ConversationID, p.ID)
 		if old, ok := st.Publications[k]; ok {
 			old.Speak = p.Speak
+			p.Exported, p.OutputSequence, p.DiscussionSource = old.Exported, old.OutputSequence, old.DiscussionSource
 			if old != p {
 				return ErrConflict
 			}
@@ -1344,11 +1371,29 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 				return ErrConflict
 			}
 		}
+		if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
+			var err error
+			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, st.Admissions[admissionKey(b.ConversationID, p.Admission)])
+			p.OutputSequence, err = nextDiscussionOutput(st, b.ConversationID)
+			if err != nil {
+				return err
+			}
+		}
 		putRecord(st, "publications", &st.Publications, k, p)
 		result = p
 		return nil
 	})
 	return result, err
+}
+
+func nextDiscussionOutput(st *State, conversation string) (uint64, error) {
+	c := st.Conversations[conversation]
+	if c.LastOutput == ^uint64(0) {
+		return 0, ErrCapacity
+	}
+	c.LastOutput++
+	putRecord(st, "conversations", &st.Conversations, conversation, c)
+	return c.LastOutput, nil
 }
 
 func (s *Store) AcceptEvent(b ManagerBinding, e Event, w Wake) (Wake, error) {
@@ -1360,7 +1405,8 @@ func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake
 	if err := checkBinding(st, b); err != nil {
 		return err
 	}
-	if e.ID == "" || e.Cursor.Binding == "" || e.Cursor.Sequence == 0 || !json.Valid(e.Metadata) || len(e.Metadata) > 128<<10 || e.WakeID == "" || e.WakeID != w.ID || w.OperationID == "" || !json.Valid(w.Request) || len(w.Request) > 128<<10 || (e.ConversationID != "" && e.ConversationID != b.ConversationID) || (w.ConversationID != "" && w.ConversationID != b.ConversationID) {
+	scopedWorker := e.WorkerProof && e.NativeTurnID != "" && e.JobID != "" && e.AttemptID != "" && e.Cursor == (JournalCursor{})
+	if e.ID == "" || (!scopedWorker && (e.Cursor.Binding == "" || e.Cursor.Sequence == 0)) || !json.Valid(e.Metadata) || len(e.Metadata) > 128<<10 || e.WakeID == "" || e.WakeID != w.ID || w.OperationID == "" || !json.Valid(w.Request) || len(w.Request) > 128<<10 || (e.ConversationID != "" && e.ConversationID != b.ConversationID) || (w.ConversationID != "" && w.ConversationID != b.ConversationID) {
 		return ErrInvalid
 	}
 	var err error
@@ -1381,7 +1427,7 @@ func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake
 	w.NativeInputID = ""
 	w.RequestHash = hashBytes(w.Request)
 	cursor, exists := st.Journal[b.ConversationID]
-	if exists && cursor.Binding != e.Cursor.Binding {
+	if !scopedWorker && exists && cursor.Binding != e.Cursor.Binding {
 		return ErrStale
 	}
 	ek := key(b.ConversationID, e.ID)
@@ -1405,7 +1451,11 @@ func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake
 		*result = prior
 		return nil
 	}
-	if e.ExaminedThrough != (JournalCursor{}) {
+	if scopedWorker {
+		if e.ExaminedThrough != (JournalCursor{}) {
+			return ErrInvalid
+		}
+	} else if e.ExaminedThrough != (JournalCursor{}) {
 		if e.ExaminedThrough.Binding != e.Cursor.Binding || e.ExaminedThrough.Sequence < cursor.Sequence || e.ExaminedThrough.Sequence != e.Cursor.Sequence-1 {
 			return fmt.Errorf("%w: invalid examined journal checkpoint", ErrStale)
 		}
@@ -1427,7 +1477,9 @@ func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake
 	}
 	putRecord(st, "events", &st.Events, ek, e)
 	putRecord(st, "wakes", &st.Wakes, wk, w)
-	putRecord(st, "journal", &st.Journal, b.ConversationID, e.Cursor)
+	if !scopedWorker {
+		putRecord(st, "journal", &st.Journal, b.ConversationID, e.Cursor)
+	}
 	*result = w
 	return nil
 }
