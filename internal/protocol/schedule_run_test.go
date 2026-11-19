@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -67,4 +69,41 @@ func TestScheduleRunOperationIDWireRetry(t *testing.T) {
 		t.Fatalf("replayed run = %q, %v", got, err)
 	}
 	checkRequest()
+}
+
+func TestScheduleCompletionSocketRejectsOwnerOperations(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sw-receipt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "receipt.sock")
+	b := &scheduleRunStub{stubDaemon: newStubDaemon(), requests: make(chan [2]string, 1)}
+	ready := make(chan struct{})
+	close(ready)
+	server, err := ServeScheduleCompletion(b, sock, "local", ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	stat, err := os.Stat(sock)
+	if err != nil || stat.Mode().Perm() != 0600 {
+		t.Fatalf("completion socket must be owner-only: %v, %v", stat, err)
+	}
+	for _, op := range []string{OpList, OpScheduleRun, OpScheduleTick, OpOwnerLaunch} {
+		t.Run(op, func(t *testing.T) {
+			raw := rawDial(t, sock)
+			hello := raw.hello(Version, []string{CapSchedule, CapOwnerLaunch, CapScheduleRunID})
+			if !slices.Equal(hello.Capabilities, []string{CapSchedule}) {
+				t.Fatalf("unexpected completion capabilities: %v", hello.Capabilities)
+			}
+			raw.writeControl(Control{Op: op, EndpointID: hello.EndpointID})
+			if resp := raw.readControl(); resp.Op != OpError {
+				t.Fatalf("received response to forbidden operation %q: %+v", op, resp)
+			}
+		})
+	}
+	if len(b.requests) != 0 {
+		t.Fatal("completion listener dispatched an owner operation")
+	}
 }

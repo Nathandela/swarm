@@ -207,8 +207,15 @@ func TestReceiptWaitsForAnAssistantMessage(t *testing.T) {
 	if err != nil || pending.State != schedule.OccurrenceWorking || pending.Completion == nil || len(b.projected) != 0 {
 		t.Fatalf("completion was shown before the assistant message: %+v, %v", pending, err)
 	}
+	if err := e.Tick(now.Add(6 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	delayed, err := store.Occurrence(id)
+	if err != nil || delayed.State != schedule.OccurrenceNeedsInput || len(b.projected) != 0 {
+		t.Fatalf("missing chat did not surface for review: %+v, %v", delayed, err)
+	}
 	b.showClosingMessage = true
-	if err := e.Tick(now.Add(time.Second)); err != nil {
+	if err := e.Tick(now.Add(7 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	ready, err := store.Occurrence(id)

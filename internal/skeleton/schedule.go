@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,6 +35,16 @@ func (b scheduleBackend) Launch(request scheduledexec.Launch) (string, error) {
 		return "", errors.Join(scheduledexec.ErrAdmission, errors.New("scheduled worker receipt socket is unavailable"))
 	}
 	options := make(map[string]string)
+	var conversation string
+	if request.Agent == schedule.RouteClaude {
+		// An interactive Claude session may only publish SessionStart after its
+		// first prompt. Pin a native identity before opening the private composer.
+		var uuid [16]byte
+		rand.Read(uuid[:])
+		uuid[6] = uuid[6]&0x0f | 0x40
+		uuid[8] = uuid[8]&0x3f | 0x80
+		conversation = fmt.Sprintf("%x-%x-%x-%x-%x", uuid[:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
+	}
 	var codexPolicy []string
 	if request.Agent == schedule.RouteCodex {
 		sandbox := ""
@@ -61,7 +72,7 @@ func (b scheduleBackend) Launch(request scheduledexec.Launch) (string, error) {
 	}
 	sum := sha256.Sum256(wire)
 	m, err := b.api.Launch(daemon.LaunchSpec{
-		AgentType: request.Agent, Cwd: request.Workspace, Name: request.Name,
+		AgentType: request.Agent, Cwd: request.Workspace, Name: request.Name, ConversationID: conversation,
 		Cols: 100, Rows: 32, Options: options,
 		OperationID: request.OperationID, OwnerLaunchHash: hex.EncodeToString(sum[:]),
 		ScheduledCodexSandbox: options["sandbox"], CodexPolicy: codexPolicy,
@@ -101,7 +112,7 @@ func (b scheduleBackend) SendPrompt(sessionID, attemptID, prompt string, begin f
 	}
 	m, ok := b.api.core.Get(local)
 	if !ok || m.ScheduleAttempt != attemptID || m.ConversationID == "" ||
-		m.Status.Process != status.ProcessRunning || m.Status.Turn == status.TurnActive ||
+		m.Status.Process != status.ProcessRunning || m.Status.Turn != status.TurnIdle ||
 		m.Status.Interaction != status.InteractionNone {
 		return nil
 	}

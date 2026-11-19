@@ -198,20 +198,22 @@ func (e *Engine) deliverPrompt(run schedule.Occurrence, a schedule.Attempt, now 
 		})
 		return err
 	}
-	if err := private.SendPrompt(a.SessionID, a.ID, e.handoffPrompt(run), func() error {
+	err := private.SendPrompt(a.SessionID, a.ID, e.handoffPrompt(run), func() error {
 		err := update(false)
 		started = err == nil
 		return err
-	}); err != nil {
-		if started {
+	})
+	if started {
+		if err != nil {
 			return e.update(run, a, schedule.OccurrenceAttention, schedule.AttemptUnknown, "", "Opening prompt delivery outcome unknown. Inspect the worker chat before sending anything again.", now)
 		}
-		return nil // Safe to retry: the durable write boundary was never reached.
+		return update(true)
 	}
-	if !started {
-		return nil // The worker's native composer is still starting.
+	// Safe to retry because the durable write boundary was never reached.
+	if now.Sub(a.StartedAt) >= 2*time.Minute {
+		return e.update(run, a, schedule.OccurrenceNeedsInput, a.State, "", "The private composer is not available. Open the worker chat and check its login and workspace trust.", now)
 	}
-	return update(true)
+	return nil
 }
 
 // Late evidence can release a frozen workspace. A definitively admitted
@@ -268,7 +270,10 @@ func (e *Engine) stop(run schedule.Occurrence, a schedule.Attempt, session Sessi
 	if !session.Running {
 		return nil
 	}
-	return e.backend.Stop(a.SessionID, a.ID)
+	// The shim may close its socket while contained processes are joining.
+	// Keep the recorded stop intent and wait for independent exit evidence.
+	_ = e.backend.Stop(a.SessionID, a.ID)
+	return nil
 }
 
 // A reservation lost to a competing workspace launch did not use a provider.

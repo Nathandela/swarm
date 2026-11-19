@@ -1367,6 +1367,9 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 			return persist.Meta{}, daemon.ErrResumeSourceChanged
 		}
 	}
+	if resolved.Scheduled != nil && resolved.AgentType == "claude" && resolved.ConversationID != "" {
+		resolved.Argv = append(resolved.Argv, "--session-id", resolved.ConversationID)
+	}
 	if len(resolved.CodexPolicy) != 0 && resolved.AgentType == "codex" {
 		// The standalone and app-server paths must use the same policy.
 		end := len(resolved.Argv)

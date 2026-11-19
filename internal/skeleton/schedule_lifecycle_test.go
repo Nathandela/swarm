@@ -28,7 +28,9 @@ func (f *scheduledShimFixture) Launch(request scheduledexec.Launch) (string, err
 	// provides custody and joined-stop evidence for both worker attempts.
 	m, err := f.api.core.Launch(daemon.LaunchSpec{
 		AgentType: schedule.RouteClaude, Argv: []string{fakeAgentBin, f.script}, Cwd: request.Workspace,
-		ConversationID: f.thread, Scheduled: &daemon.ScheduledLaunch{AttemptID: request.AttemptID},
+		ConversationID: f.thread, Cols: 80, Rows: 24,
+		OperationID: request.OperationID, OwnerLaunchHash: request.AttemptID,
+		Scheduled: &daemon.ScheduledLaunch{AttemptID: request.AttemptID},
 	})
 	if err != nil {
 		return "", err
