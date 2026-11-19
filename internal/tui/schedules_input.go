@@ -180,9 +180,7 @@ func (m rootModel) activateSchedule(key string, layout scheduleFrame) (tea.Model
 		case "enter":
 			for _, run := range s.runs {
 				if run.ID == rowID {
-					s.run = run
-					s.gotoPage(scheduleRun)
-					break
+					return m.showScheduleRun(run)
 				}
 			}
 		case "r":

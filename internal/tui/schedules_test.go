@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -86,7 +87,7 @@ func scheduleTestUpdate(t *testing.T, model tea.Model, msg tea.Msg) rootModel {
 	next, cmd := model.Update(msg)
 	if cmd != nil {
 		switch msg := cmd().(type) {
-		case scheduleResultMsg:
+		case scheduleResultMsg, scheduleTranscriptMsg, scheduleOpenResultMsg:
 			next, _ = next.Update(msg)
 		default:
 			t.Fatalf("unexpected command result %T", msg)
@@ -290,5 +291,49 @@ func TestScheduleCompletedWorkerReopensNativeConversation(t *testing.T) {
 	resumed = send(resumed, keyEsc).(rootModel)
 	if resumed.screen != screenSchedules || resumed.schedules.run.ID != "saved-run" || scheduleSession(resumed.schedules.run) != session.ID {
 		t.Fatal("review continuation overwrote run history identity")
+	}
+}
+
+type scheduleTranscriptClient struct {
+	*fakeClient
+	requested string
+}
+
+func (c *scheduleTranscriptClient) InteractionHistory(id string, _ int) ([]protocol.JournalRecord, error) {
+	c.requested = id
+	return []protocol.JournalRecord{
+		{Type: "interaction", Item: json.RawMessage(`{"kind":"tool_run","item_id":"tool","text":"hidden tool output"}`)},
+		{Type: "interaction", Item: json.RawMessage(`{"kind":"agent_message","item_id":"closing","status":"in_progress","text":"Fixture is "}`)},
+		{Type: "interaction", Item: json.RawMessage(`{"kind":"agent_message","item_id":"closing","status":"completed","text":"ready for review.\u001b[2J"}`)},
+	}, nil
+}
+
+func TestScheduleRunRetainsRecentNativeMessagesWhenResumeFails(t *testing.T) {
+	session := sCompleted("endpoint/finished", "codex", t.TempDir(), "worker exited", time.Minute)
+	client := &scheduleTranscriptClient{fakeClient: newFakeClient(session)}
+	client.launchErr = errors.New("Native project workspace is untrusted")
+	model := send(New(client, nil), tea.WindowSizeMsg{Width: 100, Height: 25}).(rootModel)
+	catalog, err := schedule.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.screen = screenSchedules
+	model.schedules = scheduleModel{catalog: catalog, page: scheduleHistory, runs: []schedule.Occurrence{{
+		ID: "retained-run", State: schedule.OccurrenceReady,
+		Attempts: []schedule.Attempt{{Agent: session.Agent, SessionID: session.ID}},
+	}}}
+	model = scheduleTestUpdate(t, model, keyEnter)
+	if client.requested != session.ID {
+		t.Fatalf("transcript request = %q, want recorded worker %q", client.requested, session.ID)
+	}
+	model = scheduleTestUpdate(t, model, keyRune('o'))
+	view := model.View().Content
+	for _, text := range []string{"Fixture is ready for review.", "Open native chat", "Native project workspace is untrusted"} {
+		if !strings.Contains(ansi.Strip(view), text) {
+			t.Fatalf("run detail after native resume refusal lacks %q", text)
+		}
+	}
+	if strings.Contains(view, "hidden tool output") || strings.Contains(view, "\x1b[2J") {
+		t.Fatal("run detail rendered hidden tool output or a terminal escape from chat")
 	}
 }

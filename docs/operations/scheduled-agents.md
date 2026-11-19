@@ -74,6 +74,8 @@ The worker is instructed to post a concise closing chat message with its result,
 
 After the receipt is stored, Swarm checks for its summary in a completed assistant message from the same native chat. It then applies the `automation` tag and a completion marker to the finishing session. The board displays a ◆ for a session with that marker and tag. Changing or clearing the tag removes that visual marker; the run receipt/history remains. Open the marked session to read the closing message. A live worker attaches directly. For an ended worker, Swarm reopens the native conversation using its original session reference. Review the diff and links in the saved workspace before accepting the result. A process exit without a receipt is incomplete, not completed.
 
+For a Ready run, **Recent assistant messages** shows the retained final chat in run detail. Choose **Open native chat** to attach to the worker or continue the ended conversation in its saved workspace. The provider may require its own checkout trust before reopening.
+
 In the TUI, open Automations to inspect job detail and run history; run detail shows outcome, workspace, agent order, detail text, completion summary, and links. CLI equivalents are:
 
 ```sh

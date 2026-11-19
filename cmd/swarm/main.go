@@ -332,10 +332,12 @@ func clientConfig() (daemon.ClientConfig, error) {
 // capability up front; a daemon that does not know it simply does not intersect it,
 // which is exactly the signal the form's refusal is built on.
 //
+// CapJournal serves retained assistant messages on the scheduled run detail.
+//
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation, protocol.CapSchedule, protocol.CapScheduleRunID}
+	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation, protocol.CapSchedule, protocol.CapScheduleRunID, protocol.CapJournal}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected

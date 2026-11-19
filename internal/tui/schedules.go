@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/schedule"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/charmbracelet/x/ansi"
@@ -69,6 +72,8 @@ type scheduleModel struct {
 	job                          schedule.Job
 	runs                         []schedule.Occurrence
 	run                          schedule.Occurrence
+	transcript                   []string
+	transcriptPending            bool
 	pendingRuns                  map[string]string // Job ID to operation ID awaiting a run record.
 	templates                    []schedule.Template
 	template                     schedule.Template
@@ -86,6 +91,12 @@ type scheduleModel struct {
 type scheduleOpenResultMsg struct {
 	result     launchResultMsg
 	connection uint64
+}
+
+type scheduleTranscriptMsg struct {
+	runID, sessionID string
+	connection       uint64
+	text             []string
 }
 
 type scheduleResultMsg struct {
@@ -163,8 +174,7 @@ func (m rootModel) applyScheduleResult(result scheduleResultMsg) (tea.Model, tea
 		for _, run := range s.runs {
 			if run.ID == result.runID {
 				delete(s.pendingRuns, result.runJobID)
-				s.run = run
-				return m, nil
+				return m.showScheduleRun(run)
 			}
 		}
 		// The attempt may be updated by a worker, but a persisted occurrence
@@ -267,6 +277,72 @@ func (m rootModel) runScheduledJob() (tea.Model, tea.Cmd) {
 		runs, err := catalog.History(jobID)
 		return scheduleResultMsg{page: scheduleRun, runs: runs, runID: id, runJobID: jobID, err: err}
 	})
+}
+
+func (m rootModel) showScheduleRun(run schedule.Occurrence) (tea.Model, tea.Cmd) {
+	s := &m.schedules
+	s.gotoPage(scheduleRun)
+	s.run, s.transcript, s.transcriptPending = run, nil, false
+	history, ok := m.client.(interface {
+		InteractionHistory(string, int) ([]protocol.JournalRecord, error)
+	})
+	id := scheduleSession(run)
+	if !ok || m.connectionLost || run.State != schedule.OccurrenceReady || id == "" {
+		return m, nil
+	}
+	s.transcriptPending = true
+	generation := m.reconnectGeneration
+	return m, func() tea.Msg {
+		result := scheduleTranscriptMsg{runID: run.ID, sessionID: id, connection: generation}
+		if records, err := history.InteractionHistory(id, 64); err == nil {
+			result.text = recentScheduleMessages(records)
+		}
+		return result
+	}
+}
+
+func (m rootModel) applyScheduleTranscript(msg scheduleTranscriptMsg) (tea.Model, tea.Cmd) {
+	s := &m.schedules
+	if s.run.ID == msg.runID && scheduleSession(s.run) == msg.sessionID && m.reconnectGeneration == msg.connection && !m.connectionLost {
+		s.transcript, s.transcriptPending = msg.text, false
+	}
+	return m, nil
+}
+
+func recentScheduleMessages(records []protocol.JournalRecord) []string {
+	const maxMessageRunes = 4000
+	messages := make(map[string][]rune)
+	var completed []string
+	for _, record := range records {
+		if record.Type != "interaction" {
+			continue
+		}
+		var message struct {
+			ID     string `json:"item_id"`
+			Kind   string `json:"kind"`
+			Status string `json:"status"`
+			Text   string `json:"text"`
+		}
+		if json.Unmarshal(record.Item, &message) != nil || message.Kind != adapter.KindAgentMessage || message.ID == "" {
+			continue
+		}
+		text := scheduleSafe(message.Text)
+		previous := messages[message.ID]
+		remaining := maxMessageRunes - len(previous)
+		piece := []rune(text)
+		messages[message.ID] = append(previous, piece[:min(remaining, len(piece))]...)
+		if message.Status == adapter.StatusCompleted {
+			text = strings.TrimSpace(string(messages[message.ID]))
+			if len(messages[message.ID]) == maxMessageRunes {
+				text += "…"
+			}
+			if text != "" {
+				completed = append(completed, text)
+			}
+			delete(messages, message.ID)
+		}
+	}
+	return completed[max(0, len(completed)-4):]
 }
 
 func scheduleSession(run schedule.Occurrence) string {
@@ -394,7 +470,11 @@ func (s scheduleModel) controls() []scheduleControl {
 		return scheduleControls("enter", "Open", "r", "Refresh", "esc", "Back")
 	case scheduleRun:
 		if scheduleSession(s.run) != "" {
-			return scheduleControls("o", "Open worker", "r", "Refresh", "g", "Board", "esc", "Back")
+			label := "Open worker"
+			if s.run.State == schedule.OccurrenceReady {
+				label = "Open native chat"
+			}
+			return scheduleControls("o", label, "r", "Refresh", "g", "Board", "esc", "Back")
 		}
 		return scheduleControls("r", "Refresh", "g", "Board", "esc", "Back")
 	case scheduleArchive:
@@ -458,6 +538,17 @@ func (s scheduleModel) content(width int) (string, []scheduleRow) {
 		if s.run.Completion != nil {
 			rows = append(rows, "", "Completion", s.run.Completion.Summary)
 			rows = append(rows, s.run.Completion.Links...)
+		}
+		if s.run.State == schedule.OccurrenceReady && scheduleSession(s.run) != "" {
+			rows = append(rows, "", "Recent assistant messages")
+			if s.transcriptPending {
+				rows = append(rows, "Loading messages…")
+			} else if len(s.transcript) == 0 {
+				rows = append(rows, "No retained assistant messages available.")
+			}
+			for _, message := range s.transcript {
+				rows = append(rows, message, "")
+			}
 		}
 		return "History / Run", scheduleTextRows(rows, width)
 	case scheduleReview:

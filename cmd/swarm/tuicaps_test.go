@@ -32,7 +32,7 @@ import (
 
 func TestTUICapsNegotiateHandsOffHandoff(t *testing.T) {
 	caps := tuiCaps()
-	for _, want := range []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapOpenCodeObservation} {
+	for _, want := range []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapOpenCodeObservation, protocol.CapJournal} {
 		if !slices.Contains(caps, want) {
 			t.Errorf("tuiCaps() = %q, missing %q", caps, want)
 		}

@@ -572,6 +572,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scheduleOpenResultMsg:
 		return m.applyScheduledChat(msg)
 
+	case scheduleTranscriptMsg:
+		return m.applyScheduleTranscript(msg)
+
 	case scheduleResultMsg:
 		return m.applyScheduleResult(msg)
 
