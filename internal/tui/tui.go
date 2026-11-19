@@ -80,6 +80,7 @@ const (
 	screenAttach
 	screenLogins
 	screenResume
+	screenSchedules
 )
 
 // eventMsg carries one Subscribe status-change into the update loop.
@@ -234,6 +235,9 @@ type rootModel struct {
 	// the pre-ADR behaviour: the grouping/ordering choice lives for one process.
 	layoutStore LayoutStore
 	layoutSaves *layoutSaveState
+
+	scheduleConfig ScheduleConfig
+	schedules      scheduleModel
 
 	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
 }
@@ -400,6 +404,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resume.directory.width = msg.Width
 		m.handoff.width = msg.Width
 		m.attach.width = msg.Width
+		m.schedules.mouseTarget = ""
 		return m, nil
 
 	case eventMsg:
@@ -561,6 +566,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case scheduleResultMsg:
+		return m.applyScheduleResult(msg)
+
 	case contextGuardSettingsLoadedMsg:
 		return m.applyContextGuardSettingsLoaded(msg)
 
@@ -576,6 +584,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch {
+		case m.screen == screenSchedules:
+			m.pasteSchedule(msg.Content)
 		case m.screen == screenLogins && m.logins.mode == "label":
 			m.logins.label.paste(msg.Content)
 		case m.screen == screenLaunch:
@@ -603,6 +613,15 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// session they were last in, not the one the attach started from.
 			m.general.restoreSel(msg.last)
 			m.general.revealFocus()
+		}
+		if m.schedules.returnFromAttach {
+			m.schedules.returnFromAttach = false
+			m.screen = screenSchedules
+			if msg.err != nil {
+				m.schedules.errorText = "Attach failed: " + msg.err.Error()
+				return m, nil
+			}
+			return m.scheduleHistory(m.schedules.run.ID)
 		}
 		cmd := m.enterGeneral()
 		if msg.err != nil {
@@ -723,6 +742,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
+		if m.screen == screenSchedules && m.pairing == nil {
+			return m.updateScheduleMouse(msg.(tea.MouseMsg))
+		}
 		// ADR-029: only the board in plain navigation takes the mouse. A report that
 		// reaches any other state (already in flight when it opened) is dropped there.
 		return m.updateBoardMouse(msg.(tea.MouseMsg))
@@ -740,6 +762,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.updatePairing(msg)
+		}
+		if m.screen == screenSchedules {
+			return m.updateSchedule(msg)
 		}
 		if m.connectionLost && m.screen != screenGeneral && m.screen != screenLogins && msg.Code != tea.KeyEsc && (m.screen != screenHandoff || !m.handoff.confirmPending() || msg.Text != "n") {
 			if m.screen == screenOptions || msg.Code == tea.KeyEnter || m.screen == screenHandoff && m.handoff.confirmPending() {
@@ -771,6 +796,8 @@ func (m rootModel) View() tea.View {
 	switch {
 	case m.hasActiveForm():
 		content = m.composeActiveForm()
+	case m.screen == screenSchedules && m.pairing == nil:
+		content = m.scheduleView()
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
@@ -793,7 +820,7 @@ func (m rootModel) View() tea.View {
 	// navigation (ADR-029 D1). The renderer turns tracking off when the attach runner
 	// releases the terminal and re-applies it on restore, so an attached agent never
 	// receives a report swarm requested.
-	if m.boardTakesMouse() {
+	if m.boardTakesMouse() || m.screen == screenSchedules && m.pairing == nil {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v

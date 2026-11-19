@@ -214,6 +214,13 @@ func (m generalModel) compactRows() bool {
 	c := rowColumnsFor(m.width, 2)
 	return c.name < 16 || c.cwd < 12 || c.summary < 12
 }
+func sessionBoardIcon(s protocol.SessionView, group status.Group, frame uint64) string {
+	if s.ScheduledCompleted && s.Tag == "automation" {
+		return "◆"
+	}
+	return groupIcon(group, frame)
+}
+
 func ellipsis(s string, n int) string { return ansi.Truncate(s, max(0, n), "…") }
 func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 	prefix := "  "
@@ -263,13 +270,13 @@ func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 		} else {
 			edited = editViewport(m.edit.text, m.edit.cursor, max(1, nameWidth))
 		}
-		return prefix + groupStyle(s.Group).Render(groupIcon(s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(edited, nameWidth)) + " " + groupStyle(s.Group).Render(state)
+		return prefix + groupStyle(s.Group).Render(sessionBoardIcon(s, s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(edited, nameWidth)) + " " + groupStyle(s.Group).Render(state)
 	}
 	name := displayName(s)
 	if name == "" {
 		name = s.ID
 	}
-	return prefix + groupStyle(s.Group).Render(groupIcon(s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(ellipsis(name, nameWidth), nameWidth)) + " " + groupStyle(s.Group).Render(state)
+	return prefix + groupStyle(s.Group).Render(sessionBoardIcon(s, s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(ellipsis(name, nameWidth), nameWidth)) + " " + groupStyle(s.Group).Render(state)
 }
 
 // boardGeometry reserves pinned chrome before traversing the shared grouped content.

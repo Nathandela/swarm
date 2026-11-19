@@ -249,6 +249,11 @@ type attachModel struct {
 
 func (m rootModel) updateAttach(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.Code == tea.KeyEsc {
+		if m.schedules.returnFromAttach {
+			m.schedules.returnFromAttach = false
+			m.screen = screenSchedules
+			return m, nil
+		}
 		cmd := m.enterGeneral()
 		return m, cmd
 	}

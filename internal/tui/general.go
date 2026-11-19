@@ -1087,7 +1087,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		return m.compactRow(s, selected)
 	}
 	gs := groupStyle(g)
-	icon := gs.Render(groupIcon(g, m.spinnerFrame))
+	icon := gs.Render(sessionBoardIcon(s, g, m.spinnerFrame))
 
 	// The confirm token is wider than the ordinary two-cell selection prefix. Resolve
 	// it first so responsive columns include its real width in the terminal budget.

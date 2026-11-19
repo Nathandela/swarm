@@ -63,11 +63,17 @@ func (m rootModel) moreLines() []menuLine {
 			}
 			lines = append(lines, menuLine{b.label, b.key})
 		}
+		if m.scheduleConfig.Open != nil && s.Cwd != "" {
+			lines = append(lines, menuLine{"Schedule in this directory", "c"})
+		}
 		if !sameProcess {
 			lines = append(lines, menuLine{text: "Target state changed; reopen More"})
 		}
 	} else if m.general.more.target != "" {
 		lines = append(lines, menuLine{text: "Target disappeared"})
+	}
+	if m.scheduleConfig.Open != nil {
+		lines = append(lines, menuLine{"Automations", "a"})
 	}
 	return append(lines, menuLine{"New", "n"}, menuLine{"Options", "o"}, menuLine{"Attention", "g"}, menuLine{"Quit", "q"})
 }
@@ -201,6 +207,14 @@ func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 	}
 	if key == "q" {
 		return m, tea.Quit
+	}
+	if key == "a" {
+		return m.openSchedules("")
+	}
+	if key == "c" {
+		if s, ok := m.general.sessionByID(target); ok && s.Cwd != "" {
+			return m.openSchedules(s.Cwd)
+		}
 	}
 	if m.connectionLost {
 		return m, nil
