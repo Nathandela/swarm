@@ -78,11 +78,13 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `name`             | string          | new session label, carried on `rename`; sanitized + length-capped server-side (P2) |
 | `tag`              | string          | manual grouping label, carried on `set_tag`; empty clears it              |
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
+| `schedule_id`      | string          | local job ID on `schedule_run`. The reply carries the occurrence ID and echoes `operation_id`. |
+| `schedule_completion` | object      | local worker receipt on `schedule_complete`; carries run and attempt IDs, credential, summary and artifact links |
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
 | `session`          | `*SessionView`  | one session view, carried on the `launch` reply and on `event`            |
 | `resume_error`     | string          | persisted reason an exact provider conversation continuation failed; surfaced on the owner roster so the source remains diagnosable |
 | `error`            | string          | human-readable error text, carried on `error`                            |
-| `operation_id`     | string            | idempotency key of a remote mutating op (`<device_id>:<client-ULID>`, R-IDP) |
+| `operation_id`     | string            | idempotency key of a remote mutating op (`<device_id>:<client-ULID>`, R-IDP) or a capability-gated owner operation |
 | `interaction_id`   | string            | the agent interaction being approved, distinct from `operation_id` (A6)      |
 | `device_id`        | string            | pairing device id; never trusted alone, always paired with `device_sig` (A1) |
 | `device_sig`       | string            | detached Ed25519 signature over the canonical op tuple (D4)                  |
@@ -331,6 +333,7 @@ alongside the group.
 | `id`            | string          | namespaced session id `<endpoint_id>/<local>`                 |
 | `agent`         | string          | agent type (e.g. `claude`, `codex`)                           |
 | `name`          | string          | user-provided session label; empty/absent falls back to `agent` (P2) |
+| `scheduled_completed` | bool | the session finalized a scheduled occurrence and retains its automation tag |
 | `tag`           | string          | user-assigned grouping label; empty/absent means untagged            |
 | `cwd`           | string          | the session's working directory                               |
 | `status`        | `status.Status` | the three raw dimensions (process, turn, interaction)         |
@@ -699,6 +702,18 @@ actionable and the launch content hash does not bind lineage.
 > Wave R1 refusal-only skeleton of both ops (this commit) answers plain `error`/
 > `op_not_implemented` in the meantime — see the `session_launch` / `composer_send` / ...
 > section below; T9's six-state vocabulary lands with the real handler.
+
+### `schedule_run`
+
+Run Now requires the owner socket and the negotiated `schedule` and
+`schedule-run-id` capabilities. The caller supplies a job `schedule_id` and an
+`operation_id` (a ULID) before submission. The daemon binds that operation ID
+to one job and persists the occurrence before starting a worker. A successful
+reply echoes the operation ID and carries the occurrence ID in `schedule_id`.
+If the reply is lost, resubmit the same job and operation ID to recover the
+original occurrence, including after completion or archive. Use a fresh
+operation ID for each deliberate new run. Reusing an ID for a different job is
+refused.
 
 ### `kill`
 

@@ -14,6 +14,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
+- [Scheduled agents](operations/scheduled-agents.md) — local per-user timer setup, verified adapter/authority routes, missed runs, workspace and completion review, diagnostics, and rollback
 - [Discord whole-swarm connection](ops/discord.md) — independent per-place bot setup, attributed teammate conversations, owner controls and deliberate replies; [decision](adr/ADR-036-whole-swarm-discord.md), [implementation and v0.24.0 deployment evidence](verification/discord-integration.md)
 - [Provider logins](operations/provider-logins.md) — manage native Claude Code and Codex logins and provider-wide safe switches
 - [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
