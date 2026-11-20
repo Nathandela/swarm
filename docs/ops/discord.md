@@ -1,6 +1,27 @@
 # Connect a local Swarm to Discord
 
-Each local Swarm gets its own Discord application, token, installation ID and user-chosen name. Connecting a VM does not connect or control another computer. Existing and future registered Swarm discussions appear automatically; exclude individual discussions when needed.
+Each connection belongs to one local Swarm place and uses a guild-installed app identity. Choose teammate mode for a colleague who joins a discussion on demand. Existing configurations start in legacy directory mode.
+
+## Connect a teammate
+
+On the machine where workers should run, open the default checkout and use the existing app credential:
+
+```sh
+swarm discord connect --mode teammate --manager codex \
+  --token-file /absolute/private/bot-token --workdir "$PWD" --install
+swarm discord doctor --channel CHANNEL_ID
+swarm discord status
+```
+
+For a previously configured installation, `connect --mode teammate --manager codex --install` reuses its identity and credentials. When the credential belongs to a bot installed in exactly one server, setup can discover the application ID, name and server. Use `--guild` to choose among servers. `--channel` can limit a rehearsal to a dedicated channel. To remove an old channel restriction, explicitly reconnect with `--all-channels --install`. Discord still controls which discussions the app can see. Keep private conversations in their intended audiences.
+
+Enable Message Content on the app and grant View Channel, Read Message History, Send Messages, Send Messages in Threads, and Create Public Threads where you want to invite the teammate. Private threads require native access. Granting visibility to a parent channel is a Discord server administration action. Starting the local service alone cannot grant that permission.
+
+Mention the app in a discussion. A regular channel mention starts a thread on that message. In an existing thread or forum post the teammate answers there. Every human participant can direct work and continue without another mention. The manager starts on demand and uses the selected native account on this place. A discussion can use its available history, including text written before the mention. Quotes, history and worker results remain attributed. If you supply several named workspaces, repeat `--project 'name=/absolute/checkout'` during setup. Each discussion remembers its chosen project; a later project switch affects new work.
+
+Only deliberately published manager replies and clarifications appear in the thread. Workers appear in the local dashboard. Tool approvals stay on their authorized native surfaces. An inaccessible destination or uncertain send is visible through local status. An outage can leave a gap; a fresh instruction in the thread resumes work. The operator and all admitted participants should understand that discussion material can reach the configured native model provider, and that native workers use the machine's execution permissions.
+
+Use `swarm discord disconnect` to stop the connector. To go back to the legacy directory, run `swarm discord connect --mode legacy --owner-id OWNER_USER_ID --install`. Check the saved channel/user scope before bringing the legacy behavior back online. The old commands below describe that mode.
 
 ## Set up a place
 
@@ -95,3 +116,17 @@ Modern Hermes keeps uncertain native work and its workspace after viewer loss un
 ## Verification status
 
 The owner authorized a local mock Discord server for this delivery. Its real Gateway/REST protocol tests cover connection, source context, endorsement, explicit publication, cancellation and fault recovery. [Integration evidence](../verification/discord-integration.md) distinguishes those tests, actual native CLI fixtures, independent reviews, release gates and installed-host checks. No live Discord server configuration is implied until actual bot credentials are configured.
+
+### Teammate recovery and worker capability
+
+The current native manager options are Codex and Claude on qualified versions. The teammate can obtain exact results from newly created Codex and qualified Claude workers. Use Codex for follow-up steering. A busy Codex worker can receive a queued instruction when its original attempt can safely accept a fresh native input. Unsupported providers or an ambiguous worker turn require operator attention. The legacy adapter roster is independent of this qualification.
+
+If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:
+
+```sh
+swarm discord status
+swarm discord resume-manual DISCUSSION_ID \
+  --session EXACT_MANAGER_SESSION --instance EXACT_INSTANCE --external-input OBSERVED_COUNT
+```
+
+Find DISCUSSION_ID, the manager session and instance, and the numeric external input count in the discussion’s native status. A changed counter, replacement instance, lost custody or ambiguous native effect refuses reconciliation. Inspect the specific manager on the home dashboard before taking further action. For a native workspace trust prompt, use the provider's own terminal; a Discord instruction cannot grant trust. Installed connectors start the supervisor using its saved owner environment. Run the first teammate installation from the owner's login shell.

@@ -44,6 +44,10 @@ func managerIntentName(conversation string) string {
 // bootstrapManager never creates a replacement for a previously bound manager.
 // A pending launch reconciles its exact durable operation without dispatching it again.
 func bootstrapManager(ctx context.Context, dir string, cfg Config, refs ManagerBridgeRefs, endpoint string, existing *ManagerBinding, client managerBootstrapClient) (managerSelection, error) {
+	return bootstrapManagerRequest(ctx, dir, cfg, refs, endpoint, existing, client, managerLaunchRequest(cfg, refs), managerIntentName(cfg.ConversationID), "")
+}
+
+func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs ManagerBridgeRefs, endpoint string, existing *ManagerBinding, client managerBootstrapClient, req protocol.LaunchReq, file, retiredSource string) (managerSelection, error) {
 	var none managerSelection
 	if err := ctx.Err(); err != nil {
 		return none, err
@@ -64,7 +68,9 @@ func bootstrapManager(ctx context.Context, dir string, cfg Config, refs ManagerB
 		if row.Role != "manager" || row.ManagerConversationID != cfg.ConversationID {
 			continue
 		}
-		hadManager = true
+		if retiredSource == "" || row.Status.Process != status.ProcessExited {
+			hadManager = true
+		}
 		if row.Status.Process == status.ProcessRunning {
 			live = append(live, row)
 		}
@@ -78,8 +84,6 @@ func bootstrapManager(ctx context.Context, dir string, cfg Config, refs ManagerB
 		}
 		return findBootstrapManager(ctx, cfg, refs, endpoint, live[0].ID, existing, client)
 	}
-	req := managerLaunchRequest(cfg, refs)
-	file := managerIntentName(cfg.ConversationID)
 	var intent managerLaunchIntent
 	raw, err := readVoiceFile(dir, file, MaxControlFrameBytes)
 	if err == nil {
@@ -185,7 +189,11 @@ func managerLaunchRequest(cfg Config, refs ManagerBridgeRefs) protocol.LaunchReq
 	if cfg.Model != "" {
 		options["model"] = cfg.Model
 	}
-	return protocol.LaunchReq{Agent: cfg.Provider, Name: "Swarm manager", Cwd: cfg.WorkDir, Options: options, Cols: 120, Rows: 32, Manager: &protocol.ManagerLaunchReq{ConversationID: cfg.ConversationID, BridgeSocket: refs.Socket, AuthFile: refs.AuthFile}}
+	name := "Swarm manager"
+	if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
+		name = cfg.Name
+	}
+	return protocol.LaunchReq{Agent: cfg.Provider, Name: name, Cwd: cfg.WorkDir, Options: options, Cols: 120, Rows: 32, Manager: &protocol.ManagerLaunchReq{ConversationID: cfg.ConversationID, BridgeSocket: refs.Socket, AuthFile: refs.AuthFile}}
 }
 
 func saveManagerIntent(dir, file string, intent managerLaunchIntent) error {
@@ -199,8 +207,15 @@ func saveManagerIntent(dir, file string, intent managerLaunchIntent) error {
 	return writeVoiceFile(dir, file, raw)
 }
 
+func managerObservationWindow(cfg Config) time.Duration {
+	if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
+		return 45 * time.Second
+	}
+	return 5 * time.Second
+}
+
 func findBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRefs, endpoint, id string, existing *ManagerBinding, client managerBootstrapClient) (managerSelection, error) {
-	observeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	observeCtx, cancel := context.WithTimeout(ctx, managerObservationWindow(cfg))
 	defer cancel()
 	observedExact := false
 	for {
@@ -211,8 +226,10 @@ func findBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRef
 		for _, row := range rows {
 			if row.ID == id {
 				observedExact = true
-				selected, err := selectBootstrapManager(ctx, cfg, refs, endpoint, existing, row, client)
-				if !errors.Is(err, managerproof.ErrUnavailable) {
+				selected, err := selectBootstrapManager(observeCtx, cfg, refs, endpoint, existing, row, client)
+				discussionDeadline := strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) &&
+					errors.Is(err, context.DeadlineExceeded) && observeCtx.Err() != nil
+				if !errors.Is(err, managerproof.ErrUnavailable) && !discussionDeadline {
 					return selected, err
 				}
 			}
@@ -223,6 +240,9 @@ func findBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRef
 				return managerSelection{}, err
 			}
 			if observedExact {
+				if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
+					return managerSelection{}, fmt.Errorf("%w: check the configured native CLI version and sign-in and resolve any workspace trust prompt on the home VM", ErrControllerNativeUnavailable)
+				}
 				return managerSelection{}, ErrControllerNativeUnavailable
 			}
 			return managerSelection{}, ErrControllerUncertain
@@ -246,7 +266,11 @@ func selectBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeR
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	window := 20 * time.Second
+	if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
+		window = managerObservationWindow(cfg)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	var native protocol.ManagerRuntimeStatus
 	for {

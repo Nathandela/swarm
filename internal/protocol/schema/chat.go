@@ -18,12 +18,13 @@ import (
 // advisory for message delivery: the daemon orders accepted messages per session and applies
 // each queue head to current provider state. TurnInterruptReq remains strictly turn-scoped.
 type ComposerSendReq struct {
-	ManagerAdmission *ManagerAdmission `json:"manager_admission,omitempty"`
-	Session          string            `json:"session"`
-	SessionInstance  string            `json:"session_instance,omitempty"`
-	ExpectedTurn     string            `json:"expected_turn,omitempty"`
-	Text             string            `json:"text"`
-	Origin           *MessageOrigin    `json:"origin,omitempty"`
+	WorkerManagerConversation string            `json:"worker_manager_conversation,omitempty"`
+	ManagerAdmission          *ManagerAdmission `json:"manager_admission,omitempty"`
+	Session                   string            `json:"session"`
+	SessionInstance           string            `json:"session_instance,omitempty"`
+	ExpectedTurn              string            `json:"expected_turn,omitempty"`
+	Text                      string            `json:"text"`
+	Origin                    *MessageOrigin    `json:"origin,omitempty"`
 }
 
 // TurnInterruptReq is the turn_interrupt body (Mirror M2.4).
@@ -70,11 +71,12 @@ func TurnInterruptContentHash(req *TurnInterruptReq) []byte {
 // Limit bounds the page. The reply rides the EXISTING Control.Journal carrier plus
 // Control.HistoryFloor.
 type InteractionHistoryReq struct {
-	Native       bool   `json:"native,omitempty"`
-	NativeCursor string `json:"native_cursor,omitempty"`
-	Session      string `json:"session"`
-	BeforeItem   string `json:"before_item"`
-	Limit        int    `json:"limit"`
+	Worker       *WorkerHistoryScope `json:"worker,omitempty"`
+	Native       bool                `json:"native,omitempty"`
+	NativeCursor string              `json:"native_cursor,omitempty"`
+	Session      string              `json:"session"`
+	BeforeItem   string              `json:"before_item"`
+	Limit        int                 `json:"limit"`
 }
 
 // InteractionDetailReq is the interaction_detail body (Mirror M3.3, IS-CAP-2): the unsigned
@@ -165,6 +167,10 @@ func ComposerSendContentHash(req *ComposerSendReq) []byte {
 		writeHashField(h, []byte("manager-admission-v1"))
 		raw, _ := json.Marshal(req.ManagerAdmission)
 		writeHashField(h, raw)
+	}
+	if req.WorkerManagerConversation != "" {
+		writeHashField(h, []byte("discussion-worker-manager-v1"))
+		writeHashField(h, []byte(req.WorkerManagerConversation))
 	}
 	return h.Sum(nil)
 }

@@ -411,7 +411,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		source, ok := d.sessions[spec.ResumedFrom]
 		if !ok || source.meta.ShimPID != expected.ShimPID || source.meta.ShimStartTime != expected.ShimStartTime ||
 			source.meta.AgentType != spec.AgentType || source.meta.ConversationID != spec.ConversationID ||
-			source.meta.Role == "manager" || source.meta.RosterHidden || source.meta.Status.Process != status.ProcessExited {
+			!matchesBoundResumeRole(source.meta, spec) ||
+			spec.Manager != nil && (source.meta.ManagerResumeOperationID != spec.OperationID || source.meta.ManagerResumeRequestHash != spec.OwnerLaunchHash) || source.meta.RosterHidden || source.meta.Status.Process != status.ProcessExited {
 			d.mu.Unlock()
 			return persist.Meta{}, ErrResumeSourceChanged
 		}

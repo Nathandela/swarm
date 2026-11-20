@@ -78,7 +78,7 @@ var remoteForbiddenOptions = map[string]string{
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
 	var manager *daemon.ManagerLaunchSpec
 	if req.Manager != nil {
-		manager = &daemon.ManagerLaunchSpec{ConversationID: req.Manager.ConversationID, BridgeSocket: req.Manager.BridgeSocket, AuthFile: req.Manager.AuthFile}
+		manager = &daemon.ManagerLaunchSpec{ConversationID: req.Manager.ConversationID, BridgeSocket: req.Manager.BridgeSocket, AuthFile: req.Manager.AuthFile, RetireOperationID: req.Manager.RetireOperationID}
 		if req.Agent == "claude" && req.Env != nil {
 			config := ""
 			for _, entry := range req.Env {
@@ -292,7 +292,7 @@ var serverCaps = []string{
 	CapContextGuardSettings,
 	CapLoginsManage,
 	CapSchedule, CapScheduleRunID,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1428,6 +1428,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleNativeDecide(c)
 	case OpNativeRequests:
 		cc.handleNativeRequests(c)
+	case OpManagerRetire, OpManagerRetireStatus:
+		cc.handleManagerRetire(c)
 	case OpManagerInterrupt, OpManagerInterruptStatus:
 		cc.handleManagerInterrupt(c)
 	case OpManagerRuntime, OpManagerResolveCall, OpManagerInputStatus:
@@ -1526,6 +1528,7 @@ func (s *Server) supportedCaps() []string {
 	_, nativeObservation := s.d.(OpenCodeObservationBackend)
 	_, nativeDecisions := s.d.(NativeDecisionApplier)
 	managerInterrupt, hasManagerInterrupt := s.d.(ManagerInterruptSource)
+	managerRetire, hasManagerRetire := s.d.(ManagerRetireSource)
 	_, managerProvenance := s.d.(ManagerRuntimeSource)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
@@ -1533,6 +1536,9 @@ func (s *Server) supportedCaps() []string {
 			continue
 		}
 		if cap == CapManagerInterrupt && (s.remoteTier || !hasManagerInterrupt || !managerInterrupt.ManagerInterruptSupported()) {
+			continue
+		}
+		if cap == CapManagerRetire && (s.remoteTier || !hasManagerRetire || !managerRetire.ManagerRetireSupported()) {
 			continue
 		}
 		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {
@@ -1612,12 +1618,23 @@ func (cc *clientConn) handleLaunch(c Control) {
 		return
 	}
 	if req.ResumeSourceInstance != "" && (c.Op != OpOwnerLaunch || cc.srv.remoteTier || req.Options[OptionResumeFrom] == "" ||
-		req.Options[OptionResumeConversationID] != "" || req.Options[OptionResumeRelocate] != "" || req.Manager != nil ||
+		req.Options[OptionResumeConversationID] != "" || req.Options[OptionResumeRelocate] != "" ||
 		req.Worktree || req.InitialPrompt != "" || len(req.ResumeSourceInstance) > 256 ||
 		strings.TrimSpace(req.ResumeSourceInstance) != req.ResumeSourceInstance || strings.ContainsFunc(req.ResumeSourceInstance, unicode.IsControl)) {
-		cc.replyErrorCode("launch: resume_source_instance requires an exact reliable owner worker resume", CodeInvalidField)
+		cc.replyErrorCode("launch: resume_source_instance requires an exact reliable owner resume", CodeInvalidField)
 		return
 	}
+	if req.Manager != nil && (req.ResumeSourceInstance != "" || req.Manager.RetireOperationID != "") {
+		if req.ResumeSourceInstance == "" || !validManagerRetireOperationID(req.Manager.RetireOperationID) || req.Options[OptionHandoffFrom] != "" {
+			cc.replyErrorCode("launch: parked manager resume requires an exact retirement operation and source instance", CodeInvalidField)
+			return
+		}
+		if !cc.hasCap(CapManagerRetire) {
+			cc.replyErrorCode("parked manager resume capability was not negotiated", CodeCapabilityRefused)
+			return
+		}
+	}
+
 	// The hands-off handoff (ADR-010 Amendment 4). Guarded BEFORE the external-resume
 	// block so a request that carries both keys is refused for what it actually is --
 	// a caller bug -- rather than for whichever capability the client happened not to

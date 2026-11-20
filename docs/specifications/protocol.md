@@ -129,6 +129,9 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `manager_input_status_request` | `*ManagerAdmission` | Owner-only historical outcome read by exact binding and existing input nonce; performs no admission |
 | `manager_interrupt_request` | `*ManagerInterruptReq` | Owner-only interrupt or status read bound to an exact manager runtime, admission nonce and native turn |
 | `manager_interrupt` | `*ManagerInterruptReceipt` | Original durable operation ID and exact native turn observation |
+| `manager_retire_request` | `*ManagerRetireReq` | Exact manager binding, controller generation, checkpoint digest and last observed native turn |
+| `manager_retire` | `*ManagerRetireReceipt` | Retirement operation ID and observed stop state |
+| `checkpoint` | string | Lowercase SHA-256 digest of the controller’s durable quiescent checkpoint in `manager_retire_request` |
 | `manager_input_status` | `*ManagerNativeTurn` | Retained exact input outcome, independent of whichever native turn is current |
 | `native_decision` | `*NativeDecisionReq` | Negotiated `native-requests-v1` decision: exact worker/native request identity, content hash, expiry and permission/question answer; the complete body is signed through `NativeDecisionContentHash`. |
 | `native_decision_receipt` | `*NativeDecisionReceipt` | Correlated native decision processing receipt, including admitted/rejected/uncertain state and actual native side-effect scope. |
@@ -144,7 +147,7 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `terminal_view`    | `*TerminalViewV1`   | Wave R8 (ADR-017 T4/T4-a/T8-a): the VERSIONED compatibility snapshot, carried under the wire name `terminal_view` on the SAME `terminal_snapshot` op as the legacy `terminal` body. Both ride one frame: a gateway that predates it ignores the key and reads `terminal` exactly as before, and one that understands it prefers this body. Its incarnation fields prevent a compatibility consumer from reading a replaced session under the same id as a seamless continuation; production Android never subscribes to or renders this body |
 | `control_generation` | string            | Wave R8 (ADR-017 T6): the minted control generation. It rides the `terminal_control_begin` REPLY and every `terminal_control_keepalive`. It is NOT a control lease — a generation and a lease have different lifetimes, different ceremonies and different authority, and the input path never reaches the lease plane (OPEN-C4) |
 
-The owner-only `semantic_send` operation reuses `composer_send` and body version 1. It requires the negotiated `semantic-send` capability and the transactional durable owner composer seam; it never uses the legacy terminal `send_input` operation. The remote socket refuses it before custody or provider access, and phone signature/action vocabulary is unchanged. Owner messages retain source `owner` and their operation ID without recording phone presence.
+The owner-only `semantic_send` operation reuses `composer_send` and body version 1. It requires the negotiated `semantic-send` capability and the transactional durable owner composer seam; it never uses the legacy terminal `send_input` operation. The remote socket refuses it before custody or provider access, and phone signature/action vocabulary is unchanged. Owner messages retain source `owner` and their operation ID without recording phone presence. A delegated Discord worker follow-up binds the exact native parent manager conversation through `worker_manager_conversation`, independently of the Discord discussion ID. This field is available only on the owner semantic route.
 
 Its operation ID is `semantic:<Unix milliseconds>:<32 lowercase hex nonce>`. Mutation retries are accepted only within one hour, with at most 30 seconds of future clock skew. This horizon is shorter than terminal receipt retention, so an expired receipt cannot make an old mutation fresh. An executing or outcome-unknown semantic operation survives ordinary TTL compaction; capacity refuses new effects rather than evicting that guard. Successful submission is distinct from model completion. A legacy OpenCode HTTP 204 is scheduling acknowledgement only; native admission requires a matching native user message.
 
@@ -155,8 +158,8 @@ The owner-only `owner_launch` operation requires negotiated `owner-launch` capab
 The owner reservation binds SHA-256 of the complete JSON `LaunchReq`, including owner environment, resume options, dimensions, prompt and lineage. Map keys encode deterministically and array order remains significant. A conflicting payload is refused. Exact replay reconciles before mutable source/runtime validation, returns the original usable session, and never re-drives a missing, lost or uncertain reservation. An existing conversation selected by resume/adoption receives its own durable operation binding. Unresolved owner reservations survive TTL compaction; store capacity refuses new effects rather than evicting them. A reply lost after launch can therefore be recovered without creating a replacement worker.
 
 The additive `owner-bound-resume` capability extends `owner_launch` with the
-`resume_source_instance` precondition for a linked worker resume. The requested
-source must be an exact exited worker. The assembly checks its incarnation and
+`resume_source_instance` precondition for a linked worker or parked manager
+resume. The requested source must have exited. The assembly checks its incarnation and
 the core revalidates its shim identity, provider conversation and exit state
 under the launch reservation lock. A changed precondition returns
 `stale_instance` without reserving a new effect. Clients must negotiate this
@@ -191,7 +194,7 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `native_session_id` | string | Actual native conversation/thread identity |
 | `turn` | `ManagerNativeTurn` | Current native turn projection, independent of historical input outcomes |
 | `text` | string | Human message text; manager admission identity remains separate |
-| `expected_turn` | string | Advisory send or required interrupt subject, depending on the operation |
+| `expected_turn` | string | Advisory send or required interrupt subject. The manager retirement request carries the exact last observed native turn in this field. |
 | `origin` | `*MessageOrigin` | Optional native routing lineage; never substitutes for manager admission or native proof |
 | `native_message_id` | string | Exact native stored user-message identity when observed |
 | `native_created_at_ms` | int64 | Qualified native admission creation timestamp, otherwise absent |
@@ -204,6 +207,7 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `native_generation` | string | Actual owning native process generation; reconnect does not fabricate preserved evidence |
 | `observation_generation` | string | Exact authenticated observer epoch: current Codex feed ID or retained Claude broker/guard scope; changed observation requires explicit reconciliation even when the physical process survives |
 | `login_epoch` | string | Server-derived managed runtime epoch or selected native account digest; caller text cannot create an identity |
+| `worker_manager_conversation` | string | Owner-only semantic send to a discussion worker. Binds the durable operation digest to the delegated worker’s native parent manager conversation. The Discord discussion ID is carried separately in origin. |
 | `manager_admission` | `*ManagerAdmission` | Optional owner `semantic_send` admission; requires `manager-provenance`, typed manager role and exact binding; participates in the semantic content hash |
 | `nonce` | string | One-use 256-bit lowercase hexadecimal input identity, separate from human text and operation ID |
 | `expected_external_input` | uint64 | Native external-input counter compared at admission/write boundary; stale baselines cannot submit unsolicited manager input |
@@ -235,6 +239,26 @@ terminal abort for the selected turn. `ended` reports another terminal
 disposition. These observations describe what happened to the turn and carry
 no attribution for who stopped it. A Claude broker acceptance or a Codex RPC
 acknowledgement alone cannot settle the receipt.
+
+The owner-only `manager-retire` capability exposes `manager_retire` and the
+read-only `manager_retire_status`. The request binds the manager runtime,
+controller `generation`, SHA-256 `checkpoint`, and `expected_turn` to one
+operation ID. Retirement takes the session lifecycle and input fences before
+rechecking controller leases, native readiness and the exact turn. The daemon
+persists the checkpoint with the source incarnation before signalling its
+shim. `unknown` means there is no matching claim. `uncertain` means the claim
+is durable and the original exit is still unproven. `retired` requires both
+the original shim's exit report and confirmation that its physical incarnation
+is gone. Status reads never signal a process. A repeated effect request can
+redrive the same unresolved claim after rechecking the durable input embargo,
+physical process, account, leases and fresh native readiness.
+
+To resume that history, send an `owner_launch` with the same manager bridge
+binding, `resume_from`, `resume_source_instance`, and the manager's
+`retire_operation_id`. The daemon checks the matching retired instance,
+native history, and account before granting one reliable launch operation
+custody of the source. Replaying that launch uses its original operation ID.
+A different launch operation cannot reuse the retired source.
 
 Manager MCP configuration uses the trusted Swarm executable selected by the daemon, never a `PATH` lookup. Its argv is `voice mcp --socket <bridge_socket> --auth-file <auth_file> --conversation <conversation_id>`. Claude receives per-invocation JSON through `--mcp-config`, keeps ordinary hooks/settings/native tools and qualified native broker enrollment even when Discord is disabled, and requests unrestricted native permissions. Codex receives the corresponding stdio MCP config and full-access policy at the shim-owned app-server that actually owns tools. Its TUI attaches to that same backend and creates/resumes the native thread normally; no second thread is started. An unavailable backend or absent/mismatched attach handshake refuses manager standalone fallback. Native organization/provider policy still applies.
 
@@ -378,7 +402,8 @@ and unrelated secrets are dropped.
 
 | JSON key         | Go type             | Meaning                                                    |
 | ---------------- | ------------------- | ---------------------------------------------------------- |
-| `resume_source_instance` | string | Exact source incarnation for `owner-bound-resume`, with `options.resume_from`. Requires an exited worker and forbids worktree creation, relocation, manager launch or initial prompt. |
+| `resume_source_instance` | string | Exact source incarnation for `owner-bound-resume`, with `options.resume_from`. Requires an exited worker or corroborated parked manager and forbids worktree creation, relocation and an initial prompt. |
+| `retire_operation_id` | string | Original `manager-retire` operation ID in the nested `manager` launch body, required when resuming a parked manager. |
 | `agent`          | string              | agent type to launch                                       |
 | `name`           | string              | optional session label; sanitized + length-capped server-side (P2) |
 | `tag`            | string              | optional manual grouping label given at creation, sanitized exactly as `set_tag`'s (blank is untagged) and stamped into the reservation meta |

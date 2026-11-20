@@ -27,7 +27,7 @@ var (
 	ErrNotFound = errors.New("discord: reference not found")
 	ErrInvalid  = errors.New("discord: invalid request or transition")
 )
-var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases", "publication_index"}
+var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases", "publication_index", teammateIngressBucket, teammateIngressGuardBucket, teammatePendingBucket, teammateDiscussionBucket, teammateActiveBindingBucket, teammateBindingIDBucket, teammateMetaBucket, teammateOutboxBucket, teammateReceiptBucket}
 
 type Store struct{ db *bolt.DB }
 type requestRecord struct {
@@ -68,8 +68,14 @@ func OpenStore(dir string) (*Store, error) {
 	}
 	s := &Store{db: db}
 	err = db.Update(func(tx *bolt.Tx) error {
+		initializeBindingIndices := tx.Bucket([]byte(teammateActiveBindingBucket)) == nil
 		for _, name := range bucketNames {
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+				return err
+			}
+		}
+		if initializeBindingIndices {
+			if err := initializeTeammateBindingIndices(tx); err != nil {
 				return err
 			}
 		}

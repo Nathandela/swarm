@@ -43,15 +43,23 @@ type LocalWorker struct {
 	Excluded bool `json:"excluded"`
 }
 type LocalStatus struct {
-	Name           string        `json:"name"`
-	InstallationID string        `json:"installation_id"`
-	Connected      bool          `json:"connected"`
-	Workers        []LocalWorker `json:"workers"`
+	Name           string          `json:"name"`
+	InstallationID string          `json:"installation_id"`
+	Connected      bool            `json:"connected"`
+	Workers        []LocalWorker   `json:"workers"`
+	Mode           string          `json:"mode,omitempty"`
+	Teammate       *TeammateStatus `json:"teammate,omitempty"`
 }
 type LocalReply struct {
 	Ref  string `json:"ref"`
 	ID   string `json:"id"`
 	Body string `json:"body"`
+}
+type LocalTeammateResumeManual struct {
+	Discussion    string `json:"discussion"`
+	Session       string `json:"session"`
+	Instance      string `json:"instance"`
+	ExternalInput uint64 `json:"external_input"`
 }
 type LocalTarget struct {
 	TargetID string `json:"target_id"`
@@ -67,7 +75,7 @@ func localMethod(operation string) string {
 	switch operation {
 	case "context", "status", "roster":
 		return http.MethodGet
-	case "reply", "include", "exclude", "propose", "shutdown":
+	case "reply", "include", "exclude", "propose", "shutdown", "resume-manual":
 		return http.MethodPost
 	}
 	return ""
@@ -147,9 +155,20 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 }
 
 func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
-	status := LocalStatus{Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true}
+	status := LocalStatus{Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true, Mode: s.Config.Mode}
 	if connection, ok := s.Messenger.(interface{ Connected() bool }); ok {
 		status.Connected = connection.Connected()
+	}
+	if s.Config.Mode == "teammate" {
+		var native func(TeammateDiscussion) (TeammateNativeStatus, error)
+		if manager, ok := s.teammateManager.(interface {
+			Status(TeammateDiscussion) (TeammateNativeStatus, error)
+		}); ok {
+			native = manager.Status
+		}
+		teammate, err := s.Store.teammateStatus(s.Config.InstallationID, native)
+		status.Teammate = &teammate
+		return status, err
 	}
 	rows, err := s.Workers.Roster(ctx)
 	if err != nil {
@@ -192,7 +211,28 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	var err error
+	if s.Config.Mode == "teammate" && operation != "status" && operation != "shutdown" && operation != "resume-manual" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "discord: this operation requires legacy mode"})
+		return
+	}
 	switch operation {
+	case "resume-manual":
+		var input struct {
+			LocalTeammateResumeManual
+			Expected *uint64 `json:"external_input"`
+		}
+		if err = decodeLocal(w, r, &input); err == nil {
+			if input.Expected == nil {
+				err = ErrInvalid
+			} else {
+				input.ExternalInput = *input.Expected
+				err = s.resumeTeammateManual(r.Context(), input.LocalTeammateResumeManual)
+			}
+		}
+		result = struct {
+			Resumed bool `json:"resumed"`
+		}{err == nil}
 	case "shutdown":
 		if err = decodeLocal(w, r, &struct{}{}); err != nil {
 			break
@@ -290,6 +330,23 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+func (s *Service) resumeTeammateManual(ctx context.Context, input LocalTeammateResumeManual) error {
+	if s.Config.Mode != "teammate" || input.Discussion == "" || input.Session == "" || input.Instance == "" {
+		return ErrInvalid
+	}
+	manager, ok := s.teammateManager.(interface {
+		ResumeManual(context.Context, TeammateDiscussion, string, string, uint64) error
+	})
+	if !ok {
+		return ErrTeammateManagerUnavailable
+	}
+	binding, err := s.Store.teammateBindingByID(s.Config.InstallationID, input.Discussion)
+	if err != nil {
+		return err
+	}
+	return manager.ResumeManual(ctx, binding.TeammateDiscussion, input.Session, input.Instance, input.ExternalInput)
 }
 
 // ServeLocal exposes the connector only through an owner-private Unix socket.

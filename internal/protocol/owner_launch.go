@@ -86,6 +86,9 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 	if req.Manager != nil && !slices.Contains(c.caps, CapManagerLaunch) {
 		return "", "", errors.New("protocol: manager launch requires an updated daemon and manager-launch capability")
 	}
+	if req.Manager != nil && req.Manager.RetireOperationID != "" && !slices.Contains(c.caps, CapManagerRetire) {
+		return "", "", errors.New("protocol: parked manager resume was not negotiated")
+	}
 	if req.ResumeSourceInstance != "" && !slices.Contains(c.caps, CapOwnerBoundResume) {
 		return "", "", errors.New("protocol: instance-bound owner resume was not negotiated")
 	}
@@ -171,6 +174,10 @@ func (cc *clientConn) handleOwnerLaunch(c Control) {
 	}
 	if c.Launch == nil || !validLaunchOperationID(c.OperationID, cc.srv.now()) {
 		cc.replyErrorCode("owner launch requires an exact request and current timestamped operation ID", CodeInvalidField)
+		return
+	}
+	if c.Launch.Manager != nil && c.Launch.Manager.RetireOperationID != "" && !cc.hasCap(CapManagerRetire) {
+		cc.replyErrorCode("parked manager resume capability was not negotiated", CodeCapabilityRefused)
 		return
 	}
 	if c.Launch.ResumeSourceInstance != "" && !cc.hasCap(CapOwnerBoundResume) {

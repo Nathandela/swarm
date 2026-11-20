@@ -29,7 +29,11 @@ var voiceMCPRun = func(ctx context.Context, socket, auth, conversation, session 
 		return err
 	}
 	defer client.Close()
-	return voice.NewManagerMCP(client.Call).Run(ctx, &mcp.IOTransport{Reader: os.Stdin, Writer: voiceWriter{stdout}, MaxLineLength: voice.MaxControlFrameBytes})
+	server := voice.NewManagerMCP(client.Call)
+	if strings.HasPrefix(conversation, voice.DiscussionConversationPrefix) {
+		server = voice.NewDiscussionManagerMCP(client.Call)
+	}
+	return server.Run(ctx, &mcp.IOTransport{Reader: os.Stdin, Writer: voiceWriter{stdout}, MaxLineLength: voice.MaxControlFrameBytes})
 }
 
 func dispatchVoice(args []string, stdout, stderr io.Writer) int {

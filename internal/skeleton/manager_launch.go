@@ -60,3 +60,10 @@ func validateManagerSelection(spec daemon.LaunchSpec, selected persist.Meta) err
 	}
 	return nil
 }
+
+func sameParkedManagerAccount(source persist.Meta, spec daemon.LaunchSpec) bool {
+	if source.LoginRuntime != nil || spec.LoginRuntime != nil {
+		return source.LoginRuntime != nil && spec.LoginRuntime != nil && *source.LoginRuntime == *spec.LoginRuntime
+	}
+	return source.AuthIdentity != "" && source.AuthIdentity == spec.AuthIdentity
+}

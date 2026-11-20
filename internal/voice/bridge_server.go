@@ -103,6 +103,7 @@ func bridgeErrorCode(err error) string {
 	}{
 		{ErrInvalid, "invalid"}, {ErrConflict, "conflict"}, {ErrStale, "stale"},
 		{ErrExpired, "expired"}, {ErrCapacity, "capacity"}, {ErrNotFound, "not_found"},
+		{ErrDiscussionSourceChanged, "discussion_source_changed"}, {errDiscussionGrantUnverified, "discussion_grant_unverified"},
 	} {
 		if errors.Is(err, pair.err) {
 			return pair.code

@@ -40,6 +40,9 @@ type DiscordClient struct {
 	OnError          func(error)
 	OnInteraction    func(*discordgo.InteractionCreate)
 	OnReady          func(*discordgo.Ready)
+	onDispatch       func(gatewayFrame, string) error
+	channelRates     map[string]*discordChannelRate
+	globalReset      time.Time
 }
 
 func NewDiscordClient(token string) (*DiscordClient, error) {
@@ -51,7 +54,19 @@ func NewDiscordClient(token string) (*DiscordClient, error) {
 func (c *DiscordClient) Connected() bool { return c.connected.Load() }
 
 // REST makes an authenticated, context-bound Discord API request. Paths are relative to the API root.
+type discordChannelRate struct {
+	gate  chan struct{}
+	reset time.Time
+}
+type discordAPIError int
+
+func (e discordAPIError) Error() string { return fmt.Sprintf("discord: API status %d", e) }
+
 func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, out any) error {
+	return c.rest(ctx, method, path, nil, payload, out)
+}
+
+func (c *DiscordClient) rest(ctx context.Context, method, path string, query url.Values, payload, out any) error {
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "?#\r\n") {
 		return errors.New("discord: invalid API path")
 	}
@@ -64,6 +79,22 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 		}
 	}
 	gate, reset := c.gate, &c.reset
+	if c.onDispatch != nil && strings.HasPrefix(path, "/channels/") {
+		channel, _, _ := strings.Cut(strings.TrimPrefix(path, "/channels/"), "/")
+		c.mu.Lock()
+		if c.channelRates == nil {
+			c.channelRates = make(map[string]*discordChannelRate)
+		}
+		rate := c.channelRates[channel]
+		if rate == nil && len(c.channelRates) < 4096 {
+			rate = &discordChannelRate{gate: make(chan struct{}, 1)}
+			c.channelRates[channel] = rate
+		}
+		c.mu.Unlock()
+		if rate != nil {
+			gate, reset = rate.gate, &rate.reset
+		}
+	}
 	if strings.HasPrefix(path, "/webhooks/") {
 		gate, reset = c.interactionGate, &c.interactionReset
 	}
@@ -78,7 +109,13 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 	}
 	defer func() { <-gate }()
 	for tries := 0; tries < 8; tries++ {
-		if wait := time.Until(*reset); wait > 0 {
+		c.mu.Lock()
+		waitUntil := c.globalReset
+		c.mu.Unlock()
+		if reset.After(waitUntil) {
+			waitUntil = *reset
+		}
+		if wait := time.Until(waitUntil); wait > 0 {
 			timer := time.NewTimer(wait)
 			select {
 			case <-timer.C:
@@ -87,7 +124,11 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 				return ctx.Err()
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, method, c.apiBase+path, bytes.NewReader(body))
+		target := c.apiBase + path
+		if len(query) > 0 {
+			target += "?" + query.Encode()
+		}
+		req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 		if err != nil {
 			return errors.New("discord: invalid request")
 		}
@@ -114,21 +155,26 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 		if resp.StatusCode == 429 {
 			var rate struct {
 				RetryAfter float64 `json:"retry_after"`
+				Global     bool    `json:"global"`
 			}
 			if json.Unmarshal(data, &rate) != nil || rate.RetryAfter <= 0 || rate.RetryAfter > 60 {
 				return errors.New("discord: invalid rate limit")
 			}
-			timer := time.NewTimer(time.Duration(rate.RetryAfter * float64(time.Second)))
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
+			rateReset := time.Now().Add(time.Duration(rate.RetryAfter * float64(time.Second)))
+			if reset.Before(rateReset) {
+				*reset = rateReset
+			}
+			if rate.Global {
+				c.mu.Lock()
+				if c.globalReset.Before(rateReset) {
+					c.globalReset = rateReset
+				}
+				c.mu.Unlock()
 			}
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("discord: API status %d", resp.StatusCode)
+			return discordAPIError(resp.StatusCode)
 		}
 		if out != nil {
 			if len(data) == 0 || string(bytes.TrimSpace(data)) == "null" || json.Unmarshal(data, out) != nil {
@@ -339,6 +385,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 		return err
 	}
 	first := true
+	durableSeq := *seq
 	for {
 		var frame gatewayFrame
 		readCtx := connCtx
@@ -375,11 +422,24 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			}
 			return errors.New("discord: invalid gateway session")
 		case 0:
+			if c.onDispatch != nil && frame.Type != "READY" {
+				if err = c.onDispatch(frame, *sessionID); err != nil {
+					*seq = durableSeq
+					return err
+				}
+				durableSeq = *seq
+			}
 			switch frame.Type {
 			case "READY":
 				var ready discordgo.Ready
 				if json.Unmarshal(frame.Data, &ready) != nil || ready.SessionID == "" {
 					return errors.New("discord: invalid ready")
+				}
+				if c.onDispatch != nil {
+					if err = c.onDispatch(frame, ready.SessionID); err != nil {
+						return err
+					}
+					durableSeq = *seq
 				}
 				*sessionID = ready.SessionID
 				var details struct {
@@ -477,9 +537,24 @@ func components(actions []Action) ([]discordgo.MessageComponent, error) {
 	return rows, nil
 }
 func (c *DiscordClient) Post(ctx context.Context, out Outbound) (string, error) {
-	rows, err := components(out.Actions)
+	message, err := c.postMessage(ctx, out)
 	if err != nil {
 		return "", err
+	}
+	return message.ID, nil
+}
+func (c *DiscordClient) postMessage(ctx context.Context, out Outbound) (discordgo.Message, error) {
+	var msg discordgo.Message
+	rows, err := components(out.Actions)
+	if err != nil {
+		return msg, err
+	}
+	var reply *discordgo.MessageReference
+	if out.ReplyTo != "" {
+		if !snowflake(out.ReplyTo) {
+			return msg, ErrInvalid
+		}
+		reply = &discordgo.MessageReference{MessageID: out.ReplyTo}
 	}
 	payload := struct {
 		Content         string                            `json:"content"`
@@ -487,16 +562,16 @@ func (c *DiscordClient) Post(ctx context.Context, out Outbound) (string, error) 
 		AllowedMentions *discordgo.MessageAllowedMentions `json:"allowed_mentions"`
 		Nonce           string                            `json:"nonce,omitempty"`
 		EnforceNonce    bool                              `json:"enforce_nonce,omitempty"`
-	}{out.Text, rows, &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}}, out.Nonce, out.Nonce != ""}
-	var msg discordgo.Message
+		Reference       *discordgo.MessageReference       `json:"message_reference,omitempty"`
+	}{out.Text, rows, &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}}, out.Nonce, out.Nonce != "", reply}
 	if err := c.REST(ctx, http.MethodPost, "/channels/"+url.PathEscape(out.Route.ChannelID)+"/messages", payload, &msg); err != nil {
-		return "", err
+		return msg, err
 	}
 	if msg.ID == "" {
-		return "", errors.New("discord: invalid post response")
+		return msg, errors.New("discord: invalid post response")
 	}
 
-	return msg.ID, nil
+	return msg, nil
 }
 func (c *DiscordClient) Edit(ctx context.Context, route Route, text string, actions []Action) (string, error) {
 	rows, err := components(actions)

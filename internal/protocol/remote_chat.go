@@ -203,6 +203,11 @@ func (cc *clientConn) handleComposerSend(c Control) {
 		cc.replyErrorCode("composer_send: missing session_instance; refresh the session and upgrade the phone before retrying", CodeInvalidField)
 		return
 	}
+	if body.WorkerManagerConversation != "" && (cc.srv.remoteTier || c.Op != OpSemanticSend || body.ManagerAdmission != nil ||
+		body.Origin == nil || body.Origin.DiscussionID == "" || len(body.WorkerManagerConversation) > 128) {
+		cc.replyErrorCode("worker manager provenance requires local owner semantic input", CodeNotAuthorized)
+		return
+	}
 	if body.ManagerAdmission != nil {
 		if cc.srv.remoteTier || c.Op != OpSemanticSend {
 			cc.replyErrorCode("manager admission is owner semantic input only", CodeNotAuthorized)
@@ -278,15 +283,21 @@ func (cc *clientConn) handleComposerSend(c Control) {
 
 			var code ErrorCode
 			var sendErr error
+			begun := false
+			begin := func() error {
+				err := exec.BeginComposerOperation(c.OperationID)
+				begun = err == nil
+				return err
+			}
 			if semantic, ok := cc.srv.d.(SemanticComposerSender); ok && c.Op == OpSemanticSend {
 				code, sendErr = semantic.SemanticSendTransactional(
 					cc.endpointID, c.OperationID, *body,
-					func() error { return exec.BeginComposerOperation(c.OperationID) },
+					begin,
 				)
 			} else if transactional, ok := cc.srv.d.(TransactionalComposerSender); ok {
 				code, sendErr = transactional.ComposerSendTransactional(
 					cc.endpointID, c.OperationID, *body,
-					func() error { return exec.BeginComposerOperation(c.OperationID) },
+					begin,
 				)
 			} else {
 				// Compatibility only: older durable test doubles cannot expose the daemon's
@@ -302,6 +313,12 @@ func (cc *clientConn) handleComposerSend(c Control) {
 				cc.replyErrorCode("composer_send: "+sendErr.Error(), schema.CodeOutcomeUnknown)
 				return
 			}
+			if !begun && !cc.srv.remoteTier && c.Op == OpSemanticSend && body.WorkerManagerConversation != "" &&
+				sendErr != nil && code == CodeInputBusy {
+				cc.replyErrorCode("composer_send: "+sendErr.Error(), code)
+				return
+			}
+
 			outcome := composerCachedOutcome{OK: sendErr == nil, Code: code}
 			if sendErr != nil {
 				outcome.Message = sendErr.Error()
@@ -470,6 +487,10 @@ func (cc *clientConn) handleInteractionHistory(c Control) {
 	req := c.History
 	if req == nil {
 		cc.replyErrorCode("interaction_history: missing interaction_history body", CodeInvalidField)
+		return
+	}
+	if req.Worker != nil && (cc.srv.remoteTier || !req.Native) {
+		cc.replyErrorCode("interaction_history: worker evidence requires the local owner socket", CodeInvalidField)
 		return
 	}
 	if req.Native {

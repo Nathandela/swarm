@@ -227,11 +227,11 @@ func TestLaunchCrashReplay_OpenTimeResolution_NoStalePreparedPointingAtDeadSessi
 	const reservedID = "resolve0planted0reserved0000"
 	plantLaunchIdemRecord(t, cfg, opID, reservedID, idempotency.PhasePrepared)
 
-	d := openDaemon(t, cfg)
-	killAllSessions(t, d)
-
+	// Register the agent's scratch cleanup before the daemon cleanup that stops its writer.
 	pidFile := filepath.Join(t.TempDir(), "agent.pid")
 	spec := announceSpec(t, pidFile)
+	d := openDaemon(t, cfg)
+	killAllSessions(t, d)
 	spec.OperationID = opID
 	_, _ = d.Launch(spec) // drive the resolver; the outcome is asserted behaviorally in W1
 

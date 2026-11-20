@@ -221,17 +221,17 @@ func (d *Daemon) composerLaneFor(local string) *composerLane {
 // send waits until attempt has either refused or issued the kill. The attempt itself performs
 // the final status/controller/ContextGuard revalidation at this queue head.
 func (d *Daemon) withAuthRecycleFence(local string, attempt func() error) error {
-	return d.withAuthRecycleFenceState(local, false, attempt)
+	return d.withSessionStopFence(local, false, "", attempt)
 }
 
 // withClaimedAuthRecycleFence redrives a durable pre-signal claim restored by a
 // new daemon incarnation. It is the only path allowed to consume a restored
 // embargo; a committed in-process kill still refuses duplicate signalling.
 func (d *Daemon) withClaimedAuthRecycleFence(local string, attempt func() error) error {
-	return d.withAuthRecycleFenceState(local, true, attempt)
+	return d.withSessionStopFence(local, true, "", attempt)
 }
 
-func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt func() error) error {
+func (d *Daemon) withSessionStopFence(local string, claimed bool, reason string, attempt func() error) error {
 	lane := d.composerLaneFor(local)
 	alreadyRecycling := lane.enterRecycle(claimed)
 	defer lane.leave()
@@ -244,7 +244,10 @@ func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt f
 	lane.endMu.Lock()
 	defer lane.endMu.Unlock()
 	lane.mu.Lock()
-	ownerEnding := lane.ownerEnding
+	ownerEnding := lane.ownerEnding || lane.retired
+	if !ownerEnding && reason != "" {
+		lane.recycleReason = reason
+	}
 	if ownerEnding {
 		lane.recycling = false
 		lane.recycleCommitted = false
@@ -255,16 +258,7 @@ func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt f
 	if ownerEnding {
 		return errAuthOwnerEnding
 	}
-	fencedAttempt := attempt
-	if d.remoteSrv != nil {
-		inner := fencedAttempt
-		fencedAttempt = func() error { return d.remoteSrv.WithInputFence(local, inner) }
-	}
-	if d.srv != nil {
-		inner := fencedAttempt
-		fencedAttempt = func() error { return d.srv.WithInputFence(local, inner) }
-	}
-	err := fencedAttempt()
+	err := d.withSessionInputFence(local, attempt)
 	lane.mu.Lock()
 	if err == nil {
 		lane.recycleCommitted = true
@@ -283,6 +277,19 @@ func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt f
 	}
 	lane.mu.Unlock()
 	return err
+}
+
+func (d *Daemon) withSessionInputFence(local string, attempt func() error) error {
+	fencedAttempt := attempt
+	if d.remoteSrv != nil {
+		inner := fencedAttempt
+		fencedAttempt = func() error { return d.remoteSrv.WithInputFence(local, inner) }
+	}
+	if d.srv != nil {
+		inner := fencedAttempt
+		fencedAttempt = func() error { return d.srv.WithInputFence(local, inner) }
+	}
+	return fencedAttempt()
 }
 
 // enterRecycle takes one FIFO position and publishes the transient embargo in
@@ -314,11 +321,18 @@ func (l *composerLane) enterRecycle(claimed bool) (alreadyRecycling bool) {
 // durable Killed claim after restart: Running rows may need a signal redrive;
 // terminal rows are still owed a serialized replacement launch.
 func (d *Daemon) restoreAuthRecycle(local string) {
+	d.restoreSessionStop(local, "")
+}
+
+func (d *Daemon) restoreSessionStop(local, reason string) {
 	lane := d.composerLaneFor(local)
 	lane.mu.Lock()
 	lane.recycling = true
 	lane.recycleCommitted = false
 	lane.recycleRestored = true
+	if reason != "" {
+		lane.recycleReason = reason
+	}
 	lane.mu.Unlock()
 }
 
@@ -429,7 +443,9 @@ func (d *Daemon) retireComposerLane(local string) {
 	lane := value.(*composerLane)
 	lane.mu.Lock()
 	lane.retired = true
-	retain := lane.recycling || lane.ownerActive
+	// Only an auth recycle owes a replacement after exit. A manager's
+	// checkpoint remains on disk without retaining its old input lane.
+	retain := (lane.recycling && lane.recycleReason != managerRetireReason) || lane.ownerActive
 	lane.mu.Unlock()
 	if !retain {
 		d.composerLanes.CompareAndDelete(local, lane)
@@ -584,6 +600,36 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
 	}
+	discussionCodex := req.WorkerManagerConversation != "" || req.Origin != nil && req.Origin.DiscussionID != "" && req.ManagerAdmission == nil
+	if discussionCodex {
+		parent, ok := d.core.Get(meta.SpawnedFrom)
+		if source != adapter.SourceOwner || req.Origin == nil || req.Origin.DiscussionID == "" ||
+			meta.AgentType != "codex" || meta.Role == "manager" || !ok || parent.Role != "manager" ||
+			parent.ManagerConversationID != req.WorkerManagerConversation || !strings.HasPrefix(req.WorkerManagerConversation, "discord-teammate-") ||
+			meta.SpawnIntent != "delegate" || req.SessionInstance == "" {
+			return protocol.CodeStructuredUnsupported, errors.New("discussion send requires an exact local delegated worker")
+		}
+	}
+	if !discussionCodex {
+		return d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, false)
+	}
+	var code protocol.ErrorCode
+	var sendErr error
+	err = d.withSessionInputFence(local, func() error {
+		if d.anyControlled(local) || d.directInputUnresolved(local) {
+			code, sendErr = protocol.CodeInputBusy, errors.New("discussion worker is under manual input control")
+			return nil
+		}
+		code, sendErr = d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, true)
+		return nil
+	})
+	if err != nil {
+		return protocol.CodeInputBusy, err
+	}
+	return code, sendErr
+}
+
+func (d *Daemon) composerSendAtHead(local, operationID string, req protocol.ComposerSendReq, begin func() error, source string, meta persist.Meta, lane *composerLane, admittedBarrier uint64, discussionCodex bool) (protocol.ErrorCode, error) {
 	if req.ManagerAdmission != nil {
 		if source != adapter.SourceOwner || meta.Role != "manager" {
 			return protocol.CodeStructuredUnsupported, errors.New("manager admission requires the owner manager source")
@@ -618,6 +664,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		return d.sendHermesNative(local, operationID, req, begin, lane, admittedBarrier)
 	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
+		if discussionCodex {
+			return protocol.CodeInputBusy, errors.New("discussion worker is waiting for its verified native input route")
+		}
 		return code, err
 	}
 	if meta.AgentType == "claude" {
@@ -632,10 +681,17 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	// Resolve the sink only after this request reaches the queue head. A backend may be
 	// replaced or disappear while earlier messages are in provider I/O.
 	sink, code, serr := d.resolveMessageSink(local, req.Session)
+	if discussionCodex && (serr != nil || sink.backend == nil || sink.backend.sessionInstance != req.SessionInstance ||
+		sink.backend.threadID != meta.ConversationID || sink.backend.feed == nil || sink.backend.feed.retired.Load()) {
+		return protocol.CodeInputBusy, errors.New("discussion worker is waiting for its verified native input route")
+	}
 	if serr != nil {
 		return code, serr
 	}
 
+	if discussionCodex && !discussionCodexThreadIdle(sink.backend) {
+		return protocol.CodeInputBusy, errors.New("discussion worker has no verified native idle turn")
+	}
 	if req.Origin != nil {
 		raw, err := json.Marshal(composerOriginIntent{Version: 1, Origin: req.Origin})
 		if err != nil {
@@ -692,6 +748,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 			lane.closedAtReservation = ""
 			lane.supersededTurn = ""
 		}
+		if discussionCodex && active {
+			return
+		}
 		if d.pendingSends == nil {
 			d.pendingSends = map[string][]pendingSend{}
 		}
@@ -711,6 +770,10 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	})
 	if priorUncertain {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: a prior message has no provider outcome yet; no later message was allowed to overtake it", protocol.ErrComposerOutcomeUnknown)
+	}
+	if discussionCodex && (active || sink.backend == nil) {
+		d.dropPendingSend(local, operationID)
+		return protocol.CodeInputBusy, errors.New("discussion send requires an idle native turn")
 	}
 	if lane.barrierChanged(admittedBarrier) {
 		d.dropPendingSend(local, operationID)
@@ -777,11 +840,35 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 			}
 		})
 	}
+	if discussionCodex {
+		evidence, _ := json.Marshal(discussionCodexReceipt{TurnID: startedNative, InputID: pending.clientRef})
+		if !adapter.IsCanonicalConversationID(startedNative) || pending.clientRef == "" || d.core.ObserveSemanticReceipt(operationID, evidence) != nil {
+			return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native discussion send receipt could not be retained", protocol.ErrComposerOutcomeUnknown)
+		}
+	}
 	// Owner automation must not claim that a phone is driving the session.
 	if source == adapter.SourcePhone {
 		d.notePhoneActivity(local)
 	}
 	return "", nil
+}
+
+// Codex turn/start can steer an active turn. The caller holds both input
+// fences and the composer lane while checking native idle and submitting.
+func discussionCodexThreadIdle(backend *sessionBackend) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
+	defer cancel()
+	var result struct {
+		Thread struct {
+			ID     string `json:"id"`
+			Status struct {
+				Type string `json:"type"`
+			} `json:"status"`
+		} `json:"thread"`
+	}
+	return backend != nil && backend.conn != nil && backend.conn.Call(ctx, "thread/read", map[string]any{
+		"threadId": backend.threadID, "includeTurns": false,
+	}, &result) == nil && result.Thread.ID == backend.threadID && result.Thread.Status.Type == "idle"
 }
 
 // messageSink is how ONE session's remote messages reach its agent. Exactly one of the two

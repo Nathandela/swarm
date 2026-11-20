@@ -58,6 +58,9 @@ func (c *Controller) workerPage(input ListInput) (json.RawMessage, error) {
 			copy := association
 			tracking = &copy
 		}
+		if c.discussion != nil && (tracking == nil || tracking.Reserved) {
+			continue
+		}
 		candidate := WorkerPage{Workers: append(page.Workers, WorkerView{Session: row.ID, SessionInstance: instance, Agent: row.Agent, Name: row.Name, Cwd: row.Cwd, Group: row.Group, Capabilities: row.Capabilities, Tracking: tracking}), NextSessionID: row.ID}
 		raw, err := json.Marshal(candidate)
 		if err != nil {

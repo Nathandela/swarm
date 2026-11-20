@@ -27,14 +27,22 @@ var controllerJournalCaps = []string{protocol.CapJournal, protocol.CapJournalSub
 // FollowDaemonJournal owns a dedicated source-aware connection until EOF/error.
 // The service reconnects after errors; device disconnect never owns this lifetime.
 func (c *Controller) FollowDaemonJournal(ctx context.Context, socket string) error {
+	return c.followDaemonJournal(ctx, socket, nil)
+}
+
+func (c *Controller) followDaemonJournal(ctx context.Context, socket string, ready func()) error {
 	client, err := protocol.DialContext(ctx, socket, controllerJournalCaps)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-	return c.consumeDaemonJournal(ctx, client)
+	return c.consumeJournal(ctx, client, ready)
 }
 func (c *Controller) consumeDaemonJournal(ctx context.Context, source controllerJournalSource) error {
+	return c.consumeJournal(ctx, source, nil)
+}
+
+func (c *Controller) consumeJournal(ctx context.Context, source controllerJournalSource, ready func()) error {
 	endpoint, _, ok := protocol.ParseID(c.binding.SessionID)
 	if !ok || source.EndpointID() != endpoint {
 		return ErrStale
@@ -59,7 +67,7 @@ func (c *Controller) consumeDaemonJournal(ctx context.Context, source controller
 	if !protocol.ValidJournalSourceID(resume.SourceID) {
 		return ErrCorrupt
 	}
-	recovery := previous.Binding == "" || previous.Binding != resume.SourceID || resume.FullResync || resume.HistoryGap
+	recovery := previous.Binding == "" || previous.Binding != resume.SourceID || resume.FullResync || (c.discussion == nil && resume.HistoryGap)
 	examined := previous.Sequence
 	if !recovery {
 		for _, record := range resume.Events {
@@ -89,23 +97,28 @@ func (c *Controller) consumeDaemonJournal(ctx context.Context, source controller
 		}{false, "initial_gap_or_namespace_recovery", len(st.Workers)})
 		cursor := JournalCursor{Binding: resume.SourceID, Sequence: resume.Cursor}
 		snapshot := JournalSnapshot{Previous: previous, Metadata: metadata}
-		owned := false
-		for _, worker := range st.Workers {
-			if worker.ConversationID == c.binding.ConversationID {
-				owned = true
-				break
-			}
-		}
-		for _, input := range st.Admissions {
-			if input.ConversationID == c.binding.ConversationID && input.SettledAt.IsZero() {
-				owned = true
-				break
-			}
-		}
-		if owned {
-			_, err = c.AcceptRecoverySnapshot(cursor, snapshot)
+		if c.discussion != nil {
+			// Scoped native turn verification independently reconciles discussion jobs.
+			err = c.ReconcileJournal(cursor, snapshot)
 		} else {
-			err = c.store.checkpointControllerRecovery(c.binding, cursor, snapshot)
+			owned := false
+			for _, worker := range st.Workers {
+				if worker.ConversationID == c.binding.ConversationID {
+					owned = true
+					break
+				}
+			}
+			for _, input := range st.Admissions {
+				if input.ConversationID == c.binding.ConversationID && input.SettledAt.IsZero() {
+					owned = true
+					break
+				}
+			}
+			if owned {
+				_, err = c.AcceptRecoverySnapshot(cursor, snapshot)
+			} else {
+				err = c.store.checkpointControllerRecovery(c.binding, cursor, snapshot)
+			}
 		}
 		if err != nil {
 			return err
@@ -126,6 +139,9 @@ func (c *Controller) consumeDaemonJournal(ctx context.Context, source controller
 	flush := func() error { return c.checkpointExaminedJournal(resume.SourceID, examined) }
 	if err = flush(); err != nil {
 		return err
+	}
+	if ready != nil {
+		ready()
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -159,7 +175,7 @@ func (c *Controller) consumeDaemonJournal(ctx context.Context, source controller
 }
 func (c *Controller) qualifiedJournalRecord(st State, endpoint string, record protocol.JournalRecord) (bool, error) {
 	relevant, _ := journalWorkerSignal(record)
-	if !relevant {
+	if !relevant || (c.discussion != nil && (record.SessionID == "" || record.Type != "exited")) {
 		return false, nil
 	}
 	session, err := journalSession(endpoint, record.SessionID)
@@ -183,13 +199,16 @@ func (c *Controller) qualifiedJournalRecord(st State, endpoint string, record pr
 		return false, nil
 	}
 	if record.SessionInstance == "" || !exact {
+		if c.discussion != nil {
+			return false, nil
+		}
 		return false, ErrControllerJournalResync
 	}
 	return true, nil
 }
 func (c *Controller) consumeJournalRecord(endpoint, sourceID string, examined uint64, record protocol.JournalRecord) error {
 	relevantSignal, _ := journalWorkerSignal(record)
-	if !relevantSignal {
+	if !relevantSignal || (c.discussion != nil && (record.SessionID == "" || record.Type != "exited")) {
 		return nil
 	}
 	normalized, err := journalSession(endpoint, record.SessionID)
@@ -203,12 +222,21 @@ func (c *Controller) consumeJournalRecord(endpoint, sourceID string, examined ui
 	if err != nil {
 		return err
 	}
+	if c.discussion != nil {
+		if err := c.deferUnassociatedWorkerEvent(st, normalized, record.SessionInstance); err != nil {
+			return err
+		}
+	}
 	relevant, err := c.qualifiedJournalRecord(st, endpoint, record)
 	if err != nil {
 		return err
 	}
 	if !relevant {
 		return nil
+	}
+	if c.discussion != nil {
+		// Session-wide activity may belong to a private turn. Exit is lifecycle only.
+		return c.store.noteDiscussionWorkerExit(c.binding, normalized, record.SessionInstance)
 	}
 	session, err := journalSession(endpoint, record.SessionID)
 	if err != nil {
@@ -251,6 +279,44 @@ func (c *Controller) consumeJournalRecord(endpoint, sourceID string, examined ui
 	_, err = c.AcceptWorkerEvent(session, record.SessionInstance, event)
 	return err
 }
+
+// Keep the subscription checkpoint behind a signal from a child whose exact launch/send
+// receipt is still being joined to its job. Retry from that cursor after reconciliation.
+func (c *Controller) deferUnassociatedWorkerEvent(st State, session, instance string) error {
+	if c.workers == nil {
+		return nil
+	}
+	target := key(session, instance)
+	awaitingLaunch := false
+	for _, action := range st.Actions {
+		if action.ConversationID != c.binding.ConversationID || action.State != "executing" {
+			continue
+		}
+		if action.Target == target {
+			return ErrControllerJournalResync
+		}
+		reservation := st.Workers[key(c.binding.ConversationID, "reservation:"+action.ID)]
+		awaitingLaunch = awaitingLaunch || reservation.Reserved
+	}
+	if !awaitingLaunch || trackedControllerWorker(st, c.binding.ConversationID, session, instance) {
+		return nil
+	}
+	_, parent, valid := protocol.ParseID(c.binding.SessionID)
+	if !valid {
+		return ErrStale
+	}
+	rows, err := c.workers.List()
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.ID == session && row.SpawnedFrom == parent {
+			return ErrControllerJournalResync
+		}
+	}
+	return nil
+}
+
 func journalSession(endpoint, session string) (string, error) {
 	if owner, _, ok := protocol.ParseID(session); ok {
 		if owner != endpoint {

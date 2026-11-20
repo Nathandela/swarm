@@ -98,16 +98,18 @@ type Config struct {
 // the protocol server bound to its socket, the status engine, and the roster
 // event source, with one Close that tears all four down cleanly.
 type Daemon struct {
-	core        *daemon.Daemon
-	srv         *protocol.Server
-	scheduleSrv *protocol.Server
-	remoteSrv   *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
-	api         *coreAPI
-	eng         *engine.Engine
-	socketPath  string
-	stateDir    string // for reading a session's transcript tail (conversation-id capture)
-	home        string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
-	directInput directInputState
+	discussionScanMu sync.Mutex
+	discussionScans  map[discussionScanKey]*discussionTranscriptScan
+	core             *daemon.Daemon
+	srv              *protocol.Server
+	scheduleSrv      *protocol.Server
+	remoteSrv        *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
+	api              *coreAPI
+	eng              *engine.Engine
+	socketPath       string
+	stateDir         string // for reading a session's transcript tail (conversation-id capture)
+	home             string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
+	directInput      directInputState
 
 	cancel context.CancelFunc // stops engine.Run
 
@@ -373,6 +375,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	locals := make([]string, 0, len(core.List()))
 	for _, m := range core.List() {
 		locals = append(locals, m.ID)
+		if m.Status.Process == status.ProcessRunning && m.ManagerRetirement.OperationID != "" {
+			d.restoreSessionStop(m.ID, managerRetireReason)
+		}
 	}
 	d.restoreDirectInputState(locals)
 	d.api = newCoreAPIUnstarted(core, cfg.FakeAgentBin, epID)
@@ -553,6 +558,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.semanticComposer = d.semanticSendTransactional
 	d.api.semanticStatus = d.semanticOperation
 	d.api.managerInterruptTurn = d.interruptManagerTurn
+	d.api.managerRetire = d.retireManager
 	d.api.managerInputStatus = d.managerInputStatus
 	d.api.managerRuntime = d.managerRuntime
 	d.api.managerCall = d.resolveManagerCall
@@ -677,6 +683,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	// input, and supervisor delivery refuse before bytes while compaction or auth
 	// recycling owns the session (the supervisor avoids even attempting).
 	inputGate := func(local string) error {
+		if m, ok := d.core.Get(local); ok && m.ManagerRetirement.OperationID != "" {
+			return fmt.Errorf("session %q is retiring its manager", local)
+		}
 		if reason := d.composerRecycleRefusal(local); reason != "" {
 			return fmt.Errorf("session %q %s; nothing was typed", local, reason)
 		}

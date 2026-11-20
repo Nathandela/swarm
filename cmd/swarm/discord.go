@@ -21,18 +21,44 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/skeleton"
+	"github.com/Nathandela/swarm/internal/teammatemanager"
 )
 
-const discordUsage = "swarm discord connect|run|status|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
+const discordUsage = "swarm discord connect|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
 
 var discordLocalCall = discord.CallLocal
 var discordUnitRun = runDiscordUnit
-var discordServiceRun = func(ctx context.Context, dir string) error {
+var discordServiceRun = func(ctx context.Context, dir string, unattended bool) error {
 	if testing.Testing() {
 		return errors.New("discord: refusing live service inside a test binary")
 	}
-	return discord.Run(ctx, dir)
+	cfg, err := discord.LoadConfig(dir)
+	if err != nil {
+		return err
+	}
+	if cfg.Mode != "teammate" {
+		return discord.Run(ctx, dir)
+	}
+	cc, err := clientConfig()
+	if err != nil {
+		return err
+	}
+	cc, err = discordSupervisorConfig(cc, cfg, dir, true)
+	if err != nil {
+		return err
+	}
+	if err = ensureManagerDaemon(cc, unattended, daemon.Dial, daemon.EnsureDaemon); err != nil {
+		return err
+	}
+	manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir), cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = manager.Close() }()
+	return discord.Run(ctx, dir, manager)
 }
 
 func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
@@ -48,14 +74,14 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	rest := args[1:]
 	id := ""
 	switch command {
-	case "context", "reply", "exclude", "include", "propose":
+	case "context", "reply", "exclude", "include", "propose", "resume-manual":
 		var ok bool
 		id, rest, ok = takeSessionID(rest)
 		if !ok || id == "" {
 			_, _ = fmt.Fprintln(stderr, "discord: need a reference or target ID first")
 			return misuseExit
 		}
-	case "connect", "run", "status", "disconnect":
+	case "connect", "run", "status", "doctor", "disconnect":
 	default:
 		_, _ = fmt.Fprintln(stderr, discordUsage)
 		return misuseExit
@@ -65,14 +91,44 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	stateDir := fs.String("state-dir", "", "connector state directory")
 	var name, applicationID, ownerID, tokenFile, workdir, receptionistCLI, receptionistModel, bodyFile, publicationID, candidateJSON string
 	var guilds, channels, users []string
-	var install bool
+	var mode, manager string
+	projects := map[string]string{}
+	var install, allChannels, unattended bool
+	if command == "run" {
+		fs.BoolVar(&unattended, "unattended", false, "start the home supervisor only from its saved environment")
+	}
 	var offset int
+	var checkChannel, session, instance, counter string
+	if command == "resume-manual" {
+		fs.StringVar(&session, "session", "", "manager session from status")
+		fs.StringVar(&instance, "instance", "", "exact manager instance from status")
+		fs.StringVar(&counter, "external-input", "", "observed external input counter from status")
+	}
+	if command == "doctor" {
+		fs.StringVar(&checkChannel, "channel", "", "verify bot access to this server channel or thread")
+	}
 	if command == "connect" {
+		fs.BoolVar(&allChannels, "all-channels", false, "remove saved channel restrictions in the enrolled servers")
+		fs.StringVar(&mode, "mode", "", "legacy directory or on-demand teammate")
+		fs.StringVar(&manager, "manager", "", "native teammate manager (codex or claude)")
+		fs.Func("project", "named checkout, name=directory (repeat to replace the project list)", func(value string) error {
+			name, dir, ok := strings.Cut(value, "=")
+			name = strings.ToLower(strings.TrimSpace(name))
+			if !ok || name == "" || dir == "" || projects[name] != "" {
+				return errors.New("expected a unique name=directory")
+			}
+			root, err := resolveVoiceWorkspace(dir)
+			if err != nil {
+				return err
+			}
+			projects[name] = root
+			return nil
+		})
 		fs.StringVar(&name, "name", "", "independent bot name")
 		fs.StringVar(&applicationID, "application-id", "", "Discord application ID")
 		fs.StringVar(&ownerID, "owner-id", "", "Discord owner user ID")
 		fs.StringVar(&tokenFile, "token-file", "", "private bot token file")
-		fs.StringVar(&workdir, "workdir", "", "receptionist working directory")
+		fs.StringVar(&workdir, "workdir", "", "default workspace for this place")
 		fs.StringVar(&receptionistCLI, "receptionist-cli", "", "receptionist agent CLI")
 		fs.StringVar(&receptionistModel, "receptionist-model", "", "receptionist model")
 		fs.BoolVar(&install, "install", false, "install and start the owner service")
@@ -122,9 +178,13 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 	switch command {
+	case "doctor":
+		return runDiscordDoctor(ctx, cc, *stateDir, checkChannel, stdout, stderr)
 	case "connect":
 		var config discord.Config
+		existing := false
 		if _, e := os.Lstat(discord.ConfigPath(*stateDir)); e == nil {
+			existing = true
 			config, err = discord.LoadConfig(*stateDir)
 			if err != nil {
 				return discordCLIError(stderr, err)
@@ -146,8 +206,18 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			}
 			config = discord.Config{Version: 1, InstallationID: hex.EncodeToString(random[:]), DaemonSocket: socket, WorkDir: cwd, ReceptionistCLI: "codex"}
 		}
+		cc, err = discordSupervisorConfig(cc, config, *stateDir, existing)
+		if err != nil {
+			return discordCLIError(stderr, err)
+		}
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
+			case "mode":
+				config.Mode = mode
+			case "manager":
+				config.ManagerCLI = manager
+			case "project":
+				config.Projects = projects
 			case "name":
 				config.Name = name
 			case "application-id":
@@ -178,6 +248,51 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
+		if allChannels {
+			if len(channels) > 0 {
+				return discordCLIError(stderr, errors.New("--all-channels conflicts with --channel"))
+			}
+			config.ChannelIDs = nil
+		}
+		if config.Mode == "teammate" {
+			if config.Supervisor == nil {
+				state, e := filepath.Abs(cc.StateDir)
+				if e != nil {
+					return discordCLIError(stderr, e)
+				}
+				lock, e := filepath.Abs(cc.LockPath)
+				if e != nil {
+					return discordCLIError(stderr, e)
+				}
+				log, e := filepath.Abs(cc.LogPath)
+				if e != nil {
+					return discordCLIError(stderr, e)
+				}
+				config.Supervisor = &discord.SupervisorPaths{StateDir: state, Lock: lock, Log: log}
+			}
+			if len(users) > 0 {
+				return discordCLIError(stderr, errors.New("every human participant can direct a teammate; --allow-user is a legacy setting"))
+			}
+			if config.ManagerCLI == "" {
+				config.ManagerCLI = "codex"
+			}
+			config.WorkDir, err = filepath.EvalSymlinks(config.WorkDir)
+			if err != nil {
+				return discordCLIError(stderr, err)
+			}
+			if config.ApplicationID == "" || config.Name == "" || len(config.GuildIDs) == 0 {
+				if err = discord.DiscoverTeammateIdentity(ctx, &config); err != nil {
+					return discordCLIError(stderr, err)
+				}
+			}
+		} else {
+			if manager != "" || len(projects) > 0 {
+				return discordCLIError(stderr, errors.New("--manager and --project require teammate mode"))
+			}
+			if config.Mode == "legacy" {
+				config.Mode, config.ManagerCLI, config.Projects, config.Supervisor = "", "", nil, nil
+			}
+		}
 		config.Enabled = true
 		if err = config.Validate(); err != nil {
 			return discordCLIError(stderr, err)
@@ -195,6 +310,11 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			return discordCLIError(stderr, err)
 		}
 		if install {
+			if config.Mode == "teammate" {
+				if err = ensureManagerDaemon(cc, false, daemon.Dial, daemon.EnsureDaemon); err != nil {
+					return discordCLIError(stderr, err)
+				}
+			}
 			home, e := os.UserHomeDir()
 			if e != nil {
 				return discordCLIError(stderr, e)
@@ -220,7 +340,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	case "run":
 		runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err = discordServiceRun(runCtx, *stateDir); err != nil {
+		if err = discordServiceRun(runCtx, *stateDir, unattended); err != nil {
 			return discordCLIError(stderr, err)
 		}
 		return 0
@@ -231,7 +351,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		}
 		var status discord.LocalStatus
 		if e = discordLocalCall(ctx, *stateDir, "status", nil, &status); e != nil {
-			status = discord.LocalStatus{Name: config.Name, InstallationID: config.InstallationID, Connected: false}
+			status = discord.LocalStatus{Name: config.Name, Mode: config.Mode, InstallationID: config.InstallationID, Connected: false}
 		}
 		if err = writeJSON(stdout, status); err != nil {
 			return discordCLIError(stderr, err)
@@ -280,6 +400,17 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	}
 	var request, response any
 	switch command {
+	case "resume-manual":
+		n, err := strconv.ParseUint(counter, 10, 64)
+		if err != nil || session == "" || instance == "" {
+			_, _ = fmt.Fprintln(stderr, "discord: specify --session, --instance and --external-input from status")
+			return misuseExit
+		}
+		request = discord.LocalTeammateResumeManual{Discussion: id, Session: session, Instance: instance, ExternalInput: n}
+		response = &struct {
+			Resumed bool `json:"resumed"`
+		}{}
+
 	case "context":
 		request = discord.LocalContextRequest{Ref: id, Offset: offset}
 		response = &discord.LocalContext{}
@@ -334,6 +465,26 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		return discordCLIError(stderr, err)
 	}
 	return 0
+}
+
+func discordSupervisorConfig(cc daemon.ClientConfig, cfg discord.Config, dir string, existing bool) (daemon.ClientConfig, error) {
+	if p := cfg.Supervisor; p != nil {
+		cc.StateDir, cc.LockPath, cc.LogPath = p.StateDir, p.Lock, p.Log
+	} else {
+		socket, err := filepath.Abs(cc.SocketPath)
+		if err != nil || socket != cfg.DaemonSocket {
+			return cc, errors.New("discord: select the original supervisor environment before migrating this connection")
+		}
+		if existing {
+			// Even a default-looking socket may belong to a place configured with a custom path.
+			selected, err := discord.SelectedState(cc.StateDir)
+			if err != nil || selected != dir {
+				return cc, errors.New("discord: the original supervisor must have a saved selection for this connector")
+			}
+		}
+	}
+	cc.SocketPath = cfg.DaemonSocket
+	return cc, nil
 }
 
 func discordNativeInputEnabled(stateDir string) bool {
@@ -398,7 +549,10 @@ func installDiscordUnit(goos, home, binary, stateDir string) error {
 		if err = discordUnitRun("systemctl", "--user", "daemon-reload"); err != nil {
 			return err
 		}
-		return discordUnitRun("systemctl", "--user", "enable", "--now", "swarm-discord.service")
+		if err = discordUnitRun("systemctl", "--user", "enable", "swarm-discord.service"); err != nil {
+			return err
+		}
+		return discordUnitRun("systemctl", "--user", "restart", "swarm-discord.service")
 	}
 	return errors.New("discord: unsupported service platform")
 }

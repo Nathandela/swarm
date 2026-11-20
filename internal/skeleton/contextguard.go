@@ -328,7 +328,7 @@ func (d *Daemon) contextGuardQuiet(local string) bool {
 	}
 	m, ok := d.core.Get(local)
 	if !ok || m.Status.Process != status.ProcessRunning ||
-		m.Status.Turn != status.TurnIdle || m.Status.Interaction != status.InteractionNone {
+		m.Status.Turn != status.TurnIdle || m.Status.Interaction != status.InteractionNone || m.ManagerRetirement.OperationID != "" {
 		return false
 	}
 	return !d.anyControlled(local) && d.logins.inputGate(local) == nil

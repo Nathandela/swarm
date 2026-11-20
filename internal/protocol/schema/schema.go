@@ -33,6 +33,8 @@ import (
 type Control struct {
 	ScheduleCompletion      *ScheduleCompletion      `json:"schedule_completion,omitempty"`
 	ScheduleID              string                   `json:"schedule_id,omitempty"`
+	ManagerRetireRequest    *ManagerRetireReq        `json:"manager_retire_request,omitempty"`
+	ManagerRetire           *ManagerRetireReceipt    `json:"manager_retire,omitempty"`
 	ManagerInterruptRequest *ManagerInterruptReq     `json:"manager_interrupt_request,omitempty"`
 	ManagerInterrupt        *ManagerInterruptReceipt `json:"manager_interrupt,omitempty"`
 	JournalSourceID         string                   `json:"journal_source_id,omitempty"`

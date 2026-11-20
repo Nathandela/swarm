@@ -216,3 +216,52 @@ func TestRemoteTierCannotUseOwnerSemanticRoute(t *testing.T) {
 		t.Fatal("remote attempt reached custody/provider")
 	}
 }
+
+type queuedDiscussionSemanticStub struct {
+	*durableComposerStub
+	busy atomic.Bool
+}
+
+func (s *queuedDiscussionSemanticStub) SemanticSendTransactional(machine, id string, req ComposerSendReq, begin func() error) (ErrorCode, error) {
+	if s.busy.Load() {
+		return CodeInputBusy, errors.New("waiting for idle")
+	}
+	return s.ComposerSendTransactional(machine, id, req, begin)
+}
+
+func TestDiscussionSemanticBusyLeavesExactOperationPrepared(t *testing.T) {
+	stub := &queuedDiscussionSemanticStub{durableComposerStub: newDurableComposerStub()}
+	stub.busy.Store(true)
+	rc := rawDial(t, serveOwnerAPI(t, stub))
+	rep := rc.hello(Version, []string{CapSemanticSend, CapMessageOrigin})
+	id := semanticTestID(time.Now(), "a")
+	frame := semanticTestFrame(rep, id, "correction")
+	frame.ComposerSend.WorkerManagerConversation = "discord-teammate-bound-conversation"
+	frame.ComposerSend.Origin = &MessageOrigin{
+		Kind: "external", InstallationID: "install", RequestID: "request", ActorID: "author", RequesterID: "author",
+		DiscussionID: "discussion", Revision: "revision", GuildID: "guild", ChannelID: "thread", MessageID: "message",
+	}
+	rc.writeControl(frame)
+	if reply := rc.readControl(); reply.Op != OpError || reply.ErrorCode != CodeInputBusy {
+		t.Fatalf("busy reply: %+v", reply)
+	}
+	if rec, sends, _ := stub.snapshot(id); rec.phase != composerPhasePrepared || sends != 0 {
+		t.Fatalf("busy request consumed receipt: %+v, sends=%d", rec, sends)
+	}
+	changed := *frame.ComposerSend
+	changed.WorkerManagerConversation = "discord-teammate-another-conversation"
+	swapped := frame
+	swapped.ComposerSend = &changed
+	rc.writeControl(swapped)
+	if reply := rc.readControl(); reply.Op != OpError || reply.ErrorCode == CodeInputBusy {
+		t.Fatalf("operation accepted a different native manager conversation: %+v", reply)
+	}
+	stub.busy.Store(false)
+	rc.writeControl(frame)
+	if reply := rc.readControl(); reply.Op != OpOK {
+		t.Fatalf("exact operation could not retry: %+v", reply)
+	}
+	if rec, sends, _ := stub.snapshot(id); rec.phase != composerPhaseCompleted || sends != 1 {
+		t.Fatalf("retry had wrong outcome: %+v, sends=%d", rec, sends)
+	}
+}

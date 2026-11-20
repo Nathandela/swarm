@@ -138,6 +138,10 @@ func (c *ManagerBridgeClient) Call(ctx context.Context, call ManagerToolCall) (j
 			return nil, ErrCapacity
 		case "not_found":
 			return nil, ErrNotFound
+		case "discussion_source_changed":
+			return nil, ErrDiscussionSourceChanged
+		case "discussion_grant_unverified":
+			return nil, errDiscussionGrantUnverified
 		default:
 			return nil, errors.New("voice: manager action is unconfirmed; reconcile before retrying")
 		}

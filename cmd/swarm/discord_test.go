@@ -156,7 +156,7 @@ func TestDiscordInstallCommandsAreShellFreeAndRealRunnerRefusesTests(t *testing.
 	if e := installDiscordUnit("linux", home, binary, dir); e != nil {
 		t.Fatal(e)
 	}
-	want := [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "--now", "swarm-discord.service"}}
+	want := [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "swarm-discord.service"}, {"systemctl", "--user", "restart", "swarm-discord.service"}}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatal(commands)
 	}
@@ -179,7 +179,7 @@ func TestDiscordRunAndProposalDelegateOnlyExplicitInputs(t *testing.T) {
 	previousCall := discordLocalCall
 	t.Cleanup(func() { discordServiceRun = previousRun; discordLocalCall = previousCall })
 	ran := false
-	discordServiceRun = func(ctx context.Context, path string) error {
+	discordServiceRun = func(ctx context.Context, path string, unattended bool) error {
 		if path != dir || ctx.Err() != nil {
 			t.Fatal(path, ctx.Err())
 		}
@@ -211,5 +211,169 @@ func TestDiscordRunAndProposalDelegateOnlyExplicitInputs(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("invalid proposal admitted", calls)
+	}
+}
+
+func TestDiscordConnectTeammateAndLegacyRollback(t *testing.T) {
+	dir, token := discordCLIRig(t)
+	project := t.TempDir()
+	code, _, msg := cliDiscord(t, "connect", "--mode", "teammate", "--manager", "codex", "--name", "Workshop", "--application-id", "100", "--token-file", token, "--guild", "10", "--project", "app="+project)
+	if code != 0 {
+		t.Fatal(msg)
+	}
+	raw, err := os.ReadFile(discord.ConfigPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Mode     string
+		Projects map[string]string
+	}
+	var encoded map[string]any
+	if err = json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(project)
+	if err != nil || cfg.Mode != "teammate" || encoded["manager_cli"] != "codex" || cfg.Projects["app"] != root {
+		t.Fatal(cfg, encoded, err)
+	}
+	installation := encoded["installation_id"]
+	if code, _, _ := cliDiscord(t, "connect", "--manager", "unknown"); code == 0 {
+		t.Fatal("saved unknown manager")
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--project", "lost="+filepath.Join(project, "missing")); code == 0 {
+		t.Fatal("accepted missing project")
+	}
+	if code, _, msg := cliDiscord(t, "connect", "--mode", "legacy", "--owner-id", "1"); code != 0 {
+		t.Fatal(msg)
+	}
+	legacy, err := discord.LoadConfig(dir)
+	if err != nil || legacy.InstallationID != installation || legacy.OwnerID != "1" {
+		t.Fatal(legacy, err)
+	}
+}
+
+func TestDiscordDoctorUnconfiguredLeavesNoState(t *testing.T) {
+	dir, _ := discordCLIRig(t)
+	code, _, msg := cliDiscord(t, "doctor", "--state-dir", dir)
+	if code != 1 || !strings.Contains(msg, "configure") {
+		t.Fatal(code, msg)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscordTeammateScopeCanClearLegacyChannels(t *testing.T) {
+	dir, token := discordCLIRig(t)
+	if code, _, msg := cliDiscord(t, "connect", "--name", "Work", "--application-id", "100", "--owner-id", "1", "--token-file", token, "--guild", "10", "--channel", "20"); code != 0 {
+		t.Fatal(msg)
+	}
+	if code, _, msg := cliDiscord(t, "connect", "--mode", "teammate", "--all-channels"); code != 0 {
+		t.Fatal(msg)
+	}
+	cfg, err := discord.LoadConfig(dir)
+	if err != nil || len(cfg.ChannelIDs) != 0 || cfg.ManagerCLI != "codex" {
+		t.Fatal(cfg, err)
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--allow-user", "3"); code == 0 {
+		t.Fatal("accepted a misleading teammate user allowlist")
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--channel", "21", "--all-channels"); code == 0 {
+		t.Fatal("accepted conflicting channel scope")
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--project", "App="+t.TempDir(), "--project", "app="+t.TempDir()); code == 0 {
+		t.Fatal("saved an ambiguous project name")
+	}
+}
+
+func TestDiscordResumeManualRequiresExactLocalCoordinates(t *testing.T) {
+	dir, _ := discordCLIRig(t)
+	old := discordLocalCall
+	t.Cleanup(func() { discordLocalCall = old })
+	calls := 0
+	discordLocalCall = func(_ context.Context, path, op string, in, out any) error {
+		calls++
+		raw, _ := json.Marshal(in)
+		var v map[string]any
+		_ = json.Unmarshal(raw, &v)
+		if path != dir || op != "resume-manual" || v["instance"] != "inst" || v["session"] != "ep/session" || v["discussion"] != "discussion" || v["external_input"] != float64(0) {
+			t.Fatal(path, op, v)
+		}
+		return nil
+	}
+	if code, _, _ := cliDiscord(t, "resume-manual", "discussion", "--session", "ep/session", "--instance", "inst"); code != misuseExit || calls != 0 {
+		t.Fatal(code, calls)
+	}
+	if code, _, msg := cliDiscord(t, "resume-manual", "discussion", "--session", "ep/session", "--instance", "inst", "--external-input", "0"); code != 0 || calls != 1 {
+		t.Fatal(code, calls, msg)
+	}
+}
+
+func TestTeammateInstallPinsSupervisorIdentity(t *testing.T) {
+	dir, token := discordCLIRig(t)
+	if code, _, err := cliDiscord(t, "connect", "--mode", "teammate", "--name", "W", "--application-id", "100", "--token-file", token, "--guild", "10"); code != 0 {
+		t.Fatal(code, err)
+	}
+	raw, err := os.ReadFile(discord.ConfigPath(dir))
+	var saved struct {
+		Supervisor *discord.SupervisorPaths `json:"supervisor"`
+	}
+	if err != nil || json.Unmarshal(raw, &saved) != nil || saved.Supervisor == nil || saved.Supervisor.StateDir != os.Getenv(daemon.EnvStateDir) {
+		t.Fatalf("teammate service would rediscover the supervisor under its launch environment: %v", err)
+	}
+}
+
+func TestDiscordLegacyMigrationCannotCrossPlaceAtSharedConnectorPath(t *testing.T) {
+	a, token := discordCLIRig(t)
+	homeA := os.Getenv(daemon.EnvStateDir)
+	base := []string{"connect", "--state-dir", a, "--name", "Place A", "--application-id", "100", "--owner-id", "1", "--guild", "10", "--token-file", token}
+	if code, _, text := cliDiscord(t, base...); code != 0 {
+		t.Fatal(text)
+	}
+	homeB := t.TempDir()
+	t.Setenv(daemon.EnvStateDir, homeB)
+	migrate := []string{"connect", "--state-dir", a, "--mode", "teammate"}
+	if code, _, _ := cliDiscord(t, migrate...); code == 0 {
+		t.Fatal("stored A's socket with B's state and credentials")
+	}
+	cfg, err := discord.LoadConfig(a)
+	if err != nil || cfg.Supervisor != nil || cfg.Mode != "" {
+		t.Fatal(cfg, err)
+	}
+	t.Setenv(daemon.EnvStateDir, homeA)
+	if code, _, text := cliDiscord(t, migrate...); code != 0 {
+		t.Fatal(text)
+	}
+	t.Setenv(daemon.EnvStateDir, homeB)
+	if code, _, text := cliDiscord(t, migrate...); code != 0 {
+		t.Fatal(text)
+	}
+	if _, err := os.Stat(filepath.Join(homeB, "discord-active.json")); !os.IsNotExist(err) {
+		t.Fatalf("modified B's connector selection: %v", err)
+	}
+}
+
+func TestDiscordMigrationDoesNotTrustSocketLayoutOrMissingSelection(t *testing.T) {
+	a, token := discordCLIRig(t)
+	homeA := os.Getenv(daemon.EnvStateDir)
+	homeB := t.TempDir()
+	t.Setenv(daemon.EnvSocket, filepath.Join(homeB, "daemon.sock"))
+	if code, _, msg := cliDiscord(t, "connect", "--state-dir", a, "--name", "A", "--application-id", "100", "--owner-id", "1", "--token-file", token, "--guild", "10"); code != 0 {
+		t.Fatal(msg)
+	}
+	t.Setenv(daemon.EnvStateDir, homeB)
+	if code, _, _ := cliDiscord(t, "connect", "--state-dir", a, "--mode", "teammate"); code == 0 {
+		t.Fatal("foreign default socket adopted unpinned place A")
+	}
+	t.Setenv(daemon.EnvStateDir, homeA)
+	if err := os.Remove(filepath.Join(homeA, "discord-active.json")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := cliDiscord(t, "connect", "--state-dir", a, "--mode", "teammate"); code == 0 {
+		t.Fatal("default directory substituted for missing persisted selection")
 	}
 }

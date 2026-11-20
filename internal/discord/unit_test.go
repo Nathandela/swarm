@@ -13,7 +13,7 @@ func TestRenderUnits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, s := range []string{"discord", "run", "--state-dir"} {
+		for _, s := range []string{"discord", "run", "--state-dir", "--unattended"} {
 			if !strings.Contains(unit, s) {
 				t.Fatalf("missing %s", s)
 			}
