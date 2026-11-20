@@ -233,8 +233,6 @@ func (c *DiscordClient) Close() error {
 	return nil
 }
 
-var errCallGatewayIdentify = errors.New("discord: call Gateway needs a fresh roster")
-
 type gatewayFrame struct {
 	Op       int             `json:"op"`
 	Data     json.RawMessage `json:"d"`
@@ -279,7 +277,7 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 			backoff = time.Second
 		})
 		status := websocket.CloseStatus(err)
-		if status == 4007 || status == 4009 || errors.Is(err, errCallGatewayIdentify) {
+		if status == 4007 || status == 4009 {
 			sessionID = ""
 			resumeURL = ""
 			seq = 0
@@ -508,11 +506,10 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				}
 			case "RESUMED":
 				replaying = false
-				if c.callGateway != nil && resuming {
-					// Text replay reached its durable boundary. A new READY
-					// records the cutover gap through the existing repair path.
-					return errCallGatewayIdentify
-				}
+				// Keep text replay continuous. The old roster was invalidated on
+				// disconnect; only a new live GUILD_CREATE can re-arm voice.
+				freshReady = true
+				callSeq = *seq
 				first = false
 				c.connected.Store(true)
 				onReady()

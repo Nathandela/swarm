@@ -207,31 +207,29 @@ func TestCallGatewayRosterAndTextRecovery(t *testing.T) {
 	send(replay, 0, "RESUMED", 15, "null")
 	expect(text, "first/replay/RESUMED")
 
-	fresh := receiveCallGatewayFixture(t, ctx, connections)
-	expectWrite(fresh, 2)
-	send(fresh, 0, "READY", 1, `{"session_id":"fresh"}`)
-	expect(voice, "READY")
-	expect(text, "fresh/READY")
+	fresh := replay
+	send(fresh, 0, "MESSAGE_CREATE", 16, `{"id":"104"}`)
+	expect(text, "first/MESSAGE_CREATE")
 	checkJoin(ctx, "10", "20", false)
-	send(fresh, 0, "GUILD_CREATE", 2, `{"id":"10","voice_states":[]}`)
+	send(fresh, 0, "GUILD_CREATE", 17, `{"id":"10","voice_states":[]}`)
 	expect(voice, "GUILD_CREATE")
 	checkJoin(stale, "10", "20", false)
 	checkJoin(client.callVoiceContext(ctx), "10", "20", true)
 	expectWrite(fresh, 4)
-	send(fresh, 0, "VOICE_STATE_UPDATE", 3, `{"guild_id":"10","channel_id":"20"}`)
-	send(fresh, 0, "VOICE_SERVER_UPDATE", 4, `{"guild_id":"10","token":"fixture"}`)
+	send(fresh, 0, "VOICE_STATE_UPDATE", 18, `{"guild_id":"10","channel_id":"20"}`)
+	send(fresh, 0, "VOICE_SERVER_UPDATE", 19, `{"guild_id":"10","token":"fixture"}`)
 	expect(voice, "VOICE_STATE_UPDATE")
 	expect(voice, "VOICE_SERVER_UPDATE")
 	for {
 		heartbeat := receiveCallGatewayFixture(t, ctx, fresh.heartbeat)
-		if string(heartbeat.Data) == "4" {
+		if string(heartbeat.Data) == "19" {
 			break
 		}
 	}
-	send(fresh, 0, "GUILD_ROLE_DELETE", 5, `{"role_id":"42"}`)
+	send(fresh, 0, "GUILD_ROLE_DELETE", 20, `{"role_id":"42"}`)
 	expect(voice, "disconnect")
 	checkJoin(ctx, "10", "20", false)
-	send(fresh, 0, "MESSAGE_CREATE", 6, `{"id":"104"}`)
-	expect(text, "fresh/GUILD_ROLE_DELETE")
-	expect(text, "fresh/MESSAGE_CREATE")
+	send(fresh, 0, "MESSAGE_CREATE", 21, `{"id":"104"}`)
+	expect(text, "first/GUILD_ROLE_DELETE")
+	expect(text, "first/MESSAGE_CREATE")
 }
