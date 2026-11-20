@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/Nathandela/swarm/internal/adapter"
 )
 
 type Env struct {
@@ -133,7 +135,7 @@ func (r relay) run(ctx context.Context, cwd, dir, attempt string, server Server,
 	}
 	result, err = r.read("2", startup)
 	var session struct{ SessionID string }
-	if err != nil || json.Unmarshal(result, &session) != nil || session.SessionID == "" {
+	if err != nil || json.Unmarshal(result, &session) != nil || !adapter.IsCanonicalConversationID(session.SessionID) {
 		return errors.New("native agy did not start a session; check its login and project configuration")
 	}
 	startupDone()

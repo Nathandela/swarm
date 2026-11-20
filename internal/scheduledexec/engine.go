@@ -22,6 +22,8 @@ var ErrAdmission = errors.New("scheduled launch refused before starting")
 var ErrWorkspaceBusy = errors.New("scheduled workspace is owned by a running or unconfirmed Swarm session")
 var errStateChanged = errors.New("scheduled occurrence changed")
 
+const startupRejectedDetail = "Worker rejected startup before the opening prompt. Worker stop verified; check the provider login and installation."
+
 type Launch struct {
 	RunID, AttemptID, OperationID, Token      string
 	Agent, Authority, Name, Workspace, Prompt string
@@ -159,7 +161,7 @@ func (e *Engine) observe(run schedule.Occurrence, now time.Time) error {
 		a.State, a.UpdatedAt = schedule.AttemptStopping, now
 		return e.stop(run, a, session, now)
 	case session.Stopped && session.StartupRejected && !a.PromptStarted:
-		return e.advanceRoute(run, a, "Worker rejected startup before the opening prompt. Worker stop verified; check the provider login and installation.", now)
+		return e.advanceRoute(run, a, startupRejectedDetail, now)
 	case session.Stopped:
 		return e.update(run, a, schedule.OccurrenceIncomplete, schedule.AttemptStopped, "", "Worker exited without a completion receipt; the workspace was kept.", now)
 	case !session.Running:
@@ -466,7 +468,7 @@ func (e *Engine) handoffPrompt(run schedule.Occurrence) string {
 	for i := len(run.Attempts) - 2; i >= 0; i-- {
 		previous := run.Attempts[i]
 		if previous.State == schedule.AttemptStopped {
-			if strings.HasPrefix(previous.Detail, "Worker rejected startup before the opening prompt.") {
+			if previous.Detail == startupRejectedDetail {
 				continue
 			}
 			return Prompt(run.Spec.Prompt) + "\n\nA previous " + previous.Agent + " worker reached a provider usage limit and was verified stopped. " +

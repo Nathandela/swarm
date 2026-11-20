@@ -49,7 +49,7 @@ func TestRelayBindsPromptAndLatestClosingMessage(t *testing.T) {
 }
 
 func TestRelayDoesNotAcceptIncompleteTurnOrAutomaticallyAllowOperation(t *testing.T) {
-	const attempt, conv = "attempt-1", "session-1"
+	const attempt, conv = "attempt-1", "b2cf6dff-e44b-42f1-9b5c-1826c732b597"
 	dir := t.TempDir()
 	if err := QueuePrompt(dir, attempt, "Original opening prompt"); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestRelayDoesNotAcceptIncompleteTurnOrAutomaticallyAllowOperation(t *testin
 	transcript := strings.Join([]string{
 		`{"id":1,"result":{"protocolVersion":1}}`,
 		`{"id":2,"result":{"sessionId":"` + conv + `"}}`,
-		`{"id":"permission-4","method":"session/request_permission","params":{"sessionId":"session-1","toolCall":{"title":"execute"},"options":[{"optionId":"allow","name":"Allow"}]}}`,
+		`{"id":"permission-4","method":"session/request_permission","params":{"sessionId":"` + conv + `","toolCall":{"title":"execute"},"options":[{"optionId":"allow","name":"Allow"}]}}`,
 		update(conv, "agent_message_chunk", "Should not be accepted."),
 		`{"id":3,"result":{"stopReason":"max_tokens"}}`,
 	}, "\n")
@@ -95,4 +95,21 @@ func update(session, kind, text string) string {
 	}}
 	data, _ := json.Marshal(item)
 	return string(data)
+}
+
+func TestRelayRejectsAnUnusableConversationIdentity(t *testing.T) {
+	dir := t.TempDir()
+	wire := strings.Join([]string{
+		`{"id":1,"result":{"protocolVersion":1}}`,
+		`{"id":2,"result":{"sessionId":"not-a-canonical-conversation"}}`,
+	}, "\n")
+	var output bytes.Buffer
+	r := relay{bufio.NewScanner(strings.NewReader(wire)), json.NewEncoder(&output), nil, &output}
+	if err := r.run(context.Background(), t.TempDir(), dir, "attempt", Server{}, func() {}); err == nil {
+		t.Fatal("unusable native conversation identity accepted")
+	}
+	evidence, found := ReadEvidence(dir, "attempt")
+	if !found || !evidence.StartupRejected {
+		t.Fatalf("startup rejection not recorded: %+v", evidence)
+	}
 }
