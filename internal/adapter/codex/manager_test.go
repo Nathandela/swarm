@@ -62,9 +62,55 @@ func TestFreshManagerSuppressesOnlyOptionalStartupUpdate(t *testing.T) {
 }
 
 func TestQualifiedManagerVersions(t *testing.T) {
-	for version, want := range map[string]bool{"0.167.0": true, "0.170.0": true, "0.169.0": false, "0.170.1": false, "": false} {
+	for version, want := range map[string]bool{"0.167.0": true, "0.170.0": true, "0.171.0": true, "0.171.1": false, "0.169.0": false, "0.170.1": false, "": false} {
 		if got := SupportsNativeTurns(version); got != want {
 			t.Errorf("version %q: got %v, want %v", version, got, want)
+		}
+	}
+}
+
+func TestVMManagerKeepsCodexBackendPermissionDefaults(t *testing.T) {
+	manager := &adapter.ManagerSpec{NativeCLI: true, Command: "/private/swarm", Args: []string{"voice", "mcp"}}
+	for _, resume := range []bool{false, true} {
+		var argv []string
+		var err error
+		if resume {
+			argv, err = New().Resume(adapter.ResumeSpec{Manager: manager, ConversationID: "019a056e-f192-7961-84cc-b4fa60e47aee"})
+		} else {
+			argv, err = New().Command(adapter.LaunchSpec{Manager: manager})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, _ := adapter.AsBackendSource(New())
+		plan, _ := src.Backend(adapter.BackendSpec{SocketPath: "/tmp/sock", AgentArgv: argv})
+		flags := strings.Join(plan.Args, "\n")
+		for _, arg := range plan.Args {
+			if !strings.HasPrefix(arg, "mcp_servers.swarm_voice=") {
+				continue
+			}
+			var settings struct {
+				Servers map[string]struct {
+					Tools map[string]struct {
+						Approval string `toml:"approval_mode"`
+					}
+				} `toml:"mcp_servers"`
+			}
+			if err := toml.Unmarshal([]byte(arg), &settings); err != nil {
+				t.Fatal(err)
+			}
+			tools := settings.Servers["swarm_voice"].Tools
+			if len(tools) != 4 {
+				t.Fatalf("approval scope %v", tools)
+			}
+			for _, name := range []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer"} {
+				if tools[name].Approval != "approve" {
+					t.Errorf("no native transport approval for %s", name)
+				}
+			}
+		}
+		if !strings.Contains(flags, `env={SWARM_MANAGER_VM_CLI="1"}`) || !strings.Contains(flags, sandboxNetworkOverride) || strings.Contains(flags, "approval_policy=") || strings.Contains(flags, "sandbox_mode=") {
+			t.Fatalf("VM manager changed standard backend policy: %s", flags)
 		}
 	}
 }

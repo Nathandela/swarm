@@ -58,12 +58,15 @@ func (m rootModel) moreLines() []menuLine {
 			lines = append(lines, menuLine{"Open", "enter"})
 		}
 		for _, b := range sessionButtons(s) {
+			if m.isLinkedDispatcher(s) {
+				continue
+			}
 			if !sameProcess && (b.key == "r" || b.key == "x") {
 				continue
 			}
 			lines = append(lines, menuLine{b.label, b.key})
 		}
-		if m.scheduleConfig.Open != nil && s.Cwd != "" {
+		if !m.isLinkedDispatcher(s) && m.scheduleConfig.Open != nil && s.Cwd != "" {
 			lines = append(lines, menuLine{"Schedule in this directory", "c"})
 		}
 		if !sameProcess {
@@ -236,6 +239,10 @@ func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 	return updated, cmd
 }
 func (m rootModel) boardCommandSession() (protocol.SessionView, bool) {
+	s, ok := m.boardTargetSession()
+	return s, ok && !m.isLinkedDispatcher(s)
+}
+func (m rootModel) boardTargetSession() (protocol.SessionView, bool) {
 	if m.general.commandID != "" {
 		return m.general.sessionByID(m.general.commandID)
 	}

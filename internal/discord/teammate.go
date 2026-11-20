@@ -51,6 +51,7 @@ type TeammateJobStatus struct {
 
 type TeammateDiscussion struct {
 	ID, InstallationID string
+	SupervisorSocket   string `json:"supervisor_socket,omitempty"`
 	Route, Starter     Route
 	ParentAnchor       string
 	Gap                uint64

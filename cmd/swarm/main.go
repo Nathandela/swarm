@@ -164,7 +164,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "relay":
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
-		return dispatchAgentVerb(runSpawn, args[1:], nil, stdout, stderr)
+		if len(args) == 2 && args[1] == "--new-operation-id" {
+			return runSpawn(args[1:], nil, stdout, stderr)
+		}
+		return dispatchAgentVerb(runSpawn, args[1:], []string{protocol.CapOwnerLaunch}, stdout, stderr)
 	case "handoff":
 		return dispatchAgentVerb(runHandoff, args[1:], nil, stdout, stderr)
 	case "reattach":
@@ -252,11 +255,12 @@ func runTUI(stdout, stderr io.Writer) int {
 	// prog is captured by the attach runner's terminal handoff; it is assigned just
 	// before Run, so the closures see the live program when an attach fires.
 	var prog *tea.Program
-	runner := tui.NewAttachRunner(attachDialer(cc), tui.TerminalHandoff{
+	hand := tui.TerminalHandoff{
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
-	})
-	opts := []tui.Option{scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)), tui.WithManagerSettingsDir(cc.StateDir)}
+	}
+	runner := tui.NewAttachRunner(attachDialer(cc), hand)
+	opts := []tui.Option{linkedDispatcherOption(cc, client.EndpointID(), hand), scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)), tui.WithManagerSettingsDir(cc.StateDir)}
 	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
 		return dialClient(tuiCaps())
 	}), tui.WithLoginRunner(loginRunner(tui.TerminalHandoff{

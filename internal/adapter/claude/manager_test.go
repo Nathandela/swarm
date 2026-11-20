@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -44,6 +45,26 @@ func TestManagerClaudeMCPPreservesHooksAndNativeToolsForFreshAndResume(t *testin
 		got := config.Servers["swarm_voice"]
 		if got.Command != manager.Command || !reflect.DeepEqual(got.Args, manager.Args) {
 			t.Fatalf("MCP arguments changed: %+v", got)
+		}
+	}
+}
+
+func TestVMManagerKeepsClaudePermissions(t *testing.T) {
+	manager := &adapter.ManagerSpec{NativeCLI: true, Command: "/private/swarm"}
+	for _, resume := range []bool{false, true} {
+		var argv []string
+		var err error
+		if resume {
+			argv, err = New().Resume(adapter.ResumeSpec{Manager: manager, ConversationID: "019a056e-f192-7961-84cc-b4fa60e47aee"})
+		} else {
+			argv, err = New().Command(adapter.LaunchSpec{Manager: manager})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx := slices.Index(argv, "--mcp-config")
+		if !slices.Contains(argv, "--allowedTools=mcp__swarm_voice__publish,mcp__swarm_voice__ask,mcp__swarm_voice__swarm_discussion_history,mcp__swarm_voice__swarm_discussion_answer") || slices.Contains(argv, "--dangerously-skip-permissions") || idx < 0 || !strings.Contains(argv[idx+1], `"env":{"SWARM_MANAGER_VM_CLI":"1"}`) {
+			t.Fatalf("unexpected VM policy: %#v", argv)
 		}
 	}
 }

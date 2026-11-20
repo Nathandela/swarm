@@ -31,7 +31,11 @@ var voiceMCPRun = func(ctx context.Context, socket, auth, conversation, session 
 	defer client.Close()
 	server := voice.NewManagerMCP(client.Call)
 	if strings.HasPrefix(conversation, voice.DiscussionConversationPrefix) {
-		server = voice.NewDiscussionManagerMCP(client.Call)
+		if os.Getenv("SWARM_MANAGER_VM_CLI") == "1" {
+			server = voice.NewVMDiscussionMCP(client.Call)
+		} else {
+			server = voice.NewDiscussionManagerMCP(client.Call)
+		}
 	}
 	return server.Run(ctx, &mcp.IOTransport{Reader: os.Stdin, Writer: voiceWriter{stdout}, MaxLineLength: voice.MaxControlFrameBytes})
 }

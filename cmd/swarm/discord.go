@@ -27,7 +27,7 @@ import (
 	"github.com/Nathandela/swarm/internal/teammatemanager"
 )
 
-const discordUsage = "swarm discord connect|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
+const discordUsage = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
 
 var discordLocalCall = discord.CallLocal
 var discordUnitRun = runDiscordUnit
@@ -53,11 +53,26 @@ var discordServiceRun = func(ctx context.Context, dir string, unattended bool) e
 	if err = ensureManagerDaemon(cc, unattended, daemon.Dial, daemon.EnsureDaemon); err != nil {
 		return err
 	}
+	if p := cfg.PreviousSupervisor; p != nil {
+		if skeleton.EndpointIDForStateDir(p.StateDir) != p.Endpoint {
+			return errors.New("discord: previous supervisor identity changed")
+		}
+		old := cc
+		old.StateDir, old.SocketPath, old.LockPath, old.LogPath = p.StateDir, p.Socket, p.Lock, p.Log
+		if err := ensureManagerDaemon(old, true, daemon.Dial, daemon.EnsureDaemon); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "discord: existing discussions are waiting for their previous supervisor:", err)
+		}
+	}
 	manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir), cc.StateDir, cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = manager.Close() }()
+	if unattended {
+		if err := recordInstalledDiscord(dir); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "discord: main board registration: %v\n", err)
+		}
+	}
 	return discord.Run(ctx, dir, manager)
 }
 
@@ -81,7 +96,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, "discord: need a reference or target ID first")
 			return misuseExit
 		}
-	case "connect", "run", "status", "doctor", "disconnect":
+	case "connect", "migrate-supervisor", "run", "status", "doctor", "disconnect":
 	default:
 		_, _ = fmt.Fprintln(stderr, discordUsage)
 		return misuseExit
@@ -91,8 +106,17 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	stateDir := fs.String("state-dir", "", "connector state directory")
 	var name, applicationID, ownerID, tokenFile, workdir, receptionistCLI, receptionistModel, bodyFile, publicationID, candidateJSON string
 	var guilds, channels, users []string
-	var mode, manager string
+	var mode, manager, projectAccess string
 	projects := map[string]string{}
+	var source discord.PreviousSupervisor
+	var migrationPreview bool
+	if command == "migrate-supervisor" {
+		fs.BoolVar(&migrationPreview, "dry-run", false, "verify both live supervisors and preview the migration")
+		fs.StringVar(&source.StateDir, "from-state-dir", "", "original supervisor state directory")
+		fs.StringVar(&source.Socket, "from-socket", "", "original supervisor socket")
+		fs.StringVar(&source.Lock, "from-lock", "", "original supervisor lock file")
+		fs.StringVar(&source.Log, "from-log", "", "original supervisor log file")
+	}
 	var install, allChannels, unattended bool
 	if command == "run" {
 		fs.BoolVar(&unattended, "unattended", false, "start the home supervisor only from its saved environment")
@@ -111,6 +135,13 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&allChannels, "all-channels", false, "remove saved channel restrictions in the enrolled servers")
 		fs.StringVar(&mode, "mode", "", "legacy, teammate (server), or personal (owner DM)")
 		fs.StringVar(&manager, "manager", "", "native teammate manager (codex or claude)")
+		fs.Func("project-access", "enrolled project directories or any accessible VM directory (default for new installations)", func(value string) error {
+			if value != discord.ProjectAccessEnrolled && value != discord.ProjectAccessVM {
+				return errors.New("expected enrolled or vm")
+			}
+			projectAccess = value
+			return nil
+		})
 		fs.Func("project", "named checkout, name=directory (repeat to replace the project list)", func(value string) error {
 			name, dir, ok := strings.Cut(value, "=")
 			name = strings.ToLower(strings.TrimSpace(name))
@@ -175,9 +206,26 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return discordCLIError(stderr, err)
 	}
+	if (command == "connect" || command == "disconnect" || command == "migrate-supervisor") && !migrationPreview {
+		release, e := lockDiscordConfiguration(*stateDir, cc.StateDir)
+		if e != nil {
+			return discordCLIError(stderr, e)
+		}
+		defer release()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 	switch command {
+	case "migrate-supervisor":
+		if err := migrateDiscordSupervisor(ctx, cc, *stateDir, source, migrationPreview); err != nil {
+			return discordCLIError(stderr, err)
+		}
+		if migrationPreview {
+			_, _ = fmt.Fprintln(stdout, "Verified home and original supervisor identities and connector selection.")
+			return 0
+		}
+		_, _ = fmt.Fprintln(stdout, "New discussions will use the selected home supervisor when the connector next starts. Existing discussions keep their supervisor.")
+		return 0
 	case "doctor":
 		return runDiscordDoctor(ctx, cc, *stateDir, checkChannel, stdout, stderr)
 	case "connect":
@@ -217,6 +265,8 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				config.Mode = mode
 			case "manager":
 				config.ManagerCLI = manager
+			case "project-access":
+				config.ProjectAccess = projectAccess
 			case "project":
 				config.Projects = projects
 			case "name":
@@ -263,6 +313,9 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			config.ChannelIDs = nil
 		}
 		if config.TeammateMode() {
+			if !existing && config.ProjectAccess == "" {
+				config.ProjectAccess = discord.ProjectAccessVM
+			}
 			if config.Supervisor == nil {
 				state, e := filepath.Abs(cc.StateDir)
 				if e != nil {
@@ -294,11 +347,11 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		} else {
-			if manager != "" || len(projects) > 0 {
-				return discordCLIError(stderr, errors.New("--manager and --project require teammate or personal mode"))
+			if manager != "" || len(projects) > 0 || projectAccess != "" {
+				return discordCLIError(stderr, errors.New("--manager, --project and --project-access require teammate or personal mode"))
 			}
 			if config.Mode == "legacy" {
-				config.Mode, config.ManagerCLI, config.Projects, config.Supervisor = "", "", nil, nil
+				config.Mode, config.ManagerCLI, config.Projects, config.Supervisor, config.ProjectAccess = "", "", nil, nil, ""
 			}
 		}
 		config.Enabled = true
@@ -360,7 +413,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		}
 		var status discord.LocalStatus
 		if e = discordLocalCall(ctx, *stateDir, "status", nil, &status); e != nil {
-			status = discord.LocalStatus{Name: config.Name, Mode: config.Mode, InstallationID: config.InstallationID, Connected: false}
+			status = discord.LocalStatus{ProjectAccess: config.EffectiveProjectAccess(), Name: config.Name, Mode: config.Mode, InstallationID: config.InstallationID, Connected: false}
 		}
 		if err = writeJSON(stdout, status); err != nil {
 			return discordCLIError(stderr, err)

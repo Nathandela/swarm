@@ -166,3 +166,48 @@ func TestBootstrapRetryRequiresCorrelatedPreEffectPrerequisite(t *testing.T) {
 		})
 	}
 }
+
+func TestVMUpgradeReconcilesInFlightLegacyManagerWithoutChangingItsPolicy(t *testing.T) {
+	dir, cfg := privateConfigDir(t), testConfig()
+	cfg.ConversationID = DiscussionConversationPrefix + "fixture"
+	refs := ManagerBridgeRefs{Socket: "/private/bridge.sock", AuthFile: "/private/bridge.key"}
+	f := bootstrapNativeFixture(cfg, refs)
+	f.lost = true
+	if _, err := bootstrapManager(t.Context(), dir, cfg, refs, "endpoint", nil, f); !errors.Is(err, ErrControllerUncertain) {
+		t.Fatal(err)
+	}
+	cfg.VMProjectAccess = true
+	if _, err := bootstrapManager(t.Context(), dir, cfg, refs, "endpoint", nil, f); !errors.Is(err, ErrControllerUncertain) || f.launches != 1 {
+		t.Fatalf("changed unresolved launch: %v", err)
+	}
+	f.outcome = schema.OperationOutcomeView{State: schema.OutcomeApplied, SessionID: "endpoint/manager"}
+	selected, err := bootstrapManager(t.Context(), dir, cfg, refs, "endpoint", nil, f)
+	if err != nil || f.launches != 1 || selected.Binding.NativeCLI {
+		t.Fatalf("upgrade took over running legacy manager: %+v %v", selected, err)
+	}
+}
+
+func TestVMUpgradeReplacesProvenUnsentLegacyManagerOperation(t *testing.T) {
+	dir, cfg := privateConfigDir(t), testConfig()
+	cfg.ConversationID = DiscussionConversationPrefix + "fixture"
+	refs := ManagerBridgeRefs{Socket: "/private/bridge.sock", AuthFile: "/private/bridge.key"}
+	f := bootstrapNativeFixture(cfg, refs)
+	id, err := protocol.NewLaunchOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveManagerIntent(dir, managerIntentName(cfg.ConversationID), managerLaunchIntent{Version: 1, ConversationID: cfg.ConversationID, Request: managerLaunchRequest(cfg, refs), OperationID: id, Phase: "prepared"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg.VMProjectAccess = true
+	f.beforeLaunch = func(op string, req protocol.LaunchReq) {
+		if op == id || !req.Manager.NativeCLI {
+			t.Fatal("changed payload reused prior operation")
+		}
+	}
+	f.runtime.NativeCLI = true
+	selected, err := bootstrapManager(t.Context(), dir, cfg, refs, "endpoint", nil, f)
+	if err != nil || !selected.Binding.NativeCLI || f.launches != 1 {
+		t.Fatalf("prepared launch %+v: %v", selected, err)
+	}
+}

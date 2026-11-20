@@ -165,6 +165,7 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance, ret
 	}
 	result.BridgeSocket = meta.ManagerBridgeSocket
 	result.AuthFile = meta.ManagerAuthFile
+	result.NativeCLI = meta.ManagerNativeCLI
 	return result, nil
 }
 func (d *Daemon) checkedManagerBinding(local string, supplied managerproof.Binding) (managerproof.Status, error) {

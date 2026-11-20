@@ -87,6 +87,8 @@ type rowColumns struct {
 
 // generalModel is the grouped session board: the general view.
 type generalModel struct {
+	linkedDispatcherIDs map[string]bool
+
 	sessions     []protocol.SessionView // newest category entry first; grouped at render time
 	sel          int                    // flat selection index across visible rows
 	grouping     groupingMode
@@ -214,6 +216,9 @@ func sortSessionsBy(sessions []protocol.SessionView, ordering orderingMode, grou
 }
 
 func (m generalModel) groupKey(s protocol.SessionView) string {
+	if isDiscordManager(s) {
+		return dispatcherSection
+	}
 	switch m.grouping {
 	case groupByRepo:
 		cwd := strings.TrimSpace(s.Cwd)
@@ -241,9 +246,12 @@ func (m generalModel) groupKey(s protocol.SessionView) string {
 func (m *generalModel) rebuildSections() {
 	if m.grouping == groupByStatus {
 		m.sections = m.sections[:0]
+		if slices.ContainsFunc(m.sessions, isDiscordManager) {
+			m.sections = append(m.sections, dispatcherSection)
+		}
 		for _, g := range groupOrder {
 			for _, s := range m.sessions {
-				if s.Group == g {
+				if m.groupKey(s) == string(g) {
 					m.sections = append(m.sections, string(g))
 					break
 				}
@@ -262,6 +270,15 @@ func (m *generalModel) rebuildSections() {
 		m.sections = append(m.sections, key)
 	}
 	slices.SortFunc(m.sections, func(a, b string) int {
+		if a == b {
+			return 0
+		}
+		if a == dispatcherSection {
+			return -1
+		}
+		if b == dispatcherSection {
+			return 1
+		}
 		if a == untaggedGroup || a == noRepoGroup {
 			return 1
 		}
@@ -653,9 +670,16 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	if !m.boardUsable() || m.connectionLost || m.general.commandID == "" && !m.general.actionVisible() {
 		return m, nil
 	}
-	s, ok := m.boardCommandSession()
+	s, ok := m.boardTargetSession()
 	if !ok {
 		return m, nil
+	}
+	if m.isLinkedDispatcher(s) {
+		if s.Status.Process != status.ProcessRunning {
+			return m, m.general.setBanner("This process has exited. Continue the discussion in its Discord thread.")
+		}
+		m.screen = screenAttach
+		return m, runAttach(m.dispatcherAttach, s, false, m.touchBack, nil)
 	}
 	// An ended/lost row cannot be attached: the daemon refuses any attach to a
 	// non-running session (internal/daemon attach.go). Rather than dial a doomed

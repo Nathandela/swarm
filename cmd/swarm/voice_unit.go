@@ -155,7 +155,7 @@ func manageVoiceUnit(command, goos, home, binary, stateDir string, run voiceUnit
 		if err := os.Remove(path); err != nil {
 			return err
 		}
-		if err := syncVoiceUnitDir(unitDir); err != nil {
+		if err := syncLocalPath(unitDir); err != nil {
 			return err
 		}
 		if goos == "linux" {
@@ -335,10 +335,10 @@ func writeVoiceUnit(path, body string) error {
 	if err := os.Remove(file.Name()); err != nil {
 		return err
 	}
-	return syncVoiceUnitDir(filepath.Dir(path))
+	return syncLocalPath(filepath.Dir(path))
 }
 
-func syncVoiceUnitDir(path string) error {
+func syncLocalPath(path string) error {
 	dir, err := os.Open(path)
 	if err != nil {
 		return err

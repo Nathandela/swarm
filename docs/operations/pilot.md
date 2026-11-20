@@ -37,3 +37,17 @@ Outside pilot mode, use `swarm message <session-id> --text 'exact message' [--op
 Pilot `create` and `resume` require the negotiated reliable owner launch capability. Before dispatch, the private context saves the operation ID and exact launch request, with an allowlisted environment and safe native-origin refusal markers. If a reply is lost, retry the exact same command in that context: it reconciles the original worker even if the resume source has disappeared. A different create/resume cannot overtake an unresolved launch. Successful receipts include `operation_id`; `swarm pilot --context <path> launch-status <operation-id>` reads its outcome without launching anything, including after the one-hour mutation retry window. A matching `applied` result with the original session ID clears that context's pending-launch guard after the result is successfully printed, including if the worker has since been deleted. Unknown or expired status does not prove no worker was created. Legacy daemons refuse this route with restart guidance; no legacy launch fallback is used.
 
 Read an existing operation with `swarm message <session-id> --status --operation-id <id>`, including after its mutation retry window. Native receipts include exact input coordinates and their evidence source. Pilot `await` follows that original native input even while a later input is running; `input_completed`, `input_failed`, `input_cancelled` and `input_declined` describe provider execution, not task correctness. An unrelated ready state cannot satisfy a native input wait.
+
+## Worker launch receipts from the terminal
+
+For an ordinary `swarm spawn`, save an operation ID before launching if you need to recover from a lost response.
+
+```sh
+operation_id=$(swarm spawn --new-operation-id)
+swarm spawn --operation-id "$operation_id" --cli codex --dir "$PWD" --prompt "Run the project tests"
+swarm spawn --status "$operation_id"
+```
+
+An `applied` receipt identifies the worker by `session_id`. Read the receipt after an interrupted command. Retry the same arguments, working directory and launch environment with the same ID within one hour. Status remains readable after that window. An unknown outcome can still have a worker, so reconcile it before starting another launch. For `--handoff` and `--delegate`, keep the same temporary directory across retries. Swarm retains a private snapshot if the source disappears and rejects a changed document for the same ID.
+
+Inside a VM-mode Discord dispatcher, an ordinary `swarm spawn` automatically prints its operation ID to standard error before submitting the launch. Standard output retains the worker session ID. The supervisor records the dispatcher as the parent and prefixes the worker name with `DSP-`.
