@@ -80,3 +80,22 @@ func TestOwnerRosterDoesNotInventOrLeakCapabilityRecords(t *testing.T) {
 		})
 	}
 }
+
+func TestManagerExitDiagnosticsStayOnExitedOwnerRoster(t *testing.T) {
+	code := 143
+	meta := persist.Meta{ID: "sess1", Role: "manager", ExitCode: &code, ManagerExitSignal: 15, Status: status.Status{Process: status.ProcessExited}}
+	for _, tc := range []struct {
+		remote  bool
+		process status.Process
+		role    string
+		want    bool
+	}{
+		{false, status.ProcessExited, "manager", true}, {true, status.ProcessExited, "manager", false}, {false, status.ProcessRunning, "manager", false}, {false, status.ProcessExited, "", false},
+	} {
+		meta.Status.Process, meta.Role = tc.process, tc.role
+		row := (&Server{d: newStubDaemon(), remoteTier: tc.remote}).stampView("ep", meta, status.GroupCompleted, false, false, time.Time{})
+		if (row.ManagerExitCode != nil) != tc.want || (row.ManagerExitSignal == 15) != tc.want {
+			t.Fatalf("unexpected diagnostics %+v for %+v", row, tc)
+		}
+	}
+}

@@ -38,6 +38,9 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 	result.ManagerSession, result.ManagerInstance, result.Project = c.Binding.SessionID, c.Binding.SessionInstance, c.Project
 	switch {
 	case c.Parked:
+		if c.FailedResume != nil {
+			result.Diagnostic = c.FailedResume.Diagnostic
+		}
 	case c.Retirement != nil:
 		result.State = "parking"
 	case c.CustodyLost:

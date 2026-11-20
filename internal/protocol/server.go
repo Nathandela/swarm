@@ -3617,6 +3617,9 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
+	if m.Role == "manager" && m.Status.Process == status.ProcessExited {
+		view.ManagerExitCode, view.ManagerExitSignal = m.ExitCode, m.ManagerExitSignal
+	}
 	if source, ok := s.d.(OwnerSessionCapabilitySource); ok {
 		if caps, present := source.OwnerSessionCapabilities(m.ID, m.ShimPID, m.ShimStartTime); present && caps.Validate() == nil {
 			if m.Status.Process != status.ProcessRunning || m.ResumeError != "" || caps.Provider != m.AgentType {

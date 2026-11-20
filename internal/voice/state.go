@@ -42,6 +42,8 @@ type ManagerBinding struct {
 }
 
 type Conversation struct {
+	FailedResume      *failedResume            `json:"failed_resume,omitempty"`
+	NeedsHandoff      bool                     `json:"needs_handoff,omitempty"`
 	LastOutput        uint64                   `json:"last_output,omitempty"`
 	ManagerGeneration uint64                   `json:"manager_generation,omitempty"`
 	Project           string                   `json:"project,omitempty"`

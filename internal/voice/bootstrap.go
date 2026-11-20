@@ -122,7 +122,7 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 			if intent.SessionID == "" || (len(live) == 1 && live[0].ID != intent.SessionID) {
 				return none, ErrStale
 			}
-			return findBootstrapManager(ctx, cfg, refs, endpoint, intent.SessionID, nil, client)
+			return observeLaunchedManager(ctx, cfg, refs, endpoint, intent, client)
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		if hadManager {
@@ -172,7 +172,41 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 	if err := saveManagerIntent(dir, file, intent); err != nil {
 		return none, err
 	}
-	return findBootstrapManager(ctx, cfg, refs, endpoint, id, nil, client)
+	return observeLaunchedManager(ctx, cfg, refs, endpoint, intent, client)
+}
+
+// An exited roster row diagnoses startup failure. Only the independently verified
+// owner launch receipt can additionally prove that this attempt accepted no input.
+type bootstrapExit struct {
+	row protocol.SessionView
+}
+
+func (e *bootstrapExit) Error() string { return managerStartupExit(e.row).Error() }
+func (e *bootstrapExit) Unwrap() error { return ErrDiscussionActivationUnavailable }
+
+type failedResume struct {
+	Attempt    int    `json:"attempt"`
+	Session    string `json:"session"`
+	Instance   string `json:"instance"`
+	Diagnostic string `json:"diagnostic"`
+}
+
+func (e *failedResume) Error() string { return e.Diagnostic }
+func (e *failedResume) Unwrap() error { return ErrDiscussionActivationUnavailable }
+
+func observeLaunchedManager(ctx context.Context, cfg Config, refs ManagerBridgeRefs, endpoint string, intent managerLaunchIntent, client managerBootstrapClient) (managerSelection, error) {
+	selected, err := findBootstrapManager(ctx, cfg, refs, endpoint, intent.SessionID, nil, client)
+	var exited *bootstrapExit
+	if !errors.As(err, &exited) || intent.Request.Manager == nil || intent.Request.Manager.RetireOperationID == "" {
+		return selected, err
+	}
+	outcome, readErr := client.LaunchOperationStatus(intent.OperationID)
+	target, applied := protocol.AppliedOwnerLaunchSession(endpoint, outcome)
+	if readErr != nil || !applied || target != intent.SessionID || outcome.FailedManagerInstance == "" ||
+		(exited.row.Capabilities != nil && exited.row.Capabilities.SessionInstance != outcome.FailedManagerInstance) {
+		return selected, errors.Join(err, ErrControllerUncertain, readErr)
+	}
+	return selected, &failedResume{Session: target, Instance: outcome.FailedManagerInstance, Diagnostic: err.Error()}
 }
 
 func knownUnsentManagerLaunch(err error) bool {
@@ -254,7 +288,13 @@ func findBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRef
 func selectBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRefs, endpoint string, existing *ManagerBinding, row protocol.SessionView, client managerBootstrapClient) (managerSelection, error) {
 	var result managerSelection
 	prefix, local, ok := strings.Cut(row.ID, "/")
-	if !ok || prefix != endpoint || local == "" || strings.Contains(local, "/") || row.EndpointID != endpoint || row.Role != "manager" || row.ManagerConversationID != cfg.ConversationID || row.Agent != cfg.Provider || row.Cwd != cfg.WorkDir || row.Status.Process != status.ProcessRunning {
+	if !ok || prefix != endpoint || local == "" || strings.Contains(local, "/") || row.EndpointID != endpoint || row.Role != "manager" || row.ManagerConversationID != cfg.ConversationID || row.Agent != cfg.Provider || row.Cwd != cfg.WorkDir {
+		return result, ErrStale
+	}
+	if row.Status.Process == status.ProcessExited {
+		return result, &bootstrapExit{row}
+	}
+	if row.Status.Process != status.ProcessRunning {
 		return result, ErrStale
 	}
 	if row.Capabilities == nil || row.Capabilities.SessionInstance == "" {

@@ -95,7 +95,7 @@ func (d *Daemon) BindParkedManagerResume(spec LaunchSpec) error {
 		return ErrResumeSourceChanged
 	}
 	m, found := d.Get(spec.ResumedFrom)
-	if !found || !matchesBoundResumeRole(m, spec) || d.ManagerRetirementStatus(m, m.ManagerRetirement) != "retired" ||
+	if !found || !d.ParkedManagerResumeAllowed(m, spec) ||
 		m.ManagerResumeOperationID != "" && (m.ManagerResumeOperationID != spec.OperationID || m.ManagerResumeRequestHash != spec.OwnerLaunchHash) {
 		return ErrResumeSourceChanged
 	}
@@ -107,6 +107,53 @@ func (d *Daemon) BindParkedManagerResume(spec LaunchSpec) error {
 		}
 	}
 	return syncLaunchDirectories(d.sessionDir(m.ID))
+}
+
+// FailedManagerStartupInstance corroborates a failed startup with the physical exit and
+// the incarnation's verified empty proof ledger. A missing record is inconclusive.
+func (d *Daemon) FailedManagerStartupInstance(m persist.Meta) string {
+	if m.Role != "manager" || m.ResumedFrom == "" || m.ManagerRetirement.OperationID != "" ||
+		m.Status.Process != status.ProcessExited || m.ExitCode == nil || *m.ExitCode == 0 ||
+		m.ShimPID <= 0 || m.ShimStartTime <= 0 || retirementShimMayLive(m) {
+		return ""
+	}
+	dir := d.sessionDir(m.ID)
+	exit, ok := readExitSideFile(dir)
+	if !ok || m.CreatedAt.IsZero() || exit.FinishedAt.IsZero() || exit.ExitCode != *m.ExitCode || exit.FinishedAt.Before(m.CreatedAt) {
+		return ""
+	}
+	replay, err := managerproof.OpenReplay(dir, m.ID, m.ManagerConversationID, m.ManagerReplayID)
+	if err != nil {
+		return ""
+	}
+	stats, err := replay.Stats()
+	closeErr := replay.Close()
+	if err != nil || closeErr != nil || stats.Records != 0 || stats.GuardKeys != 0 {
+		return ""
+	}
+	return d.recordedJournalInstance(m)
+}
+
+// ParkedManagerResumeAllowed permits one continuation from the retired source
+// and one from its proved failed child. The child's own reservation fences retries.
+func (d *Daemon) ParkedManagerResumeAllowed(source persist.Meta, spec LaunchSpec) bool {
+	if spec.Manager == nil || spec.ResumeSource == nil || source.ConversationID != spec.ConversationID ||
+		source.ShimPID != spec.ResumeSource.ShimPID || source.ShimStartTime != spec.ResumeSource.ShimStartTime || !matchesBoundResumeRole(source, spec) {
+		return false
+	}
+	if source.ManagerRetirement.OperationID != "" {
+		return d.ManagerRetirementStatus(source, source.ManagerRetirement) == "retired"
+	}
+	parent, ok := d.Get(source.ResumedFrom)
+	if !ok || parent.ManagerRetirement.OperationID == "" || parent.ManagerRetirement.OperationID != spec.Manager.RetireOperationID ||
+		parent.ManagerConversationID != source.ManagerConversationID || parent.ConversationID != source.ConversationID ||
+		parent.ManagerBridgeSocket != source.ManagerBridgeSocket || parent.ManagerAuthFile != source.ManagerAuthFile ||
+		parent.AgentType != source.AgentType || parent.ManagerResumeOperationID == "" ||
+		d.ManagerRetirementStatus(parent, parent.ManagerRetirement) != "retired" {
+		return false
+	}
+	out, ok := d.OwnerLaunchOutcome(parent.ManagerResumeOperationID)
+	return ok && out.State == OpStateApplied && out.SessionID == source.ID && spec.ResumeSource.Instance != "" && d.FailedManagerStartupInstance(source) == spec.ResumeSource.Instance
 }
 
 func managerRetirementProven(m persist.Meta, target persist.ManagerRetirement, exit shim.ExitInfo, reported, shimAlive bool) bool {
@@ -122,7 +169,8 @@ func matchesBoundResumeRole(source persist.Meta, spec LaunchSpec) bool {
 	retirement := source.ManagerRetirement
 	return source.Role == "manager" && source.ManagerConversationID == spec.Manager.ConversationID &&
 		source.ManagerBridgeSocket == spec.Manager.BridgeSocket && source.ManagerAuthFile == spec.Manager.AuthFile &&
-		retirement.OperationID != "" && retirement.OperationID == spec.Manager.RetireOperationID &&
-		retirement.Instance == spec.ResumeSource.Instance && retirement.NativeSessionID == spec.ConversationID &&
-		retirement.ShimPID == spec.ResumeSource.ShimPID && retirement.ShimStartTime == spec.ResumeSource.ShimStartTime
+		((retirement.OperationID == "" && source.ResumedFrom != "" && spec.Manager.RetireOperationID != "") ||
+			(retirement.OperationID != "" && retirement.OperationID == spec.Manager.RetireOperationID &&
+				retirement.Instance == spec.ResumeSource.Instance && retirement.NativeSessionID == spec.ConversationID &&
+				retirement.ShimPID == spec.ResumeSource.ShimPID && retirement.ShimStartTime == spec.ResumeSource.ShimStartTime))
 }

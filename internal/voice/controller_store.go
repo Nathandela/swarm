@@ -147,6 +147,11 @@ func (s *Store) controllerInputPhase(b ManagerBinding, seq uint64, phase, turn, 
 		}
 		if turn != "" {
 			a.NativeTurnID = turn
+			conv := st.Conversations[b.ConversationID]
+			if conv.NeedsHandoff && (phase == "running" || phase == "completed") {
+				conv.NeedsHandoff = false
+				putRecord(st, "conversations", &st.Conversations, b.ConversationID, conv)
+			}
 		}
 		if phase == "submitted" || phase == "admitted" || phase == "running" || phase == "completed" {
 			for wk, w := range st.Wakes {

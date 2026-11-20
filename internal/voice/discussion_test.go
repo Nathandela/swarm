@@ -380,7 +380,7 @@ func TestDiscussionObserverRebindPreservesExactExecutingInputAndReconstructionKe
 	d := &DiscussionController{store: s, now: time.Now}
 	next := prior
 	next.ObservationGeneration = "rejoined-observer"
-	rejoined, err := d.recoverBinding(prior, next, protocol.ManagerNativeTurn{State: "idle"}, false)
+	rejoined, err := d.recoverBinding(prior, next, protocol.ManagerNativeTurn{State: "idle"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestDiscussionObserverRebindPreservesExactExecutingInputAndReconstructionKe
 	}
 	replacement := rejoined
 	replacement.SessionID, replacement.SessionInstance, replacement.NativeSessionID = "machine/rebuilt", "replacement", "native-rebuilt"
-	if _, err := d.recoverBinding(rejoined, replacement, protocol.ManagerNativeTurn{State: "idle"}, true); err != nil {
+	if _, err := d.recoverBinding(rejoined, replacement, protocol.ManagerNativeTurn{State: "idle"}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = s.Snapshot()
@@ -437,10 +437,8 @@ func TestDiscussionWakePublicationsRetainOrderAndAcknowledgedRetries(t *testing.
 	}
 	first := Publication{Admission: 1, NativeTurnID: "wake-turn", ID: "z-first", Sequence: 1, Text: "I checked the worker result"}
 	final := Publication{Admission: 1, NativeTurnID: "wake-turn", ID: "a-final", Sequence: 2, Text: "The integration test passed", Final: true}
-	for _, p := range []Publication{first, final} {
-		if _, err := s.PublishSpeech(binding, permit, p); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := s.PublishSpeech(binding, permit, first); err != nil {
+		t.Fatal(err)
 	}
 	d := &DiscussionController{store: s, cfg: Config{ConversationID: binding.ConversationID}, now: time.Now}
 	st, _ := s.Snapshot()
@@ -448,6 +446,16 @@ func TestDiscussionWakePublicationsRetainOrderAndAcknowledgedRetries(t *testing.
 	lost := errors.New("outbox acknowledgment lost")
 	if err := d.export(st, func(output DiscussionOutput) error { uncertain = output; return lost }); !errors.Is(err, lost) {
 		t.Fatalf("torn outbox acknowledgment was ignored: %v", err)
+	}
+	if uncertain.ID != first.ID || uncertain.Text != first.Text {
+		t.Fatalf("non-final publication was unavailable during the turn: %+v", uncertain)
+	}
+	if _, err := s.PublishSpeech(binding, permit, final); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
 	}
 	var received []DiscussionOutput
 	emit := func(output DiscussionOutput) error {

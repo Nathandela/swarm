@@ -62,12 +62,16 @@ func readNativeProof(stateRoot, local, name string, value any) error {
 	return json.Unmarshal(raw, value)
 }
 func verifyLoginWritersStopped(stateRoot string, meta persist.Meta) error {
+	return verifyNativeWritersStopped(stateRoot, meta, true)
+}
+
+func verifyNativeWritersStopped(stateRoot string, meta persist.Meta, allowLegacy bool) error {
 	if meta.Status.Process == status.ProcessRunning || loginProcessAlive(meta.ShimPID, meta.ShimStartTime) {
 		return logins.ErrInUse
 	}
 	var native shim.NativeProcessInfo
 	err := readNativeProof(stateRoot, meta.ID, shim.NativeProcessFile, &native)
-	if errors.Is(err, os.ErrNotExist) && meta.LoginRuntime == nil {
+	if allowLegacy && errors.Is(err, os.ErrNotExist) && meta.LoginRuntime == nil {
 		// Offline migration validates old writer custody before removing its old
 		// records; ordinary rows without a native scope have no Swarm auth writer.
 		return nil

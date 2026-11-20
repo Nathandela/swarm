@@ -127,3 +127,17 @@ func lastNonEmptyLine(s string) string {
 	}
 	return ""
 }
+
+func TestExitSignalNumberRequiresMatchingReport(t *testing.T) {
+	for _, tc := range []struct {
+		code   int
+		signal string
+		want   int
+	}{
+		{143, "SIGTERM", 15}, {143, "", 0}, {143, "SIGHUP", 0}, {1, "private error", 0},
+	} {
+		if got := (ExitInfo{ExitCode: tc.code, ExitSignal: tc.signal}).SignalNumber(); got != tc.want {
+			t.Fatalf("code %d signal %q yielded %d, want %d", tc.code, tc.signal, got, tc.want)
+		}
+	}
+}

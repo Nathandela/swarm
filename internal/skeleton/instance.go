@@ -57,12 +57,13 @@ func (a *coreAPI) validateBoundResume(spec daemon.LaunchSpec, local string, sour
 	if spec.Manager == nil && source.Role != "manager" {
 		return nil
 	}
-	retirement := source.ManagerRetirement
 	if spec.Manager == nil || validateManagerSelection(spec, source) != nil ||
-		retirement.OperationID == "" || retirement.OperationID != spec.Manager.RetireOperationID ||
-		retirement.Instance != spec.ResumeSource.Instance ||
+		source.ManagerRetirement.OperationID == "" && verifyNativeWritersStopped(a.stateDir, source, false) != nil ||
 		source.ManagerResumeOperationID != "" && (source.ManagerResumeOperationID != spec.OperationID || source.ManagerResumeRequestHash != spec.OwnerLaunchHash) ||
-		a.core.ManagerRetirementStatus(source, retirement) != "retired" {
+		!a.core.ParkedManagerResumeAllowed(source, daemon.LaunchSpec{
+			Manager: spec.Manager, ConversationID: source.ConversationID,
+			ResumeSource: &daemon.ResumeSourceFence{Instance: spec.ResumeSource.Instance, ShimPID: source.ShimPID, ShimStartTime: source.ShimStartTime},
+		}) {
 		return daemon.ErrResumeSourceChanged
 	}
 	return nil

@@ -148,8 +148,9 @@ type Meta struct {
 	OpenCodeBinding *OpenCodeBinding `json:"opencode_binding,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
-	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
-	ExitCode    *int         `json:"exit_code"`
+	CLIIdentity       *CLIIdentity `json:"cli_identity,omitempty"`
+	ExitCode          *int         `json:"exit_code"`
+	ManagerExitSignal int          `json:"manager_exit_signal,omitempty"`
 	// RosterHidden archives an ended historical attempt without deleting its files.
 	RosterHidden bool   `json:"roster_hidden,omitempty"`
 	ResumedFrom  string `json:"resumed_from"`
