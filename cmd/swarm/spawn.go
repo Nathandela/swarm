@@ -7,14 +7,19 @@ package main
 // pointed at by a one-line initial prompt, so instructions never travel as argv.
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"time"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/worktree"
 )
 
@@ -41,8 +46,64 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	prompt := fs.String("prompt", "", "inline instructions for the new session")
 	handoff := fs.String("handoff", "", "handoff document to hand the new session")
 	delegate := fs.String("delegate", "", "delegation document to hand the new session")
+	operationID := fs.String("operation-id", "", "durable operation ID from swarm spawn --new-operation-id; reuse only for an exact retry")
+	generateID := fs.Bool("new-operation-id", false, "print a new durable operation ID for a later launch")
+	statusID := fs.String("status", "", "read the durable launch outcome for this operation ID as JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if fs.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "spawn: unexpected positional arguments")
+		return 2
+	}
+	if *generateID {
+		if fs.NFlag() != 1 {
+			_, _ = fmt.Fprintln(stderr, "spawn: --new-operation-id takes no other arguments")
+			return 2
+		}
+		id, err := protocol.NewLaunchOperationID()
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		_, _ = fmt.Fprintln(stdout, id)
+		return 0
+	}
+	var emptyID bool
+	fs.Visit(func(f *flag.Flag) {
+		if (f.Name == "operation-id" || f.Name == "status") && f.Value.String() == "" {
+			emptyID = true
+		}
+	})
+	if emptyID {
+		_, _ = fmt.Fprintln(stderr, "spawn: operation ID must not be empty")
+		return 2
+	}
+	if *statusID != "" {
+		if fs.NFlag() != 1 {
+			_, _ = fmt.Fprintln(stderr, "spawn: --status takes only an operation ID")
+			return 2
+		}
+		reader, ok := c.(interface {
+			LaunchOperationStatus(string) (schema.OperationOutcomeView, error)
+		})
+		if !ok {
+			_, _ = fmt.Fprintln(stderr, "spawn: launch status requires an updated daemon")
+			return 1
+		}
+		outcome, err := reader.LaunchOperationStatus(*statusID)
+		if err == nil {
+			err = json.NewEncoder(stdout).Encode(outcome)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if *operationID != "" && !protocol.LaunchOperationReplayable(*operationID, time.Now()) {
+		_, _ = fmt.Fprintln(stderr, "spawn: invalid or expired operation ID; check an earlier attempt with --status")
+		return misuseExit
 	}
 	if *cli == "" {
 		_, _ = fmt.Fprintln(stderr, "spawn: --cli is required: swarm spawn --cli <agent> (--prompt t | --handoff f | --delegate f)")
@@ -97,9 +158,25 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	if doc != "" && !explicit && worktree.IsRepo(cwd) {
 		*isolate = true
 	}
+	parent := os.Getenv(hookclient.EnvSessionID)
+	if *operationID == "" && parent != "" && os.Getenv(schema.EnvManagerVMCLI) == "1" {
+		*operationID, err = protocol.NewLaunchOperationID()
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		// Publish the recovery coordinate before sending anything to the daemon.
+		if _, err := fmt.Fprintf(stderr, "operation_id=%s\n", *operationID); err != nil {
+			return 1
+		}
+	}
 	var dest string
 	if doc != "" {
-		dest, err = copyHandoff(doc)
+		if *operationID == "" {
+			dest, err = copyHandoff(doc)
+		} else {
+			dest, err = operationHandoff(*operationID, doc)
+		}
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
 			return 1
@@ -124,15 +201,27 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	// The daemon injects SWARM_SESSION_ID into every agent it launches, so it is set
 	// exactly when the caller IS a session. A human at a plain terminal has no parent,
 	// and the daemon refuses an intent without one, so neither field is sent there.
-	if parent := os.Getenv(hookclient.EnvSessionID); parent != "" {
+	if parent != "" {
 		req.SpawnedFrom, req.SpawnIntent = parent, intent
 	}
 
-	id, canonical, err := c.Launch(req)
+	var id, canonical string
+	if *operationID == "" {
+		id, canonical, err = c.Launch(req)
+	} else {
+		launcher, ok := c.(ownerLaunchClient)
+		if !ok {
+			_, _ = fmt.Fprintln(stderr, "spawn: reliable launch requires an updated daemon")
+			return 1
+		}
+		req.Env = daemon.OwnerLaunchEnvironment(req.Agent, req.Env)
+		slices.Sort(req.Env)
+		id, canonical, err = launcher.LaunchOperation(*operationID, req)
+	}
 	if err != nil {
 		// A refused launch must not strand its handoff copy: retries against a
 		// full daemon would otherwise accumulate documents no session references.
-		if dest != "" {
+		if dest != "" && *operationID == "" {
 			_ = os.RemoveAll(filepath.Dir(dest)) // the private directory is the copy's
 		}
 		_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)

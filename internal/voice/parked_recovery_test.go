@@ -35,6 +35,7 @@ func (r *parkedRecoveryRuntime) record(request protocol.LaunchReq, op string) st
 		}
 	} else {
 		row.Status.Process = status.ProcessRunning
+		r.status.NativeCLI = request.Manager.NativeCLI
 		r.status.Binding.Session = id
 		r.status.Binding.SessionInstance = instance
 		if request.ResumeSourceInstance == "" {
@@ -137,5 +138,44 @@ func TestParkedResumeRecoversOldAppliedIntentWithoutReplayingItsLaunch(t *testin
 				t.Fatal("replacement reused failed source")
 			}
 		})
+	}
+}
+
+func TestParkedLegacyManagerMigratesOnceAfterRetirementProof(t *testing.T) {
+	_, store, base, old := newControllerFixture(t)
+	cfg := testConfig()
+	cfg.ConversationID, cfg.VMProjectAccess = old.ConversationID, true
+	dir := privateConfigDir(t)
+	r := &parkedRecoveryRuntime{discussionTestRuntime: discussionTestRuntime{controllerRuntimeFixture: base}, receipts: make(map[string]schema.OperationOutcomeView)}
+	d := &DiscussionController{cfg: cfg, store: store, runtime: r, dir: dir, endpoint: "machine", bridge: &privateHTTP{socket: dir + "/bridge.sock"}, now: time.Now}
+	r.status.BridgeSocket, r.status.AuthFile = d.refs().Socket, d.refs().AuthFile
+	ret := &protocol.ManagerRetireReq{Binding: runtimeBinding(old), Generation: 1, Checkpoint: hashBytes([]byte("checkpoint"))}
+	if err := store.update(func(st *State) error {
+		c := st.Conversations[cfg.ConversationID]
+		c.Parked, c.Retirement = true, ret
+		putRecord(st, "conversations", &st.Conversations, cfg.ConversationID, c)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	attempt := func() (ManagerBinding, error) {
+		st, err := store.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.wakeParked(context.Background(), st.Generation, st.Conversations[cfg.ConversationID])
+	}
+	r.retirement.State = "uncertain"
+	if _, err := attempt(); !errors.Is(err, ErrDiscussionActivationUnavailable) || len(r.requests) != 0 {
+		t.Fatalf("unproven migration launched: %v", err)
+	}
+	r.retirement.State = "retired"
+	next, err := attempt()
+	if err != nil || !next.NativeCLI || next.NativeSessionID == old.NativeSessionID || len(r.requests) != 1 || r.requests[0].ResumeSourceInstance != "" {
+		t.Fatalf("migration %+v, launches %+v: %v", next, r.requests, err)
+	}
+	st, err := store.Snapshot()
+	if err != nil || st.Conversations[cfg.ConversationID].Parked || !st.Conversations[cfg.ConversationID].NeedsHandoff || len(st.Publications) != 1 {
+		t.Fatalf("migration lost context handoff: %v", err)
 	}
 }

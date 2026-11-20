@@ -143,3 +143,28 @@ func TestManagerLaunchRefusesUnsupportedNativeAccountBeforeFiltering(t *testing.
 		})
 	}
 }
+
+func TestManagerNativeCLIRequiresExactNegotiationAndDiscord(t *testing.T) {
+	req := LaunchReq{Agent: "codex", Manager: privateManagerRequest(t)}
+	req.Manager.NativeCLI = true
+	if validateManagerLaunch(req) == nil {
+		t.Fatal("VM privileges accepted for non-Discord manager")
+	}
+	req.Manager.ConversationID = "discord-teammate-test"
+	req.Options = map[string]string{"sandbox": "workspace-write"}
+	if err := validateManagerLaunch(req); err != nil {
+		t.Fatal(err)
+	}
+	backend := &managerLaunchStub{&ownerLaunchStub{durableComposerStub: newDurableComposerStub()}}
+	socket := serveOwnerAPI(t, backend)
+	raw := rawDial(t, socket)
+	hello := raw.hello(Version, []string{CapOwnerLaunch, CapManagerLaunch})
+	id, err := NewLaunchOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.writeControl(Control{Op: OpOwnerLaunch, EndpointID: hello.EndpointID, OperationID: id, Launch: &req})
+	if got := raw.readControl(); got.Op != OpError || got.ErrorCode != CodeCapabilityRefused {
+		t.Errorf("unnegotiated native CLI accepted: %+v", got)
+	}
+}

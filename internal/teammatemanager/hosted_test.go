@@ -133,6 +133,11 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		t.Error("rehearsal processes did not finish before cleanup deadline")
 	})
 	cfg := discord.Config{Mode: "teammate", Name: "Teammate rehearsal", InstallationID: "synthetic-place", ManagerCLI: "codex", WorkDir: workdir, DaemonSocket: socket, Projects: map[string]string{"fixture": project}}
+	vmMode := os.Getenv("SWARM_TEAMMATE_TEST_VM") == "1"
+	if vmMode {
+		cfg.ProjectAccess = discord.ProjectAccessVM
+		cfg.Projects = nil // The real job below uses an unregistered directory.
+	}
 	personal := os.Getenv("SWARM_TEAMMATE_TEST_PERSONAL") == "1"
 	if personal {
 		cfg.Mode, cfg.DMChannelID, cfg.OwnerID = "personal", "202", "401"
@@ -239,11 +244,11 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		workerCommand := fmt.Sprintf(`%q teammate message --text "My marker is $(cat question.txt). What exact string should I write to reply.txt?"`, bin)
 		provider := "Codex"
 		workerFollowup := "Tell the worker to finish its native turn after queuing the question and wait for your separate follow-up."
-		managerFollowup := "When the worker message wakes you, use swarm_send to ask that same worker to write this exact value to reply.txt: "
+		managerFollowup := "When the worker message wakes you, use swarm reply with the question ID to ask that same worker to write this exact value to reply.txt: "
 		if messageMode == "claude" {
 			provider = "Claude"
 			workerFollowup = fmt.Sprintf("Tell the worker to take the queued message ID, run %q teammate reply --id MESSAGE_ID --wait 90s with that ID, then write the exact response text into reply.txt.", bin)
-			managerFollowup = "When the worker message wakes you, call swarm_reply with this exact text: "
+			managerFollowup = "When the worker message wakes you, use swarm reply with the question ID and this exact text: "
 		}
 		send("302", "401", "Launch exactly one "+provider+" worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
 			". "+workerFollowup+" Do not tell the worker the answer during creation. "+managerFollowup+reply+
@@ -265,7 +270,11 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		return
 	}
-	send("302", "401", "Start one Codex worker in project fixture. Have it wait 15 seconds, read proof.txt, and return its exact text. When the worker returns, publish its exact result here. Use only the scoped Swarm tools and leave the file to the worker.")
+	location := "project fixture"
+	if vmMode {
+		location = project
+	}
+	send("302", "401", "Start exactly one Codex worker in "+location+". Have it wait 15 seconds, read proof.txt, and return its exact text. Publish its result here. Leave the file to the worker.")
 	wait("manager acknowledged the human separately from the worker result", 90*time.Second, func() bool {
 		for _, p := range outputs {
 			if p.AdmissionID == "input-302" && p.JobID == "" && p.QuestionID == "" && strings.TrimSpace(p.Body) != "" {
@@ -274,8 +283,21 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		return false
 	})
-	wait("worker launch", 90*time.Second, func() bool { return len(roster()) == 2 })
-	send("303", "402", "Keep the original proof.txt task. Please send the same worker one follow-up: read second.txt and return its exact text. Report both verified results in this thread. Use scoped Swarm tools; do not read either file yourself or start another worker.")
+	var dispatchedID string
+	wait("visible dispatcher and one DSP worker", 90*time.Second, func() bool {
+		rows := roster()
+		if len(rows) != 2 {
+			return false
+		}
+		for _, row := range rows {
+			if row.Role != "manager" && strings.HasPrefix(row.Name, "DSP-") && row.SpawnedFrom != "" {
+				dispatchedID = row.ID
+				return true
+			}
+		}
+		return false
+	})
+	send("303", "402", "Keep the original proof.txt task. Please send the same worker one follow-up: read second.txt and return its exact text. Report both verified results in this thread. Do not read either file yourself or start another worker.")
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -304,6 +326,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		return false
 	})
+	if rows := roster(); len(rows) != 2 || (rows[0].ID != dispatchedID && rows[1].ID != dispatchedID) {
+		t.Fatal("follow-up did not retain the original worker")
+	}
 	wait("idle retirement", voice.DiscussionIdleGrace+90*time.Second, func() bool {
 		for _, row := range roster() {
 			if row.Role == "manager" && row.Status.Process == status.ProcessRunning {
@@ -312,12 +337,23 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		return true
 	})
-	if armResumeFailures != nil {
+	migrating := os.Getenv("SWARM_TEAMMATE_TEST_MIGRATE") == "1"
+	if migrating {
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		cfg.ProjectAccess = discord.ProjectAccessVM
+		r = open()
+	}
+	if armResumeFailures != nil || migrating {
 		old, err := r.Status(thread)
 		if err != nil || len(old.Jobs) != 1 || old.State != "parked" {
 			t.Fatalf("parked fixture: %+v %v", old, err)
 		}
-		verify := armResumeFailures(state, old.ManagerSession)
+		verify := func(string) {}
+		if armResumeFailures != nil {
+			verify = armResumeFailures(state, old.ManagerSession)
+		}
 		resumeProof := "pine cone " + hex.EncodeToString(marker[:])
 		if err := os.WriteFile(filepath.Join(project, "third.txt"), []byte(resumeProof), 0600); err != nil {
 			t.Fatal(err)

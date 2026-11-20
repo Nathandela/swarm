@@ -31,6 +31,48 @@ swarm discord doctor --channel CHANNEL_ID
 swarm discord status
 ```
 
+Open the main Swarm board to find Discord managers in **DISPATCHER**, including when grouping by tag or repository. Enter on a running manager opens its terminal. Its workers appear on their owning supervisor. A parked manager wakes on a new message in its thread.
+
+New teammate and personal installations use the VM policy by default. Existing installations keep their enrolled-directory policy until explicitly changed. To give an existing installation's managers and delegated workers the same choice of working directory as local Swarm, including its native shell and ordinary CLI commands, set the VM policy and restart the connector:
+
+```sh
+swarm discord connect --state-dir "$connector" --project-access vm
+```
+
+In VM mode the manager uses its native shell and the installed `swarm` CLI. It can use the same commands, directories, agent types and VM-user access as an ordinary Swarm session. The Discord bridge carries conversation history and deliberate replies and wakes the manager for changes to its workers. Direct children appear as `DSP-` workers. Prior enrolled-mode installations keep their existing configuration until the operator selects VM mode. Named project aliases are optional. Each participant in an admitted teammate discussion can direct the manager.
+
+### Bring an existing connector onto the home supervisor
+
+Start new installations from the same Swarm supervisor you use in your terminal. For an installation that already has a separate supervisor, keep the connector directory, its database, and the original supervisor state in place. Each existing discussion has an endpoint-bound manager ledger and may have active workers. Migration starts new discussions on the home supervisor and continues existing discussions on their original supervisor. The main board can attach to those existing managers and workers while their discussions remain active.
+
+Install the new Swarm executable at the path used by the existing user service. From the owner's usual terminal, start or verify the home supervisor and prepare the cutover. Set `connector` to the absolute connector state directory from the existing unit's `--state-dir` argument.
+
+```sh
+swarm ls --json
+swarm discord migrate-supervisor --state-dir "$connector"
+```
+
+Add `--dry-run` to verify the two live supervisor identities and preview the cutover. For earlier connections that saved only a daemon socket, supply the four paths from the original service environment. The command checks its existing connector selection and verifies the original socket's identity with a live supervisor handshake.
+
+```sh
+swarm discord migrate-supervisor --state-dir "$connector" \
+  --from-state-dir "$original_state" --from-socket "$original_socket" \
+  --from-lock "$original_lock" --from-log "$original_log"
+```
+
+On Linux restart the connector after the configuration change. The saved supervisor selections take precedence over the service's startup environment.
+
+```sh
+systemctl --user restart swarm-discord.service
+swarm discord doctor --state-dir "$connector"
+swarm discord status --state-dir "$connector"
+```
+
+Check an existing discussion's manager and worker identities against its pre-migration status. A newly opened discussion uses the home supervisor. A parked historic thread still retains its original binding, so keep the previous state and its saved launch environment available as long as such threads can receive follow-ups. Repeating the migration to the same home completes an interrupted local selector write. A downgrade that predates the migration format must be deferred while either supervisor owns discussions.
+
+
+
+
 For a previously configured installation, `connect --mode teammate --manager codex --install` reuses its identity and credentials. When the credential belongs to a bot installed in exactly one server, setup can discover the application ID, name and server. Use `--guild` to choose among servers. `--channel` can limit a rehearsal to a dedicated channel. To remove an old channel restriction, explicitly reconnect with `--all-channels --install`. Discord still controls which discussions the app can see. Keep private conversations in their intended audiences.
 
 Enable Message Content on the app and grant View Channel, Read Message History, Send Messages, Send Messages in Threads, and Create Public Threads where you want to invite the teammate. Private threads require native access. Granting visibility to a parent channel is a Discord server administration action. Starting the local service alone cannot grant that permission.
@@ -149,7 +191,7 @@ A delegated worker can queue a progress note, blocker, or clarification for its 
 swarm teammate message --text 'Which fixture should I use?'
 ```
 
-The command returns a queue receipt with a message ID. If the receipt is uncertain, retry the same text with `--id MESSAGE_ID`. A parked manager can wake for the note. The manager uses scoped `swarm_send` for Codex, pinned to that worker session and instance. A blocked Codex worker should finish its current turn so it can receive the reply when idle. For a Claude worker, the manager uses `swarm_reply` during the message's wake. The worker reads that response with `swarm teammate reply --id MESSAGE_ID --wait 90s`. Workers report final results in their native replies, which the manager verifies before reporting completion.
+The worker receives a message ID and can retry the same text with that ID if its receipt is uncertain. The manager wakes for the note and runs `swarm reply --id WAKE_MESSAGE_ID --text TEXT` with the ID from its wake. Swarm delivers the answer to the originating worker. Codex receives a follow-up after its current turn; a Claude worker retrieves the response with `swarm teammate reply --id MESSAGE_ID --wait 90s` using its original receipt.
 
 
 If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:

@@ -10,8 +10,9 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-func discussionBindingFromNative(native protocol.ManagerRuntimeBinding) ManagerBinding {
-	return ManagerBinding{ConversationID: native.ConversationID, Provider: native.Provider, SessionID: native.Session,
+func discussionBindingFromNative(observed protocol.ManagerRuntimeStatus) ManagerBinding {
+	native := observed.Binding
+	return ManagerBinding{NativeCLI: observed.NativeCLI, ConversationID: native.ConversationID, Provider: native.Provider, SessionID: native.Session,
 		SessionInstance: native.SessionInstance, NativeSessionID: native.NativeSessionID, NativeGeneration: native.NativeGeneration,
 		ObservationGeneration: native.ObservationGeneration, LoginEpoch: native.LoginEpoch}
 }
@@ -42,7 +43,7 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	previous := d.controller.binding
 	native, err := d.runtime.ManagerRuntime(previous.SessionID, previous.SessionInstance)
 	if err == nil {
-		next := discussionBindingFromNative(native.Binding)
+		next := discussionBindingFromNative(native)
 		if native.Binding.Validate() != nil || !discussionSameNative(previous, next) || native.AuthFile != d.refs().AuthFile || native.BridgeSocket != d.refs().Socket {
 			return ErrStale
 		}
@@ -108,7 +109,9 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 		id := previous.ConversationID
 		c := st.Conversations[id]
 		if parked != nil {
-			if !reconstructed || !sameParkedManager(st, previous.Generation, c, *parked) || c.FailedResume == nil || c.FailedResume.Attempt != 2 {
+			migration := d.cfg.VMProjectAccess && !previous.NativeCLI && next.NativeCLI
+			exhausted := c.FailedResume != nil && c.FailedResume.Attempt == 2
+			if !reconstructed || !sameParkedManager(st, previous.Generation, c, *parked) || (!migration && !exhausted) {
 				return ErrStale
 			}
 		} else if c.Parked || c.Retirement != nil {
@@ -181,6 +184,9 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 			}
 			p := Publication{ID: "continuity-" + hashValue(identity(previous)), ConversationID: id, OutputSequence: sequence, DiscussionSource: DiscussionOutputSource{SystemCause: "manager_continuity_gap"},
 				Text: "Swarm started a replacement manager in this thread. The previous manager’s native history was unavailable. Queued messages and tracked jobs were preserved. Actions with uncertain outcomes remain on hold."}
+			if parked != nil && !previous.NativeCLI && next.NativeCLI {
+				p.Text = "Swarm moved this discussion to a new manager using the VM’s normal CLI permissions. Queued messages and tracked jobs were preserved."
+			}
 			p.TextHash = hashBytes([]byte(p.Text))
 			putRecord(st, "publications", &st.Publications, key(id, p.ID), p)
 		}

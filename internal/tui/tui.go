@@ -200,6 +200,9 @@ type rootModel struct {
 	// options incarnation that happens to reuse the same local focus state.
 	optionsGeneration  uint64
 	managerSettingsDir string
+	dispatcherList     func() ([]protocol.SessionView, error)
+	dispatcherAttach   AttachRunner
+	linkedDispatchers  []protocol.SessionView
 	attach             attachModel
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
@@ -326,6 +329,9 @@ func boundedList(ctx context.Context, c Client, events <-chan protocol.Event) ([
 // or the launch form; its result is cached via detectMsg (V-2/L1).
 func (m rootModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen), m.initialRoster}
+	if m.dispatcherList != nil {
+		cmds = append(cmds, m.loadDispatchers)
+	}
 	if m.animatingWorking {
 		cmds = append(cmds, workingAnimationTick())
 	}
@@ -531,6 +537,10 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonReconnectedMsg:
 		return m.applyDaemonReconnected(msg)
+	case dispatcherPoll:
+		return m, m.loadDispatchers
+	case dispatcherRows:
+		return m.applyDispatcherRows(msg)
 	case rosterLoadedMsg:
 		return m.applyRoster(msg)
 

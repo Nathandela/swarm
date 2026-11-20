@@ -78,7 +78,7 @@ var remoteForbiddenOptions = map[string]string{
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
 	var manager *daemon.ManagerLaunchSpec
 	if req.Manager != nil {
-		manager = &daemon.ManagerLaunchSpec{ConversationID: req.Manager.ConversationID, BridgeSocket: req.Manager.BridgeSocket, AuthFile: req.Manager.AuthFile, RetireOperationID: req.Manager.RetireOperationID}
+		manager = &daemon.ManagerLaunchSpec{NativeCLI: req.Manager.NativeCLI, ConversationID: req.Manager.ConversationID, BridgeSocket: req.Manager.BridgeSocket, AuthFile: req.Manager.AuthFile, RetireOperationID: req.Manager.RetireOperationID}
 		if req.Agent == "claude" && req.Env != nil {
 			config := ""
 			for _, entry := range req.Env {
@@ -293,7 +293,7 @@ var serverCaps = []string{
 	CapContextGuardSettings,
 	CapLoginsManage,
 	CapSchedule, CapScheduleRunID, CapScheduleWorkspace, CapScheduleHostTime, CapScheduleRoute,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1549,7 +1549,7 @@ func (s *Server) supportedCaps() []string {
 		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {
 			continue
 		}
-		if cap == CapManagerLaunch && (s.remoteTier || !ownerLaunch || !managerLaunch || !managerSource.ManagerLaunchSupported()) {
+		if (cap == CapManagerLaunch || cap == CapManagerNativeCLI) && (s.remoteTier || !ownerLaunch || !managerLaunch || !managerSource.ManagerLaunchSupported()) {
 			continue
 		}
 		if cap == CapOwnerBoundResume && (s.remoteTier || !ownerLaunch || !hasBoundResume || !boundResume.OwnerBoundResumeSupported()) {

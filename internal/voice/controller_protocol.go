@@ -96,6 +96,9 @@ func (p *ProtocolControllerClient) LaunchOperation(operation string, req protoco
 	caps := []string{protocol.CapOwnerLaunch}
 	if req.Manager != nil {
 		caps = append(caps, protocol.CapManagerLaunch)
+		if req.Manager.NativeCLI {
+			caps = append(caps, protocol.CapManagerNativeCLI)
+		}
 		if req.Manager.RetireOperationID != "" {
 			caps = append(caps, protocol.CapManagerRetire)
 		}

@@ -12,10 +12,13 @@ import (
 
 func connectManagerMCP(t *testing.T, call ManagerToolCaller) *mcp.ClientSession {
 	t.Helper()
+	return connectTestManagerServer(t, NewManagerMCP(call))
+}
+func connectTestManagerServer(t *testing.T, server *mcp.Server) *mcp.ClientSession {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	a, b := mcp.NewInMemoryTransports()
-	server := NewManagerMCP(call)
 	ss, err := server.Connect(ctx, a, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -103,5 +106,23 @@ func TestManagerMCPToolSurface(t *testing.T) {
 	}
 	if len(want) > 0 {
 		t.Fatal("missing tools", want)
+	}
+}
+
+func TestVMManagerBridgeOnlyHandlesConversation(t *testing.T) {
+	client := connectTestManagerServer(t, NewVMDiscussionMCP(nil))
+	list, err := client.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"swarm_discussion_history": true, "swarm_discussion_answer": true, "publish": true, "ask": true}
+	for _, tool := range list.Tools {
+		if !want[tool.Name] {
+			t.Fatal("unexpected discussion tool", tool.Name)
+		}
+		delete(want, tool.Name)
+	}
+	if len(want) != 0 {
+		t.Fatal("missing discussion tools", want)
 	}
 }

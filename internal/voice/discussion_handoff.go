@@ -37,7 +37,7 @@ func discussionHandoff(st State, current Admission, input, provider, nonce strin
 		recent = recent[:8]
 	}
 	refs, _ := json.Marshal(recent)
-	const guidance = "Manager handoff for this Discord discussion. Use swarm_discussion_history for earlier messages, including the former manager’s replies and questions. Use swarm_list to locate the existing worker. Check action receipts with swarm_status before continuing. A settled action alone does not prove successful work. Never repeat an uncertain action. If the human’s request permits a helper and the history is lengthy, a Luna or Haiku worker can summarize a quoted excerpt from this discussion. Check its summary against the receipts."
+	const guidance = "Manager handoff for this Discord discussion. Use swarm_discussion_history for earlier messages, including the former manager’s replies and questions. Locate the existing worker and check its receipt before continuing. A settled action alone does not prove successful work. Never repeat an uncertain action. If the human’s request permits a helper and the history is lengthy, a Luna or Haiku worker can summarize a quoted excerpt from this discussion. Check its summary against the receipts."
 	// Keep standing instructions, the recovery-only prefix and the full human input
 	// byte-for-byte. Optional handoff information uses the remaining wire budget.
 	for _, suffix := range []string{"\nRecent action references: " + string(refs), ""} {

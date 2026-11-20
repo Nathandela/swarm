@@ -66,7 +66,7 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 			job.State = "uncertain"
 		case worker.Ended:
 			job.State = "exited"
-			if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified {
+			if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified && !worker.VMChild {
 				job.State = "exited_unconfirmed"
 			}
 		}

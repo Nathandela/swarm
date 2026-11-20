@@ -3,8 +3,12 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
@@ -127,5 +131,36 @@ func TestManagerReplayBootstrapPrecedesNativeActivity(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestNativeCLIManagerLaunchUsesActualOwnerEndpoint(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+	killAllSessions(t, d)
+	spec := announceSpec(t, t.TempDir()+"/pid")
+	spec.AgentType = "claude"
+	spec.CLIIdentity = &persist.CLIIdentity{Path: spec.Argv[0], Version: "2.1.319"}
+	spec.Manager = &ManagerLaunchSpec{NativeCLI: true, ConversationID: "discord-teammate-test", Command: cfg.ShimBinary}
+	spec.ClientEnv = append(spec.ClientEnv, EnvStateDir+"=/wrong-state", EnvSocket+"=/wrong-socket")
+	m, err := d.Launch(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(cfg.StateDir, m.ID, shimLaunchConfigFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lc shimSpawnConfig
+	if err = json.Unmarshal(body, &lc); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []string{schema.EnvManagerVMCLI + "=1", EnvStateDir + "=" + cfg.StateDir, EnvSocket + "=" + cfg.SocketPath, EnvLock + "=" + cfg.LockPath, EnvLog + "=" + cfg.LogPath, hookclient.EnvSessionID + "=" + m.ID} {
+		if !slices.Contains(lc.Env, entry) {
+			t.Errorf("missing manager environment %s", strings.SplitN(entry, "=", 2)[0])
+		}
+	}
+	if !m.ManagerNativeCLI || slices.Contains(lc.Env, EnvStateDir+"=/wrong-state") || slices.Contains(lc.Env, EnvSocket+"=/wrong-socket") {
+		t.Fatal("wrong launcher identity")
 	}
 }

@@ -30,6 +30,7 @@ var (
 )
 
 type ManagerBinding struct {
+	NativeCLI             bool   `json:"native_cli,omitempty"`
 	ConversationID        string `json:"conversation_id"`
 	Provider              string `json:"provider"`
 	SessionID             string `json:"session_id"`
@@ -175,6 +176,7 @@ type JournalSnapshot struct {
 }
 
 type Event struct {
+	VMWorkerStatus  bool            `json:"vm_worker_status,omitempty"`
 	WorkerMessage   bool            `json:"worker_message,omitempty"`
 	WorkerProof     bool            `json:"worker_proof,omitempty"`
 	NativeTurnID    string          `json:"native_turn_id,omitempty"`
@@ -204,6 +206,7 @@ type Wake struct {
 }
 
 type WorkerAssociation struct {
+	VMChild          bool   `json:"vm_child,omitempty"`
 	EvidenceLimited  bool   `json:"evidence_limited,omitempty"`
 	Parent           string `json:"parent,omitempty"`
 	Ended            bool   `json:"ended,omitempty"`

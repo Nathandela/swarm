@@ -227,7 +227,7 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 	return m, tea.Batch(cmds...)
 }
 func (m *rootModel) reconcileRoster(sessions []protocol.SessionView) tea.Cmd {
-	visible := protocol.VisibleDiscussions(sessions)
+	visible := append(protocol.VisibleDiscussions(sessions), m.linkedDispatchers...)
 	ids, sections := make(map[string]bool, len(visible)), make(map[string]bool)
 	for _, s := range visible {
 		ids[s.ID] = true

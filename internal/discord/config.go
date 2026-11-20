@@ -14,26 +14,33 @@ import (
 )
 
 // Config contains non-secret configuration for one local installation.
+const (
+	ProjectAccessVM       = "vm"
+	ProjectAccessEnrolled = "enrolled"
+)
+
 type Config struct {
-	Supervisor        *SupervisorPaths  `json:"supervisor,omitempty"`
-	Mode              string            `json:"mode,omitempty"`
-	ManagerCLI        string            `json:"manager_cli,omitempty"`
-	Projects          map[string]string `json:"projects,omitempty"`
-	Enabled           bool              `json:"enabled"`
-	Version           int               `json:"version"`
-	InstallationID    string            `json:"installation_id"`
-	Name              string            `json:"name"`
-	ApplicationID     string            `json:"application_id"`
-	DMChannelID       string            `json:"dm_channel_id,omitempty"`
-	OwnerID           string            `json:"owner_id"`
-	TokenFile         string            `json:"token_file"`
-	DaemonSocket      string            `json:"daemon_socket"`
-	GuildIDs          []string          `json:"guild_ids"`
-	ChannelIDs        []string          `json:"channel_ids"`
-	UserIDs           []string          `json:"user_ids"`
-	ReceptionistCLI   string            `json:"receptionist_cli"`
-	ReceptionistModel string            `json:"receptionist_model"`
-	WorkDir           string            `json:"work_dir"`
+	ProjectAccess      string              `json:"project_access,omitempty"`
+	PreviousSupervisor *PreviousSupervisor `json:"previous_supervisor,omitempty"`
+	Supervisor         *SupervisorPaths    `json:"supervisor,omitempty"`
+	Mode               string              `json:"mode,omitempty"`
+	ManagerCLI         string              `json:"manager_cli,omitempty"`
+	Projects           map[string]string   `json:"projects,omitempty"`
+	Enabled            bool                `json:"enabled"`
+	Version            int                 `json:"version"`
+	InstallationID     string              `json:"installation_id"`
+	Name               string              `json:"name"`
+	ApplicationID      string              `json:"application_id"`
+	DMChannelID        string              `json:"dm_channel_id,omitempty"`
+	OwnerID            string              `json:"owner_id"`
+	TokenFile          string              `json:"token_file"`
+	DaemonSocket       string              `json:"daemon_socket"`
+	GuildIDs           []string            `json:"guild_ids"`
+	ChannelIDs         []string            `json:"channel_ids"`
+	UserIDs            []string            `json:"user_ids"`
+	ReceptionistCLI    string              `json:"receptionist_cli"`
+	ReceptionistModel  string              `json:"receptionist_model"`
+	WorkDir            string              `json:"work_dir"`
 }
 
 // SupervisorPaths retain the operator's chosen place when the user service starts after logout.
@@ -41,6 +48,13 @@ type SupervisorPaths struct {
 	StateDir string `json:"state_dir"`
 	Lock     string `json:"lock"`
 	Log      string `json:"log"`
+}
+
+// PreviousSupervisor retains the original owner of discussions bound before cutover.
+type PreviousSupervisor struct {
+	SupervisorPaths
+	Socket   string `json:"socket"`
+	Endpoint string `json:"endpoint"`
 }
 
 func ConfigPath(dir string) string { return filepath.Join(dir, "config.json") }
@@ -92,6 +106,17 @@ func NativeInputEnabled(dir string) bool {
 }
 func (c Config) TeammateMode() bool { return c.Mode == "teammate" || c.Mode == "personal" }
 
+// EffectiveProjectAccess preserves the pre-policy default for saved installations.
+func (c Config) EffectiveProjectAccess() string {
+	if !c.TeammateMode() {
+		return ""
+	}
+	if c.ProjectAccess == ProjectAccessVM {
+		return ProjectAccessVM
+	}
+	return ProjectAccessEnrolled
+}
+
 func (c Config) Validate() error {
 	if c.Version != 1 {
 		return errors.New("discord: unsupported config version")
@@ -120,6 +145,12 @@ func (c Config) Validate() error {
 			}
 		}
 		return true
+	}
+	if p := c.PreviousSupervisor; p != nil && (!c.TeammateMode() || c.Supervisor == nil || !validStatePath(p.StateDir) || !validStatePath(p.Socket) || !validStatePath(p.Lock) || !validStatePath(p.Log) || !validText(p.Endpoint, 128) || p.Endpoint == "" || p.StateDir == c.Supervisor.StateDir || p.Socket == c.DaemonSocket) {
+		return errors.New("discord: invalid previous supervisor enrollment")
+	}
+	if c.ProjectAccess != "" && (!c.TeammateMode() || (c.ProjectAccess != ProjectAccessVM && c.ProjectAccess != ProjectAccessEnrolled)) {
+		return errors.New("discord: project access must be enrolled or vm for a teammate or personal manager")
 	}
 	if c.Mode != "personal" && c.DMChannelID != "" {
 		return errors.New("discord: DM channel requires personal mode")

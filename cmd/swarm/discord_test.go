@@ -18,6 +18,8 @@ import (
 func discordCLIRig(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	t.Setenv(daemon.EnvStateDir, root)
 	token := filepath.Join(root, "token")
 	if e := os.WriteFile(token, []byte("test-token-never-print\n"), 0600); e != nil {

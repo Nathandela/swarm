@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -82,5 +83,24 @@ func TestMessageRefusesLegacyOrUnboundSessionsWithoutTerminalFallback(t *testing
 				t.Fatalf("refused message generated success or terminal effect: exit %d, %q, %q", code, out.String(), stderr.String())
 			}
 		})
+	}
+}
+
+func TestVMDispatcherCanMessageAnUnrelatedOwnerSession(t *testing.T) {
+	id, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"local/ami", "--text", "Follow up in this existing session.", "--operation-id", id}
+	var normal, dispatcher, stderr bytes.Buffer
+	operator := newFakeSemanticClient()
+	if code := runMessage(args, operator, &normal, &stderr); code != 0 {
+		t.Fatal(code, stderr.String())
+	}
+	t.Setenv(schema.EnvManagerVMCLI, "1")
+	t.Setenv("SWARM_SESSION_ID", "unrelated-dispatcher")
+	vm := newFakeSemanticClient()
+	if code := runMessage(args, vm, &dispatcher, &stderr); code != 0 || dispatcher.String() != normal.String() || len(vm.messages) != 1 || vm.messages[0] != operator.messages[0] {
+		t.Fatalf("VM message lost ordinary owner semantics: code=%d receipt=%q %s", code, dispatcher.String(), stderr.String())
 	}
 }

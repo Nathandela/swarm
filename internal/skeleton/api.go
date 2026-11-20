@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1654,6 +1655,18 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 	}
 
 	if len(spec.Argv) == 0 {
+		// The supervisor owns dispatcher attribution for every fresh worker,
+		// including ordinary shell spawns and providers without a thread bridge.
+		if spec.Manager == nil && spec.SpawnedFrom != "" {
+			parent, ok := getSource(spec.SpawnedFrom)
+			if ok && schema.IsDiscordManager(parent.Role, parent.ManagerConversationID) && !strings.HasPrefix(spec.Name, "DSP-") {
+				name := spec.Name
+				if name == "" {
+					name = spec.AgentType
+				}
+				spec.Name = protocol.SanitizeName("DSP-" + name)
+			}
+		}
 		switch spec.AgentType {
 		case "fake":
 			if fakeAgentBin != "" {
@@ -1661,6 +1674,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			}
 		default:
 			if ad, ok := registry.New(spec.AgentType); ok {
+				if spec.Manager == nil || spec.Manager.NativeCLI {
+					spec.Options = workerLaunchOptions(ad, spec.Options)
+				}
 				argv, err := ad.Command(adapter.LaunchSpec{
 					Manager:       managerAdapterSpec(spec.Manager),
 					Cwd:           spec.Cwd,
@@ -1680,6 +1696,21 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		}
 	}
 	return spec, nil
+}
+
+// Apply adapter defaults to fresh workers and VM-native managers. Resume
+// composition above restores the original provider policy from its saved options.
+func workerLaunchOptions(ad adapter.Adapter, supplied map[string]string) map[string]string {
+	options := maps.Clone(supplied)
+	for _, option := range ad.Options() {
+		if _, explicit := options[option.Key]; !explicit && option.Default != "" {
+			if options == nil {
+				options = make(map[string]string)
+			}
+			options[option.Key] = option.Default
+		}
+	}
+	return options
 }
 
 // resolveArgv0 rewrites argv[0] (the bare agent binary name) to an absolute path

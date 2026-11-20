@@ -12,13 +12,14 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
-const DiscussionConversationPrefix = "discord-teammate-"
+const DiscussionConversationPrefix = schema.DiscussionConversationPrefix
 
 var ErrDiscussionSourceChanged = errors.New("voice: verified Discord source changed before dispatch")
 var errDiscussionGrantUnverified = errors.New("voice: Discord authority could not be verified before dispatch; retry the same request after access is restored")
 
 // DiscussionScope comes from the verified connector destination and local enrollment.
 type DiscussionScope struct {
+	VMProjectAccess    bool
 	DMOwnerID          string
 	ManagerSettingsDir string
 	DiscussionID       string

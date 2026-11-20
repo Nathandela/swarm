@@ -213,7 +213,7 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 	if err != nil {
 		return binding, nil, err
 	}
-	binding = teammateBinding{TeammateDiscussion: TeammateDiscussion{
+	binding = teammateBinding{TeammateDiscussion: TeammateDiscussion{SupervisorSocket: cfg.DaemonSocket,
 		ID:             "dt_" + digest([]string{cfg.InstallationID, route.GuildID, route.ChannelID})[:32],
 		InstallationID: cfg.InstallationID, Route: route, Starter: starter, ParentAnchor: anchor,
 	}, RepairEpoch: p.GapEpoch, NotifiedEpoch: p.GapEpoch}
@@ -224,7 +224,10 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 	if err = t.service.Store.teammateBind(binding); err != nil {
 		return binding, nil, err
 	}
-	return binding, m, nil
+	// A replayed parent opener may rediscover an already bound thread after cutover.
+	// The durable winner owns this admission, including a historic unmarked binding.
+	binding, err = t.service.Store.teammateBindingByID(cfg.InstallationID, binding.ID)
+	return binding, m, err
 }
 
 func (t *teammateConnector) admissibleHuman(m *discordgo.Message) bool {
