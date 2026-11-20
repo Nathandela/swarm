@@ -101,9 +101,9 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 	writes := make(chan []byte, callMediaQueueSize)
 	writes <- start
 	writeDone := make(chan error, 1)
-	go func() {
-		writeDone <- writeCallMedia(ctx, stdin, writes)
-	}()
+	go func(pending <-chan []byte) {
+		writeDone <- writeCallMedia(ctx, stdin, pending)
+	}(writes)
 	events := make(chan callMediaEvent, callMediaQueueSize)
 	readDone := make(chan error, 1)
 	var ready, stopped atomic.Bool
