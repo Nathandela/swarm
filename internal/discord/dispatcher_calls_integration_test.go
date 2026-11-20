@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -396,7 +397,7 @@ func (f *dispatcherCallFixture) message(msg *discordgo.Message) {
 	}
 }
 
-func (f *dispatcherCallFixture) runMedia(ctx context.Context, _, guild, room, bot string, speakers []string, input <-chan any, handle func(callMediaEvent) error) error {
+func (f *dispatcherCallFixture) runMedia(ctx context.Context, _, guild, room, bot string, speakers []string, input <-chan any, onLoss func(), handle func(callMediaEvent) error) error {
 	if guild != "10" || room != "20" || bot != "99" || !slices.Equal(speakers, f.speakers) {
 		f.t.Error("media received the wrong audience")
 		return ErrInvalid
@@ -412,6 +413,7 @@ func (f *dispatcherCallFixture) runMedia(ctx context.Context, _, guild, room, bo
 			return ctx.Err()
 		case audio, ok := <-f.mediaAudio:
 			if !ok {
+				onLoss()
 				return errors.New("test media process exited")
 			}
 			if err := handle(audio); err != nil {
@@ -521,7 +523,7 @@ func (f *dispatcherCallFixture) waitDiscussionOpened(d TeammateDiscussion) {
 	}
 }
 
-func (f *dispatcherCallFixture) begin() (*callFixtureSpeech, TeammateAdmission) {
+func (f *dispatcherCallFixture) requestJoin() TeammateAdmission {
 	f.t.Helper()
 	f.message(f.marker)
 	text := callFixtureReceive(f.t, f.ctx, f.native.accepted, "written marker admission")
@@ -558,6 +560,12 @@ func (f *dispatcherCallFixture) begin() (*callFixtureSpeech, TeammateAdmission) 
 	f.expectRoom("20")
 	f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", "20"))))
 	f.send("VOICE_SERVER_UPDATE", json.RawMessage(`{"guild_id":"10","token":"fixture-voice","endpoint":"example.invalid"}`))
+	return text
+}
+
+func (f *dispatcherCallFixture) begin() (*callFixtureSpeech, TeammateAdmission) {
+	f.t.Helper()
+	text := f.requestJoin()
 	speech := callFixtureReceive(f.t, f.ctx, f.ack, "media and speech readiness")
 
 	f.audio(1)
@@ -573,6 +581,171 @@ func (f *dispatcherCallFixture) begin() (*callFixtureSpeech, TeammateAdmission) 
 		f.t.Fatalf("voice admission did not preserve the written discussion and speaker: %+v", heard)
 	}
 	return speech, heard
+}
+
+func TestDispatcherCallHelperLossDuringAdmission(t *testing.T) {
+	for _, name := range []string{"process exit", "stuck write"} {
+		t.Run(name, func(t *testing.T) {
+			f := newDispatcherCallFixture(t, false)
+			finalFault := filepath.Join(t.TempDir(), "send-fault")
+			drain := fmt.Sprintf(`
+while [ ! -f %q ]; do sleep 0.01; done
+printf '%%s\n' '{"type":"fault","code":"dave_changed"}'
+`, finalFault)
+			// Keep stdout open after the supervised process exits in the first case.
+			if name == "process exit" {
+				drain = "IFS= read -r line\n(\n" + drain + ") &\nexit 0\n"
+			}
+			path := mediaTestHelper(t, `
+IFS= read -r line
+printf '%s\n' '{"type":"gateway","data":{"op":4,"d":{"guild_id":"10","channel_id":"20"}}}'
+IFS= read -r line
+IFS= read -r line
+printf '%s\n' '{"type":"ready"}'
+`+drain)
+			releaseFault := func() {
+				if err := os.WriteFile(finalFault, nil, 0600); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(releaseFault)
+			f.calls.mu.Lock()
+			f.connector.service.Config.Calls.HelperPath = path
+			f.calls.dependencies.runMedia = runCallMedia
+			f.calls.mu.Unlock()
+			text := f.requestJoin()
+			speech := callFixtureReceive(t, f.ctx, f.ack, "real helper readiness")
+			f.calls.mu.Lock()
+			call := f.calls.active
+			f.calls.mu.Unlock()
+
+			f.native.mu.Lock()
+			unlock := sync.OnceFunc(f.native.mu.Unlock)
+			defer unlock()
+			turn := callspeech.Turn{ID: "queued", Speaker: "70", Text: "pending voice request"}
+			speech.cfg.Turn(speech.ctx, turn)
+			turnID := digest([]string{call.id, turn.ID})
+			op := callAdmissionID(text.Discussion.InstallationID, call.id, turnID)
+			tick := time.NewTicker(10 * time.Millisecond)
+			defer tick.Stop()
+			var record callAdmissionRecord
+			for {
+				var err error
+				record, err = f.connector.callAdmission(text.Discussion, op)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, ErrNotFound) {
+					t.Fatal(err)
+				}
+				callFixtureReceive(t, f.ctx, tick.C, "durable turn waiting for native admission")
+			}
+			history := f.connector.history(text.Discussion)
+			query := TeammateHistoryQuery{Source: "admission", AdmissionID: op, Revision: record.Voice.BodyHash,
+				AuthorID: turn.Speaker, Voice: record.Voice, Authority: record.Authority}
+			if _, err := history(f.ctx, query); err != nil {
+				t.Fatalf("pending receipt was invalid before helper loss: %v", err)
+			}
+
+			pcm := make([]byte, callMediaPCMBytes)
+			if name == "process exit" {
+				if err := speech.cfg.Play(f.ctx, pcm); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				message := map[string]any{"type": "voice_server", "data": map[string]string{"token": strings.Repeat("x", 8000)}}
+				pacer := time.NewTicker(50 * time.Millisecond)
+				defer pacer.Stop()
+				for speech.ctx.Err() == nil {
+					f.calls.mu.Lock()
+					f.calls.queueLocked(call, message)
+					f.calls.mu.Unlock()
+					callFixtureReceive(t, f.ctx, pacer.C, "filling the helper input pipe")
+				}
+			}
+			callFixtureReceive(t, f.ctx, speech.ctx.Done(), "authority loss before final helper fault")
+			if err := speech.cfg.Play(f.ctx, pcm); !errors.Is(err, ErrNotAuthorized) {
+				t.Fatalf("helper loss still permitted playback: %v", err)
+			}
+			if _, err := history(f.ctx, query); !errors.Is(err, ErrTeammateSourceChanged) {
+				t.Fatalf("helper loss still permitted a fresh receipt: %v", err)
+			}
+			unlock()
+			for {
+				f.connector.callAdmissionMu.Lock()
+				pending := f.connector.callAdmissions[text.Discussion.ID]
+				f.connector.callAdmissionMu.Unlock()
+				if pending == 0 {
+					break
+				}
+				callFixtureReceive(t, f.ctx, tick.C, "blocked admission returning during drain")
+			}
+			select {
+			case admitted := <-f.native.accepted:
+				t.Fatalf("queued turn crossed helper loss: %+v", admitted)
+			default:
+			}
+			releaseFault()
+			f.expectRoom("")
+			f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
+			f.expectRoom("20")
+			f.calls.mu.Lock()
+			ready, lost, recovered := call.ready, call.mediaLost, call.daveChanged
+			f.calls.mu.Unlock()
+			if ready || !lost || !recovered {
+				t.Fatalf("retired helper ready=%v lost=%v final DAVE fault=%v", ready, lost, recovered)
+			}
+		})
+	}
+}
+
+func TestDispatcherCallHelperLossDuringStartup(t *testing.T) {
+	f := newDispatcherCallFixture(t, false)
+	providerReady, lost, finish := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	finishDrain := sync.OnceFunc(func() { close(finish) })
+	defer finishDrain()
+	f.calls.mu.Lock()
+	f.calls.dependencies.newSpeech = func(ctx context.Context, cfg callspeech.Config) dispatcherCallSpeech {
+		return &callFixtureSpeech{ctx: ctx, cfg: cfg, ready: providerReady, ack: f.ack}
+	}
+	f.calls.dependencies.runMedia = func(ctx context.Context, path, guild, room, bot string, ids []string, input <-chan any, onLoss func(), handle func(callMediaEvent) error) error {
+		return f.runMedia(ctx, path, guild, room, bot, ids, input, onLoss, func(e callMediaEvent) error {
+			if err := handle(e); err != nil || e.Type != "ready" {
+				return err
+			}
+			onLoss()
+			close(providerReady)
+			close(lost)
+			select {
+			case <-finish:
+				return errors.New("test media process exited")
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}
+	f.calls.mu.Unlock()
+	f.requestJoin()
+	callFixtureReceive(t, f.ctx, lost, "helper loss before provider readiness")
+	f.calls.mu.Lock()
+	call := f.calls.active
+	f.calls.mu.Unlock()
+	if call == nil {
+		t.Fatal("call left before the helper drain completed")
+	}
+	finishDrain()
+	f.expectRoom("")
+	f.calls.mu.Lock()
+	ready, mediaLost := call.ready, call.mediaLost
+	f.calls.mu.Unlock()
+	if ready || !mediaLost {
+		t.Fatal("provider readiness restored authority after helper loss")
+	}
+	select {
+	case <-f.ack:
+		t.Fatal("provider acknowledged readiness after helper loss")
+	default:
+	}
 }
 
 func TestDispatcherCallsIntegration(t *testing.T) {

@@ -277,9 +277,10 @@ func TestCallGatewayRestartsOnlyOnceAfterDAVEChange(t *testing.T) {
 		t.Run(fault, func(t *testing.T) {
 			f := newDispatcherCallFixture(t, false)
 			f.calls.mu.Lock()
-			f.calls.dependencies.runMedia = func(ctx context.Context, path, guild, room, bot string, ids []string, input <-chan any, handle func(callMediaEvent) error) error {
-				return f.runMedia(ctx, path, guild, room, bot, ids, input, func(e callMediaEvent) error {
+			f.calls.dependencies.runMedia = func(ctx context.Context, path, guild, room, bot string, ids []string, input <-chan any, onLoss func(), handle func(callMediaEvent) error) error {
+				return f.runMedia(ctx, path, guild, room, bot, ids, input, onLoss, func(e callMediaEvent) error {
 					if e.Type == "audio" && e.PCM[0] == 127 {
+						onLoss()
 						return handle(callMediaEvent{Type: "fault", Code: fault})
 					}
 					return handle(e)
@@ -389,7 +390,7 @@ func TestCallPermissionRearmRechecksRevokedThreadMember(t *testing.T) {
 		newSpeech: func(ctx context.Context, cfg callspeech.Config) dispatcherCallSpeech {
 			return &callFixtureSpeech{ctx: ctx, cfg: cfg, ready: ready, ack: ack}
 		},
-		runMedia: func(ctx context.Context, _, _, _, _ string, _ []string, _ <-chan any, handle func(callMediaEvent) error) error {
+		runMedia: func(ctx context.Context, _, _, _, _ string, _ []string, _ <-chan any, _ func(), handle func(callMediaEvent) error) error {
 			if err := handle(callMediaEvent{Type: "ready"}); err != nil {
 				return err
 			}

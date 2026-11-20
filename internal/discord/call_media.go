@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,9 +40,19 @@ type callMediaEvent struct {
 	Code   string          `json:"code,omitempty"`
 }
 
-// handle is called serially. It must return promptly and honor the call context:
-// shutdown can reap the helper even if a callback is still running.
-func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string, speakers []string, input <-chan any, handle func(callMediaEvent) error) error {
+// onLoss revokes authority synchronously, independently of the serial event handler.
+// Only a terminal fault can still reach handle during the bounded drain.
+func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string, speakers []string, input <-chan any, onLoss func(), handle func(callMediaEvent) error) error {
+	live, cancelLive := context.WithCancel(ctx)
+	var stdin *os.File
+	loseAuthority := sync.OnceFunc(func() {
+		cancelLive()
+		onLoss()
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+	})
+	defer loseAuthority()
 	if !filepath.IsAbs(helperPath) {
 		return errors.New("discord call media: helper path must be absolute")
 	}
@@ -88,11 +99,12 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 	var exitErr, writeFailure error
 	go func() {
 		exitErr = cmd.Wait()
+		loseAuthority()
 		close(exited)
 	}()
 	defer func() {
+		loseAuthority()
 		cancel()
-		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = cmd.Process.Kill()
 		<-exited
@@ -102,39 +114,50 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 	writes <- start
 	writeDone := make(chan error, 1)
 	go func(pending <-chan []byte) {
-		writeDone <- writeCallMedia(ctx, stdin, pending)
+		err := writeCallMedia(live, stdin, pending)
+		writeDone <- err
+		if err != nil {
+			loseAuthority()
+		}
 	}(writes)
 	events := make(chan callMediaEvent, callMediaQueueSize)
 	readDone := make(chan error, 1)
 	var ready, stopped atomic.Bool
 	go func() {
 		defer close(events)
-		readDone <- readCallMedia(stdout, allowed, botID, &ready, events)
+		err := readCallMedia(ctx, live, stdout, allowed, botID, &ready, events, loseAuthority)
+		loseAuthority()
+		readDone <- err
 	}()
 	handled := make(chan error, 1)
 	go func() {
+		var handleErr error
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case event, ok := <-events:
 				if !ok {
-					handled <- nil
+					handled <- handleErr
 					return
 				}
 				if ctx.Err() != nil {
 					return
 				}
-				if event.Type == "audio" && stopped.Load() {
+				if event.Type != "fault" && (live.Err() != nil || event.Type == "audio" && stopped.Load()) {
 					continue
 				}
-				if err := handle(event); err != nil {
+				err := handle(event)
+				if event.Type == "fault" {
+					if err == nil {
+						err = errors.New("discord call media: helper reported a fault")
+					}
 					handled <- err
 					return
 				}
-				if event.Type == "fault" {
-					handled <- errors.New("discord call media: helper reported a fault")
-					return
+				if err != nil && live.Err() == nil {
+					loseAuthority()
+					handleErr = err
 				}
 			}
 		}
@@ -159,6 +182,7 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 		}
 	}
 	processDone := (<-chan struct{})(exited)
+	lost := live.Done()
 	for processDone != nil || handled != nil || readDone != nil || writeDone != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -167,7 +191,20 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline:
+			if writeDone != nil {
+				select {
+				case writeFailure = <-writeDone:
+				default:
+				}
+			}
+			if writeFailure != nil {
+				return writeFailure
+			}
 			return errors.New("discord call media: helper shutdown timed out")
+		case <-lost:
+			loseAuthority()
+			lost = nil
+			beginShutdown()
 		case <-processDone:
 			processDone = nil
 			beginShutdown()
@@ -185,6 +222,7 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 		case err := <-writeDone:
 			if err != nil {
 				// A retiring helper can close stdin before its final DAVE fault arrives on stdout.
+				loseAuthority()
 				writeFailure = err
 				beginShutdown()
 			}
@@ -192,6 +230,9 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 		case message, ok := <-input:
 			if !ok {
 				beginShutdown()
+				continue
+			}
+			if live.Err() != nil {
 				continue
 			}
 			line, err := json.Marshal(message)
@@ -238,16 +279,22 @@ func writeCallMedia(ctx context.Context, stdin *os.File, pending <-chan []byte) 
 				return nil
 			}
 			if err := stdin.SetWriteDeadline(time.Now().Add(callMediaWriteWait)); err != nil {
+				if ctx.Err() != nil && errors.Is(err, os.ErrClosed) {
+					return nil
+				}
 				return errors.New("discord call media: could not bound helper write")
 			}
 			if _, err := stdin.Write(append(line, '\n')); err != nil {
+				if ctx.Err() != nil && errors.Is(err, os.ErrClosed) {
+					return nil
+				}
 				return errors.New("discord call media: helper write failed")
 			}
 		}
 	}
 }
 
-func readCallMedia(stdout io.Reader, speakers []string, botID string, ready *atomic.Bool, events chan<- callMediaEvent) error {
+func readCallMedia(ctx, live context.Context, stdout io.Reader, speakers []string, botID string, ready *atomic.Bool, events chan<- callMediaEvent, loseAuthority func()) error {
 	reader := bufio.NewReaderSize(stdout, callMediaLineLimit+1)
 	joined := false
 	for {
@@ -277,13 +324,20 @@ func readCallMedia(stdout io.Reader, speakers []string, botID string, ready *ato
 				return errCallMediaProtocol
 			}
 		}
-		select {
-		case events <- event:
-		default:
-			return errors.New("discord call media: helper output backlog")
-		}
 		if event.Type == "fault" {
+			loseAuthority()
+			select {
+			case events <- event:
+			case <-ctx.Done():
+			}
 			return nil
+		}
+		if live.Err() == nil {
+			select {
+			case events <- event:
+			default:
+				return errors.New("discord call media: helper output backlog")
+			}
 		}
 	}
 }

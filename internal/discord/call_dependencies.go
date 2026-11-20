@@ -17,7 +17,7 @@ type dispatcherCallSpeech interface {
 
 type dispatcherCallDependencies struct {
 	newSpeech func(context.Context, callspeech.Config) dispatcherCallSpeech
-	runMedia  func(context.Context, string, string, string, string, []string, <-chan any, func(callMediaEvent) error) error
+	runMedia  func(context.Context, string, string, string, string, []string, <-chan any, func(), func(callMediaEvent) error) error
 }
 
 func defaultDispatcherCallDependencies() dispatcherCallDependencies {

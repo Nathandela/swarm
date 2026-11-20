@@ -72,7 +72,7 @@ IFS= read -r line
 	input <- map[string]any{"type": "play", "pcm": pcm}
 	input <- map[string]any{"type": "voice_server", "data": json.RawMessage(`{"token":"selected-voice-token"}`)}
 	var received []string
-	err = runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, input, func(event callMediaEvent) error {
+	err = runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, input, func() {}, func(event callMediaEvent) error {
 		received = append(received, event.Type)
 		switch event.Type {
 		case "gateway":
@@ -126,7 +126,8 @@ func TestCallMediaRejectsInvalidOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := mediaTestHelper(t, "IFS= read -r line\nprintf '%s' '"+test.output+"'\n")
-			err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"3", "4"}, nil, func(event callMediaEvent) error {
+			lost := make(chan struct{})
+			err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"3", "4"}, nil, func() { close(lost) }, func(event callMediaEvent) error {
 				if event.Type == "audio" {
 					t.Error("invalid audio reached handler")
 				}
@@ -134,6 +135,11 @@ func TestCallMediaRejectsInvalidOutput(t *testing.T) {
 			})
 			if !errors.Is(err, errCallMediaProtocol) {
 				t.Fatalf("expected protocol failure, got %v", err)
+			}
+			select {
+			case <-lost:
+			default:
+				t.Fatal("invalid output did not revoke authority")
 			}
 		})
 	}
@@ -144,7 +150,7 @@ func TestCallMediaShutdown(t *testing.T) {
 		name, afterPID, want string
 	}{
 		{"cancel blocked handler", "exec /bin/sleep 60", "context canceled"},
-		{"EOF while child hangs", "exec 1>&-; exec /bin/sleep 60", "shutdown timed out"},
+		{"EOF while child hangs", "IFS= read -r line; exec 1>&-; exec /bin/sleep 60", "shutdown timed out"},
 		{"closed input while child hangs", "exec /bin/sleep 60", "shutdown timed out"},
 		{"output backlog", "IFS= read -r line; printf '%s\\n' '{\"type\":\"ready\"}'; while :; do printf '%s\\n' '${audio}'; done", "output backlog"},
 		{"blocked writer", "exec /bin/sleep 60", "helper input backlog"},
@@ -160,10 +166,11 @@ printf '{"type":"gateway","data":{"pid":%s}}\n' "$$"
 `+after+"\n")
 			input := make(chan any, 32)
 			entered, result := make(chan int, 1), make(chan error, 1)
+			lost := make(chan struct{})
 			release := make(chan struct{})
 			defer close(release)
 			go func() {
-				result <- runCallMedia(ctx, path, "1", "2", "3", []string{"4"}, input, func(event callMediaEvent) error {
+				result <- runCallMedia(ctx, path, "1", "2", "3", []string{"4"}, input, func() { close(lost) }, func(event callMediaEvent) error {
 					if event.Type != "gateway" {
 						return nil
 					}
@@ -194,7 +201,7 @@ printf '{"type":"gateway","data":{"pid":%s}}\n' "$$"
 				cancel()
 			case "closed input while child hangs":
 				close(input)
-			case "output backlog":
+			case "output backlog", "EOF while child hangs":
 				input <- map[string]any{"type": "clear"}
 			case "blocked writer", "single blocked write":
 				message := map[string]any{"type": "voice_server", "data": map[string]string{"token": strings.Repeat("x", 8000)}}
@@ -205,16 +212,36 @@ printf '{"type":"gateway","data":{"pid":%s}}\n' "$$"
 					}
 				} else {
 					// Fill the pipe slowly so the deadline, rather than the queue, stops the writer.
-					for range 16 {
-						time.Sleep(20 * time.Millisecond)
-						input <- message
+					pacer := time.NewTicker(50 * time.Millisecond)
+					defer pacer.Stop()
+				fill:
+					for {
+						select {
+						case <-lost:
+							break fill
+						case <-pacer.C:
+							input <- message
+						case <-ctx.Done():
+							t.Fatal(ctx.Err())
+						}
 					}
+				}
+			}
+			if test.name == "EOF while child hangs" {
+				callFixtureReceive(t, ctx, lost, "stdout EOF revoking authority")
+				if err := syscall.Kill(pid, 0); err != nil {
+					t.Fatalf("EOF notification arrived after child cleanup: %v", err)
 				}
 			}
 			select {
 			case err := <-result:
 				if err == nil || !strings.Contains(err.Error(), test.want) {
 					t.Fatalf("expected %q, got %v", test.want, err)
+				}
+				select {
+				case <-lost:
+				default:
+					t.Fatal("runner returned before notifying authority loss")
 				}
 			case <-time.After(2 * time.Second):
 				t.Fatal("helper shutdown did not return")
@@ -232,7 +259,7 @@ printf '%s\n' '{"type":"fault","code":"dave_required"}'
 exit 1
 `)
 	fault := make(chan string, 1)
-	err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, nil, func(event callMediaEvent) error {
+	err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, nil, func() {}, func(event callMediaEvent) error {
 		fault <- event.Code
 		return nil
 	})
@@ -257,7 +284,7 @@ exit 1
 			t.Fatalf("invalid input got %v", err)
 		}
 	}
-	if err := runCallMedia(mediaTestContext(t), "./fake", "1", "2", "3", nil, nil, nil); err == nil {
+	if err := runCallMedia(mediaTestContext(t), "./fake", "1", "2", "3", nil, nil, func() {}, nil); err == nil {
 		t.Fatal("accepted a relative helper path")
 	}
 }
@@ -271,7 +298,7 @@ printf '%s\n' '{"type":"fault","code":"dave_changed"}'
 `)
 	commands := make(chan any, 1)
 	observed := make(chan string, 1)
-	err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, commands, func(e callMediaEvent) error {
+	err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, commands, func() {}, func(e callMediaEvent) error {
 		if e.Type == "ready" {
 			commands <- map[string]any{"type": "clear"}
 		}

@@ -61,6 +61,7 @@ type dispatcherCall struct {
 	daveChanged  bool
 	retriedDAVE  bool
 	mediaFault   bool
+	mediaLost    bool
 }
 
 func enableDispatcherCalls(ctx context.Context, t *teammateConnector, injected ...dispatcherCallDependencies) *dispatcherCalls {
@@ -313,7 +314,8 @@ func (d *dispatcherCalls) run() {
 				deadline = previousDeadline
 			}
 		}
-		ctx, cancel := context.WithDeadline(gatewayCtx, deadline)
+		mediaCtx, cancel := context.WithDeadline(gatewayCtx, deadline)
+		ctx, revoke := context.WithCancel(mediaCtx)
 		d.generation++
 		c := &dispatcherCall{ctx: ctx, cancel: cancel, id: rand.Text(), generation: d.generation, speakers: slices.Clone(ids), input: make(chan any, 24), turns: make(chan callspeech.Turn, 8), publications: make(chan TeammatePublication, 16), lastSpeech: time.Now()}
 		c.started = time.Now()
@@ -322,7 +324,7 @@ func (d *dispatcherCalls) run() {
 		retry = nil
 		d.active = c
 		d.mu.Unlock()
-		err := d.serve(c)
+		err := d.serve(c, mediaCtx, revoke)
 		cancel()
 		d.mu.Lock()
 		// Wait for the bot's leave dispatch before a replacement helper can join.
@@ -391,7 +393,7 @@ func (d *dispatcherCalls) checkAudience(ctx context.Context, b TeammateDiscussio
 	return nil
 }
 
-func (d *dispatcherCalls) serve(c *dispatcherCall) error {
+func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, revoke context.CancelFunc) (serveErr error) {
 	fail := func(reason string) {
 		d.mu.Lock()
 		if c.failure == "" {
@@ -449,6 +451,9 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 		Stop:   func() { d.mu.Lock(); defer d.mu.Unlock(); d.queueLocked(c, map[string]any{"type": "clear"}) },
 		Failed: func(error) { fail("speech provider unavailable; continue in text"); c.cancel() },
 		Turn: func(ctx context.Context, turn callspeech.Turn) {
+			if c.ctx.Err() != nil {
+				return
+			}
 			select {
 			case <-ctx.Done():
 			case <-c.ctx.Done():
@@ -460,8 +465,25 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 	})
 	mediaDone := make(chan error, 1)
 	started := make(chan struct{})
+	onLoss := sync.OnceFunc(func() {
+		revoke()
+		d.mu.Lock()
+		c.ready, c.mediaLost = false, true
+		d.mu.Unlock()
+	})
 	go func() {
-		mediaErr := d.dependencies.runMedia(c.ctx, cfg.Calls.HelperPath, cfg.Calls.GuildID, cfg.Calls.RoomID, cfg.ApplicationID, c.speakers, c.input, func(e callMediaEvent) error {
+		mediaErr := d.dependencies.runMedia(mediaCtx, cfg.Calls.HelperPath, cfg.Calls.GuildID, cfg.Calls.RoomID, cfg.ApplicationID, c.speakers, c.input, onLoss, func(e callMediaEvent) error {
+			if e.Type == "fault" {
+				d.mu.Lock()
+				c.mediaFault = true
+				select {
+				case <-started:
+					c.daveChanged = e.Code == "dave_changed" && mediaCtx.Err() == nil && c.joinAt != 0
+				default:
+				}
+				d.mu.Unlock()
+				return errors.New("discord call media: helper reported a fault")
+			}
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
@@ -487,18 +509,12 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 				c.joinAt = d.roster.sequence
 				d.mu.Unlock()
 				return d.t.client.setCallVoiceState(c.ctx, cfg.Calls.GuildID, cfg.Calls.RoomID)
-			case "fault":
-				d.mu.Lock()
-				c.mediaFault = true
-				select {
-				case <-started:
-					c.daveChanged = e.Code == "dave_changed" && c.ctx.Err() == nil && c.joinAt != 0
-				default:
-				}
-				c.cancel()
-				d.mu.Unlock()
-				return errors.New("discord call media: helper reported a fault")
 			case "ready":
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				if err := c.ctx.Err(); err != nil {
+					return err
+				}
 				select {
 				case <-started:
 					return ErrConflict
@@ -525,16 +541,21 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 			}
 			return nil
 		})
-		// The admission loop can be blocked in native I/O when the helper exits.
-		c.cancel()
+		onLoss()
 		mediaDone <- mediaErr
 	}()
 	ended := false
 	defer func() {
-		c.cancel()
-		if !ended {
-			<-mediaDone
+		// Helper loss cancels authority while the media runner drains its terminal fault.
+		if c.ctx.Err() == nil {
+			c.cancel()
 		}
+		if !ended {
+			if mediaErr := <-mediaDone; mediaErr != nil && errors.Is(serveErr, context.Canceled) {
+				serveErr = mediaErr
+			}
+		}
+		c.cancel()
 		lane.Close()
 		<-lane.Done()
 	}()
@@ -558,7 +579,11 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 		}
 	}
 	d.mu.Lock()
-	c.ready = c.ctx.Err() == nil
+	if c.mediaLost || c.ctx.Err() != nil {
+		d.mu.Unlock()
+		return c.ctx.Err()
+	}
+	c.ready = true
 	c.metrics.ReadyMS = time.Since(c.started).Milliseconds()
 	d.mu.Unlock()
 	if err = lane.Acknowledge(); err != nil {
@@ -617,12 +642,18 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 				return err
 			}
 		case p := <-c.publications:
+			if err = c.ctx.Err(); err != nil {
+				return err
+			}
 			o, err := d.t.callPublicationOrigin(b, p)
 			if _, known := delegations[o.TurnID]; err != nil || o.CallID != c.id || o.Generation != c.generation || !known || seen[p.ID] {
 				continue
 			}
 			if err = d.checkAudience(c.ctx, b, c.speakers); err != nil {
 				fail("participant no longer has access to the linked discussion")
+				return err
+			}
+			if err = c.ctx.Err(); err != nil {
 				return err
 			}
 			if len(seen) >= 1024 {
