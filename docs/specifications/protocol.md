@@ -231,6 +231,7 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `manager_admission` | `*ManagerAdmission` | Optional owner `semantic_send` admission; requires `manager-provenance`, typed manager role and exact binding; participates in the semantic content hash |
 | `nonce` | string | One-use 256-bit lowercase hexadecimal input identity, separate from human text and operation ID |
 | `expected_external_input` | uint64 | Native external-input counter compared at admission/write boundary; stale baselines cannot submit unsolicited manager input |
+| `rejection_code` | string | Optional durable semantic refusal code. An exact `manager_direct_input_unresolved` rejection without a native input or turn proves the unfinished terminal input prevented submission. |
 | `native_input_id` | string | Exact admitted nonce, retained in semantic receipt and historical outcome |
 | `native_turn_id` | string | Exact native main-turn identifier, retained separately from the input nonce |
 | `native_call_id` | string | Exact host-native tool call identifier joined to native observations |
