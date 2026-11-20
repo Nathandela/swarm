@@ -35,3 +35,9 @@ A real test guild and consenting human participants are still required for the p
 ### First-version handoff
 
 Nathan deferred live Discord and human testing until after implementation. Astra’s fourth review closed the four remaining round-three implementation findings, including revocation at first observed helper loss, incomplete RTP spanning two clocks, recovered DM order and unattended VM tool authorization. The subsequent two-worker hosted run passed. That review also confirmed exact-word fallback. No live bot, deployment or release tag was used. The [operator setup](../ops/discord.md#opt-in-to-dispatcher-calls) and [first-call acceptance procedure](../specifications/discord-dispatcher-calls.md#integrated-contracts-and-acceptance-procedure) cover the next trial.
+
+## Repository gates
+
+The first-trial candidate passed `go build ./...`, `go vet ./...` and repository-wide golangci-lint with zero issues. The final serial `go test -p 1 -timeout 45m ./...` exited successfully with 97 passing packages and 8 packages without tests. Race detection passed in all 10 changed Go packages, including the CLI, Discord, both native adapters, schema, native manager and speech packages. The tests used shared Go caches and canonical scratch roots.
+
+An earlier parallel run hit startup deadlines in the CLI and daemon packages and stalled in a test-supervisor fixture. The two packages passed on serial retry, the test-supervisor package passed in isolation, and the complete serial rerun passed. The macOS arm64 trial CLI and bundled, credential-free Node helper also passed their local version and dependency smoke checks. Live Discord qualification remains deferred at the owner's request.
