@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	HostTimeZone     = "host"
 	CalendarOnce     = "once"
 	CalendarDaily    = "daily"
 	CalendarWeekdays = "weekdays"
@@ -17,7 +18,7 @@ const (
 	CalendarCron     = "cron"
 )
 
-// Calendar uses a named IANA time zone. It skips wall times inside a DST
+// Calendar uses the host zone or a named IANA time zone. It skips wall times inside a DST
 // gap and uses the first instant when a wall time occurs twice.
 type Calendar struct {
 	Kind     string `json:"kind"`
@@ -29,11 +30,12 @@ type Calendar struct {
 }
 
 type calendarRule struct {
-	location *time.Location
-	once     *time.Time
-	fields   [5]uint64
-	starDay  bool
-	starWeek bool
+	location   *time.Location
+	hostZoneID string
+	once       *time.Time
+	fields     [5]uint64
+	starDay    bool
+	starWeek   bool
 }
 
 const (
@@ -44,15 +46,36 @@ const (
 	allWeekdays = 1<<7 - 1
 )
 
-func (c Calendar) compile() (calendarRule, error) {
-	var rule calendarRule
-	if c.TimeZone == "" || c.TimeZone == "Local" {
-		return rule, fmt.Errorf("select a named IANA time zone")
+// Location resolves the effective time zone at the time of the call.
+func (c Calendar) Location() (*time.Location, error) {
+	loc, _, err := c.location(systemHostZone)
+	return loc, err
+}
+
+func (c Calendar) location(host hostZoneResolver) (*time.Location, string, error) {
+	if c.TimeZone == HostTimeZone {
+		return host()
 	}
-	var err error
-	rule.location, err = time.LoadLocation(c.TimeZone)
+	if c.TimeZone == "" || c.TimeZone == "Local" {
+		return nil, "", fmt.Errorf("select the host time zone or a named IANA time zone")
+	}
+	loc, err := time.LoadLocation(c.TimeZone)
 	if err != nil {
-		return rule, fmt.Errorf("time zone %q: %w", c.TimeZone, err)
+		return nil, "", fmt.Errorf("time zone %q: %w", c.TimeZone, err)
+	}
+	return loc, "", nil
+}
+
+func (c Calendar) compile() (calendarRule, error) {
+	return c.compileWith(systemHostZone)
+}
+
+func (c Calendar) compileWith(host hostZoneResolver) (calendarRule, error) {
+	var rule calendarRule
+	var err error
+	rule.location, rule.hostZoneID, err = c.location(host)
+	if err != nil {
+		return rule, err
 	}
 	rule.fields = [5]uint64{allMinutes, allHours, allDays, allMonths, allWeekdays}
 	rule.starDay, rule.starWeek = true, true

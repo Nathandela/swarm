@@ -21,7 +21,7 @@ func (s *Store) ClaimDue(now time.Time) ([]Occurrence, error) {
 	var due []jobEvaluation
 	err := s.view(func(tx *bolt.Tx) error {
 		var err error
-		due, err = dueOccurrences(tx, now)
+		due, err = s.dueOccurrences(tx, now)
 		return err
 	})
 	if err != nil || len(due) == 0 {
@@ -30,7 +30,7 @@ func (s *Store) ClaimDue(now time.Time) ([]Occurrence, error) {
 	var claimed []Occurrence
 	err = s.update(func(tx *bolt.Tx) error {
 		// A writer may have edited or claimed after the initial read.
-		due, err := dueOccurrences(tx, now)
+		due, err := s.dueOccurrences(tx, now)
 		if err != nil {
 			return err
 		}
@@ -52,15 +52,27 @@ func (s *Store) ClaimDue(now time.Time) ([]Occurrence, error) {
 }
 
 type jobEvaluation struct {
-	jobID  string
-	cursor time.Time
-	due    Occurrence
+	jobID      string
+	cursor     time.Time
+	due        Occurrence
+	hostZoneID string
+	wallSlot   string
 }
 
-func dueOccurrences(tx *bolt.Tx, now time.Time) ([]jobEvaluation, error) {
+func (s *Store) dueOccurrences(tx *bolt.Tx, now time.Time) ([]jobEvaluation, error) {
 	var due []jobEvaluation
+	// Resolve the OS zone once per transaction, only if a job follows it.
+	var zone *time.Location
+	var zoneID string
+	resolve := func() (*time.Location, string, error) {
+		var err error
+		if zone == nil {
+			zone, zoneID, err = s.hostZone()
+		}
+		return zone, zoneID, err
+	}
 	err := eachRecord(tx, jobsBucket, func(job Job) error {
-		evaluation, err := evaluateJob(tx, job, now, now)
+		evaluation, err := evaluateJob(tx, job, now, now, resolve)
 		if err == nil && !evaluation.cursor.IsZero() {
 			due = append(due, evaluation)
 		}
@@ -72,7 +84,7 @@ func dueOccurrences(tx *bolt.Tx, now time.Time) ([]jobEvaluation, error) {
 	return due, err
 }
 
-func evaluateJob(tx *bolt.Tx, job Job, through, now time.Time) (jobEvaluation, error) {
+func evaluateJob(tx *bolt.Tx, job Job, through, now time.Time, host hostZoneResolver) (jobEvaluation, error) {
 	result := jobEvaluation{jobID: job.ID}
 	if job.State != JobActive {
 		return result, nil
@@ -92,15 +104,38 @@ func evaluateJob(tx *bolt.Tx, job Job, through, now time.Time) (jobEvaluation, e
 			from, result.cursor = rewound, rewound
 		}
 	}
-	rule, err := job.Spec.Calendar.compile()
+	rule, err := job.Spec.Calendar.compileWith(host)
 	if err != nil {
 		return result, err
 	}
-	at := rule.find(through, true).UTC()
+	if rule.hostZoneID != "" {
+		oldZone, err := record[string](tx, evalBucket, job.ID+"/zone")
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return result, err
+		}
+		if rule.hostZoneID != oldZone {
+			// A newly observed zone applies from the current minute. Never
+			// reinterpret the elapsed catch-up window in the new zone.
+			bound := through.Truncate(time.Minute).Add(-time.Nanosecond)
+			if bound.After(from) {
+				from = bound
+			}
+			result.cursor, result.hostZoneID = from, rule.hostZoneID
+		}
+	}
+	at := rule.find(through, true)
+	if rule.hostZoneID == "" {
+		at = at.UTC()
+	}
 	if !at.After(from) {
 		return result, nil
 	}
-	result.cursor = at
+	result.cursor = at.UTC()
+	if rule.hostZoneID != "" {
+		// Traveling west can present the same wall slot twice at different
+		// instants. Retain the original UTC occurrence and dispatch identity.
+		result.wallSlot = job.ID + "/wall/" + at.Format("2006-01-02T15:04")
+	}
 	result.due, err = newOccurrence(job, at, now, "")
 	return result, err
 }
@@ -111,6 +146,20 @@ func saveEvaluation(tx *bolt.Tx, evaluation jobEvaluation, skipReason string) (O
 	}
 	if err := putRecord(tx, evalBucket, evaluation.jobID, evaluation.cursor); err != nil {
 		return Occurrence{}, err
+	}
+	if evaluation.hostZoneID != "" {
+		if err := putRecord(tx, evalBucket, evaluation.jobID+"/zone", evaluation.hostZoneID); err != nil {
+			return Occurrence{}, err
+		}
+	}
+	if evaluation.wallSlot != "" {
+		b := tx.Bucket([]byte(evalBucket))
+		if b.Get([]byte(evaluation.wallSlot)) != nil {
+			return Occurrence{}, nil
+		}
+		if err := b.Put([]byte(evaluation.wallSlot), []byte{1}); err != nil {
+			return Occurrence{}, err
+		}
 	}
 	o := evaluation.due
 	if o.ID == "" || tx.Bucket([]byte(runsBucket)).Get([]byte(o.ID)) != nil {
@@ -163,7 +212,15 @@ func (s *Store) ClaimManualWithID(jobID, invocationID string, now time.Time) (Oc
 		if job.State == JobArchived {
 			return ErrArchived
 		}
-		result, err = newOccurrence(job, now, now, invocationID)
+		due := now
+		if job.Spec.Calendar.TimeZone == HostTimeZone {
+			loc, _, err := s.hostZone()
+			if err != nil {
+				return err
+			}
+			due = now.In(loc)
+		}
+		result, err = newOccurrence(job, due, now, invocationID)
 		if err != nil {
 			return err
 		}
