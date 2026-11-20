@@ -60,9 +60,9 @@ func (m rootModel) boardButtons() []actionButton {
 	if m.width > 0 && width-1 > m.width {
 		buttons = buttons[1:]
 	}
-	if s, ok := m.general.selected(); ok && m.general.focusVisible() && !m.isLinkedDispatcher(s) {
+	if s, ok := m.general.selected(); ok && m.general.focusVisible() {
 		for _, b := range sessionButtons(s) {
-			if b.key != "r" {
+			if b.key != "r" && (!m.isLinkedDispatcher(s) || b.key == "x" && m.dispatcherRemove != nil) {
 				buttons = append(buttons, b)
 			}
 		}

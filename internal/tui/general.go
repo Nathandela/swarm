@@ -652,7 +652,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
 		// so a concurrent status event cannot shift a different row under it.
-		if s, ok := m.boardCommandSession(); ok {
+		if s, ok := m.boardTargetSession(); ok && (!m.isLinkedDispatcher(s) || m.dispatcherRemove != nil) {
 			m.general.confirm = true
 			m.general.confirmID = s.ID
 			m.general.confirmKill = s.Status.Process == status.ProcessRunning
@@ -729,6 +729,15 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if running := s.Status.Process == status.ProcessRunning; running != wantKill {
 			return m, nil // target flipped kill<->delete state — do nothing
+		}
+		if m.isLinkedDispatcher(s) {
+			return m, func() tea.Msg {
+				err := m.dispatcherRemove(id, wantKill)
+				if wantKill {
+					return killDoneMsg{id: id, err: err}
+				}
+				return deleteDoneMsg{id: id, err: err}
+			}
 		}
 		if wantKill {
 			return m, killCmd(m.client, s.ID)

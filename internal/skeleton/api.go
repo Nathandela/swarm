@@ -1659,12 +1659,17 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		// including ordinary shell spawns and providers without a thread bridge.
 		if spec.Manager == nil && spec.SpawnedFrom != "" {
 			parent, ok := getSource(spec.SpawnedFrom)
-			if ok && schema.IsDiscordManager(parent.Role, parent.ManagerConversationID) && !strings.HasPrefix(spec.Name, "DSP-") {
-				name := spec.Name
-				if name == "" {
-					name = spec.AgentType
+			if ok && schema.IsDiscordManager(parent.Role, parent.ManagerConversationID) {
+				if spec.Tag == "" {
+					spec.Tag = "DSP"
 				}
-				spec.Name = protocol.SanitizeName("DSP-" + name)
+				if !strings.HasPrefix(spec.Name, "DSP-") {
+					name := spec.Name
+					if name == "" {
+						name = spec.AgentType
+					}
+					spec.Name = protocol.SanitizeName("DSP-" + name)
+				}
 			}
 		}
 		switch spec.AgentType {

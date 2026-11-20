@@ -58,7 +58,7 @@ func (m rootModel) moreLines() []menuLine {
 			lines = append(lines, menuLine{"Open", "enter"})
 		}
 		for _, b := range sessionButtons(s) {
-			if m.isLinkedDispatcher(s) {
+			if m.isLinkedDispatcher(s) && (b.key != "x" || m.dispatcherRemove == nil) {
 				continue
 			}
 			if !sameProcess && (b.key == "r" || b.key == "x") {

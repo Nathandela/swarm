@@ -202,6 +202,7 @@ type rootModel struct {
 	managerSettingsDir string
 	dispatcherList     func() ([]protocol.SessionView, error)
 	dispatcherAttach   AttachRunner
+	dispatcherRemove   func(string, bool) error
 	linkedDispatchers  []protocol.SessionView
 	attach             attachModel
 
