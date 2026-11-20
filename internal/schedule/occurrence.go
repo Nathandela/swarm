@@ -258,9 +258,7 @@ func checkOverlap(tx *bolt.Tx, o *Occurrence) error {
 		// Opted-in runs can isolate at execution time. Keep their claim
 		// queued so a restart recovers the pending workspace decision.
 		sameJobConflict := other.JobID == o.JobID && (!o.Spec.AllowOverlap || !other.Spec.AllowOverlap)
-		directConflict := !o.Spec.AllowOverlap &&
-			(o.Spec.Workspace == WorkspaceDirectory || other.Spec.Workspace == WorkspaceDirectory) &&
-			pathsOverlap(o.Spec.Directory, other.Spec.Directory)
+		directConflict := other.BlocksSelectedDirectory(o.Spec)
 		if (sameJobConflict || directConflict) && (conflicting == "" || other.ID < conflicting) {
 			conflicting = other.ID
 		}
@@ -273,6 +271,14 @@ func checkOverlap(tx *bolt.Tx, o *Occurrence) error {
 		o.State, o.Detail = OccurrenceBlocked, "overlap with active occurrence "+conflicting
 	}
 	return nil
+}
+
+// BlocksSelectedDirectory checks the same checkout reservation used before
+// a new occurrence has an assigned execution workspace.
+func (o Occurrence) BlocksSelectedDirectory(next JobSpec) bool {
+	return !next.AllowOverlap && o.reservesWorkspace() && o.Spec.Directory != "" &&
+		(next.Workspace == WorkspaceDirectory || o.Spec.Workspace == WorkspaceDirectory) &&
+		pathsOverlap(next.Directory, o.Spec.Directory)
 }
 
 func pathsOverlap(a, b string) bool {
