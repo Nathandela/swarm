@@ -67,6 +67,7 @@ type teammateBinding struct {
 	PersonalHistoryFailureEpoch uint64    `json:",omitempty"`
 	PersonalScanEpoch           uint64    `json:",omitempty"`
 	PersonalRepairEpoch         uint64    `json:",omitempty"`
+	PersonalRepairThrough       string    `json:",omitempty"`
 	NotifiedEpoch               uint64
 	ParentLow                   string
 	Error                       string

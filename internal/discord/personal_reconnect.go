@@ -13,6 +13,7 @@ import (
 )
 
 var errPersonalHistoryRepair = errors.New("discord: personal DM history recovery is in progress")
+var errPersonalHistoryPending = errors.New("discord: recovered owner DMs are pending native admission")
 var errPersonalHistoryBoundary = errors.New("previous message boundary unavailable")
 var errPersonalHistoryPermission = errors.New("read permission unavailable")
 
@@ -29,6 +30,10 @@ func personalRepairPending(b teammateBinding, epoch uint64) bool {
 }
 
 func checkPersonalRepairGate(tx *bolt.Tx, cfg Config, d TeammateDiscussion) error {
+	return checkPersonalHistory(tx, cfg, d, false)
+}
+
+func checkPersonalHistory(tx *bolt.Tx, cfg Config, d TeammateDiscussion, checkPending bool) error {
 	if !isPersonalDiscussion(cfg, d) {
 		return nil
 	}
@@ -47,7 +52,26 @@ func checkPersonalRepairGate(tx *bolt.Tx, cfg Config, d TeammateDiscussion) erro
 	if personalRepairPending(b, checkpoint.GapEpoch) {
 		return errPersonalHistoryRepair
 	}
-	return nil
+	if !checkPending || b.PersonalRepairEpoch == 0 {
+		return nil
+	}
+	through := b.PersonalRepairThrough
+	if through == "" {
+		// A scan completed by an older binary only stored its watermark in Boundary.
+		through = b.Boundary
+	}
+	ingress := tx.Bucket([]byte(teammateIngressBucket))
+	return teammateEach(tx.Bucket([]byte(teammatePendingBucket)), d.InstallationID, func(_, key []byte) error {
+		var c teammateCandidate
+		if err := teammateGet(ingress, key, &c); err != nil {
+			return err
+		}
+		if c.Author.ID == cfg.OwnerID && c.Route.ChannelID == d.Route.ChannelID && c.Route.GuildID == "" &&
+			!snowflakeLess(through, c.Route.MessageID) {
+			return errPersonalHistoryPending
+		}
+		return nil
+	})
 }
 
 // A parked DM still needs an ingress scan on a new gateway epoch, without a human prompt.
@@ -247,6 +271,9 @@ func (s *Store) recordPersonalRepairPage(b teammateBinding, epoch uint64, upper,
 			}
 			if snowflakeLess(current.Boundary, upper) {
 				current.Boundary = upper
+			}
+			if snowflakeLess(current.PersonalRepairThrough, upper) {
+				current.PersonalRepairThrough = upper
 			}
 		}
 		return putJSON(tx, teammateDiscussionBucket, key, current)

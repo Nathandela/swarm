@@ -272,7 +272,12 @@ func (t *teammateConnector) verifyCallAdmission(ctx context.Context, bound Teamm
 	if errors.Is(err, ErrNotAuthorized) {
 		return ErrTeammateSourceChanged
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return t.service.Store.db.View(func(tx *bolt.Tx) error {
+		return checkPersonalHistory(tx, t.service.Config, bound, true)
+	})
 }
 
 func (t *teammateConnector) dispatchCallPublication(ctx context.Context, bound TeammateDiscussion, p TeammatePublication) {

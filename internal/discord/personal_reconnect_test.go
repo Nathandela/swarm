@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	bolt "go.etcd.io/bbolt"
-	"testing"
 )
 
 func TestPersonalReconnectRecoversMissedOriginalIDs(t *testing.T) {
@@ -45,7 +47,22 @@ func TestPersonalReconnectRecoversMissedOriginalIDs(t *testing.T) {
 
 type personalReconnectManager struct {
 	teammateTestManager
-	syncs int
+	syncs     int
+	retryText bool
+}
+
+func (m *personalReconnectManager) AdmissionState(ctx context.Context, a TeammateAdmission) (string, error) {
+	if a.Voice.Generation != 0 {
+		return TeammateAdmissionMissing, nil
+	}
+	return m.teammateTestManager.AdmissionState(ctx, a)
+}
+
+func (m *personalReconnectManager) Admit(ctx context.Context, a TeammateAdmission, reader TeammateHistoryReader) error {
+	if m.retryText && a.Route.MessageID == "51" {
+		return errors.New("native manager temporarily offline")
+	}
+	return m.teammateTestManager.Admit(ctx, a, reader)
 }
 
 func (m *personalReconnectManager) Sync(context.Context, TeammateDiscussion, TeammateHistoryReader, func(TeammatePublication) error) error {
@@ -123,10 +140,12 @@ func TestPersonalReconnectResumesVerifiedPagesAndKeepsNativeFIFO(t *testing.T) {
 		}
 	})
 	cfg := &c.service.Config
-	cfg.Mode, cfg.OwnerID, cfg.DMChannelID = "personal", "30", "20"
+	cfg.Mode, cfg.OwnerID, cfg.DMChannelID, cfg.DaemonSocket = "personal", "30", "20", "/tmp/supervisor.sock"
+	cfg.Calls = &DispatcherCallsConfig{Mode: "personal", DiscussionID: "20"}
 	cfg.GuildIDs, cfg.UserIDs = nil, nil
 	m := &personalReconnectManager{}
 	c.manager = m
+	c.verifyCallTurn = func(context.Context, TeammateDiscussion, schema.VoiceOrigin, bool) error { return nil }
 	s := c.service.Store
 	d := TeammateDiscussion{ID: "existing", InstallationID: cfg.InstallationID, Route: Route{ChannelID: "20"}}
 	b := teammateBinding{TeammateDiscussion: d, Opened: true, Boundary: "150", RepairEpoch: 1, RepairTargetEpoch: 1, NotifiedEpoch: 1}
@@ -226,17 +245,44 @@ func TestPersonalReconnectResumesVerifiedPagesAndKeepsNativeFIFO(t *testing.T) {
 	if out, err := s.teammateOutputs(d.InstallationID, d.ID); err != nil || len(out) != 0 {
 		t.Fatalf("prepared legacy restate was not suppressed: %+v %v", out, err)
 	}
-	for range 3 {
-		tick(true)
+	// Even with a completed scan, a voice retry must wait across store reopen
+	// and an older DM's failed first attempt to transfer custody.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
 	}
-	if len(m.admitted) != 3 {
-		p, _ := s.teammatePending(d.InstallationID)
-		active, _ := s.teammateBindingByID(d.InstallationID, d.ID)
-		checkpoint, _ := s.teammateCheckpoint(d.InstallationID)
-		t.Fatalf("admissions=%+v pending=%+v active=%+v checkpoint=%+v", m.admitted, p, active, checkpoint)
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.service.Store = s
+	t.Cleanup(func() { _ = s.Close() })
+	voice := func(want error) {
+		t.Helper()
+		_, err := c.submitCallTurn(t.Context(), d, "call", "turn", 1, Actor{ID: "30"}, "new voice request")
+		if !errors.Is(err, want) {
+			t.Fatalf("new call admission = %v, want %v", err, want)
+		}
+	}
+	voice(errPersonalHistoryPending)
+	m.retryText = true
+	tick(true)
+	if pending, err := s.teammatePending(d.InstallationID); err != nil || len(pending) != 3 || len(m.admitted) != 0 || !slices.ContainsFunc(pending, func(c teammateCandidate) bool {
+		return c.Route.MessageID == "51" && c.State == StateSending
+	}) {
+		t.Fatalf("failed text attempt did not retain durable custody: %+v, %v", pending, err)
+	}
+	voice(errPersonalHistoryPending)
+	m.retryText = false
+	tick(true)
+	voice(errPersonalHistoryPending)
+	tick(true)
+	voice(nil) // Live DM 151 was outside the scan and follows ordinary text scheduling.
+	tick(true)
+	if len(m.admitted) != 4 || m.admitted[2].Voice.Generation == 0 {
+		t.Fatalf("recovered DMs and fresh voice did not enter native custody in order: %+v", m.admitted)
 	}
 	want := []struct{ id, text string }{{"51", "same request, edited before delivery"}, {"135", "same request"}, {"151", "same request plus a new instruction"}}
-	for i, a := range m.admitted {
+	for i, a := range []TeammateAdmission{m.admitted[0], m.admitted[1], m.admitted[3]} {
 		operation := "da_" + digest([]string{d.InstallationID, want[i].id})[:32]
 		if a.Route.MessageID != want[i].id || a.Text != want[i].text || a.OperationID != operation {
 			t.Fatalf("admission %d: %+v", i, a)
@@ -246,7 +292,7 @@ func TestPersonalReconnectResumesVerifiedPagesAndKeepsNativeFIFO(t *testing.T) {
 		teammateTestEvent(t, c, 3, "MESSAGE_CREATE", ownerMessage(id, "same request"))
 	}
 	teammateTestEvent(t, c, 4, "MESSAGE_UPDATE", ownerMessage("51", "edited after cutover"))
-	if p, err := s.teammatePending(d.InstallationID); err != nil || len(p) != 0 || len(m.admitted) != 3 {
+	if p, err := s.teammatePending(d.InstallationID); err != nil || len(p) != 0 || len(m.admitted) != 4 {
 		t.Fatalf("repeat/late edit replayed an effect: %v %v, admissions %d", p, err, len(m.admitted))
 	}
 }
