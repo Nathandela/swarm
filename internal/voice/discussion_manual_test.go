@@ -48,7 +48,7 @@ func TestDiscussionManualResumeKeepsQuarantinedManagerFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := d.ResumeManual(context.Background(), b.SessionID, b.SessionInstance, 0)
-	if !errors.Is(err, managerproof.ErrQuarantined) || !strings.Contains(err.Error(), b.SessionID) || !strings.Contains(err.Error(), "dashboard") {
+	if !errors.Is(err, managerproof.ErrQuarantined) || !strings.Contains(err.Error(), b.SessionID) || !strings.Contains(err.Error(), "verifies its native writers stopped") || !strings.Contains(err.Error(), "preserve any unfinished draft") {
 		t.Fatalf("quarantine lacked exact actionable recovery: %v", err)
 	}
 	st, _ := store.Snapshot()
