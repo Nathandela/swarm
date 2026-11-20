@@ -148,7 +148,7 @@ func (p *ProtocolControllerClient) ManagerRetire(ctx context.Context, req protoc
 func (p *ProtocolControllerClient) discussionSupported(ctx context.Context) error {
 	caps := append([]string{
 		protocol.CapOwnerLaunch, protocol.CapOwnerBoundResume, protocol.CapManagerLaunch, protocol.CapManagerProvenance,
-		protocol.CapManagerRetire, protocol.CapMessageOrigin, protocol.CapSemanticSend,
+		protocol.CapManagerRetire, protocol.CapTeammateWorkerBridge, protocol.CapMessageOrigin, protocol.CapSemanticSend,
 	}, controllerJournalCaps...)
 	_, err := controllerOwnerCall(p, ctx, 3*time.Second, caps, func(*protocol.Client) (struct{}, error) {
 		return struct{}{}, nil
