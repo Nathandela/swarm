@@ -19,16 +19,18 @@ var errDiscussionGrantUnverified = errors.New("voice: Discord authority could no
 
 // DiscussionScope comes from the verified connector destination and local enrollment.
 type DiscussionScope struct {
-	DiscussionID    string
-	InstallationID  string
-	GuildID         string
-	ThreadID        string
-	VerifyAudience  func(context.Context) error
-	ProjectEnrolled func(string) bool
-	VerifyOrigin    func(context.Context, schema.MessageOrigin) error
-	VerifyGrant     func(context.Context, schema.MessageOrigin) error
-	journalReady    func() bool
-	History         func(context.Context, DiscussionHistoryInput) (json.RawMessage, error)
+	DMOwnerID          string
+	ManagerSettingsDir string
+	DiscussionID       string
+	InstallationID     string
+	GuildID            string
+	ThreadID           string
+	VerifyAudience     func(context.Context) error
+	ProjectEnrolled    func(string) bool
+	VerifyOrigin       func(context.Context, schema.MessageOrigin) error
+	VerifyGrant        func(context.Context, schema.MessageOrigin) error
+	journalReady       func() bool
+	History            func(context.Context, DiscussionHistoryInput) (json.RawMessage, error)
 }
 
 type DiscussionHistoryInput struct {
@@ -38,6 +40,9 @@ type DiscussionHistoryInput struct {
 }
 
 func (s *DiscussionScope) validateOrigin(origin schema.MessageOrigin) bool {
+	if s.DMOwnerID != "" && (origin.Kind != "owner_direct" || origin.ActorID != s.DMOwnerID || origin.RequesterID != s.DMOwnerID) {
+		return false
+	}
 	return (origin.Kind == "external" || origin.Kind == "owner_direct") && origin.Validate() == nil &&
 		origin.DiscussionID == s.DiscussionID && origin.InstallationID == s.InstallationID && origin.GuildID == s.GuildID && origin.ChannelID == s.ThreadID && origin.MessageID != ""
 }
@@ -128,8 +133,9 @@ func (c *Controller) discussionContinuation(st State, admission Admission, targe
 	wake := st.Wakes[key(c.binding.ConversationID, wakeID)]
 	event := st.Events[key(c.binding.ConversationID, wake.EventID)]
 	worker := st.Workers[key(c.binding.ConversationID, target)]
-	if !event.WorkerProof || event.NativeTurnID == "" || event.JobID == "" || event.AttemptID == "" ||
-		worker.JobID != event.JobID || worker.AttemptID != event.AttemptID || event.ID != discussionEvidenceID(worker) || worker.RecoveryRequired || worker.Ended ||
+	verifiedResult := event.WorkerProof && event.NativeTurnID != "" && event.ID == discussionEvidenceID(worker)
+	if (!verifiedResult && !event.WorkerMessage) || event.JobID == "" || event.AttemptID == "" ||
+		worker.JobID != event.JobID || worker.AttemptID != event.AttemptID || worker.RecoveryRequired || worker.Ended ||
 		!c.projectPath(worker.Project, worker.Project) {
 		return nil, "", ErrExpired
 	}

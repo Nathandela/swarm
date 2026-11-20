@@ -16,6 +16,7 @@ type managerHandler struct {
 	mu                                sync.RWMutex
 	conversation, credential, session string
 	call                              ManagerToolCaller
+	workerMessage                     workerMessageCaller
 }
 
 func newManagerHandler(conversation, credential string) *managerHandler {
@@ -32,6 +33,10 @@ func (h *managerHandler) bind(localSession string, call ManagerToolCaller) {
 func (h *managerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Path == workerMessagePath {
+		h.serveWorkerMessage(w, r)
+		return
+	}
 	if r.Method != http.MethodPost || r.URL.Path != "/manager/call" || r.Host != "voice" {
 		w.WriteHeader(http.StatusNotFound)
 		return

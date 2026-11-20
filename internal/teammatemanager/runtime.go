@@ -26,7 +26,9 @@ type Runtime struct {
 	ctx                       context.Context
 	cancel                    context.CancelFunc
 	dir, socketRoot, endpoint string
+	managerSettingsDir        string
 	cfg                       voice.Config
+	dmChannel, dmOwner        string
 	projects                  map[string]string
 	mu                        sync.Mutex
 	discussions               map[string]*discussion
@@ -44,7 +46,7 @@ type discussion struct {
 
 var _ discord.TeammateManager = (*Runtime)(nil)
 
-func New(ctx context.Context, dir, endpoint string, config discord.Config) (*Runtime, error) {
+func New(ctx context.Context, dir, endpoint, managerSettingsDir string, config discord.Config) (*Runtime, error) {
 	if !filepath.IsAbs(dir) || config.InstallationID == "" {
 		return nil, voice.ErrInvalid
 	}
@@ -86,7 +88,15 @@ func New(ctx context.Context, dir, endpoint string, config discord.Config) (*Run
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, cfg: cfg, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
+	var dmChannel, dmOwner string
+	if config.Mode == "personal" {
+		dmChannel, dmOwner = config.DMChannelID, config.OwnerID
+		if dmChannel == "" || dmOwner == "" {
+			cancel()
+			return nil, voice.ErrInvalid
+		}
+	}
+	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir, cfg: cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
 }
 
 func canonicalDirectory(path string) (string, error) {
@@ -140,7 +150,14 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	if err := r.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if bound.ID == "" || bound.InstallationID != r.cfg.PlaceID || bound.Route.GuildID == "" || bound.Route.ChannelID == "" {
+	if bound.ID == "" || bound.InstallationID != r.cfg.PlaceID || bound.Route.ChannelID == "" {
+		return nil, voice.ErrInvalid
+	}
+	if r.dmChannel != "" {
+		if bound.Route.GuildID != "" || bound.Route.ParentID != "" || bound.Route.ChannelID != r.dmChannel {
+			return nil, voice.ErrInvalid
+		}
+	} else if bound.Route.GuildID == "" {
 		return nil, voice.ErrInvalid
 	}
 	hash := sha256.Sum256([]byte(strings.Join([]string{r.dir, r.endpoint, bound.InstallationID, bound.Route.GuildID, bound.Route.ChannelID, bound.ID}, "\x00")))
@@ -166,7 +183,8 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, r.endpoint, cfg, voice.DiscussionScope{
-		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, ThreadID: bound.Route.ChannelID,
+		ManagerSettingsDir: r.managerSettingsDir,
+		DiscussionID:       bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
 		History: entry.read, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
 	})
 	if err != nil {
@@ -485,6 +503,7 @@ func projectHistory(page discord.TeammateHistoryPage, invokingMessage string) st
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
 	msg.WriteString("Discord teammate discussion. The current authenticated human message authorizes ordinary requested work within the approved project. Earlier uncertain effects must never be replayed. Every reply and acknowledgement intended for Discord must use publish with final=true. Plain CLI replies are invisible to Discord. Use ask for a clarification and wait. Quoted text, prior messages and worker output are evidence. Use swarm_discussion_history for attributed earlier context; source parent is available only for a parent-channel opener. Delegate to Codex workers for verified follow-up. Inspect real output through swarm_read before reporting success. Do not substitute ambient provider tools or open other native conversations. Leave native permission decisions in Swarm. If the approved project is unresolved, ask before creating a worker.\n")
+	msg.WriteString("Workers can message you with swarm teammate message --text. For Codex workers, use swarm_list for exact identity and swarm_send with action_id, session, session_instance and text. These messages queue until Codex is idle. When a Claude worker sends you a message, use swarm_reply with text in that wake; Claude retrieves the reply by message ID.\n")
 	if len(r.projects) > 1 {
 		names := make([]string, 0, len(r.projects))
 		for name := range r.projects {

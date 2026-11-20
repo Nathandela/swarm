@@ -79,7 +79,8 @@ func OpenDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Co
 }
 
 func openDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Config, scope DiscussionScope, runtime discussionRuntime) (*DiscussionController, error) {
-	if cfg.Validate() != nil || !strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) || !configText(scope.InstallationID, 128) || !configText(scope.GuildID, 128) || !configText(scope.ThreadID, 128) {
+	validAudience := (configText(scope.GuildID, 128) && scope.DMOwnerID == "") || (scope.GuildID == "" && configText(scope.DMOwnerID, 128))
+	if cfg.Validate() != nil || !strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) || !configText(scope.InstallationID, 128) || !validAudience || !configText(scope.ThreadID, 128) {
 		return nil, ErrInvalid
 	}
 	store, err := OpenStore(dir)
@@ -149,9 +150,11 @@ func (d *DiscussionController) bind(b ManagerBinding) error {
 	scope := d.scope
 	scope.journalReady = d.journalReady.Load
 	controller.discussion = &scope
+	controller.managerSettingsDir = scope.ManagerSettingsDir
 	d.stopFollowing()
 	d.controller = controller
 	d.handler.bind(local, controller.ManagerCall)
+	d.handler.bindWorker(controller.acceptDiscussionWorkerMessage)
 	ctx, cancel := context.WithCancel(d.ctx)
 	done := make(chan struct{})
 	d.followCancel, d.followDone = cancel, done

@@ -39,7 +39,7 @@ var discordServiceRun = func(ctx context.Context, dir string, unattended bool) e
 	if err != nil {
 		return err
 	}
-	if cfg.Mode != "teammate" {
+	if !cfg.TeammateMode() {
 		return discord.Run(ctx, dir)
 	}
 	cc, err := clientConfig()
@@ -53,7 +53,7 @@ var discordServiceRun = func(ctx context.Context, dir string, unattended bool) e
 	if err = ensureManagerDaemon(cc, unattended, daemon.Dial, daemon.EnsureDaemon); err != nil {
 		return err
 	}
-	manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir), cfg)
+	manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir), cc.StateDir, cfg)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	}
 	if command == "connect" {
 		fs.BoolVar(&allChannels, "all-channels", false, "remove saved channel restrictions in the enrolled servers")
-		fs.StringVar(&mode, "mode", "", "legacy directory or on-demand teammate")
+		fs.StringVar(&mode, "mode", "", "legacy, teammate (server), or personal (owner DM)")
 		fs.StringVar(&manager, "manager", "", "native teammate manager (codex or claude)")
 		fs.Func("project", "named checkout, name=directory (repeat to replace the project list)", func(value string) error {
 			name, dir, ok := strings.Cut(value, "=")
@@ -210,6 +210,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return discordCLIError(stderr, err)
 		}
+		previous := config
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "mode":
@@ -240,6 +241,13 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				config.UserIDs = users
 			}
 		})
+		if existing && (previous.Mode == "personal" || config.Mode == "personal") &&
+			(previous.Mode != config.Mode || previous.OwnerID != config.OwnerID || previous.ApplicationID != config.ApplicationID) {
+			return discordCLIError(stderr, errors.New("changing a personal DM enrollment requires a new --state-dir"))
+		}
+		if config.Mode == "personal" && (allChannels || len(config.GuildIDs)+len(config.ChannelIDs)+len(config.UserIDs) > 0) {
+			return discordCLIError(stderr, errors.New("--guild, --channel, --all-channels and --allow-user are server settings"))
+		}
 		for _, path := range []*string{&config.TokenFile, &config.WorkDir} {
 			if *path != "" {
 				*path, err = filepath.Abs(*path)
@@ -254,7 +262,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			}
 			config.ChannelIDs = nil
 		}
-		if config.Mode == "teammate" {
+		if config.TeammateMode() {
 			if config.Supervisor == nil {
 				state, e := filepath.Abs(cc.StateDir)
 				if e != nil {
@@ -280,14 +288,14 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			if err != nil {
 				return discordCLIError(stderr, err)
 			}
-			if config.ApplicationID == "" || config.Name == "" || len(config.GuildIDs) == 0 {
+			if config.Mode == "personal" || config.ApplicationID == "" || config.Name == "" || len(config.GuildIDs) == 0 {
 				if err = discord.DiscoverTeammateIdentity(ctx, &config); err != nil {
 					return discordCLIError(stderr, err)
 				}
 			}
 		} else {
 			if manager != "" || len(projects) > 0 {
-				return discordCLIError(stderr, errors.New("--manager and --project require teammate mode"))
+				return discordCLIError(stderr, errors.New("--manager and --project require teammate or personal mode"))
 			}
 			if config.Mode == "legacy" {
 				config.Mode, config.ManagerCLI, config.Projects, config.Supervisor = "", "", nil, nil
@@ -310,7 +318,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			return discordCLIError(stderr, err)
 		}
 		if install {
-			if config.Mode == "teammate" {
+			if config.TeammateMode() {
 				if err = ensureManagerDaemon(cc, false, daemon.Dial, daemon.EnsureDaemon); err != nil {
 					return discordCLIError(stderr, err)
 				}
@@ -332,8 +340,9 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			InstallationID string `json:"installation_id"`
 			StateDir       string `json:"state_dir"`
 			Installed      bool   `json:"installed"`
+			DMChannelID    string `json:"dm_channel_id,omitempty"`
 			Next           string `json:"next"`
-		}{config.Name, config.InstallationID, *stateDir, install, "swarm discord run --state-dir " + shellDiscordArg(*stateDir)}); err != nil {
+		}{config.Name, config.InstallationID, *stateDir, install, config.DMChannelID, "swarm discord run --state-dir " + shellDiscordArg(*stateDir)}); err != nil {
 			return discordCLIError(stderr, err)
 		}
 		return 0

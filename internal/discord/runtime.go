@@ -44,7 +44,7 @@ func Run(parent context.Context, stateDir string, managers ...TeammateManager) e
 	}
 	s := NewService(cfg, store, SwarmClient{Socket: cfg.DaemonSocket}, ScopedMessenger{Client: client, Config: cfg})
 	s.StateDir = stateDir
-	if cfg.Mode == "teammate" {
+	if cfg.TeammateMode() {
 		if len(managers) != 1 || managers[0] == nil {
 			return errors.New("discord: native teammate manager is unavailable")
 		}

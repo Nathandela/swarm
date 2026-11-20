@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/voice"
 )
 
 // options.go is the session-board options window: the one place the board's
@@ -32,6 +33,7 @@ const (
 	optionsFocusAutoCompact
 	optionsFocusThreshold
 	optionsFocusLogins
+	optionsFocusManagerPrompt
 )
 
 // optionsModel is the open form: the focused row and the pending choices.
@@ -41,7 +43,10 @@ type optionsModel struct {
 	ordering  orderingMode
 	touchBack bool
 
-	contextGuard contextGuardOptions
+	contextGuard                               contextGuardOptions
+	managerPrompt                              lineEditor
+	managerPromptAvailable, managerPromptSaved bool
+	managerPromptErr                           string
 }
 
 type contextGuardDraft struct {
@@ -123,6 +128,7 @@ func saveContextGuardSettingsCmd(c contextGuardSettingsClient, generation, revis
 const optionsHint = "←→ change · tab/↑↓ next · enter apply · esc cancel"
 
 const touchBackSelectionNotice = "Touch captures the whole screen.\nText selection may need your terminal's override."
+const managerPromptNotice = "Applies to all local managers.\nThis prompt is visible to the model."
 
 func (o optionsModel) hint() string {
 	if o.focus == optionsFocusTouchBack {
@@ -130,6 +136,9 @@ func (o optionsModel) hint() string {
 	}
 	if o.focus == optionsFocusLogins {
 		return "enter provider logins · tab/↑↓ next · esc cancel options"
+	}
+	if o.focus == optionsFocusManagerPrompt {
+		return "enter save prompt · tab/↑↓ next · esc cancel"
 	}
 	if !o.contextGuard.available || !o.contextGuard.loaded {
 		return optionsHint
@@ -148,6 +157,21 @@ func (m rootModel) updateOptions(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyDown, tea.KeyTab:
 		o.moveFocus(1)
+		return m, nil
+	}
+	if o.focus == optionsFocusManagerPrompt && o.managerPromptAvailable {
+		if k.Code == tea.KeyEnter {
+			o.managerPromptErr = ""
+			o.managerPromptSaved = false
+			if err := voice.SaveManagerStartingPrompt(m.managerSettingsDir, o.managerPrompt.text); err != nil {
+				o.managerPromptErr = err.Error()
+			} else {
+				o.managerPrompt.set(strings.TrimSpace(o.managerPrompt.text))
+				o.managerPromptSaved = true
+			}
+		} else if o.managerPrompt.update(k).changed {
+			o.managerPromptSaved = false
+		}
 		return m, nil
 	}
 	// Provider logins remain reachable while settings load, save or fail. Opening it
@@ -201,6 +225,9 @@ func optionStep(k tea.KeyPressMsg) int {
 
 func (o optionsModel) focusRows() []int {
 	rows := []int{optionsFocusGroup, optionsFocusOrder, optionsFocusTouchBack}
+	if o.managerPromptAvailable {
+		rows = append(rows, optionsFocusManagerPrompt)
+	}
 	if o.contextGuard.available && o.contextGuard.loaded {
 		rows = append(rows, optionsFocusAutoCompact, optionsFocusThreshold)
 	}
@@ -328,6 +355,28 @@ func (o optionsModel) view(width int) string {
 	b.WriteString(fieldLine("CLI button", touchBack, o.focus == optionsFocusTouchBack))
 	if o.focus == optionsFocusTouchBack || o.touchBack {
 		b.WriteString(styleDim.Render(touchBackSelectionNotice) + "\n")
+	}
+	if o.managerPromptAvailable {
+		const label = "manager prompt"
+		field := launchModel{width: width}
+		focused := o.focus == optionsFocusManagerPrompt
+		value := o.managerPrompt.text
+		if value == "" {
+			value = "(empty)"
+		}
+		if focused {
+			value = field.focusedEditorValue(label, o.managerPrompt)
+		}
+		if focused {
+			b.WriteString(wrapIndented(managerPromptNotice, width, styleDim) + "\n")
+			if o.managerPromptSaved {
+				b.WriteString(styleDim.Render("  Manager prompt saved.") + "\n")
+			}
+		}
+		if o.managerPromptErr != "" {
+			b.WriteString(wrapIndented(o.managerPromptErr, width, styleError) + "\n")
+		}
+		b.WriteString(field.launchFieldLine(label, value, focused))
 	}
 	// Every early return (unsupported/loading/error) retains the action.
 	logins := fieldLine("logins", "Provider logins →", o.focus == optionsFocusLogins)

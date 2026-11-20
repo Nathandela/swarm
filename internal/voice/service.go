@@ -169,6 +169,7 @@ func runManagerController(ctx context.Context, dir, endpoint string, cfg Config,
 	if err != nil {
 		return err
 	}
+	controller.managerSettingsDir = filepath.Dir(dir)
 	handler.bind(selected.LocalID, controller.ManagerCall)
 	mux.Handle("/manager/call", handler)
 	control := &managerControl{store: store, binding: binding, controller: controller, replacement: recovery, wake: make(chan struct{}, 1), preparePTT: preparePTT, pttReads: make(chan struct{}, 4), preview: ownerPreview{open: openPreview, language: cfg.Language}, devices: devices}

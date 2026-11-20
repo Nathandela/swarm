@@ -103,6 +103,9 @@ func (p *ProtocolControllerClient) LaunchOperation(operation string, req protoco
 	if req.ResumeSourceInstance != "" {
 		caps = append(caps, protocol.CapOwnerBoundResume)
 	}
+	if req.WorkerBridge != "" {
+		caps = append(caps, protocol.CapTeammateWorkerBridge)
+	}
 	result, err := controllerOwnerCall(p, p.ctx, 100*time.Second, caps, func(c *protocol.Client) (launchResult, error) {
 		id, name, err := c.LaunchOperation(operation, req)
 		return launchResult{id, name}, err
@@ -145,7 +148,7 @@ func (p *ProtocolControllerClient) ManagerRetire(ctx context.Context, req protoc
 func (p *ProtocolControllerClient) discussionSupported(ctx context.Context) error {
 	caps := append([]string{
 		protocol.CapOwnerLaunch, protocol.CapOwnerBoundResume, protocol.CapManagerLaunch, protocol.CapManagerProvenance,
-		protocol.CapManagerRetire, protocol.CapMessageOrigin, protocol.CapSemanticSend,
+		protocol.CapManagerRetire, protocol.CapTeammateWorkerBridge, protocol.CapMessageOrigin, protocol.CapSemanticSend,
 	}, controllerJournalCaps...)
 	_, err := controllerOwnerCall(p, ctx, 3*time.Second, caps, func(*protocol.Client) (struct{}, error) {
 		return struct{}{}, nil

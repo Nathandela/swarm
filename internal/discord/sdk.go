@@ -30,6 +30,7 @@ type DiscordClient struct {
 	interactionGate  chan struct{}
 	interactionReset time.Time
 	connected        atomic.Bool
+	personal         bool
 	mu               sync.Mutex
 	cancel           context.CancelFunc
 	done             chan struct{}
@@ -51,6 +52,10 @@ func NewDiscordClient(token string) (*DiscordClient, error) {
 	}
 	return &DiscordClient{token: token, apiBase: "https://discord.com/api/v10", http: &http.Client{Timeout: 20 * time.Second}, gate: make(chan struct{}, 1), interactionGate: make(chan struct{}, 1)}, nil
 }
+
+// UsePersonalDMs selects the direct message Gateway intent before opening the connection.
+func (c *DiscordClient) UsePersonalDMs() { c.personal = true }
+
 func (c *DiscordClient) Connected() bool { return c.connected.Load() }
 
 // REST makes an authenticated, context-bound Discord API request. Paths are relative to the API root.
@@ -379,7 +384,11 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 	if *sessionID != "" {
 		identify = map[string]any{"op": 6, "d": map[string]any{"token": "Bot " + c.token, "session_id": *sessionID, "seq": *seq}}
 	} else {
-		identify = map[string]any{"op": 2, "d": map[string]any{"token": "Bot " + c.token, "intents": discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent, "properties": map[string]string{"os": "swarm", "browser": "swarm", "device": "swarm"}}}
+		intents := discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
+		if c.personal {
+			intents = discordgo.IntentsDirectMessages
+		}
+		identify = map[string]any{"op": 2, "d": map[string]any{"token": "Bot " + c.token, "intents": intents, "properties": map[string]string{"os": "swarm", "browser": "swarm", "device": "swarm"}}}
 	}
 	if err = wsjson.Write(connCtx, conn, identify); err != nil {
 		return err

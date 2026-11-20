@@ -1,6 +1,24 @@
 # Connect a local Swarm to Discord
 
-Each connection belongs to one local Swarm place and uses a guild-installed app identity. Choose teammate mode for a colleague who joins a discussion on demand. Existing configurations start in legacy directory mode.
+Each connection belongs to one local Swarm place and uses its own Discord app identity. Choose personal mode for an owner-only direct message or teammate mode for a bot that joins server discussions on demand. Existing configurations can still use legacy directory mode.
+
+## Connect a personal manager on Mac
+
+Create a separate bot application in the [Discord Developer Portal](https://discord.com/developers/applications). Save its token in a private file outside the repository. Use Discord Developer Mode to copy your own Discord user ID. On the Mac where the manager and its workers should run, open the default checkout and run:
+
+```sh
+swarm discord connect --mode personal --owner-id OWNER_USER_ID --manager codex \
+  --token-file /absolute/private/personal-bot-token --workdir "$PWD" \
+  --state-dir /absolute/private/personal-discord --install
+swarm discord doctor --state-dir /absolute/private/personal-discord
+swarm discord status --state-dir /absolute/private/personal-discord
+```
+
+Setup obtains the bot identity and verifies the one-to-one DM with the specified owner. The command prints the channel ID. Open the DM with that bot and send an ordinary text message to start the manager. If you need a shared server to locate the bot or open the DM, use a private server and check Discord’s DM settings. The connector uses the direct-message Gateway intent. Discord supplies content in the bot’s own DMs without the privileged Message Content intent. [Discord Create DM](https://docs.discord.com/developers/resources/user#create-dm) · [Discord Gateway intents](https://docs.discord.com/developers/events/gateway#message-content-intent)
+
+Only messages from the enrolled owner in that one-to-one DM can direct the personal manager. Replies and clarifications go to the same DM. The same connector and manager state survive restarts. Run `swarm discord disconnect --state-dir /absolute/private/personal-discord` to stop the connector. Changing the enrolled owner or app requires a new connector state directory.
+
+To set standing instructions for this place, press `o` on the Swarm board, choose **Manager prompt**, and press Enter to save. The prompt is empty by default, accepts up to 1,024 UTF-8 bytes, and applies when a manager wakes.
 
 ## Connect a teammate
 
@@ -120,6 +138,15 @@ The owner authorized a local mock Discord server for this delivery. Its real Gat
 ### Teammate recovery and worker capability
 
 The current native manager options are Codex and Claude on qualified versions. The teammate can obtain exact results from newly created Codex and qualified Claude workers. Use Codex for follow-up steering. A busy Codex worker can receive a queued instruction when its original attempt can safely accept a fresh native input. Unsupported providers or an ambiguous worker turn require operator attention. The legacy adapter roster is independent of this qualification.
+
+A delegated worker can queue a progress note, blocker, or clarification for its own manager from the worker's shell.
+
+```sh
+swarm teammate message --text 'Which fixture should I use?'
+```
+
+The command returns a queue receipt with a message ID. If the receipt is uncertain, retry the same text with `--id MESSAGE_ID`. A parked manager can wake for the note. The manager uses scoped `swarm_send` for Codex, pinned to that worker session and instance. A blocked Codex worker should finish its current turn so it can receive the reply when idle. For a Claude worker, the manager uses `swarm_reply` during the message's wake. The worker reads that response with `swarm teammate reply --id MESSAGE_ID --wait 90s`. Workers report final results in their native replies, which the manager verifies before reporting completion.
+
 
 If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:
 

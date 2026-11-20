@@ -525,7 +525,7 @@ func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutpu
 	if err != nil {
 		return err
 	}
-	if out.DiscussionID == "" {
+	if out.DiscussionID == "" || t.service.Config.Mode == "personal" {
 		if checked.IsThread() || bits&discordgo.PermissionSendMessages == 0 {
 			return ErrNotAuthorized
 		}

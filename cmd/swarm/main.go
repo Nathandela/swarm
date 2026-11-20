@@ -86,6 +86,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|schedule|voi
   swarm kill       terminate a session
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
+  swarm teammate message --text s   send a note to your own Swarm manager
   swarm message    submit a semantic message <session> --text s [--operation-id id]
                    or read its receipt with --status --operation-id id
   swarm requests   list native pending requests <session>, or inspect one with
@@ -156,6 +157,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchSchedule(args[1:], stdout, stderr)
 	case "discord":
 		return dispatchDiscord(args[1:], stdout, stderr)
+	case "teammate":
+		return dispatchTeammate(args[1:], stdout, stderr)
 	case "voice":
 		return dispatchVoice(args[1:], stdout, stderr)
 	case "relay":
@@ -253,7 +256,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	opts := []tui.Option{scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
+	opts := []tui.Option{scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)), tui.WithManagerSettingsDir(cc.StateDir)}
 	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
 		return dialClient(tuiCaps())
 	}), tui.WithLoginRunner(loginRunner(tui.TerminalHandoff{

@@ -198,8 +198,9 @@ type rootModel struct {
 	// optionsGeneration monotonically stamps every context-guard settings RPC. It
 	// survives closing/reopening the form, so an older response cannot land in a new
 	// options incarnation that happens to reuse the same local focus state.
-	optionsGeneration uint64
-	attach            attachModel
+	optionsGeneration  uint64
+	managerSettingsDir string
+	attach             attachModel
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
 
@@ -597,6 +598,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pasteSchedule(msg.Content)
 		case m.screen == screenLogins && m.logins.mode == "label":
 			m.logins.label.paste(msg.Content)
+		case m.screen == screenOptions && m.options.focus == optionsFocusManagerPrompt:
+			m.pasteManagerPrompt(msg.Content)
 		case m.screen == screenLaunch:
 			// Creation requires consecutive Enter presses. Pasting into any launch
 			// field is an edit action and therefore invalidates an armed path.

@@ -132,8 +132,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		t.Error("rehearsal processes did not finish before cleanup deadline")
 	})
 	cfg := discord.Config{Mode: "teammate", Name: "Teammate rehearsal", InstallationID: "synthetic-place", ManagerCLI: "codex", WorkDir: workdir, DaemonSocket: socket, Projects: map[string]string{"fixture": project}}
+	personal := os.Getenv("SWARM_TEAMMATE_TEST_PERSONAL") == "1"
+	if personal {
+		cfg.Mode, cfg.DMChannelID, cfg.OwnerID = "personal", "202", "401"
+	}
 	open := func() *Runtime {
-		r, err := New(ctx, connector, owner.EndpointID(), cfg)
+		r, err := New(ctx, connector, owner.EndpointID(), state, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,12 +146,19 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	r := open()
 	t.Cleanup(func() { _ = r.Close() })
 	thread := discord.TeammateDiscussion{ID: "fixture-discussion", InstallationID: cfg.InstallationID, Route: discord.Route{GuildID: "101", ChannelID: "202", ParentID: "201"}}
+	if personal {
+		thread.Route = discord.Route{ChannelID: cfg.DMChannelID}
+	}
 	reader := func(_ context.Context, _ discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
 		return discord.TeammateHistoryPage{Messages: []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}}, nil
 	}
 	send := func(id, actor, body string) {
 		t.Helper()
 		a := discord.TeammateAdmission{Discussion: thread, OperationID: "input-" + id, Revision: "rev-" + id, Text: body, Route: discord.Route{GuildID: "101", ChannelID: "202", MessageID: id}, Author: discord.Actor{ID: actor, Name: actor}, InvokerID: actor, Authority: discord.AuthorityExternal}
+		if personal {
+			a.Authority = discord.AuthorityOwnerDirect
+			a.Route.GuildID = ""
+		}
 		if err := r.Admit(ctx, a, reader); err != nil {
 			t.Fatal(err)
 		}
@@ -185,10 +196,65 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if n := len(roster()); n != 0 {
 		t.Fatalf("native sessions before first contact: %d", n)
 	}
+	if personal {
+		for i, prefix := range []string{"birch", "cedar"} {
+			code := prefix + "-" + hex.EncodeToString(marker[:])
+			if err := voice.SaveManagerStartingPrompt(state, "When the owner asks for the check word, reply with "+code); err != nil {
+				t.Fatal(err)
+			}
+			send(fmt.Sprint(301+i), cfg.OwnerID, "What is the current check word?")
+			wait("personal owner received current standing instruction", 90*time.Second, func() bool {
+				return len(outputs) > i && strings.Contains(outputs[len(outputs)-1].Body, code)
+			})
+		}
+		if rows := roster(); len(rows) != 1 || rows[0].Role != "manager" {
+			t.Fatalf("personal check expected a single manager, observed %d sessions", len(rows))
+		}
+		return
+	}
 	send("301", "402", "What did Alice call our synthetic check? Reply with its name.")
 	wait("cold context answer", 90*time.Second, func() bool {
 		return len(outputs) > 0 && strings.Contains(strings.ToLower(outputs[0].Body), "violet orchard")
 	})
+	if messageMode := os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE"); messageMode == "1" || messageMode == "claude" {
+		reply := "manager-reply-" + hex.EncodeToString(marker[:])
+		var workerNonce [8]byte
+		if _, err := rand.Read(workerNonce[:]); err != nil {
+			t.Fatal(err)
+		}
+		workerMarker := "worker-question-" + hex.EncodeToString(workerNonce[:])
+		if err := os.WriteFile(filepath.Join(project, "question.txt"), []byte(workerMarker+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		workerCommand := fmt.Sprintf(`%q teammate message --text "My marker is $(cat question.txt). What exact string should I write to reply.txt?"`, bin)
+		provider := "Codex"
+		workerFollowup := "Tell the worker to finish its native turn after queuing the question and wait for your separate follow-up."
+		managerFollowup := "When the worker message wakes you, use swarm_send to ask that same worker to write this exact value to reply.txt: "
+		if messageMode == "claude" {
+			provider = "Claude"
+			workerFollowup = fmt.Sprintf("Tell the worker to take the queued message ID, run %q teammate reply --id MESSAGE_ID --wait 90s with that ID, then write the exact response text into reply.txt.", bin)
+			managerFollowup = "When the worker message wakes you, call swarm_reply with this exact text: "
+		}
+		send("302", "401", "Launch exactly one "+provider+" worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
+			". "+workerFollowup+" Do not tell the worker the answer during creation. "+managerFollowup+reply+
+			". After you receive the worker's actual message, also publish its exact marker in Discord. Do not access the files yourself. Publish a brief acknowledgment now.")
+		wait("scoped worker message reached the native manager", 180*time.Second, func() bool {
+			for _, p := range outputs {
+				if p.JobID != "" && p.AttemptID != "" && strings.Contains(p.Body, workerMarker) {
+					return true
+				}
+			}
+			return false
+		})
+		wait("native worker received a reply to its scoped message", 90*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "reply.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == reply
+		})
+		if rows := roster(); len(rows) != 2 {
+			t.Fatalf("wanted one manager and one worker, observed %d sessions", len(rows))
+		}
+		return
+	}
 	send("302", "401", "Start one Codex worker in project fixture. Have it wait 15 seconds, read proof.txt, and return its exact text. Publish a short acknowledgement and end this turn. When the worker returns, publish its exact result here. Use only the scoped Swarm tools and leave the file to the worker.")
 	wait("worker launch", 90*time.Second, func() bool { return len(roster()) == 2 })
 	send("303", "402", "Keep the original proof.txt task. Please send the same worker one follow-up: read second.txt and return its exact text. Report both verified results in this thread. Use scoped Swarm tools; do not read either file yourself or start another worker.")

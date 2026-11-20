@@ -173,6 +173,7 @@ type JournalSnapshot struct {
 }
 
 type Event struct {
+	WorkerMessage   bool            `json:"worker_message,omitempty"`
 	WorkerProof     bool            `json:"worker_proof,omitempty"`
 	NativeTurnID    string          `json:"native_turn_id,omitempty"`
 	JobID           string          `json:"job_id,omitempty"`
@@ -187,6 +188,7 @@ type Event struct {
 }
 
 type Wake struct {
+	WorkerReply    string          `json:"worker_reply,omitempty"`
 	RecoveryOnly   bool            `json:"recovery_only,omitempty"`
 	ID             string          `json:"id"`
 	ConversationID string          `json:"conversation_id"`
