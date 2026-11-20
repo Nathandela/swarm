@@ -113,6 +113,9 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 	body := "Swarm delivery paused. Your messages are kept in order. No need to resend. Swarm cannot confirm the dispatcher is ready for the next message. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status`."
 	if hold.DirectInput {
 		body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in Swarm. Finish any unfinished input, or save the draft and exit that manager normally. If you already submitted a terminal turn, inspect its outcome before using `swarm discord resume-manual` with the coordinates from `swarm discord status`."
+		if hold.CustodyLost {
+			body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in the Swarm dashboard, save any unfinished input, and exit the manager normally. Swarm will replace it after confirming the old process stopped."
+		}
 	}
 	if hold.EffectUncertain {
 		id = teammateInputNoticeID(d, hold.AdmissionID+":effect")

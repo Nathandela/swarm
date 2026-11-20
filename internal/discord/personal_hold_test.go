@@ -218,8 +218,10 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 		t.Fatalf("unexpected scope, cause or cooldown %q", bodies)
 	}
 	now = now.Add(teammateInputNoticeInterval)
-	notify(d, "two", true)
-	if len(bodies) != 2 || !strings.Contains(bodies[1], "unfinished input") {
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "two", DirectInput: true, CustodyLost: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || !strings.Contains(bodies[1], "unfinished input") || !strings.Contains(bodies[1], "exit the manager normally") || strings.Contains(bodies[1], "resume-manual") {
 		t.Fatalf("persistent second hold after cooldown: %q", bodies)
 	}
 	hold := &TeammateInputHold{AdmissionID: "two", EffectUncertain: true}
