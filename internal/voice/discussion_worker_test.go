@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
@@ -298,5 +299,39 @@ func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
 		if _, err = c.readDiscussionWorkerNote(read, admission); !errors.Is(err, ErrStale) {
 			t.Fatalf("foreign worker note read: %v", err)
 		}
+	}
+}
+
+func TestMailboxWakeFitsClaudeEnvelopeAtProtocolBoundary(t *testing.T) {
+	c, store, _, binding := newControllerFixture(t)
+	worker := WorkerAssociation{Mailbox: true, VMChild: true, ConversationID: binding.ConversationID,
+		Session: "machine/worker", SessionInstance: "worker-instance", Parent: "original-manager", JobID: "job", AttemptID: "attempt"}
+	queue := func(id, text string) string {
+		t.Helper()
+		input := workerMessageInput{ID: id, Kind: "needs-input", Text: text}
+		source := workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: "claude",
+			Text: text, Kind: input.Kind, NoteID: id, Sequence: 1}
+		if _, err := c.queueWorkerNote(worker, input, source); err != nil {
+			t.Fatal(err)
+		}
+		st, err := store.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wakeID := "worker-message-" + hashValue([]string{worker.Session, worker.SessionInstance, worker.AttemptID, id})
+		wake := st.Wakes[key(binding.ConversationID, wakeID)]
+		prompt, err := c.admissionText(st, Admission{Sequence: wake.Admission, SourceID: "wake:" + wakeID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return prompt
+	}
+	small := queue("small", "x")
+	prompt := queue("large", strings.Repeat("x", protocol.MaxSendInputText-len(small)+1))
+	if !strings.Contains(prompt, "swarm_read_note") {
+		t.Fatal("full input cannot fit with native framing, but no preview was provided")
+	}
+	if _, err := claudeinput.ManagerEnvelope(strings.Repeat("a", 64), prompt); err != nil {
+		t.Fatalf("mailbox wake was rejected by the Claude envelope: %d bytes, %v", len(prompt), err)
 	}
 }

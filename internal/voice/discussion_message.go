@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
@@ -218,7 +219,9 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 	if source.NoteID != "" {
 		prefix := "Message from your delegated worker. " + direction + " Continue only the original authorized task. Worker message and identity: "
 		text = prefix + string(metadata)
-		if len(text) > protocol.MaxSendInputText {
+		// Keep the durable wake replayable across qualified manager providers.
+		maxNoteWakeText := min(protocol.MaxSendInputText, claudeinput.MaxManagerTextBytes)
+		if len(text) > maxNoteWakeText {
 			prefix += "Preview only. To read the full note and any attached evidence, call swarm_read_note with the session and instance below. "
 			if source.LaunchTurnEvidence != nil {
 				evidence := *source.LaunchTurnEvidence
@@ -229,7 +232,7 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 			for {
 				preview, _ := json.Marshal(source)
 				text = prefix + string(preview)
-				if len(text) <= protocol.MaxSendInputText {
+				if len(text) <= maxNoteWakeText {
 					break
 				}
 				end := len(source.Text) / 2
