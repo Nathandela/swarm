@@ -731,3 +731,49 @@ func TestDiscussionPersistsHumanIngressBeforeFencingRetirement(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscussionReportsOwnerDraftHoldBehindWorkerWake(t *testing.T) {
+	_, store, fixture, b := newControllerFixture(t)
+	if err := store.noteControllerCustodyLost(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(st *State) error {
+		a, err := allocateAdmission(st, b, "wake:worker")
+		if err != nil {
+			return err
+		}
+		w := Wake{ID: "worker", ConversationID: b.ConversationID, State: "admitted", Admission: a.Sequence}
+		putRecord(st, "wakes", &st.Wakes, key(b.ConversationID, w.ID), w)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &discussionTestRuntime{controllerRuntimeFixture: fixture, managerErr: managerproof.ErrDirectInputUnresolved}
+	scope := DiscussionScope{InstallationID: "install", DiscussionID: "discord-discussion", ThreadID: "thread", DMOwnerID: "owner"}
+	d := &DiscussionController{store: store, runtime: runtime, scope: scope, cfg: Config{ConversationID: b.ConversationID},
+		now: time.Now, ctx: t.Context(), dir: filepath.Dir(fixture.status.AuthFile), bridge: &privateHTTP{socket: fixture.status.BridgeSocket},
+		handler: newManagerHandler(b.ConversationID, "fixture")}
+	t.Cleanup(d.stopFollowing)
+	for _, id := range []string{"first", "second"} {
+		origin := schema.MessageOrigin{Kind: "owner_direct", InstallationID: "install", DiscussionID: "discord-discussion",
+			ChannelID: "thread", RequestID: id, MessageID: id, ActorID: "owner", RequesterID: "owner", Revision: "current"}
+		if err := d.Admit(t.Context(), DiscussionInput{Origin: origin, Text: "message " + id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		err := d.Sync(t.Context(), nil)
+		var hold *DiscussionInputHold
+		if !errors.As(err, &hold) || !errors.Is(err, ErrDiscussionDirectInputHeld) || hold.AdmissionID != "first" || !hold.CustodyLost {
+			t.Fatalf("expected a draft hold on the first queued owner admission: %v", err)
+		}
+	}
+	after, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.sent) != 0 || len(runtime.retirements) != 0 || len(after.Admissions) != 3 ||
+		!after.Conversations[b.ConversationID].CustodyLost || after.Wakes[key(b.ConversationID, "worker")].State != "admitted" {
+		t.Fatal("reporting the hold changed admission order, worker or manager custody")
+	}
+}

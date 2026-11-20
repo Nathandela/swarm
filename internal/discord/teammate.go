@@ -96,6 +96,7 @@ var ErrTeammateSourceChanged = errors.New("discord: source message changed befor
 type TeammateInputHold struct {
 	AdmissionID     string
 	DirectInput     bool
+	CustodyLost     bool
 	EffectUncertain bool
 }
 
