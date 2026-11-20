@@ -8,8 +8,8 @@ type ManagerSpec struct {
 	Args      []string
 }
 
-// DiscordTransportTools names the operations authorized by installation of the
-// discussion bridge. Provider approval for shell commands remains independent.
+// DiscordTransportTools names the VM discussion bridge's provider-approved tools.
+// The controller still verifies exact call and worker grants for create and read.
 func DiscordTransportTools() []string {
-	return []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer", "swarm_reply", "swarm_read_note"}
+	return []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer", "swarm_reply", "swarm_read_note", "swarm_create", "swarm_read"}
 }

@@ -71,6 +71,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	armResumeFailures := prepareHostedResumeFailures(t, root)
 	socket := filepath.Join(state, "daemon.sock")
 	callCanary := os.Getenv("SWARM_TEAMMATE_TEST_CALL") == "1"
+	callWorkers := callCanary && os.Getenv("SWARM_TEAMMATE_TEST_CALL_WORKERS") == "1"
 	nativeHome := os.Getenv("SWARM_TEAMMATE_TEST_NATIVE_HOME")
 	if callCanary {
 		resolvedHome, resolveErr := filepath.EvalSymlinks(nativeHome)
@@ -183,7 +184,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	vmMode := os.Getenv("SWARM_TEAMMATE_TEST_VM") == "1"
 	if vmMode {
 		cfg.ProjectAccess = discord.ProjectAccessVM
-		cfg.Projects = nil // The real job below uses an unregistered directory.
+		if !callWorkers {
+			cfg.Projects = nil // The ordinary VM rehearsal uses an unregistered directory.
+		}
 	}
 	personal := os.Getenv("SWARM_TEAMMATE_TEST_PERSONAL") == "1"
 	if personal {
@@ -350,6 +353,84 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatalf("canary custody counts: native inputs=%d canonical outputs=%d", nativeInputs, spokenOutputs)
 		}
 		t.Logf("native canary observed %d input, %d canonical output and %d live grant checks; no Discord or speech traffic", nativeInputs, spokenOutputs, admissionChecks)
+		if callWorkers {
+			if !vmMode || !personal {
+				t.Fatal("call worker rehearsal requires personal VM mode")
+			}
+			type job struct {
+				id, marker, assignment string
+				launch                 discord.TeammateJobStatus
+			}
+			var nonce [16]byte
+			if _, err := rand.Read(nonce[:]); err != nil {
+				t.Fatal(err)
+			}
+			first := job{id: "first", marker: "amber-" + hex.EncodeToString(nonce[:8]), assignment: `Run for i in $(seq 1 180); do if test -s call-first.txt; then cat call-first.txt; exit; fi; sleep 1; done. Return only the file contents in your normal final answer.`}
+			second := job{id: "second", marker: "indigo-" + hex.EncodeToString(nonce[8:]), assignment: "Read call-second.txt and return only its contents in your normal final answer."}
+			if err := os.WriteFile(filepath.Join(project, "call-second.txt"), []byte(second.marker+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			grants := map[string]schema.VoiceOrigin{callOperation: coord}
+			reader = func(callCtx context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
+				if q.Source != "admission" && q.Source != "grant" {
+					return textReader(callCtx, q)
+				}
+				v, ok := grants[q.AdmissionID]
+				if !ok || q.Voice != v || q.AuthorID != v.SpeakerID || q.Revision != v.BodyHash || q.Authority != authority ||
+					q.MessageID != "" || q.Anchor != "" || q.Cursor != "" {
+					return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
+				}
+				return discord.TeammateHistoryPage{}, nil
+			}
+			for i, j := range []*job{&first, &second} {
+				text := fmt.Sprintf("Switch project to fixture. Launch one Codex worker through swarm_create, using action_id call-worker-%s and cwd %s. Pass this as its initial prompt: %s Do not read the file yourself or send further instructions. End your turn promptly. When that completed worker wakes you, call swarm_read with its exact session, session_instance, job_id and attempt_id, then publish only the verified marker as a final reply.", j.id, project, j.assignment)
+				a := admission
+				a.OperationID, a.Voice.TurnID, a.Text = "dv_worker_"+j.id, "hosted-worker-"+j.id, text
+				a.Revision = discord.PublicationBodyHash(text)
+				a.Voice.BodyHash = a.Revision
+				grants[a.OperationID] = a.Voice
+				if err := r.Admit(ctx, a, reader); err != nil {
+					t.Fatal(err)
+				}
+				wait("verified worker launch for "+j.id+" voice turn", 75*time.Second, func() bool {
+					state, err := r.Status(thread)
+					if err != nil || state.PendingAdmissions != 0 || len(roster()) != i+2 {
+						return false
+					}
+					for _, launch := range state.Jobs {
+						if launch.Session != "" && launch.Instance != "" && strings.HasPrefix(launch.AttemptID, "action:") && launch.ID != first.launch.ID {
+							j.launch = launch
+							return true
+						}
+					}
+					return false
+				})
+			}
+			for _, j := range []*job{&second, &first} {
+				wait("exact marked return for "+j.id+" voice turn", 100*time.Second, func() bool {
+					for _, p := range outputs {
+						if strings.TrimSpace(p.Body) != j.marker {
+							continue
+						}
+						p.BodyHash = discord.PublicationBodyHash(p.Body)
+						origin, err := r.PublicationCallAdmission(ctx, thread, p)
+						if p.JobID != j.launch.ID || p.AttemptID != j.launch.AttemptID || origin != "dv_worker_"+j.id || err != nil {
+							t.Fatalf("worker return for %s: job=%s attempt=%s origin=%q err=%v", j.id, p.JobID, p.AttemptID, origin, err)
+						}
+						return true
+					}
+					return false
+				})
+				if j == &second {
+					if err := os.WriteFile(filepath.Join(project, "call-first.txt"), []byte(first.marker+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if rows := roster(); len(rows) != 3 || first.launch.Session == second.launch.Session {
+				t.Fatalf("expected one manager and two distinct workers, observed %d sessions", len(rows))
+			}
+		}
 		return
 	}
 	if fixture := os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_FIXTURE"); fixture != "" {

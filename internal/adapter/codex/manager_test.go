@@ -100,10 +100,10 @@ func TestVMManagerKeepsCodexBackendPermissionDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			tools := settings.Servers["swarm_voice"].Tools
-			if len(tools) != 6 {
+			if len(tools) != 8 {
 				t.Fatalf("approval scope %v", tools)
 			}
-			for _, name := range []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer", "swarm_reply", "swarm_read_note"} {
+			for _, name := range []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer", "swarm_reply", "swarm_read_note", "swarm_create", "swarm_read"} {
 				if tools[name].Approval != "approve" {
 					t.Errorf("no native transport approval for %s", name)
 				}
