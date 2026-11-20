@@ -42,7 +42,8 @@ func (o MessageOrigin) Validate() error {
 		return errors.New("message origin requires an endorser only for owner_endorsed")
 	}
 	if o.DiscussionID != "" || o.Revision != "" {
-		if o.DiscussionID == "" || o.Revision == "" || o.RequesterID == "" || o.MessageID == "" || o.GuildID == "" || o.ChannelID == "" || o.Kind == "owner_endorsed" {
+		personal := o.Kind == "owner_direct" && o.RequesterID == o.ActorID
+		if o.DiscussionID == "" || o.Revision == "" || o.RequesterID == "" || o.MessageID == "" || (o.GuildID == "" && !personal) || o.ChannelID == "" || o.Kind == "owner_endorsed" {
 			return errors.New("message origin requires the complete discussion coordinate")
 		}
 	}
