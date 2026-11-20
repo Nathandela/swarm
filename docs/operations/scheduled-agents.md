@@ -74,13 +74,15 @@ Agents are tried in the order shown with `→`. A launch refused before starting
 
 Each scheduled occurrence gets a distinct worktree when `worktree` is selected. Worktree mode requires a Git working tree. With `directory`, the first worker can use the selected checkout directly. When another occurrence overlaps, **Allow isolated overlaps** gives it an independent Git worktree. New editor jobs use **Skip overlaps**. On the CLI, pass `--allow-overlap=false` to skip overlaps. Swarm keeps unfinished workspaces for inspection and recovery; it does not automatically commit, push, merge, or delete agent changes.
 
+Codex and Claude report recognized mid-run quota events. If agy fails after accepting a prompt, Swarm retains the workspace for review.
+
 The agy worker uses native ACP to deliver the prompt privately and verify the final provider response. A native permission request is visible in the worker terminal.
 
 Claude Code can ask you to trust a new checkout or approve a tool under its configured permissions. When Swarm reports **Needs input**, select the job in Automations, open **History**, choose the run, then select **Open worker** to answer the native prompt. Review the checkout before trusting it. Use **Run now** with the intended checkout and authority to confirm the worker can start with the local provider login before relying on the timer.
 
 ## Completion, review, and archive
 
-The worker is instructed to post a concise closing chat message with its result, current state, and artifact links, then call the run-scoped `swarm schedule complete --summary ...` command (repeat `--link` for artifacts). The command only works inside the active scheduled worker session and validates the current attempt, session, and private completion credential. A receipt records the worker's assertion that the requested task is complete; it is **not** an independent quality check, test result, clean diff, commit, or merge.
+The worker records its result with the run-scoped `swarm schedule complete --summary ...` command (repeat `--link` for artifacts) or its scoped completion tool, then posts the summary and links as its closing chat message. The command only works inside the active scheduled worker session and validates the current attempt, session, and private completion credential. A receipt records the worker's assertion that the requested task is complete; it is **not** an independent quality check, test result, clean diff, commit, or merge.
 
 After the receipt is stored, Swarm checks for its summary in a completed assistant message from the same native chat. It then applies the `automation` tag and a completion marker to the finishing session. The board displays a ◆ for a session with that marker and tag. Changing or clearing the tag removes that visual marker; the run receipt/history remains. Open the marked session to read the closing message. A live worker attaches directly. For an ended worker, Swarm reopens the native conversation using its original session reference. Review the diff and links in the saved workspace before accepting the result. A process exit without a receipt is incomplete, not completed.
 
