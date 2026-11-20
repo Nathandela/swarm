@@ -777,7 +777,13 @@ func (c *Client) requestWithTimeout(req Control, timeout time.Duration) (Control
 	case resp := <-c.respCh:
 		return resp, nil
 	case <-c.done:
-		return Control{}, errors.New("protocol: connection closed")
+		// The reader can enqueue the complete reply immediately before observing EOF.
+		select {
+		case resp := <-c.respCh:
+			return resp, nil
+		default:
+			return Control{}, errors.New("protocol: connection closed")
+		}
 	case <-time.After(timeout):
 		// Replies carry no request sequence; a late reply must never satisfy another request.
 		_ = c.Close()
