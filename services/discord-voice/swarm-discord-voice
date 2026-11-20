@@ -159,6 +159,9 @@ function start(message) {
   });
   connection.on('transitioned', checkReady);
   const receiver = connection.receiver;
+  // shortcut: RTP loss ends this generation until the parent protocol can carry a turn discontinuity.
+  // Personal callers can leave and rejoin. Team callers can send @Bot voice join with current consent.
+  // Wait for the ready tone and repeat the full request, or continue in the linked text discussion.
   guardReceiver(receiver, gate, speakers, stop);
   for (const userId of allowed) {
     const decoder = codec();

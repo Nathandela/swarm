@@ -151,7 +151,7 @@ function mockConnection(change, ...messages) {
   const mock = `
     import { EventEmitter } from 'node:events';
     import OpusScript from ${JSON.stringify(opus)};
-    import { NetworkingStatusCode, VoiceConnection, VoiceConnectionStatus } from ${JSON.stringify(voice)};
+    import { Networking, NetworkingStatusCode, VoiceConnection, VoiceConnectionStatus } from ${JSON.stringify(voice)};
     VoiceConnection.prototype.configureNetworking = function() {
       if (!this.packets.state || !this.packets.server) return;
       const dave = {
@@ -252,35 +252,100 @@ test('pinned voice package round-trips both negotiated RTP AEAD modes', async ()
   }
 });
 
-test('active RTP gaps fault while Discord silence and idle gaps never emit audio', () => {
+test('receive rejects failed authentication and gaps even on silence', () => {
   const audio = {payload: Buffer.from('voice')};
   const silence = {payload: Buffer.from([0xf8, 0xff, 0xfe])};
   const dave = {session: {canPassthrough: () => false}};
-  const faults = [];
-  let at = 0;
-  let next = audio;
-  const receiver = {parsePacket: () => next};
-  guardReceiver(receiver, () => dave, new Map([['speaker', {}]]), (code) => faults.push(code), () => at);
-  function packet(seq) {
-    const rtp = Buffer.alloc(32);
-    rtp.writeUInt16BE(seq, 2);
-    return receiver.parsePacket(rtp, '', null, null, 'speaker', 0);
+  for (const [seq, parse, length] of [
+    [2, () => null, 32],
+    [2, () => { throw new Error('fixture authentication failure'); }, 32],
+    [2, () => audio, 31],
+    [3, () => silence, 32],
+  ]) {
+    const faults = [];
+    let next = () => audio;
+    const receiver = {parsePacket: () => next()};
+    guardReceiver(receiver, () => faults.length === 0 && dave, new Map([['speaker', {}]]),
+      (code) => faults.push(code));
+    function packet(sequence, size = 32) {
+      const rtp = Buffer.alloc(size);
+      rtp.writeUInt16BE(sequence, 2);
+      return receiver.parsePacket(rtp, '', null, null, 'speaker', 0);
+    }
+    assert.equal(packet(1), audio);
+    next = parse;
+    assert.equal(packet(seq, length), null);
+    assert.deepEqual(faults, ['receive_discontinuity']);
+    next = () => audio;
+    assert.equal(packet(seq + 1), null);
   }
-  assert.equal(packet(1), audio);
-  next = silence;
-  at = 20;
-  assert.equal(packet(2), null);
-  next = audio;
-  at = 40;
-  assert.equal(packet(3), audio);
-  assert.equal(packet(3), null);
-  at = 1000;
-  assert.equal(packet(10), audio);
-  // A missing word after a 600 ms pause still falls inside one personal utterance.
-  at = 1600;
-  assert.equal(packet(12), null);
-  assert.deepEqual(faults, ['receive_discontinuity']);
 });
+
+test('an 870 ms RTP gap retires before unequal forwarding delays can splice speech', () => {
+  const receiveGap = 870;
+  const childDelay = [55, 20];
+  const parentDelay = [10, 0];
+  const [first, second] = childDelay.map((delay, i) => delay + parentDelay[i]);
+  assert.equal(receiveGap + second - first, 825);
+  const result = receiveAcrossPause(receiveGap, childDelay, false);
+  assert.deepEqual(result.events.map((event) => event.type), ['gateway', 'ready', 'audio', 'fault']);
+  assert.equal(result.status, 1);
+  assert.equal(result.events.at(-1).code, 'receive_discontinuity');
+});
+
+test('long idle with contiguous RTP and authenticated silence preserves the call', () => {
+  const result = receiveAcrossPause(10000, [20, 20], true);
+  assert.equal(result.status, 0);
+  assert.deepEqual(result.events.map((event) => event.type), ['gateway', 'ready', 'audio', 'audio']);
+});
+
+function receiveAcrossPause(receiveGap, childDelay, contiguous) {
+  return mockConnection(`
+    let now = 1000;
+    Object.defineProperty(performance, 'now', {value: () => now});
+    const codec = new OpusScript(24000, 1, OpusScript.Application.VOIP);
+    const audio = codec.encode(Buffer.alloc(960), 480);
+    codec.delete();
+    dave.session.canPassthrough = () => false;
+    dave.decrypt = (payload) => payload;
+    const mode = networking.state.connectionData.encryptionMode;
+    const key = Buffer.alloc(32, 0x22);
+    const transport = {encryptionMode: mode, secretKey: key, nonceBuffer: Buffer.alloc(12), nonce: 0};
+    const receiver = this.receiver;
+    const stream = receiver.subscriptions.get('4');
+    const receive = (seq, silent = false) => {
+      const header = Buffer.alloc(12);
+      header[0] = 0x80;
+      header.writeUInt16BE(seq, 2);
+      header.writeUInt32BE(2, 8);
+      const payload = silent ? Buffer.from([0xf8, 0xff, 0xfe]) : audio;
+      const encrypted = Networking.prototype.encryptOpusPacket(payload, transport, header);
+      const packet = receiver.parsePacket(Buffer.concat([header, ...encrypted]), mode, Buffer.alloc(12), key, '4', 2);
+      if (packet) stream.emit('data', packet);
+    };
+    let pendingTick;
+    const setTimer = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (callback.name !== 'tick') return setTimer(callback, delay, ...args);
+      return pendingTick = callback;
+    };
+    const tickAfter = (delay) => {
+      const tick = pendingTick;
+      pendingTick = undefined;
+      now += delay;
+      tick?.();
+    };
+    receive(1);
+    tickAfter(${childDelay[0]});
+    if (${contiguous}) {
+      now = 1080;
+      receive(2, true);
+    }
+    now = 1000 + ${receiveGap};
+    receive(3);
+    tickAfter(${childDelay[1]});
+  `, state, server);
+}
 
 test('receive overflow faults before exporting a partial burst', () => {
   const result = mockConnection(`

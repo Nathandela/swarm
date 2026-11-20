@@ -4,9 +4,6 @@ export const frameBytes = 960;
 export const frameSamples = 480;
 export const frameMS = 20;
 export const maxLine = 8192;
-// Cover the longest open utterance in the Go speech lane, including personal pauses.
-const speechGapMS = 850;
-
 const transports = new Set(['aead_aes256_gcm_rtpsize', 'aead_xchacha20_poly1305_rtpsize']);
 const silence = Buffer.from([0xf8, 0xff, 0xfe]);
 
@@ -22,35 +19,40 @@ export function daveState(connection) {
   return dave;
 }
 
-export function guardReceiver(receiver, gate, speakers, retire, now = () => performance.now()) {
+export function guardReceiver(receiver, gate, speakers, retire) {
   const parse = receiver.parsePacket.bind(receiver);
   const last = new Map();
   receiver.parsePacket = (rtp, mode, nonce, key, userId, ssrc) => {
     const dave = gate();
-    if (!dave || !speakers.has(userId) || dave.session.canPassthrough(userId) || rtp.length < 32) return null;
+    if (!dave || !speakers.has(userId) || dave.session.canPassthrough(userId)) return null;
+    if (rtp.length < 32) {
+      retire('receive_discontinuity');
+      return null;
+    }
     const seq = rtp.readUInt16BE(2);
     const previous = last.get(userId);
     const sameSSRC = previous?.ssrc === ssrc;
     const distance = sameSSRC ? (seq - previous.seq) & 0xffff : 1;
     if (!distance || distance >= 0x8000) return null;
 
-    const at = now();
-    const packet = parse(rtp, mode, nonce, key, userId, ssrc);
-    if (sameSSRC && at - previous.audioAt < speechGapMS && (!packet || distance !== 1)) {
+    let packet;
+    try {
+      packet = parse(rtp, mode, nonce, key, userId, ssrc);
+    } catch {
       retire('receive_discontinuity');
       return null;
     }
-    if (!packet) return null;
-    if (packet.payload.equals(silence)) {
-      if (sameSSRC) previous.seq = seq;
+    // The parent segments on PCM arrival, so helper receive time cannot clear a sequence gap.
+    if (!packet || distance !== 1) {
+      retire('receive_discontinuity');
       return null;
     }
     if (previous && !sameSSRC) {
       retire('speaker_rebound');
       return null;
     }
-    last.set(userId, {ssrc, seq, audioAt: at});
-    return packet;
+    last.set(userId, {ssrc, seq});
+    return packet.payload.equals(silence) ? null : packet;
   };
 }
 
