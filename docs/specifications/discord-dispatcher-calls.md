@@ -42,7 +42,7 @@ Review this entire contract independently with Astra and Sol. Resolve conflicts 
 
 ## Primary references
 
-[Discord voice](https://docs.discord.com/developers/topics/voice-connections), [Discord.js voice](https://discord.js.org/docs/packages/voice/main), [Codex realtime handoffs](https://github.com/openai/codex/blob/main/codex-rs/core/src/realtime_conversation.rs), [OpenAI client delegation](https://developers.openai.com/api/docs/guides/live-delegation), [Companion implementation](https://github.com/Quanthome/fii/blob/0de15b1cf1edd8e6626e25eb138dbe3c51c1a51d/apps/frontend/src/features/voice/voiceCall.ts), [OpenClaw Discord voice](https://docs.openclaw.ai/channels/discord/voice-channels), [local dispatcher operations](../ops/discord.md), [existing voice verification](../verification/voice-manager/controller-integration.md).
+[Discord voice](https://docs.discord.com/developers/topics/voice-connections), [Discord.js voice](https://discord.js.org/docs/packages/voice/main), [Codex realtime handoffs](https://github.com/openai/codex/blob/main/codex-rs/core/src/realtime_conversation.rs), [OpenAI client delegation](https://developers.openai.com/api/docs/guides/live-delegation), [OpenClaw Discord voice](https://docs.openclaw.ai/channels/discord/voice-channels), [local dispatcher operations](../ops/discord.md), [existing voice verification](../verification/voice-manager/controller-integration.md).
 
 ## Review decisions before implementation
 
