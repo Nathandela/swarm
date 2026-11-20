@@ -466,6 +466,9 @@ func (e *Engine) handoffPrompt(run schedule.Occurrence) string {
 	for i := len(run.Attempts) - 2; i >= 0; i-- {
 		previous := run.Attempts[i]
 		if previous.State == schedule.AttemptStopped {
+			if strings.HasPrefix(previous.Detail, "Worker rejected startup before the opening prompt.") {
+				continue
+			}
 			return Prompt(run.Spec.Prompt) + "\n\nA previous " + previous.Agent + " worker reached a provider usage limit and was verified stopped. " +
 				"It used this same workspace. Inspect the changes and verify any prior external actions before continuing. Preserve existing work. Previous Swarm session: " + previous.SessionID + "." + e.backend.HandoffEvidence(previous.SessionID, previous.ID)
 		}
