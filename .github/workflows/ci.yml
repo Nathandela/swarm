@@ -41,6 +41,23 @@ jobs:
       - name: Phase B slice-ownership manifest (PB-DOC-7)
         run: python3 scripts/check-phaseb-manifest.py --strict-section11
 
+  discord-voice:
+    name: Discord voice helper
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/discord-voice
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.17.0'
+          cache: npm
+          cache-dependency-path: services/discord-voice/package-lock.json
+      - run: npm ci
+      - run: ./swarm-discord-voice --check
+      - run: npm test
+
   lint:
     name: lint (golangci-lint)
     runs-on: ubuntu-latest
