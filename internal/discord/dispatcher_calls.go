@@ -433,7 +433,13 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 		}
 		return nil
 	}
-	lane := d.dependencies.newSpeech(c.ctx, callspeech.Config{Key: key, Team: cfg.Mode == "teammate", Play: play, PlaybackStarted: func(turnID string) {
+	lane := d.dependencies.newSpeech(c.ctx, callspeech.Config{Key: key, Team: cfg.Mode == "teammate", Play: play, ReadoutFailed: func(_ string) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if c.ctx.Err() == nil {
+			c.metrics.WrittenOnly++
+		}
+	}, PlaybackStarted: func(turnID string) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		if c.ctx.Err() == nil && turnID == c.lastTurnID && !c.lastTurnEnd.IsZero() && c.metrics.LastResultFrameMS == 0 {
@@ -656,6 +662,7 @@ func (d *dispatcherCalls) status() string {
 
 // Durations are host-observed. Discord playback and human hearing need a device measurement.
 type dispatcherCallMetrics struct {
+	WrittenOnly       uint64 `json:"written_only_readouts"`
 	LastAdmissionMS   int64  `json:"last_turn_end_to_admission_ms,omitempty"`
 	LastResultFrameMS int64  `json:"last_turn_end_to_result_frame_ms,omitempty"`
 	CallID            string `json:"call_id"`

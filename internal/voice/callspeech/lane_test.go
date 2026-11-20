@@ -388,3 +388,32 @@ func TestClippedUtteranceNeverQueuesNativeInput(t *testing.T) {
 		t.Fatal("clipped utterance acquired native admission or commentary scope")
 	}
 }
+
+func TestUnverifiedReadoutReportsWrittenFallback(t *testing.T) {
+	failed := make(chan string, 1)
+	played := make(chan struct{}, 1)
+	l := newLane(t.Context(), Config{
+		ReadoutFailed: func(id string) { failed <- id },
+		Play:          func(context.Context, []byte) error { played <- struct{}{}; return nil },
+	}, provider{
+		open: func(context.Context, string, string) (liveSession, error) {
+			return &fakeLive{events: make(chan openailive.Event)}, nil
+		},
+		render: func(context.Context, string, string, string) ([]byte, error) {
+			return nil, errors.New("unverified readout")
+		},
+	})
+	t.Cleanup(func() { l.Close(); await(t, l.Done()) })
+	l.registerTurn("receipt")
+	if err := l.PublishForTurn("receipt", "Exact result"); err != nil {
+		t.Fatal(err)
+	}
+	if id := await(t, failed); id != "receipt" {
+		t.Fatal("wrong written-only turn", id)
+	}
+	select {
+	case <-played:
+		t.Fatal("unverified result produced playback")
+	default:
+	}
+}

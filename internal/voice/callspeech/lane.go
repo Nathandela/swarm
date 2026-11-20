@@ -45,6 +45,7 @@ type Config struct {
 	Failed               func(error)
 	Play                 func(context.Context, []byte) error
 	PlaybackStarted      func(string)
+	ReadoutFailed        func(string)
 	Stop                 func()
 }
 
@@ -365,6 +366,9 @@ func (l *Lane) playPublication(p publication) {
 		if err != nil {
 			if ctx.Err() == nil {
 				slog.Debug("call publication speech rendering failed", "error", err)
+				if l.cfg.ReadoutFailed != nil {
+					l.cfg.ReadoutFailed(p.turnID)
+				}
 			}
 			return
 		}
