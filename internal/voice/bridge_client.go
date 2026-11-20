@@ -58,13 +58,17 @@ func NewManagerBridgeClient(socket, authFile, conversation, session string) (*Ma
 	if len(credential) != 64 || decodeErr != nil || strings.ToLower(credential) != credential {
 		return nil, errors.New("voice: invalid manager bridge credential")
 	}
+	return &ManagerBridgeClient{conversation: conversation, session: session, credential: credential, http: managerBridgeHTTPClient(socket)}, nil
+}
+
+func managerBridgeHTTPClient(socket string) *http.Client {
 	transport := &http.Transport{MaxIdleConns: 1, MaxConnsPerHost: 4, IdleConnTimeout: 30 * time.Second, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		if err := validateManagerSocket(socket); err != nil {
 			return nil, err
 		}
 		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
 	}}
-	return &ManagerBridgeClient{conversation: conversation, session: session, credential: credential, http: &http.Client{Transport: transport, Timeout: 35 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &http.Client{Transport: transport, Timeout: 35 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
 func validateManagerSocket(path string) error {

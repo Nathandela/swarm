@@ -154,6 +154,7 @@ func (d *DiscussionController) bind(b ManagerBinding) error {
 	d.stopFollowing()
 	d.controller = controller
 	d.handler.bind(local, controller.ManagerCall)
+	d.handler.bindWorker(controller.acceptDiscussionWorkerMessage)
 	ctx, cancel := context.WithCancel(d.ctx)
 	done := make(chan struct{})
 	d.followCancel, d.followDone = cancel, done

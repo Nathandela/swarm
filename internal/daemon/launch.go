@@ -22,6 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
@@ -834,6 +835,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		HookDrainToken: drainToken,
 	}
 
+	if spec.WorkerBridge != "" {
+		lc.Env = append(lc.Env, schema.WorkerBridgeEnv+"="+spec.WorkerBridge)
+	}
 	if spec.Scheduled != nil {
 		lc.Env = append(lc.Env, d.scheduledEnvironment(spec.Scheduled, id)...)
 	}

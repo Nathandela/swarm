@@ -3,6 +3,8 @@ package voice
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -373,7 +375,7 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		prompt := input.Prompt
 		if c.discussion != nil {
 			provenance, _ := json.Marshal(admission.Origin)
-			prompt = "Supervisor-verified Discord work attribution " + string(provenance) + "\n\n" + prompt
+			prompt = discussionWorkerGuidance + "\n\nSupervisor-verified Discord work attribution " + string(provenance) + "\n\n" + prompt
 		}
 		request.Launch = &protocol.LaunchReq{Agent: input.Agent, Name: input.Name, Cwd: input.Cwd, Options: options, InitialPrompt: prompt, Worktree: input.Worktree, Cols: 120, Rows: 32, SpawnedFrom: parent, SpawnIntent: schema.SpawnIntentDelegate}
 	case "swarm_resume":
@@ -454,6 +456,7 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		if json.Unmarshal(action.Request, &prepared) != nil {
 			return nil, ErrCorrupt
 		}
+		request.Launch = prepared.Launch
 		if err := c.verifyDiscussionLaunch(ctx, prepared); err != nil {
 			if errors.Is(err, ErrDiscussionSourceChanged) || errors.Is(err, ErrExpired) {
 				return nil, c.rejectWorkerResume(action, err)
@@ -757,6 +760,21 @@ func (c *Controller) prepareManagerAction(ctx context.Context, name, id, target 
 		}
 		if err != nil {
 			return Action{}, err
+		}
+	}
+	if c.discussion != nil && request.Launch != nil {
+		if exists {
+			var old controllerActionRequest
+			if json.Unmarshal(prior.Request, &old) != nil || old.Launch == nil {
+				return Action{}, ErrCorrupt
+			}
+			request.Launch = old.Launch
+		} else {
+			var token [32]byte
+			if _, err := rand.Read(token[:]); err != nil {
+				return Action{}, err
+			}
+			request.Launch.WorkerBridge = c.refs.Socket + ":" + hex.EncodeToString(token[:])
 		}
 	}
 	raw, err := json.Marshal(request)

@@ -117,6 +117,7 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 	}
 	return daemon.LaunchSpec{
 		ResumeSource:  resumeSource,
+		WorkerBridge:  req.WorkerBridge,
 		Manager:       manager,
 		HermesOrigins: hermesOrigins,
 		AgentType:     req.Agent,
@@ -1767,6 +1768,15 @@ func (cc *clientConn) handleLaunch(c Control) {
 	if req.Cols < 1 || req.Cols > maxDim || req.Rows < 1 || req.Rows > maxDim {
 		cc.replyError("launch: cols/rows out of range")
 		return
+	}
+	if req.WorkerBridge != "" {
+		socket, token, ok := strings.Cut(req.WorkerBridge, ":")
+		_, tokenErr := hex.DecodeString(token)
+		if cc.srv.remoteTier || c.Op != OpOwnerLaunch || c.OperationID == "" || req.Manager != nil || req.SpawnedFrom == "" || req.SpawnIntent != SpawnIntentDelegate ||
+			!ok || !filepath.IsAbs(socket) || filepath.Clean(socket) != socket || strings.ContainsAny(socket, "\x00\r\n") || len(socket) > 104 || len(token) != 64 || tokenErr != nil {
+			cc.replyErrorCode("launch: invalid worker bridge", CodeInvalidField)
+			return
+		}
 	}
 	// ADR-010 D4: the spawn lineage is validated BEFORE any daemon side effect. The
 	// intent vocabulary is closed (an unvalidated value would persist into meta and

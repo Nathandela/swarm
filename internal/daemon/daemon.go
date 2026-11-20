@@ -164,6 +164,7 @@ type ResumeSourceFence struct {
 }
 
 type LaunchSpec struct {
+	WorkerBridge          string   `json:"-"`
 	ScheduledCodexSandbox string   `json:"-"`
 	CodexPolicy           []string `json:"-"`
 	managerLogin          *managerLoginBinding

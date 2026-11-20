@@ -189,6 +189,22 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	wait("cold context answer", 90*time.Second, func() bool {
 		return len(outputs) > 0 && strings.Contains(strings.ToLower(outputs[0].Body), "violet orchard")
 	})
+	if os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE") == "1" {
+		reply := "manager-reply-" + hex.EncodeToString(marker[:])
+		workerCommand := fmt.Sprintf("%q teammate message --text 'What exact string should I write to reply.txt?'", bin)
+		send("302", "401", "Launch exactly one Codex worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
+			". Tell the worker to finish its native turn after queuing the question and wait for your separate follow-up. Do not tell the worker the answer during creation. "+
+			"When you receive its actual message as a new turn, reply to that exact worker with swarm_send. Ask it to write this exact value to reply.txt: "+reply+
+			". Do not write the file yourself. Publish a brief acknowledgment now, and report the completed worker result after verifying it.")
+		wait("native worker received a reply to its scoped message", 180*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "reply.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == reply
+		})
+		if rows := roster(); len(rows) != 2 {
+			t.Fatalf("wanted one manager and one worker, observed %d sessions", len(rows))
+		}
+		return
+	}
 	send("302", "401", "Start one Codex worker in project fixture. Have it wait 15 seconds, read proof.txt, and return its exact text. Publish a short acknowledgement and end this turn. When the worker returns, publish its exact result here. Use only the scoped Swarm tools and leave the file to the worker.")
 	wait("worker launch", 90*time.Second, func() bool { return len(roster()) == 2 })
 	send("303", "402", "Keep the original proof.txt task. Please send the same worker one follow-up: read second.txt and return its exact text. Report both verified results in this thread. Use scoped Swarm tools; do not read either file yourself or start another worker.")
