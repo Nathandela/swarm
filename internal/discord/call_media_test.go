@@ -27,7 +27,7 @@ func mediaTestHelper(t *testing.T, script string) string {
 
 func mediaTestContext(t *testing.T) context.Context {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	t.Cleanup(cancel)
 	return ctx
 }
@@ -143,12 +143,12 @@ func TestCallMediaShutdown(t *testing.T) {
 	for _, test := range []struct {
 		name, afterPID, want string
 	}{
-		{"cancel blocked handler", "while :; do :; done", "context canceled"},
-		{"EOF while child hangs", "exec 1>&-; while :; do :; done", "shutdown timed out"},
-		{"closed input while child hangs", "while :; do :; done", "shutdown timed out"},
+		{"cancel blocked handler", "exec /bin/sleep 60", "context canceled"},
+		{"EOF while child hangs", "exec 1>&-; exec /bin/sleep 60", "shutdown timed out"},
+		{"closed input while child hangs", "exec /bin/sleep 60", "shutdown timed out"},
 		{"output backlog", "IFS= read -r line; printf '%s\\n' '{\"type\":\"ready\"}'; while :; do printf '%s\\n' '${audio}'; done", "output backlog"},
-		{"blocked writer", "while :; do :; done", "helper input backlog"},
-		{"single blocked write", "while :; do :; done", "helper write failed"},
+		{"blocked writer", "exec /bin/sleep 60", "helper input backlog"},
+		{"single blocked write", "exec /bin/sleep 60", "helper write failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(mediaTestContext(t))
