@@ -100,10 +100,12 @@ func NewDiscussionManagerMCP(call ManagerToolCaller) *mcp.Server {
 	return newManagerMCP(call, true)
 }
 
-// VM managers use the provider's native shell and ordinary Swarm CLI. These
-// tools are only the return channel to the Discord discussion.
+// VM managers use the native shell. A verified call can additionally use
+// receipt-backed delegation and reads guarded by the discussion controller.
 func NewVMDiscussionMCP(call ManagerToolCaller) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "swarm_voice", Version: "1"}, &mcp.ServerOptions{Instructions: "Use your native shell and installed swarm CLI for work. Publish replies to the current Discord conversation here."})
+	s := mcp.NewServer(&mcp.Implementation{Name: "swarm_voice", Version: "1"}, &mcp.ServerOptions{Instructions: "Use your native shell and installed swarm CLI for ordinary VM work. Use the scoped worker tools only for a verified call request or its resulting worker evidence. Publish replies to the current Discord conversation here."})
+	addManagerTool[CreateInput](s, "swarm_create", "For a verified call request, launch an ordinary worker in the selected project and bind its exact attempt to this request.", call)
+	addManagerTool[ReadInput](s, "swarm_read", "Read exact worker output for this verified call request or its verified worker completion. Use the session and instance in the receipt.", call)
 	addManagerTool[SessionInput](s, "swarm_read_note", "Read the full worker claim and any attached launch-turn evidence for this admission only. Use the exact session and instance from the note.", call)
 	addManagerTool[WorkerReplyInput](s, "swarm_reply", "Answer the worker question that triggered this turn. The worker retrieves the answer by note ID.", call)
 	addManagerTool[DiscussionHistoryInput](s, "swarm_discussion_history", "Read earlier attributed messages in this thread.", call)

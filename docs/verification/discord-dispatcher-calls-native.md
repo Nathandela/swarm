@@ -9,6 +9,8 @@ The local fixtures exercise the existing native discussion ledger with typed cal
 
 Existing VM shell delegation uses a process-scoped dispatcher credential. That credential proves the parent manager and worker attempt, but carries no native turn identity. A later shell worker result with only that proof stays eligible for the canonical written outbox. Calls direct new delegation through the existing native manager tool, which can record the exact launch or resume grant against the input. Neither observing a currently active native turn nor matching a job ID establishes that a prior shell command came from that turn. Attributing shell-launched workers to live calls remains open until the launch carries an independently verified native call coordinate.
 
+The VM manager MCP fixture uses its production tool list and controller. It checks that a native call admission can launch and read an exact worker while existing text admissions still publish normally. The read requires the original voice grant or the exact verified worker wake. Removal of that grant prevents further reads. After a personal Discord reconnect, pending DM repair blocks live call admission alongside text ingress. Existing canonical delivery keeps its post-cutover audience checks.
+
 These fixtures use synthetic input and no Discord or speech credentials. Actual personal and team calls, provider tool adoption, audible stop, and human end-to-end acceptance remain open.
 
 ## Hosted native personal canary

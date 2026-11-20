@@ -154,7 +154,7 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 		t.Fatal(err)
 	}
 	input := ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}
-	read, err = c.readDiscussionWorker(input, Admission{SourceID: "wake:" + event.WakeID})
+	read, err = c.readDiscussionWorker(t.Context(), input, Admission{SourceID: "wake:" + event.WakeID})
 	if err != nil || !strings.Contains(string(read), "verified result") || strings.Contains(string(read), "newer result") {
 		t.Fatalf("earlier wake read the newer turn: %s, %v", read, err)
 	}

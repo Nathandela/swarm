@@ -6,10 +6,9 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-
-	"github.com/Nathandela/swarm/internal/managerproof"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestCallAdmissionPinsOriginalPersonalDiscussionAndReplays(t *testing.T) {
@@ -65,6 +66,17 @@ func TestCallAdmissionPinsOriginalPersonalDiscussionAndReplays(t *testing.T) {
 		q := TeammateHistoryQuery{Source: "admission", AdmissionID: op, Revision: a.Revision, AuthorID: speaker.ID, Voice: a.Voice, Authority: a.Authority}
 		if _, err := reopened.history(bound)(t.Context(), q); !errors.Is(err, ErrTeammateSourceChanged) {
 			t.Fatalf("ended generation could admit = %v", err)
+		}
+		if err := conn.service.Store.db.Update(func(tx *bolt.Tx) error {
+			if err := teammateCheckpointUpdate(tx, cfg.InstallationID, "original", 1, false, ""); err != nil {
+				return err
+			}
+			return teammateCheckpointUpdate(tx, cfg.InstallationID, "reconnect", 1, true, "")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := reopened.checkCallSpeaker(t.Context(), bound, speaker.ID); !errors.Is(err, errPersonalHistoryRepair) {
+			t.Fatalf("live call bypassed the pending personal history repair: %v", err)
 		}
 		cfg.Calls = nil
 		reopened.verifyCallTurn = nil

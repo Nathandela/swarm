@@ -114,7 +114,7 @@ func discussionEvidenceID(worker WorkerAssociation) string {
 	})
 }
 
-func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) (json.RawMessage, error) {
+func (c *Controller) readDiscussionWorker(ctx context.Context, input ReadInput, admission Admission) (json.RawMessage, error) {
 	if input.Cursor != "" || input.Source != "" && input.Source != "native" {
 		return nil, ErrControllerNativeUnavailable
 	}
@@ -137,6 +137,28 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 	attempt := st.Actions[key(c.binding.ConversationID, worker.AttemptID)]
 	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &original) != nil || original.Project != worker.Project {
 		return nil, ErrStale
+	}
+	if c.discussion.VMProjectAccess {
+		if original.Origin == nil || original.Origin.Voice.Generation == 0 ||
+			c.discussion.VerifyAudience == nil || c.discussion.VerifyGrant == nil {
+			return nil, ErrExpired
+		}
+		source := st.Admissions[admissionKey(c.binding.ConversationID, attempt.Admission)]
+		if !source.SourceCutover || source.Origin == nil || *source.Origin != *original.Origin {
+			return nil, ErrExpired
+		}
+		if admission.Origin == nil || !admission.SourceCutover || *admission.Origin != *original.Origin {
+			wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:")
+			wake := st.Wakes[key(c.binding.ConversationID, wakeID)]
+			event := st.Events[key(c.binding.ConversationID, wake.EventID)]
+			if !fromWake || admission.Sequence == 0 || wake.Admission != admission.Sequence || !event.WorkerProof ||
+				event.ID != discussionEvidenceID(worker) || event.JobID != worker.JobID || event.AttemptID != worker.AttemptID {
+				return nil, ErrExpired
+			}
+		}
+		if err := c.verifyDiscussionLaunch(ctx, original); err != nil {
+			return nil, err
+		}
 	}
 	turn := input.NativeTurnID
 	if wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:"); fromWake && turn == "" {
@@ -177,7 +199,7 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 		if _, err = c.workerTarget(input.SessionInput, false); err != nil {
 			return nil, err
 		}
-		proof, err = c.discussionWorkerEvidence(context.Background(), worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
+		proof, err = c.discussionWorkerEvidence(ctx, worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
 		if err != nil {
 			return nil, err
 		}

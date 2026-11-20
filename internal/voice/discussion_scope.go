@@ -121,6 +121,11 @@ func (c *Controller) discussionEffect(admission Admission, name string) error {
 		}
 		fallthrough
 	case "swarm_create", "swarm_resume":
+		if name == "swarm_create" && c.discussion.VMProjectAccess &&
+			(admission.Origin == nil || admission.Origin.Voice.Generation == 0 || !admission.SourceCutover ||
+				c.discussion.VerifyAudience == nil || c.discussion.VerifyGrant == nil) {
+			return ErrExpired
+		}
 		if admission.Origin == nil || !c.discussion.validateOrigin(*admission.Origin) {
 			return ErrExpired
 		}

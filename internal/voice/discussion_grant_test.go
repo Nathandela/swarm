@@ -220,7 +220,7 @@ func TestDiscussionHumanFollowupCarriesEveryReadProjectGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 2 {
-		raw, err := c.readDiscussionWorker(ReadInput{SessionInput: SessionInput{fmt.Sprintf("machine/w%d", i), "instance"}}, a)
+		raw, err := c.readDiscussionWorker(t.Context(), ReadInput{SessionInput: SessionInput{fmt.Sprintf("machine/w%d", i), "instance"}}, a)
 		var read struct{ Evidence *schema.WorkerTurnEvidence }
 		if err != nil || json.Unmarshal(raw, &read) != nil || read.Evidence == nil || read.Evidence.Text != "verified result" {
 			t.Fatalf("worker %d evidence missing: %s, %v", i, raw, err)

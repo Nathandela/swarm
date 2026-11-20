@@ -3,10 +3,13 @@ package voice
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -109,13 +112,13 @@ func TestManagerMCPToolSurface(t *testing.T) {
 	}
 }
 
-func TestVMManagerBridgeOnlyHandlesConversation(t *testing.T) {
+func TestVMManagerBridgeIncludesScopedCallDelegation(t *testing.T) {
 	client := connectTestManagerServer(t, NewVMDiscussionMCP(nil))
 	list, err := client.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"swarm_read_note": true, "swarm_reply": true, "swarm_discussion_history": true, "swarm_discussion_answer": true, "publish": true, "ask": true}
+	want := map[string]bool{"swarm_create": true, "swarm_read": true, "swarm_read_note": true, "swarm_reply": true, "swarm_discussion_history": true, "swarm_discussion_answer": true, "publish": true, "ask": true}
 	for _, tool := range list.Tools {
 		if !want[tool.Name] {
 			t.Fatal("unexpected discussion tool", tool.Name)
@@ -125,4 +128,103 @@ func TestVMManagerBridgeOnlyHandlesConversation(t *testing.T) {
 	if len(want) != 0 {
 		t.Fatal("missing discussion tools", want)
 	}
+}
+
+func TestVMManagerScopedWorkerToolsRequireVerifiedCall(t *testing.T) {
+	_, store, runtime, binding := newControllerFixture(t)
+	binding.ConversationID = DiscussionConversationPrefix + "call-vm"
+	binding, err := store.BindManager(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.status.Binding = runtimeBinding(binding)
+	refs := ManagerBridgeRefs{Socket: runtime.status.BridgeSocket, AuthFile: runtime.status.AuthFile}
+	c, err := NewController(store, runtime, binding, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := true
+	scope := DiscussionScope{VMProjectAccess: true, InstallationID: "install", DiscussionID: "bound", GuildID: "guild", ThreadID: "thread",
+		SupervisorSocket: "/historic/supervisor.sock",
+		VerifyAudience:   func(context.Context) error { return nil },
+		VerifyOrigin:     func(context.Context, schema.MessageOrigin) error { return nil },
+		VerifyGrant: func(context.Context, schema.MessageOrigin) error {
+			if !grant {
+				return ErrDiscussionSourceChanged
+			}
+			return nil
+		},
+	}
+	c.discussion = &scope
+	workers := &discussionEvidenceWorker{}
+	workers.rows = []protocol.SessionView{{ID: "machine/created", Agent: "codex", Name: "created", SpawnedFrom: "session",
+		SpawnIntent: schema.SpawnIntentDelegate, Capabilities: &schema.SessionCapabilities{SessionInstance: "created-instance"}}}
+	c.workers = workers
+	d := &DiscussionController{scope: scope, controller: c, store: store, cfg: Config{ConversationID: binding.ConversationID}, now: time.Now}
+	client := connectTestManagerServer(t, NewVMDiscussionMCP(c.ManagerCall))
+	const body = "Check the native worker marker."
+	hash := hashValue(body)
+	origin := schema.MessageOrigin{Kind: "external", InstallationID: scope.InstallationID, DiscussionID: scope.DiscussionID, GuildID: scope.GuildID,
+		ChannelID: scope.ThreadID, RequestID: "dv_vm", ActorID: "speaker", RequesterID: "speaker", Revision: hash,
+		Voice: schema.VoiceOrigin{CallID: "call", TurnID: "call-turn", SpeakerID: "speaker", SupervisorSocket: scope.SupervisorSocket, BodyHash: hash, Generation: 1}}
+	run := func(origin schema.MessageOrigin, nativeTurn string) {
+		t.Helper()
+		if err := d.Admit(t.Context(), DiscussionInput{Origin: origin, Text: body, Answer: body, Project: func(string) (string, bool) { return project, false }}); err != nil {
+			t.Fatal(err)
+		}
+		runtime.status.ReadyForInput = true
+		if err := c.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		nonce := runtime.sent[len(runtime.sent)-1].ManagerAdmission.Nonce
+		runtime.status.ReadyForInput = false
+		runtime.status.Turn = protocol.ManagerNativeTurn{State: "running", NativeInputID: nonce, NativeTurnID: nativeTurn}
+		runtime.proof = protocol.ManagerCallProof{Main: true, NativeInputID: nonce, NativeTurnID: nativeTurn, NativeCallID: "native-call"}
+	}
+	call := func(name string, args any, allowed bool) {
+		t.Helper()
+		result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if result.IsError == allowed {
+			t.Fatalf("%s allowed %t: %s", name, allowed, mustToolResultText(result))
+		}
+	}
+	run(origin, "voice-turn")
+	create := CreateInput{ActionID: "created", Agent: "codex", Cwd: project, Prompt: "Read the fixture marker and return it."}
+	read := ReadInput{SessionInput: SessionInput{Session: "machine/created", SessionInstance: "created-instance"}}
+	call("swarm_create", create, true)
+	call("swarm_read", read, true)
+	grant = false
+	call("swarm_read", read, false)
+	grant = true
+	runtime.status.Turn.State = "completed"
+	if err := c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	origin.Voice = schema.VoiceOrigin{}
+	origin.RequestID, origin.MessageID, origin.Revision = "text", "message", "text-revision"
+	run(origin, "text-turn")
+	create.ActionID = "denied"
+	call("swarm_create", create, false)
+	call("swarm_read", read, false)
+	call("publish", PublishInput{OutputID: "written", Sequence: 1, Text: "Written reply.", Final: true}, true)
+	if workers.launches != 1 || workers.nativeReads != 1 {
+		t.Fatalf("worker effects: launches=%d, reads=%d", workers.launches, workers.nativeReads)
+	}
+}
+
+func mustToolResultText(result *mcp.CallToolResult) string {
+	for _, item := range result.Content {
+		if text, ok := item.(*mcp.TextContent); ok {
+			return text.Text
+		}
+	}
+	return ""
 }

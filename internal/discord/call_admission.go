@@ -63,6 +63,13 @@ func (t *teammateConnector) checkCallSpeakerAudience(ctx context.Context, bound 
 	if !snowflake(speakerID) || speakerID == t.service.botUserID() || cfg.Mode == "personal" && speakerID != cfg.OwnerID {
 		return ErrNotAuthorized
 	}
+	if live && cfg.Mode == "personal" {
+		if err := t.service.Store.db.View(func(tx *bolt.Tx) error {
+			return checkPersonalRepairGate(tx, cfg, bound)
+		}); err != nil {
+			return err
+		}
+	}
 	channel, parent, botBits, err := teammateChannelScope(ctx, t.client, cfg, bound.Route, t.service.botUserID())
 	if err != nil || cfg.Mode == "personal" {
 		return err
