@@ -37,6 +37,11 @@ func TestScheduledLaunchGateHost(t *testing.T) {
 		LogPath: filepath.Join(dir, "daemon.log"),
 	}
 	spec := scheduledGateSpec(t, dir)
+	if mode == "worker-released" {
+		spec.Scheduled = nil
+		spec.workerDiscussion = "discord-teammate-fixture"
+		cfg.WorkerInstance = func(string, int, ...int64) (string, error) { return "exact", nil }
+	}
 	ready := func(pid int) error {
 		return publishEnvDump(filepath.Join(dir, "boundary"), []byte(strconv.Itoa(pid)))
 	}
@@ -65,7 +70,7 @@ func TestScheduledLaunchGateHost(t *testing.T) {
 			time.Sleep(2 * pollTimeout)
 			t.Fatal("parent did not kill daemon at the release boundary")
 		}
-	case "released":
+	case "released", "worker-released":
 		// Hold the child before it can read permission or bind its socket.
 		// The daemon will commit, release the pipe, and then signal the parent.
 		cfg.onMetaSave = func(m persist.Meta) {
@@ -89,10 +94,14 @@ func TestScheduledLaunchGateHost(t *testing.T) {
 }
 
 func TestScheduledLaunchGateRealDaemonCrash(t *testing.T) {
-	for _, mode := range []string{"before-identity", "before-release", "released"} {
+	for _, mode := range []string{"before-identity", "before-release", "released", "worker-released"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := daemonConfig(t)
 			spec := scheduledGateSpec(t, cfg.StateDir)
+			if mode == "worker-released" {
+				spec.Scheduled = nil
+				spec.workerDiscussion = "discord-teammate-fixture"
+			}
 			host := exec.Command(selfExe(t), "-test.run", "^TestScheduledLaunchGateHost$")
 			host.Env = append(os.Environ(), scheduledGateHost+"="+mode, envDaemonState+"="+cfg.StateDir, "SWARM_TEST_GATE_SHIM="+swarmBin)
 			host.Stdout, host.Stderr = os.Stderr, os.Stderr
@@ -128,7 +137,7 @@ func TestScheduledLaunchGateRealDaemonCrash(t *testing.T) {
 			}
 			d := openDaemon(t, cfg)
 			m := assertScheduledGateUnknown(t, d, spec)
-			if mode != "released" {
+			if mode != "released" && mode != "worker-released" {
 				if mode == "before-identity" && m.ShimPID != 0 {
 					t.Fatalf("reservation acquired an identity before commit: %+v", m)
 				}
@@ -235,8 +244,8 @@ func TestScheduledLaunchGateIdentityFailureRetainsReservation(t *testing.T) {
 func assertScheduledGateUnknown(t *testing.T, d *Daemon, spec LaunchSpec) persist.Meta {
 	t.Helper()
 	rows := d.List()
-	if len(rows) != 1 || rows[0].ScheduleAttempt != spec.Scheduled.AttemptID {
-		t.Fatalf("expected one reservation for attempt %q, got %+v", spec.Scheduled.AttemptID, rows)
+	if len(rows) != 1 || spec.Scheduled != nil && rows[0].ScheduleAttempt != spec.Scheduled.AttemptID || spec.Scheduled == nil && rows[0].WorkerDiscussion != spec.workerDiscussion {
+		t.Fatalf("expected one bound reservation, got %+v", rows)
 	}
 	outcome, ok := d.OwnerLaunchOutcome(spec.OperationID)
 	if !ok || outcome.State != OpStateOutcomeUnknown {

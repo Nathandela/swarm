@@ -104,3 +104,59 @@ func TestVMDispatcherCanMessageAnUnrelatedOwnerSession(t *testing.T) {
 		t.Fatalf("VM message lost ordinary owner semantics: code=%d receipt=%q %s", code, dispatcher.String(), stderr.String())
 	}
 }
+
+type resolvingSemanticClient struct {
+	*fakeSemanticClient
+}
+
+func (c *resolvingSemanticClient) List() ([]protocol.SessionView, error) {
+	return nil, errors.New("authoritative send must not consult the roster")
+}
+
+func (c *resolvingSemanticClient) SemanticTarget(session string) (string, error) {
+	if session != "local/ami" {
+		return "", errors.New("wrong endpoint")
+	}
+	return "verified-instance", nil
+}
+
+func TestMessageResolvesExactTargetWithoutRoster(t *testing.T) {
+	c := &resolvingSemanticClient{newFakeSemanticClient()}
+	var out, stderr bytes.Buffer
+	if code := runMessage([]string{"local/ami", "--text", "first send"}, c, &out, &stderr); code != 0 {
+		t.Fatal(code, stderr.String())
+	}
+	if len(c.messages) != 1 || c.messages[0].req.SessionInstance != "verified-instance" || len(c.sendCalls()) != 0 {
+		t.Fatalf("calls: %+v", c.messages)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := runMessage([]string{"wrong/ami", "--text", "wrong endpoint"}, c, &out, &stderr); code == 0 ||
+		len(c.messages) != 1 || out.Len() != 0 || stderr.String() != "message: operation_id=: wrong endpoint\n" {
+		t.Fatalf("refused target: %d %s %s", code, out.String(), stderr.String())
+	}
+}
+
+type warmingSemanticClient struct {
+	*fakeSemanticClient
+	lists int
+}
+
+func (c *warmingSemanticClient) List() ([]protocol.SessionView, error) {
+	c.lists++
+	if c.lists == 1 {
+		row := c.sessions[0]
+		row.Capabilities = nil
+		return []protocol.SessionView{row}, nil
+	}
+	return c.fakeSemanticClient.List()
+}
+
+func TestMessageRefreshesOlderDaemonBeforeSending(t *testing.T) {
+	c := &warmingSemanticClient{fakeSemanticClient: newFakeSemanticClient()}
+	var out, stderr bytes.Buffer
+	if code := runMessage([]string{"local/ami", "--text", "first send"}, c, &out, &stderr); code != 0 || c.lists != 2 ||
+		len(c.messages) != 1 || c.messages[0].req.SessionInstance != "native-incarnation" {
+		t.Fatalf("message did not wait for identity: %d, %s, %d, %+v", code, stderr.String(), c.lists, c.messages)
+	}
+}

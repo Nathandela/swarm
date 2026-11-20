@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 func TestManagerRetirementRequiresOriginalExitReport(t *testing.T) {
@@ -82,6 +84,34 @@ func TestManagerRetireStopsOriginalShimAndKeepsResumeCustodyAfterRestart(t *test
 	if claimed, err := d.RetireManager(t.Context(), m.ID, m.ManagerConversationID, m.AgentType, stale); claimed || err == nil {
 		t.Fatalf("stale shim target dispatched: %v %v", claimed, err)
 	}
+	// Simulate a worker note accepted after the connector prepared its checkpoint.
+	binding := workermail.Binding{Discussion: m.ManagerConversationID, Session: "home/worker", Instance: "worker-inc", Parent: m.ID, Attempt: "job"}
+	note, err := workermail.Submit(d.cfg.StateDir, binding, "preclaim", "complete", "evidence", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := d.RetireManager(t.Context(), m.ID, m.ManagerConversationID, m.AgentType, target); claimed || !errors.Is(err, managerproof.ErrStale) {
+		t.Fatalf("preclaim note lost to retirement: claimed=%v err=%v", claimed, err)
+	}
+	if !pidAlive(nativePID) {
+		t.Fatal("preclaim note did not keep the manager usable")
+	}
+	if err := workermail.Acknowledge(d.cfg.StateDir, note, ""); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := target
+	cancelled.OperationID = "cancel-before-rpc"
+	if err := d.CancelManagerRetire(t.Context(), m.ID, m.ManagerConversationID, m.AgentType, cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = openDaemon(t, cfg)
+	m, _ = d.Get(m.ID)
+	if claimed, err := d.RetireManager(t.Context(), m.ID, m.ManagerConversationID, m.AgentType, cancelled); claimed || !errors.Is(err, managerproof.ErrStale) {
+		t.Fatalf("delayed cancelled request after restart: claimed=%v err=%v", claimed, err)
+	}
 	// Model the daemon stopping after fsync of the claim and before delivering TERM.
 	target.ClaimedAt = time.Now().UTC()
 	m.ManagerRetirement = target
@@ -93,6 +123,13 @@ func TestManagerRetireStopsOriginalShimAndKeepsResumeCustodyAfterRestart(t *test
 	}
 	d = openDaemon(t, cfg)
 	m, _ = d.Get(m.ID)
+	if err := d.CancelManagerRetire(t.Context(), m.ID, m.ManagerConversationID, m.AgentType, target); !errors.Is(err, managerproof.ErrStale) {
+		t.Fatalf("cancelled claimed retirement: %v", err)
+	}
+	// Notes arriving after claim must survive while the original signal is re-driven.
+	if _, err := workermail.Submit(d.cfg.StateDir, binding, "postclaim", "needs-input", "question", true); err != nil {
+		t.Fatal(err)
+	}
 	if got := d.ManagerRetirementStatus(m, target); got != "uncertain" {
 		t.Fatalf("durable claim without effect reported %q", got)
 	}
@@ -114,6 +151,9 @@ func TestManagerRetireStopsOriginalShimAndKeepsResumeCustodyAfterRestart(t *test
 		t.Fatal(err)
 	}
 	d = openDaemon(t, cfg)
+	if pending, err := workermail.Pending(d.cfg.StateDir, binding.Discussion); err != nil || len(pending) != 1 || pending[0].ID != "postclaim" {
+		t.Fatalf("lost postclaim note after restart: %+v %v", pending, err)
+	}
 	recovered, _ := d.Get(m.ID)
 	if d.ManagerRetirementStatus(recovered, m.ManagerRetirement) != "retired" {
 		t.Fatal("lost response could not be reconciled after daemon restart")

@@ -13,6 +13,7 @@ import (
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/workermail"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
@@ -44,6 +45,7 @@ func TestDiscussionAdmissionKeepsAuthorAndDeduplicates(t *testing.T) {
 type discussionTestRuntime struct {
 	*controllerRuntimeFixture
 	bootstrapFixture
+	cancelState           string
 	retirements           []bool
 	retirement            protocol.ManagerRetireReceipt
 	managerErr, retireErr error
@@ -60,6 +62,14 @@ func (r *discussionTestRuntime) ManagerRetire(_ context.Context, req protocol.Ma
 	r.retirements = append(r.retirements, statusOnly)
 	r.retirement.OperationID = protocol.ManagerRetireOperationID(req)
 	return r.retirement, r.retireErr
+}
+
+func (r *discussionTestRuntime) CancelManagerRetire(_ context.Context, req protocol.ManagerRetireReq) (protocol.ManagerRetireReceipt, error) {
+	state := r.cancelState
+	if state == "" {
+		state = "cancelled"
+	}
+	return protocol.ManagerRetireReceipt{OperationID: protocol.ManagerRetireOperationID(req), State: state}, nil
 }
 
 func TestDiscussionRetirementWaitsForGraceAndExactExit(t *testing.T) {
@@ -92,6 +102,18 @@ func TestDiscussionRetirementWaitsForGraceAndExactExit(t *testing.T) {
 	if conv.Retirement == nil || conv.Parked || conv.Retirement.ExpectedTurn.State != "idle" {
 		t.Fatalf("expected persisted retiring state: %+v", conv)
 	}
+	for range 2 {
+		if err := d.finishRetirement(ctx, *conv.Retirement, true); !errors.Is(err, ErrControllerUncertain) {
+			t.Fatal(err)
+		}
+	}
+	if len(db.retirements) != 4 || !db.retirements[1] || db.retirements[2] || !db.retirements[3] {
+		t.Fatalf("repeated tick re-drove stop before backoff: %v", db.retirements)
+	}
+	now = now.Add(time.Second)
+	if err := d.finishRetirement(ctx, *conv.Retirement, true); !errors.Is(err, ErrControllerUncertain) || len(db.retirements) != 6 || db.retirements[5] {
+		t.Fatalf("missing retry after backoff: %v %v", db.retirements, err)
+	}
 	db.retirement.State = "retired"
 	if err := d.finishRetirement(ctx, *conv.Retirement, true); !errors.Is(err, ErrControllerUncertain) {
 		t.Fatalf("missing process counted as exact exit: %v", err)
@@ -104,6 +126,94 @@ func TestDiscussionRetirementWaitsForGraceAndExactExit(t *testing.T) {
 	st, _ = s.Snapshot()
 	if !st.Conversations[binding.ConversationID].Parked {
 		t.Fatal("corroborated retirement did not park")
+	}
+}
+
+func TestDiscussionNoteStatusCorrelatesIngressAdmissionAndPublication(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now().UTC().Add(-2 * time.Hour)
+	d := DiscussionController{cfg: Config{ConversationID: "discussion"}, scope: DiscussionScope{VMProjectAccess: true, ManagerSettingsDir: dir}}
+	b := workermail.Binding{Discussion: "discussion", Session: "vm/worker", Instance: "inc", Parent: "parent", Attempt: "attempt"}
+	if _, err := workermail.Submit(dir, b, "new", "needs-input", "private question", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workermail.Submit(dir, b, "recorded", "complete", "private result", true); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := json.Marshal(workerNoteMetadata{Session: b.Session, Instance: b.Instance, NoteID: "recorded", Created: &at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := State{Wakes: map[string]Wake{"w": {ID: "w", ConversationID: b.Discussion, State: "settled", EventID: "ev", Admission: 2, WorkerReply: "private answer", WorkerReplyExported: true}},
+		Events:       map[string]Event{key(b.Discussion, "ev"): {WorkerMessage: true, AttemptID: b.Attempt, JobID: "job", Metadata: meta}},
+		Admissions:   map[string]Admission{admissionKey(b.Discussion, 2): {Phase: "accepted"}},
+		Publications: map[string]Publication{"pub": {ID: "pub", ConversationID: b.Discussion, DiscussionSource: DiscussionOutputSource{AdmissionID: "w"}}}}
+	result := DiscussionNativeStatus{State: "parked"}
+	if err := d.noteStatus(st, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Notes) != 2 || result.Notes[0].ID != "new" || result.Notes[0].State != "queued" || result.OldestPendingNote != result.Notes[0].Created || result.Diagnostic == "" {
+		t.Fatalf("pending status: %+v", result)
+	}
+	n := result.Notes[1]
+	if n.ID != "recorded" || n.AttemptID != "attempt" || n.Source != "wake:w" || !n.Answered || n.Admission != 2 || n.AdmissionPhase != "accepted" || len(n.Publications) != 1 || n.Publications[0].ID != "pub" || n.Publications[0].State != "awaiting_delivery_receipt" {
+		t.Fatalf("recorded note: %+v", n)
+	}
+}
+
+func TestDiscussionParksLiveVMWorkerOnlyWithIndependentMailbox(t *testing.T) {
+	_, store, _, b := newControllerFixture(t)
+	if err := store.ReconcileJournal(b, JournalCursor{Binding: "daemon", Sequence: 9}, JournalSnapshot{Metadata: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ mailbox, reader, ended, park bool }{
+		{true, true, false, true}, {true, false, false, false}, {false, true, false, false}, {false, false, true, true},
+	} {
+		st.Workers["worker"] = WorkerAssociation{VMChild: true, Ended: tc.ended, Mailbox: tc.mailbox}
+		d := DiscussionController{scope: DiscussionScope{VMProjectAccess: true}}
+		if tc.reader {
+			d.scope.ManagerSettingsDir = t.TempDir()
+		}
+		if got := d.canPark(st, time.Now()); got != tc.park {
+			t.Fatalf("%+v: park=%v", tc, got)
+		}
+	}
+}
+
+func TestDiscussionPendingWakeClearsOnlyAfterDurableRetirementCancellation(t *testing.T) {
+	for _, state := range []string{"cancelled", "uncertain"} {
+		t.Run(state, func(t *testing.T) {
+			c, s, rt, b := newControllerFixture(t)
+			db := &discussionTestRuntime{controllerRuntimeFixture: rt, cancelState: state, retirement: protocol.ManagerRetireReceipt{State: "unknown"}}
+			d := &DiscussionController{controller: c, store: s, runtime: db, now: time.Now}
+			trackControllerFixtureWorker(t, s, b)
+			event := Event{ID: "worker", Cursor: JournalCursor{Binding: "journal", Sequence: 1}, Metadata: json.RawMessage(`{"done":true}`)}
+			if _, err := c.AcceptWorkerEvent("machine/worker", "instance", event); err != nil {
+				t.Fatal(err)
+			}
+			req := protocol.ManagerRetireReq{Binding: runtimeBinding(b), Generation: 1, Checkpoint: strings.Repeat("a", 64)}
+			if err := s.update(func(st *State) error {
+				conv := st.Conversations[b.ConversationID]
+				conv.Retirement = &req
+				putRecord(st, "conversations", &st.Conversations, b.ConversationID, conv)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err := d.finishRetirement(t.Context(), req, true)
+			st, snapErr := s.Snapshot()
+			if snapErr != nil {
+				t.Fatal(snapErr)
+			}
+			if (state == "cancelled") != (err == nil) || (state == "cancelled") != (st.Conversations[b.ConversationID].Retirement == nil) ||
+				!discussionPending(st) || len(db.retirements) != 1 || !db.retirements[0] {
+				t.Fatalf("state=%s pending=%v retirements=%v err=%v", state, discussionPending(st), db.retirements, err)
+			}
+		})
 	}
 }
 

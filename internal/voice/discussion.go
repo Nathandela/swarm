@@ -30,6 +30,7 @@ const DiscussionIdleGrace = 2 * time.Minute
 
 type discussionRuntime interface {
 	managerServiceRuntime
+	CancelManagerRetire(context.Context, protocol.ManagerRetireReq) (protocol.ManagerRetireReceipt, error)
 	ManagerRetire(context.Context, protocol.ManagerRetireReq, bool) (protocol.ManagerRetireReceipt, error)
 }
 
@@ -53,21 +54,23 @@ type DiscussionOutput struct {
 }
 
 type DiscussionController struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	dir, endpoint string
-	cfg           Config
-	runtime       discussionRuntime
-	store         *Store
-	scope         DiscussionScope
-	bridge        *privateHTTP
-	handler       *managerHandler
-	controller    *Controller
-	followCancel  context.CancelFunc
-	followDone    chan struct{}
-	journalReady  atomic.Bool
-	now           func() time.Time
-	idleSince     time.Time
+	mu                   sync.Mutex
+	ctx                  context.Context
+	dir, endpoint        string
+	cfg                  Config
+	runtime              discussionRuntime
+	store                *Store
+	scope                DiscussionScope
+	bridge               *privateHTTP
+	handler              *managerHandler
+	controller           *Controller
+	followCancel         context.CancelFunc
+	followDone           chan struct{}
+	journalReady         atomic.Bool
+	now                  func() time.Time
+	idleSince            time.Time
+	retirementRetryAt    time.Time
+	retirementRetryDelay time.Duration
 }
 
 func OpenDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Config, scope DiscussionScope) (*DiscussionController, error) {
@@ -534,6 +537,16 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 		return err
 	}
 	if d.controller.discussion != nil && d.controller.discussion.VMProjectAccess && d.controller.workers != nil {
+		mailChanged, err := d.controller.ingestWorkerMail(ctx, st)
+		if err != nil {
+			return err
+		}
+		if mailChanged {
+			st, err = d.store.Snapshot()
+			if err != nil {
+				return err
+			}
+		}
 		changed, err := d.controller.observeVMWorkers(st)
 		if err != nil {
 			return err
@@ -620,6 +633,18 @@ func discussionQuiescent(st State, now time.Time) bool {
 	return true
 }
 
+func (d *DiscussionController) canPark(st State, now time.Time) bool {
+	if !discussionQuiescent(st, now) {
+		return false
+	}
+	for _, w := range st.Workers {
+		if w.VMChild && !w.Ended && (!w.Mailbox || !d.scope.VMProjectAccess || !filepath.IsAbs(d.scope.ManagerSettingsDir)) {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *DiscussionController) maybeRetire(ctx context.Context) error {
 	c := d.controller
 	c.scheduler.Lock()
@@ -629,7 +654,7 @@ func (d *DiscussionController) maybeRetire(ctx context.Context) error {
 		return err
 	}
 	now := d.now()
-	if !discussionQuiescent(st, now) {
+	if !d.canPark(st, now) {
 		d.idleSince = time.Time{}
 		return nil
 	}
@@ -653,7 +678,7 @@ func (d *DiscussionController) maybeRetire(ctx context.Context) error {
 		if err := checkBinding(current, c.binding); err != nil {
 			return err
 		}
-		if !discussionQuiescent(*current, now) || !d.journalReady.Load() {
+		if !d.canPark(*current, now) || !d.journalReady.Load() {
 			return ErrControllerUncertain
 		}
 		conversation := current.Conversations[c.binding.ConversationID]
@@ -673,10 +698,21 @@ func (d *DiscussionController) maybeRetire(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.retirementRetryAt = time.Time{}
+	d.retirementRetryDelay = 0
 	return d.finishRetirement(ctx, req, false)
 }
 
 func (d *DiscussionController) finishRetirement(ctx context.Context, req protocol.ManagerRetireReq, statusOnly bool) error {
+	if !statusOnly {
+		st, err := d.store.Snapshot()
+		if err != nil {
+			return err
+		}
+		if discussionPending(st) {
+			return d.cancelRetirement(ctx, req)
+		}
+	}
 	receipt, err := d.runtime.ManagerRetire(ctx, req, statusOnly)
 	if err != nil {
 		return err
@@ -689,6 +725,13 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		if !statusOnly {
 			return ErrControllerUncertain
 		}
+		st, err := d.store.Snapshot()
+		if err != nil {
+			return err
+		}
+		if discussionPending(st) {
+			return d.cancelRetirement(ctx, req)
+		}
 		native, err := d.controller.nativeStatus(ctx)
 		if err != nil {
 			if !discussionRecoverableBindingError(err) {
@@ -700,8 +743,7 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 					return listErr
 				}
 				if discussionManagerExited(rows, req.Binding) {
-					d.idleSince = time.Time{}
-					return d.recordRetirement(req, false)
+					return d.cancelRetirement(ctx, req)
 				}
 			}
 			binding := d.controller.binding
@@ -712,12 +754,10 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 			}
 			// No daemon claim exists, and the original physical manager is still
 			// provable under a new observation epoch. Reconcile it on the next tick.
-			d.idleSince = time.Time{}
-			return d.recordRetirement(req, false)
+			return d.cancelRetirement(ctx, req)
 		}
 		if !native.ReadyForInput || native.Turn != req.ExpectedTurn {
-			d.idleSince = time.Time{}
-			return d.recordRetirement(req, false)
+			return d.cancelRetirement(ctx, req)
 		}
 		_, err = d.runtime.ManagerRetire(ctx, req, false)
 		if errors.Is(err, managerproof.ErrStale) {
@@ -726,15 +766,17 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 				return readErr
 			}
 			if verified.State == "unknown" {
-				d.idleSince = time.Time{}
-				return d.recordRetirement(req, false)
+				return d.cancelRetirement(ctx, req)
 			}
 		}
 		if err != nil {
 			return err
 		}
 	case "uncertain":
-		if statusOnly {
+		// Continue observing exact exit on every tick while spacing signal retries.
+		if statusOnly && !d.now().Before(d.retirementRetryAt) {
+			d.retirementRetryDelay = min(max(2*d.retirementRetryDelay, time.Second), 30*time.Second)
+			d.retirementRetryAt = d.now().Add(d.retirementRetryDelay)
 			_, err = d.runtime.ManagerRetire(ctx, req, false)
 			if err != nil && !errors.Is(err, managerproof.ErrStale) {
 				return err
@@ -750,6 +792,18 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		}
 	}
 	return ErrControllerUncertain
+}
+
+func (d *DiscussionController) cancelRetirement(ctx context.Context, req protocol.ManagerRetireReq) error {
+	receipt, err := d.runtime.CancelManagerRetire(ctx, req)
+	if err != nil {
+		return err
+	}
+	if receipt.OperationID != protocol.ManagerRetireOperationID(req) || receipt.State != "cancelled" {
+		return ErrControllerUncertain
+	}
+	d.idleSince = time.Time{}
+	return d.recordRetirement(req, false)
 }
 
 func (d *DiscussionController) recordRetirement(req protocol.ManagerRetireReq, parked bool) error {

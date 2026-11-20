@@ -220,6 +220,7 @@ type coreAPI struct {
 	// them, and nil is fail-closed -- no record authored, no record found.
 	onLaunched       func(persist.Meta)
 	sessionCaps      func(local string) (protocol.SessionCapabilities, bool)
+	semanticTarget   func(string) (string, protocol.ErrorCode, error)
 	ownerSessionCaps func(local string, shimPID int, shimStart int64) (protocol.SessionCapabilities, bool)
 	// withSessionStateSnapshot, when wired by the full assembly, runs a journal
 	// roster boundary and its capability lookups under one shared state fence.

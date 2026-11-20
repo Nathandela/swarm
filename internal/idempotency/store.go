@@ -54,9 +54,10 @@ var ErrCapacity = errors.New("idempotency: capacity reached; retry after protect
 
 // Record is one operation's durable idempotency state.
 type Record struct {
-	OperationID string `json:"operation_id"`
-	Action      string `json:"action"`
-	SessionID   string `json:"session_id"`
+	WorkerLaunchGate bool   `json:"worker_launch_gate,omitempty"`
+	OperationID      string `json:"operation_id"`
+	Action           string `json:"action"`
+	SessionID        string `json:"session_id"`
 	// SessionInstance optionally fences a mutating operation to one incarnation of a
 	// reusable session id. Empty preserves records written before incarnation binding.
 	SessionInstance string `json:"session_instance,omitempty"`
@@ -191,6 +192,12 @@ func (s *Store) Prepare(operationID, action, sessionID string) (Record, bool, er
 // bindings are part of the durable claim, so a delayed message cannot be applied to a
 // replacement process and a colliding id cannot inherit another body's terminal outcome.
 func (s *Store) PrepareBound(operationID, action, sessionID, sessionInstance, requestHash string) (Record, bool, error) {
+	return s.prepareBound(operationID, action, sessionID, sessionInstance, requestHash, false)
+}
+func (s *Store) PrepareWorkerLaunch(operationID, sessionID, requestHash string) (Record, bool, error) {
+	return s.prepareBound(operationID, "owner_launch", sessionID, "", requestHash, true)
+}
+func (s *Store) prepareBound(operationID, action, sessionID, sessionInstance, requestHash string, workerGate bool) (Record, bool, error) {
 	if operationID == "" {
 		return Record{}, false, errors.New("idempotency: empty operation_id")
 	}
@@ -210,14 +217,15 @@ func (s *Store) PrepareBound(operationID, action, sessionID, sessionInstance, re
 	}
 	now := s.clock()
 	rec := Record{
-		OperationID:     operationID,
-		Action:          action,
-		SessionID:       sessionID,
-		SessionInstance: sessionInstance,
-		RequestHash:     requestHash,
-		Phase:           PhasePrepared,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		WorkerLaunchGate: workerGate,
+		OperationID:      operationID,
+		Action:           action,
+		SessionID:        sessionID,
+		SessionInstance:  sessionInstance,
+		RequestHash:      requestHash,
+		Phase:            PhasePrepared,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	if err := s.appendLocked(rec); err != nil {
 		return Record{}, false, err

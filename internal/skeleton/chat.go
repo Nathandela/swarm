@@ -595,7 +595,8 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	}
 	if req.SessionInstance != "" {
 		currentInstance, ok := d.sessionInstance(local)
-		if !ok || currentInstance != req.SessionInstance {
+		if !ok || currentInstance != req.SessionInstance || meta.ShimPID > 0 && meta.ShimStartTime > 0 &&
+			!d.matchesResumeSourceInstance(meta, req.SessionInstance) {
 			return protocol.CodeStaleInstance, errIsLife5(
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
@@ -689,6 +690,9 @@ func (d *Daemon) composerSendAtHead(local, operationID string, req protocol.Comp
 		return code, serr
 	}
 
+	if source == adapter.SourceOwner && sink.backend == nil {
+		return protocol.CodeStructuredUnsupported, errors.New("native semantic input is unavailable; nothing was submitted")
+	}
 	if discussionCodex && !discussionCodexThreadIdle(sink.backend) {
 		return protocol.CodeInputBusy, errors.New("discussion worker has no verified native idle turn")
 	}

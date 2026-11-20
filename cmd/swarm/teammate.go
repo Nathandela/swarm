@@ -14,11 +14,33 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/voice"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "swarm teammate message --text TEXT [--id MESSAGE_ID]\nswarm teammate reply --id MESSAGE_ID [--wait 90s]")
+		_, _ = fmt.Fprintln(stdout, "swarm teammate message --text TEXT [--kind needs-input|complete] [--id MESSAGE_ID]\nswarm teammate receipt --id MESSAGE_ID\nswarm teammate reply --id MESSAGE_ID [--wait 90s]\nswarm dispatcher-guide    read the dispatcher workflow")
+		return 0
+	}
+	if args[0] == "receipt" {
+		fs := flag.NewFlagSet("teammate receipt", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		id := fs.String("id", "", "message ID")
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || *id == "" {
+			return misuseExit
+		}
+		var err error
+		r := schema.WorkerMailReceipt{ID: *id}
+		if os.Getenv(workermail.SocketEnv) != "" {
+			r, err = ordinaryWorkerMail(context.Background(), schema.WorkerMailReq{Action: "receipt", ID: *id})
+		} else {
+			r.State, err = voice.DiscussionWorkerReceipt(context.Background(), os.Getenv(schema.WorkerBridgeEnv), os.Getenv(hookclient.EnvSessionID), *id)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		_ = json.NewEncoder(stdout).Encode(r)
 		return 0
 	}
 	if args[0] == "reply" {
@@ -30,6 +52,7 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	}
 	fs := flag.NewFlagSet("teammate message", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	kind := fs.String("kind", "", "needs-input or complete")
 	text := fs.String("text", "", "message to your own manager")
 	id := fs.String("id", "", "message ID from the original attempt when retrying")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -38,7 +61,7 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 		}
 		return misuseExit
 	}
-	if fs.NArg() != 0 || *text == "" {
+	if fs.NArg() != 0 || *text == "" || !workermail.ValidKind(*kind) {
 		_, _ = fmt.Fprintln(stderr, "teammate: expected message --text TEXT")
 		return misuseExit
 	}
@@ -50,14 +73,18 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 		}
 		*id = generated
 	}
-	if err := voice.SendDiscussionWorkerMessage(context.Background(), os.Getenv(schema.WorkerBridgeEnv), os.Getenv(hookclient.EnvSessionID), *id, *text); err != nil {
+	var err error
+	receipt := schema.WorkerMailReceipt{ID: *id, State: "queued"}
+	if os.Getenv(workermail.SocketEnv) != "" {
+		receipt, err = ordinaryWorkerMail(context.Background(), schema.WorkerMailReq{Action: "message", ID: *id, Kind: *kind, Text: *text})
+	} else {
+		err = voice.SendDiscussionWorkerMessageKind(context.Background(), os.Getenv(schema.WorkerBridgeEnv), os.Getenv(hookclient.EnvSessionID), *id, *text, *kind)
+	}
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%v (message ID %s)\n", err, *id)
 		return 1
 	}
-	_ = json.NewEncoder(stdout).Encode(struct {
-		State string `json:"state"`
-		ID    string `json:"id"`
-	}{"queued", *id})
+	_ = json.NewEncoder(stdout).Encode(receipt)
 	return 0
 }
 
@@ -87,7 +114,19 @@ func dispatchTeammateReply(args []string, stdout, stderr io.Writer) int {
 	defer ticker.Stop()
 	state, text := "pending", ""
 	for {
-		reply, err := voice.ReadDiscussionWorkerReply(ctx, bridge, session, *id)
+		var reply string
+		var err error
+		if os.Getenv(workermail.SocketEnv) != "" {
+			var r schema.WorkerMailReceipt
+			r, err = ordinaryWorkerMail(ctx, schema.WorkerMailReq{Action: "reply", ID: *id})
+			if err == nil && r.State == "superseded" {
+				state = r.State
+				break
+			}
+			reply = r.Text
+		} else {
+			reply, err = voice.ReadDiscussionWorkerReply(ctx, bridge, session, *id)
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			break
 		}
@@ -115,4 +154,22 @@ func dispatchTeammateReply(args []string, stdout, stderr io.Writer) int {
 		Text  string `json:"text,omitempty"`
 	}{state, *id, text})
 	return 0
+}
+
+func ordinaryWorkerMail(ctx context.Context, req schema.WorkerMailReq) (schema.WorkerMailReceipt, error) {
+	socket, session := os.Getenv(workermail.SocketEnv), os.Getenv(hookclient.EnvSessionID)
+	req.Proof = os.Getenv(workermail.WorkerProofEnv)
+	if socket == "" || session == "" || req.Proof == "" {
+		return schema.WorkerMailReceipt{}, errors.New("run this command inside a mailbox-enabled worker")
+	}
+	c, err := protocol.DialContext(ctx, socket, []string{protocol.CapWorkerMail})
+	if err != nil {
+		return schema.WorkerMailReceipt{}, err
+	}
+	defer func() { _ = c.Close() }()
+	receipt, err := c.WorkerMail(session, req)
+	if ctx.Err() != nil {
+		return schema.WorkerMailReceipt{}, ctx.Err()
+	}
+	return receipt, err
 }

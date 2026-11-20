@@ -125,6 +125,9 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
 | `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5), amended for ordered sends: the phone's structured message under the wire name `composer_send`, carrying `session` / required `session_instance` / advisory `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text, context, or a replacement session incarnation (ADR-009 (8)) |
 | `semantic_receipt` | `*SemanticMessageReceipt` | owner-only `semantic_status` result: operation/session/incarnation, submission state, exact native session/message/generation/creation coordinates and observed agent/model/variant/selection basis where qualified; absent native coordinates are not invented |
+| `worker_mail` | `*WorkerMailReq` | Local supervisor request to send a worker note, inspect its receipt or retrieve its answer. Scope the authenticated worker to its exact session and launch attempt. |
+| `worker_mail_receipt` | `*WorkerMailReceipt` | Correlated note ID, state and optional answer. Queued confirms durable supervisor acceptance. |
+| `semantic_target_instance` | string | Physically verified incarnation returned to an owner resolving a semantic message target. |
 | `manager_runtime_request` | `*ManagerRuntimeReq` | Owner-only current native manager proof request, carrying required `session_instance` |
 | `manager_runtime` | `*ManagerRuntimeStatus` | Derived exact binding, native turn, explicit readiness and private bridge references |
 | `manager_call` | `*ManagerCallReq` | Owner-only exact tool name, canonical argument hash and native host metadata resolution request |
@@ -153,6 +156,8 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 The owner-only `semantic_send` operation reuses `composer_send` and body version 1. It requires the negotiated `semantic-send` capability and the transactional durable owner composer seam; it never uses the legacy terminal `send_input` operation. The remote socket refuses it before custody or provider access, and phone signature/action vocabulary is unchanged. Owner messages retain source `owner` and their operation ID without recording phone presence. A delegated Discord worker follow-up binds the exact native parent manager conversation through `worker_manager_conversation`, independently of the Discord discussion ID. This field is available only on the owner semantic route.
 
 Its operation ID is `semantic:<Unix milliseconds>:<32 lowercase hex nonce>`. Mutation retries are accepted only within one hour, with at most 30 seconds of future clock skew. This horizon is shorter than terminal receipt retention, so an expired receipt cannot make an old mutation fresh. An executing or outcome-unknown semantic operation survives ordinary TTL compaction; capacity refuses new effects rather than evicting that guard. Successful submission is distinct from model completion. A legacy OpenCode HTTP 204 is scheduling acknowledgement only; native admission requires a matching native user message.
+
+The owner-only, negotiated `semantic_target` operation resolves one exact namespaced session against the supervisor’s stored incarnation and live shim identity. The CLI uses the returned `semantic_target_instance` for the subsequent `semantic_send`. Resolution reads no roster hints and performs no input submission. It can briefly wait for a retained native backend to reconnect. The subsequent send checks the incarnation and provider route again. Older supervisors can supply the incarnation through a bounded roster refresh.
 
 The owner-only, negotiated `semantic_status` operation reads an existing operation using `session_id` and `operation_id`, including after its mutation replay horizon. It performs no provider submission. Its `semantic_receipt` distinguishes unknown/prepared/uncertain/rejected/submitted/admitted/running and qualified terminal execution states. Native identifiers, model selection and outcome source are evidence fields; an admitted or completed execution does not certify task correctness. The remote socket refuses this read before accessing private operation custody.
 
@@ -215,6 +220,12 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `native_generation` | string | Actual owning native process generation; reconnect does not fabricate preserved evidence |
 | `observation_generation` | string | Exact authenticated observer epoch: current Codex feed ID or retained Claude broker/guard scope; changed observation requires explicit reconciliation even when the physical process survives |
 | `login_epoch` | string | Server-derived managed runtime epoch or selected native account digest; caller text cannot create an identity |
+| `worker_mail` | `*WorkerMailReq` | Owner-only request on the bound supervisor. The worker sends its scoped proof, original ID and action (message, reply or receipt). The supervisor verifies the current shim and derives the destination and attempt. |
+| `worker_mail_receipt` | `*WorkerMailReceipt` | Exact note ID, state and optional answer. Accepted IDs remain queryable after the native submission window. |
+| `dispatcher_proof` | string | Owner launch only. Proof of the live native dispatcher that issued an ordinary spawn, used to bind a child before execution. |
+| `worker_discussion` | string | Supervisor-bound logical worker discussion on the owner roster. |
+| `worker_attempt` | string | Stable attempt from the launch operation. |
+| `worker_instance` | string | Worker incarnation recorded before native execution. |
 | `worker_bridge` | string | Requires the negotiated owner capability `teammate-worker-bridge`. Carries the local discussion socket and per-launch bearer secret for messages to the parent manager. Keep this value private. |
 | `worker_manager_conversation` | string | Owner-only semantic send to a discussion worker. Binds the durable operation digest to the delegated worker’s native parent manager conversation. The Discord discussion ID is carried separately in origin. |
 | `manager_admission` | `*ManagerAdmission` | Optional owner `semantic_send` admission; requires `manager-provenance`, typed manager role and exact binding; participates in the semantic content hash |
@@ -260,7 +271,11 @@ is durable and the original exit is still unproven. `retired` requires both
 the original shim's exit report and confirmation that its physical incarnation
 is gone. Status reads never signal a process. A repeated effect request can
 redrive the same unresolved claim after rechecking the durable input embargo,
-physical process, account, leases and fresh native readiness.
+physical process, account, leases and fresh native readiness. The additional
+owner-only `manager-retire-cancel` capability exposes `manager_retire_cancel`
+with the same checkpoint and operation ID. A `cancelled` receipt confirms
+a durable fence against delayed requests for that exact operation. A claimed
+retirement retains its existing receipt and must be reconciled to exact exit.
 
 To resume that history, send an `owner_launch` with the same manager bridge
 binding, `resume_from`, `resume_source_instance`, and the manager's
@@ -379,6 +394,9 @@ alongside the group.
 | `supersedes` | array of strings | namespaced historical resume attempt IDs to remove from the visible roster; persisted history remains available by ID |
 | `superseded_by` | string | namespaced visible successor for a historical attempt event; roster clients remove/ignore this event row, while session-scoped consumers retain its original ID and status |
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
+| `worker_discussion` | string | Logical discussion recorded at an authenticated ordinary worker launch. |
+| `worker_attempt` | string | Stable launch operation associated with that worker. |
+| `worker_instance` | string | Physical worker incarnation recorded before native execution. |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 | `backend_plan_error` | string     | the persisted reason this session launched with no backend although its adapter declared one (the agent's PTY runs; nothing serves the attach channel); absent on a healthy session and on rows from an older daemon (lifecycle R1) |
 | `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |
@@ -424,6 +442,7 @@ and unrelated secrets are dropped.
 | `initial_prompt` | string              | optional initial prompt text                               |
 | `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
 | `spawned_from`   | string              | optional local id of the spawning session, carried verbatim into meta (ADR-010 D4) |
+| `dispatcher_proof` | string | Local dispatcher credential used by the owner supervisor to authenticate the parent when binding a delegated worker. |
 | `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
 | `supervision`    | string              | optional supervision mode, one of `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); refused unless `spawn_intent` is `handoff` |
 

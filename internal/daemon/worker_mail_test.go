@@ -1,0 +1,149 @@
+package daemon
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/workermail"
+)
+
+func TestOrdinaryDispatcherWorkerBindingPrecedesExecAndSurvivesLostReceipt(t *testing.T) {
+	cfg := daemonConfig(t)
+	childPID := filepath.Join(t.TempDir(), "child.pid")
+	cfg.WorkerInstance = func(_ string, pid int, start ...int64) (string, error) {
+		if _, err := os.Stat(childPID); !errors.Is(err, os.ErrNotExist) || pid == 0 || len(start) != 1 || start[0] <= 0 {
+			t.Fatal("child ran before its exact shim was bound")
+		}
+		return "confirmed-instance", nil
+	}
+	d := openDaemon(t, cfg)
+	spec := announceSpec(t, filepath.Join(t.TempDir(), "manager.pid"))
+	spec.AgentType = "claude"
+	spec.CLIIdentity = &persist.CLIIdentity{Path: spec.Argv[0], Version: "2.1.319"}
+	spec.Manager = &ManagerLaunchSpec{NativeCLI: true, ConversationID: "discord-teammate-test", Command: cfg.ShimBinary}
+	parent, err := d.Launch(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := announceSpec(t, childPID)
+	child.SpawnedFrom = parent.ID
+	child.SpawnIntent = "delegate"
+	child.OwnerLaunchHash = "exact-request"
+	child.OperationID = "stable-launch"
+	token, _ := readShimLaunchToken(d.sessionDir(parent.ID))
+	child.DispatcherProof = workermail.Proof("different-parent", "spawn")
+	if _, err = d.Launch(child); err == nil {
+		t.Fatal("unrelated caller claimed dispatcher parent")
+	}
+	child.DispatcherProof = workermail.Proof(token, "spawn")
+	m, err := d.Launch(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readPIDFile(t, childPID)
+	if m.WorkerInstance != "confirmed-instance" || m.WorkerDiscussion != parent.ManagerConversationID || m.WorkerAttempt == "" {
+		t.Fatalf("incomplete binding %+v", m)
+	}
+	again, known, err := d.OwnerLaunchReplay(child.OperationID, child.OwnerLaunchHash)
+	if err != nil || !known || again.ID != m.ID || again.WorkerInstance != m.WorkerInstance {
+		t.Fatalf("spawn retry %v %v %v", again.ID, known, err)
+	}
+	own, _ := readShimLaunchToken(d.sessionDir(m.ID))
+	req := schema.WorkerMailReq{ID: "test-note", Kind: "needs-input", Action: "message", Text: "which region?", Proof: workermail.Proof(token, "worker")}
+	for _, action := range []string{"message", "reply", "receipt"} {
+		req.Action = action
+		if _, err = d.WorkerMail("ep", m.ID, req, true); err == nil {
+			t.Fatalf("sibling proof allowed %s", action)
+		}
+	}
+	req.Action = "message"
+	req.Proof = workermail.Proof(own, "worker")
+	// Hold the same custody lock a retiring manager holds through its claim.
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		receipt schema.WorkerMailReceipt
+		err     error
+	}
+	done := make(chan outcome, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		receipt, err := d.WorkerMail("ep", m.ID, req, true)
+		done <- outcome{receipt, err}
+	}()
+	<-started
+	select {
+	case <-done:
+		unlock()
+		t.Fatal("worker acknowledged before the retirement decision released custody")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	result := <-done
+	receipt, err := result.receipt, result.err
+	if err != nil || receipt.State != "queued" {
+		t.Fatalf("note: %+v %v", receipt, err)
+	}
+	receipt, err = d.WorkerMail("ep", m.ID, req, false)
+	if err != nil || receipt.State != "queued" {
+		t.Fatalf("expired replay: %+v %v", receipt, err)
+	}
+	rows, err := workermail.Pending(cfg.StateDir, m.WorkerDiscussion)
+	if err != nil || len(rows) != 1 || rows[0].Instance != m.WorkerInstance {
+		t.Fatalf("pending %+v, %v", rows, err)
+	}
+}
+
+func TestWorkerLaunchRepairsUnexecutedReservationAcrossDaemonRestart(t *testing.T) {
+	cfg := daemonConfig(t)
+	cfg.WorkerInstance = func(string, int, ...int64) (string, error) { return "exact", nil }
+	d, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { killSessions(d); _ = d.Close() })
+	manager := announceSpec(t, filepath.Join(t.TempDir(), "parent"))
+	manager.AgentType = "claude"
+	manager.CLIIdentity = &persist.CLIIdentity{Path: manager.Argv[0], Version: "2.1.319"}
+	manager.Manager = &ManagerLaunchSpec{NativeCLI: true, ConversationID: "discord-teammate-test", Command: cfg.ShimBinary}
+	parent, err := d.Launch(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "first-worker-command")
+	child := announceSpec(t, path)
+	child.OperationID = "original"
+	child.OwnerLaunchHash = "request-hash"
+	child.SpawnIntent = "delegate"
+	child.SpawnedFrom = parent.ID
+	token, _ := readShimLaunchToken(d.sessionDir(parent.ID))
+	child.DispatcherProof = workermail.Proof(token, "spawn")
+	stop := errors.New("crash after reservation")
+	before, err := d.launch(child, func(p launchPhase, _ persist.Meta) error {
+		if p == phaseReserved {
+			return stop
+		}
+		return nil
+	})
+	if !errors.Is(err, stop) {
+		t.Fatalf("inject crash: %v", err)
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("worker started before reservation committed")
+	}
+	d.abandon()
+	restored := openDaemon(t, cfg)
+	after, err := restored.Launch(child)
+	if err != nil || before.ID != after.ID || len(restored.List()) != 2 || after.WorkerAttempt != before.WorkerAttempt {
+		t.Fatalf("restored %s -> %s, err %v", before.ID, after.ID, err)
+	}
+	readPIDFile(t, path)
+}

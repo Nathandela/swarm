@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/workermail"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -29,14 +32,17 @@ const (
 )
 
 type TeammateNativeStatus struct {
-	State           string              `json:"state"`
-	ManagerSession  string              `json:"manager_session,omitempty"`
-	ManagerInstance string              `json:"manager_instance,omitempty"`
-	Project         string              `json:"project,omitempty"`
-	Diagnostic      string              `json:"diagnostic,omitempty"`
-	ExternalInput   uint64              `json:"external_input"`
-	Generation      uint64              `json:"generation"`
-	Jobs            []TeammateJobStatus `json:"jobs,omitempty"`
+	Notes               []workermail.NoteStatus `json:"worker_notes,omitempty"`
+	RetirementOperation string                  `json:"retirement_operation,omitempty"`
+	OldestPendingNote   time.Time               `json:"oldest_pending_note,omitzero"`
+	State               string                  `json:"state"`
+	ManagerSession      string                  `json:"manager_session,omitempty"`
+	ManagerInstance     string                  `json:"manager_instance,omitempty"`
+	Project             string                  `json:"project,omitempty"`
+	Diagnostic          string                  `json:"diagnostic,omitempty"`
+	ExternalInput       uint64                  `json:"external_input"`
+	Generation          uint64                  `json:"generation"`
+	Jobs                []TeammateJobStatus     `json:"jobs,omitempty"`
 }
 
 type TeammateJobStatus struct {

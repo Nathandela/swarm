@@ -147,6 +147,12 @@ func (p *ProtocolControllerClient) ManagerRetire(ctx context.Context, req protoc
 	})
 }
 
+func (p *ProtocolControllerClient) CancelManagerRetire(ctx context.Context, req protocol.ManagerRetireReq) (protocol.ManagerRetireReceipt, error) {
+	return controllerOwnerCall(p, ctx, 20*time.Second, []string{protocol.CapManagerRetire, protocol.CapManagerRetireCancel}, func(c *protocol.Client) (protocol.ManagerRetireReceipt, error) {
+		return c.CancelManagerRetire(ctx, req)
+	})
+}
+
 // discussionSupported fences connector work before any native launch on an older daemon.
 func (p *ProtocolControllerClient) discussionSupported(ctx context.Context) error {
 	caps := append([]string{

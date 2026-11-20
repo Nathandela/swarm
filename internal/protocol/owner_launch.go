@@ -93,6 +93,9 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 	if req.Manager != nil && req.Manager.RetireOperationID != "" && !slices.Contains(c.caps, CapManagerRetire) {
 		return "", "", errors.New("protocol: parked manager resume was not negotiated")
 	}
+	if req.DispatcherProof != "" && !slices.Contains(c.caps, CapWorkerMail) {
+		return "", "", errors.New("dispatcher worker mailbox requires an updated daemon")
+	}
 	if req.WorkerBridge != "" && !slices.Contains(c.caps, CapTeammateWorkerBridge) {
 		return "", "", errors.New("protocol: teammate worker messages require an updated daemon")
 	}

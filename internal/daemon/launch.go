@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/Nathandela/swarm/internal/worktree"
 )
 
@@ -346,6 +348,13 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
 	scheduled := spec.Scheduled != nil
+	if spec.DispatcherProof != "" {
+		if rec, ok := d.idem.Get(spec.OperationID); ok && rec.WorkerLaunchGate && rec.Phase == idempotency.PhasePrepared && rec.CreatedAt.Before(d.openedAt) {
+			// Serialize restoration of the reserved row with explicit operator deletion.
+			d.deleteMu.Lock()
+			defer d.deleteMu.Unlock()
+		}
+	}
 	if scheduled && (spec.Scheduled.AttemptID == "" || spec.OperationID == "" || spec.OwnerLaunchHash == "") {
 		return persist.Meta{}, errors.New("daemon: scheduled launch requires an attempt and a bound owner operation")
 	}
@@ -423,11 +432,31 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.mu.Unlock()
 		return persist.Meta{}, ErrScheduledWorkspaceBusy
 	}
-	if d.liveCountLocked() >= d.cfg.MaxSessions {
+	if spec.DispatcherProof != "" {
+		parent, ok := d.sessions[spec.SpawnedFrom]
+		if !ok || parent.meta.Status.Process != status.ProcessRunning || !parent.meta.ManagerNativeCLI || !schema.IsDiscordManager(parent.meta.Role, parent.meta.ManagerConversationID) || parent.meta.ManagerRetirement.OperationID != "" || spec.OwnerLaunchHash == "" || d.cfg.WorkerInstance == nil || !d.shimIdentityMatches(parent.meta) || !d.workerProof(parent.meta.ID, spec.DispatcherProof, "spawn") {
+			d.mu.Unlock()
+			return persist.Meta{}, errors.New("dispatcher spawn proof is stale")
+		}
+		spec.workerDiscussion = parent.meta.ManagerConversationID
+	}
+	gated := scheduled || spec.workerDiscussion != ""
+	id := d.freshIDLocked()
+	repair := false
+	var previousCwd string
+	if spec.workerDiscussion != "" {
+		if rec, ok := d.idem.Get(spec.OperationID); ok && d.workerLaunchCanRetryLocked(rec, spec.OwnerLaunchHash) {
+			id, repair = rec.SessionID, true
+			if old := d.sessions[id]; old != nil {
+				previousCwd = old.meta.AgentCwd
+			}
+		}
+	}
+	occupiesSlot := repair && d.sessions[id] != nil && d.sessions[id].meta.Status.Process == status.ProcessRunning
+	if !occupiesSlot && d.liveCountLocked() >= d.cfg.MaxSessions {
 		d.mu.Unlock()
 		return persist.Meta{}, fmt.Errorf("%w: at capacity (max %d sessions)", ErrMaxSessions, d.cfg.MaxSessions)
 	}
-	id := d.freshIDLocked()
 	now := time.Now()
 	m := persist.Meta{
 		HermesNative:    spec.HermesInput != nil,
@@ -455,6 +484,14 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		Supervision:     spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
 		Status:          status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
+	if spec.workerDiscussion != "" {
+		if spec.InitialPrompt != "" {
+			promptHash := sha256.Sum256([]byte(spec.InitialPrompt))
+			m.WorkerPromptHash = hex.EncodeToString(promptHash[:])
+		}
+		m.WorkerDiscussion = spec.workerDiscussion
+		m.WorkerAttempt = "vm-child-" + spec.OperationID
+	}
 	m.ScheduledCodexSandbox = spec.ScheduledCodexSandbox
 	if spec.Scheduled != nil {
 		m.ScheduleAttempt = spec.Scheduled.AttemptID
@@ -469,10 +506,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			m.ManagerClaudeConfigDir = *spec.Manager.ClaudeConfigDir
 		}
 	}
-	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{}), scheduledLaunching: scheduled}
+	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{}), scheduledLaunching: gated}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
-	if scheduled {
+	if gated {
 		defer func() {
 			d.mu.Lock()
 			s.scheduledLaunching = false
@@ -491,12 +528,19 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		if spec.OwnerLaunchHash != "" {
 			action = "owner_launch"
 		}
-		record, existed, perr := d.idem.PrepareBound(spec.OperationID, action, id, "", spec.OwnerLaunchHash)
+		var record idempotency.Record
+		var existed bool
+		var perr error
+		if spec.workerDiscussion != "" {
+			record, existed, perr = d.idem.PrepareWorkerLaunch(spec.OperationID, id, spec.OwnerLaunchHash)
+		} else {
+			record, existed, perr = d.idem.PrepareBound(spec.OperationID, action, id, "", spec.OwnerLaunchHash)
+		}
 		if perr != nil {
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
 		}
-		if existed {
+		if existed && !repair {
 			if record.Action != action || record.RequestHash != spec.OwnerLaunchHash {
 				d.dropReserved(id)
 				return persist.Meta{}, ErrOwnerLaunchConflict
@@ -567,7 +611,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// compensate via PreDelete when it did (F2), since dropReserved erases the
 	// meta and no future Delete() could otherwise ever reach this id again.
 	preLaunchOK := false
-	if d.cfg.PreLaunch != nil {
+	if previousCwd != "" {
+		// Keep the original isolated checkout and its contents when repairing a reservation.
+		spec.Cwd, m.AgentCwd = previousCwd, previousCwd
+	} else if d.cfg.PreLaunch != nil {
 		cwd, err := d.cfg.PreLaunch(id, spec)
 		if err != nil {
 			d.dropReserved(id)
@@ -631,7 +678,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	}
 	// Phase 1 — reserve: persist the running meta before any shim exists.
 	var reserveErr error
-	if scheduled {
+	if gated {
 		reserveErr = d.persistScheduledLaunch(&m)
 	} else {
 		reserveErr = d.saveMeta(m)
@@ -655,7 +702,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, terr
 	}
 	var gateRead, gateWrite *os.File
-	if scheduled {
+	if gated {
 		var err error
 		gateRead, gateWrite, err = os.Pipe()
 		if err != nil {
@@ -691,7 +738,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// launches still use the shim's TERM containment path (F2/N2).
 	st, sterr := procStartTimeFn(m.ShimPID)
 	if sterr != nil {
-		if scheduled {
+		if gated {
 			return d.abortScheduledShim(m, cmd, s, gateWrite, fmt.Errorf("read shim identity: %w", sterr))
 		}
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
@@ -701,7 +748,16 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
-	if scheduled {
+	if spec.workerDiscussion != "" {
+		m.WorkerInstance, err = d.cfg.WorkerInstance(id, m.ShimPID, st)
+		if err == nil && m.WorkerInstance == "" {
+			err = errors.New("worker instance unavailable")
+		}
+		if err != nil {
+			return d.abortScheduledShim(m, cmd, s, gateWrite, err)
+		}
+	}
+	if gated {
 		if err := d.admitScheduledShim(&m, gateWrite); err != nil {
 			return d.abortScheduledShim(m, cmd, s, gateWrite, err)
 		}
@@ -838,7 +894,10 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 	}
 
 	if spec.Manager != nil && spec.Manager.NativeCLI {
-		lc.Env = append(lc.Env, schema.EnvManagerVMCLI+"=1", EnvStateDir+"="+d.cfg.StateDir, EnvLock+"="+d.cfg.LockPath, EnvLog+"="+d.cfg.LogPath)
+		lc.Env = append(lc.Env, workermail.ProofEnv+"="+workermail.Proof(token, "spawn"), schema.EnvManagerVMCLI+"=1", EnvStateDir+"="+d.cfg.StateDir, EnvLock+"="+d.cfg.LockPath, EnvLog+"="+d.cfg.LogPath)
+	}
+	if spec.workerDiscussion != "" {
+		lc.Env = append(lc.Env, workermail.SocketEnv+"="+d.cfg.SocketPath, workermail.WorkerProofEnv+"="+workermail.Proof(token, "worker"))
 	}
 	if spec.WorkerBridge != "" {
 		lc.Env = append(lc.Env, schema.WorkerBridgeEnv+"="+spec.WorkerBridge)
@@ -919,7 +978,10 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		lc.BackendSocketPath = backendSock
 		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
 		if len(lc.BackendEnv) > 0 && spec.Manager != nil && spec.Manager.NativeCLI {
-			lc.BackendEnv = append(lc.BackendEnv, schema.EnvManagerVMCLI+"=1", EnvStateDir+"="+d.cfg.StateDir, EnvLock+"="+d.cfg.LockPath, EnvLog+"="+d.cfg.LogPath, EnvSocket+"="+d.cfg.SocketPath, hookclient.EnvSessionID+"="+id)
+			lc.BackendEnv = append(lc.BackendEnv, workermail.ProofEnv+"="+workermail.Proof(token, "spawn"), schema.EnvManagerVMCLI+"=1", EnvStateDir+"="+d.cfg.StateDir, EnvLock+"="+d.cfg.LockPath, EnvLog+"="+d.cfg.LogPath, EnvSocket+"="+d.cfg.SocketPath, hookclient.EnvSessionID+"="+id)
+		}
+		if len(lc.BackendEnv) > 0 && spec.workerDiscussion != "" {
+			lc.BackendEnv = append(lc.BackendEnv, workermail.SocketEnv+"="+d.cfg.SocketPath, workermail.WorkerProofEnv+"="+workermail.Proof(token, "worker"), hookclient.EnvSessionID+"="+id)
 		}
 		lc.BackendArgs = append(lc.BackendArgs, spec.CodexPolicy...)
 		if spec.Scheduled != nil {

@@ -58,7 +58,17 @@ func (d *Daemon) OwnerLaunchReplay(operationID, requestHash string) (persist.Met
 	if present {
 		m = cloneOpenCodeMeta(s.meta)
 	}
+	retry := d.workerLaunchCanRetryLocked(rec, requestHash)
 	d.mu.Unlock()
+	if retry {
+		return persist.Meta{}, false, nil
+	}
+	if rec.WorkerLaunchGate && rec.Phase == idempotency.PhaseFailed {
+		return persist.Meta{}, true, ErrLaunchOpConsumed
+	}
+	if rec.WorkerLaunchGate && rec.Phase == idempotency.PhasePrepared {
+		return persist.Meta{}, true, ErrLaunchOutcomeUnknown
+	}
 	if present && m.ShimPID != 0 && m.Status.Process != status.ProcessLost && openCodeLaunchComplete(m) && d.scheduledLaunchApplied(m) {
 		if rec.Phase != idempotency.PhaseCompleted {
 			if err := d.idem.Complete(operationID, nil); err != nil {
@@ -106,4 +116,14 @@ func (d *Daemon) RecordOwnerLaunch(spec LaunchSpec, m persist.Meta) (persist.Met
 		return persist.Meta{}, err
 	}
 	return m, nil
+}
+
+// Only an earlier daemon's unclaimed execution gate proves no child code ran.
+// A live launch, manual deletion, or claim with unknown physical outcome stays fenced.
+func (d *Daemon) workerLaunchCanRetryLocked(rec idempotency.Record, hash string) bool {
+	if !rec.WorkerLaunchGate || rec.RequestHash != hash || rec.Phase != idempotency.PhasePrepared || !rec.UpdatedAt.Before(d.openedAt) || d.isDeleted(rec.SessionID) {
+		return false
+	}
+	s := d.sessions[rec.SessionID]
+	return s == nil || !s.scheduledLaunching && s.meta.WorkerDiscussion != "" && !d.shimIdentityMatches(s.meta)
 }

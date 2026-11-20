@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -488,6 +489,19 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	if err != nil {
 		return err
 	}
+	if source, ok := t.manager.(interface {
+		PendingWorkerDiscussions() (func(TeammateDiscussion) bool, error)
+	}); ok {
+		matches, err := source.PendingWorkerDiscussions()
+		if err != nil {
+			return err
+		}
+		if matches != nil {
+			if err = store.teammateActivateWorkerMail(install, matches); err != nil {
+				return err
+			}
+		}
+	}
 	bindings, err := store.teammateActiveBindings(install)
 	if err != nil {
 		return err
@@ -572,7 +586,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		waiting, hasAccepted := accepted[b.Route.ChannelID]
 		if !b.Opened && !hasAccepted && !b.ProvisionalCancelled {
 			if !predecessors[b.Route.ChannelID] {
-				if err := store.teammatePark(b.TeammateDiscussion, through); err != nil {
+				if err := store.teammatePark(b.TeammateDiscussion, through, nil); err != nil {
 					return err
 				}
 			}
@@ -636,7 +650,17 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 						return err
 					}
 					if dormant {
-						return store.teammatePark(b.TeammateDiscussion, through)
+						var notes []workermail.NoteStatus
+						if reporter, ok := t.manager.(interface {
+							Status(TeammateDiscussion) (TeammateNativeStatus, error)
+						}); ok && t.service.Config.EffectiveProjectAccess() == ProjectAccessVM {
+							view, err := reporter.Status(b.TeammateDiscussion)
+							if err != nil {
+								return err
+							}
+							notes = view.Notes
+						}
+						return store.teammatePark(b.TeammateDiscussion, through, notes)
 					}
 				}
 			}

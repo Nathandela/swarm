@@ -152,6 +152,7 @@ const (
 	OpComposerSend         = "composer_send"
 	OpSemanticSend         = "semantic_send"
 	OpSemanticStatus       = "semantic_status"
+	OpSemanticTarget       = "semantic_target"
 	OpOperationStatus      = "operation_status"
 	OpTurnInterrupt        = "turn_interrupt"
 	OpTerminalControlBegin = "terminal_control_begin"
@@ -214,6 +215,7 @@ const (
 	CapContextGuardSettings = "context-guard-settings"
 	CapLoginsManage         = "logins.manage.v1"
 	CapSemanticSend         = "semantic-send"
+	CapSemanticTarget       = "semantic-target"
 	CapMessageOrigin        = "message-origin"
 )
 

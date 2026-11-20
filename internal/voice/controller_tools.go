@@ -154,6 +154,13 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		}
 		return c.managerQuestion(input, args, proof, admission)
 
+	case "swarm_read_note":
+		input, err := decodeControllerInput[SessionInput](args)
+		if err != nil {
+			return nil, err
+		}
+		return c.readDiscussionWorkerNote(input, admission)
+
 	case "swarm_reply":
 		input, err := decodeControllerInput[WorkerReplyInput](args)
 		if err != nil {

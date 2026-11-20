@@ -83,6 +83,7 @@ type Registry interface {
 
 // Config configures a daemon instance.
 type Config struct {
+	WorkerInstance func(string, int, ...int64) (string, error)
 	// NativeInputEnabled is checked at launch; nil keeps ordinary sessions unchanged.
 	NativeInputEnabled func() bool
 
@@ -164,6 +165,8 @@ type ResumeSourceFence struct {
 }
 
 type LaunchSpec struct {
+	DispatcherProof       string `json:"-"`
+	workerDiscussion      string
 	WorkerBridge          string   `json:"-"`
 	ScheduledCodexSandbox string   `json:"-"`
 	CodexPolicy           []string `json:"-"`

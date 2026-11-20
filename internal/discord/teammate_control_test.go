@@ -363,7 +363,7 @@ func TestTeammateDormantRoutesDoNotExhaustActiveQuota(t *testing.T) {
 	if err := s.teammateBind(teammateBinding{TeammateDiscussion: fresh, Opened: true}); err != nil {
 		t.Fatalf("new binding after historical quota: %v", err)
 	}
-	if err := s.teammatePark(fresh, 0); err != nil {
+	if err := s.teammatePark(fresh, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	active, err := s.teammateActiveBindings("install")
@@ -379,7 +379,7 @@ func TestTeammateDormantRoutesDoNotExhaustActiveQuota(t *testing.T) {
 		t.Fatalf("parked binding %+v err=%v", parked, err)
 	}
 	teammateTestEvent(t, c, 3, "MESSAGE_CREATE", teammateTestMessage("400", first.Route.ChannelID, "88", "ordinary follow-up", false))
-	if err = s.teammatePark(first, 0); err != nil {
+	if err = s.teammatePark(first, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	active, err = s.teammateActiveBindings("install")

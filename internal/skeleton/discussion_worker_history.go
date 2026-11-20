@@ -28,7 +28,10 @@ func discussionInputHash(text string) string {
 }
 
 func (d *Daemon) discussionWorkerHistory(meta persist.Meta, req schema.InteractionHistoryReq) (schema.NativeHistoryPage, protocol.ErrorCode, error) {
-	scope := req.Worker
+	scope := *req.Worker
+	if scope.PromptHash == "" && scope.TurnID == "" && scope.InputID == "" && meta.WorkerDiscussion == scope.ManagerConversation && meta.WorkerInstance == scope.SessionInstance && meta.WorkerAttempt != "" {
+		scope.PromptHash = meta.WorkerPromptHash
+	}
 	unavailable := errors.New("worker turn evidence unavailable")
 	empty := schema.NativeHistoryPage{}
 	parent, ok := d.core.Get(scope.Parent)
@@ -52,7 +55,7 @@ func (d *Daemon) discussionWorkerHistory(meta persist.Meta, req schema.Interacti
 		return empty, protocol.CodeUnavailable, unavailable
 	}
 	defer func() { _ = file.Close() }()
-	evidence, limited, err := d.readDiscussionTranscript(file, meta, *scope)
+	evidence, limited, err := d.readDiscussionTranscript(file, meta, scope)
 	current, exists := d.core.Get(meta.ID)
 	currentInstance, bound := d.sessionInstance(meta.ID)
 	if err != nil || !exists || !bound || currentInstance != instance || current.ConversationID != meta.ConversationID || current.SpawnedFrom != meta.SpawnedFrom {

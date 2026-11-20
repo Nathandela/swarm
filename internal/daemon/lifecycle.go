@@ -3,7 +3,9 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -111,6 +113,10 @@ func (d *Daemon) Delete(id string) error {
 	}
 	d.mu.Lock()
 	sess, present := d.sessions[id]
+	if present && (sess.scheduledLaunching || s != sess) {
+		d.mu.Unlock()
+		return ErrLaunchOutcomeUnknown
+	}
 	if present {
 		meta = sess.meta
 	}
@@ -149,6 +155,14 @@ func (d *Daemon) Delete(id string) error {
 		meta = current.meta
 	}
 	d.mu.Unlock()
+	if meta.WorkerDiscussion != "" {
+		op := strings.TrimPrefix(meta.WorkerAttempt, "vm-child-")
+		if rec, ok := d.idem.Get(op); ok && rec.WorkerLaunchGate && rec.Phase == idempotency.PhasePrepared {
+			if err := d.idem.Fail(op, nil); err != nil {
+				return err
+			}
+		}
+	}
 	// WAL-first: a crash during directory removal must leave a durable deletion event.
 	if _, jerr := d.appendJournal(journal.Record{SessionID: id, Type: journal.TypeDeleted, SessionInstance: d.recordedJournalInstance(meta), Role: meta.Role}); jerr != nil {
 		return jerr

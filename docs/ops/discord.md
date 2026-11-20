@@ -22,6 +22,18 @@ Only messages from the enrolled owner in that one-to-one DM can direct the perso
 
 To set standing instructions for this place, press `o` on the Swarm board, choose **Manager prompt**, and press Enter to save. The prompt is empty by default, accepts up to 1,024 UTF-8 bytes, and applies when a manager wakes.
 
+On upgrade, a running VM dispatcher can authenticate a new worker with its existing per-session hook credential. Some 0.29.5 Codex backends lack this credential. A delegation from such a dispatcher stops before launching a child and reports the missing credential. Let the manager finish and park, then resume the same Discord discussion on the upgraded supervisor. Keep existing workers and discussion history. An unfinished worker without a proven mailbox binding keeps the manager active. Follow its progress in the existing session and let it finish before parking.
+
+`swarm discord status` includes up to 16 recently parked discussions with worker notes for seven days after parking. Their recorded publication IDs and confirmed Discord message IDs remain available after the manager parks, without reopening its native session.
+
+Run `swarm dispatcher-guide` for the worker notification and reply workflow. To expose the same guidance through native skill discovery, install the bundled skill in the dispatcher account. For Codex use `$HOME/.agents/skills`. For Claude use `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills`.
+
+```sh
+skill_dir="$HOME/.agents/skills/swarm-dispatcher"
+mkdir -p "$skill_dir"
+swarm dispatcher-guide --skill > "$skill_dir/SKILL.md"
+```
+
 ## Connect a teammate
 
 On the machine where workers should run, open the default checkout and use the existing app credential:
@@ -205,3 +217,11 @@ swarm discord resume-manual DISCUSSION_ID \
 ```
 
 Find DISCUSSION_ID, the manager session and instance, and the numeric external input count in the discussion’s native status. A changed counter, replacement instance, lost custody or ambiguous native effect refuses reconciliation. Inspect the specific manager on the home dashboard before taking further action. For a native workspace trust prompt, use the provider's own terminal; a Discord instruction cannot grant trust. Installed connectors start the supervisor using its saved owner environment. Run the first teammate installation from the owner's login shell.
+
+### Upgrade and troubleshoot dispatcher notifications
+
+Upgrade the owning supervisor, connector and CLI together. Run `swarm discord doctor --state-dir "$connector"` against the installed place. Keep the original supervisor available for discussions bound there. A pre-upgrade worker keeps its history and ordinary CLI controls. A worker with no verifiable mailbox binding uses the existing status-based workflow. New delegated workers on the upgraded supervisor can send explicit notes.
+
+Inside an eligible worker, inspect a note with `swarm teammate receipt --id MESSAGE_ID`. Retry a lost response with the original ID, kind and text. The supervisor keeps accepted notes across connector downtime. A queued note is waiting for ingestion. Use `swarm discord status --state-dir "$connector"` to inspect the worker attempt, manager admission, retirement operation and Discord publication receipts. Preserve the original receipt while an outcome is uncertain.
+
+Before downgrading, finish active mailbox jobs and their replies with the compatible supervisor and connector. Check for queued notes, pending admissions, retirement claims and uncertain publications. Leave the compatible consumer running while any are unresolved. Keep the supervisor state directory, connector database and session shims in place during the change.

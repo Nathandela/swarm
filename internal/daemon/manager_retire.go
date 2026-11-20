@@ -2,8 +2,12 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
@@ -11,7 +15,35 @@ import (
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
+
+func (d *Daemon) retirementCancellation(local, operation string) string {
+	return filepath.Join(d.sessionDir(local), fmt.Sprintf("cancelled-retirement-%x", sha256.Sum256([]byte(operation))))
+}
+
+// CancelManagerRetire fences delayed copies of this request under the same custody lock as its claim.
+func (d *Daemon) CancelManagerRetire(ctx context.Context, local, conversation, provider string, target persist.ManagerRetirement) error {
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m, ok := d.Get(local)
+	if !ok || m.Role != "manager" || m.ManagerConversationID != conversation || m.AgentType != provider ||
+		m.ShimPID != target.ShimPID || m.ShimStartTime != target.ShimStartTime || m.ManagerRetirement.OperationID != "" {
+		return managerproof.ErrStale
+	}
+	// An empty directory is a durable tombstone once its parent is synced.
+	err = os.Mkdir(d.retirementCancellation(local, target.OperationID), 0700)
+	if err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return syncLaunchDirectories(d.sessionDir(local))
+}
 
 // RetireManager records the checkpoint and signals under the same incarnation
 // fence as the metadata writers. The caller holds both input lanes and the
@@ -32,11 +64,24 @@ func (d *Daemon) RetireManager(ctx context.Context, local, conversation, provide
 		(m.ManagerRetirement.OperationID != "" && m.ManagerRetirement != target) {
 		return false, managerproof.ErrStale
 	}
+	if _, err := os.Stat(d.retirementCancellation(local, target.OperationID)); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return false, err
+		}
+		return false, managerproof.ErrStale
+	}
 	native, err := d.SessionNativeGeneration(local)
 	if err != nil || native != target.NativeGeneration || !d.shimIdentityMatches(m) {
 		return false, managerproof.ErrStale
 	}
 	if m.ManagerRetirement.OperationID == "" {
+		pending, err := workermail.HasPending(d.cfg.StateDir, conversation)
+		if err != nil {
+			return false, err
+		}
+		if pending {
+			return false, managerproof.ErrStale
+		}
 		target.ClaimedAt = time.Now().UTC()
 		m.ManagerRetirement = target
 		written, err := d.saveMetaLocked(&m)

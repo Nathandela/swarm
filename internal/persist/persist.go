@@ -66,6 +66,10 @@ type Meta struct {
 	Role                   string `json:"role,omitempty"`
 	ManagerConversationID  string `json:"manager_conversation_id,omitempty"`
 	ManagerReplayID        string `json:"manager_replay_id,omitempty"`
+	WorkerPromptHash       string `json:"worker_prompt_hash,omitempty"`
+	WorkerDiscussion       string `json:"worker_discussion,omitempty"`
+	WorkerAttempt          string `json:"worker_attempt,omitempty"`
+	WorkerInstance         string `json:"worker_instance,omitempty"`
 	ManagerNativeCLI       bool   `json:"manager_native_cli,omitempty"`
 	ManagerBridgeSocket    string `json:"manager_bridge_socket,omitempty"`
 	ManagerAuthFile        string `json:"manager_auth_file,omitempty"`

@@ -33,14 +33,23 @@ func TestDiscussionNativeTurnRequiresExactSendReceipt(t *testing.T) {
 
 type discussionEvidenceWorker struct {
 	controllerWorkerFixture
-	req schema.InteractionHistoryReq
+	req         schema.InteractionHistoryReq
+	unavailable bool
+	text        string
 }
 
 func (w *discussionEvidenceWorker) NativeHistoryPage(req schema.InteractionHistoryReq) (schema.NativeHistoryPage, error) {
 	w.req = req
 	w.nativeReads++
+	if w.unavailable {
+		return schema.NativeHistoryPage{}, ErrControllerNativeUnavailable
+	}
+	text := w.text
+	if text == "" {
+		text = "verified result"
+	}
 	return schema.NativeHistoryPage{Version: 1, Scope: "authorized_worker_turn", Floor: true,
-		Worker: &schema.WorkerTurnEvidence{TurnID: "exact-turn", State: "completed", Text: "verified result"}}, nil
+		Worker: &schema.WorkerTurnEvidence{TurnID: "exact-turn", State: "completed", Text: text}}, nil
 }
 
 func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testing.T) {
@@ -187,5 +196,96 @@ func TestDiscussionWorkerRejectedSendPreservesPriorWorker(t *testing.T) {
 	st, err := s.Snapshot()
 	if err != nil || st.Workers[workerKey] != worker || st.Actions[key(binding.ConversationID, action.ID)].State != "settled" {
 		t.Fatalf("rejected send changed worker scope or remained executing: %v", err)
+	}
+}
+
+func TestMailboxCompletionRetryKeepsOriginalEvidence(t *testing.T) {
+	c, s, _, binding := newControllerFixture(t)
+	workers := &discussionEvidenceWorker{unavailable: true}
+	c.workers = workers
+	worker := WorkerAssociation{Mailbox: true, VMChild: true, ConversationID: binding.ConversationID,
+		Session: "machine/worker", SessionInstance: "worker-instance", Parent: "original-manager", JobID: "job", AttemptID: "attempt"}
+	input := workerMessageInput{ID: "result-1", Kind: "complete", Text: "worker claim"}
+	src := workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: "codex",
+		Text: input.Text, Kind: input.Kind, NoteID: input.ID, Sequence: 1}
+	receipt, err := c.queueWorkerNote(worker, input, src)
+	if err != nil || receipt.State != "queued" || workers.nativeReads != 1 {
+		t.Fatalf("initial queue: %+v, %v, %d reads", receipt, err, workers.nativeReads)
+	}
+	if scope := workers.req.Worker; scope == nil || scope.Parent != worker.Parent ||
+		scope.SessionInstance != worker.SessionInstance || scope.ManagerConversation != binding.ConversationID ||
+		scope.PromptHash != "" || scope.TurnID != "" || scope.InputID != "" {
+		t.Fatalf("native lookup lost exact original launch scope: %+v", scope)
+	}
+	workers.unavailable = false
+	retry, err := c.queueWorkerNote(worker, input, src)
+	if err != nil || retry != receipt || workers.nativeReads != 1 {
+		t.Fatalf("retry consumed newly available evidence: %+v, %v, %d reads", retry, err, workers.nativeReads)
+	}
+	snapshot, err := s.Snapshot()
+	if err != nil || len(snapshot.Wakes) != 1 || len(snapshot.Events) != 1 {
+		t.Fatalf("replay duplicated work: %d wakes, %d events, %v", len(snapshot.Wakes), len(snapshot.Events), err)
+	}
+	for _, event := range snapshot.Events {
+		var metadata workerNoteMetadata
+		if err := json.Unmarshal(event.Metadata, &metadata); err != nil || metadata.LaunchTurnEvidence != nil {
+			t.Fatalf("duplicate changed stored evidence: %+v, %v", metadata, err)
+		}
+	}
+
+	input.ID, src.NoteID, src.Sequence = "result-2", "result-2", 2
+	if _, err := c.queueWorkerNote(worker, input, src); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = s.Snapshot()
+	if err != nil || workers.nativeReads != 2 {
+		t.Fatalf("new note failed to check available evidence: %v (%d reads)", err, workers.nativeReads)
+	}
+	event := snapshot.Events[key(binding.ConversationID, "worker-message-"+hashValue([]string{worker.Session, worker.SessionInstance, worker.AttemptID, input.ID}))]
+	var metadata workerNoteMetadata
+	if err := json.Unmarshal(event.Metadata, &metadata); err != nil || metadata.LaunchTurnEvidence == nil || metadata.LaunchTurnEvidence.TurnID != "exact-turn" {
+		t.Fatalf("new note lost available proof: %+v, %v", metadata, err)
+	}
+}
+
+func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
+	c, s, _, binding := newControllerFixture(t)
+	c.discussion = &DiscussionScope{VMProjectAccess: true}
+	workers := &discussionEvidenceWorker{text: strings.Repeat("<", 4096)}
+	c.workers = workers
+	worker := WorkerAssociation{Mailbox: true, VMChild: true, ConversationID: binding.ConversationID,
+		Session: "machine/worker", SessionInstance: "worker-instance", Parent: "original-manager", JobID: "job", AttemptID: "attempt"}
+	note := "The issue is " + strings.Repeat(">", 4083)
+	input := workerMessageInput{ID: "result", Kind: "complete", Text: note}
+	src := workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: "codex",
+		Text: note, Kind: input.Kind, NoteID: input.ID, Sequence: 1}
+	if _, err := c.queueWorkerNote(worker, input, src); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Snapshot()
+	if err != nil || len(st.Wakes) != 1 {
+		t.Fatalf("expected one wake: %d, %v", len(st.Wakes), err)
+	}
+	for _, wake := range st.Wakes {
+		admission := Admission{SourceID: "wake:" + wake.ID, Sequence: wake.Admission}
+		prompt, err := c.admissionText(st, admission)
+		if err != nil || len(prompt) > protocol.MaxSendInputText ||
+			!strings.Contains(prompt, "The issue is ") || !strings.Contains(prompt, "swarm_read_note") {
+			t.Fatalf("invalid preview: %d bytes, %v", len(prompt), err)
+		}
+		read := SessionInput{Session: worker.Session, SessionInstance: worker.SessionInstance}
+		raw, err := c.readDiscussionWorkerNote(read, admission)
+		var stored workerNoteMetadata
+		if err != nil || json.Unmarshal(raw, &stored) != nil || stored.Text != note ||
+			stored.LaunchTurnEvidence == nil || stored.LaunchTurnEvidence.Text != workers.text {
+			t.Fatalf("full note read lost data: %v", err)
+		}
+		if _, err = managerToolResponse(raw); err != nil {
+			t.Fatalf("full note does not fit its tool envelope: %v", err)
+		}
+		read.SessionInstance = "different-worker-instance"
+		if _, err = c.readDiscussionWorkerNote(read, admission); !errors.Is(err, ErrStale) {
+			t.Fatalf("foreign worker note read: %v", err)
+		}
 	}
 }

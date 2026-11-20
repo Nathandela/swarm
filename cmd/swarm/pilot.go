@@ -79,7 +79,7 @@ func dispatchPilot(args []string, stdout, stderr io.Writer) int {
 	}
 	caps := []string{protocol.CapJournal, protocol.CapSubscribe, protocol.CapOpenCodeObservation}
 	if fs.NArg() > 0 && (fs.Arg(0) == "send" || fs.Arg(0) == "await") {
-		caps = append(caps, protocol.CapSemanticSend)
+		caps = append(caps, protocol.CapSemanticSend, protocol.CapSemanticTarget)
 	}
 	if fs.NArg() > 0 && fs.Arg(0) == "watch" {
 		caps = append(caps, protocol.CapJournalSubscribeFrom)

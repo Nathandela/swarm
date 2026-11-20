@@ -20,6 +20,7 @@ import (
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/voice"
+	"github.com/Nathandela/swarm/internal/workermail"
 	"golang.org/x/sys/unix"
 )
 
@@ -178,8 +179,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	if err != nil {
 		return nil, err
 	}
-	hash := sha256.Sum256([]byte(strings.Join([]string{r.dir, endpoint, bound.InstallationID, bound.Route.GuildID, bound.Route.ChannelID, bound.ID}, "\x00")))
-	id := hex.EncodeToString(hash[:])
+	id := r.mailDiscussionID(bound, endpoint)
 	if opened := r.discussions[id]; opened != nil {
 		opened.users++
 		if reader != nil {
@@ -190,7 +190,16 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 		return opened, nil
 	}
 	if skipDormant && r.dormant[id] {
-		return nil, nil
+		if !r.vmProjectAccess || settings == "" {
+			return nil, nil
+		}
+		notes, err := workermail.Pending(settings, voice.DiscussionConversationPrefix+id)
+		if err != nil {
+			return nil, err
+		}
+		if len(notes) == 0 {
+			return nil, nil
+		}
 	}
 	delete(r.dormant, id)
 	cfg := r.cfg
@@ -322,6 +331,7 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 		return discord.TeammateNativeStatus{}, err
 	}
 	result := discord.TeammateNativeStatus{
+		Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
 	}
@@ -539,7 +549,7 @@ func projectHistory(page discord.TeammateHistoryPage, invokingMessage string) st
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
 	if r.vmProjectAccess {
-		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Return after dispatch; worker status changes wake you here.\n")
+		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask workers for explicit needs-input and completion notes, then return after dispatch.\n")
 	} else {
 		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
 	}
@@ -596,4 +606,40 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 	}{input.Author, input.Route.MessageID, input.ReplyTo, input.Text})
 	fmt.Fprintf(&msg, "Current human instruction (JSON) %s", body)
 	return msg.String()
+}
+
+func (r *Runtime) mailDiscussionID(b discord.TeammateDiscussion, endpoint string) string {
+	hash := sha256.Sum256([]byte(strings.Join([]string{r.dir, endpoint, b.InstallationID, b.Route.GuildID, b.Route.ChannelID, b.ID}, "\x00")))
+	return hex.EncodeToString(hash[:])
+}
+
+// PendingWorkerDiscussions snapshots the durable pending index once per bound supervisor.
+func (r *Runtime) PendingWorkerDiscussions() (func(discord.TeammateDiscussion) bool, error) {
+	if !r.vmProjectAccess {
+		return nil, nil
+	}
+	dirs := []string{r.managerSettingsDir}
+	if r.previous != nil && r.previous.StateDir != r.managerSettingsDir {
+		dirs = append(dirs, r.previous.StateDir)
+	}
+	byDir := map[string]map[string]bool{}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		pending, err := workermail.Discussions(dir)
+		if err != nil {
+			return nil, err
+		}
+		if len(pending) > 0 {
+			byDir[dir] = pending
+		}
+	}
+	if len(byDir) == 0 {
+		return nil, nil
+	}
+	return func(b discord.TeammateDiscussion) bool {
+		ep, _, dir, err := r.supervisorForDiscussion(b)
+		return err == nil && byDir[dir][voice.DiscussionConversationPrefix+r.mailDiscussionID(b, ep)]
+	}, nil
 }
