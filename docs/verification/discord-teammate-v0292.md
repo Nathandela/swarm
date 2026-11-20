@@ -21,3 +21,10 @@ Two independent unmodified Codex 0.170.0 rehearsals reproduced a specific failur
 Manager-native tool timestamps also establish that the manager published both the opening acknowledgement and the untagged correction acknowledgement before issuing the corresponding worker command. A busy turn can delay when the manager sees the next message; there is no fixed acknowledgement time.
 
 With the final version check and observer cleanup together, the natural native rehearsal took 33.7 seconds. Two physical manager instances shared the original native conversation ID, and the final answer belonged to the new human admission. The observer regression also exercises a failed backend dial and a disconnect before registration. In each case the still-running supervisor released the exited manager's input ledger so recovery could verify it.
+
+| Injected resume failures | Manager history | Acknowledgement after activation | Verified worker result | Other checks |
+| --- | --- | --- | --- | --- |
+| One | Same native thread | 5 s | 47 s | Original worker session and instance, hidden third-file value, one file append |
+| Two | Fresh native thread | 6 s | 53 s | Original worker session and instance, hidden third-file value, one file append |
+
+Both rehearsals used a real Codex manager and worker, a private supervisor and a local publication sink. Each exercised controller restart and duplicate admission. The helper model was optional and was not needed in these runs. The timings are observations from this fixture. Live Discord delivery and the FII production environment were outside the rehearsal.
