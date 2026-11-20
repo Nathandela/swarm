@@ -78,6 +78,9 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `name`             | string          | new session label, carried on `rename`; sanitized + length-capped server-side (P2) |
 | `tag`              | string          | manual grouping label, carried on `set_tag`; empty clears it              |
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
+| `schedule_workspace` | string | absolute directory in a workspace check request or the conflicting provider directory in its reply |
+| `schedule_agent` | string | scheduled agent identifier in a route check request and reply |
+| `schedule_unavailable` | string | reason the requested scheduled agent is unavailable on this host |
 | `schedule_id`      | string          | local job ID on `schedule_run`. The reply carries the occurrence ID and echoes `operation_id`. |
 | `schedule_completion` | object      | local worker receipt on `schedule_complete`; carries run and attempt IDs, credential, summary and artifact links |
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
@@ -733,6 +736,10 @@ actionable and the launch content hash does not bind lineage.
 > Wave R1 refusal-only skeleton of both ops (this commit) answers plain `error`/
 > `op_not_implemented` in the meantime — see the `session_launch` / `composer_send` / ...
 > section below; T9's six-state vocabulary lands with the real handler.
+
+### Schedule editor preflight
+
+The owner socket negotiates `schedule-workspace-check` for `schedule_workspace_check`. The request supplies an absolute path in `schedule_workspace`. The response returns the conflicting live provider workspace or an empty value. The `schedule-route-check` capability enables `schedule_route_check` with `schedule_agent`; its reply echoes the agent and includes `schedule_unavailable` when local discovery detects a problem. Both operations leave sessions and the job catalog unchanged. The remote and worker completion sockets cannot call them. The `schedule-host-time` capability signals support for host-following calendar jobs.
 
 ### `schedule_run`
 

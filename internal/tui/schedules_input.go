@@ -33,8 +33,12 @@ func (m rootModel) updateSchedule(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		s.move(view.budget, view)
 	default:
-		if s.page >= scheduleTask && s.page <= scheduleRoute {
-			next, cmd := m.updateScheduleDraft(k)
+		if s.page == scheduleEditor {
+			rowID := ""
+			if s.sel < len(view.rows) {
+				rowID = view.rows[s.sel].id
+			}
+			next, cmd := m.updateScheduleDraft(k, rowID)
 			updated := next.(rootModel)
 			updated.schedules.reveal(updated.scheduleLayout())
 			return updated, cmd
@@ -80,7 +84,7 @@ func (m rootModel) backSchedule() (tea.Model, tea.Cmd) {
 		return m.leaveSchedules()
 	}
 	switch s.page {
-	case scheduleTask:
+	case scheduleEditor:
 		if s.draftReturn == scheduleJob {
 			s.gotoPage(scheduleJob)
 			return m, nil
@@ -89,8 +93,9 @@ func (m rootModel) backSchedule() (tea.Model, tea.Cmd) {
 			return m.leaveSchedules()
 		}
 		return m.scheduleList(s.archived)
-	case scheduleCalendar, scheduleRoute, scheduleReview:
-		s.gotoPage(s.page - 1)
+	case scheduleEditorEnable, scheduleConvertZone:
+		s.gotoPage(scheduleEditor)
+		return m.checkScheduleEditor()
 	case scheduleJob:
 		return m.scheduleList(s.job.State == schedule.JobArchived)
 	case scheduleHistory, scheduleArchive:
@@ -101,7 +106,7 @@ func (m rootModel) backSchedule() (tea.Model, tea.Cmd) {
 		s.gotoPage(s.templateReturn)
 	case scheduleTemplateEdit:
 		if s.saveDraftTemplate {
-			s.gotoPage(scheduleTask)
+			s.gotoPage(scheduleEditor)
 		} else {
 			s.gotoPage(scheduleTemplates)
 		}
@@ -133,7 +138,8 @@ func (m rootModel) activateSchedule(key string, layout scheduleFrame) (tea.Model
 			s.draft = blankSchedule("")
 			s.draftReturn = scheduleList
 			s.directoryShortcut = false
-			s.gotoPage(scheduleTask)
+			s.gotoPage(scheduleEditor)
+			return m.checkScheduleEditor()
 		case "i":
 			s.gotoPage(scheduleTimerEnable)
 		case "v":
@@ -154,16 +160,12 @@ func (m rootModel) activateSchedule(key string, layout scheduleFrame) (tea.Model
 	case scheduleJob:
 		switch key {
 		case "e":
-			s.draft = newScheduleDraft(s.job.Spec)
-			s.draft.jobID, s.draft.revision = s.job.ID, s.job.RevisionID
-			s.draftReturn = scheduleJob
-			s.gotoPage(scheduleTask)
+			return m.editScheduledJob()
 		case "p":
-			next := schedule.JobPaused
 			if s.job.State == schedule.JobPaused {
-				next = schedule.JobActive
+				return m.editScheduledJob()
 			}
-			return m.scheduleState(next)
+			return m.scheduleState(schedule.JobPaused)
 		case "r":
 			return m.runScheduledJob()
 		case "h":
@@ -171,8 +173,13 @@ func (m rootModel) activateSchedule(key string, layout scheduleFrame) (tea.Model
 		case "x":
 			s.gotoPage(scheduleArchive)
 		}
-	case scheduleReview:
-		return m.saveSchedule()
+	case scheduleEditorEnable:
+		return m.saveSchedule(true, true)
+	case scheduleConvertZone:
+		s.draft.zone = schedule.HostTimeZone
+		s.gotoPage(scheduleEditor)
+		m.selectScheduleRow("zone")
+		return m.checkScheduleEditor()
 	case scheduleArchive:
 		return m.scheduleState(schedule.JobArchived)
 	case scheduleHistory:
@@ -217,13 +224,14 @@ func (m rootModel) activateScheduleTemplate(key, id string) (tea.Model, tea.Cmd)
 		}
 		template = s.templates[i]
 	}
-	if s.templateReturn == scheduleTask {
+	if s.templateReturn == scheduleEditor {
 		s.draft.prompt.set(template.Prompt)
 		if s.draft.name.text == "" {
 			s.draft.name.set(template.Name)
 		}
-		s.gotoPage(scheduleTask)
-		return m, nil
+		s.gotoPage(scheduleEditor)
+		m.selectScheduleRow("prompt")
+		return m.checkScheduleEditor()
 	}
 	s.template = template
 	s.saveDraftTemplate = false
@@ -267,17 +275,17 @@ func (m rootModel) changeScheduleTemplate(remove bool) (tea.Model, tea.Cmd) {
 			return scheduleResultMsg{err: err}
 		}
 		if s.saveDraftTemplate {
-			return scheduleResultMsg{page: scheduleTask}
+			return scheduleResultMsg{page: scheduleEditor}
 		}
 		templates, err := s.catalog.Templates()
 		return scheduleResultMsg{page: scheduleTemplates, templates: templates, err: err}
 	})
 }
 
-func (m *rootModel) pasteSchedule(content string) {
+func (m rootModel) pasteSchedule(content string) (tea.Model, tea.Cmd) {
 	s := &m.schedules
 	if s.busy {
-		return
+		return m, nil
 	}
 	if s.page == scheduleTemplateEdit {
 		if s.sel == 0 {
@@ -285,17 +293,50 @@ func (m *rootModel) pasteSchedule(content string) {
 		} else {
 			s.templatePrompt.insert(schedulePastePrompt(content))
 		}
-		return
+		return m, nil
 	}
-	fields := s.draft.fields(s.page)
-	if s.sel < 0 || s.sel >= len(fields) || fields[s.sel].text == nil {
-		return
+	if s.page != scheduleEditor {
+		return m, nil
 	}
-	field := fields[s.sel]
-	if field.id == "prompt" {
-		field.text.insert(schedulePastePrompt(content))
-	} else {
-		field.text.paste(scheduleSafe(content))
+	rows := m.scheduleLayout().rows
+	if s.sel >= len(rows) {
+		return m, nil
+	}
+	for _, field := range s.draft.fields() {
+		if field.id != rows[s.sel].id || field.text == nil {
+			continue
+		}
+		if field.id == "prompt" {
+			field.text.insert(schedulePastePrompt(content))
+		} else {
+			field.text.paste(scheduleSafe(content))
+		}
+		return m.checkScheduleEditor()
+	}
+	return m, nil
+}
+
+func (m rootModel) editScheduledJob() (tea.Model, tea.Cmd) {
+	s := &m.schedules
+	s.draft = newScheduleDraft(s.job.Spec)
+	s.draft.jobID, s.draft.revision, s.draft.state = s.job.ID, s.job.RevisionID, s.job.State
+	s.draftReturn = scheduleJob
+	s.gotoPage(scheduleEditor)
+	return m.checkScheduleEditor()
+}
+
+func (m rootModel) selectedScheduleRow() string {
+	rows := m.scheduleLayout().rows
+	if m.schedules.sel >= len(rows) {
+		return ""
+	}
+	return rows[m.schedules.sel].id
+}
+
+func (m *rootModel) selectScheduleRow(id string) {
+	rows := m.scheduleLayout().rows
+	if index := slices.IndexFunc(rows, func(row scheduleRow) bool { return id != "" && row.id == id }); index >= 0 {
+		m.schedules.sel = index
 	}
 }
 
@@ -328,14 +369,8 @@ func (m rootModel) scheduleLayout() scheduleFrame {
 		height = 24
 	}
 	s := m.schedules
-	title, rows := s.content(width)
-	if s.page == scheduleRoute && m.scheduleConfig.ValidateRoute != nil {
-		for i, row := range rows {
-			if slices.Contains(scheduleAgents, row.id) && m.scheduleConfig.ValidateRoute(row.id, s.draft.authority) != nil {
-				rows[i].text += " · unavailable with this authority"
-			}
-		}
-	}
+	title, rows := s.content(width, m.agents)
+
 	if s.busy {
 		title += " · Loading"
 	}
@@ -475,8 +510,29 @@ func (m rootModel) updateScheduleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if inBody {
 			active := s.sel == row
 			s.sel = row
-			if active && frame.rows[row].id != "" && (s.page == scheduleList || s.page == scheduleHistory || s.page == scheduleTemplates) {
+			id := frame.rows[row].id
+			if active && id != "" && (s.page == scheduleList || s.page == scheduleHistory || s.page == scheduleTemplates) {
 				onButton = "enter"
+			}
+			if s.page == scheduleEditor {
+				switch {
+				case id == "advanced" || id == "convert-zone" || strings.HasPrefix(id, "save-") || strings.HasPrefix(id, "fallback-"):
+					onButton = "enter"
+				default:
+					for _, field := range s.draft.fields() {
+						if field.id == id && field.choice != nil {
+							label := frame.rows[row].text
+							left := strings.Index(label, "‹")
+							right := strings.LastIndex(label, "›")
+							if left >= 0 && mouse.X == 2+ansi.StringWidth(label[:left]) {
+								onButton = "left"
+							}
+							if right >= 0 && mouse.X == 2+ansi.StringWidth(label[:right]) {
+								onButton = "right"
+							}
+						}
+					}
+				}
 			}
 		}
 		s.mouseTarget, s.mouseX, s.mouseY = onButton, mouse.X, mouse.Y
@@ -488,7 +544,7 @@ func (m rootModel) updateScheduleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		key := s.mouseTarget
 		s.mouseTarget = ""
 		if key != "" && s.mouseX == mouse.X && s.mouseY == mouse.Y && (mouse.Button == tea.MouseNone || mouse.Button == tea.MouseLeft) {
-			if key == onButton || inBody && key == "enter" && s.sel == row {
+			if key == onButton || inBody && s.sel == row && (key == "enter" || key == "left" || key == "right") {
 				return m.updateSchedule(scheduleActionKey(key))
 			}
 		}
@@ -508,8 +564,8 @@ func scheduleActionKey(key string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: rune(key[0]), Text: key}
 	case "ctrl+t":
 		return tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
-	case "ctrl+s":
-		return tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
+	case "ctrl+s", "ctrl+d", "ctrl+e", "ctrl+r":
+		return tea.KeyPressMsg{Code: rune(key[len(key)-1]), Mod: tea.ModCtrl}
 	case "space":
 		return tea.KeyPressMsg{Code: ' ', Text: " "}
 	}

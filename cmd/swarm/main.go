@@ -151,6 +151,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
+	case "schedule-agy-worker":
+		return runScheduleAgyWorker(args[1:], stdout, stderr)
 	case "schedule-receipt-bridge":
 		return runScheduleReceiptBridge(os.Stdin, stdout, stderr)
 	case "schedule":

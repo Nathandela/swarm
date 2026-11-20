@@ -22,13 +22,15 @@ var ErrAdmission = errors.New("scheduled launch refused before starting")
 var ErrWorkspaceBusy = errors.New("scheduled workspace is owned by a running or unconfirmed Swarm session")
 var errStateChanged = errors.New("scheduled occurrence changed")
 
+const startupRejectedDetail = "Worker rejected startup before the opening prompt. Worker stop verified; check the provider login and installation."
+
 type Launch struct {
 	RunID, AttemptID, OperationID, Token      string
 	Agent, Authority, Name, Workspace, Prompt string
 }
 
 type Session struct {
-	Running, NeedsInput, Exhausted, Stopped bool
+	Running, NeedsInput, Exhausted, Stopped, StartupRejected bool
 }
 
 type Backend interface {
@@ -158,6 +160,8 @@ func (e *Engine) observe(run schedule.Occurrence, now time.Time) error {
 		}
 		a.State, a.UpdatedAt = schedule.AttemptStopping, now
 		return e.stop(run, a, session, now)
+	case session.Stopped && session.StartupRejected && !a.PromptStarted:
+		return e.advanceRoute(run, a, startupRejectedDetail, now)
 	case session.Stopped:
 		return e.update(run, a, schedule.OccurrenceIncomplete, schedule.AttemptStopped, "", "Worker exited without a completion receipt; the workspace was kept.", now)
 	case !session.Running:
@@ -375,7 +379,7 @@ func (e *Engine) reserveWorkspace(run schedule.Occurrence) (schedule.Occurrence,
 		return schedule.Occurrence{}, err
 	}
 	if !available {
-		return schedule.Occurrence{}, e.mark(run.ID, schedule.OccurrenceBlocked, "An earlier run owns an overlapping workspace and isolation is unavailable.")
+		return schedule.Occurrence{}, e.mark(run.ID, schedule.OccurrenceBlocked, fmt.Sprintf("Workspace %s overlaps another Swarm session or occurrence. Choose a dedicated checkout for isolation, or wait until it is free.", run.SourceDirectory))
 	}
 	return e.store.UpdateOccurrence(run.ID, func(current *schedule.Occurrence) error {
 		current.SourceDirectory, current.Workspace = run.SourceDirectory, run.Workspace
@@ -392,7 +396,7 @@ func (e *Engine) workspaceAvailable(run schedule.Occurrence) (bool, error) {
 		return false, err
 	}
 	for _, other := range others {
-		if other.ID == run.ID || !e.ownsWorkspace(other) {
+		if other.ID == run.ID || !ownsWorkspace(other) {
 			continue
 		}
 		sameJob := other.JobID == run.JobID && other.State != schedule.OccurrenceReady
@@ -403,7 +407,7 @@ func (e *Engine) workspaceAvailable(run schedule.Occurrence) (bool, error) {
 	return true, nil
 }
 
-func (e *Engine) ownsWorkspace(run schedule.Occurrence) bool {
+func ownsWorkspace(run schedule.Occurrence) bool {
 	if run.Workspace == "" {
 		return false
 	}
@@ -464,6 +468,9 @@ func (e *Engine) handoffPrompt(run schedule.Occurrence) string {
 	for i := len(run.Attempts) - 2; i >= 0; i-- {
 		previous := run.Attempts[i]
 		if previous.State == schedule.AttemptStopped {
+			if previous.Detail == startupRejectedDetail {
+				continue
+			}
 			return Prompt(run.Spec.Prompt) + "\n\nA previous " + previous.Agent + " worker reached a provider usage limit and was verified stopped. " +
 				"It used this same workspace. Inspect the changes and verify any prior external actions before continuing. Preserve existing work. Previous Swarm session: " + previous.SessionID + "." + e.backend.HandoffEvidence(previous.SessionID, previous.ID)
 		}

@@ -90,10 +90,10 @@ func TestScheduleCompletionSocketRejectsOwnerOperations(t *testing.T) {
 	if err != nil || stat.Mode().Perm() != 0600 {
 		t.Fatalf("completion socket must be owner-only: %v, %v", stat, err)
 	}
-	for _, op := range []string{OpList, OpScheduleRun, OpScheduleTick, OpOwnerLaunch} {
+	for _, op := range []string{OpList, OpScheduleRun, OpScheduleTick, OpOwnerLaunch, OpScheduleWorkspace, OpScheduleRoute} {
 		t.Run(op, func(t *testing.T) {
 			raw := rawDial(t, sock)
-			hello := raw.hello(Version, []string{CapSchedule, CapOwnerLaunch, CapScheduleRunID})
+			hello := raw.hello(Version, []string{CapSchedule, CapOwnerLaunch, CapScheduleRunID, CapScheduleWorkspace, CapScheduleRoute, CapScheduleHostTime})
 			if !slices.Equal(hello.Capabilities, []string{CapSchedule}) {
 				t.Fatalf("unexpected completion capabilities: %v", hello.Capabilities)
 			}

@@ -26,7 +26,8 @@ const (
 )
 
 type Store struct {
-	dir string
+	dir      string
+	hostZone hostZoneResolver
 }
 
 // Open opens the private automation catalog under the daemon's state directory.
@@ -49,7 +50,7 @@ func Open(path string) (*Store, error) {
 	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("schedule state directory must be private: %s", dir)
 	}
-	s := &Store{dir: dir}
+	s := &Store{dir: dir, hostZone: systemHostZone}
 	err = s.database(true, func(db *bolt.DB) error {
 		if err := db.View(func(tx *bolt.Tx) error {
 			if tx.Bucket([]byte(tmplBucket)) == nil {
@@ -151,17 +152,23 @@ func eachRecord[T any](tx *bolt.Tx, bucket string, fn func(T) error) error {
 }
 
 func (s *Store) CreateJob(spec JobSpec, now time.Time) (Job, error) {
+	return s.createJob(spec, JobActive, now)
+}
+
+func (s *Store) createJob(spec JobSpec, state JobState, now time.Time) (Job, error) {
 	spec, err := PrepareJob(spec)
 	if err != nil {
 		return Job{}, err
 	}
 	now = now.UTC()
-	if err := validateFuture(spec.Calendar, now); err != nil {
-		return Job{}, err
+	if state == JobActive {
+		if err := s.validateFuture(spec.Calendar, now); err != nil {
+			return Job{}, err
+		}
 	}
 	job := Job{ID: NewID(now), RevisionID: NewID(now), Spec: spec,
-		State: JobActive, CreatedAt: now, UpdatedAt: now}
-	err = s.update(func(tx *bolt.Tx) error { return setRevision(tx, job, now) })
+		State: state, CreatedAt: now, UpdatedAt: now}
+	err = s.update(func(tx *bolt.Tx) error { return s.setRevision(tx, job, now) })
 	return job, err
 }
 
@@ -169,9 +176,28 @@ func (s *Store) EditJob(id string, spec JobSpec, now time.Time) (Job, error) {
 	return s.EditJobRevision(id, "", spec, now)
 }
 
+// SaveJob commits an editor definition and its activation state together.
+// An empty ID creates a job. An edit must identify the revision being replaced.
+func (s *Store) SaveJob(id, expectedRevision string, spec JobSpec, state JobState, now time.Time) (Job, error) {
+	if state != JobActive && state != JobPaused {
+		return Job{}, fmt.Errorf("save requires active or paused state")
+	}
+	if id == "" && expectedRevision == "" {
+		return s.createJob(spec, state, now)
+	}
+	if id == "" || expectedRevision == "" {
+		return Job{}, fmt.Errorf("editing requires a job ID and its revision")
+	}
+	return s.editJob(id, expectedRevision, spec, state, now)
+}
+
 // EditJobRevision applies an edit if expectedRevision still identifies the
 // current definition. An empty expected revision applies it unconditionally.
 func (s *Store) EditJobRevision(id, expectedRevision string, spec JobSpec, now time.Time) (Job, error) {
+	return s.editJob(id, expectedRevision, spec, "", now)
+}
+
+func (s *Store) editJob(id, expectedRevision string, spec JobSpec, state JobState, now time.Time) (Job, error) {
 	spec, err := PrepareJob(spec)
 	if err != nil {
 		return Job{}, err
@@ -189,21 +215,28 @@ func (s *Store) EditJobRevision(id, expectedRevision string, spec JobSpec, now t
 		if expectedRevision != "" && job.RevisionID != expectedRevision {
 			return ErrConflict
 		}
-		if spec.Calendar != job.Spec.Calendar {
-			if err := validateFuture(spec.Calendar, now); err != nil {
+		if state != JobPaused && (spec.Calendar != job.Spec.Calendar || (job.State == JobPaused && state == JobActive)) {
+			if err := s.validateFuture(spec.Calendar, now); err != nil {
 				return err
 			}
 		}
-		old, err := evaluateJob(tx, job, now.Add(-time.Nanosecond), now)
+		old, err := evaluateJob(tx, job, now.Add(-time.Nanosecond), now, s.hostZone)
 		if err != nil {
 			return err
 		}
-		if _, err := saveEvaluation(tx, old, ""); err != nil {
+		skipReason := ""
+		if state == JobPaused {
+			skipReason = "job was paused before this trigger was claimed"
+		}
+		if _, err := saveEvaluation(tx, old, skipReason); err != nil {
 			return err
 		}
 		job.Spec, job.RevisionID, job.UpdatedAt = spec, NewID(now), now
+		if state != "" {
+			job.State = state
+		}
 		result = job
-		return setRevision(tx, job, now)
+		return s.setRevision(tx, job, now)
 	})
 	if err != nil {
 		return Job{}, err
@@ -211,18 +244,18 @@ func (s *Store) EditJobRevision(id, expectedRevision string, spec JobSpec, now t
 	return result, nil
 }
 
-func validateFuture(calendar Calendar, now time.Time) error {
-	next, err := calendar.Next(now.Add(-time.Nanosecond))
+func (s *Store) validateFuture(calendar Calendar, now time.Time) error {
+	rule, err := calendar.compileWith(s.hostZone)
 	if err != nil {
 		return err
 	}
-	if next.IsZero() {
+	if rule.find(now.Add(-time.Nanosecond), false).IsZero() {
 		return fmt.Errorf("schedule has no future trigger")
 	}
 	return nil
 }
 
-func setRevision(tx *bolt.Tx, job Job, now time.Time) error {
+func (s *Store) setRevision(tx *bolt.Tx, job Job, now time.Time) error {
 	if err := putRecord(tx, jobsBucket, job.ID, job); err != nil {
 		return err
 	}
@@ -231,7 +264,7 @@ func setRevision(tx *bolt.Tx, job Job, now time.Time) error {
 	}); err != nil {
 		return err
 	}
-	return putRecord(tx, evalBucket, job.ID, now.Add(-time.Nanosecond))
+	return s.resetCalendarCursor(tx, job, now)
 }
 
 func (s *Store) SetJobState(id string, next JobState, now time.Time) (Job, error) {
@@ -254,7 +287,7 @@ func (s *Store) SetJobState(id string, next JobState, now time.Time) (Job, error
 			return ErrArchived
 		}
 		now = now.UTC()
-		old, err := evaluateJob(tx, job, now.Add(-time.Nanosecond), now)
+		old, err := evaluateJob(tx, job, now.Add(-time.Nanosecond), now, s.hostZone)
 		if err != nil {
 			return err
 		}
@@ -266,7 +299,7 @@ func (s *Store) SetJobState(id string, next JobState, now time.Time) (Job, error
 		if err := putRecord(tx, jobsBucket, id, job); err != nil {
 			return err
 		}
-		return putRecord(tx, evalBucket, id, now.Add(-time.Nanosecond))
+		return s.resetCalendarCursor(tx, job, now)
 	})
 	if err != nil {
 		return Job{}, err
@@ -304,4 +337,17 @@ func get[T any](s *Store, bucket, id string) (T, error) {
 		return err
 	})
 	return item, err
+}
+
+func (s *Store) resetCalendarCursor(tx *bolt.Tx, job Job, now time.Time) error {
+	if job.Spec.Calendar.TimeZone == HostTimeZone {
+		_, zoneID, err := s.hostZone()
+		if err != nil {
+			return err
+		}
+		if err := putRecord(tx, evalBucket, job.ID+"/zone", zoneID); err != nil {
+			return err
+		}
+	}
+	return putRecord(tx, evalBucket, job.ID, now.Add(-time.Nanosecond))
 }

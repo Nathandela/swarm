@@ -31,6 +31,9 @@ import (
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
+	ScheduleAgent           string                   `json:"schedule_agent,omitempty"`
+	ScheduleUnavailable     string                   `json:"schedule_unavailable,omitempty"`
+	ScheduleWorkspace       string                   `json:"schedule_workspace,omitempty"`
 	ScheduleCompletion      *ScheduleCompletion      `json:"schedule_completion,omitempty"`
 	ScheduleID              string                   `json:"schedule_id,omitempty"`
 	ManagerRetireRequest    *ManagerRetireReq        `json:"manager_retire_request,omitempty"`

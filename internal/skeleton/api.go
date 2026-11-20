@@ -647,6 +647,12 @@ func (a *coreAPI) InterruptTurn(machine, operationID string, req protocol.TurnIn
 
 // InteractionHistory makes coreAPI a protocol.InteractionHistorian (Wave R6, M3.1).
 func (a *coreAPI) InteractionHistory(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error) {
+	if records, retained := a.scheduledAgyHistory(session, beforeItem); retained {
+		if limit <= 0 {
+			return nil, false, protocol.CodeInvalidField, fmt.Errorf("interaction history: non-positive limit %d", limit)
+		}
+		return records, true, "", nil
+	}
 	if a.history == nil {
 		return nil, false, "", errors.New("skeleton: this daemon has no interaction-history seam wired")
 	}
@@ -1327,7 +1333,7 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		return persist.Meta{}, err
 	}
 
-	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" || a.core.HermesNativeRequested(resolved)) {
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || (resolved.AgentType == "agy" && resolved.Scheduled == nil) || a.core.HermesNativeRequested(resolved)) {
 		probeEnv := resolved.ClientEnv
 		if a.core.HermesNativeRequested(resolved) {
 			for _, origin := range resolved.HermesOrigins {
@@ -2333,4 +2339,8 @@ func (a *coreAPI) watch() {
 			return
 		}
 	}
+}
+
+func (a *coreAPI) ScheduleWorkspaceConflict(path string) string {
+	return a.core.ScheduleWorkspaceConflict(path)
 }

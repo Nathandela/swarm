@@ -1,5 +1,12 @@
 # Scheduled agent qualification
 
+## Single-page editor qualification on November 20, 2026
+
+- On macOS, an 84×20 terminal displayed the editor and the next firing. Cancelling timer activation and choosing **Save draft** created one paused, host-following job with zero history. The board remained reachable at 24×4.
+- On Linux, Antigravity CLI 1.5.12 delivered a scoped completion receipt and a matching closing message in an isolated Git worktree. Swarm recorded the occurrence as Ready. Opening the completed worker on the board launched the same native conversation in the same worktree. The provider requested trust for the disposable checkout. A native ACP session-load replayed the closing assistant message, which also remained available in Swarm history.
+- A separate Linux run rejected an older agy binary and reached Claude Code. Claude reported a provider quota limit. This test qualified route selection and launch. The November 19 probe below covers successful Claude completion.
+- Regression tests exercise stale editor saves, timer activation failures, old supervisors, host-zone changes, repeated wall times, occupied parent and child workspaces, fallback order, and receipt-socket restrictions.
+
 ## Host probes on November 19, 2026
 
 Disposable Swarm supervisors, private state directories and fixture Git repositories were used on macOS arm64 and the Linux amd64 VM. No colleague VM was contacted.

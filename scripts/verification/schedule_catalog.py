@@ -14,7 +14,7 @@ def verify(binary, root):
     subprocess.run(["git", "init", "-q", repo], check=True)
     subprocess.run(["git", "-C", repo, "-c", "user.name=Schedule QA", "-c",
                     "user.email=qa@localhost", "commit", "--allow-empty", "-qm", "base"], check=True)
-    env = dict(os.environ, SWARM_DAEMON_STATE=str(state))
+    env = dict(os.environ, SWARM_DAEMON_STATE=str(state), SWARM_DAEMON_SOCK=str(root / "swarm.sock"))
 
     def command(*args, stdin=None, check=True):
         return subprocess.run([binary, "schedule", *args], env=env, text=True,
@@ -43,6 +43,12 @@ def verify(binary, root):
     read("templates", "edit", template["id"], "New title", "-", stdin="A revised template")
     assert read("show", job_id)["spec"]["prompt"] == prompt
     assert read("archive", job_id)["state"] == "archived"
+    host_job = read("create", "--name", "Host clock", "--dir", str(repo), "--workspace",
+                    "directory", "--authority", "agent-default", "--agents", "agy,claude",
+                    "--weekdays", "--time", "08:30", "--prompt-file", "-", stdin=prompt)
+    assert host_job["spec"]["calendar"]["time_zone"] == "host"
+    assert host_job["spec"]["agents"] == ["agy", "claude"]
+    assert not read("history", host_job["id"])
     command("templates", "delete", template["id"])
     assert not read("templates", "list")
     assert command("create", "--cron", "invalid", check=False).returncode != 0

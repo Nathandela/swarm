@@ -292,7 +292,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSchedule, CapScheduleRunID,
+	CapSchedule, CapScheduleRunID, CapScheduleWorkspace, CapScheduleHostTime, CapScheduleRoute,
 	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
 }
 
@@ -1419,6 +1419,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleSemanticSend(c)
 	case OpOwnerLaunch:
 		cc.handleOwnerLaunch(c)
+	case OpScheduleRoute:
+		cc.handleScheduleRoute(c)
+	case OpScheduleWorkspace:
+		cc.handleScheduleWorkspace(c)
 	case OpScheduleTick, OpScheduleRun, OpScheduleComplete:
 		cc.handleSchedule(c)
 	case OpOwnerLaunchStatus:
@@ -1551,7 +1555,17 @@ func (s *Server) supportedCaps() []string {
 		if cap == CapOwnerBoundResume && (s.remoteTier || !ownerLaunch || !hasBoundResume || !boundResume.OwnerBoundResumeSupported()) {
 			continue
 		}
-		if (cap == CapSchedule || cap == CapScheduleRunID) && (s.remoteTier || !scheduled) {
+		if cap == CapScheduleRoute {
+			if _, ok := s.d.(scheduleRouteSource); !ok || s.remoteTier || s.completionTier {
+				continue
+			}
+		}
+		if cap == CapScheduleWorkspace {
+			if _, ok := s.d.(scheduleWorkspaceSource); !ok || s.remoteTier || s.completionTier {
+				continue
+			}
+		}
+		if (cap == CapSchedule || cap == CapScheduleRunID || cap == CapScheduleHostTime) && (s.remoteTier || !scheduled) {
 			continue
 		}
 		if (cap == CapOwnerLaunch || cap == CapTeammateWorkerBridge) && (s.remoteTier || !ownerLaunch) {

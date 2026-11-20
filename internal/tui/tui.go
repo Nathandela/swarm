@@ -240,8 +240,9 @@ type rootModel struct {
 	layoutStore LayoutStore
 	layoutSaves *layoutSaveState
 
-	scheduleConfig ScheduleConfig
-	schedules      scheduleModel
+	scheduleConfig           ScheduleConfig
+	scheduleEditorGeneration uint64
+	schedules                scheduleModel
 
 	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
 }
@@ -586,6 +587,12 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scheduleTranscriptMsg:
 		return m.applyScheduleTranscript(msg)
 
+	case schedulePreflightTick:
+		return m.startSchedulePreflight(msg)
+
+	case schedulePreflightResult:
+		return m.finishSchedulePreflight(msg)
+
 	case scheduleResultMsg:
 		return m.applyScheduleResult(msg)
 
@@ -605,7 +612,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case m.screen == screenSchedules:
-			m.pasteSchedule(msg.Content)
+			return m.pasteSchedule(msg.Content)
 		case m.screen == screenLogins && m.logins.mode == "label":
 			m.logins.label.paste(msg.Content)
 		case m.screen == screenOptions && m.options.focus == optionsFocusManagerPrompt:
