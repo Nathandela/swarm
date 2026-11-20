@@ -56,6 +56,7 @@ type Messenger interface {
 	Message(context.Context, Route) (Input, error)
 }
 type Service struct {
+	calls           *dispatcherCalls
 	Config          Config
 	Store           *Store
 	Workers         Workers

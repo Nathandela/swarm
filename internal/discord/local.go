@@ -43,13 +43,15 @@ type LocalWorker struct {
 	Excluded bool `json:"excluded"`
 }
 type LocalStatus struct {
-	ProjectAccess  string          `json:"project_access,omitempty"`
-	Name           string          `json:"name"`
-	InstallationID string          `json:"installation_id"`
-	Connected      bool            `json:"connected"`
-	Workers        []LocalWorker   `json:"workers"`
-	Mode           string          `json:"mode,omitempty"`
-	Teammate       *TeammateStatus `json:"teammate,omitempty"`
+	CallMetrics    *dispatcherCallMetrics `json:"call_metrics,omitempty"`
+	Calls          string                 `json:"calls,omitempty"`
+	ProjectAccess  string                 `json:"project_access,omitempty"`
+	Name           string                 `json:"name"`
+	InstallationID string                 `json:"installation_id"`
+	Connected      bool                   `json:"connected"`
+	Workers        []LocalWorker          `json:"workers"`
+	Mode           string                 `json:"mode,omitempty"`
+	Teammate       *TeammateStatus        `json:"teammate,omitempty"`
 }
 type LocalReply struct {
 	Ref  string `json:"ref"`
@@ -76,7 +78,7 @@ func localMethod(operation string) string {
 	switch operation {
 	case "context", "status", "roster":
 		return http.MethodGet
-	case "reply", "include", "exclude", "propose", "shutdown", "resume-manual":
+	case "reply", "include", "exclude", "propose", "shutdown", "resume-manual", "stop-call":
 		return http.MethodPost
 	}
 	return ""
@@ -157,6 +159,10 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 
 func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
 	status := LocalStatus{ProjectAccess: s.Config.EffectiveProjectAccess(), Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true, Mode: s.Config.Mode}
+	if s.calls != nil {
+		status.Calls = s.calls.status()
+		status.CallMetrics = s.calls.metricsSnapshot()
+	}
 	if connection, ok := s.Messenger.(interface{ Connected() bool }); ok {
 		status.Connected = connection.Connected()
 	}
@@ -212,12 +218,23 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	var err error
-	if s.Config.TeammateMode() && operation != "status" && operation != "shutdown" && operation != "resume-manual" {
+	if s.Config.TeammateMode() && operation != "status" && operation != "shutdown" && operation != "resume-manual" && operation != "stop-call" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "discord: this operation requires legacy mode"})
 		return
 	}
 	switch operation {
+	case "stop-call":
+		if err = decodeLocal(w, r, &struct{}{}); err == nil {
+			if s.calls == nil {
+				err = errors.New("discord: calls are not enabled")
+			} else {
+				s.calls.stopCall()
+				result = struct {
+					Stopped bool `json:"stopped"`
+				}{true}
+			}
+		}
 	case "resume-manual":
 		var input struct {
 			LocalTeammateResumeManual

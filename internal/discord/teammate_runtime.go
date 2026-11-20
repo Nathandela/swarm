@@ -730,6 +730,10 @@ func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, 
 	}
 	t := &teammateConnector{service: s, client: c, manager: m, cursorKey: key, wake: make(chan struct{}, 1)}
 	c.onDispatch = t.gateway
+	if s.Config.Calls != nil {
+		calls := enableDispatcherCalls(ctx, t)
+		defer func() { cancel(); calls.close() }()
+	}
 	if s.Config.Mode == "personal" {
 		c.UsePersonalDMs()
 		verifyCtx, verifyCancel := context.WithTimeout(ctx, 20*time.Second)
