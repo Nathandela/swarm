@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
@@ -387,5 +389,37 @@ func TestTeammateDormantRoutesDoNotExhaustActiveQuota(t *testing.T) {
 	pending, err := s.teammatePending("install")
 	if err != nil || len(pending) != 1 || pending[0].Opening || pending[0].Route.ChannelID != first.Route.ChannelID {
 		t.Fatalf("untagged input %+v err=%v", pending, err)
+	}
+}
+
+func TestIdleSyncRetainsDiagnosticForBlockedHumanMessage(t *testing.T) {
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	const failure = "manager process exited before readiness could be verified, exit code 1"
+	if err := c.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true, Error: failure}); err != nil {
+		t.Fatal(err)
+	}
+	teammateTestEvent(t, c, 1, "MESSAGE_CREATE", teammateTestMessage("202", "201", "77", "check via gcloud", false))
+	pending, err := c.service.Store.teammatePending("install")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending %d, %v", len(pending), err)
+	}
+	var tasks sync.WaitGroup
+	done := make(chan teammateTaskResult, 1)
+	if err := c.schedule(context.Background(), 1, map[string]bool{}, map[string]bool{}, map[string]time.Time{}, map[string]time.Time{}, done, &tasks); err != nil {
+		t.Fatal(err)
+	}
+	tasks.Wait()
+	select {
+	case result := <-done:
+		if result.id != "201" || !result.sync || result.retry {
+			t.Fatalf("idle sync: %+v", result)
+		}
+	default:
+		t.Fatal("idle sync was not scheduled")
+	}
+	b, err := c.service.Store.teammateBindingByID("install", d.ID)
+	if err != nil || b.Error != failure {
+		t.Fatalf("pending input diagnostic %q, %v", b.Error, err)
 	}
 }

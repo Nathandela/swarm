@@ -313,44 +313,116 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 			return discussionActivationError(err)
 		}
 	}
-	req := managerLaunchRequest(d.cfg, d.refs())
-	file := managerIntentName(d.cfg.ConversationID)
-	retiredSource := ""
+	var binding ManagerBinding
+	var err error
 	if conv.Parked {
-		if conv.Retirement == nil {
-			return ErrCorrupt
+		binding, err = d.wakeParked(ctx, st.Generation, conv)
+	} else {
+		req := managerLaunchRequest(d.cfg, d.refs())
+		var selected managerSelection
+		selected, err = bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, managerIntentName(d.cfg.ConversationID), "")
+		if err == nil {
+			binding, err = d.store.BindManager(selected.Binding)
 		}
-		retiredSource = conv.Binding.SessionID
-		req.Options[protocol.OptionResumeFrom] = retiredSource
-		req.ResumeSourceInstance = conv.Binding.SessionInstance
-		req.Manager.RetireOperationID = protocol.ManagerRetireOperationID(*conv.Retirement)
-		file = "resume-" + hashBytes([]byte(req.Manager.RetireOperationID)) + ".json"
 	}
-	selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, retiredSource)
 	if err != nil {
 		return discussionActivationError(err)
-	}
-	var binding ManagerBinding
-	if conv.Parked {
-		if selected.Binding.NativeSessionID != conv.Binding.NativeSessionID || selected.Binding.LoginEpoch != conv.Binding.LoginEpoch || selected.Binding.SessionInstance == conv.Binding.SessionInstance {
-			return ErrStale
-		}
-		binding, err = d.resume(st.Generation, conv, selected.Binding, selected.Runtime.Turn.ExternalInput)
-	} else {
-		binding, err = d.store.BindManager(selected.Binding)
-	}
-	if err != nil {
-		return err
 	}
 	d.idleSince = time.Time{}
 	return d.bind(binding)
 }
 
+func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64, conv Conversation) (ManagerBinding, error) {
+	if conv.Retirement == nil {
+		return ManagerBinding{}, ErrCorrupt
+	}
+	retirement := protocol.ManagerRetireOperationID(*conv.Retirement)
+	suffix := hashBytes([]byte(retirement)) + ".json"
+	for {
+		req := managerLaunchRequest(d.cfg, d.refs())
+		source := conv.Binding.SessionID
+		instance := conv.Binding.SessionInstance
+		stage := 0
+		if prev := conv.FailedResume; prev != nil {
+			stage = prev.Attempt
+			if stage < 1 || stage > 2 || prev.Session == "" || prev.Instance == "" {
+				return ManagerBinding{}, ErrCorrupt
+			}
+			if d.scope.VerifyAudience != nil {
+				if err := d.scope.VerifyAudience(ctx); err != nil {
+					return ManagerBinding{}, err
+				}
+			}
+			source, instance = prev.Session, prev.Instance
+		}
+		file := "resume-" + suffix
+		if stage == 2 {
+			file = "reconstruct-" + suffix
+		} else {
+			req.Options[protocol.OptionResumeFrom] = source
+			req.ResumeSourceInstance = instance
+			req.Manager.RetireOperationID = retirement
+			if stage == 1 {
+				file = "retry-" + suffix
+			}
+		}
+		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
+		if err != nil {
+			var failed *failedResume
+			if stage == 2 || !errors.As(err, &failed) {
+				if errors.Is(err, ErrControllerUncertain) || errors.Is(err, ErrStale) || errors.Is(err, ErrConflict) {
+					return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
+				}
+				return ManagerBinding{}, err
+			}
+			failed.Attempt = stage + 1
+			if err = d.store.update(func(st *State) error {
+				c := st.Conversations[d.cfg.ConversationID]
+				if !sameParkedManager(st, generation, c, conv) {
+					return ErrStale
+				}
+				c.FailedResume = failed
+				putRecord(st, "conversations", &st.Conversations, d.cfg.ConversationID, c)
+				return nil
+			}); err != nil {
+				return ManagerBinding{}, err
+			}
+			conv.FailedResume = failed
+			continue
+		}
+		next := selected.Binding
+		if next.LoginEpoch != conv.Binding.LoginEpoch || next.SessionInstance == conv.Binding.SessionInstance || next.SessionID == conv.Binding.SessionID {
+			return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
+		}
+		if stage == 2 {
+			if next.NativeSessionID == conv.Binding.NativeSessionID {
+				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
+			}
+			old := conv.Binding
+			old.Generation = generation
+			return d.recoverBinding(old, next, selected.Runtime.Turn, true, &conv)
+		}
+		if next.NativeSessionID != conv.Binding.NativeSessionID {
+			return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
+		}
+		return d.resume(generation, conv, next, selected.Runtime.Turn.ExternalInput)
+	}
+}
+func sameParkedManager(st *State, generation uint64, c, previous Conversation) bool {
+	if st.CurrentConversation != previous.Binding.ConversationID || st.Generation != generation || !c.Parked || c.Binding != previous.Binding ||
+		c.Retirement == nil || previous.Retirement == nil || *c.Retirement != *previous.Retirement || c.ManagerGeneration == ^uint64(0) {
+		return false
+	}
+	if c.FailedResume == nil || previous.FailedResume == nil {
+		return c.FailedResume == previous.FailedResume
+	}
+	return *c.FailedResume == *previous.FailedResume
+}
+
 func (d *DiscussionController) resume(generation uint64, previous Conversation, next ManagerBinding, external uint64) (ManagerBinding, error) {
 	err := d.store.update(func(st *State) error {
 		c := st.Conversations[next.ConversationID]
-		if st.CurrentConversation != next.ConversationID || st.Generation != generation || !c.Parked || c.Binding != previous.Binding ||
-			c.Retirement == nil || *c.Retirement != *previous.Retirement || c.ManagerGeneration == ^uint64(0) {
+		if !sameParkedManager(st, generation, c, previous) {
 			return ErrStale
 		}
 		c.ManagerGeneration = max(c.ManagerGeneration, 1) + 1
@@ -358,6 +430,7 @@ func (d *DiscussionController) resume(generation uint64, previous Conversation, 
 		c.Binding = identity(next)
 		c.Parked = false
 		c.Retirement = nil
+		c.FailedResume = nil
 		c.ExternalInput = external
 		c.ExternalObserved = true
 		c.SchedulerPaused = false

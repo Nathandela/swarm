@@ -63,6 +63,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "second.txt"), []byte(steeringProof+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	armResumeFailures := prepareHostedResumeFailures(t, root)
 	socket := filepath.Join(state, "daemon.sock")
 	cmd := exec.Command(bin, "daemon")
 	cmd.Dir = project
@@ -152,14 +153,18 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	reader := func(_ context.Context, _ discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
 		return discord.TeammateHistoryPage{Messages: []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}}, nil
 	}
-	send := func(id, actor, body string) {
+	admit := func(id, actor, body string) error {
 		t.Helper()
 		a := discord.TeammateAdmission{Discussion: thread, OperationID: "input-" + id, Revision: "rev-" + id, Text: body, Route: discord.Route{GuildID: "101", ChannelID: "202", MessageID: id}, Author: discord.Actor{ID: actor, Name: actor}, InvokerID: actor, Authority: discord.AuthorityExternal}
 		if personal {
 			a.Authority = discord.AuthorityOwnerDirect
 			a.Route.GuildID = ""
 		}
-		if err := r.Admit(ctx, a, reader); err != nil {
+		return r.Admit(ctx, a, reader)
+	}
+	send := func(id, actor, body string) {
+		t.Helper()
+		if err := admit(id, actor, body); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -214,7 +219,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	send("301", "402", "What did Alice call our synthetic check? Reply with its name.")
 	wait("cold context answer", 90*time.Second, func() bool {
-		return len(outputs) > 0 && strings.Contains(strings.ToLower(outputs[0].Body), "violet orchard")
+		for _, p := range outputs {
+			if p.AdmissionID == "input-301" && strings.Contains(strings.ToLower(p.Body), "violet orchard") {
+				return true
+			}
+		}
+		return false
 	})
 	if messageMode := os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE"); messageMode == "1" || messageMode == "claude" {
 		reply := "manager-reply-" + hex.EncodeToString(marker[:])
@@ -237,7 +247,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		send("302", "401", "Launch exactly one "+provider+" worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
 			". "+workerFollowup+" Do not tell the worker the answer during creation. "+managerFollowup+reply+
-			". After you receive the worker's actual message, also publish its exact marker in Discord. Do not access the files yourself. Publish a brief acknowledgment now.")
+			". After you receive the worker's actual message, also publish its exact marker in Discord. Do not access the files yourself.")
 		wait("scoped worker message reached the native manager", 180*time.Second, func() bool {
 			for _, p := range outputs {
 				if p.JobID != "" && p.AttemptID != "" && strings.Contains(p.Body, workerMarker) {
@@ -255,13 +265,29 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		return
 	}
-	send("302", "401", "Start one Codex worker in project fixture. Have it wait 15 seconds, read proof.txt, and return its exact text. Publish a short acknowledgement and end this turn. When the worker returns, publish its exact result here. Use only the scoped Swarm tools and leave the file to the worker.")
+	send("302", "401", "Start one Codex worker in project fixture. Have it wait 15 seconds, read proof.txt, and return its exact text. When the worker returns, publish its exact result here. Use only the scoped Swarm tools and leave the file to the worker.")
+	wait("manager acknowledged the human separately from the worker result", 90*time.Second, func() bool {
+		for _, p := range outputs {
+			if p.AdmissionID == "input-302" && p.JobID == "" && p.QuestionID == "" && strings.TrimSpace(p.Body) != "" {
+				return true
+			}
+		}
+		return false
+	})
 	wait("worker launch", 90*time.Second, func() bool { return len(roster()) == 2 })
 	send("303", "402", "Keep the original proof.txt task. Please send the same worker one follow-up: read second.txt and return its exact text. Report both verified results in this thread. Use scoped Swarm tools; do not read either file yourself or start another worker.")
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 	r = open()
+	wait("manager acknowledged the second participant's steering", 90*time.Second, func() bool {
+		for _, p := range outputs {
+			if p.AdmissionID == "input-303" && p.QuestionID == "" && p.SystemCause == "" && strings.TrimSpace(p.Body) != "" && !strings.Contains(p.Body, steeringProof) {
+				return true
+			}
+		}
+		return false
+	})
 	wait("verified asynchronous job result after restart", 150*time.Second, func() bool {
 		for _, p := range outputs {
 			if p.JobID != "" && p.AttemptID != "" && strings.Contains(p.Body, proof) {
@@ -286,6 +312,64 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		return true
 	})
+	if armResumeFailures != nil {
+		old, err := r.Status(thread)
+		if err != nil || len(old.Jobs) != 1 || old.State != "parked" {
+			t.Fatalf("parked fixture: %+v %v", old, err)
+		}
+		verify := armResumeFailures(state, old.ManagerSession)
+		resumeProof := "pine cone " + hex.EncodeToString(marker[:])
+		if err := os.WriteFile(filepath.Join(project, "third.txt"), []byte(resumeProof), 0600); err != nil {
+			t.Fatal(err)
+		}
+		instruction := "Use the same worker as before. Ask it to append one x to count.txt exactly once, read third.txt, and report its exact value here. Leave both files to that worker."
+		admitDeadline := time.Now().Add(90 * time.Second)
+		reopened := false
+		for {
+			err := admit("304", "402", instruction)
+			if err == nil {
+				break
+			}
+			if ctx.Err() != nil || time.Now().After(admitDeadline) {
+				t.Fatal("parked follow-up admission failed", err)
+			}
+			if !reopened {
+				if err := r.Close(); err != nil {
+					t.Fatal(err)
+				}
+				r = open()
+				reopened = true
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+		send("304", "402", instruction)
+		wait("manager acknowledged the recovered follow-up", 90*time.Second, func() bool {
+			for _, p := range outputs {
+				if p.AdmissionID == "input-304" && p.QuestionID == "" && p.SystemCause == "" && strings.TrimSpace(p.Body) != "" && !strings.Contains(p.Body, resumeProof) {
+					return true
+				}
+			}
+			return false
+		})
+		wait("same worker delivered the recovered follow-up", 150*time.Second, func() bool {
+			for _, p := range outputs {
+				if p.JobID == old.Jobs[0].ID && p.AttemptID != "" && strings.Contains(p.Body, resumeProof) {
+					return true
+				}
+			}
+			return false
+		})
+		after, err := r.Status(thread)
+		if err != nil || len(after.Jobs) != 1 || old.Jobs[0].Session != after.Jobs[0].Session || old.Jobs[0].Instance != after.Jobs[0].Instance {
+			t.Fatal("recovery lost worker identity", err)
+		}
+		count, err := os.ReadFile(filepath.Join(project, "count.txt"))
+		if err != nil || strings.TrimSpace(string(count)) != "x" {
+			t.Fatalf("expected one worker effect, got %q: %v", count, err)
+		}
+		verify(after.ManagerSession)
+		return
+	}
 	before := len(outputs)
 	send("304", "402", "What exact value did the worker find in proof.txt earlier? Please quote it.")
 	wait("continued conversation", 90*time.Second, func() bool {

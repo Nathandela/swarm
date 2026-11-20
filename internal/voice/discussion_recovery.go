@@ -49,7 +49,7 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 		if identity(previous) == identity(next) {
 			return original
 		}
-		binding, err := d.recoverBinding(previous, next, native.Turn, false)
+		binding, err := d.recoverBinding(previous, next, native.Turn, false, nil)
 		if err != nil {
 			return err
 		}
@@ -73,7 +73,7 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 		return original
 	}
 	for _, action := range st.Actions {
-		if action.State == "executing" {
+		if action.ConversationID == previous.ConversationID && action.State == "executing" {
 			if _, err := d.controller.reconcileAction(ctx, action); err != nil {
 				return err
 			}
@@ -93,25 +93,35 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	if selected.Binding.SessionID == previous.SessionID || selected.Binding.SessionInstance == previous.SessionInstance {
 		return ErrStale
 	}
-	binding, err := d.recoverBinding(previous, selected.Binding, selected.Runtime.Turn, true)
+	binding, err := d.recoverBinding(previous, selected.Binding, selected.Runtime.Turn, true, nil)
 	if err != nil {
 		return err
 	}
 	return d.bind(binding)
 }
 
-func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, turn protocol.ManagerNativeTurn, reconstructed bool) (ManagerBinding, error) {
+func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, turn protocol.ManagerNativeTurn, reconstructed bool, parked *Conversation) (ManagerBinding, error) {
 	err := d.store.update(func(st *State) error {
 		if err := checkBinding(st, previous); err != nil {
 			return err
 		}
 		id := previous.ConversationID
 		c := st.Conversations[id]
-		if c.Parked || c.Retirement != nil || next.Provider != previous.Provider || next.ConversationID != id || !validBinding(next) {
+		if parked != nil {
+			if !reconstructed || !sameParkedManager(st, previous.Generation, c, *parked) || c.FailedResume == nil || c.FailedResume.Attempt != 2 {
+				return ErrStale
+			}
+		} else if c.Parked || c.Retirement != nil {
+			return ErrConflict
+		}
+		if next.Provider != previous.Provider || next.ConversationID != id || !validBinding(next) {
 			return ErrConflict
 		}
 		if reconstructed {
 			for k, action := range st.Actions {
+				if action.ConversationID != id {
+					continue
+				}
 				switch action.State {
 				case "executing":
 					return ErrControllerUncertain
@@ -146,6 +156,14 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 		c = st.Conversations[id]
 		next.Generation = st.Generation
 		c.Binding, c.CustodyLost = identity(next), false
+		if reconstructed {
+			c.NeedsHandoff = true
+		}
+		if parked != nil {
+			c.Parked = false
+			c.Retirement = nil
+			c.FailedResume = nil
+		}
 		manualActivity := !reconstructed && (turn.ExternallySteered || c.ExternalObserved && c.ExternalInput != turn.ExternalInput)
 		c.ExternalObserved, c.ExternalInput = true, turn.ExternalInput
 		c.SchedulerPaused = manualActivity || !reconstructed && c.SchedulerPaused
@@ -162,7 +180,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				return err
 			}
 			p := Publication{ID: "continuity-" + hashValue(identity(previous)), ConversationID: id, OutputSequence: sequence, DiscussionSource: DiscussionOutputSource{SystemCause: "manager_continuity_gap"},
-				Text: "I recovered this discussion after the previous manager exited. Its native conversation history could not be resumed. I kept the discussion and tracked jobs, and I will not replay uncertain work."}
+				Text: "Swarm started a replacement manager in this thread. The previous manager’s native history was unavailable. Queued messages and tracked jobs were preserved. Actions with uncertain outcomes remain on hold."}
 			p.TextHash = hashBytes([]byte(p.Text))
 			putRecord(st, "publications", &st.Publications, key(id, p.ID), p)
 		}

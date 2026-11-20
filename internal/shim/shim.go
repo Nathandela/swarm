@@ -748,6 +748,18 @@ var signalNames = map[syscall.Signal]string{
 	syscall.SIGBUS:  "SIGBUS",
 }
 
+// SignalNumber returns the signal only when both fields corroborate a signal exit.
+func (e ExitInfo) SignalNumber() int {
+	if e.ExitCode <= 128 || e.ExitCode > 255 || e.ExitSignal == "" {
+		return 0
+	}
+	n := e.ExitCode - 128
+	if e.ExitSignal != signalName(syscall.Signal(n)) {
+		return 0
+	}
+	return n
+}
+
 func signalName(sig syscall.Signal) string {
 	if n, ok := signalNames[sig]; ok {
 		return n

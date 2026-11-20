@@ -263,6 +263,8 @@ type SessionView struct {
 	ScheduledCompleted    bool   `json:"scheduled_completed,omitempty"`
 	Role                  string `json:"role,omitempty"`
 	ManagerConversationID string `json:"manager_conversation_id,omitempty"`
+	ManagerExitCode       *int   `json:"manager_exit_code,omitempty"`
+	ManagerExitSignal     int    `json:"manager_exit_signal,omitempty"`
 	// Resume projection affects roster visibility, never the raw event identity.
 	RosterHidden   bool          `json:"roster_hidden,omitempty"`
 	Supersedes     []string      `json:"supersedes,omitempty"`

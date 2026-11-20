@@ -83,8 +83,10 @@ const (
 
 // OperationOutcomeView is the operation_status reply body.
 type OperationOutcomeView struct {
-	State     string `json:"state"`
-	SessionID string `json:"session_id,omitempty"`
+	// Owner launch status only: the exact resumed manager exited before any proved manager input.
+	FailedManagerInstance string `json:"failed_manager_instance,omitempty"`
+	State                 string `json:"state"`
+	SessionID             string `json:"session_id,omitempty"`
 }
 
 // ActivityRecord is one remote-originated action's audit entry (ADR-007 D10): every

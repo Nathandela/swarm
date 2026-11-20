@@ -2,10 +2,13 @@ package teammatemanager
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/discord"
 )
 
@@ -129,6 +132,25 @@ func TestPersonalDiscussionPinnedToOneDMAndOwner(t *testing.T) {
 		d.Route = route
 		if _, err := r.discussion(d, nil, false); err == nil {
 			t.Fatalf("accepted wrong destination %+v", route)
+		}
+	}
+}
+
+func TestDiscussionAcknowledgementFitsStandingInstructionsAndHumanText(t *testing.T) {
+	r := &Runtime{projects: map[string]string{"fixture": "/work/fixture", "other": "/work/other"}}
+	var page discord.TeammateHistoryPage
+	for i := range 50 {
+		page.Messages = append(page.Messages, discord.TeammateHistoryMessage{ContextMessage: discord.ContextMessage{ID: fmt.Sprint(i), Text: strings.Repeat("prior ", 20)}})
+	}
+	for _, size := range []int{990, 2000} {
+		input := discord.TeammateAdmission{Route: discord.Route{MessageID: "100"}, Author: discord.Actor{ID: "42", Name: "Alice"}, Text: strings.Repeat("x", size)}
+		body := r.prompt(input, page, "thread", nil)
+		full := "Local manager starting instructions\n" + strings.Repeat("y", 1024) + "\n\nCurrent input\nApproved project for new work \"/work/fixture\"\n" + body
+		if !strings.Contains(body, input.Text) || !strings.Contains(body, "final=false") {
+			t.Fatal("human text or acknowledgement guidance lost")
+		}
+		if _, err := claudeinput.ManagerEnvelope(strings.Repeat("a", 64), full); err != nil {
+			t.Fatalf("message size %d exceeded native budget: %d bytes before envelope", size, len(full))
 		}
 	}
 }

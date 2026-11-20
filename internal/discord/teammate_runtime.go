@@ -618,7 +618,8 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 			if err := errors.Join(repairErr, noticeErr, managerErr, ackErr, compactErr, outputErr); err != nil {
 				return err
 			}
-			if b.Error != "" {
+			// A successful idle sync can interleave with retries of a blocked human message.
+			if b.Error != "" && !predecessors[b.Route.ChannelID] {
 				if err := store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) { current.Error = "" }); err != nil {
 					return err
 				}

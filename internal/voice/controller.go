@@ -296,6 +296,9 @@ func (c *Controller) Tick(ctx context.Context) error {
 				return err
 			}
 			nonce := hex.EncodeToString(nonceBytes[:])
+			if c.discussion != nil && st.Conversations[c.binding.ConversationID].NeedsHandoff {
+				text = discussionHandoff(st, a, text, c.binding.Provider, nonce)
+			}
 			for _, w := range st.Wakes {
 				if w.ConversationID == c.binding.ConversationID && w.Admission == a.Sequence {
 					if protocol.SemanticOperationReplayable(w.OperationID, time.Now()) {

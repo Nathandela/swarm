@@ -294,6 +294,9 @@ func mergeExit(m persist.Meta, ei shim.ExitInfo) persist.Meta {
 	m.Status.Process = status.ProcessExited
 	code := ei.ExitCode
 	m.ExitCode = &code
+	if m.Role == "manager" {
+		m.ManagerExitSignal = ei.SignalNumber()
+	}
 	if !ei.FinishedAt.IsZero() {
 		m.LastActivity = ei.FinishedAt
 	}
