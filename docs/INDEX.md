@@ -28,7 +28,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
-- [Personal and team Discord dispatcher calls](specifications/discord-dispatcher-calls.md) — integration design, development and release gates, [encrypted media evidence](verification/discord-dispatcher-calls-media.md), and [operator setup](ops/discord.md#opt-in-to-dispatcher-calls).
+- [Personal and team Discord dispatcher calls](specifications/discord-dispatcher-calls.md) — integration design, development and release gates, [qualification results](verification/discord-dispatcher-calls.md), and [operator setup](ops/discord.md#opt-in-to-dispatcher-calls).
 - [On-demand Discord teammate manager](specifications/discord-teammate-manager.md) — interaction, native lifecycle, delegated work, [plan spikes and reviews](verification/discord-teammate-manager.md), and [implementation qualification](verification/discord-teammate-implementation.md). See the [durable dispatcher delivery plan](specifications/discord-dispatcher-delivery-plan.md) for ordinary worker notifications, retirement recovery and dispatcher guidance.
 
 - [Broader voice manager integration](verification/voice-manager/controller-integration.md) — native turns, durable worker receipts, desktop and SSH, device enrollment, the Apple binding foundation, and qualification boundaries. [Operator commands](operations/voice.md).

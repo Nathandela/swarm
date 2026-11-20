@@ -1,5 +1,7 @@
 # Personal and team dispatcher calls
 
+For completed tests, timings and remaining release gates, see the [qualification record](../verification/discord-dispatcher-calls.md).
+
 ## Outcome and scope
 
 An owner enters a configured ordinary guild voice room to speak naturally to the existing personal Discord dispatcher. The written conversation continues in that owner’s DM. An authorized teammate explicitly invites the dispatcher from an existing linked team discussion. A team hears answers and can address it by saying “Dispatcher”; unaddressed conversation creates no native input. The team thread is the canonical written destination. A bot DM phone call is outside Discord's bot contract. No new manager, shell execution path, public HTTP listener, production credentials, release tag or changes to worker delivery are required. Base b3ac49c includes the merged durable dispatcher delivery change.
@@ -59,7 +61,7 @@ The Go coordinator is in `internal/discord/dispatcher_calls.go`. It consumes fre
 
 A team invitation and participant consents must be fresh messages in the actual linked discussion. Await an authoritative roster, require every listener to be a permitted speaker and current thread member, compare the native MLS roster to that audience, and expire the entire generation at the earliest consent deadline. An owner can suspend calls immediately with `swarm discord stop-call`. Restarting the connector re-enables configured calls. A successful Gateway text resume can precede an authoritative voice snapshot. Continue text and display voice as waiting until a fresh guild snapshot, or restart the connector.
 
-The persistent GPT-Live client receives personal audio and addressed team speech. Finalized isolated transcription supplies the authorized words in both modes. Team chatter can reach the transcription service for address detection after all participants consent. Team addressing starts with “Dispatcher” and a vocative separator. An ambiguous or overlapping request needs another turn. The published readout uses a separate `gpt-realtime-2.1-mini` response with only the authorized manager publication as input. Compare the completed response transcript before releasing PCM. The original GPT-Live readout lost a distinguishing word on both personal and team hosted trials. Exact written publications continue in the DM or linked thread. No microphone recording is retained.
+The persistent GPT-Live client receives personal audio and addressed team speech. Finalized isolated transcription supplies the authorized words in both modes. Team chatter can reach the transcription service for address detection after all participants consent. Team addressing starts with an explicit “Hey Dispatcher” or “Dispatcher” and a vocative separator. An ambiguous or overlapping request needs another turn. The published readout uses a separate `gpt-realtime-2.1-mini` response with only the authorized manager publication as input. Compare the completed response transcript before releasing PCM. The original GPT-Live readout lost a distinguishing word on both personal and team hosted trials. Exact written publications continue in the DM or linked thread. No microphone recording is retained.
 
 |Scenario|Operator procedure|Pass evidence|
 |---|---|---|
