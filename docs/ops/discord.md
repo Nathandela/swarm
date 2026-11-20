@@ -139,6 +139,15 @@ The owner authorized a local mock Discord server for this delivery. Its real Gat
 
 The current native manager options are Codex and Claude on qualified versions. The teammate can obtain exact results from newly created Codex and qualified Claude workers. Use Codex for follow-up steering. A busy Codex worker can receive a queued instruction when its original attempt can safely accept a fresh native input. Unsupported providers or an ambiguous worker turn require operator attention. The legacy adapter roster is independent of this qualification.
 
+A delegated worker can queue a progress note, blocker, or clarification for its own manager from the worker's shell.
+
+```sh
+swarm teammate message --text 'Which fixture should I use?'
+```
+
+The command returns a queue receipt with a message ID. If the receipt is uncertain, retry the same text with `--id MESSAGE_ID`. A parked manager can wake for the note. The manager uses scoped `swarm_send` to reply to the exact worker session and instance. A blocked worker should finish its current turn so Codex can accept the reply when idle. Workers report final results in their native replies, which the manager verifies before reporting completion.
+
+
 If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:
 
 ```sh

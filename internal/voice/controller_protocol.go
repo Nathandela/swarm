@@ -103,6 +103,9 @@ func (p *ProtocolControllerClient) LaunchOperation(operation string, req protoco
 	if req.ResumeSourceInstance != "" {
 		caps = append(caps, protocol.CapOwnerBoundResume)
 	}
+	if req.WorkerBridge != "" {
+		caps = append(caps, protocol.CapTeammateWorkerBridge)
+	}
 	result, err := controllerOwnerCall(p, p.ctx, 100*time.Second, caps, func(c *protocol.Client) (launchResult, error) {
 		id, name, err := c.LaunchOperation(operation, req)
 		return launchResult{id, name}, err

@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	OpOwnerLaunch       = "owner_launch"
-	OpOwnerLaunchStatus = "owner_launch_status"
-	CapOwnerLaunch      = "owner-launch"
-	CapOwnerBoundResume = "owner-bound-resume"
+	OpOwnerLaunch           = "owner_launch"
+	OpOwnerLaunchStatus     = "owner_launch_status"
+	CapOwnerLaunch          = "owner-launch"
+	CapOwnerBoundResume     = "owner-bound-resume"
+	CapTeammateWorkerBridge = "teammate-worker-bridge"
 )
 
 // ErrOwnerResumeStaleSource proves the exact resume source was refused before launch.
@@ -88,6 +89,9 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 	}
 	if req.Manager != nil && req.Manager.RetireOperationID != "" && !slices.Contains(c.caps, CapManagerRetire) {
 		return "", "", errors.New("protocol: parked manager resume was not negotiated")
+	}
+	if req.WorkerBridge != "" && !slices.Contains(c.caps, CapTeammateWorkerBridge) {
+		return "", "", errors.New("protocol: teammate worker messages require an updated daemon")
 	}
 	if req.ResumeSourceInstance != "" && !slices.Contains(c.caps, CapOwnerBoundResume) {
 		return "", "", errors.New("protocol: instance-bound owner resume was not negotiated")
@@ -182,6 +186,10 @@ func (cc *clientConn) handleOwnerLaunch(c Control) {
 	}
 	if c.Launch.ResumeSourceInstance != "" && !cc.hasCap(CapOwnerBoundResume) {
 		cc.replyErrorCode("instance-bound owner resume was not negotiated", CodeCapabilityRefused)
+		return
+	}
+	if c.Launch.WorkerBridge != "" && !cc.hasCap(CapTeammateWorkerBridge) {
+		cc.replyErrorCode("teammate-worker-bridge capability was not negotiated", CodeCapabilityRefused)
 		return
 	}
 	unlock := cc.srv.lockComposerOperation(c.OperationID)

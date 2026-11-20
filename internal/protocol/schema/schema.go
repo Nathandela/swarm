@@ -404,10 +404,11 @@ type PairingControl struct {
 	Failure string `json:"failure,omitempty"`
 }
 
-// LaunchReq is a client's request to launch a new session. Every field is
-// re-validated server-side (E6.6) before it reaches the DaemonAPI.
+// WorkerBridgeEnv is injected only into worker processes launched with a bridge capability.
 const WorkerBridgeEnv = "SWARM_TEAMMATE_WORKER_BRIDGE"
 
+// LaunchReq is a client's request to launch a new session. Every field is
+// re-validated server-side (E6.6) before it reaches the DaemonAPI.
 type LaunchReq struct {
 	WorkerBridge         string            `json:"worker_bridge,omitempty"`
 	ResumeSourceInstance string            `json:"resume_source_instance,omitempty"`

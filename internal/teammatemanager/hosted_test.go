@@ -191,12 +191,28 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	})
 	if os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE") == "1" {
 		reply := "manager-reply-" + hex.EncodeToString(marker[:])
-		workerCommand := fmt.Sprintf("%q teammate message --text 'What exact string should I write to reply.txt?'", bin)
+		var workerNonce [8]byte
+		if _, err := rand.Read(workerNonce[:]); err != nil {
+			t.Fatal(err)
+		}
+		workerMarker := "worker-question-" + hex.EncodeToString(workerNonce[:])
+		if err := os.WriteFile(filepath.Join(project, "question.txt"), []byte(workerMarker+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		workerCommand := fmt.Sprintf(`%q teammate message --text "My marker is $(cat question.txt). What exact string should I write to reply.txt?"`, bin)
 		send("302", "401", "Launch exactly one Codex worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
 			". Tell the worker to finish its native turn after queuing the question and wait for your separate follow-up. Do not tell the worker the answer during creation. "+
 			"When you receive its actual message as a new turn, reply to that exact worker with swarm_send. Ask it to write this exact value to reply.txt: "+reply+
-			". Do not write the file yourself. Publish a brief acknowledgment now, and report the completed worker result after verifying it.")
-		wait("native worker received a reply to its scoped message", 180*time.Second, func() bool {
+			". After you receive the worker's actual message, also publish its exact marker in Discord. Do not access the files yourself. Publish a brief acknowledgment now.")
+		wait("scoped worker message reached the native manager", 180*time.Second, func() bool {
+			for _, p := range outputs {
+				if p.JobID != "" && p.AttemptID != "" && strings.Contains(p.Body, workerMarker) {
+					return true
+				}
+			}
+			return false
+		})
+		wait("native worker received a reply to its scoped message", 90*time.Second, func() bool {
 			raw, err := os.ReadFile(filepath.Join(project, "reply.txt"))
 			return err == nil && strings.TrimSpace(string(raw)) == reply
 		})

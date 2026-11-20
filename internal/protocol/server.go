@@ -293,7 +293,7 @@ var serverCaps = []string{
 	CapContextGuardSettings,
 	CapLoginsManage,
 	CapSchedule, CapScheduleRunID,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapManagerLaunch, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1554,7 +1554,7 @@ func (s *Server) supportedCaps() []string {
 		if (cap == CapSchedule || cap == CapScheduleRunID) && (s.remoteTier || !scheduled) {
 			continue
 		}
-		if cap == CapOwnerLaunch && (s.remoteTier || !ownerLaunch) {
+		if (cap == CapOwnerLaunch || cap == CapTeammateWorkerBridge) && (s.remoteTier || !ownerLaunch) {
 			continue
 		}
 		if cap == CapNativeRequests && !nativeDecisions {

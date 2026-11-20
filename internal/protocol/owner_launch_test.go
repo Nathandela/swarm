@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,11 +33,11 @@ func TestOwnerLaunchRefusesUnnegotiatedAndRemoteBeforeCustody(t *testing.T) {
 		caps := []string{}
 		if remote {
 			sock = serveRemoteAPI(t, b)
-			caps = []string{CapRemoteGateway, "owner-launch"}
+			caps = []string{CapRemoteGateway, CapOwnerLaunch, CapTeammateWorkerBridge}
 		}
 		raw := rawDial(t, sock)
 		hello := raw.hello(Version, caps)
-		if slices.Contains(hello.Capabilities, "owner-launch") {
+		if slices.Contains(hello.Capabilities, CapOwnerLaunch) || slices.Contains(hello.Capabilities, CapTeammateWorkerBridge) {
 			t.Fatal("owner capability offered to remote")
 		}
 		raw.writeControl(Control{Op: "owner_launch_status", EndpointID: hello.EndpointID, SubjectOperationID: "launch:old"})
@@ -92,6 +93,7 @@ func TestOwnerLaunchHashBindsEveryRequestField(t *testing.T) {
 		func(r *LaunchReq) { r.Supervision = "manual" },
 		func(r *LaunchReq) { r.InitialPrompt = "new task" },
 		func(r *LaunchReq) { r.ResumeSourceInstance = "different-incarnation" },
+		func(r *LaunchReq) { r.WorkerBridge = "/tmp/bridge.sock:" + strings.Repeat("ab", 32) },
 	} {
 		changed := req
 		mutate(&changed)
@@ -148,5 +150,42 @@ func TestOwnerBoundResumeNegotiatesAndPreservesStaleInstanceRefusal(t *testing.T
 				t.Fatalf("owner dispatch changed exact source authority: %+v", spec)
 			}
 		}
+	}
+}
+
+func TestTeammateWorkerBridgeRequiresNegotiatedOwnerDelegate(t *testing.T) {
+	b := &boundResumeOwnerStub{ownerLaunchStub: &ownerLaunchStub{durableComposerStub: newDurableComposerStub()}, seen: make(chan daemon.LaunchSpec, 1)}
+	sock := serveOwnerAPI(t, b)
+	id, err := NewLaunchOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := LaunchReq{Agent: "codex", Cwd: t.TempDir(), Cols: 80, Rows: 24,
+		SpawnedFrom: "manager", WorkerBridge: "/tmp/bridge.sock:" + strings.Repeat("ab", 32)}
+	c, err := Dial(sock, []string{CapOwnerLaunch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = c.LaunchOperation(id, req); err == nil || len(b.seen) != 0 {
+		t.Fatalf("worker bridge reached daemon without negotiated support: %v", err)
+	}
+	_ = c.Close()
+	c, err = Dial(sock, []string{CapOwnerLaunch, CapTeammateWorkerBridge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if _, _, err = c.LaunchOperation(id, req); err == nil || len(b.seen) != 0 {
+		t.Fatalf("a non-delegating launch carried a bridge: %v", err)
+	}
+	req.SpawnIntent = SpawnIntentDelegate
+	_, _, _ = c.LaunchOperation(id, req)
+	select {
+	case spec := <-b.seen:
+		if spec.WorkerBridge != req.WorkerBridge {
+			t.Fatal("owner dispatch lost the worker bridge capability")
+		}
+	default:
+		t.Fatal("qualified delegated launch did not reach the daemon")
 	}
 }
