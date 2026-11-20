@@ -65,6 +65,7 @@ type TeammateDiscussion struct {
 }
 
 type TeammateAdmission struct {
+	AttachmentManifest                   string `json:",omitempty"`
 	RequireMention                       bool
 	Supersedes                           string
 	Discussion                           TeammateDiscussion

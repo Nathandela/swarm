@@ -55,7 +55,10 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 	result.ManagerSession, result.ManagerInstance, result.Project = c.Binding.SessionID, c.Binding.SessionInstance, c.Project
 	switch {
 	case c.Parked:
-		if c.FailedResume != nil {
+		if c.Retirement != nil && c.Retirement.Replacement != "" && c.ReplacementAfter != 0 && c.ReplacementAfter > time.Now().Unix() {
+			result.State = "waiting"
+			result.Diagnostic = replacementRetryError(c.ReplacementAfter).Error()
+		} else if c.FailedResume != nil {
 			result.Diagnostic = c.FailedResume.Diagnostic
 		}
 	case c.Retirement != nil:

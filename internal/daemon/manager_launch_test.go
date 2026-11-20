@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
@@ -162,5 +163,37 @@ func TestNativeCLIManagerLaunchUsesActualOwnerEndpoint(t *testing.T) {
 	}
 	if !m.ManagerNativeCLI || slices.Contains(lc.Env, EnvStateDir+"=/wrong-state") || slices.Contains(lc.Env, EnvSocket+"=/wrong-socket") {
 		t.Fatal("wrong launcher identity")
+	}
+}
+
+func TestConcurrentDiscordManagerLaunchHasOnePhysicalOwner(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+	killAllSessions(t, d)
+	spec := announceSpec(t, t.TempDir()+"/pid")
+	spec.AgentType = "claude"
+	spec.CLIIdentity = &persist.CLIIdentity{Path: spec.Argv[0], Version: "2.1.319"}
+	spec.Manager = &ManagerLaunchSpec{NativeCLI: true, ConversationID: "discord-teammate-competing-claims", Command: cfg.ShimBinary}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	start := make(chan struct{})
+	for range 2 {
+		wg.Go(func() { <-start; _, err := d.Launch(spec); results <- err })
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var winners, refused int
+	for err := range results {
+		if err == nil {
+			winners++
+		} else if errors.Is(err, ErrDiscussionManagerOwned) {
+			refused++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if winners != 1 || refused != 1 {
+		t.Fatalf("simultaneous owners: winners=%d refused=%d", winners, refused)
 	}
 }

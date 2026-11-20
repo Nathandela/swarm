@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -56,14 +59,21 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 		}
 		return d.bind(binding)
 	}
+	if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+		return d.inputHold(ErrDiscussionDirectInputHeld, err)
+	}
 	if !discussionRecoverableBindingError(err) {
 		return original
 	}
+	errFromRuntime := err
 	rows, err := d.runtime.List()
 	if err != nil {
 		return err
 	}
 	if !discussionManagerExited(rows, runtimeBinding(previous)) {
+		if errors.Is(original, managerproof.ErrQuarantined) && errors.Is(errFromRuntime, managerproof.ErrQuarantined) {
+			return d.startReplacement(ctx, schema.ManagerReplaceCustody)
+		}
 		return ErrControllerUncertain
 	}
 	st, err := d.store.Snapshot()
@@ -73,9 +83,17 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	if !discussionPending(st) {
 		return original
 	}
+	reqExit := protocol.ManagerRetireReq{Binding: runtimeBinding(previous), Generation: max(st.Conversations[previous.ConversationID].ManagerGeneration, 1), Checkpoint: hashValue(identity(previous)), Replacement: schema.ManagerReplaceExited, ExpectedTurn: protocol.ManagerNativeTurn{State: "unknown"}}
+	receipt, err := d.runtime.ManagerRetire(ctx, reqExit, true)
+	if err != nil {
+		return err
+	}
+	if receipt.OperationID != protocol.ManagerRetireOperationID(reqExit) || receipt.State != "retired" {
+		return ErrControllerUncertain
+	}
 	for _, action := range st.Actions {
 		if action.ConversationID == previous.ConversationID && action.State == "executing" {
-			if _, err := d.controller.reconcileAction(ctx, action); err != nil {
+			if _, err := d.controller.reconcileAction(ctx, action); err != nil && !errors.Is(err, ErrControllerUncertain) {
 				return err
 			}
 		}
@@ -85,20 +103,20 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 			return err
 		}
 	}
-	req := managerLaunchRequest(d.cfg, d.refs())
-	intent := "reconstruct-" + hashValue(identity(previous)) + ".json"
-	selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, intent, previous.SessionID)
-	if err != nil {
-		return err
-	}
-	if selected.Binding.SessionID == previous.SessionID || selected.Binding.SessionInstance == previous.SessionInstance {
-		return ErrStale
-	}
-	binding, err := d.recoverBinding(previous, selected.Binding, selected.Runtime.Turn, true, nil)
-	if err != nil {
-		return err
-	}
-	return d.bind(binding)
+	// Persist the proved natural exit just like a completed retirement, so a
+	// service restart or unavailable login pool reuses the same replacement intent.
+	return d.store.update(func(current *State) error {
+		if err := checkBinding(current, previous); err != nil {
+			return err
+		}
+		c := current.Conversations[previous.ConversationID]
+		if c.Retirement != nil || c.Parked {
+			return ErrConflict
+		}
+		c.Retirement, c.Parked = &reqExit, true
+		putRecord(current, "conversations", &current.Conversations, previous.ConversationID, c)
+		return nil
+	})
 }
 
 func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, turn protocol.ManagerNativeTurn, reconstructed bool, parked *Conversation) (ManagerBinding, error) {
@@ -111,7 +129,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 		if parked != nil {
 			migration := d.cfg.VMProjectAccess && !previous.NativeCLI && next.NativeCLI
 			exhausted := c.FailedResume != nil && c.FailedResume.Attempt == 2
-			if !reconstructed || !sameParkedManager(st, previous.Generation, c, *parked) || (!migration && !exhausted) {
+			if !reconstructed || !sameParkedManager(st, previous.Generation, c, *parked) || (!migration && !exhausted && parked.Retirement.Replacement == "") {
 				return ErrStale
 			}
 		} else if c.Parked || c.Retirement != nil {
@@ -126,8 +144,6 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 					continue
 				}
 				switch action.State {
-				case "executing":
-					return ErrControllerUncertain
 				case "prepared":
 					action.State, action.Receipt, action.SettledAt = "settled", json.RawMessage(`{"state":"rejected","reason":"manager exited before action dispatch"}`), d.now().UTC()
 					putRecord(st, "actions", &st.Actions, k, action)
@@ -135,6 +151,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				}
 			}
 		}
+		var interrupted Admission
 		for k, a := range st.Admissions {
 			if a.ConversationID != id || !a.SettledAt.IsZero() {
 				continue
@@ -149,11 +166,41 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				if !reconstructed {
 					continue
 				}
+				if a.Sequence > interrupted.Sequence {
+					interrupted = a
+				}
 				a.Phase, a.Reason, a.NativeBindingRetired = "uncertain", "manager exited; prior native outcome is uncertain", true
 				putRecord(st, "admissions", &st.Admissions, k, a)
-				if err := settleControllerInputState(st, previous, a.Sequence); err != nil {
+				if !outstandingDiscussionAction(st, id, a.Sequence) {
+					if err := settleControllerInputState(st, previous, a.Sequence); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		hasReadyInput := false
+		for _, a := range st.Admissions {
+			if a.ConversationID == id && a.SettledAt.IsZero() && !a.NativeBindingRetired {
+				hasReadyInput = true
+				break
+			}
+		}
+		if reconstructed && interrupted.Sequence != 0 && !hasReadyInput {
+			output := discussionOutputSource(st, id, interrupted)
+			for _, p := range st.Publications {
+				if p.ConversationID == id && p.Admission == interrupted.Sequence && p.Final {
+					output = DiscussionOutputSource{}
+					break
+				}
+			}
+			if output.AdmissionID != "" {
+				recovery, err := allocateAdmission(st, previous, "manager-recovery:"+hashValue(identity(previous)))
+				if err != nil {
 					return err
 				}
+				recovery.RecoveryOnly, recovery.RecoveryOutput, recovery.Project = true, &output, interrupted.Project
+				recovery.InputText = "Reconcile the interrupted discussion turn from its original thread, worker sessions and receipts. Report confirmed results or the specific outcome still unknown. Do not repeat prior operations or spawn another worker."
+				putRecord(st, "admissions", &st.Admissions, admissionKey(id, recovery.Sequence), recovery)
 			}
 		}
 		c = st.Conversations[id]
@@ -164,6 +211,9 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 		}
 		if parked != nil {
 			c.Parked = false
+			if c.Retirement.Replacement != "" {
+				c.ReplacementAfter = d.now().Add(discussionReplacementInterval).Unix()
+			}
 			c.Retirement = nil
 			c.FailedResume = nil
 		}
@@ -193,4 +243,60 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 		return nil
 	})
 	return next, err
+}
+
+// startReplacement checkpoints pending work before the supervisor independently fences the old
+// process. A crash resumes the same retirement ID and launch intent.
+func (d *DiscussionController) startReplacement(ctx context.Context, reason string) error {
+	b := d.controller.binding
+	rows, err := d.runtime.List()
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.Role == "manager" && row.ManagerConversationID == b.ConversationID && row.ID != b.SessionID && row.Status.Process != status.ProcessExited {
+			return errCompetingManagers
+		}
+	}
+	req := protocol.ManagerRetireReq{Binding: runtimeBinding(b), Replacement: reason, ExpectedTurn: protocol.ManagerNativeTurn{State: "unknown"}}
+	if err := d.store.update(func(st *State) error {
+		if err := checkBinding(st, b); err != nil {
+			return err
+		}
+		c := st.Conversations[b.ConversationID]
+		if !discussionPending(*st) {
+			return ErrControllerUncertain
+		}
+		if c.Retirement != nil {
+			return ErrConflict
+		}
+		req.Generation = max(c.ManagerGeneration, 1)
+		req.Checkpoint = hashValue(struct {
+			Binding   ManagerBinding
+			Reason    string
+			Admission uint64
+			At        int64
+		}{b, reason, c.LastAdmission, d.now().UnixNano()})
+		c.Retirement = &req
+		putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
+		return nil
+	}); err != nil {
+		return err
+	}
+	return d.finishRetirement(ctx, req, false)
+}
+
+func outstandingDiscussionAction(st *State, conversation string, admission uint64) bool {
+	for _, a := range st.Actions {
+		if a.ConversationID == conversation && a.Admission == admission && a.State == "executing" {
+			return true
+		}
+	}
+	return false
+}
+
+const discussionReplacementInterval = 5 * time.Minute
+
+func replacementRetryError(at int64) error {
+	return fmt.Errorf("%w: dispatcher replacement retry at %s", ErrDiscussionActivationUnavailable, time.Unix(at, 0).UTC().Format(time.RFC3339))
 }

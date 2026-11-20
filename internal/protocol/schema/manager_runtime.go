@@ -59,12 +59,13 @@ type ManagerRuntimeReq struct {
 	SessionInstance string `json:"session_instance"`
 }
 type ManagerRuntimeStatus struct {
-	NativeCLI     bool                  `json:"native_cli,omitempty"`
-	ReadyForInput bool                  `json:"ready_for_input"`
-	BridgeSocket  string                `json:"bridge_socket"`
-	AuthFile      string                `json:"auth_file"`
-	Binding       ManagerRuntimeBinding `json:"binding"`
-	Turn          ManagerNativeTurn     `json:"turn"`
+	ProviderExhausted bool                  `json:"provider_exhausted,omitempty"`
+	NativeCLI         bool                  `json:"native_cli,omitempty"`
+	ReadyForInput     bool                  `json:"ready_for_input"`
+	BridgeSocket      string                `json:"bridge_socket"`
+	AuthFile          string                `json:"auth_file"`
+	Binding           ManagerRuntimeBinding `json:"binding"`
+	Turn              ManagerNativeTurn     `json:"turn"`
 }
 type ManagerCallReq struct {
 	Binding       ManagerRuntimeBinding `json:"binding"`

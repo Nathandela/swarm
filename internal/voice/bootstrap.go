@@ -15,6 +15,8 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
+var errCompetingManagers = errors.New("voice: more than one manager claims this conversation; reconcile before continuing")
+
 type managerBootstrapClient interface {
 	List() ([]protocol.SessionView, error)
 	LaunchOperation(string, protocol.LaunchReq) (string, string, error)
@@ -76,7 +78,7 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 		}
 	}
 	if len(live) > 1 {
-		return none, errors.New("voice: more than one manager claims this conversation; reconcile before continuing")
+		return none, errCompetingManagers
 	}
 	if existing != nil {
 		if len(live) != 1 {
@@ -209,7 +211,7 @@ func observeLaunchedManager(ctx context.Context, cfg Config, refs ManagerBridgeR
 		return managerSelection{}, ErrStale
 	}
 	var exited *bootstrapExit
-	if !errors.As(err, &exited) || intent.Request.Manager == nil || intent.Request.Manager.RetireOperationID == "" {
+	if !errors.As(err, &exited) || intent.Request.Manager == nil || intent.Request.Manager.RetireOperationID == "" && !strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
 		return selected, err
 	}
 	outcome, readErr := client.LaunchOperationStatus(intent.OperationID)

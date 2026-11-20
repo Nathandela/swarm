@@ -17,7 +17,7 @@ func TestDiscussionHandoffKeepsScopedReceiptReferences(t *testing.T) {
 		st.Actions[project] = a
 		st.Admissions[admissionKey("d", seq)] = Admission{ConversationID: "d", Project: project}
 	}
-	got := discussionHandoff(st, current, "Use gcloud", "codex", "")
+	got := discussionHandoff(st, current, "Use gcloud", "codex", "", false)
 	if !strings.Contains(got, `"action":"/work"`) || strings.Contains(got, "withdrawn") || !strings.HasPrefix(got, "Use gcloud") {
 		t.Fatal(got)
 	}
@@ -28,7 +28,7 @@ func TestHandoffPreservesNativeInputBudget(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
 		for n := 0; n <= protocol.MaxSendInputText; n += 7 {
 			input := recoveryInputNotice + "local instructions\n" + strings.Repeat("界", n/3)
-			got := discussionHandoff(State{}, Admission{}, input, provider, nonce)
+			got := discussionHandoff(State{}, Admission{}, input, provider, nonce, false)
 			if !strings.HasPrefix(got, input) {
 				t.Fatal("changed input")
 			}

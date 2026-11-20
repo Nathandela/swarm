@@ -900,6 +900,11 @@ func quarantineControllerState(st *State, b ManagerBinding, session, instance st
 		if worker.ConversationID != b.ConversationID || (session != "" && (worker.Session != session || worker.SessionInstance != instance)) {
 			continue
 		}
+		// Losing the dispatcher observation or journal does not revoke the
+		// independent supervisor grant of an ordinary mailbox worker.
+		if session == "" && worker.VMChild && worker.Mailbox {
+			continue
+		}
 		worker.RecoveryRequired = true
 		putRecord(st, "workers", &st.Workers, wk, worker)
 		if _, ok := st.Admissions[admissionKey(b.ConversationID, worker.Admission)]; ok {
@@ -911,7 +916,7 @@ func quarantineControllerState(st *State, b ManagerBinding, session, instance st
 	if session == "" {
 		for _, a := range st.Admissions {
 			// Discord human proof is independent of worker journal coverage.
-			if a.ConversationID == b.ConversationID && a.SettledAt.IsZero() && a.Origin == nil {
+			if a.ConversationID == b.ConversationID && a.SettledAt.IsZero() && a.Origin == nil && !queuedMailboxNote(st, b.ConversationID, a) {
 				if err := restrictRecoveryState(st, b, a.Sequence); err != nil {
 					return err
 				}
@@ -1095,4 +1100,23 @@ func (s *Store) settleRetiredControllerInput(b ManagerBinding, seq uint64) error
 		}
 		return settleAdmission(st, b, seq)
 	})
+}
+
+func queuedMailboxNote(st *State, conversation string, a Admission) bool {
+	if a.Phase != "" && a.Phase != "prepared" || a.SourceCutover {
+		return false
+	}
+	id, ok := strings.CutPrefix(a.SourceID, "wake:")
+	if !ok {
+		return false
+	}
+	w := st.Wakes[key(conversation, id)]
+	e := st.Events[key(conversation, w.EventID)]
+	var meta workerNoteMetadata
+	if w.Admission != a.Sequence || !e.WorkerMessage || e.RecoveryOnly || json.Unmarshal(e.Metadata, &meta) != nil || meta.NoteID == "" {
+		return false
+	}
+	worker := st.Workers[key(conversation, key(meta.Session, meta.Instance))]
+	return worker.VMChild && worker.Mailbox && !worker.RecoveryRequired && worker.JobID == e.JobID && worker.AttemptID == e.AttemptID &&
+		e.ID == "worker-message-"+hashValue([]string{worker.Session, worker.SessionInstance, worker.AttemptID, meta.NoteID})
 }

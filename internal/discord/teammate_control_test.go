@@ -152,6 +152,9 @@ func TestTeammateStartupBlockPostsOneNoticeWhileProvisional(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				t.Error(err)
 			}
+			if !strings.Contains(p.Content, "swarm discord status") || !strings.Contains(p.Content, "queued") {
+				t.Fatal("missing owner action or queue status")
+			}
 			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "303", ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})
 		default:
 			w.WriteHeader(404)

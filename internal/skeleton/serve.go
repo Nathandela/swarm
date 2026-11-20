@@ -44,6 +44,7 @@ import (
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
@@ -790,7 +791,7 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	if ad, ok := registry.New(m.AgentType); ok {
 		sources = ad.SignalSources()
 	}
-	if m.LoginRuntime != nil && m.AgentType == "claude" {
+	if (m.LoginRuntime != nil || schema.IsDiscordManager(m.Role, m.ManagerConversationID)) && m.AgentType == "claude" {
 		sources = append(sources, loginClaudeObserverSources()...)
 	}
 	// Register WITH the session's persisted status in ONE atomic op (C2/S7): at fresh

@@ -10,6 +10,7 @@ import (
 var dispatcherSkill string
 
 const dispatcherGuide = `Acknowledge the request briefly in your own words through the publish tool.
+For a follow-up after interruption, read the discussion history and check the original worker, replies and action receipts. Carry forward edits or new details and report the existing result when the work is complete. Ask only for information you could not recover.
 Start work with ordinary swarm spawn on this supervisor. Keep the same worker for follow-ups.
 
 In the worker's prompt, request both notifications:
