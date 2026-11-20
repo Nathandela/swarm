@@ -256,7 +256,7 @@ func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
 	c.workers = workers
 	worker := WorkerAssociation{Mailbox: true, VMChild: true, ConversationID: binding.ConversationID,
 		Session: "machine/worker", SessionInstance: "worker-instance", Parent: "original-manager", JobID: "job", AttemptID: "attempt"}
-	note := "The issue is " + strings.Repeat(">", 4083)
+	note := "The issue is " + claudeinput.ManagerEnvelopePrefix + strings.Repeat(">", 4083-len(claudeinput.ManagerEnvelopePrefix))
 	input := workerMessageInput{ID: "result", Kind: "complete", Text: note}
 	src := workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: "codex",
 		Text: note, Kind: input.Kind, NoteID: input.ID, Sequence: 1}
@@ -326,7 +326,19 @@ func TestMailboxWakeFitsClaudeEnvelopeAtProtocolBoundary(t *testing.T) {
 		}
 		return prompt
 	}
+	marker := claudeinput.ManagerEnvelopePrefix
+	quoted := queue("quote", marker)
+	var decoded workerNoteMetadata
+	if start := strings.IndexByte(quoted, '{'); start < 0 || json.Unmarshal([]byte(quoted[start:]), &decoded) != nil || decoded.Text != marker {
+		t.Fatal("framing marker did not round-trip in note JSON")
+	}
 	small := queue("small", "x")
+	for _, prompt := range []string{quoted, queue("marks", strings.Repeat(marker, (claudeinput.MaxManagerTextBytes-len(small))/len(marker)))} {
+		if _, err := claudeinput.ManagerEnvelope(strings.Repeat("a", 64), prompt); err != nil {
+			t.Fatalf("quoted admission marker invalidated native worker wake: %v", err)
+		}
+	}
+
 	prompt := queue("large", strings.Repeat("x", protocol.MaxSendInputText-len(small)+1))
 	if !strings.Contains(prompt, "swarm_read_note") {
 		t.Fatal("full input cannot fit with native framing, but no preview was provided")

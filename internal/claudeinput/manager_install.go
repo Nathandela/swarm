@@ -14,10 +14,12 @@ import (
 )
 
 const managerSetupFile = "claude-manager-input.json"
-const managerEnvelopePrefix = "[SWARM_MANAGER_INPUT_V1:"
+
+// ManagerEnvelopePrefix identifies registered native machine input.
+const ManagerEnvelopePrefix = "[SWARM_MANAGER_INPUT_V1:"
 
 // MaxManagerTextBytes leaves room for the native admission prefix and hash.
-const MaxManagerTextBytes = 4096 - len(managerEnvelopePrefix) - 64 - len("]\n")
+const MaxManagerTextBytes = 4096 - len(ManagerEnvelopePrefix) - 64 - len("]\n")
 
 type managerSetup struct {
 	ConversationID string `json:"conversation_id"`
@@ -70,8 +72,8 @@ func managerProjection(sender, envelope string) string {
 
 // ManagerEnvelope separates registered machine admission from ordinary human prose.
 func ManagerEnvelope(nonce, text string) (string, error) {
-	envelope := managerEnvelopePrefix + nonce + "]\n" + text
-	if !managerproof.ValidHash(nonce) || text == "" || !utf8.ValidString(text) || strings.Contains(text, managerEnvelopePrefix) || len(text) > MaxManagerTextBytes {
+	envelope := ManagerEnvelopePrefix + nonce + "]\n" + text
+	if !managerproof.ValidHash(nonce) || text == "" || !utf8.ValidString(text) || strings.Contains(text, ManagerEnvelopePrefix) || len(text) > MaxManagerTextBytes {
 		return "", managerproof.ErrInvalid
 	}
 	return envelope, nil

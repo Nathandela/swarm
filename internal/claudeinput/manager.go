@@ -177,7 +177,7 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 	}
 	if path == "/manager-submit" {
 		snapshot, err := b.manager.BindingSnapshot()
-		if err != nil || req.Worker != b.worker || req.Admission == nil || req.Admission.Validate() != nil || req.Admission.Binding != snapshot.Binding || req.OperationID == "" || len(req.OperationID) > 128 || req.Text == "" || strings.Contains(req.Text, managerEnvelopePrefix) {
+		if err != nil || req.Worker != b.worker || req.Admission == nil || req.Admission.Validate() != nil || req.Admission.Binding != snapshot.Binding || req.OperationID == "" || len(req.OperationID) > 128 || req.Text == "" || strings.Contains(req.Text, ManagerEnvelopePrefix) {
 			refuse("invalid manager admission")
 			return true
 		}
@@ -228,11 +228,11 @@ func (b *Broker) serveManagerLocked(path string, req request, respond func(any),
 		return true
 	}
 	if path == "/manager-prompt" {
-		if !strings.HasPrefix(req.Text, managerEnvelopePrefix) || len(req.Text) < len(managerEnvelopePrefix)+66 {
+		if !strings.HasPrefix(req.Text, ManagerEnvelopePrefix) || len(req.Text) < len(ManagerEnvelopePrefix)+66 {
 			refuse("missing machine input envelope")
 			return true
 		}
-		nonce := req.Text[len(managerEnvelopePrefix) : len(managerEnvelopePrefix)+64]
+		nonce := req.Text[len(ManagerEnvelopePrefix) : len(ManagerEnvelopePrefix)+64]
 		input, ok := b.managerInputs[nonce]
 		if !ok || input.Prompted || input.Envelope != req.Text {
 			refuse("unattested or repeated machine envelope")
