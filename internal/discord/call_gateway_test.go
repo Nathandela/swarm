@@ -191,6 +191,9 @@ func TestCallGatewayRosterAndTextRecovery(t *testing.T) {
 	stale := client.callVoiceContext(ctx)
 	checkJoin(ctx, "99", "20", false)
 	checkJoin(ctx, "10", "21", false)
+	cancelled, cancelJoin := context.WithCancel(stale)
+	cancelJoin()
+	checkJoin(cancelled, "10", "20", false)
 	checkJoin(stale, "10", "20", true)
 	join := expectWrite(first, 4)
 	var request struct {

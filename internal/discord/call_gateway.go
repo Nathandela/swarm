@@ -19,8 +19,9 @@ type callGateway struct {
 	disconnect  func()
 	unavailable func(string)
 
-	mu     sync.Mutex
-	active *callGatewaySession
+	mu      sync.Mutex
+	active  *callGatewaySession
+	writeMu sync.Mutex
 }
 
 type callGatewaySession struct {
@@ -48,6 +49,9 @@ func (c *DiscordClient) setCallVoiceState(ctx context.Context, guild, channel st
 	if g == nil || !snowflake(guild) || !snowflake(g.room) || guild != g.guild || channel != "" && channel != g.room {
 		return ErrInvalid
 	}
+	// A canceled join must finish or observe cancellation before the leave writes.
+	g.writeMu.Lock()
+	defer g.writeMu.Unlock()
 	g.mu.Lock()
 	active := g.active
 	bound, boundOK := ctx.Value(callGatewaySessionKey{}).(*callGatewaySession)
