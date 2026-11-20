@@ -10,7 +10,7 @@ const codec = () => new OpusScript(24000, 1, OpusScript.Application.VOIP);
 const id = (value) => typeof value === 'string' && /^\d{1,20}$/.test(value);
 const endpoint = (value) => typeof value === 'string' && /^[a-z0-9.-]{1,253}(?::443)?$/i.test(value);
 const maxSpeakers = 16;
-const maxPlayback = 50;
+const maxPlayback = 6;
 const maxReceive = 3;
 const maxFrameAge = 120;
 
@@ -45,6 +45,8 @@ let pinnedEpoch;
 let encoder;
 let speaking = false;
 let written = false;
+let ticker;
+let nextFrameAt = 0;
 const speakers = new Map();
 const playback = [];
 
@@ -64,7 +66,7 @@ function stop(code) {
   if (closing) return;
   closing = true;
   clearTimeout(deadline);
-  clearInterval(ticker);
+  clearTimeout(ticker);
   process.stdin.pause();
   playback.length = 0;
   // The parent owns the final voice-state leave, including forced child exit.
@@ -104,6 +106,12 @@ function checkReady() {
   }
   const dave = daveState(connection);
   if (!dave) return;
+  const members = new Set(dave.session.getUserIds());
+  if (members.size !== speakers.size + 1 || !members.delete(config.botId) ||
+      [...members].some((userId) => !speakers.has(userId))) {
+    stop('dave_roster_mismatch');
+    return;
+  }
   pinnedDave = dave;
   pinnedEpoch = dave.session.epoch;
   clearTimeout(deadline);
@@ -169,6 +177,7 @@ function start(message) {
       if (pcm.length !== frameBytes) return;
       if (speaker.frames.length === maxReceive) speaker.frames.shift();
       speaker.frames.push({pcm, receivedAt: performance.now()});
+      scheduleTick();
     });
   }
 }
@@ -179,7 +188,6 @@ function handoff() {
   // The pinned adapter configures networking only when the server half arrives.
   adapter.onVoiceStateUpdate(state);
   adapter.onVoiceServerUpdate(server);
-  state = server = undefined;
 }
 
 function command(message) {
@@ -190,16 +198,18 @@ function command(message) {
   const {type, data} = message;
   switch (type) {
     case 'voice_state':
-      if (forwarded || data?.guild_id !== config.guildId || data.user_id !== config.botId ||
+      if (data?.guild_id !== config.guildId || data.user_id !== config.botId ||
           data.channel_id !== config.channelId || data.self_deaf || data.self_mute || data.deaf || data.mute ||
           typeof data.session_id !== 'string' || !data.session_id) return stop('invalid_voice_state');
       if (state && state.session_id !== data.session_id) return stop('conflicting_voice_state');
+      if (state) return;
       state = data;
       return handoff();
     case 'voice_server':
-      if (forwarded || data?.guild_id !== config.guildId || !endpoint(data.endpoint) ||
+      if (data?.guild_id !== config.guildId || !endpoint(data.endpoint) ||
           typeof data.token !== 'string' || !data.token) return stop('invalid_voice_server');
       if (server && (server.token !== data.token || server.endpoint !== data.endpoint)) return stop('conflicting_voice_server');
+      if (server) return;
       server = data;
       return handoff();
     case 'clear':
@@ -209,7 +219,8 @@ function command(message) {
       if (!pcm) return stop('invalid_pcm');
       if (!gate()) return;
       if (playback.length === maxPlayback) return stop('playback_backlog');
-      playback.push(pcm);
+      playback.push({pcm, receivedAt: performance.now()});
+      scheduleTick();
       return;
     }
     default:
@@ -228,26 +239,36 @@ process.on('uncaughtException', () => stop('helper_error'));
 process.on('unhandledRejection', () => stop('helper_error'));
 
 const deadline = setTimeout(() => stop('voice_timeout'), 15000);
-let lastTick = performance.now();
-const ticker = setInterval(() => {
-  checkReady();
+function scheduleTick() {
+  if (ticker) return;
+  const now = performance.now();
+  if (nextFrameAt < now - frameMS) nextFrameAt = now + frameMS;
+  ticker = setTimeout(tick, Math.max(1, nextFrameAt - now));
+}
+
+function tick() {
+  ticker = undefined;
+  nextFrameAt += frameMS;
   if (!gate()) return;
   const now = performance.now();
-  if (now - lastTick > maxFrameAge) clearPlayback();
-  lastTick = now;
+  let pending = false;
   for (const [userId, speaker] of speakers) {
     while (speaker.frames.length && now - speaker.frames[0].receivedAt > maxFrameAge) speaker.frames.shift();
     const frame = speaker.frames.shift();
     if (frame) send({type: 'audio', userId, pcm: frame.pcm.toString('base64')});
+    pending ||= speaker.frames.length > 0;
   }
-  const pcm = playback.shift();
-  if (pcm) {
-    connection.playOpusPacket(encoder.encode(pcm, frameSamples));
+  while (playback.length && now - playback[0].receivedAt > maxFrameAge) playback.shift();
+  const frame = playback.shift();
+  if (frame) {
+    connection.playOpusPacket(encoder.encode(frame.pcm, frameSamples));
     speaking = true;
   } else if (speaking) {
     clearPlayback();
   }
-}, frameMS);
+  if (pending || speaking) scheduleTick();
+  else nextFrameAt = 0;
+}
 
 process.stdin.on('data', (chunk) => {
   let start = 0;

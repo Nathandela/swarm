@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { setImmediate } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { NetworkingStatusCode, VoiceConnectionStatus } from '@discordjs/voice';
+import { Networking, NetworkingStatusCode, VoiceConnectionStatus, VoiceReceiver } from '@discordjs/voice';
 import OpusScript from 'opusscript';
 import { daveState, frameBytes, frameSamples, guardReceiver, maxLine, pcmFrame } from './media.mjs';
 
@@ -130,5 +131,115 @@ test('20 ms Opus exchange between Discord and 24 kHz mono PCM', () => {
   } finally {
     client.delete();
     discord.delete();
+  }
+});
+
+const state = {type: 'voice_state', data: {
+  guild_id: '1', channel_id: '2', user_id: '3', session_id: 'fixture-session',
+}};
+const server = {type: 'voice_server', data: {
+  guild_id: '1', endpoint: 'voice.invalid', token: 'fixture-token',
+}};
+
+function mockConnection(change, ...messages) {
+  const voice = import.meta.resolve('@discordjs/voice');
+  const mock = `
+    import { EventEmitter } from 'node:events';
+    import { NetworkingStatusCode, VoiceConnection, VoiceConnectionStatus } from ${JSON.stringify(voice)};
+    VoiceConnection.prototype.configureNetworking = function() {
+      if (!this.packets.state || !this.packets.server) return;
+      const dave = {
+        protocolVersion: 1,
+        session: {ready: true, protocolVersion: 1, epoch: 1n, getUserIds: () => ['3', '4']},
+        pendingTransitions: new Map(),
+        downgraded: false,
+        reinitializing: false,
+      };
+      const networking = new EventEmitter();
+      const ws = new EventEmitter();
+      networking.destroy = () => {};
+      networking.state = {
+        code: NetworkingStatusCode.Ready,
+        connectionData: {encryptionMode: 'aead_aes256_gcm_rtpsize'},
+        dave, ws,
+      };
+      if (this.packets.server.token === 'wrong-roster-fixture-token') dave.session.getUserIds = () => ['3', '6'];
+      this.state = {...this.state, status: VoiceConnectionStatus.Ready, networking};
+      ${change}
+    };
+  `;
+  const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(mock), helper], {
+    input: [start, ...messages].map((message) => JSON.stringify(message) + '\n').join(''),
+    encoding: 'utf8',
+    timeout: 3000,
+  });
+  assert.equal(result.stderr, '');
+  return {status: result.status, events: result.stdout.trim().split('\n').map(JSON.parse)};
+}
+
+test('initial dispatch pair works in either order and exact late duplicates preserve the call', () => {
+  for (const pair of [[state, server], [server, state]]) {
+    const result = mockConnection('', ...pair, ...pair, {type: 'stop'});
+    assert.equal(result.status, 0);
+    assert.deepEqual(result.events.map((event) => event.type), ['gateway', 'ready']);
+  }
+  const changed = mockConnection('', state, server, {
+    ...server, data: {...server.data, token: 'changed-fixture-token'},
+  });
+  assert.equal(changed.status, 1);
+  assert.deepEqual(changed.events.at(-1), {type: 'fault', code: 'conflicting_voice_server'});
+});
+
+test('late downgrade or MLS epoch change retires the active generation', () => {
+  for (const mutation of [
+    'dave.pendingTransitions.set(2, 0);',
+    'dave.session.epoch = 2n;',
+  ]) {
+    const result = mockConnection(mutation + "ws.emit('packet', {op: 24, d: {}});", state, server);
+    assert.equal(result.status, 1);
+    assert.deepEqual(result.events.map((event) => event.type), ['gateway', 'ready', 'fault']);
+    assert.equal(result.events.at(-1).code, 'dave_changed');
+  }
+});
+
+test('sole member without an established MLS group cannot open the media gate', () => {
+  const fixture = `
+    import { DAVESession } from '@snazzah/davey';
+    const session = new DAVESession(1, '3', '2');
+    session.getSerializedKeyPackage();
+    if (session.ready || session.epoch !== null) process.exit(1);
+  `;
+  assert.equal(spawnSync(process.execPath, ['--input-type=module', '-e', fixture], {
+    cwd: fileURLToPath(new URL('.', import.meta.url)),
+  }).status, 0);
+});
+
+test('MLS group must match the admitted Discord roster', () => {
+  const result = mockConnection('', state, {
+    ...server, data: {...server.data, token: 'wrong-roster-fixture-token'},
+  });
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.events.map((event) => event.type), ['gateway', 'fault']);
+  assert.equal(result.events.at(-1).code, 'dave_roster_mismatch');
+});
+
+test('pinned voice package round-trips both negotiated RTP AEAD modes', async () => {
+  await import('@noble/ciphers/chacha.js');
+  await setImmediate();
+  const packet = Buffer.from('synthetic Opus payload');
+  const header = Buffer.alloc(12);
+  header[0] = 0x80;
+  for (const [encryptionMode, nonceBytes] of [
+    ['aead_aes256_gcm_rtpsize', 12],
+    ['aead_xchacha20_poly1305_rtpsize', 24],
+  ]) {
+    const secretKey = Buffer.alloc(32, 0x22);
+    const transport = {encryptionMode, secretKey, nonceBuffer: Buffer.alloc(nonceBytes), nonce: 0};
+    const encrypted = Networking.prototype.encryptOpusPacket(packet, transport, header);
+    const rtp = Buffer.concat([header, ...encrypted]);
+    const decrypt = () => VoiceReceiver.prototype.decrypt(rtp, encryptionMode, Buffer.alloc(nonceBytes), secretKey);
+    assert.deepEqual(decrypt(), packet);
+    rtp[12] ^= 1;
+    assert.throws(decrypt);
   }
 });

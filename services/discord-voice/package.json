@@ -12,7 +12,7 @@
   "dependencies": {
     "@discordjs/voice": "0.19.2",
     "@noble/ciphers": "2.0.1",
-    "@snazzah/davey": "0.1.9",
+    "@snazzah/davey": "0.1.12",
     "opusscript": "0.1.1"
   }
 }
