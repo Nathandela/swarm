@@ -97,7 +97,7 @@ func callAdmissionID(installation, call, turn string) string {
 }
 
 func (t *teammateConnector) submitCallTurn(ctx context.Context, bound TeammateDiscussion, callID, turnID string, generation uint64, speaker Actor, text string) (string, error) {
-	if t.verifyCallTurn == nil || strings.TrimSpace(text) == "" || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
+	if strings.TrimSpace(text) == "" || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
 		return "", ErrInvalid
 	}
 	cfg := t.service.Config
@@ -148,6 +148,9 @@ func (t *teammateConnector) submitCallTurn(ctx context.Context, bound TeammateDi
 			return ErrConflict
 		}
 		if errors.Is(err, ErrNotFound) {
+			if t.verifyCallTurn == nil || cfg.Calls == nil {
+				return ErrTeammateSourceChanged
+			}
 			if err = putJSON(tx, callAdmissionBucket, recordKey, record); err != nil {
 				return err
 			}

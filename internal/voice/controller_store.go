@@ -508,7 +508,10 @@ func (s *Store) deferDraftRefusal(b ManagerBinding, expected Admission, operatio
 				putRecord(st, "wakes", &st.Wakes, wk, w)
 			}
 		}
-		// Keep the original Discord source sealed after crossing its cutover.
+		// A fresh voice write needs a current call grant after a proven refusal.
+		if a.Origin != nil && a.Origin.Voice.Generation != 0 {
+			a.SourceCutover = false
+		}
 		a.Phase, a.OperationID, a.Reason = "prepared", operation, ""
 		putRecord(st, "admissions", &st.Admissions, k, a)
 		return nil

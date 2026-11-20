@@ -67,6 +67,11 @@ func TestCallAdmissionPinsOriginalPersonalDiscussionAndReplays(t *testing.T) {
 			t.Fatalf("ended generation could admit = %v", err)
 		}
 		cfg.Calls = nil
+		reopened.verifyCallTurn = nil
+		replay, err = reopened.submitCallTurn(t.Context(), resolved, "call", "turn", 1, speaker, "check the marker")
+		if err != nil || replay != op || len(manager.admitted) != 1 {
+			t.Fatalf("disabled replay = %q, %v, admissions %d", replay, err, len(manager.admitted))
+		}
 		q.Source = "grant"
 		if _, err := reopened.history(bound)(t.Context(), q); err != nil {
 			t.Fatalf("disabled calls lost written continuation grant = %v", err)

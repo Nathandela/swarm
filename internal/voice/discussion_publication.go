@@ -151,17 +151,31 @@ func (d *DiscussionController) PublicationCallAdmission(ctx context.Context, out
 		if !ok || event.JobID != output.JobID || event.AttemptID != output.AttemptID {
 			return "", ErrNotFound
 		}
-		var initialSource string
+		attempt := st.Actions[key(conversation, output.AttemptID)]
+		var intent controllerActionRequest
+		if attempt.State != "settled" || json.Unmarshal(attempt.Request, &intent) != nil || intent.Origin == nil || intent.Origin.Voice.Generation == 0 {
+			return "", ErrNotFound
+		}
+		origin := st.Admissions[admissionKey(conversation, attempt.Admission)]
+		if origin.Origin == nil || *origin.Origin != *intent.Origin || !origin.SourceCutover {
+			return "", ErrStale
+		}
+		// An intervening steer can change the result without changing its attempt.
+		// Require both the launch/resume and current worker custody to agree.
+		matches := false
 		for _, worker := range st.Workers {
-			if worker.ConversationID == conversation && worker.JobID == output.JobID && worker.AttemptID == output.AttemptID &&
-				!worker.Reserved && worker.InitialSourceID != "" {
-				if initialSource != "" && initialSource != worker.InitialSourceID {
+			if worker.ConversationID == conversation && worker.JobID == output.JobID &&
+				worker.AttemptID == output.AttemptID && !worker.Reserved {
+				if worker.ActionID != attempt.ID || worker.SourceID != origin.SourceID {
 					return "", ErrStale
 				}
-				initialSource = worker.InitialSourceID
+				matches = true
 			}
 		}
-		request, _ = strings.CutPrefix(initialSource, "discussion:")
+		if !matches {
+			return "", ErrNotFound
+		}
+		request = intent.Origin.RequestID
 	}
 	for _, admission := range st.Admissions {
 		if admission.ConversationID == conversation && admission.SourceCutover && admission.Origin != nil &&

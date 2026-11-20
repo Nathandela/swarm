@@ -564,7 +564,12 @@ func projectHistory(page discord.TeammateHistoryPage, invokingMessage string) st
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
 	if r.vmProjectAccess {
-		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask workers for explicit needs-input and completion notes, then return after dispatch.\n")
+		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands.")
+		if input.Voice.Generation != 0 {
+			msg.WriteString(" For this call request, delegate through swarm_create in the selected project and inspect results with swarm_read. Swarm can then bind the exact worker attempt to the call. Give the worker its instructions in the initial prompt and return after dispatch.\n")
+		} else {
+			msg.WriteString(" Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask workers for explicit needs-input and completion notes, then return after dispatch.\n")
+		}
 	} else {
 		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
 	}

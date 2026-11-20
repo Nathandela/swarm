@@ -10,6 +10,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 func privateTestSockets(t *testing.T) string {
@@ -152,5 +153,20 @@ func TestDiscussionAcknowledgementFitsStandingInstructionsAndHumanText(t *testin
 		if _, err := claudeinput.ManagerEnvelope(strings.Repeat("a", 64), full); err != nil {
 			t.Fatalf("message size %d exceeded native budget: %d bytes before envelope", size, len(full))
 		}
+	}
+}
+
+func TestCallVMDelegationUsesNativeAttemptAttribution(t *testing.T) {
+	r := Runtime{vmProjectAccess: true}
+	input := discord.TeammateAdmission{Text: "Check the marker."}
+	text := r.prompt(input, discord.TeammateHistoryPage{}, "thread", nil)
+	if !strings.Contains(text, "Start workers with swarm spawn") {
+		t.Fatalf("written VM workflow changed: %s", text)
+	}
+	input.Voice = schema.VoiceOrigin{CallID: "call", TurnID: "turn", Generation: 1}
+	voice := r.prompt(input, discord.TeammateHistoryPage{}, "thread", nil)
+	if !strings.Contains(voice, "delegate through swarm_create") || strings.Contains(voice, "Start workers with swarm spawn") ||
+		!strings.Contains(voice, `"CallID":"call","TurnID":"turn"`) || !strings.Contains(voice, "Use your shell and ordinary VM commands") {
+		t.Fatalf("voice VM turn lost exact delegation or ambient VM policy: %s", voice)
 	}
 }
