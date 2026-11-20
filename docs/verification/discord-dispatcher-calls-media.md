@@ -31,3 +31,8 @@ The previous stable voice package used davey 0.1.x. In an offline negative test 
 Interior sequence gaps observed before the current speech window closes fail the call instead of exporting the next frame. RTP cannot establish whether media was lost before the first authenticated packet, after the last one, or across a long quiet interval. Late duplicates and ordinary silent gaps do not fault. Discord roster events also have delivery latency. [Discord voice connections](https://docs.discord.com/developers/topics/voice-connections).
 
 No Discord accounts, hosted voice gateways, production credentials, human speech or physical audio devices were used. Hosted join, hosted rekey recovery, intelligibility, and interactive latency remain release gates.
+
+
+### Additional qualification after round three
+
+A checksum-verified official macOS x64 Node 24.17.0 runtime under Rosetta performed a clean lockfile install, ran the dependency probe, and passed all 14 helper tests. Earlier Linux and native macOS runs in the table used the 12-test checkpoint. The expanded tests reject a known RTP discontinuity even across unequal inter-process forwarding delays, preserve a long contiguous idle followed by authenticated silence and speech, and retire the current media generation on missing data. The conservative loss behavior needs a real-network usability trial.
