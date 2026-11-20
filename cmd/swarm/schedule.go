@@ -16,10 +16,11 @@ import (
 )
 
 const scheduleUsage = `usage: swarm schedule <command>
-  create --name NAME --dir PATH --agents codex,claude --authority MODE
+  create --name NAME --dir PATH --agents ORDERED_LIST --authority MODE
          --workspace worktree|directory --prompt-file FILE [--timezone ZONE]
          (--once YYYY-MM-DD | --daily | --weekdays | --weekly Monday | --cron EXPR)
          [--time HH:MM] [--catch-up 1h] [--allow-overlap=false]
+  Supported agents: codex, claude, agy (in fallback order).
   create --spec-file FILE         create from a JSON job specification
   edit JOB --spec-file FILE [--revision ID]    replace a job specification
   list [--json] | show JOB | history JOB

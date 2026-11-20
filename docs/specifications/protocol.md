@@ -78,6 +78,9 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `name`             | string          | new session label, carried on `rename`; sanitized + length-capped server-side (P2) |
 | `tag`              | string          | manual grouping label, carried on `set_tag`; empty clears it              |
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
+| `schedule_workspace` | string | absolute directory in a workspace check request or the conflicting provider directory in its reply |
+| `schedule_agent` | string | scheduled agent identifier in a route check request and reply |
+| `schedule_unavailable` | string | reason the requested scheduled agent is unavailable on this host |
 | `schedule_id`      | string          | local job ID on `schedule_run`. The reply carries the occurrence ID and echoes `operation_id`. |
 | `schedule_completion` | object      | local worker receipt on `schedule_complete`; carries run and attempt IDs, credential, summary and artifact links |
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
