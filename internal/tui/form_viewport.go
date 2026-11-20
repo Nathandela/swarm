@@ -79,6 +79,12 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		if m.options.focus == optionsFocusTouchBack || m.options.touchBack {
 			f.context = touchBackSelectionNotice + "\n" + f.context
 		}
+		if m.options.focus == optionsFocusManagerPrompt {
+			f.context = managerPromptNotice
+			if m.options.managerPromptErr != "" {
+				f.context += "\n" + m.options.managerPromptErr
+			}
+		}
 	case m.screen == screenLogins:
 		l := m.logins
 		f = formContent{body: m.loginsBody(), target: "Provider logins", hint: l.hint(m.connectionLost, m.loginRunner != nil, m.width), context: l.err}

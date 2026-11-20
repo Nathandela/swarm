@@ -11,19 +11,21 @@ import (
 
 func TestManagerPromptOptionsPersistOnSave(t *testing.T) {
 	dir := t.TempDir()
-	m := rootModel{managerSettingsDir: dir, screen: screenOptions}
-	m.loadManagerPrompt()
-	m.options.focus = optionsFocusManagerPrompt
-	if view := m.options.view(80); !strings.Contains(view, "manager prompt") || !strings.Contains(view, "visible to the model") {
+	m := New(newFakeClient(), detectMixed(), WithManagerSettingsDir(dir))
+	m = send(m, tea.WindowSizeMsg{Width: 40, Height: 8})
+	m = send(m, keyRune('o'))
+	for range 3 {
+		m = send(m, keyDown)
+	}
+	if view := m.View().Content; !strings.Contains(view, "manager prompt") || !strings.Contains(view, "visible to the model") {
 		t.Fatalf("manager setting missing: %s", view)
 	}
-	m.pasteManagerPrompt("Check output.\nThen summarize.")
-	next, _ := m.updateOptions(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if next.(rootModel).options.managerPromptErr != "" {
-		t.Fatal(next.(rootModel).options.managerPromptErr)
+	m = send(m, tea.PasteMsg{Content: "Check output.\nThen summarize."})
+	m = send(m, keyEnter)
+	if m.(rootModel).options.managerPromptErr != "" {
+		t.Fatal(m.(rootModel).options.managerPromptErr)
 	}
-	restarted := rootModel{managerSettingsDir: dir}
-	restarted.loadManagerPrompt()
+	restarted := send(New(newFakeClient(), detectMixed(), WithManagerSettingsDir(dir)), keyRune('o')).(rootModel)
 	if got := restarted.options.managerPrompt.text; got != "Check output. Then summarize." {
 		t.Fatalf("reopened prompt = %q", got)
 	}

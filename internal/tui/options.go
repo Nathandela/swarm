@@ -128,6 +128,7 @@ func saveContextGuardSettingsCmd(c contextGuardSettingsClient, generation, revis
 const optionsHint = "←→ change · tab/↑↓ next · enter apply · esc cancel"
 
 const touchBackSelectionNotice = "Touch captures the whole screen.\nText selection may need your terminal's override."
+const managerPromptNotice = "Applies to all local managers.\nThis prompt is visible to the model."
 
 func (o optionsModel) hint() string {
 	if o.focus == optionsFocusTouchBack {
@@ -366,16 +367,16 @@ func (o optionsModel) view(width int) string {
 		if focused {
 			value = field.focusedEditorValue(label, o.managerPrompt)
 		}
-		b.WriteString(field.launchFieldLine(label, value, focused))
 		if focused {
-			b.WriteString(styleDim.Render("  Applies to all managers on this computer and is visible to the model.") + "\n")
+			b.WriteString(wrapIndented(managerPromptNotice, width, styleDim) + "\n")
 			if o.managerPromptSaved {
 				b.WriteString(styleDim.Render("  Manager prompt saved.") + "\n")
 			}
 		}
 		if o.managerPromptErr != "" {
-			b.WriteString(styleError.Render("  "+o.managerPromptErr) + "\n")
+			b.WriteString(wrapIndented(o.managerPromptErr, width, styleError) + "\n")
 		}
+		b.WriteString(field.launchFieldLine(label, value, focused))
 	}
 	// Every early return (unsupported/loading/error) retains the action.
 	logins := fieldLine("logins", "Provider logins →", o.focus == optionsFocusLogins)
