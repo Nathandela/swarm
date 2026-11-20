@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -188,6 +189,9 @@ func TestPersonalReconnectResumesVerifiedPagesAndKeepsNativeFIFO(t *testing.T) {
 	active, err := s.teammateBindingByID(d.InstallationID, d.ID)
 	if err != nil || active.RepairAfter != "51" || active.PersonalRepairEpoch != 0 || active.Error == "" || len(m.admitted) != 0 || m.syncs != 0 {
 		t.Fatalf("partial recovery advanced native work or lost cursor: %+v, %v", active, err)
+	}
+	if _, err := c.history(d)(t.Context(), TeammateHistoryQuery{Source: "audience"}); !errors.Is(err, errPersonalHistoryRepair) {
+		t.Fatalf("preexisting native sync could bypass recovery with a late worker note: %v", err)
 	}
 	var observed teammateOutput
 	if err = s.db.View(func(tx *bolt.Tx) error {

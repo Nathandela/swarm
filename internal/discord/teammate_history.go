@@ -115,6 +115,11 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		if q.Cursor != "" || q.Anchor != "" {
 			return out, ErrInvalid
 		}
+		if err := t.service.Store.db.View(func(tx *bolt.Tx) error {
+			return checkPersonalRepairGate(tx, t.service.Config, d)
+		}); err != nil {
+			return out, err
+		}
 		return out, t.checkDiscussion(ctx, d)
 	}
 	if q.Source == "" {
@@ -499,21 +504,9 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 	var record teammateCandidate
 	var guard teammateIngressGuard
 	err := t.service.Store.db.View(func(tx *bolt.Tx) error {
-		if q.Source == "admission" && isPersonalDiscussion(t.service.Config, d) {
-			key := teammateKey(d.InstallationID, d.Route.ChannelID)
-			var b teammateBinding
-			if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &b); err != nil {
+		if q.Source == "admission" {
+			if err := checkPersonalRepairGate(tx, t.service.Config, d); err != nil {
 				return err
-			}
-			if b.ID != d.ID || b.Route != d.Route {
-				return ErrTeammateSourceChanged
-			}
-			var checkpoint teammateCheckpoint
-			if err := teammateGet(tx.Bucket([]byte(teammateMetaBucket)), teammateKey(d.InstallationID, "checkpoint"), &checkpoint); err != nil && !errors.Is(err, ErrNotFound) {
-				return err
-			}
-			if personalRepairPending(b, checkpoint.GapEpoch) {
-				return errPersonalHistoryRepair
 			}
 		}
 		key := teammateKey(d.InstallationID, q.MessageID)

@@ -28,6 +28,28 @@ func personalRepairPending(b teammateBinding, epoch uint64) bool {
 	return b.Opened && b.PersonalRepairEpoch < epoch
 }
 
+func checkPersonalRepairGate(tx *bolt.Tx, cfg Config, d TeammateDiscussion) error {
+	if !isPersonalDiscussion(cfg, d) {
+		return nil
+	}
+	key := teammateKey(d.InstallationID, d.Route.ChannelID)
+	var b teammateBinding
+	if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &b); err != nil {
+		return err
+	}
+	if b.ID != d.ID || b.Route != d.Route {
+		return ErrTeammateSourceChanged
+	}
+	var checkpoint teammateCheckpoint
+	if err := teammateGet(tx.Bucket([]byte(teammateMetaBucket)), teammateKey(d.InstallationID, "checkpoint"), &checkpoint); err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if personalRepairPending(b, checkpoint.GapEpoch) {
+		return errPersonalHistoryRepair
+	}
+	return nil
+}
+
 // A parked DM still needs an ingress scan on a new gateway epoch, without a human prompt.
 func (s *Store) preparePersonalRepair(cfg Config, epoch uint64) error {
 	if cfg.Mode != "personal" || epoch == 0 {
