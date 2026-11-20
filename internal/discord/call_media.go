@@ -85,7 +85,7 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 
 	ctx, cancel := context.WithCancel(ctx)
 	exited := make(chan struct{})
-	var exitErr error
+	var exitErr, writeFailure error
 	go func() {
 		exitErr = cmd.Wait()
 		close(exited)
@@ -184,7 +184,9 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 			handled = nil
 		case err := <-writeDone:
 			if err != nil {
-				return err
+				// A retiring helper can close stdin before its final DAVE fault arrives on stdout.
+				writeFailure = err
+				beginShutdown()
 			}
 			writeDone = nil
 		case message, ok := <-input:
@@ -215,6 +217,9 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 				beginShutdown()
 			}
 		}
+	}
+	if writeFailure != nil {
+		return writeFailure
 	}
 	if exitErr != nil {
 		return errors.New("discord call media: helper exited unsuccessfully")

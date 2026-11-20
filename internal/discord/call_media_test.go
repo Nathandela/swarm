@@ -261,3 +261,34 @@ exit 1
 		t.Fatal("accepted a relative helper path")
 	}
 }
+
+func TestHelperInputClosePreservesFinalFault(t *testing.T) {
+	path := mediaTestHelper(t, `IFS= read -r line
+exec 0<&-
+printf '%s\n' '{"type":"ready"}'
+sleep 0.1
+printf '%s\n' '{"type":"fault","code":"dave_changed"}'
+`)
+	commands := make(chan any, 1)
+	observed := make(chan string, 1)
+	err := runCallMedia(mediaTestContext(t), path, "1", "2", "3", []string{"4"}, commands, func(e callMediaEvent) error {
+		if e.Type == "ready" {
+			commands <- map[string]any{"type": "clear"}
+		}
+		if e.Type == "fault" {
+			observed <- e.Code
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("accepted interrupted media helper")
+	}
+	select {
+	case code := <-observed:
+		if code != "dave_changed" {
+			t.Fatal(code)
+		}
+	default:
+		t.Fatal("stdin failure hid the DAVE fault")
+	}
+}
