@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +72,15 @@ func syntheticPCM(t *testing.T, name string) []byte {
 
 func qualifyHostedLane(t *testing.T, key string, team bool, positive, chatter []byte) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 65*time.Second)
+	rounds := 1
+	if raw := os.Getenv("SWARM_TEST_HOSTED_DISPATCHER_CALL_TURNS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 10 {
+			t.Fatal("hosted turns must be 1 to 10")
+		}
+		rounds = n
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Duration(rounds)*45*time.Second+20*time.Second)
 	defer cancel()
 	turns := make(chan callspeech.Turn, 2)
 	played := make(chan []byte, 512)
@@ -114,68 +123,71 @@ func qualifyHostedLane(t *testing.T, key string, team bool, positive, chatter []
 		case <-time.After(2 * time.Second):
 		}
 	}
-	pushHostedPCM(t, ctx, lane, "synthetic-owner", positive)
-	lastInput := time.Now()
-	var turn callspeech.Turn
-	select {
-	case turn = <-turns:
-	case err := <-failed:
-		t.Fatalf("speech provider failed: %v", err)
-	case <-ctx.Done():
-		t.Fatal("native input deadline")
-	}
-	admission := time.Since(lastInput)
-	if turn.Speaker != "synthetic-owner" || turn.ID == "" || !strings.Contains(strings.ToLower(turn.Text), "blue notebook") {
-		t.Fatal("synthetic native marker or attribution missing")
-	}
-	const answer = "The orange lantern is ready."
-	if err := lane.PublishForTurn(turn.ID, answer); err != nil {
-		t.Fatal(err)
-	}
-
-	var pcm []byte
-	var first time.Duration
-	idle := time.NewTimer(25 * time.Second)
-	defer idle.Stop()
-collect:
-	for {
+	seen := make(map[string]bool, rounds)
+	for round := 1; round <= rounds; round++ {
+		pushHostedPCM(t, ctx, lane, "synthetic-owner", positive)
+		lastInput := time.Now()
+		var turn callspeech.Turn
 		select {
-		case frame := <-played:
-			if len(pcm) == 0 {
-				first = time.Since(lastInput)
-			}
-			pcm = append(pcm, frame...)
-			idle.Reset(600 * time.Millisecond)
+		case turn = <-turns:
 		case err := <-failed:
-			t.Fatalf("return speech failed: %v", err)
-		case <-idle.C:
-			break collect
+			t.Fatalf("speech provider failed: %v", err)
 		case <-ctx.Done():
-			t.Fatal("return speech deadline")
+			t.Fatal("native input deadline")
 		}
-	}
-	lane.Close()
-	<-lane.Done()
-	liveElapsed := time.Since(sessionStart)
+		admission := time.Since(lastInput)
+		if turn.Speaker != "synthetic-owner" || turn.ID == "" || seen[turn.ID] || !strings.Contains(strings.ToLower(turn.Text), "blue notebook") {
+			t.Fatal("synthetic native marker or attribution missing")
+		}
+		seen[turn.ID] = true
+		const answer = "The orange lantern is ready."
+		if err := lane.PublishForTurn(turn.ID, answer); err != nil {
+			t.Fatal(err)
+		}
 
-	if len(pcm) == 0 {
-		t.Fatal("verified synthetic publication produced no PCM")
-	}
-	heard, err := openailive.Transcribe(ctx, key, pcm, "en")
-	if err != nil {
-		t.Fatalf("independent output check failed: %v", err)
-	}
-	matched := strings.Contains(strings.ToLower(heard), "orange lantern")
-	t.Logf("startup_ms=%d last_input_to_admission_ms=%d last_input_to_playback_ms=%d live_session_wall_ms=%d input_pcm_ms=%d output_pcm_ms=%d output_marker=%t (duration is a usage proxy, billing unverified)",
-		startup.Milliseconds(), admission.Milliseconds(), first.Milliseconds(), liveElapsed.Milliseconds(),
-		(len(positive)+len(chatter))/48, len(pcm)/48, matched)
-	if !matched {
-		t.Fatal("independent output transcription missed the synthetic marker")
-	}
-	select {
-	case <-turns:
-		t.Fatal("duplicate native turn")
-	default:
+		var pcm []byte
+		var first time.Duration
+		idle := time.NewTimer(25 * time.Second)
+		defer idle.Stop()
+	collect:
+		for {
+			select {
+			case frame := <-played:
+				if len(pcm) == 0 {
+					first = time.Since(lastInput)
+				}
+				pcm = append(pcm, frame...)
+				idle.Reset(600 * time.Millisecond)
+			case err := <-failed:
+				t.Fatalf("return speech failed: %v", err)
+			case <-idle.C:
+				break collect
+			case <-ctx.Done():
+				t.Fatal("return speech deadline")
+			}
+		}
+		idle.Stop()
+		liveElapsed := time.Since(sessionStart)
+
+		if len(pcm) == 0 {
+			t.Fatal("verified synthetic publication produced no PCM")
+		}
+		heard, err := openailive.Transcribe(ctx, key, pcm, "en")
+		if err != nil {
+			t.Fatalf("independent output check failed: %v", err)
+		}
+		matched := strings.Contains(strings.ToLower(heard), "orange lantern")
+		t.Logf("round=%d startup_ms=%d last_input_to_admission_ms=%d last_input_to_playback_ms=%d live_session_wall_ms=%d input_pcm_ms=%d output_pcm_ms=%d output_marker=%t (duration is a usage proxy, billing unverified)",
+			round, startup.Milliseconds(), admission.Milliseconds(), first.Milliseconds(), liveElapsed.Milliseconds(),
+			(len(positive)+len(chatter))/48, len(pcm)/48, matched)
+		if !matched {
+			t.Fatalf("independent output transcription missed synthetic marker: %q", heard)
+		}
+		select {
+		case <-turns:
+			t.Fatal("duplicate native turn")
+		default:
+		}
 	}
 }
 
