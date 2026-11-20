@@ -15,7 +15,7 @@ Keep the VM user’s existing environment, provider permissions, project access 
 - With a routed mailbox, both `gpt-6-luna` and `claude-haiku-5-5` published two challenge markers while the worker remained inside one native turn. That positive control used a synthetic Discord sink. Haiku’s positive control also used an isolated launcher with ordinary shell permissions and the fixture’s named manager tools.
 - A real 0.29.3 → 0.29.5 supervisor replacement preserved the worker shim and incarnation. The first send returned the missing-incarnation error before allocating an operation ID. A retry 220 ms later submitted. The named live session’s roster identity likewise appeared when the one-second hint cache warmed. Both guidance prototypes were discovered by fresh Luna dispatchers given a general discovery hint.
 
-The full [research report and evidence sent to Nathan](https://discord.com/channels/@me/1573388027802296493/1573404959108763828) distinguish native observations, controlled tests and inference.
+The 20 November dispatcher research report and evidence bundle are retained on the owner VM and were delivered privately to Nathan. The findings above distinguish native observations, controlled tests and inference.
 
 ## Component changes and implementation order
 
