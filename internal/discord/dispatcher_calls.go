@@ -40,6 +40,8 @@ type dispatcherCalls struct {
 }
 
 type dispatcherCall struct {
+	lastTurnID   string
+	lastTurnEnd  time.Time
 	metrics      dispatcherCallMetrics
 	started      time.Time
 	failure      string
@@ -431,7 +433,13 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 		}
 		return nil
 	}
-	lane := d.dependencies.newSpeech(c.ctx, callspeech.Config{Key: key, Team: cfg.Mode == "teammate", Play: play,
+	lane := d.dependencies.newSpeech(c.ctx, callspeech.Config{Key: key, Team: cfg.Mode == "teammate", Play: play, PlaybackStarted: func(turnID string) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if c.ctx.Err() == nil && turnID == c.lastTurnID && !c.lastTurnEnd.IsZero() && c.metrics.LastResultFrameMS == 0 {
+			c.metrics.LastResultFrameMS = time.Since(c.lastTurnEnd).Milliseconds()
+		}
+	},
 		Stop:   func() { d.mu.Lock(); defer d.mu.Unlock(); d.queueLocked(c, map[string]any{"type": "clear"}) },
 		Failed: func(error) { fail("speech provider unavailable; continue in text"); c.cancel() },
 		Turn: func(ctx context.Context, turn callspeech.Turn) {
@@ -593,6 +601,11 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 			}
 			d.mu.Lock()
 			c.metrics.AcceptedTurns++
+			c.lastTurnID, c.lastTurnEnd = turn.ID, turn.LastVoicedAt
+			c.metrics.LastAdmissionMS, c.metrics.LastResultFrameMS = 0, 0
+			if !turn.LastVoicedAt.IsZero() {
+				c.metrics.LastAdmissionMS = time.Since(turn.LastVoicedAt).Milliseconds()
+			}
 			d.mu.Unlock()
 			if err = lane.Acknowledge(); err != nil {
 				return err
@@ -643,13 +656,15 @@ func (d *dispatcherCalls) status() string {
 
 // Durations are host-observed. Discord playback and human hearing need a device measurement.
 type dispatcherCallMetrics struct {
-	CallID         string `json:"call_id"`
-	ReadyMS        int64  `json:"ready_ms"`
-	DurationMS     int64  `json:"duration_ms"`
-	InputFrames    uint64 `json:"input_frames"`
-	AcceptedTurns  uint64 `json:"accepted_turns"`
-	Publications   uint64 `json:"verified_publications"`
-	QueueOverflows uint64 `json:"queue_overflows"`
+	LastAdmissionMS   int64  `json:"last_turn_end_to_admission_ms,omitempty"`
+	LastResultFrameMS int64  `json:"last_turn_end_to_result_frame_ms,omitempty"`
+	CallID            string `json:"call_id"`
+	ReadyMS           int64  `json:"ready_ms"`
+	DurationMS        int64  `json:"duration_ms"`
+	InputFrames       uint64 `json:"input_frames"`
+	AcceptedTurns     uint64 `json:"accepted_turns"`
+	Publications      uint64 `json:"verified_publications"`
+	QueueOverflows    uint64 `json:"queue_overflows"`
 }
 
 func (d *dispatcherCalls) metricsSnapshot() *dispatcherCallMetrics {

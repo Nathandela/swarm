@@ -31,6 +31,7 @@ var (
 
 type Turn struct {
 	Speaker, Text, ID string
+	LastVoicedAt      time.Time
 }
 
 // Config callbacks belong to a single call generation. The caller must fence
@@ -43,6 +44,7 @@ type Config struct {
 	Turn                 func(context.Context, Turn)
 	Failed               func(error)
 	Play                 func(context.Context, []byte) error
+	PlaybackStarted      func(string)
 	Stop                 func()
 }
 
@@ -71,8 +73,9 @@ type utterance struct {
 }
 
 type publication struct {
-	text  string
-	epoch uint64
+	turnID string
+	text   string
+	epoch  uint64
 }
 
 type liveCommentary struct {
@@ -171,7 +174,7 @@ func (l *Lane) PublishForTurn(turnID, text string) error {
 	if !ok {
 		return ErrPublication
 	}
-	if err := l.queueLocked(text); err != nil {
+	if err := l.queueLocked(turnID, text); err != nil {
 		return err
 	}
 	if scope.delegationID != "" {
@@ -187,15 +190,15 @@ func (l *Lane) PublishForTurn(turnID, text string) error {
 func (l *Lane) Acknowledge() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.queueLocked("")
+	return l.queueLocked("", "")
 }
 
-func (l *Lane) queueLocked(text string) error {
+func (l *Lane) queueLocked(turnID, text string) error {
 	if l.ctx.Err() != nil {
 		return ErrClosed
 	}
 	select {
-	case l.output <- publication{text: text, epoch: l.epoch}:
+	case l.output <- publication{turnID: turnID, text: text, epoch: l.epoch}:
 		return nil
 	default:
 		return ErrBacklog
@@ -376,6 +379,7 @@ func (l *Lane) playPublication(p publication) {
 	}()
 	ticker := time.NewTicker(framePeriod)
 	defer ticker.Stop()
+	firstFrame := true
 	for len(pcm) != 0 && ctx.Err() == nil {
 		var chunk [frameBytes]byte
 		n := copy(chunk[:], pcm)
@@ -385,6 +389,10 @@ func (l *Lane) playPublication(p publication) {
 			}
 			return
 		}
+		if firstFrame && p.turnID != "" && l.cfg.PlaybackStarted != nil {
+			l.cfg.PlaybackStarted(p.turnID)
+		}
+		firstFrame = false
 		pcm = pcm[n:]
 		select {
 		case <-ctx.Done():

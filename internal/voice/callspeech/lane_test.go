@@ -251,7 +251,8 @@ func TestPendingPublicationWaitsForPersonalQuiet(t *testing.T) {
 			playing := make(chan byte, 4)
 			rendered := make(chan string, 4)
 			interrupted := make(chan struct{}, 1)
-			l := newLane(t.Context(), Config{Play: func(ctx context.Context, pcm []byte) error {
+			started := make(chan string, 2)
+			l := newLane(t.Context(), Config{PlaybackStarted: func(id string) { started <- id }, Play: func(ctx context.Context, pcm []byte) error {
 				playing <- pcm[0]
 				if pcm[0] == 'o' {
 					<-ctx.Done()
@@ -293,6 +294,9 @@ func TestPendingPublicationWaitsForPersonalQuiet(t *testing.T) {
 			} else {
 				if got := await(t, playing); got != 'n' || time.Since(lastSpeech) < personalQuietTime {
 					t.Fatal("pending result did not wait for the latest quiet window")
+				}
+				if got := await(t, started); got != "verified" {
+					t.Fatalf("unexpected playback scope %q", got)
 				}
 			}
 			select {

@@ -128,6 +128,7 @@ func (l *Lane) run() {
 					buffered.turn.Speaker = f.speaker
 				}
 				lastVoiced = f.at
+				buffered.turn.LastVoicedAt = f.at
 				if f.speaker != buffered.turn.Speaker {
 					overlap = true
 				}
@@ -163,6 +164,7 @@ func (l *Lane) run() {
 						c.invalid = true
 					}
 					c.last = f.at
+					c.turn.LastVoicedAt = f.at
 					c.voicedFrames++
 					c.end = clock + int64(framePeriod/time.Millisecond)
 				}
