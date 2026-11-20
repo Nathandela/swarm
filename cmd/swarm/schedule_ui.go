@@ -24,13 +24,11 @@ func scheduleUIOption() tui.Option {
 			}
 			return schedule.Open(cfg.StateDir)
 		},
-		Validate:      schedule.ValidateJob,
 		Preflight:     preflightSchedule,
 		Save:          saveScheduleEditor,
 		ValidateRoute: scheduledexec.ValidateRoute,
 		TimerStatus:   scheduletimer.Status,
 		InstallTimer:  installScheduleTimer,
-		Prompt:        scheduledexec.Prompt,
 	})
 }
 
