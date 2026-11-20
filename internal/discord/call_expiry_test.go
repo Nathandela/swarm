@@ -47,3 +47,36 @@ func TestTeamConsentExpiresWhileManagerIsBlocked(t *testing.T) {
 	default:
 	}
 }
+
+func TestAbruptMediaExitRevokesPendingNativeInput(t *testing.T) {
+	f := newDispatcherCallFixture(t, false)
+	speech, initial := f.begin()
+	f.native.mu.Lock()
+	defer f.native.mu.Unlock()
+	f.audio(3)
+	turnID := digest([]string{initial.Voice.CallID, "3"})
+	op := callAdmissionID(initial.Discussion.InstallationID, initial.Voice.CallID, turnID)
+	tick := time.NewTicker(time.Millisecond * 10)
+	defer tick.Stop()
+	for {
+		_, err := f.connector.callAdmission(initial.Discussion, op)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatal(err)
+		}
+		callFixtureReceive(t, f.ctx, tick.C, "durable pending input reaching blocked native service")
+	}
+	close(f.mediaAudio)
+	select {
+	case <-speech.ctx.Done():
+	case <-f.ctx.Done():
+		t.Fatal("media helper exit did not immediately revoke pending native input")
+	}
+	origin := initial.Voice
+	origin.TurnID = turnID
+	if err := f.calls.verify(f.ctx, initial.Discussion, origin, true); !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("ended call could admit queued native input: %v", err)
+	}
+}

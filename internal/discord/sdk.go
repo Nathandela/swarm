@@ -284,7 +284,7 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 			seq = 0
 		}
 		// A missing optional team voice intent must leave the text connector usable.
-		if status == 4014 && !connected && c.callGateway != nil && !c.personal && c.callDisabled.CompareAndSwap(false, true) {
+		if status == 4014 && c.callGateway != nil && !c.personal && c.callDisabled.CompareAndSwap(false, true) {
 			sessionID, resumeURL, seq = "", "", 0
 			if c.callGateway.unavailable != nil {
 				c.callGateway.unavailable("enable Server Members Intent in Discord Developer Portal > Bot > Privileged Gateway Intents and restart the connector to use team calls")

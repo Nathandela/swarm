@@ -122,7 +122,9 @@ func (d *dispatcherCalls) dispatch(f gatewayFrame) {
 	}
 	before, wasEligible := d.roster.speakers(cfg)
 	changed := d.roster.apply(cfg, f)
-	if d.leaving && (f.Type == "GUILD_CREATE" || f.Sequence != nil && d.roster.selfLeftAt == *f.Sequence) {
+	selfLeave := f.Sequence != nil && d.roster.selfLeftAt == *f.Sequence
+	freshEmptyBot := f.Type == "GUILD_CREATE" && d.roster.occupants != nil && d.roster.selfChannel == ""
+	if d.leaving && (freshEmptyBot || selfLeave) {
 		d.leaving = false
 		if d.rearmOnLeave {
 			d.signalLocked()
@@ -132,7 +134,6 @@ func (d *dispatcherCalls) dispatch(f gatewayFrame) {
 	if changed {
 		d.invalidateLocked()
 		after, eligible := d.roster.speakers(cfg)
-		selfLeave := f.Sequence != nil && d.roster.selfLeftAt == *f.Sequence
 		if eligible && !selfLeave && (!wasEligible || !slices.Equal(before, after) || f.Type == "GUILD_CREATE" || callPermissionEvent(f.Type)) {
 			d.signalLocked()
 		}
@@ -281,6 +282,11 @@ func (d *dispatcherCalls) run() {
 			d.mu.Unlock()
 			continue
 		}
+		gatewayCtx := d.t.client.callVoiceContext(d.ctx)
+		if retry != nil && retry.ctx.Value(callGatewaySessionKey{}) != gatewayCtx.Value(callGatewaySessionKey{}) {
+			// A fresh Gateway anchor is an independent authorization trigger.
+			retry = nil
+		}
 		if retry != nil && (retry.occupancyAt != d.roster.occupancyAt || !slices.Equal(retry.speakers, ids)) {
 			retry = nil
 			d.mu.Unlock()
@@ -305,7 +311,7 @@ func (d *dispatcherCalls) run() {
 				deadline = previousDeadline
 			}
 		}
-		ctx, cancel := context.WithDeadline(d.t.client.callVoiceContext(d.ctx), deadline)
+		ctx, cancel := context.WithDeadline(gatewayCtx, deadline)
 		d.generation++
 		c := &dispatcherCall{ctx: ctx, cancel: cancel, id: rand.Text(), generation: d.generation, speakers: slices.Clone(ids), input: make(chan any, 24), turns: make(chan callspeech.Turn, 8), publications: make(chan TeammatePublication, 16), lastSpeech: time.Now()}
 		c.started = time.Now()
@@ -411,6 +417,10 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 		return err
 	}
 	d.mu.Lock()
+	if err = c.ctx.Err(); err != nil {
+		d.mu.Unlock()
+		return err
+	}
 	c.bound = b
 	d.mu.Unlock()
 	play := func(ctx context.Context, pcm []byte) error {
@@ -437,7 +447,7 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 	mediaDone := make(chan error, 1)
 	started := make(chan struct{})
 	go func() {
-		mediaDone <- d.dependencies.runMedia(c.ctx, cfg.Calls.HelperPath, cfg.Calls.GuildID, cfg.Calls.RoomID, cfg.ApplicationID, c.speakers, c.input, func(e callMediaEvent) error {
+		mediaErr := d.dependencies.runMedia(c.ctx, cfg.Calls.HelperPath, cfg.Calls.GuildID, cfg.Calls.RoomID, cfg.ApplicationID, c.speakers, c.input, func(e callMediaEvent) error {
 			if c.ctx.Err() != nil {
 				return c.ctx.Err()
 			}
@@ -501,6 +511,9 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 			}
 			return nil
 		})
+		// The admission loop can be blocked in native I/O when the helper exits.
+		c.cancel()
+		mediaDone <- mediaErr
 	}()
 	ended := false
 	defer func() {
@@ -561,6 +574,9 @@ func (d *dispatcherCalls) serve(c *dispatcherCall) error {
 				return err
 			}
 		case turn := <-c.turns:
+			if err = c.ctx.Err(); err != nil {
+				return err
+			}
 			if !slices.Contains(c.speakers, turn.Speaker) || turn.ID == "" {
 				return ErrInvalid
 			}

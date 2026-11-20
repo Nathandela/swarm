@@ -15,8 +15,12 @@ import (
 )
 
 func TestCallIntentDeniedKeepsTeamTextOnline(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 18*time.Second)
-	defer cancel()
+	for _, phase := range []string{"initial", "after-ready"} {
+		t.Run(phase, func(t *testing.T) { t.Parallel(); checkDeniedCallIntent(t, phase == "after-ready") })
+	}
+}
+func checkDeniedCallIntent(t *testing.T, previouslyReady bool) {
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
 	var attempts atomic.Int32
 	var second atomic.Int64
 	delivered := make(chan struct{}, 1)
@@ -40,7 +44,13 @@ func TestCallIntentDeniedKeepsTeamTextOnline(t *testing.T) {
 		if wsjson.Read(ctx, ws, &ident) != nil || ident.Op != 2 {
 			return
 		}
-		if attempts.Add(1) == 1 {
+		attempt := attempts.Add(1)
+		if previouslyReady && attempt == 1 {
+			_ = wsjson.Write(ctx, ws, map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]string{"session_id": "before-refusal"}})
+			_ = ws.Close(4009, "new identify required")
+			return
+		}
+		if attempt == 1 || previouslyReady && attempt == 2 {
 			if ident.D.Intents&discordgo.IntentsGuildMembers == 0 {
 				t.Error("team call did not request membership updates")
 			}
@@ -78,7 +88,11 @@ func TestCallIntentDeniedKeepsTeamTextOnline(t *testing.T) {
 		t.Fatal("text dispatch missing after voice permission was refused")
 	}
 	base := discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
-	if attempts.Load() != 2 || discordgo.Intent(second.Load()) != base || !c.callDisabled.Load() {
+	wantAttempts := int32(2)
+	if previouslyReady {
+		wantAttempts++
+	}
+	if attempts.Load() != wantAttempts || discordgo.Intent(second.Load()) != base || !c.callDisabled.Load() {
 		t.Fatal("voice denial did not downgrade to existing team text intents")
 	}
 }

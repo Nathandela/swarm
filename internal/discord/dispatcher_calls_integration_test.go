@@ -410,7 +410,10 @@ func (f *dispatcherCallFixture) runMedia(ctx context.Context, _, guild, room, bo
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case audio := <-f.mediaAudio:
+		case audio, ok := <-f.mediaAudio:
+			if !ok {
+				return errors.New("test media process exited")
+			}
 			if err := handle(audio); err != nil {
 				return err
 			}

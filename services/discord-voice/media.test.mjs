@@ -274,9 +274,10 @@ test('active RTP gaps fault while Discord silence and idle gaps never emit audio
   at = 40;
   assert.equal(packet(3), audio);
   assert.equal(packet(3), null);
-  at = 500;
+  at = 1000;
   assert.equal(packet(10), audio);
-  at = 540;
+  // A missing word after a 600 ms pause still falls inside one personal utterance.
+  at = 1600;
   assert.equal(packet(12), null);
   assert.deepEqual(faults, ['receive_discontinuity']);
 });

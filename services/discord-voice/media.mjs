@@ -4,7 +4,8 @@ export const frameBytes = 960;
 export const frameSamples = 480;
 export const frameMS = 20;
 export const maxLine = 8192;
-const speechGapMS = 420;
+// Cover the longest open utterance in the Go speech lane, including personal pauses.
+const speechGapMS = 850;
 
 const transports = new Set(['aead_aes256_gcm_rtpsize', 'aead_xchacha20_poly1305_rtpsize']);
 const silence = Buffer.from([0xf8, 0xff, 0xfe]);
