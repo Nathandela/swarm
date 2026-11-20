@@ -1,0 +1,193 @@
+package callspeech_test
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/voice"
+	"github.com/Nathandela/swarm/internal/voice/callspeech"
+	"github.com/Nathandela/swarm/internal/voice/openailive"
+)
+
+const (
+	hostedFrameBytes = 960
+	hostedFrameTime  = 20 * time.Millisecond
+)
+
+// TestHostedDispatcherSpeech uses synthetic speech only. It explicitly opts
+// into separate provider work from the existing one-session preview probe.
+func TestHostedDispatcherSpeech(t *testing.T) {
+	dir := os.Getenv("SWARM_TEST_HOSTED_DISPATCHER_CALL_DIR")
+	if dir == "" {
+		t.Skip("set SWARM_TEST_HOSTED_DISPATCHER_CALL_DIR to an approved local Swarm voice test settings directory")
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skip("the in-memory source uses the local macOS Swift speech synthesizer")
+	}
+	key, err := voice.LoadOpenAIKey(dir)
+	if err != nil {
+		t.Fatal("approved test speech credential unavailable")
+	}
+	for _, test := range []struct {
+		name, phrase string
+		team         bool
+	}{
+		{name: "personal", phrase: "Check the blue notebook."},
+		{name: "team", phrase: "Dispatcher, check the blue notebook.", team: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			positive := syntheticPCM(t, test.phrase)
+			var chatter []byte
+			if test.team {
+				chatter = syntheticPCM(t, "I left the blue notebook on the table.")
+			}
+			qualifyHostedLane(t, key, test.team, positive, chatter)
+		})
+	}
+}
+
+func syntheticPCM(t *testing.T, phrase string) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "swift", "testdata/synthesize.swift", phrase)
+	pcm, err := cmd.Output()
+	if err != nil || len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > 24000*2*10 {
+		t.Fatalf("in-memory synthetic speech failed (%d PCM bytes): %v", len(pcm), err)
+	}
+	return pcm
+}
+
+func qualifyHostedLane(t *testing.T, key string, team bool, positive, chatter []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 65*time.Second)
+	defer cancel()
+	turns := make(chan callspeech.Turn, 2)
+	played := make(chan []byte, 512)
+	failed := make(chan error, 1)
+	sessionStart := time.Now()
+	lane := callspeech.New(ctx, callspeech.Config{Key: key, Language: "en", Team: team,
+		Turn: func(ctx context.Context, turn callspeech.Turn) {
+			select {
+			case turns <- turn:
+			case <-ctx.Done():
+			}
+		},
+		Play: func(ctx context.Context, pcm []byte) error {
+			select {
+			case played <- pcm:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+		Failed: func(err error) { failed <- err },
+	})
+	defer func() { lane.Close(); <-lane.Done() }()
+	select {
+	case <-lane.Ready():
+	case err := <-failed:
+		t.Fatalf("provider startup failed: %v", err)
+	case <-ctx.Done():
+		t.Fatal("provider ready deadline")
+	}
+	startup := time.Since(sessionStart)
+
+	if team {
+		pushHostedPCM(t, ctx, lane, "synthetic-chatter", chatter)
+		select {
+		case <-turns:
+			t.Fatal("unaddressed team speech admitted")
+		case err := <-failed:
+			t.Fatalf("team recognition failed: %v", err)
+		case <-time.After(2 * time.Second):
+		}
+	}
+	pushHostedPCM(t, ctx, lane, "synthetic-owner", positive)
+	lastInput := time.Now()
+	var turn callspeech.Turn
+	select {
+	case turn = <-turns:
+	case err := <-failed:
+		t.Fatalf("speech provider failed: %v", err)
+	case <-ctx.Done():
+		t.Fatal("native input deadline")
+	}
+	admission := time.Since(lastInput)
+	if turn.Speaker != "synthetic-owner" || turn.ID == "" || !strings.Contains(strings.ToLower(turn.Text), "blue notebook") {
+		t.Fatal("synthetic native marker or attribution missing")
+	}
+	const answer = "The orange lantern is ready."
+	if err := lane.PublishForTurn(turn.ID, answer); err != nil {
+		t.Fatal(err)
+	}
+
+	var pcm []byte
+	var first time.Duration
+	idle := time.NewTimer(25 * time.Second)
+	defer idle.Stop()
+collect:
+	for {
+		select {
+		case frame := <-played:
+			if len(pcm) == 0 {
+				first = time.Since(lastInput)
+			}
+			pcm = append(pcm, frame...)
+			idle.Reset(600 * time.Millisecond)
+		case err := <-failed:
+			t.Fatalf("return speech failed: %v", err)
+		case <-idle.C:
+			break collect
+		case <-ctx.Done():
+			t.Fatal("return speech deadline")
+		}
+	}
+	lane.Close()
+	<-lane.Done()
+	liveElapsed := time.Since(sessionStart)
+
+	if len(pcm) == 0 {
+		t.Fatal("verified synthetic publication produced no PCM")
+	}
+	heard, err := openailive.Transcribe(ctx, key, pcm, "en")
+	if err != nil {
+		t.Fatalf("independent output check failed: %v", err)
+	}
+	matched := strings.Contains(strings.ToLower(heard), "orange lantern")
+	t.Logf("startup_ms=%d last_input_to_admission_ms=%d last_input_to_playback_ms=%d live_session_wall_ms=%d input_pcm_ms=%d output_pcm_ms=%d output_marker=%t (duration is a usage proxy, billing unverified)",
+		startup.Milliseconds(), admission.Milliseconds(), first.Milliseconds(), liveElapsed.Milliseconds(),
+		(len(positive)+len(chatter))/48, len(pcm)/48, matched)
+	if !matched {
+		t.Fatal("independent output transcription missed the synthetic marker")
+	}
+	select {
+	case <-turns:
+		t.Fatal("duplicate native turn")
+	default:
+	}
+}
+
+func pushHostedPCM(t *testing.T, ctx context.Context, lane *callspeech.Lane, speaker string, pcm []byte) {
+	t.Helper()
+	clock := time.NewTicker(hostedFrameTime)
+	defer clock.Stop()
+	for len(pcm) != 0 {
+		var frame [hostedFrameBytes]byte
+		n := copy(frame[:], pcm)
+		if err := lane.Push(speaker, frame[:]); err != nil {
+			t.Fatal(err)
+		}
+		pcm = pcm[n:]
+		select {
+		case <-ctx.Done():
+			t.Fatal("input deadline")
+		case <-clock.C:
+		}
+	}
+}
