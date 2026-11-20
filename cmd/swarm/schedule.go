@@ -17,7 +17,7 @@ import (
 
 const scheduleUsage = `usage: swarm schedule <command>
   create --name NAME --dir PATH --agents codex,claude --authority MODE
-         --workspace worktree|directory --prompt-file FILE --timezone ZONE
+         --workspace worktree|directory --prompt-file FILE [--timezone ZONE]
          (--once YYYY-MM-DD | --daily | --weekdays | --weekly Monday | --cron EXPR)
          [--time HH:MM] [--catch-up 1h] [--allow-overlap=false]
   create --spec-file FILE         create from a JSON job specification
@@ -132,7 +132,7 @@ func scheduleCatalog(store *schedule.Store, args []string, out io.Writer) (any, 
 					return nil, err
 				}
 				if !due.IsZero() {
-					zone, err := time.LoadLocation(job.Spec.Calendar.TimeZone)
+					zone, err := job.Spec.Calendar.Location()
 					if err != nil {
 						return nil, err
 					}
@@ -150,6 +150,9 @@ func scheduleCatalog(store *schedule.Store, args []string, out io.Writer) (any, 
 			return nil, err
 		}
 		if err := validateScheduleSpec(spec); err != nil {
+			return nil, err
+		}
+		if err := checkScheduleCalendar(spec.Calendar); err != nil {
 			return nil, err
 		}
 		return store.CreateJob(spec, now)
@@ -171,6 +174,9 @@ func scheduleCatalog(store *schedule.Store, args []string, out io.Writer) (any, 
 		if err := validateScheduleSpec(spec); err != nil {
 			return nil, err
 		}
+		if err := checkScheduleCalendar(spec.Calendar); err != nil {
+			return nil, err
+		}
 		if len(args) == 6 {
 			return store.EditJobRevision(id, args[5], spec, now)
 		}
@@ -187,6 +193,13 @@ func scheduleCatalog(store *schedule.Store, args []string, out io.Writer) (any, 
 	case "pause":
 		return store.SetJobState(id, schedule.JobPaused, now)
 	case "resume":
+		job, err := store.Job(id)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkScheduleCalendar(job.Spec.Calendar); err != nil {
+			return nil, err
+		}
 		return store.SetJobState(id, schedule.JobActive, now)
 	case "archive":
 		return store.SetJobState(id, schedule.JobArchived, now)
@@ -260,7 +273,7 @@ func readScheduleSpec(args []string) (schedule.JobSpec, error) {
 	f.StringVar(&c.Weekday, "weekly", "", "weekday")
 	f.StringVar(&c.Cron, "cron", "", "five-field cron expression")
 	f.StringVar(&c.Time, "time", "", "local time")
-	f.StringVar(&c.TimeZone, "timezone", "", "IANA time zone")
+	f.StringVar(&c.TimeZone, "timezone", schedule.HostTimeZone, "follow host time or specify an IANA time zone")
 	if err := f.Parse(args); err != nil {
 		return spec, err
 	}

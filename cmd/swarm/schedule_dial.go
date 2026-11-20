@@ -3,10 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"syscall"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/schedule"
 )
 
 // A timer's environment is often missing the owner's agent executables and
@@ -16,7 +19,7 @@ func dialScheduleClient(fromTimer bool) (*protocol.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	caps := []string{protocol.CapSchedule, protocol.CapScheduleRunID}
+	caps := []string{protocol.CapSchedule, protocol.CapScheduleRunID, protocol.CapScheduleWorkspace, protocol.CapScheduleRoute, protocol.CapScheduleHostTime}
 	connect := func() (*protocol.Client, error) {
 		client, err := protocol.Dial(cfg.SocketPath, caps)
 		if err != nil {
@@ -46,3 +49,31 @@ func dialScheduleClient(fromTimer bool) (*protocol.Client, error) {
 }
 
 var errScheduleUnsupported = errors.New("running daemon does not support scheduled jobs; upgrade and restart the Swarm daemon")
+
+// The catalog CLI can work offline. Before publishing a host calendar,
+// ensure a live older daemon cannot encounter a zone it cannot evaluate.
+func checkScheduleCalendar(calendar schedule.Calendar) error {
+	if calendar.TimeZone != schedule.HostTimeZone {
+		return nil
+	}
+	cfg, err := clientConfig()
+	if err != nil {
+		return err
+	}
+	client, err := protocol.Dial(cfg.SocketPath, []string{protocol.CapScheduleHostTime})
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Close() }()
+	return checkHostTimeCapability(calendar, client.Capabilities())
+}
+
+func checkHostTimeCapability(calendar schedule.Calendar, caps []string) error {
+	if calendar.TimeZone == schedule.HostTimeZone && !slices.Contains(caps, protocol.CapScheduleHostTime) {
+		return errors.New("restart the updated Swarm daemon before enabling a schedule that follows host time")
+	}
+	return nil
+}

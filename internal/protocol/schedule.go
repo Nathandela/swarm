@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -12,11 +13,16 @@ import (
 )
 
 const (
-	CapSchedule        = "schedule"
-	CapScheduleRunID   = "schedule-run-id"
-	OpScheduleTick     = "schedule_tick"
-	OpScheduleRun      = "schedule_run"
-	OpScheduleComplete = "schedule_complete"
+	CapSchedule          = "schedule"
+	CapScheduleRoute     = "schedule-route-check"
+	OpScheduleRoute      = "schedule_route_check"
+	CapScheduleWorkspace = "schedule-workspace-check"
+	CapScheduleHostTime  = "schedule-host-time"
+	OpScheduleWorkspace  = "schedule_workspace_check"
+	CapScheduleRunID     = "schedule-run-id"
+	OpScheduleTick       = "schedule_tick"
+	OpScheduleRun        = "schedule_run"
+	OpScheduleComplete   = "schedule_complete"
 )
 
 // ServeScheduleCompletion exposes only the attempt-bound receipt operation.
@@ -127,4 +133,72 @@ func (cc *clientConn) handleSchedule(req Control) {
 		return
 	}
 	_ = cc.writeControl(Control{Op: req.Op, EndpointID: cc.endpointID, ScheduleID: runID, OperationID: req.OperationID})
+}
+
+// ScheduleWorkspaceConflict asks the local owner daemon for the same workspace
+// conflict it checks during launch. An empty result means currently available.
+func (c *Client) ScheduleWorkspaceConflict(path string) (string, error) {
+	if !slices.Contains(c.caps, CapScheduleWorkspace) {
+		return "", errors.New("restart the updated Swarm daemon to check workspace availability")
+	}
+	resp, err := c.requestWithTimeout(Control{Op: OpScheduleWorkspace, EndpointID: c.endpointID, ScheduleWorkspace: path}, 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if resp.Op == OpError {
+		return "", fmt.Errorf("workspace check: %s", resp.Error)
+	}
+	if resp.Op != OpScheduleWorkspace || resp.EndpointID != c.endpointID {
+		return "", errors.New("invalid workspace check response")
+	}
+	return resp.ScheduleWorkspace, nil
+}
+
+type scheduleWorkspaceSource interface{ ScheduleWorkspaceConflict(string) string }
+
+func (cc *clientConn) handleScheduleWorkspace(req Control) {
+	src, ok := cc.srv.d.(scheduleWorkspaceSource)
+	if !ok || cc.srv.remoteTier || cc.srv.completionTier || !cc.hasCap(CapScheduleWorkspace) {
+		cc.replyErrorCode("workspace check requires the local owner socket", CodeNotAuthorized)
+		return
+	}
+	if !filepath.IsAbs(req.ScheduleWorkspace) {
+		cc.replyErrorCode("workspace check requires an absolute path", CodeInvalidField)
+		return
+	}
+	_ = cc.writeControl(Control{Op: OpScheduleWorkspace, EndpointID: cc.endpointID, ScheduleWorkspace: src.ScheduleWorkspaceConflict(req.ScheduleWorkspace)})
+}
+
+type scheduleRouteSource interface{ ScheduleRouteAvailability(string) string }
+
+func (c *Client) ScheduleRouteAvailability(agent string) (string, error) {
+	if !slices.Contains(c.caps, CapScheduleRoute) {
+		return "", errors.New("restart the updated Swarm daemon to check agent availability")
+	}
+	resp, err := c.requestWithTimeout(Control{Op: OpScheduleRoute, EndpointID: c.endpointID, ScheduleAgent: agent}, 10*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if resp.Op == OpError {
+		return "", fmt.Errorf("agent check: %s", resp.Error)
+	}
+	if resp.Op != OpScheduleRoute || resp.EndpointID != c.endpointID || resp.ScheduleAgent != agent {
+		return "", errors.New("invalid agent check response")
+	}
+	return resp.ScheduleUnavailable, nil
+}
+
+func (cc *clientConn) handleScheduleRoute(req Control) {
+	src, ok := cc.srv.d.(scheduleRouteSource)
+	if !ok || cc.srv.remoteTier || cc.srv.completionTier || !cc.hasCap(CapScheduleRoute) {
+		cc.replyErrorCode("agent check requires the local owner socket", CodeNotAuthorized)
+		return
+	}
+	switch req.ScheduleAgent {
+	case "codex", "claude", "agy":
+	default:
+		cc.replyErrorCode("unknown scheduled agent", CodeInvalidField)
+		return
+	}
+	_ = cc.writeControl(Control{Op: OpScheduleRoute, EndpointID: cc.endpointID, ScheduleAgent: req.ScheduleAgent, ScheduleUnavailable: src.ScheduleRouteAvailability(req.ScheduleAgent)})
 }

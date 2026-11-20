@@ -110,12 +110,17 @@ func (d *Daemon) updateScheduledMeta(id, attempt string, change func(*persist.Me
 // ScheduledWorkspaceAvailable is an advisory check; launch reserves and checks
 // the same workspace under the registry mutex before spawning.
 func (d *Daemon) ScheduledWorkspaceAvailable(cwd string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return !d.scheduledWorkspaceConflictLocked(cwd, true)
+	return d.ScheduleWorkspaceConflict(cwd) == ""
 }
 
-func (d *Daemon) scheduledWorkspaceConflictLocked(cwd string, scheduled bool) bool {
+// ScheduleWorkspaceConflict returns the owning directory seen by the launch guard.
+func (d *Daemon) ScheduleWorkspaceConflict(cwd string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.scheduledWorkspaceConflictLocked(cwd, true)
+}
+
+func (d *Daemon) scheduledWorkspaceConflictLocked(cwd string, scheduled bool) string {
 	for _, existing := range d.sessions {
 		m := existing.meta
 		// Leave established ordinary-vs-ordinary launch behavior intact.
@@ -123,13 +128,13 @@ func (d *Daemon) scheduledWorkspaceConflictLocked(cwd string, scheduled bool) bo
 			continue
 		}
 		if m.Status.Process == status.ProcessRunning && worktree.PathsOverlap(cwd, m.ProviderCwd()) {
-			return true
+			return m.ProviderCwd()
 		}
 		if m.ScheduleAttempt != "" && m.Status.Process == status.ProcessLost && worktree.PathsOverlap(cwd, m.ProviderCwd()) {
 			if _, confirmed := readExitSideFile(d.sessionDir(m.ID)); !confirmed {
-				return true
+				return m.ProviderCwd()
 			}
 		}
 	}
-	return false
+	return ""
 }

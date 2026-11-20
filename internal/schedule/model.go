@@ -194,7 +194,7 @@ func PrepareJob(spec JobSpec) (JobSpec, error) {
 	if _, err := spec.Calendar.compile(); err != nil {
 		return spec, err
 	}
-	dir, err := resolveDirectory(spec.Directory)
+	dir, err := ResolveDirectory(spec.Directory)
 	if err != nil {
 		return spec, err
 	}
@@ -221,7 +221,8 @@ func validateNamePrompt(name, prompt string) error {
 	return nil
 }
 
-func resolveDirectory(path string) (string, error) {
+// ResolveDirectory normalizes the work folder for both previews and persisted jobs.
+func ResolveDirectory(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("select a directory")
 	}

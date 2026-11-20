@@ -1,6 +1,15 @@
 # Scheduled agents: operator guide
 
-Swarm's scheduler is a per-user, per-host catalog driven by a local timer. A timer tick checks calendars and asks the local Swarm daemon to dispatch eligible work. The scheduled execution path currently admits **Codex** for `observe`, `workspace-write`, and `agent-default` authority, and **Claude Code** for `agent-default` authority. Although other adapters appear in the editor, their scheduled routes are refused by policy. This is not qualification of every adapter or of every host/provider setup.
+Swarm's scheduler is a per-user, per-host catalog driven by a local timer. A timer tick checks calendars and asks the local Swarm daemon to dispatch eligible work. Codex supports the **Observe**, **Workspace write**, and **Configured agent permissions** choices. Claude Code and agy support **Configured agent permissions**. Swarm preserves your authority choice when you switch harnesses. Scheduled agy requires Antigravity CLI 1.5.12 or later on the executor's agent PATH and an authenticated native provider. Hermes and OpenCode currently lack scheduled execution support.
+
+## Create or edit in the terminal
+
+1. Open **More → Automations** and create a job, or choose **Schedule in this directory** from a session. Give the job a name, enter the task or insert a personal template, and confirm the working directory.
+2. Pick the cadence, time and primary harness on the same screen. New jobs default to daily at 09:00 on this machine, using Codex with Observe permissions. The next firing, effective permissions and timer status are visible before saving.
+3. Expand **Advanced** to choose an isolated worktree, allow overlapping runs, catch up a missed slot or set an ordered fallback list. A new editor job defaults to the selected directory and skips overlaps and missed runs.
+4. Choose **Save draft** to store a paused job or **Save and enable** to activate it. If Swarm needs to start the user timer, the editor explains that the timer serves every enabled job in this account. Readiness checks run again at activation. Open **History** to inspect a run or use **Run now** to test deliberately.
+
+Workspace checks use the current supervisor's actual session directories. If a live session owns a parent or child of the selected folder, choose an available checkout or an isolated worktree backed by a Git commit. GitHub and Dependabot tasks that invoke `gh` need network access on the executor. A signed-in CLI still needs network access under the selected harness authority.
 
 ## A Gaston-style example
 
@@ -23,7 +32,6 @@ swarm schedule create \
   --authority agent-default \
   --workspace worktree \
   --prompt-file /tmp/gaston-review.txt \
-  --timezone Europe/Zurich \
   --weekly Friday --time 08:30
 
 swarm schedule timer install
@@ -41,7 +49,7 @@ Open **Templates** from Automations to save a personal prompt. When creating a j
 
 ## Calendar and missed runs
 
-Calendars use a named IANA timezone (not `Local`) and support a one-time date, daily, weekdays, weekly weekday, or five-field cron. A wall time skipped by a daylight-saving jump is skipped; an ambiguous wall time is run at its first instant. `--catch-up 1h` (or the TUI's catch-up choice, currently one hour) allows only the latest missed calendar slot when it is within that grace period. With no grace, a slot at least one minute late is recorded as missed. The scheduler advances past older missed slots rather than replaying a backlog. Pausing suppresses calendar dispatch; manual `run` is still allowed on a paused job. `run` creates a separate occurrence and does not move the calendar cursor.
+New schedules follow the host clock. A host timezone change takes effect from the first tick that observes it. An already recorded wall-clock slot is not replayed. Existing schedules with a fixed IANA timezone retain it on edit unless you select **Use host wall time**. The CLI accepts an explicit IANA zone via `--timezone`. Calendars support a one-time date, daily, weekdays, weekly weekday, or five-field cron. A wall time skipped by a daylight-saving jump is skipped; an ambiguous wall time is run at its first instant. `--catch-up 1h` (or the TUI's catch-up choice, currently one hour) allows only the latest missed calendar slot when it is within that grace period. With no grace, a slot at least one minute late is recorded as missed. The scheduler advances past older missed slots rather than replaying a backlog. Pausing suppresses calendar dispatch; manual `run` is still allowed on a paused job. `run` creates a separate occurrence and does not move the calendar cursor.
 
 macOS installs a per-user LaunchAgent at `~/Library/LaunchAgents/com.swarm.schedule.plist`, checking every minute. Linux installs a systemd **user** service and timer under `${XDG_CONFIG_HOME:-~/.config}/systemd/user`; `Persistent=true` allows a missed timer to fire after the user manager becomes active again. These timers do not wake a sleeping host. On macOS, launchd coalesces missed calendar intervals and checks on wake; the scheduler's grace policy decides whether the latest slot is still eligible. Check both service status and scheduler history after an outage.
 
@@ -64,7 +72,9 @@ Install requires a stable executable path. Linux requires a working systemd user
 
 Agents are tried in the order shown with `→`. A launch refused before starting can advance to the next configured route. If a running worker reaches a recognized provider usage limit, Swarm requests a stop and waits for verified stop evidence before trying the next configured agent in the **same occurrence workspace**. The replacement prompt tells the next worker to inspect and preserve earlier changes and includes the previous session reference and available handoff evidence. It does not transfer provider credits, guarantee a new provider has quota, or qualify an unverified adapter route. If stop cannot be verified or launch outcome is uncertain, the occurrence is sent to attention instead of automatically starting another worker.
 
-Each scheduled occurrence gets a distinct worktree when `worktree` is selected. Worktree mode requires a Git working tree. With `directory`, the first worker can use the selected checkout directly. When another occurrence overlaps, the default is to give it an independent Git worktree. Select **Skip overlapping runs** or pass `--allow-overlap=false` to skip it instead. Swarm keeps unfinished workspaces for inspection and recovery; it does not automatically commit, push, merge, or delete agent changes.
+Each scheduled occurrence gets a distinct worktree when `worktree` is selected. Worktree mode requires a Git working tree. With `directory`, the first worker can use the selected checkout directly. When another occurrence overlaps, **Allow isolated overlaps** gives it an independent Git worktree. New editor jobs use **Skip overlaps**. On the CLI, pass `--allow-overlap=false` to skip overlaps. Swarm keeps unfinished workspaces for inspection and recovery; it does not automatically commit, push, merge, or delete agent changes.
+
+The agy worker uses native ACP to deliver the prompt privately and verify the final provider response. A native permission request is visible in the worker terminal.
 
 Claude Code can ask you to trust a new checkout or approve a tool under its configured permissions. When Swarm reports **Needs input**, select the job in Automations, open **History**, choose the run, then select **Open worker** to answer the native prompt. Review the checkout before trusting it. Use **Run now** with the intended checkout and authority to confirm the worker can start with the local provider login before relying on the timer.
 

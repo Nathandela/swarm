@@ -731,6 +731,10 @@ actionable and the launch content hash does not bind lineage.
 > `op_not_implemented` in the meantime — see the `session_launch` / `composer_send` / ...
 > section below; T9's six-state vocabulary lands with the real handler.
 
+### Schedule editor preflight
+
+The owner socket negotiates `schedule-workspace-check` for `schedule_workspace_check`. The request supplies an absolute path in `schedule_workspace`. The response returns the conflicting live provider workspace or an empty value. The `schedule-route-check` capability enables `schedule_route_check` with `schedule_agent`; its reply echoes the agent and includes `schedule_unavailable` when local discovery detects a problem. Both operations leave sessions and the job catalog unchanged. The remote and worker completion sockets cannot call them. The `schedule-host-time` capability signals support for host-following calendar jobs.
+
 ### `schedule_run`
 
 Run Now requires the owner socket and the negotiated `schedule` and
