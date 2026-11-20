@@ -82,6 +82,13 @@ func (d *Daemon) managerRuntime(local, instance string) (managerproof.Status, er
 	// A terminal editor can retain a draft while the provider reports an idle turn.
 	if d.core != nil && d.directInputUnresolved(local) {
 		if m, ok := d.core.Get(local); ok && m.Status.Process == status.ProcessRunning && m.ManagerRetirement.OperationID == "" && schema.IsDiscordManager(m.Role, m.ManagerConversationID) && d.matchesResumeSourceInstance(m, instance) {
+			if !d.blockedRetirementInput(local, schema.ManagerReplaceCustody) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if _, err := d.managerRuntimeContext(ctx, local, instance, ""); errors.Is(err, managerproof.ErrQuarantined) {
+					return managerproof.Status{}, err
+				}
+			}
 			return managerproof.Status{}, managerproof.ErrDirectInputUnresolved
 		}
 	}
@@ -177,6 +184,7 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance, ret
 	result.BridgeSocket = meta.ManagerBridgeSocket
 	result.AuthFile = meta.ManagerAuthFile
 	result.NativeCLI = meta.ManagerNativeCLI
+	result.ProviderExhausted = meta.ManagerQuotaTurn != "" && meta.ManagerQuotaTurn == result.Turn.NativeTurnID && result.Turn.State == "completed" && result.Turn.Reason == "error"
 	return result, nil
 }
 func (d *Daemon) checkedManagerBinding(local string, supplied managerproof.Binding) (managerproof.Status, error) {

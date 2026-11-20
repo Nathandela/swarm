@@ -36,3 +36,37 @@ func TestPendingWakeReportsParkedManagerActivationRefusal(t *testing.T) {
 		t.Fatalf("parked wake: %v", err)
 	}
 }
+
+func TestPendingDiscussionReportsSupervisorSocketOutage(t *testing.T) {
+	ctx := t.Context()
+	c, s, _, b := newControllerFixture(t)
+	cfg := testConfig()
+	cfg.ConversationID = b.ConversationID
+	dir := privateConfigDir(t)
+	client, err := NewProtocolControllerClient(ctx, dir+"/absent.sock", "endpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = discussionActivationError(client.discussionSupported(ctx)); !errors.Is(err, ErrDiscussionActivationUnavailable) || !errors.Is(err, errControllerSupervisorOffline) {
+		t.Fatalf("missing cold-start notice: %v", err)
+	}
+	c.runtime = client
+	d := &DiscussionController{cfg: cfg, store: s, controller: c, runtime: client, dir: dir, endpoint: "endpoint", now: time.Now}
+	if err = d.Sync(ctx, nil); errors.Is(err, ErrDiscussionActivationUnavailable) {
+		t.Fatalf("idle outage requested owner notice: %v", err)
+	}
+	if err = s.update(func(st *State) error {
+		a, err := allocateAdmission(st, b, "wake:existing-worker")
+		if err != nil {
+			return err
+		}
+		putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = d.Sync(ctx, nil)
+	if !errors.Is(err, ErrDiscussionActivationUnavailable) || !errors.Is(err, errControllerSupervisorOffline) {
+		t.Fatalf("pending worker completion had no actionable outage: %v", err)
+	}
+}

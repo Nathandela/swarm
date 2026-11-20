@@ -114,7 +114,29 @@ func (c *DiscordClient) teammateMessage(ctx context.Context, route Route) (*disc
 	return &m, nil
 }
 
+type teammateHistoryMessage struct {
+	discordgo.Message
+	Nonce string
+}
+
+func (m *teammateHistoryMessage) UnmarshalJSON(raw []byte) error {
+	m.Nonce = messageNonce(raw)
+	return m.Message.UnmarshalJSON(raw)
+}
+
 func (c *DiscordClient) teammateMessages(ctx context.Context, route Route, before string, limit int) ([]*discordgo.Message, error) {
+	rows, err := c.teammateHistoryMessages(ctx, route, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]*discordgo.Message, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, &row.Message)
+	}
+	return messages, nil
+}
+
+func (c *DiscordClient) teammateHistoryMessages(ctx context.Context, route Route, before string, limit int) ([]*teammateHistoryMessage, error) {
 	if !snowflake(route.ChannelID) || route.GuildID != "" && !snowflake(route.GuildID) || before != "" && !snowflake(before) || limit < 1 || limit > 100 {
 		return nil, ErrInvalid
 	}
@@ -122,7 +144,7 @@ func (c *DiscordClient) teammateMessages(ctx context.Context, route Route, befor
 	if before != "" {
 		query.Set("before", before)
 	}
-	var messages []*discordgo.Message
+	var messages []*teammateHistoryMessage
 	err := c.rest(ctx, http.MethodGet, "/channels/"+route.ChannelID+"/messages", query, nil, &messages)
 	if err != nil {
 		return nil, err

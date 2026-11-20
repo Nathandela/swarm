@@ -43,6 +43,7 @@ type ManagerBinding struct {
 }
 
 type Conversation struct {
+	ReplacementAfter  int64                    `json:"replacement_after,omitempty"`
 	FailedResume      *failedResume            `json:"failed_resume,omitempty"`
 	NeedsHandoff      bool                     `json:"needs_handoff,omitempty"`
 	LastOutput        uint64                   `json:"last_output,omitempty"`
@@ -75,29 +76,30 @@ type Utterance struct {
 }
 
 type Admission struct {
-	WorkerAttempts       string                `json:"worker_attempts,omitempty"`
-	WorkerProjects       string                `json:"worker_projects,omitempty"`
-	SourceCutover        bool                  `json:"source_cutover,omitempty"`
-	ProjectExplicit      bool                  `json:"project_explicit,omitempty"`
-	QuestionBoundary     uint64                `json:"question_boundary,omitempty"`
-	HumanReply           string                `json:"human_reply,omitempty"`
-	Origin               *schema.MessageOrigin `json:"origin,omitempty"`
-	Project              string                `json:"project,omitempty"`
-	NativeBindingRetired bool                  `json:"native_binding_retired,omitempty"`
-	RecoveryOnly         bool                  `json:"recovery_only,omitempty"`
-	RecoveryAcknowledged bool                  `json:"recovery_acknowledged,omitempty"`
-	OperationID          string                `json:"operation_id,omitempty"`
-	Request              json.RawMessage       `json:"request,omitempty"`
-	Phase                string                `json:"phase,omitempty"`
-	NativeTurnID         string                `json:"native_turn_id,omitempty"`
-	Reason               string                `json:"reason,omitempty"`
-	ExternalInput        uint64                `json:"external_input,omitempty"`
-	InputText            string                `json:"input_text,omitempty"`
-	ConversationID       string                `json:"conversation_id"`
-	Sequence             uint64                `json:"sequence"`
-	SourceID             string                `json:"source_id"`
-	NativeInputID        string                `json:"native_input_id,omitempty"`
-	SettledAt            time.Time             `json:"settled_at,omitempty"`
+	RecoveryOutput       *DiscussionOutputSource `json:"recovery_output,omitempty"`
+	WorkerAttempts       string                  `json:"worker_attempts,omitempty"`
+	WorkerProjects       string                  `json:"worker_projects,omitempty"`
+	SourceCutover        bool                    `json:"source_cutover,omitempty"`
+	ProjectExplicit      bool                    `json:"project_explicit,omitempty"`
+	QuestionBoundary     uint64                  `json:"question_boundary,omitempty"`
+	HumanReply           string                  `json:"human_reply,omitempty"`
+	Origin               *schema.MessageOrigin   `json:"origin,omitempty"`
+	Project              string                  `json:"project,omitempty"`
+	NativeBindingRetired bool                    `json:"native_binding_retired,omitempty"`
+	RecoveryOnly         bool                    `json:"recovery_only,omitempty"`
+	RecoveryAcknowledged bool                    `json:"recovery_acknowledged,omitempty"`
+	OperationID          string                  `json:"operation_id,omitempty"`
+	Request              json.RawMessage         `json:"request,omitempty"`
+	Phase                string                  `json:"phase,omitempty"`
+	NativeTurnID         string                  `json:"native_turn_id,omitempty"`
+	Reason               string                  `json:"reason,omitempty"`
+	ExternalInput        uint64                  `json:"external_input,omitempty"`
+	InputText            string                  `json:"input_text,omitempty"`
+	ConversationID       string                  `json:"conversation_id"`
+	Sequence             uint64                  `json:"sequence"`
+	SourceID             string                  `json:"source_id"`
+	NativeInputID        string                  `json:"native_input_id,omitempty"`
+	SettledAt            time.Time               `json:"settled_at,omitempty"`
 }
 
 type Action struct {

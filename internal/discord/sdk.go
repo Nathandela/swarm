@@ -23,6 +23,7 @@ import (
 
 // DiscordClient owns its network operations and never exposes its token in errors.
 type DiscordClient struct {
+	attachmentMu     sync.Mutex
 	token, apiBase   string
 	http             *http.Client
 	gate             chan struct{}

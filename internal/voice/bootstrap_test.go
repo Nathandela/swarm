@@ -118,8 +118,8 @@ func TestBootstrapDoesNotReplaceStoppedOrAmbiguousManager(t *testing.T) {
 	}
 	row := protocol.SessionView{ID: "endpoint/manager", EndpointID: "endpoint", Role: "manager", ManagerConversationID: cfg.ConversationID, Agent: cfg.Provider, Status: status.Status{Process: status.ProcessRunning}, Capabilities: &protocol.SessionCapabilities{SessionInstance: "instance"}}
 	f.rows = []protocol.SessionView{row, row}
-	if _, err := bootstrapManager(context.Background(), dir, cfg, refs, "endpoint", nil, f); err == nil || f.launches != 1 {
-		t.Fatal("ambiguous manager selected")
+	if _, err := bootstrapManager(context.Background(), dir, cfg, refs, "endpoint", nil, f); !errors.Is(discussionActivationError(err), ErrDiscussionActivationUnavailable) || !errors.Is(err, errCompetingManagers) || f.launches != 1 {
+		t.Fatalf("ambiguous manager selected or missing owner notice: %v", err)
 	}
 }
 

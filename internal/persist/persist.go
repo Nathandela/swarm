@@ -43,6 +43,7 @@ var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data
 // ManagerRetirement retains the controller's last quiescent checkpoint with the
 // native source, for as long as that source can be used for a parked resume.
 type ManagerRetirement struct {
+	Replacement      string    `json:"replacement,omitempty"`
 	OperationID      string    `json:"operation_id"`
 	Instance         string    `json:"instance"`
 	NativeSessionID  string    `json:"native_session_id"`
@@ -58,6 +59,7 @@ type ManagerRetirement struct {
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
 type Meta struct {
+	ManagerQuotaTurn       string `json:"manager_quota_turn,omitempty"`
 	ScheduledCodexSandbox  string `json:"scheduled_codex_sandbox,omitempty"`
 	ScheduleAttempt        string `json:"schedule_attempt,omitempty"`
 	ScheduledCompleted     bool   `json:"scheduled_completed,omitempty"`

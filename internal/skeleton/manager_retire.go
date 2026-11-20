@@ -7,6 +7,9 @@ import (
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 const managerRetireReason = "is retiring a quiescent manager"
@@ -27,7 +30,19 @@ func (a *coreAPI) ManagerRetire(ctx context.Context, local, operation string, re
 	if !found || m.Role != "manager" || m.ManagerConversationID != req.Binding.ConversationID || m.AgentType != req.Binding.Provider {
 		return receipt, managerproof.ErrStale
 	}
-	target := persist.ManagerRetirement{OperationID: operation, Instance: req.Binding.SessionInstance, NativeSessionID: req.Binding.NativeSessionID,
+	if req.Replacement != "" && !schema.IsDiscordManager(m.Role, m.ManagerConversationID) {
+		return receipt, managerproof.ErrStale
+	}
+	if req.Replacement == schema.ManagerReplaceExited {
+		if op != protocol.OpManagerRetireStatus {
+			return receipt, managerproof.ErrStale
+		}
+		if a.matchResumeInstance != nil && a.matchResumeInstance(m, req.Binding.SessionInstance) && a.managerWritersExited(m, req.Binding) {
+			receipt.State = "retired"
+		}
+		return receipt, nil
+	}
+	target := persist.ManagerRetirement{OperationID: operation, Replacement: req.Replacement, Instance: req.Binding.SessionInstance, NativeSessionID: req.Binding.NativeSessionID,
 		NativeGeneration: req.Binding.NativeGeneration, Generation: req.Generation, Checkpoint: req.Checkpoint,
 		ShimPID: m.ShimPID, ShimStartTime: m.ShimStartTime, ClaimedAt: m.ManagerRetirement.ClaimedAt}
 	if m.ManagerRetirement.OperationID != "" {
@@ -35,6 +50,9 @@ func (a *coreAPI) ManagerRetire(ctx context.Context, local, operation string, re
 			return receipt, managerproof.ErrStale
 		}
 		receipt.State = a.core.ManagerRetirementStatus(m, target)
+		if receipt.State == "retired" && req.Replacement != "" && !a.managerWritersExited(m, req.Binding) {
+			receipt.State = "uncertain"
+		}
 		if op == protocol.OpManagerRetire && receipt.State == "uncertain" {
 			_, _ = a.managerRetire(ctx, local, req, target)
 		}
@@ -68,8 +86,11 @@ func (d *Daemon) retireManager(ctx context.Context, local string, req protocol.M
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if d.anyControlled(local) || d.directInputUnresolved(local) || d.contextGuardCompactionInFlight(local) ||
-			d.composerOutcomeUnresolved(local) || d.core.UnobservedSemanticExecution(local, "") {
+		if req.Replacement != "" && d.blockedRetirementInput(local, req.Replacement) {
+			return managerproof.ErrDirectInputUnresolved
+		}
+		if d.anyControlled(local) || req.Replacement == "" && d.directInputUnresolved(local) || d.contextGuardCompactionInFlight(local) ||
+			req.Replacement == "" && (d.composerOutcomeUnresolved(local) || d.core.UnobservedSemanticExecution(local, "")) {
 			return managerproof.ErrUnavailable
 		}
 		retirement := ""
@@ -77,11 +98,19 @@ func (d *Daemon) retireManager(ctx context.Context, local string, req protocol.M
 			retirement = target.OperationID
 		}
 		current, err := d.managerRuntimeContext(ctx, local, target.Instance, retirement)
-		if err != nil {
+		if req.Replacement != "" {
+			// A submitted terminal line is retained as an uncertain old effect. A draft or attached
+			// operator above always vetoes the claim. Retry only the exact durable physical claim.
+			lostCustody := req.Replacement == schema.ManagerReplaceCustody && errors.Is(err, managerproof.ErrQuarantined)
+			exhausted := req.Replacement == schema.ManagerReplaceQuota && err == nil && current.ProviderExhausted && current.ReadyForInput && current.Binding == req.Binding && !current.Turn.ExternallySteered
+			if !redrive && !lostCustody && !exhausted {
+				return managerproof.ErrStale
+			}
+		} else if err != nil {
 			return err
 		}
 		meta, found := d.core.Get(local)
-		if !found || !d.matchesResumeSourceInstance(meta, target.Instance) || !retirementReady(req, current, redrive) {
+		if !found || !d.matchesResumeSourceInstance(meta, target.Instance) || req.Replacement == "" && !retirementReady(req, current, redrive) {
 			return managerproof.ErrStale
 		}
 		claimed, err = d.core.RetireManager(ctx, local, req.Binding.ConversationID, req.Binding.Provider, target)
@@ -111,4 +140,19 @@ func retirementReady(req protocol.ManagerRetireReq, current protocol.ManagerRunt
 	}
 	current.Binding.ObservationGeneration = req.Binding.ObservationGeneration
 	return current.Binding == req.Binding && (current.Turn == req.ExpectedTurn || current.Turn.State == "idle")
+}
+
+func (d *Daemon) blockedRetirementInput(local, replacement string) bool {
+	d.directInput.mu.Lock()
+	defer d.directInput.mu.Unlock()
+	r, ok := d.directInput.unresolved[local]
+	return ok && (replacement == "" || r.Class != protocol.DirectInputSubmitted || d.directInput.pendingDurability[local])
+}
+
+func (a *coreAPI) managerWritersExited(m persist.Meta, b protocol.ManagerRuntimeBinding) bool {
+	if m.Status.Process != status.ProcessExited || m.ConversationID != b.NativeSessionID || verifyNativeWritersStopped(a.stateDir, m, false) != nil {
+		return false
+	}
+	var native shim.NativeProcessInfo
+	return readNativeProof(a.stateDir, m.ID, shim.NativeProcessFile, &native) == nil && native.Generation == b.NativeGeneration
 }

@@ -137,6 +137,8 @@ capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-termi
 | `manager_interrupt` | `*ManagerInterruptReceipt` | Original durable operation ID and exact native turn observation |
 | `manager_retire_request` | `*ManagerRetireReq` | Exact manager binding, controller generation, checkpoint digest and last observed native turn |
 | `manager_retire` | `*ManagerRetireReceipt` | Retirement operation ID and observed stop state |
+| `replacement` | string | Optional reason for replacing an exact manager incarnation. The supervisor verifies custody loss or provider exhaustion before stopping the old writer. |
+| `provider_exhausted` | bool | Optional manager runtime observation that the current provider cannot continue because its quota is exhausted. |
 | `checkpoint` | string | Lowercase SHA-256 digest of the controller’s durable quiescent checkpoint in `manager_retire_request` |
 | `manager_input_status` | `*ManagerNativeTurn` | Retained exact input outcome, independent of whichever native turn is current |
 | `native_decision` | `*NativeDecisionReq` | Negotiated `native-requests-v1` decision: exact worker/native request identity, content hash, expiry and permission/question answer; the complete body is signed through `NativeDecisionContentHash`. |

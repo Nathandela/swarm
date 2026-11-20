@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	CapManagerReplace      = "manager-replace"
 	CapManagerRetire       = "manager-retire"
 	OpManagerRetire        = "manager_retire"
 	OpManagerRetireStatus  = "manager_retire_status"
@@ -60,7 +61,7 @@ func (c *Client) CancelManagerRetire(ctx context.Context, req ManagerRetireReq) 
 
 func (c *Client) managerRetireRequest(ctx context.Context, req ManagerRetireReq, op string) (ManagerRetireReceipt, error) {
 	var none ManagerRetireReceipt
-	if !slices.Contains(c.caps, CapManagerRetire) || op == OpManagerRetireCancel && !slices.Contains(c.caps, CapManagerRetireCancel) {
+	if !slices.Contains(c.caps, CapManagerRetire) || req.Replacement != "" && !slices.Contains(c.caps, CapManagerReplace) || op == OpManagerRetireCancel && !slices.Contains(c.caps, CapManagerRetireCancel) {
 		return none, managerproof.ErrUnavailable
 	}
 	if req.Validate() != nil {
@@ -71,6 +72,9 @@ func (c *Client) managerRetireRequest(ctx context.Context, req ManagerRetireReq,
 		SessionID: req.Binding.Session, OperationID: id, ManagerRetireRequest: &req})
 	if err != nil {
 		return none, err
+	}
+	if r.Op == OpError && r.ErrorCode == CodeManagerDirectInput {
+		return none, managerproof.ErrDirectInputUnresolved
 	}
 	if r.Op == OpError && r.ErrorCode == CodeStaleInstance {
 		return none, managerproof.ErrStale
@@ -95,6 +99,10 @@ func (cc *clientConn) handleManagerRetire(c Control) {
 	if !cc.requireBodyVersion(c) {
 		return
 	}
+	if c.ManagerRetireRequest != nil && c.ManagerRetireRequest.Replacement != "" && !cc.hasCap(CapManagerReplace) {
+		cc.replyErrorCode("dispatcher replacement was not negotiated", CodeNotImplemented)
+		return
+	}
 	if c.ManagerRetireRequest == nil || c.ManagerRetireRequest.Validate() != nil || c.ManagerRetireRequest.Binding.Session != c.SessionID ||
 		ManagerRetireOperationID(*c.ManagerRetireRequest) != c.OperationID {
 		cc.replyErrorCode("invalid exact manager retirement request", CodeInvalidField)
@@ -111,6 +119,10 @@ func (cc *clientConn) handleManagerRetire(c Control) {
 	req := *c.ManagerRetireRequest
 	req.Binding.Session = local
 	receipt, err := source.ManagerRetire(ctx, local, c.OperationID, req, c.Op)
+	if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+		cc.replyErrorCode("unsent terminal draft prevents dispatcher replacement", CodeManagerDirectInput)
+		return
+	}
 	if errors.Is(err, managerproof.ErrStale) {
 		cc.replyErrorCode("manager retirement target changed", CodeStaleInstance)
 		return

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -118,6 +119,11 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		if q.Cursor != "" || q.Anchor != "" {
 			return out, ErrInvalid
 		}
+		if err := t.service.Store.db.View(func(tx *bolt.Tx) error {
+			return checkPersonalRepairGate(tx, t.service.Config, d)
+		}); err != nil {
+			return out, err
+		}
 		return out, t.checkDiscussion(ctx, d)
 	}
 	if q.Source == "" {
@@ -144,6 +150,16 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 	if d.Gap > 0 {
 		out.Notice = strings.TrimSpace(out.Notice + " There was an unobserved interval. Deleted messages and intermediate edits may be missing.")
 	}
+	floor := ""
+	if q.Source == "thread" && isPersonalDiscussion(t.service.Config, d) {
+		floor, err = t.service.Store.personalHistoryConsent(t.service.Config, d, threadAnchor)
+		if err != nil {
+			return out, err
+		}
+		if floor == "" {
+			return out, fmt.Errorf("%w: previous message boundary unavailable", errPersonalHistoryRepair)
+		}
+	}
 	cursor := teammateHistoryCursor{Discussion: d.ID, Source: q.Source}
 	if q.Cursor != "" {
 		cursor, err = decodeTeammateCursor(t.cursorKey, q.Cursor)
@@ -162,6 +178,9 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		return t.historyFragment(ctx, d.Starter, out, cursor)
 	}
 	if cursor.PartHash != "" {
+		if floor != "" && snowflakeLess(cursor.Before, floor) {
+			return out, ErrNotAuthorized
+		}
 		route.MessageID = cursor.Before
 		if q.Anchor != "" {
 			return out, ErrInvalid
@@ -184,7 +203,7 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 			if q.Source == "parent" {
 				cursor.Upper, cursor.Before = d.ParentAnchor, d.ParentAnchor
 				leading = append(leading, starter)
-				chain, missing, e := t.replyChain(ctx, route, starter)
+				chain, missing, e := t.replyChain(ctx, route, starter, "")
 				if e != nil {
 					return out, e
 				}
@@ -199,6 +218,9 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		}
 	}
 	if q.Source == "thread" && q.Cursor == "" && threadAnchor != "" {
+		if floor != "" && snowflakeLess(threadAnchor, floor) {
+			return out, ErrNotAuthorized
+		}
 		anchor, e := t.client.teammateMessage(ctx, Route{GuildID: route.GuildID, ChannelID: route.ChannelID, MessageID: threadAnchor})
 		if teammateAPIStatus(e, http.StatusNotFound) {
 			out.Notice = strings.TrimSpace(out.Notice + " The invoking message is unavailable.")
@@ -207,7 +229,10 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 			return out, e
 		}
 		if anchor != nil {
-			chain, missing, e := t.replyChain(ctx, route, anchor)
+			if floor != "" {
+				cursor.Upper, cursor.Before = anchor.ID, anchor.ID
+			}
+			chain, missing, e := t.replyChain(ctx, route, anchor, floor)
 			if e != nil {
 				return out, e
 			}
@@ -233,12 +258,33 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		cursor.Before = anchor.ID
 		leading = []*discordgo.Message{anchor}
 	}
+	if floor != "" && cursor.Before != "" && !snowflakeLess(floor, cursor.Before) {
+		return out, nil
+	}
 	const pageLimit = 20
 	raw, err := t.client.teammateMessages(ctx, route, cursor.Before, pageLimit)
 	if err != nil {
 		return out, err
 	}
 	more := len(raw) == pageLimit || q.Anchor != ""
+	if floor != "" {
+		page := raw[:0]
+		for _, message := range raw {
+			if snowflakeLess(message.ID, floor) {
+				more = false
+				continue
+			}
+			page = append(page, message)
+		}
+		raw = page
+		chain := out.ReplyChain[:0]
+		for _, message := range out.ReplyChain {
+			if !snowflakeLess(message.ID, floor) {
+				chain = append(chain, message)
+			}
+		}
+		out.ReplyChain = chain
+	}
 	if topicStart != "" && q.Anchor == "" {
 		// The reply chain locates the topic but other speakers can contribute between its links.
 		page := raw[:0]
@@ -376,10 +422,10 @@ func (t *teammateConnector) historyFragment(ctx context.Context, route Route, ou
 	return out, nil
 }
 
-func (t *teammateConnector) replyChain(ctx context.Context, route Route, m *discordgo.Message) (chain []*discordgo.Message, missing bool, err error) {
+func (t *teammateConnector) replyChain(ctx context.Context, route Route, m *discordgo.Message, floor string) (chain []*discordgo.Message, missing bool, err error) {
 	for range 20 {
 		reply := teammateReply(m)
-		if reply == "" || !snowflakeLess(reply, m.ID) {
+		if reply == "" || !snowflakeLess(reply, m.ID) || floor != "" && snowflakeLess(reply, floor) {
 			break
 		}
 		m, err = t.client.teammateMessage(ctx, Route{GuildID: route.GuildID, ChannelID: route.ChannelID, MessageID: reply})
@@ -395,15 +441,27 @@ func (t *teammateConnector) replyChain(ctx context.Context, route Route, m *disc
 }
 
 func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch uint64) error {
-	if b.RepairEpoch == epoch || epoch == 0 || b.RepairTargetEpoch != epoch {
+	personal := b.Opened && isPersonalDiscussion(t.service.Config, b.TeammateDiscussion)
+	if epoch == 0 || b.RepairTargetEpoch != epoch ||
+		personal && (!personalRepairPending(b, epoch) || b.PersonalScanEpoch != epoch) ||
+		!personal && b.RepairEpoch == epoch {
 		return nil
 	}
 	_, _, bits, err := teammateChannelScope(ctx, t.client, t.service.Config, b.Route, t.service.botUserID())
 	if err != nil {
+		if personal {
+			return fmt.Errorf("%w: could not verify DM audience: %w", errPersonalHistoryRepair, err)
+		}
 		return err
 	}
 	if bits&discordgo.PermissionReadMessageHistory == 0 {
+		if personal {
+			return fmt.Errorf("%w: %w", errPersonalHistoryRepair, errPersonalHistoryPermission)
+		}
 		return errors.New("discord: cannot repair thread context without history permission")
+	}
+	if personal {
+		return t.repairPersonalHistory(ctx, b, epoch)
 	}
 	before := b.RepairAfter
 	for range 4 {
@@ -450,6 +508,11 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 	var record teammateCandidate
 	var guard teammateIngressGuard
 	err := t.service.Store.db.View(func(tx *bolt.Tx) error {
+		if q.Source == "admission" {
+			if err := checkPersonalRepairGate(tx, t.service.Config, d); err != nil {
+				return err
+			}
+		}
 		key := teammateKey(d.InstallationID, q.MessageID)
 		err := teammateGet(tx.Bucket([]byte(teammateIngressBucket)), key, &record)
 		if !errors.Is(err, ErrNotFound) || q.Source != "grant" {

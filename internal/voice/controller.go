@@ -17,6 +17,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
+var errDiscussionProviderExhausted = errors.New("voice: dispatcher provider exhausted")
 var ErrControllerPaused = errors.New("voice: scheduling suspended; reconcile direct terminal activity before resuming")
 var ErrControllerUncertain = errors.New("voice: native input outcome is uncertain; reconciliation required")
 var ErrControllerNativeUnavailable = errors.New("voice: current native input proof is unavailable; refresh worker status before retrying")
@@ -141,6 +142,9 @@ func (c *Controller) Tick(ctx context.Context) error {
 	}
 	if err != nil {
 		return err
+	}
+	if c.discussion != nil && status.ProviderExhausted && status.ReadyForInput && !status.Turn.ExternallySteered {
+		return errDiscussionProviderExhausted
 	}
 	if err = c.store.observeController(c.binding, status.Turn.ExternalInput, status.Turn.ExternallySteered && status.Turn.State == "running"); err != nil {
 		return err
@@ -302,7 +306,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 			}
 			nonce := hex.EncodeToString(nonceBytes[:])
 			if c.discussion != nil && st.Conversations[c.binding.ConversationID].NeedsHandoff {
-				text = discussionHandoff(st, a, text, c.binding.Provider, nonce)
+				text = discussionHandoff(st, a, text, c.binding.Provider, nonce, c.discussion.VMProjectAccess)
 			}
 			for _, w := range st.Wakes {
 				if w.ConversationID == c.binding.ConversationID && w.Admission == a.Sequence {

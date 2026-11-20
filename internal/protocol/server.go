@@ -293,7 +293,7 @@ var serverCaps = []string{
 	CapContextGuardSettings,
 	CapLoginsManage,
 	CapSchedule, CapScheduleRunID, CapScheduleWorkspace, CapScheduleHostTime, CapScheduleRoute,
-	CapSemanticSend, CapSemanticTarget, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapWorkerMail, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire, CapManagerRetireCancel,
+	CapSemanticSend, CapSemanticTarget, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapWorkerMail, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire, CapManagerRetireCancel, CapManagerReplace,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1547,7 +1547,7 @@ func (s *Server) supportedCaps() []string {
 		if cap == CapManagerInterrupt && (s.remoteTier || !hasManagerInterrupt || !managerInterrupt.ManagerInterruptSupported()) {
 			continue
 		}
-		if (cap == CapManagerRetire || cap == CapManagerRetireCancel) && (s.remoteTier || !hasManagerRetire || !managerRetire.ManagerRetireSupported()) {
+		if (cap == CapManagerRetire || cap == CapManagerRetireCancel || cap == CapManagerReplace) && (s.remoteTier || !hasManagerRetire || !managerRetire.ManagerRetireSupported()) {
 			continue
 		}
 		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {

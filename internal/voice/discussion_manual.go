@@ -8,7 +8,7 @@ import (
 	"github.com/Nathandela/swarm/internal/managerproof"
 )
 
-const discussionCustodyDiagnostic = "Inspect the exact manager in the local Swarm dashboard and have it exit there. The connector can recover the discussion once the daemon confirms its exit."
+const discussionCustodyDiagnostic = "Swarm will replace this dispatcher after the supervisor verifies its native writers stopped. If a terminal is attached, preserve any unfinished draft and exit that manager normally."
 
 // ResumeManual releases scheduling only for the exact active manager and observed input counter.
 func (d *DiscussionController) ResumeManual(ctx context.Context, session, instance string, externalInput uint64) error {

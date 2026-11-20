@@ -31,7 +31,7 @@ func (e *DiscussionInputHold) Error() string { return e.Reason.Error() }
 func (e *DiscussionInputHold) Unwrap() error { return e.Reason }
 
 func discussionActivationError(err error) error {
-	if errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrControllerNativeUnavailable) {
+	if errors.Is(err, errControllerSupervisorOffline) || errors.Is(err, errCompetingManagers) || errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrControllerNativeUnavailable) {
 		return errors.Join(ErrDiscussionActivationUnavailable, err)
 	}
 	return err
@@ -389,6 +389,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 	if conv.Retirement == nil {
 		return ManagerBinding{}, ErrCorrupt
 	}
+	if conv.Retirement.Replacement != "" && conv.ReplacementAfter > d.now().Unix() {
+		return ManagerBinding{}, replacementRetryError(conv.ReplacementAfter)
+	}
 	retirement := protocol.ManagerRetireOperationID(*conv.Retirement)
 	suffix := hashBytes([]byte(retirement)) + ".json"
 	for {
@@ -409,8 +412,11 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 			source, instance = prev.Session, prev.Instance
 		}
 		file := "resume-" + suffix
-		if stage == 2 {
+		if stage == 2 || conv.Retirement.Replacement != "" {
 			file = "reconstruct-" + suffix
+			if conv.Retirement.Replacement != "" && conv.FailedResume != nil {
+				file = "reconstruct-" + hashValue([]string{retirement, conv.FailedResume.Session}) + ".json"
+			}
 		} else {
 			req.Options[protocol.OptionResumeFrom] = source
 			req.ResumeSourceInstance = instance
@@ -423,7 +429,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		// Start a new native history only after confirming retirement and ruling out
 		// any in-flight legacy resume. Preserve the thread's tracked work and outbox.
 		migrate := false
-		if d.cfg.VMProjectAccess && !conv.Binding.NativeCLI && stage != 2 {
+		if conv.Retirement.Replacement == "" && d.cfg.VMProjectAccess && !conv.Binding.NativeCLI && stage != 2 {
 			var err error
 			migrate, err = d.canMigrateParked(ctx, conv, file, req)
 			if err != nil {
@@ -437,6 +443,22 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
 		if err != nil {
 			var failed *failedResume
+			if conv.Retirement.Replacement != "" {
+				delayErr := d.store.update(func(st *State) error {
+					c := st.Conversations[d.cfg.ConversationID]
+					if !sameParkedManager(st, generation, c, conv) {
+						return ErrStale
+					}
+					c.ReplacementAfter = d.now().Add(discussionReplacementInterval).Unix()
+					if errors.As(err, &failed) {
+						failed.Attempt = 1
+						c.FailedResume = failed
+					}
+					putRecord(st, "conversations", &st.Conversations, d.cfg.ConversationID, c)
+					return nil
+				})
+				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err, delayErr)
+			}
 			if migrate || stage == 2 || !errors.As(err, &failed) {
 				if errors.Is(err, ErrControllerUncertain) || errors.Is(err, ErrStale) || errors.Is(err, ErrConflict) {
 					return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
@@ -459,10 +481,10 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 			continue
 		}
 		next := selected.Binding
-		if next.LoginEpoch != conv.Binding.LoginEpoch || next.SessionInstance == conv.Binding.SessionInstance || next.SessionID == conv.Binding.SessionID {
+		if (conv.Retirement.Replacement == "" && next.LoginEpoch != conv.Binding.LoginEpoch) || next.SessionInstance == conv.Binding.SessionInstance || next.SessionID == conv.Binding.SessionID {
 			return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 		}
-		if migrate || stage == 2 {
+		if migrate || stage == 2 || conv.Retirement.Replacement != "" {
 			if next.NativeSessionID == conv.Binding.NativeSessionID {
 				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 			}
@@ -571,9 +593,18 @@ func (d *DiscussionController) Dormant() (bool, error) {
 	return true, nil
 }
 
-func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOutput) error) error {
+func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOutput) error) (result error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer func() {
+		if !errors.Is(result, errControllerSupervisorOffline) {
+			return
+		}
+		st, err := d.store.readView()
+		if err == nil && discussionPending(st) {
+			result = errors.Join(ErrDiscussionActivationUnavailable, result)
+		}
+	}()
 	st, err := d.store.Snapshot()
 	if err != nil {
 		return err
@@ -646,6 +677,9 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	}
 	if err := d.controller.Tick(ctx); err != nil {
 		d.idleSince = time.Time{}
+		if errors.Is(err, errDiscussionProviderExhausted) {
+			return d.startReplacement(ctx, schema.ManagerReplaceQuota)
+		}
 		if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
 			return d.inputHold(ErrDiscussionDirectInputHeld, err)
 		}
@@ -796,8 +830,20 @@ func (d *DiscussionController) maybeRetire(ctx context.Context) error {
 	return d.finishRetirement(ctx, req, false)
 }
 
-func (d *DiscussionController) finishRetirement(ctx context.Context, req protocol.ManagerRetireReq, statusOnly bool) error {
-	if !statusOnly {
+func (d *DiscussionController) finishRetirement(ctx context.Context, req protocol.ManagerRetireReq, statusOnly bool) (result error) {
+	defer func() {
+		if req.Replacement != "" && result != nil {
+			reason := ErrDiscussionNativeProofHeld
+			if errors.Is(result, managerproof.ErrDirectInputUnresolved) {
+				reason = ErrDiscussionDirectInputHeld
+			}
+			var hold *DiscussionInputHold
+			if notice := d.inputHold(reason, result); errors.As(notice, &hold) {
+				result = errors.Join(result, notice)
+			}
+		}
+	}()
+	if !statusOnly && req.Replacement == "" {
 		st, err := d.store.Snapshot()
 		if err != nil {
 			return err
@@ -821,6 +867,18 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		st, err := d.store.Snapshot()
 		if err != nil {
 			return err
+		}
+		if req.Replacement != "" {
+			// The supervisor revalidates eligibility at each physical claim. Cancel an unclaimed
+			// refusal so a returning healthy owner can keep its existing discussion.
+			_, err = d.runtime.ManagerRetire(ctx, req, false)
+			if errors.Is(err, managerproof.ErrStale) {
+				return d.cancelRetirement(ctx, req)
+			}
+			if err != nil {
+				return err
+			}
+			return ErrControllerUncertain
 		}
 		if discussionPending(st) {
 			return d.cancelRetirement(ctx, req)
@@ -1018,6 +1076,9 @@ func (d *DiscussionController) PublicationExported(id string, question bool) (bo
 }
 
 func discussionOutputSource(st *State, conversation string, a Admission) DiscussionOutputSource {
+	if a.RecoveryOnly && a.RecoveryOutput != nil {
+		return *a.RecoveryOutput
+	}
 	if a.Origin != nil {
 		output := DiscussionOutputSource{AdmissionID: a.Origin.RequestID}
 		for _, worker := range st.Workers {

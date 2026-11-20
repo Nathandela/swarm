@@ -24,9 +24,17 @@ type ManagerLaunchReq struct {
 	RetireOperationID string `json:"retire_operation_id,omitempty"`
 }
 
-// ManagerRetireReq binds one quiescent checkpoint to the exact native writer
-// and the last turn observed when the controller wrote the checkpoint.
+const (
+	ManagerReplaceExited  = "exited"
+	ManagerReplaceCustody = "custody_lost"
+	ManagerReplaceQuota   = "provider_exhausted"
+)
+
+// ManagerRetireReq identifies the native writer and its durable retirement checkpoint.
+// Ordinary parking verifies its last observed turn. Replacement requires separate
+// supervisor proof of the named condition and the old native writers' exit.
 type ManagerRetireReq struct {
+	Replacement  string                `json:"replacement,omitempty"`
 	Binding      ManagerRuntimeBinding `json:"binding"`
 	Generation   uint64                `json:"generation"`
 	Checkpoint   string                `json:"checkpoint"`
@@ -34,8 +42,12 @@ type ManagerRetireReq struct {
 }
 
 func (r ManagerRetireReq) Validate() error {
-	if (ManagerAdmission{Binding: r.Binding, Nonce: r.Checkpoint}).Validate() != nil || r.Generation == 0 ||
-		(r.ExpectedTurn.State != "idle" && r.ExpectedTurn.State != "completed") {
+	validTurn := r.ExpectedTurn.State == "idle" || r.ExpectedTurn.State == "completed"
+	if r.Replacement != "" {
+		validCause := r.Replacement == ManagerReplaceCustody || r.Replacement == ManagerReplaceQuota || r.Replacement == ManagerReplaceExited
+		validTurn = validCause && r.ExpectedTurn == (ManagerNativeTurn{State: "unknown"})
+	}
+	if (ManagerAdmission{Binding: r.Binding, Nonce: r.Checkpoint}).Validate() != nil || r.Generation == 0 || !validTurn {
 		return errors.New("invalid manager retirement checkpoint")
 	}
 	for _, value := range []string{r.ExpectedTurn.NativeInputID, r.ExpectedTurn.NativeTurnID, r.ExpectedTurn.Reason} {

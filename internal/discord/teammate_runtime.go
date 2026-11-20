@@ -222,6 +222,10 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 		ID:             "dt_" + digest([]string{cfg.InstallationID, route.GuildID, route.ChannelID})[:32],
 		InstallationID: cfg.InstallationID, Route: route, Starter: starter, ParentAnchor: anchor,
 	}, RepairEpoch: p.GapEpoch, NotifiedEpoch: p.GapEpoch}
+	if personal {
+		binding.PersonalConsentID = m.ID
+		binding.PersonalRepairEpoch = p.GapEpoch
+	}
 	// For a newly bound thread, the invoking message forms the first context boundary.
 	if route.ChannelID == c.Route.ChannelID {
 		binding.Boundary = m.ID
@@ -284,6 +288,16 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 				return store.teammateCandidateChange(cfg.InstallationID, c, StatePrepared, "source changed before native submission", nil)
 			}
 			a.Text = current.Content
+			previousManifest := a.AttachmentManifest
+			a.AttachmentManifest, err = t.captureAttachments(ctx, a, current)
+			if err != nil {
+				return err
+			}
+			if previousManifest != a.AttachmentManifest {
+				if err = store.teammateCandidateChange(cfg.InstallationID, c, StateSending, "", &a); err != nil {
+					return err
+				}
+			}
 			noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			noticeErr = t.sendStartupNotice(noticeCtx, a.Discussion, false)
 			cancel()
@@ -320,7 +334,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		if err != nil {
 			return err
 		}
-		if b.Opened && p.GapEpoch > b.NotifiedEpoch {
+		if cfg.Mode != "personal" && b.Opened && p.GapEpoch > b.NotifiedEpoch {
 			b.Gap = p.GapEpoch
 			if err = t.queueGap(b.TeammateDiscussion); err != nil {
 				return err
@@ -347,6 +361,11 @@ func (t *teammateConnector) submitRevision(ctx context.Context, c teammateCandid
 		a.Supersedes = a.Revision
 	}
 	a.Revision, a.Text, a.ReplyTo = teammateRevision(m), m.Content, teammateReply(m)
+	var captureErr error
+	a.AttachmentManifest, captureErr = t.captureAttachments(ctx, a, m)
+	if captureErr != nil {
+		return captureErr
+	}
 	a.QuestionID, a.QuestionHash = "", ""
 	if a.ReplyTo != "" {
 		var err error
@@ -497,6 +516,9 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	if err != nil {
 		return err
 	}
+	if err := store.preparePersonalRepair(t.service.Config, checkpoint.GapEpoch); err != nil {
+		return err
+	}
 	if source, ok := t.manager.(interface {
 		PendingWorkerDiscussions() (func(TeammateDiscussion) bool, error)
 	}); ok {
@@ -555,6 +577,17 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		})
 	}
 	now := time.Now()
+	if t.service.Config.Mode == "personal" {
+		// Backward REST pages and live Gateway events can enter custody in either
+		// order. Reconcile any already-started admission, then send in source order.
+		sort.SliceStable(pending, func(i, j int) bool {
+			a, b := pending[i], pending[j]
+			if (a.Admission == nil) != (b.Admission == nil) {
+				return a.Admission != nil
+			}
+			return snowflakeLess(a.Route.MessageID, b.Route.MessageID)
+		})
+	}
 	predecessors := make(map[string]bool)
 	accepted := make(map[string]teammateCandidate)
 	for _, c := range pending {
@@ -565,7 +598,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		if c.Admission != nil {
 			id = c.Admission.Discussion.Route.ChannelID
 		}
-		if predecessors[id] {
+		if predecessors[id] || isPersonalDiscussion(t.service.Config, bound[id].TeammateDiscussion) && personalRepairPending(bound[id], checkpoint.GapEpoch) {
 			continue
 		}
 		predecessors[id] = true
@@ -604,6 +637,10 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		}
 		launch(b.Route.ChannelID, "", true, func(ctx context.Context) error {
 			repairErr := t.repair(ctx, b, checkpoint.GapEpoch)
+			if isPersonalDiscussion(t.service.Config, b.TeammateDiscussion) && personalRepairPending(b, checkpoint.GapEpoch) {
+				// The pending snapshot predates any newly staged history rows.
+				return errors.Join(repairErr, t.notifyPersonalHistoryHold(ctx, b, checkpoint.GapEpoch, repairErr))
+			}
 			if hasAccepted {
 				if err := t.reconcileAccepted(ctx, waiting); err != nil {
 					return errors.Join(repairErr, err)

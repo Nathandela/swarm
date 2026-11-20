@@ -54,17 +54,22 @@ type teammateBinding struct {
 	StartupNoticePending    bool
 	StartupNoticeGeneration uint64
 	TeammateDiscussion
-	Opened              bool
-	LastIngressSequence uint64
-	Boundary            string
-	RepairUpper         string
-	RepairLower         string
-	RepairAfter         string
-	RepairEpoch         uint64
-	RepairTargetEpoch   uint64
-	NotifiedEpoch       uint64
-	ParentLow           string
-	Error               string
+	Opened                      bool
+	LastIngressSequence         uint64
+	Boundary                    string
+	RepairUpper                 string
+	RepairLower                 string
+	RepairAfter                 string
+	RepairEpoch                 uint64
+	RepairTargetEpoch           uint64
+	PersonalConsentID           string    `json:",omitempty"`
+	PersonalHistoryFailureSince time.Time `json:",omitzero"`
+	PersonalHistoryFailureEpoch uint64    `json:",omitempty"`
+	PersonalScanEpoch           uint64    `json:",omitempty"`
+	PersonalRepairEpoch         uint64    `json:",omitempty"`
+	NotifiedEpoch               uint64
+	ParentLow                   string
+	Error                       string
 }
 
 type teammateCheckpoint struct {
@@ -117,126 +122,135 @@ func (s *Store) teammateInterested(installation, id string) (candidate bool, err
 
 func (s *Store) teammateRecord(installation, session string, sequence int64, records []teammateCandidate, deleted bool) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(teammateIngressBucket))
-		queue := tx.Bucket([]byte(teammatePendingBucket))
-		for _, record := range records {
-			key := teammateKey(installation, record.Route.MessageID)
-			var prior teammateCandidate
-			err := teammateGet(b, key, &prior)
-			if err == nil {
-				if (deleted || record.Edited) && record.Route.GuildID == "" {
-					record.Route.GuildID = prior.Route.GuildID
-				}
-				if prior.Route != record.Route || !deleted && !record.Edited && prior.Author.ID != record.Author.ID {
-					return ErrConflict
-				}
-				if deleted || record.Edited {
-					prior.Edited = true
-					prior.Mutation++
-					prior.Deleted = prior.Deleted || deleted
-					if deleted && prior.State == StatePrepared {
-						if err := teammateSettleCandidate(tx, installation, key, prior, StateFailed); err != nil {
-							return err
-						}
-						continue
-					}
-					if err = putJSON(tx, teammateIngressBucket, key, prior); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-			if !errors.Is(err, ErrNotFound) {
-				return err
-			}
-			var guard teammateIngressGuard
-			err = teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)), key, &guard)
-			if err == nil {
-				if (record.Edited || deleted) && record.Route.GuildID == "" {
-					record.Route.GuildID = guard.Route.GuildID
-				}
-				if record.Route != guard.Route || !deleted && !record.Edited && guard.ActorID != record.Author.ID {
-					return ErrConflict
-				}
-				if deleted || record.Edited && guard.LastChange != "deleted" {
-					guard.LastChange = "edited"
-					if deleted {
-						guard.LastChange = "deleted"
-					}
-					if err = putJSON(tx, teammateIngressGuardBucket, key, guard); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-			if !errors.Is(err, ErrNotFound) {
-				return err
-			}
-			if record.Edited || deleted {
-				continue
-			}
-			var binding teammateBinding
-			bindingKey := teammateKey(installation, record.Route.ChannelID)
-			err = teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), bindingKey, &binding)
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return err
-			}
-			knownBinding := err == nil
-			if knownBinding {
-				if binding.Route.GuildID != record.Route.GuildID {
-					return ErrConflict
-				}
-				if !record.Opening && (binding.ProvisionalCancelled || !binding.Opened && tx.Bucket([]byte(teammateActiveBindingBucket)).Get(teammateKey(installation, record.Route.ChannelID)) == nil) {
-					continue
-				}
-				if err = teammateActivate(tx, &binding); err != nil {
-					return err
-				}
-			}
-			if !record.Opening && errors.Is(err, ErrNotFound) {
-				// Hold early, untagged posts only after an opener has been durably observed.
-				openingKey := teammateOpeningKey(installation, record.Route.ChannelID)
-				meta := tx.Bucket([]byte(teammateMetaBucket))
-				if meta.Get(openingKey) == nil || meta.Get(teammateKey(installation, "parent:"+record.Route.ChannelID)) != nil {
-					continue
-				}
-			}
-			if err = teammateIngressCount(tx, 1); err != nil {
-				return err
-			}
-			record.Sequence, err = b.NextSequence()
-			if err != nil {
-				return err
-			}
-			record.State = StatePrepared
-			if knownBinding {
-				binding.LastIngressSequence = record.Sequence
-				if err = putJSON(tx, teammateDiscussionBucket, bindingKey, binding); err != nil {
-					return err
-				}
-			}
-			if err = putJSON(tx, teammateIngressBucket, key, record); err != nil {
-				return err
-			}
-			if err = queue.Put(teammatePendingKey(installation, record.Sequence), key); err != nil {
-				return err
-			}
-			if record.Opening {
-				meta := tx.Bucket([]byte(teammateMetaBucket))
-				for _, id := range []string{record.Route.ChannelID, record.Route.MessageID} {
-					if err = meta.Put(teammateOpeningKey(installation, id), []byte{1}); err != nil {
-						return err
-					}
-				}
-			}
+		if err := teammateRecordCandidates(tx, installation, records, deleted); err != nil {
+			return err
 		}
 		return teammateCheckpointUpdate(tx, installation, session, sequence, false, "")
 	})
 }
 
+func teammateRecordCandidates(tx *bolt.Tx, installation string, records []teammateCandidate, deleted bool) error {
+	b := tx.Bucket([]byte(teammateIngressBucket))
+	queue := tx.Bucket([]byte(teammatePendingBucket))
+	for _, record := range records {
+		key := teammateKey(installation, record.Route.MessageID)
+		var prior teammateCandidate
+		err := teammateGet(b, key, &prior)
+		if err == nil {
+			if (deleted || record.Edited) && record.Route.GuildID == "" {
+				record.Route.GuildID = prior.Route.GuildID
+			}
+			if prior.Route != record.Route || !deleted && !record.Edited && prior.Author.ID != record.Author.ID {
+				return ErrConflict
+			}
+			if deleted || record.Edited {
+				prior.Edited = true
+				prior.Mutation++
+				prior.Deleted = prior.Deleted || deleted
+				if deleted && prior.State == StatePrepared {
+					if err := teammateSettleCandidate(tx, installation, key, prior, StateFailed); err != nil {
+						return err
+					}
+					continue
+				}
+				if err = putJSON(tx, teammateIngressBucket, key, prior); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		var guard teammateIngressGuard
+		err = teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)), key, &guard)
+		if err == nil {
+			if (record.Edited || deleted) && record.Route.GuildID == "" {
+				record.Route.GuildID = guard.Route.GuildID
+			}
+			if record.Route != guard.Route || !deleted && !record.Edited && guard.ActorID != record.Author.ID {
+				return ErrConflict
+			}
+			if deleted || record.Edited && guard.LastChange != "deleted" {
+				guard.LastChange = "edited"
+				if deleted {
+					guard.LastChange = "deleted"
+				}
+				if err = putJSON(tx, teammateIngressGuardBucket, key, guard); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if record.Edited || deleted {
+			continue
+		}
+		var binding teammateBinding
+		bindingKey := teammateKey(installation, record.Route.ChannelID)
+		err = teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), bindingKey, &binding)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		knownBinding := err == nil
+		if knownBinding {
+			if binding.Route.GuildID != record.Route.GuildID {
+				return ErrConflict
+			}
+			if !record.Opening && (binding.ProvisionalCancelled || !binding.Opened && tx.Bucket([]byte(teammateActiveBindingBucket)).Get(teammateKey(installation, record.Route.ChannelID)) == nil) {
+				continue
+			}
+			if err = teammateActivate(tx, &binding); err != nil {
+				return err
+			}
+		}
+		if !record.Opening && errors.Is(err, ErrNotFound) {
+			// Hold early, untagged posts only after an opener has been durably observed.
+			openingKey := teammateOpeningKey(installation, record.Route.ChannelID)
+			meta := tx.Bucket([]byte(teammateMetaBucket))
+			if meta.Get(openingKey) == nil || meta.Get(teammateKey(installation, "parent:"+record.Route.ChannelID)) != nil {
+				continue
+			}
+		}
+		if err = teammateIngressCount(tx, 1); err != nil {
+			return err
+		}
+		record.Sequence, err = b.NextSequence()
+		if err != nil {
+			return err
+		}
+		record.State = StatePrepared
+		if knownBinding {
+			binding.LastIngressSequence = record.Sequence
+			if err = putJSON(tx, teammateDiscussionBucket, bindingKey, binding); err != nil {
+				return err
+			}
+		}
+		if err = putJSON(tx, teammateIngressBucket, key, record); err != nil {
+			return err
+		}
+		if err = queue.Put(teammatePendingKey(installation, record.Sequence), key); err != nil {
+			return err
+		}
+		if record.Opening {
+			meta := tx.Bucket([]byte(teammateMetaBucket))
+			for _, id := range []string{record.Route.ChannelID, record.Route.MessageID} {
+				if err = meta.Put(teammateOpeningKey(installation, id), []byte{1}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func teammateOpeningKey(installation, id string) []byte {
 	return teammateKey(installation, "opening:"+id)
 }
+
+const teammateContextGapMessage = "Unobserved Discord interval. Known threads are repaired as context; an unknown tag may have been missed."
 
 func teammateCheckpointUpdate(tx *bolt.Tx, installation, session string, sequence int64, gap bool, issue string) error {
 	key := teammateKey(installation, "checkpoint")
@@ -256,7 +270,7 @@ func teammateCheckpointUpdate(tx *bolt.Tx, installation, session string, sequenc
 		}); err != nil {
 			return err
 		}
-		p.Error = "Unobserved Discord interval. Known threads are repaired as context; an unknown tag may have been missed."
+		p.Error = teammateContextGapMessage
 	}
 	if issue != "" {
 		p.Error = issue
@@ -529,6 +543,9 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 				return err
 			}
 			if state == StateSent {
+				if !binding.Opened && binding.PersonalConsentID != "" {
+					binding.PersonalConsentID = record.Route.MessageID
+				}
 				binding.Opened = true
 				binding.ProvisionalCancelled = false
 				if record.Route.ChannelID == d.Route.ChannelID && snowflakeLess(binding.Boundary, record.Route.MessageID) {

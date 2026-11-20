@@ -2,6 +2,9 @@ package voice
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,6 +13,8 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
+
+var errControllerSupervisorOffline = errors.New("voice: supervisor API is unavailable")
 
 // ProtocolControllerClient isolates each owner RPC: a lost send reply never blocks native proof reads.
 // Only service shutdown cancels accepted mutations; device/bridge disconnect does not own their lifetime.
@@ -35,6 +40,9 @@ func controllerOwnerCall[T any](p *ProtocolControllerClient, caller context.Cont
 	}
 	client, err := protocol.DialContext(operation, p.socket, caps)
 	if err != nil {
+		if caller.Err() == nil && p.ctx.Err() == nil {
+			return zero, errors.Join(errControllerSupervisorOffline, err)
+		}
 		return zero, err
 	}
 	defer func() { _ = client.Close() }()
@@ -48,7 +56,14 @@ func controllerOwnerCall[T any](p *ProtocolControllerClient, caller context.Cont
 	}
 	result, err := call(client)
 	if operation.Err() != nil {
+		if caller.Err() == nil && p.ctx.Err() == nil {
+			return zero, errors.Join(errControllerSupervisorOffline, operation.Err())
+		}
 		return zero, operation.Err()
+	}
+	var networkErr net.Error
+	if err != nil && caller.Err() == nil && p.ctx.Err() == nil && (errors.As(err, &networkErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		return result, errors.Join(errControllerSupervisorOffline, err)
 	}
 	return result, err
 }
@@ -142,13 +157,21 @@ func (p *ProtocolControllerClient) RetainedHistoryPage(req schema.InteractionHis
 }
 
 func (p *ProtocolControllerClient) ManagerRetire(ctx context.Context, req protocol.ManagerRetireReq, statusOnly bool) (protocol.ManagerRetireReceipt, error) {
-	return controllerOwnerCall(p, ctx, 20*time.Second, []string{protocol.CapManagerRetire}, func(c *protocol.Client) (protocol.ManagerRetireReceipt, error) {
+	caps := []string{protocol.CapManagerRetire}
+	if req.Replacement != "" {
+		caps = append(caps, protocol.CapManagerReplace)
+	}
+	return controllerOwnerCall(p, ctx, 20*time.Second, caps, func(c *protocol.Client) (protocol.ManagerRetireReceipt, error) {
 		return c.ManagerRetire(ctx, req, statusOnly)
 	})
 }
 
 func (p *ProtocolControllerClient) CancelManagerRetire(ctx context.Context, req protocol.ManagerRetireReq) (protocol.ManagerRetireReceipt, error) {
-	return controllerOwnerCall(p, ctx, 20*time.Second, []string{protocol.CapManagerRetire, protocol.CapManagerRetireCancel}, func(c *protocol.Client) (protocol.ManagerRetireReceipt, error) {
+	caps := []string{protocol.CapManagerRetire, protocol.CapManagerRetireCancel}
+	if req.Replacement != "" {
+		caps = append(caps, protocol.CapManagerReplace)
+	}
+	return controllerOwnerCall(p, ctx, 20*time.Second, caps, func(c *protocol.Client) (protocol.ManagerRetireReceipt, error) {
 		return c.CancelManagerRetire(ctx, req)
 	})
 }

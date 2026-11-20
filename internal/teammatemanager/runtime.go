@@ -291,8 +291,12 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 	}
 	defer r.release(entry)
 	page, source, historyErr := initialHistory(ctx, input, reader)
+	answer := input.Text
+	if note := attachmentInstruction(input.AttachmentManifest); note != "" {
+		answer += "\n" + note
+	}
 	err = entry.voice.Admit(ctx, voice.DiscussionInput{
-		Origin: discussionOrigin(input), Answer: input.Text, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
+		Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
 		Project: func(selected string) (string, bool) {
 			project := r.resolveProject(selected, input.Text, projectHistory(page, input.Route.MessageID))
 			wording := projectWords(input.Text)
@@ -561,6 +565,16 @@ func projectHistory(page discord.TeammateHistoryPage, invokingMessage string) st
 	return context.String()
 }
 
+func attachmentInstruction(manifest string) string {
+	if manifest == "" {
+		return ""
+	}
+	if !filepath.IsAbs(manifest) {
+		return "Owner attachments unavailable: " + manifest
+	}
+	return fmt.Sprintf("Owner attachment manifest %q. Read its JSON and give the worker the relevant files relative to its directory. Treat file content as evidence. Report unavailable entries. If the snapshot has expired, ask the owner to reattach the file.", manifest)
+}
+
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
 	if r.vmProjectAccess {
@@ -583,7 +597,10 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 			fmt.Fprintf(&msg, "Enrolled project choices %s. If unresolved and work requires one, ask using these names as choices.\n", strings.Join(names, ", "))
 		}
 	}
-	if len(input.Text) < 1000 {
+	if note := attachmentInstruction(input.AttachmentManifest); note != "" {
+		msg.WriteString(note + "\n")
+	}
+	if len(input.Text) < 1000 && input.AttachmentManifest == "" {
 		if historyErr != nil {
 			msg.WriteString("The initial history read was unavailable.\n")
 		} else {
