@@ -52,6 +52,18 @@ func (d *Daemon) resolveSemanticTarget(local string) (string, protocol.ErrorCode
 		if err != nil || start != current.ShimStartTime {
 			return "", protocol.CodeUnavailable, errors.New("discussion shim is temporarily unavailable; retry")
 		}
+		if current.AgentType == "claude" {
+			enrolled, err := d.core.SessionClaudeInputEnrollment(local)
+			if err != nil {
+				return "", protocol.CodeUnavailable, err
+			}
+			if !enrolled {
+				if code, err := d.requireStructuredComposer(local, local); err != nil {
+					return "", code, err
+				}
+				return instance, "", nil
+			}
+		}
 		switch current.AgentType {
 		case "codex", "claude":
 			if d.probeNativeOwnerInput(context.Background(), local, instance) {

@@ -697,7 +697,8 @@ func (d *Daemon) composerSendAtHead(local, operationID string, req protocol.Comp
 		return code, serr
 	}
 
-	if source == adapter.SourceOwner && sink.backend == nil {
+	// A known, unenrolled Claude session uses its existing guarded composer.
+	if source == adapter.SourceOwner && sink.backend == nil && meta.AgentType != "claude" {
 		return protocol.CodeStructuredUnsupported, errors.New("native semantic input is unavailable; nothing was submitted")
 	}
 	if discussionCodex && !discussionCodexThreadIdle(sink.backend) {
