@@ -202,7 +202,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
-		ManagerSettingsDir: settings, OwnerSocket: socket, VMProjectAccess: r.vmProjectAccess,
+		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
 		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
 		History: entry.read, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
 	})

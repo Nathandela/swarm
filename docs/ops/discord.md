@@ -33,13 +33,13 @@ swarm discord status
 
 Open the main Swarm board to find Discord managers in **DISPATCHER**, including when grouping by tag or repository. Enter on a running manager opens its terminal. Its workers appear on their owning supervisor. A parked manager wakes on a new message in its thread.
 
-New teammate and personal installations use the VM policy by default. Existing installations keep their enrolled-directory policy until explicitly changed. To give an existing installation's managers and delegated workers the same choice of working directory as local Swarm, set the VM policy and restart the connector:
+New teammate and personal installations use the VM policy by default. Existing installations keep their enrolled-directory policy until explicitly changed. To give an existing installation's managers and delegated workers the same choice of working directory as local Swarm, including its native shell and ordinary CLI commands, set the VM policy and restart the connector:
 
 ```sh
 swarm discord connect --state-dir "$connector" --project-access vm
 ```
 
-VM access accepts canonical, existing absolute directories accessible to the Swarm OS user. Existing project aliases remain available as shortcuts. Each admitted participant can request work under that policy. Filesystem permissions, native approval policy and cloud credentials continue to apply. The running connector reports the effective `project_access` in `swarm discord status`. Set `--project-access enrolled` and restart the connector to restore the enrolled-directory policy for subsequent effects.
+In VM mode the manager uses its native shell and the installed `swarm` CLI. It can use the same commands, directories, agent types and VM-user access as an ordinary Swarm session. The Discord bridge carries conversation history and deliberate replies and wakes the manager for changes to its workers. Direct children appear as `DSP-` workers. Prior enrolled-mode installations keep their existing configuration until the operator selects VM mode. Named project aliases are optional. Each participant in an admitted teammate discussion can direct the manager.
 
 ### Bring an existing connector onto the home supervisor
 
@@ -71,7 +71,7 @@ swarm discord status --state-dir "$connector"
 Check an existing discussion's manager and worker identities against its pre-migration status. A newly opened discussion uses the home supervisor. A parked historic thread still retains its original binding, so keep the previous state and its saved launch environment available as long as such threads can receive follow-ups. Repeating the migration to the same home completes an interrupted local selector write. A downgrade that predates the migration format must be deferred while either supervisor owns discussions.
 
 
-In VM mode the manager uses its native shell and the installed `swarm` CLI. It can use the same commands, directories, agent types and VM-user access as an ordinary Swarm session. The Discord bridge carries conversation history and deliberate replies and wakes the manager for changes to its workers. Direct children appear as `DSP-` workers. Prior enrolled-mode installations keep their existing configuration until the operator selects VM mode.
+
 
 For a previously configured installation, `connect --mode teammate --manager codex --install` reuses its identity and credentials. When the credential belongs to a bot installed in exactly one server, setup can discover the application ID, name and server. Use `--guild` to choose among servers. `--channel` can limit a rehearsal to a dedicated channel. To remove an old channel restriction, explicitly reconnect with `--all-channels --install`. Discord still controls which discussions the app can see. Keep private conversations in their intended audiences.
 

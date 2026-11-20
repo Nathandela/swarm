@@ -1,14 +1,15 @@
 package main
 
 import (
-	"github.com/Nathandela/swarm/internal/protocol"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/skeleton"
 )
 
@@ -80,8 +81,14 @@ func TestMigrateDiscordSupervisorRejectsOccupiedHome(t *testing.T) {
 }
 
 func TestMigrateLegacyUsesAuthenticatedSourceAndSelector(t *testing.T) {
-	// Short socket root for Linux sockaddr_un.
+	// macOS test temp paths can exceed sockaddr_un's limit.
 	dir, token := migrationCLI(t)
+	short, err := os.MkdirTemp("/tmp", "swmig-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(short) })
+	t.Setenv(daemon.EnvSocket, filepath.Join(short, "old.sock"))
 	if code, _, err := cliDiscord(t, "connect", "--mode", "teammate", "--name", "W", "--application-id", "100", "--token-file", token, "--guild", "10"); code != 0 {
 		t.Fatal(err)
 	}
@@ -96,6 +103,7 @@ func TestMigrateLegacyUsesAuthenticatedSourceAndSelector(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv(daemon.EnvStateDir, home)
+	t.Setenv(daemon.EnvSocket, filepath.Join(short, "home.sock"))
 	args := []string{"migrate-supervisor", "--state-dir", dir, "--from-state-dir", old.StateDir, "--from-socket", cfg.DaemonSocket, "--from-lock", old.Lock, "--from-log", old.Log}
 	if code, _, _ := cliDiscord(t, args...); code == 0 {
 		t.Fatal("accepted an offline socket")

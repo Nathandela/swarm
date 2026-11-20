@@ -20,7 +20,6 @@ var errDiscussionGrantUnverified = errors.New("voice: Discord authority could no
 // DiscussionScope comes from the verified connector destination and local enrollment.
 type DiscussionScope struct {
 	VMProjectAccess    bool
-	OwnerSocket        string
 	DMOwnerID          string
 	ManagerSettingsDir string
 	DiscussionID       string

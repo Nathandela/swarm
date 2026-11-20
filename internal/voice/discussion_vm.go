@@ -22,6 +22,13 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 			parents[row.ID] = true
 		}
 	}
+	// Remember the original record key even while an adapter is reconnecting.
+	known := make(map[string]string)
+	for k, w := range st.Workers {
+		if w.ConversationID == c.binding.ConversationID && !w.Reserved {
+			known[w.Session] = k
+		}
+	}
 	changed := false
 	for _, row := range rows {
 		if row.SpawnedFrom == "" || row.Role == "manager" || !parents[protocol.NamespacedID(row.EndpointID, row.SpawnedFrom)] {
@@ -31,13 +38,19 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 		if row.Capabilities != nil && row.Capabilities.SessionInstance != "" {
 			instance = row.Capabilities.SessionInstance
 		}
-		k := key(c.binding.ConversationID, key(row.ID, row.ID))
-		// Preserve an existing discussion receipt when a parked manager switches to the native CLI.
-		existingKey := key(c.binding.ConversationID, key(row.ID, instance))
-		if _, ok := st.Workers[existingKey]; ok {
-			k = existingKey
+		k := known[row.ID]
+		if k == "" {
+			k = key(c.binding.ConversationID, key(row.ID, row.ID))
 		}
 		old, found := st.Workers[k]
+		if found {
+			if instance == row.ID {
+				instance = old.SessionInstance
+			}
+			if old.SessionInstance != row.ID && old.SessionInstance != instance {
+				continue
+			}
+		}
 		w := old
 		if !found {
 			job := "vm-child-" + hashValue([]string{c.binding.ConversationID, row.ID})

@@ -425,23 +425,19 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		return d.resume(generation, conv, next, selected.Runtime.Turn.ExternalInput)
 	}
 }
+
 func (d *DiscussionController) canMigrateParked(ctx context.Context, conv Conversation, file string, expected protocol.LaunchReq) (bool, error) {
 	raw, err := readVoiceFile(d.dir, file, MaxControlFrameBytes)
 	if err == nil {
 		var intent managerLaunchIntent
 		// An executing/applied resume must reconcile its existing owner receipt.
-		if json.Unmarshal(raw, &intent) != nil {
+		if validateObjectMembers(raw, "version", "conversation_id", "operation_id", "request", "phase", "session_id") != nil || json.Unmarshal(raw, &intent) != nil {
 			return false, ErrCorrupt
 		}
 		if intent.Phase != "prepared" {
 			return false, nil
 		}
-		old := *expected.Manager
-		old.NativeCLI = false
-		expected.Manager = &old
-		a, _ := json.Marshal(expected)
-		b, _ := json.Marshal(intent.Request)
-		if intent.Version != 1 || intent.ConversationID != d.cfg.ConversationID || intent.OperationID == "" || intent.SessionID != "" || string(a) != string(b) {
+		if intent.Version != 1 || intent.ConversationID != d.cfg.ConversationID || intent.OperationID == "" || intent.SessionID != "" || !matchesLegacyManagerRequest(intent.Request, expected) {
 			return false, ErrConflict
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {

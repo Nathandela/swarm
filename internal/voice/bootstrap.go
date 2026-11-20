@@ -92,26 +92,18 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 		}
 		// Reconcile a pre-upgrade receipt using its immutable request. A prepared
 		// intent never reached dispatch and may adopt the new launch configuration.
-		if req.Manager != nil && req.Manager.NativeCLI && intent.Request.Manager != nil && !intent.Request.Manager.NativeCLI {
-			legacyManager := *req.Manager
-			legacyManager.NativeCLI = false
-			legacy := req
-			legacy.Manager = &legacyManager
-			want, _ := json.Marshal(legacy)
-			old, _ := json.Marshal(intent.Request)
-			if string(old) == string(want) {
-				if intent.Phase == "prepared" {
-					intent.Request = req
-				} else {
-					req = legacy
+		if matchesLegacyManagerRequest(intent.Request, req) {
+			if intent.Phase == "prepared" {
+				intent.OperationID, err = protocol.NewLaunchOperationID()
+				if err != nil {
+					return none, err
 				}
+				intent.Request = req
 			}
-		}
-		original, _ := json.Marshal(intent.Request)
-		current, _ := json.Marshal(req)
-		if string(original) != string(current) {
+		} else if !sameManagerRequest(intent.Request, req) {
 			return none, ErrConflict
 		}
+
 		if intent.Phase != "prepared" && intent.Phase != "executing" && intent.Phase != "applied" {
 			return none, ErrCorrupt
 		}
@@ -248,6 +240,22 @@ func managerLaunchRequest(cfg Config, refs ManagerBridgeRefs) protocol.LaunchReq
 		name = cfg.Name
 	}
 	return protocol.LaunchReq{Agent: cfg.Provider, Name: name, Cwd: cfg.WorkDir, Options: options, Cols: 120, Rows: 32, Manager: &protocol.ManagerLaunchReq{NativeCLI: cfg.VMProjectAccess, ConversationID: cfg.ConversationID, BridgeSocket: refs.Socket, AuthFile: refs.AuthFile}}
+}
+
+func sameManagerRequest(a, b protocol.LaunchReq) bool {
+	first, _ := json.Marshal(a)
+	second, _ := json.Marshal(b)
+	return string(first) == string(second)
+}
+
+func matchesLegacyManagerRequest(previous, current protocol.LaunchReq) bool {
+	if previous.Manager == nil || previous.Manager.NativeCLI || current.Manager == nil || !current.Manager.NativeCLI {
+		return false
+	}
+	legacy := *current.Manager
+	legacy.NativeCLI = false
+	current.Manager = &legacy
+	return sameManagerRequest(previous, current)
 }
 
 func saveManagerIntent(dir, file string, intent managerLaunchIntent) error {
