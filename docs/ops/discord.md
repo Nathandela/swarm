@@ -1,6 +1,24 @@
 # Connect a local Swarm to Discord
 
-Each connection belongs to one local Swarm place and uses a guild-installed app identity. Choose teammate mode for a colleague who joins a discussion on demand. Existing configurations start in legacy directory mode.
+Each connection belongs to one local Swarm place and uses its own Discord app identity. Choose personal mode for an owner-only direct message or teammate mode for a bot that joins server discussions on demand. Existing configurations can still use legacy directory mode.
+
+## Connect a personal manager on Mac
+
+Create a separate bot application in the [Discord Developer Portal](https://discord.com/developers/applications). Save its token in a private file outside the repository. Use Discord Developer Mode to copy your own Discord user ID. On the Mac where the manager and its workers should run, open the default checkout and run:
+
+```sh
+swarm discord connect --mode personal --owner-id OWNER_USER_ID --manager codex \
+  --token-file /absolute/private/personal-bot-token --workdir "$PWD" \
+  --state-dir /absolute/private/personal-discord --install
+swarm discord doctor
+swarm discord status
+```
+
+Setup obtains the bot identity and verifies the one-to-one DM with the specified owner. The command prints the channel ID. Open the DM with that bot and send an ordinary text message to start the manager. If you need a shared server to locate the bot or open the DM, use a private server and check Discord’s DM settings. The connector uses the direct-message Gateway intent. Discord supplies content in the bot’s own DMs without the privileged Message Content intent. [Discord Create DM](https://docs.discord.com/developers/resources/user#create-dm) · [Discord Gateway intents](https://docs.discord.com/developers/events/gateway#message-content-intent)
+
+Only messages from the enrolled owner in that one-to-one DM can direct the personal manager. Replies and clarifications go to the same DM. The same connector and manager state survive restarts. Run `swarm discord disconnect` to stop the connector. Changing the enrolled owner or app requires a new connector state directory.
+
+To set standing instructions for this place, press `o` on the Swarm board, choose **Manager prompt**, and press Enter to save. The prompt is empty by default, accepts up to 1,024 UTF-8 bytes, and applies when a manager wakes.
 
 ## Connect a teammate
 

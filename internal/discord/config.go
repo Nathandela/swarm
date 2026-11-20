@@ -24,6 +24,7 @@ type Config struct {
 	InstallationID    string            `json:"installation_id"`
 	Name              string            `json:"name"`
 	ApplicationID     string            `json:"application_id"`
+	DMChannelID       string            `json:"dm_channel_id,omitempty"`
 	OwnerID           string            `json:"owner_id"`
 	TokenFile         string            `json:"token_file"`
 	DaemonSocket      string            `json:"daemon_socket"`
@@ -89,6 +90,8 @@ func NativeInputEnabled(dir string) bool {
 	c, err := LoadConfig(dir)
 	return err == nil && c.Enabled
 }
+func (c Config) TeammateMode() bool { return c.Mode == "teammate" || c.Mode == "personal" }
+
 func (c Config) Validate() error {
 	if c.Version != 1 {
 		return errors.New("discord: unsupported config version")
@@ -118,17 +121,28 @@ func (c Config) Validate() error {
 		}
 		return true
 	}
+	if c.Mode != "personal" && c.DMChannelID != "" {
+		return errors.New("discord: DM channel requires personal mode")
+	}
 	switch c.Mode {
 	case "", "legacy":
 		if !id(c.OwnerID) {
 			return errors.New("discord: invalid owner ID")
 		}
-	case "teammate":
+	case "teammate", "personal":
 		if p := c.Supervisor; p != nil && (!validStatePath(p.StateDir) || !validStatePath(p.Lock) || !validStatePath(p.Log)) {
 			return errors.New("discord: invalid enrolled supervisor paths")
 		}
-		if len(c.GuildIDs) == 0 || (c.ManagerCLI != "codex" && c.ManagerCLI != "claude") {
-			return errors.New("discord: teammate requires an enrolled server and a Codex or Claude manager")
+		if c.ManagerCLI != "codex" && c.ManagerCLI != "claude" {
+			return errors.New("discord: teammate requires a Codex or Claude manager")
+		}
+		if c.Mode == "personal" {
+			if !snowflake(c.OwnerID) || !snowflake(c.DMChannelID) || c.OwnerID == c.ApplicationID ||
+				len(c.GuildIDs)+len(c.ChannelIDs)+len(c.UserIDs) != 0 {
+				return errors.New("discord: personal mode requires one owner and a verified DM channel")
+			}
+		} else if len(c.GuildIDs) == 0 {
+			return errors.New("discord: teammate requires an enrolled server")
 		}
 		if c.OwnerID != "" && !id(c.OwnerID) {
 			return errors.New("discord: invalid owner ID")

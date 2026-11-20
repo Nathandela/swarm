@@ -33,8 +33,8 @@ func runDiscordDoctor(ctx context.Context, cc daemon.ClientConfig, dir, channel 
 	if err != nil {
 		return discordCLIError(errout, err)
 	}
-	if cfg.Mode != "teammate" {
-		return discordCLIError(errout, errors.New("this place uses the legacy connector; teammate checks require --mode teammate"))
+	if !cfg.TeammateMode() {
+		return discordCLIError(errout, errors.New("this place uses the legacy connector; native manager checks require --mode teammate or --mode personal"))
 	}
 	cc, err = discordSupervisorConfig(cc, cfg, dir, true)
 	if err != nil {
@@ -162,6 +162,9 @@ func sortedProjectNames(projects map[string]string) []string {
 }
 
 func discordNetworkChecks(ctx context.Context, c *discord.DiscordClient, cfg discord.Config, channel string) []doctorFinding {
+	if cfg.Mode == "personal" {
+		c.UsePersonalDMs()
+	}
 	var me discordgo.User
 	if err := c.REST(ctx, http.MethodGet, "/users/@me", nil, &me); err != nil || !me.Bot || me.ID != cfg.ApplicationID {
 		return []doctorFinding{{Check: "Discord app", Status: "fail", Detail: "token cannot verify the enrolled bot identity"}}
@@ -172,6 +175,16 @@ func discordNetworkChecks(ctx context.Context, c *discord.DiscordClient, cfg dis
 	} else {
 		_ = c.Close()
 		findings = append(findings, doctorFinding{Check: "Gateway", Status: "ok", Detail: "message intents accepted"})
+	}
+	if cfg.Mode == "personal" {
+		if channel == "" {
+			channel = cfg.DMChannelID
+		}
+		f := doctorFinding{Check: "owner DM", Status: "ok", Detail: "verified one-to-one channel for the enrolled owner"}
+		if _, err := discord.TeammatePermissions(ctx, c, cfg, discord.Route{ChannelID: channel}, me.ID); err != nil {
+			f.Status, f.Detail = "fail", err.Error()
+		}
+		return append(findings, f)
 	}
 	channels := cfg.ChannelIDs
 	if channel != "" {

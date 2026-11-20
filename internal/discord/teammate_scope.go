@@ -20,7 +20,7 @@ func teammateAPIStatus(err error, status int) bool {
 
 func (c *DiscordClient) teammateChannel(ctx context.Context, guild, id string) (discordgo.Channel, error) {
 	var channel discordgo.Channel
-	if !snowflake(guild) || !snowflake(id) {
+	if guild != "" && !snowflake(guild) || !snowflake(id) {
 		return channel, ErrInvalid
 	}
 	err := c.REST(ctx, http.MethodGet, "/channels/"+id, nil, &channel)
@@ -32,6 +32,16 @@ func (c *DiscordClient) teammateChannel(ctx context.Context, guild, id string) (
 
 func teammateChannelScope(ctx context.Context, client *DiscordClient, cfg Config, route Route, botID string) (discordgo.Channel, discordgo.Channel, int64, error) {
 	var channel, parent discordgo.Channel
+	if cfg.Mode == "personal" {
+		if route.GuildID != "" || route.ParentID != "" || route.ChannelID != cfg.DMChannelID || botID != cfg.ApplicationID {
+			return channel, parent, 0, ErrNotAuthorized
+		}
+		channel, err := client.teammateChannel(ctx, "", route.ChannelID)
+		if err == nil && !personalChannel(channel, cfg.OwnerID) {
+			err = ErrNotAuthorized
+		}
+		return channel, channel, discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory, err
+	}
 	if !containsID(cfg.GuildIDs, route.GuildID) || !snowflake(botID) {
 		return channel, parent, 0, ErrNotAuthorized
 	}
@@ -90,7 +100,7 @@ func TeammatePermissions(ctx context.Context, client *DiscordClient, cfg Config,
 }
 
 func (c *DiscordClient) teammateMessage(ctx context.Context, route Route) (*discordgo.Message, error) {
-	if !snowflake(route.ChannelID) || !snowflake(route.MessageID) || !snowflake(route.GuildID) {
+	if !snowflake(route.ChannelID) || !snowflake(route.MessageID) || route.GuildID != "" && !snowflake(route.GuildID) {
 		return nil, ErrInvalid
 	}
 	var m discordgo.Message
@@ -105,7 +115,7 @@ func (c *DiscordClient) teammateMessage(ctx context.Context, route Route) (*disc
 }
 
 func (c *DiscordClient) teammateMessages(ctx context.Context, route Route, before string, limit int) ([]*discordgo.Message, error) {
-	if !snowflake(route.ChannelID) || !snowflake(route.GuildID) || before != "" && !snowflake(before) || limit < 1 || limit > 100 {
+	if !snowflake(route.ChannelID) || route.GuildID != "" && !snowflake(route.GuildID) || before != "" && !snowflake(before) || limit < 1 || limit > 100 {
 		return nil, ErrInvalid
 	}
 	query := url.Values{"limit": {strconv.Itoa(limit)}}
@@ -160,6 +170,9 @@ func (t *teammateConnector) checkDiscussion(ctx context.Context, d TeammateDiscu
 	c, _, bits, err := teammateChannelScope(ctx, t.client, t.service.Config, d.Route, t.service.botUserID())
 	if err != nil {
 		return err
+	}
+	if t.service.Config.Mode == "personal" {
+		return nil
 	}
 	required := int64(discordgo.PermissionReadMessageHistory | discordgo.PermissionSendMessagesInThreads)
 	if !c.IsThread() || c.ThreadMetadata.Locked || bits&required != required {

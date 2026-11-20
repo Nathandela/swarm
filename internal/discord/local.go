@@ -159,7 +159,7 @@ func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
 	if connection, ok := s.Messenger.(interface{ Connected() bool }); ok {
 		status.Connected = connection.Connected()
 	}
-	if s.Config.Mode == "teammate" {
+	if s.Config.TeammateMode() {
 		var native func(TeammateDiscussion) (TeammateNativeStatus, error)
 		if manager, ok := s.teammateManager.(interface {
 			Status(TeammateDiscussion) (TeammateNativeStatus, error)
@@ -211,7 +211,7 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	var err error
-	if s.Config.Mode == "teammate" && operation != "status" && operation != "shutdown" && operation != "resume-manual" {
+	if s.Config.TeammateMode() && operation != "status" && operation != "shutdown" && operation != "resume-manual" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "discord: this operation requires legacy mode"})
 		return
@@ -333,7 +333,7 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) resumeTeammateManual(ctx context.Context, input LocalTeammateResumeManual) error {
-	if s.Config.Mode != "teammate" || input.Discussion == "" || input.Session == "" || input.Instance == "" {
+	if !s.Config.TeammateMode() || input.Discussion == "" || input.Session == "" || input.Instance == "" {
 		return ErrInvalid
 	}
 	manager, ok := s.teammateManager.(interface {

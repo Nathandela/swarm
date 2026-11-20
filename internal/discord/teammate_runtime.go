@@ -37,7 +37,7 @@ func (t *teammateConnector) gateway(f gatewayFrame, session string) error {
 	}
 	if f.Type == "READY" {
 		var ready discordgo.Ready
-		if json.Unmarshal(f.Data, &ready) != nil || ready.Application == nil || ready.Application.ID != cfg.ApplicationID || ready.User == nil || !snowflake(ready.User.ID) {
+		if json.Unmarshal(f.Data, &ready) != nil || ready.Application == nil || ready.Application.ID != cfg.ApplicationID || ready.User == nil || !snowflake(ready.User.ID) || cfg.Mode == "personal" && ready.User.ID != cfg.ApplicationID {
 			return errors.New("discord: bot token does not match configured application")
 		}
 		t.service.SetBotID(ready.User.ID)
@@ -58,7 +58,10 @@ func (t *teammateConnector) gateway(f gatewayFrame, session string) error {
 	}
 	if json.Unmarshal(f.Data, &envelope) != nil || !snowflake(envelope.ChannelID) ||
 		envelope.GuildID != "" && !containsID(cfg.GuildIDs, envelope.GuildID) ||
-		f.Type == "MESSAGE_CREATE" && envelope.GuildID == "" {
+		cfg.Mode != "personal" && f.Type == "MESSAGE_CREATE" && envelope.GuildID == "" {
+		return nil
+	}
+	if cfg.Mode == "personal" && (envelope.GuildID != "" || envelope.ChannelID != cfg.DMChannelID) {
 		return nil
 	}
 	route := Route{GuildID: envelope.GuildID, ChannelID: envelope.ChannelID}
@@ -74,11 +77,11 @@ func (t *teammateConnector) gateway(f gatewayFrame, session string) error {
 				return t.service.Store.teammateObserve(cfg.InstallationID, route, m.ID, nonce, m.Content, t.service.Now())
 			}
 		}
-		if !teammateHuman(&m, t.service.botUserID()) || !snowflake(m.ID) {
+		if !t.admissibleHuman(&m) || !snowflake(m.ID) {
 			return nil
 		}
 		route.MessageID = m.ID
-		opening := teammateMention(&m, t.service.botUserID())
+		opening := t.addressed(&m)
 		if !opening {
 			relevant, err := t.service.Store.teammateInterested(cfg.InstallationID, route.ChannelID)
 			if err != nil {
@@ -134,7 +137,8 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 			return teammateBinding{}, nil, ErrNotAuthorized
 		}
 	}
-	if !channel.IsThread() && channel.Type != discordgo.ChannelTypeGuildText {
+	personal := cfg.Mode == "personal"
+	if !personal && !channel.IsThread() && channel.Type != discordgo.ChannelTypeGuildText {
 		return teammateBinding{}, nil, errTeammateUnsupported
 	}
 	if channel.IsThread() && parent.Type != discordgo.ChannelTypeGuildText && parent.Type != discordgo.ChannelTypeGuildNews && parent.Type != discordgo.ChannelTypeGuildForum {
@@ -147,12 +151,12 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 	if err != nil {
 		return teammateBinding{}, nil, err
 	}
-	if !teammateHuman(m, botID) || m.Author.ID != c.Author.ID {
+	if !t.admissibleHuman(m) || m.Author.ID != c.Author.ID {
 		return teammateBinding{}, nil, ErrConflict
 	}
 	route := Route{GuildID: c.Route.GuildID, ChannelID: channel.ID, ParentID: channel.ParentID}
 	var binding teammateBinding
-	if channel.IsThread() {
+	if channel.IsThread() || personal {
 		err = t.service.Store.db.View(func(tx *bolt.Tx) error {
 			return teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(cfg.InstallationID, channel.ID), &binding)
 		})
@@ -160,10 +164,10 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 			if binding.Route != route {
 				return binding, nil, ErrConflict
 			}
-			if channel.ThreadMetadata.Locked || bits&discordgo.PermissionSendMessagesInThreads == 0 {
+			if !personal && (channel.ThreadMetadata.Locked || bits&discordgo.PermissionSendMessagesInThreads == 0) {
 				return binding, nil, ErrNotAuthorized
 			}
-			if !binding.Opened && (!c.Opening || !teammateMention(m, botID)) {
+			if !binding.Opened && (!c.Opening || !t.addressed(m)) {
 				return binding, nil, ErrConflict
 			}
 			return binding, m, nil
@@ -172,15 +176,17 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 			return binding, nil, err
 		}
 	}
-	if !c.Opening || !teammateMention(m, botID) {
+	if !c.Opening || !t.addressed(m) {
 		return binding, nil, ErrConflict
 	}
-	if bits&discordgo.PermissionSendMessagesInThreads == 0 {
+	if !personal && bits&discordgo.PermissionSendMessagesInThreads == 0 {
 		return binding, nil, ErrNotAuthorized
 	}
 	starter := Route{GuildID: c.Route.GuildID, ChannelID: parent.ID, MessageID: channel.ID}
 	anchor := ""
-	if channel.Type == discordgo.ChannelTypeGuildText {
+	if personal {
+		starter = Route{}
+	} else if channel.Type == discordgo.ChannelTypeGuildText {
 		route, err = t.client.teammateThread(ctx, c.Route, clipUTF16(cfg.Name+" discussion", 95), bits&discordgo.PermissionCreatePublicThreads != 0)
 		if err != nil {
 			return binding, nil, err
@@ -200,7 +206,7 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 			return binding, nil, e
 		}
 	}
-	if channel.ThreadMetadata.Locked || bits&discordgo.PermissionSendMessagesInThreads == 0 {
+	if !personal && (channel.ThreadMetadata.Locked || bits&discordgo.PermissionSendMessagesInThreads == 0) {
 		return binding, nil, ErrNotAuthorized
 	}
 	p, err := t.service.Store.teammateCheckpoint(cfg.InstallationID)
@@ -219,6 +225,15 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 		return binding, nil, err
 	}
 	return binding, m, nil
+}
+
+func (t *teammateConnector) admissibleHuman(m *discordgo.Message) bool {
+	cfg := t.service.Config
+	return teammateHuman(m, t.service.botUserID()) && (cfg.Mode != "personal" || m.Author.ID == cfg.OwnerID)
+}
+
+func (t *teammateConnector) addressed(m *discordgo.Message) bool {
+	return t.service.Config.Mode == "personal" || teammateMention(m, t.service.botUserID())
 }
 
 func teammateRevision(m *discordgo.Message) string {
@@ -282,7 +297,6 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 			}
 			return err
 		}
-		botID := t.service.botUserID()
 		// Read again after routing so edits and deletes during thread creation cannot enter a native turn.
 		current, err := t.client.teammateMessage(ctx, c.Route)
 		if teammateAPIStatus(err, http.StatusNotFound) {
@@ -291,7 +305,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		if err != nil {
 			return err
 		}
-		if !teammateHuman(current, botID) || current.Author.ID != m.Author.ID || !b.Opened && (!c.Opening || !teammateMention(current, botID)) {
+		if !t.admissibleHuman(current) || current.Author.ID != m.Author.ID || !b.Opened && (!c.Opening || !t.addressed(current)) {
 			return store.teammateCandidateChange(cfg.InstallationID, c, StateFailed, "verified opening message changed", nil)
 		}
 		p, err := store.teammateCheckpoint(cfg.InstallationID)
@@ -311,7 +325,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		if current.Author.ID == cfg.OwnerID {
 			authority = AuthorityOwnerDirect
 		}
-		a = TeammateAdmission{RequireMention: !b.Opened, Discussion: b.TeammateDiscussion, OperationID: "da_" + digest([]string{cfg.InstallationID, current.ID})[:32],
+		a = TeammateAdmission{RequireMention: !b.Opened && cfg.Mode != "personal", Discussion: b.TeammateDiscussion, OperationID: "da_" + digest([]string{cfg.InstallationID, current.ID})[:32],
 			Route: c.Route, Author: Actor{ID: current.Author.ID, Name: current.Author.Username},
 			InvokerID: current.Author.ID, Authority: authority, Sequence: c.Sequence,
 		}
@@ -416,8 +430,7 @@ func (t *teammateConnector) readAdmissionSource(ctx context.Context, c teammateC
 	if err != nil {
 		return nil, err
 	}
-	botID := t.service.botUserID()
-	if !teammateHuman(m, botID) || m.Author.ID != a.Author.ID || a.RequireMention && !teammateMention(m, botID) {
+	if !t.admissibleHuman(m) || m.Author.ID != a.Author.ID || a.RequireMention && !t.addressed(m) {
 		return nil, ErrTeammateSourceChanged
 	}
 	return m, nil
@@ -649,7 +662,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 
 func (t *teammateConnector) explainOpening(ctx context.Context, route Route) error {
 	channel, _, bits, err := teammateChannelScope(ctx, t.client, t.service.Config, route, t.service.botUserID())
-	if err != nil || channel.IsThread() || bits&discordgo.PermissionSendMessages == 0 {
+	if err != nil || channel.IsThread() || bits&discordgo.PermissionSendMessages == 0 || t.service.Config.Mode == "personal" {
 		return nil
 	}
 	text := "I couldn’t open a public thread here. Mention me in a server text thread or ask a moderator to check my thread and history permissions."
@@ -667,6 +680,15 @@ func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, 
 	}
 	t := &teammateConnector{service: s, client: c, manager: m, cursorKey: key, wake: make(chan struct{}, 1)}
 	c.onDispatch = t.gateway
+	if s.Config.Mode == "personal" {
+		c.UsePersonalDMs()
+		verifyCtx, verifyCancel := context.WithTimeout(ctx, 20*time.Second)
+		_, _, _, err = teammateChannelScope(verifyCtx, c, s.Config, Route{ChannelID: s.Config.DMChannelID}, s.Config.ApplicationID)
+		verifyCancel()
+		if err != nil {
+			return err
+		}
+	}
 	failures := make(chan error, 3)
 	c.OnError = func(err error) { failures <- err }
 	var tasks sync.WaitGroup
