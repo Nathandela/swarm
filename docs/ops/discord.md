@@ -2,6 +2,8 @@
 
 Each connection belongs to one local Swarm place and uses its own Discord app identity. Choose personal mode for an owner-only direct message or teammate mode for a bot that joins server discussions on demand. Existing configurations can still use legacy directory mode.
 
+The main board groups managers under **DISPATCHER**. Dispatched workers get the **DSP** tag by default. Select a dispatcher and press **Ctrl+X**, then **Y**, to stop a running session or delete an ended one. The connector remains available for future messages.
+
 ## Connect a personal manager on Mac
 
 Create a separate bot application in the [Discord Developer Portal](https://discord.com/developers/applications). Save its token in a private file outside the repository. Use Discord Developer Mode to copy your own Discord user ID. On the Mac where the manager and its workers should run, open the default checkout and run:

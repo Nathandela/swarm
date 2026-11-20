@@ -17,8 +17,12 @@ func isDiscordManager(s protocol.SessionView) bool {
 	return s.Role == "manager" && strings.HasPrefix(s.ManagerConversationID, voice.DiscussionConversationPrefix)
 }
 
-func WithLinkedDispatchers(list func() ([]protocol.SessionView, error), attach AttachRunner) Option {
-	return func(m *rootModel) { m.dispatcherList = list; m.dispatcherAttach = attach }
+func WithLinkedDispatchers(list func() ([]protocol.SessionView, error), attach AttachRunner, remove func(string, bool) error) Option {
+	return func(m *rootModel) {
+		m.dispatcherList = list
+		m.dispatcherAttach = attach
+		m.dispatcherRemove = remove
+	}
 }
 
 type dispatcherRows []protocol.SessionView
@@ -29,6 +33,10 @@ func (m rootModel) loadDispatchers() tea.Msg {
 	if err != nil {
 		return dispatcherRows(nil)
 	}
+	return dispatcherRoster(rows, true)
+}
+
+func dispatcherRoster(rows []protocol.SessionView, linkedOnly bool) dispatcherRows {
 	parents := make(map[string]bool)
 	for _, s := range rows {
 		if isDiscordManager(s) {
@@ -41,7 +49,11 @@ func (m rootModel) loadDispatchers() tea.Msg {
 	var members dispatcherRows
 	for _, s := range protocol.VisibleDiscussions(rows) {
 		parent := protocol.NamespacedID(s.EndpointID, s.SpawnedFrom)
-		if isDiscordManager(s) || s.SpawnedFrom != "" && parents[parent] {
+		worker := s.SpawnedFrom != "" && parents[parent]
+		if worker && s.Tag == "" {
+			s.Tag = "DSP"
+		}
+		if !linkedOnly || isDiscordManager(s) || worker {
 			members = append(members, s)
 		}
 	}

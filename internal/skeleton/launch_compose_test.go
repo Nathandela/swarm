@@ -460,7 +460,7 @@ func TestPublicSpawnNamesChildrenFromActualDispatcherRecord(t *testing.T) {
 			for _, tc := range []struct{ name, want string }{{"", "DSP-" + agent}, {"audit", "DSP-audit"}, {"DSP-audit", "DSP-audit"}} {
 				req := daemon.LaunchSpec{AgentType: agent, Name: tc.name, Cwd: "/work", SpawnedFrom: parent.ID, SpawnIntent: schema.SpawnIntentDelegate}
 				got, err := composeLaunchSpec(req, testEndpoint, "", srcGetter(parent.ID, parent), stubLookPath)
-				if err != nil || got.Name != tc.want || got.SpawnedFrom != parent.ID || got.SpawnIntent != schema.SpawnIntentDelegate {
+				if err != nil || got.Name != tc.want || got.Tag != "DSP" || got.SpawnedFrom != parent.ID || got.SpawnIntent != schema.SpawnIntentDelegate {
 					t.Fatalf("worker %s name=%q parent=%q intent=%q: %v", agent, got.Name, got.SpawnedFrom, got.SpawnIntent, err)
 				}
 			}
@@ -469,7 +469,7 @@ func TestPublicSpawnNamesChildrenFromActualDispatcherRecord(t *testing.T) {
 	for _, other := range []persist.Meta{{ID: "absent"}, {ID: "manager", Role: "manager", ManagerConversationID: "voice-conversation"}, {ID: "manager", ManagerConversationID: parent.ManagerConversationID}} {
 		req := daemon.LaunchSpec{AgentType: "codex", Name: "audit", Cwd: "/work", SpawnedFrom: parent.ID, SpawnIntent: schema.SpawnIntentDelegate}
 		got, err := composeLaunchSpec(req, testEndpoint, "", srcGetter(other.ID, other), stubLookPath)
-		if err != nil || got.Name != "audit" {
+		if err != nil || got.Name != "audit" || got.Tag != "" {
 			t.Fatalf("misattributed worker to a dispatcher: %q %v", got.Name, err)
 		}
 	}

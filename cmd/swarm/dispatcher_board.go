@@ -112,5 +112,21 @@ func linkedDispatcherOption(cc daemon.ClientConfig, localEndpoint string, hand t
 		}
 		return terminal, func() { _ = client.Close() }, nil
 	}
-	return tui.WithLinkedDispatchers(list, tui.NewAttachRunner(dial, hand))
+	remove := func(id string, kill bool) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		client, err := dialLinkedDispatcher(ctx, cc.SocketPath, localEndpoint, nil)
+		if err != nil {
+			return err
+		}
+		if client == nil {
+			return errors.New("dispatcher supervisor unavailable")
+		}
+		defer func() { _ = client.Close() }()
+		if kill {
+			return client.Kill(id)
+		}
+		return client.Delete(id)
+	}
+	return tui.WithLinkedDispatchers(list, tui.NewAttachRunner(dial, hand), remove)
 }
