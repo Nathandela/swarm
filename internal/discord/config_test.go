@@ -83,6 +83,16 @@ func TestDispatcherCallsConfigValidation(t *testing.T) {
 	if err := team.Validate(); err != nil {
 		t.Fatalf("valid team calls config: %v", err)
 	}
+	maxTeam := team
+	maxCalls := *team.Calls
+	maxCalls.UserIDs = make([]string, 16)
+	for i := range maxCalls.UserIDs {
+		maxCalls.UserIDs[i] = "323456789012345678"
+	}
+	maxTeam.Calls = &maxCalls
+	if err := maxTeam.Validate(); err != nil {
+		t.Fatalf("valid team calls config at 16 users: %v", err)
+	}
 
 	personal := sampleConfig(dir)
 	personal.Mode, personal.ManagerCLI, personal.GuildIDs, personal.UserIDs = "personal", "codex", nil, nil
@@ -97,7 +107,7 @@ func TestDispatcherCallsConfigValidation(t *testing.T) {
 		"non-snowflake room":        func(c *Config) { c.Calls.RoomID = "01" },
 		"guild outside allowlist":   func(c *Config) { c.Calls.GuildID = "923456789012345678" },
 		"no explicit team users":    func(c *Config) { c.Calls.UserIDs = nil },
-		"too many team users":       func(c *Config) { c.Calls.UserIDs = make([]string, 33) },
+		"too many team users":       func(c *Config) { c.Calls.UserIDs = make([]string, 17) },
 		"invalid team speaker":      func(c *Config) { c.Calls.UserIDs = []string{"01"} },
 		"relative helper":           func(c *Config) { c.Calls.HelperPath = "helper" },
 		"personal wrong discussion": func(c *Config) { c.Calls.DiscussionID = "523456789012345678" },

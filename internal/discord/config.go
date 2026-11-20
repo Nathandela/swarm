@@ -206,7 +206,7 @@ func (c Config) Validate() error {
 	}
 	if calls := c.Calls; calls != nil {
 		if calls.Mode != "team" && calls.Mode != "personal" ||
-			calls.Mode == "team" && (c.Mode != "teammate" || !containsID(c.GuildIDs, calls.GuildID) || len(calls.UserIDs) == 0 || len(calls.UserIDs) > 32) ||
+			calls.Mode == "team" && (c.Mode != "teammate" || !containsID(c.GuildIDs, calls.GuildID) || len(calls.UserIDs) == 0 || len(calls.UserIDs) > 16) ||
 			calls.Mode == "personal" && (c.Mode != "personal" || calls.DiscussionID != c.DMChannelID || len(calls.UserIDs) != 0) ||
 			!snowflake(calls.GuildID) || !snowflake(calls.RoomID) || !snowflake(calls.DiscussionID) ||
 			!filepath.IsAbs(calls.HelperPath) || !validText(calls.HelperPath, 4096) ||

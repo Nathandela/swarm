@@ -27,7 +27,7 @@ import (
 	"github.com/Nathandela/swarm/internal/teammatemanager"
 )
 
-const discordUsage = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
+const discordUsage = "swarm discord connect|migrate-supervisor|run|status|doctor|stop-call|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'"
 
 var discordLocalCall = discord.CallLocal
 var discordUnitRun = runDiscordUnit
@@ -96,7 +96,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, "discord: need a reference or target ID first")
 			return misuseExit
 		}
-	case "connect", "migrate-supervisor", "run", "status", "doctor", "disconnect":
+	case "connect", "migrate-supervisor", "run", "status", "doctor", "disconnect", "stop-call":
 	default:
 		_, _ = fmt.Fprintln(stderr, discordUsage)
 		return misuseExit
@@ -462,6 +462,11 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	}
 	var request, response any
 	switch command {
+	case "stop-call":
+		request = struct{}{}
+		response = &struct {
+			Stopped bool `json:"stopped"`
+		}{}
 	case "resume-manual":
 		n, err := strconv.ParseUint(counter, 10, 64)
 		if err != nil || session == "" || instance == "" {
