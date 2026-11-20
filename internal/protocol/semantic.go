@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/managerproof"
 )
 
 const semanticReplayWindow = time.Hour
@@ -45,6 +47,9 @@ func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
 		return err
 	}
 	if resp.Op == OpError {
+		if resp.ErrorCode == CodeManagerDirectInput {
+			return managerproof.ErrDirectInputUnresolved
+		}
 		if resp.ErrorCode == CodeInputBusy || resp.ErrorCode == CodeStaleTurn || resp.ErrorCode == CodeStaleInstance || resp.ErrorCode == CodeStructuredUnsupported {
 			return fmt.Errorf("%w: %s (%s)", ErrSemanticSendRejected, resp.Error, resp.ErrorCode)
 		}

@@ -78,7 +78,7 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	if os.Getenv(workermail.SocketEnv) != "" {
 		receipt, err = ordinaryWorkerMail(context.Background(), schema.WorkerMailReq{Action: "message", ID: *id, Kind: *kind, Text: *text})
 	} else {
-		err = voice.SendDiscussionWorkerMessageKind(context.Background(), os.Getenv(schema.WorkerBridgeEnv), os.Getenv(hookclient.EnvSessionID), *id, *text, *kind)
+		err = voice.SendDiscussionWorkerMessage(context.Background(), os.Getenv(schema.WorkerBridgeEnv), os.Getenv(hookclient.EnvSessionID), *id, *text, *kind)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%v (message ID %s)\n", err, *id)

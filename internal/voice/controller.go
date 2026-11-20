@@ -134,6 +134,11 @@ func (c *Controller) Tick(ctx context.Context) error {
 	c.scheduler.Lock()
 	defer c.scheduler.Unlock()
 	status, err := c.nativeStatus(ctx)
+	if errors.Is(err, managerproof.ErrDirectInputUnresolved) && c.discussion != nil {
+		if retryErr := c.recoverDraftRefusal(); retryErr != nil {
+			return retryErr
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -244,7 +249,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 			if c.discussion.journalReady != nil && !c.discussion.journalReady() {
 				return ErrControllerJournalResync
 			}
-			if a.Origin != nil && c.discussion.VerifyOrigin != nil {
+			if a.Origin != nil && !a.SourceCutover && c.discussion.VerifyOrigin != nil {
 				if err := c.discussion.VerifyOrigin(ctx, *a.Origin); err != nil {
 					if !errors.Is(err, ErrDiscussionSourceChanged) {
 						return err
@@ -348,6 +353,12 @@ func (c *Controller) Tick(ctx context.Context) error {
 		if errors.Is(sendErr, managerproof.ErrQuarantined) {
 			return c.nativeError(sendErr)
 		}
+		if c.discussion != nil && errors.Is(sendErr, managerproof.ErrDirectInputUnresolved) {
+			if err := c.deferDraftRefusal(a); err != nil {
+				return err
+			}
+			return sendErr
+		}
 		if errors.Is(sendErr, protocol.ErrSemanticSendRejected) || c.discussion != nil && errors.Is(sendErr, ErrControllerUnsupported) {
 			if err = c.store.controllerInputPhase(c.binding, a.Sequence, "rejected", "", "native refused without a new effect"); err != nil {
 				return err
@@ -416,6 +427,9 @@ func (c *Controller) reconcileInput(ctx context.Context, a Admission, status pro
 	if receipt.OperationID != a.OperationID || receipt.Session != c.binding.SessionID || receipt.SessionInstance != c.binding.SessionInstance || receipt.NativeGeneration != "" && receipt.NativeGeneration != c.binding.NativeGeneration || receipt.NativeInputID != "" && receipt.NativeInputID != a.NativeInputID {
 		return false, ErrStale
 	}
+	if c.discussion != nil && isDraftRefusal(receipt, a, c.binding) {
+		return false, c.deferDraftRefusal(a)
+	}
 	phase := "uncertain"
 	switch receipt.State {
 	case "submitted":
@@ -439,6 +453,40 @@ func (c *Controller) reconcileInput(ctx context.Context, a Admission, status pro
 	}
 	return false, nil
 }
+
+// Recover a lost no-effect acknowledgement while the draft blocks native status.
+func (c *Controller) recoverDraftRefusal() error {
+	st, err := c.store.readView()
+	if err != nil {
+		return err
+	}
+	for _, a := range st.Admissions {
+		if a.ConversationID != c.binding.ConversationID || !a.SettledAt.IsZero() || a.NativeTurnID != "" || a.NativeBindingRetired ||
+			a.Phase != "executing" && a.Phase != "uncertain" {
+			continue
+		}
+		receipt, err := c.runtime.SemanticOperation(c.binding.SessionID, a.OperationID)
+		if err == nil && isDraftRefusal(receipt, a, c.binding) {
+			return c.deferDraftRefusal(a)
+		}
+	}
+	return nil
+}
+
+func isDraftRefusal(receipt protocol.SemanticMessageReceipt, a Admission, b ManagerBinding) bool {
+	return receipt.OperationID == a.OperationID && receipt.Session == b.SessionID && receipt.SessionInstance == b.SessionInstance &&
+		receipt.State == "rejected" && receipt.RejectionCode == protocol.CodeManagerDirectInput && receipt.NativeTurnID == "" && receipt.NativeInputID == "" &&
+		(receipt.NativeGeneration == "" || receipt.NativeGeneration == b.NativeGeneration)
+}
+
+func (c *Controller) deferDraftRefusal(a Admission) error {
+	operation, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		return err
+	}
+	return c.store.deferDraftRefusal(c.binding, a, operation)
+}
+
 func (c *Controller) admissionText(st State, a Admission) (string, error) {
 	if a.InputText != "" {
 		if pair, ok := strings.CutPrefix(a.SourceID, "answer:"); ok {

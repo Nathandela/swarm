@@ -55,16 +55,16 @@ func TestDiscussionWorkerMessageIsScopedAndRetrySafe(t *testing.T) {
 		{server.socket + ":" + strings.Repeat("cd", 32), "worker"},
 		{server.socket + ":" + strings.Repeat("ef", 32), "worker"},
 	} {
-		if err := SendDiscussionWorkerMessage(ctx, request.bridge, request.session, operation, "wrong identity"); err == nil || !strings.Contains(err.Error(), "not_found") {
+		if err := SendDiscussionWorkerMessage(ctx, request.bridge, request.session, operation, "wrong identity", ""); err == nil || !strings.Contains(err.Error(), "not_found") {
 			t.Fatalf("wrong worker identity got %v", err)
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "I need clarification"); err != nil {
+		if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "I need clarification", ""); err != nil {
 			t.Fatalf("message %d: %v", i, err)
 		}
 	}
-	if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "changed"); err == nil || !strings.Contains(err.Error(), "conflict") {
+	if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "changed", ""); err == nil || !strings.Contains(err.Error(), "conflict") {
 		t.Fatalf("changed payload got %v", err)
 	}
 	st, err := store.Snapshot()
@@ -106,7 +106,7 @@ func TestDiscussionWorkerMessageIsScopedAndRetrySafe(t *testing.T) {
 		if err != nil || got != "Use the second fixture." {
 			t.Fatalf("worker reply = %q, %v", got, err)
 		}
-		if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "I need clarification"); err != nil {
+		if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "I need clarification", ""); err != nil {
 			t.Fatalf("reply changed the message retry: %v", err)
 		}
 		if _, err := ReadDiscussionWorkerReply(ctx, bridge, "different", operation); err == nil {

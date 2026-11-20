@@ -110,9 +110,13 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 		return nil
 	}
 	id := teammateInputNoticeID(d, hold.AdmissionID)
-	body := "Swarm delivery paused. Your messages are kept in order. No need to resend. Swarm cannot confirm the previous turn. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status`."
+	body := "Swarm delivery paused. Your messages are kept in order. No need to resend. Swarm cannot confirm the dispatcher is ready for the next message. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status`."
 	if hold.DirectInput {
-		body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in Swarm. Finish the unfinished input, or save the draft and exit that manager normally. For deliberate terminal steering, use `swarm discord resume-manual` with the coordinates from `swarm discord status`."
+		body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in Swarm. Finish any unfinished input, or save the draft and exit that manager normally. If you already submitted a terminal turn, inspect its outcome before using `swarm discord resume-manual` with the coordinates from `swarm discord status`."
+	}
+	if hold.EffectUncertain {
+		id = teammateInputNoticeID(d, hold.AdmissionID+":effect")
+		body = "Swarm cannot confirm the outcome of an earlier message in this DM. Later messages stay queued in order. Please don’t resend. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status` to reconcile the original submission."
 	}
 	store := t.service.Store
 	p := TeammatePublication{ID: id, AdmissionID: hold.AdmissionID, Body: body, SystemCause: teammateInputNotice}
@@ -132,21 +136,20 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 	return t.sendOutput(ctx, d.InstallationID, out)
 }
 
-func (s *Store) teammateClearInputNotice(d TeammateDiscussion, admission string) error {
+func (s *Store) teammateClearInputNotice(d TeammateDiscussion, id string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		key := teammateKey(d.InstallationID, d.Route.ChannelID)
 		var b teammateBinding
 		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &b); err != nil {
 			return err
 		}
-		if b.ID != d.ID || b.Route != d.Route || b.InputNoticeAdmission != admission {
+		if b.ID != d.ID || b.Route != d.Route || b.InputNoticeID != id {
 			return ErrConflict
 		}
-		id := teammateInputNoticeID(d, admission)
 		if err := teammateCancelPreparedNotice(tx, d, id, teammateInputNotice); err != nil {
 			return err
 		}
-		b.InputNoticeAdmission = ""
+		b.InputNoticeID = ""
 		return putJSON(tx, teammateDiscussionBucket, key, b)
 	})
 }
@@ -277,16 +280,24 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 				return ErrConflict
 			}
 			if internal && p.SystemCause == teammateInputNotice {
-				if binding.InputNoticeAdmission == p.AdmissionID || now.Sub(binding.InputNoticeAt) < teammateInputNoticeInterval {
+				// A proven pre-effect refusal and an unconfirmed native submission
+				// require different operator actions for the same admission.
+				otherID := teammateInputNoticeID(binding.TeammateDiscussion, p.AdmissionID)
+				if otherID == p.ID {
+					otherID = teammateInputNoticeID(binding.TeammateDiscussion, p.AdmissionID+":effect")
+				}
+				otherKey := teammateOutputKey(install, id, otherID)
+				changedCause := b.Get(otherKey) != nil || tx.Bucket([]byte(teammateReceiptBucket)).Get(otherKey) != nil
+				if binding.InputNoticeID == p.ID || !changedCause && now.Sub(binding.InputNoticeAt) < teammateInputNoticeInterval {
 					return nil
 				}
-				if binding.InputNoticeAdmission != "" {
-					oldID := teammateInputNoticeID(binding.TeammateDiscussion, binding.InputNoticeAdmission)
+				if binding.InputNoticeID != "" {
+					oldID := binding.InputNoticeID
 					if err = teammateCancelPreparedNotice(tx, binding.TeammateDiscussion, oldID, teammateInputNotice); err != nil {
 						return err
 					}
 				}
-				binding.InputNoticeAdmission, binding.InputNoticeAt = p.AdmissionID, now
+				binding.InputNoticeID, binding.InputNoticeAt = p.ID, now
 				if err = putJSON(tx, teammateDiscussionBucket, teammateKey(install, route.ChannelID), binding); err != nil {
 					return err
 				}

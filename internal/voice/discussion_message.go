@@ -283,10 +283,7 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 
 // SendDiscussionWorkerMessage sends a receipt-backed note to the worker's own
 // manager. The worker capability cannot call the manager's tools.
-func SendDiscussionWorkerMessage(ctx context.Context, bridge, localSession, id, text string) error {
-	return SendDiscussionWorkerMessageKind(ctx, bridge, localSession, id, text, "")
-}
-func SendDiscussionWorkerMessageKind(ctx context.Context, bridge, localSession, id, text, kind string) error {
+func SendDiscussionWorkerMessage(ctx context.Context, bridge, localSession, id, text, kind string) error {
 	reply, err := callDiscussionWorkerBridge(ctx, bridge, localSession, workerMessageInput{ID: id, Text: text, Kind: kind})
 	if err == nil && reply.State != "queued" {
 		return errors.New("teammate: manager queue receipt unavailable")

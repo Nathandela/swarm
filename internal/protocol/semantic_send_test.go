@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -263,5 +264,38 @@ func TestDiscussionSemanticBusyLeavesExactOperationPrepared(t *testing.T) {
 	}
 	if rec, sends, _ := stub.snapshot(id); rec.phase != composerPhaseCompleted || sends != 1 {
 		t.Fatalf("retry had wrong outcome: %+v, sends=%d", rec, sends)
+	}
+}
+
+type draftRefusalStub struct {
+	*durableComposerStub
+	checks atomic.Int32
+}
+
+func (s *draftRefusalStub) SemanticSendTransactional(_, _ string, _ ComposerSendReq, _ func() error) (ErrorCode, error) {
+	s.checks.Add(1)
+	return CodeManagerDirectInput, managerproof.ErrDirectInputUnresolved
+}
+
+func TestSemanticDraftRefusalRemainsTypedOnDurableReplay(t *testing.T) {
+	stub := &draftRefusalStub{durableComposerStub: newDurableComposerStub()}
+	c, err := Dial(serveOwnerAPI(t, stub), []string{CapSemanticSend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	id, err := NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := ComposerSendReq{Session: c.EndpointID() + "/sess1", SessionInstance: "test-instance", Text: "stay queued"}
+	for range 2 {
+		if err := c.SemanticSend(id, req); !errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+			t.Fatalf("lost typed draft refusal: %v", err)
+		}
+	}
+	record, _, _ := stub.snapshot(id)
+	if record.phase != composerPhaseFailed || stub.checks.Load() != 1 {
+		t.Fatalf("draft retry attempted delivery: phase %s, checks %d", record.phase, stub.checks.Load())
 	}
 }

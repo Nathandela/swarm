@@ -93,11 +93,15 @@ var ErrTeammateSourceChanged = errors.New("discord: source message changed befor
 
 // TeammateInputHold describes a durable human admission awaiting native input.
 type TeammateInputHold struct {
-	AdmissionID string
-	DirectInput bool
+	AdmissionID     string
+	DirectInput     bool
+	EffectUncertain bool
 }
 
 func (h *TeammateInputHold) Error() string {
+	if h.EffectUncertain {
+		return "discord: previous dispatcher submission outcome is unconfirmed"
+	}
 	if h.DirectInput {
 		return "discord: dispatcher delivery paused by direct terminal input"
 	}

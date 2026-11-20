@@ -19,6 +19,7 @@ import (
 
 var ErrDiscussionActivationUnavailable = errors.New("voice: discussion manager could not become ready")
 var ErrDiscussionDirectInputHeld = errors.New("voice: queued Discord message is waiting for you to submit or clear the draft in the Swarm terminal")
+var ErrDiscussionEffectUncertain = errors.New("voice: native submission outcome is unconfirmed")
 var ErrDiscussionNativeProofHeld = errors.New("voice: queued Discord message is waiting for the dispatcher native input proof; inspect the dispatcher in Swarm")
 
 type DiscussionInputHold struct {
@@ -631,12 +632,18 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	if err := d.controller.Tick(ctx); err != nil {
 		d.idleSince = time.Time{}
 		if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
-			return discussionInputHold(st, ErrDiscussionDirectInputHeld, err)
+			return d.inputHold(ErrDiscussionDirectInputHeld, err)
+		}
+		if errors.Is(err, ErrControllerPaused) {
+			return d.inputHold(ErrDiscussionNativeProofHeld, err)
+		}
+		if errors.Is(err, ErrControllerUncertain) {
+			return d.inputHold(nil, err)
 		}
 		if discussionRecoverableBindingError(err) {
 			recoveryErr := d.recoverActive(ctx, err)
 			if recoveryErr != nil && (errors.Is(err, managerproof.ErrUnavailable) || errors.Is(err, ErrControllerNativeUnavailable)) {
-				return discussionInputHold(st, ErrDiscussionNativeProofHeld, recoveryErr)
+				return d.inputHold(ErrDiscussionNativeProofHeld, recoveryErr)
 			}
 			return recoveryErr
 		}
@@ -646,7 +653,12 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 }
 
 // Only report a hold against the oldest open admission, the one the FIFO can attempt.
-func discussionInputHold(st State, reason, fallback error) error {
+func (d *DiscussionController) inputHold(reason, fallback error) error {
+	// Tick may have persisted an effect receipt or a proven pre-effect refusal.
+	st, err := d.store.readView()
+	if err != nil {
+		return errors.Join(fallback, err)
+	}
 	var head Admission
 	for _, a := range st.Admissions {
 		if a.ConversationID == st.CurrentConversation && a.SettledAt.IsZero() &&
@@ -654,7 +666,10 @@ func discussionInputHold(st State, reason, fallback error) error {
 			head = a
 		}
 	}
-	if head.Origin != nil && (head.Phase == "" || head.Phase == "prepared") {
+	if head.Origin != nil && (head.Phase == "executing" || head.Phase == "uncertain") {
+		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: ErrDiscussionEffectUncertain}
+	}
+	if reason != nil && head.Origin != nil && (head.Phase == "" || head.Phase == "prepared") {
 		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: reason}
 	}
 	return fallback

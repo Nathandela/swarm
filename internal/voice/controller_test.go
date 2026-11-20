@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
@@ -506,6 +507,89 @@ func TestControllerRejectsOversizedClaudeHeadWithoutBlockingFIFO(t *testing.T) {
 			rejected := st.Admissions[admissionKey(b.ConversationID, first.Sequence)]
 			if rejected.Phase != "rejected" || rejected.SettledAt.IsZero() || rejected.Reason == "" || len(r.sent) != 1 || r.sent[0].Text != "valid" {
 				t.Fatalf("oversized input stalled or reached the native FIFO: phase=%q, sends=%d", rejected.Phase, len(r.sent))
+			}
+		})
+	}
+}
+
+type lateDraftRuntime struct {
+	*controllerRuntimeFixture
+	draft, hideReceipt, loseReply bool
+	held                          protocol.SemanticMessageReceipt
+}
+
+func (r *lateDraftRuntime) ManagerRuntime(session, instance string) (protocol.ManagerRuntimeStatus, error) {
+	if r.draft {
+		return protocol.ManagerRuntimeStatus{}, managerproof.ErrDirectInputUnresolved
+	}
+	return r.controllerRuntimeFixture.ManagerRuntime(session, instance)
+}
+
+func (r *lateDraftRuntime) SemanticSend(op string, req protocol.ComposerSendReq) error {
+	if r.held.OperationID != "" {
+		return r.controllerRuntimeFixture.SemanticSend(op, req)
+	}
+	r.draft = true
+	r.held = protocol.SemanticMessageReceipt{OperationID: op, Session: req.Session, SessionInstance: req.SessionInstance,
+		State: "rejected", RejectionCode: protocol.CodeManagerDirectInput}
+	if r.loseReply {
+		return errors.New("transport closed before refusal acknowledgement")
+	}
+	return managerproof.ErrDirectInputUnresolved
+}
+
+func (r *lateDraftRuntime) SemanticOperation(session, operation string) (protocol.SemanticMessageReceipt, error) {
+	if operation == r.held.OperationID {
+		if r.hideReceipt {
+			return protocol.SemanticMessageReceipt{}, errors.New("receipt temporarily unavailable")
+		}
+		return r.held, nil
+	}
+	return r.controllerRuntimeFixture.SemanticOperation(session, operation)
+}
+
+func TestDiscussionLateDraftRefusalPreservesExactFIFO(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lost acknowledgement %t", lost), func(t *testing.T) {
+			c, s, fixture, b := newControllerFixture(t)
+			r := &lateDraftRuntime{controllerRuntimeFixture: fixture, loseReply: lost, hideReceipt: lost}
+			c.runtime = r
+			verifications := 0
+			c.discussion = &DiscussionScope{VMProjectAccess: true, InstallationID: "install", GuildID: "guild", ThreadID: "thread",
+				VerifyOrigin: func(context.Context, protocol.MessageOrigin) error {
+					verifications++
+					return nil
+				}}
+			first, err := c.submitDiscussion(discussionFixtureOrigin("first"), "first", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = c.submitDiscussion(discussionFixtureOrigin("second"), "second", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			err = c.Tick(t.Context())
+			if lost {
+				if !errors.Is(err, ErrControllerUncertain) {
+					t.Fatalf("lost refusal was initially certain: %v", err)
+				}
+				r.hideReceipt = false
+				err = c.Tick(t.Context())
+			}
+			if !errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+				t.Fatalf("draft did not surface as a hold: %v", err)
+			}
+			st, err := s.Snapshot()
+			a := st.Admissions[admissionKey(b.ConversationID, first.Sequence)]
+			if err != nil || a.Phase != "prepared" || !a.SourceCutover || a.OperationID == r.held.OperationID ||
+				a.InputText != "first" || len(fixture.sent) != 0 {
+				t.Fatalf("wrong admission after no-effect refusal: %+v, %v", a, err)
+			}
+			r.draft = false
+			if err := c.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(fixture.sent) != 1 || fixture.sent[0].Text != "first" || fixture.operations[0] != a.OperationID || verifications != 1 {
+				t.Fatalf("sealed FIFO changed: %+v, operations %v, verifications %d", fixture.sent, fixture.operations, verifications)
 			}
 		})
 	}

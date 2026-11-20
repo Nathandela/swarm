@@ -307,7 +307,7 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 func activationNotice(err error) error {
 	var hold *voice.DiscussionInputHold
 	if errors.As(err, &hold) {
-		return errors.Join(&discord.TeammateInputHold{AdmissionID: hold.AdmissionID, DirectInput: errors.Is(err, voice.ErrDiscussionDirectInputHeld)}, err)
+		return errors.Join(&discord.TeammateInputHold{AdmissionID: hold.AdmissionID, DirectInput: errors.Is(err, voice.ErrDiscussionDirectInputHeld), EffectUncertain: errors.Is(err, voice.ErrDiscussionEffectUncertain)}, err)
 	}
 	if errors.Is(err, voice.ErrDiscussionActivationUnavailable) {
 		return errors.Join(discord.ErrTeammateManagerUnavailable, err)

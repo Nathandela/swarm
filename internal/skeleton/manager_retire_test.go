@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
@@ -121,8 +122,24 @@ func TestDiscordDraftSurvivesReconnectAndFencesNativeAdmission(t *testing.T) {
 		t.Fatal("draft attributed to the wrong incarnation")
 	}
 	req := protocol.ComposerSendReq{Session: "machine/" + b.Session, SessionInstance: b.SessionInstance, Text: "first", ManagerAdmission: &protocol.ManagerAdmission{Binding: b, Nonce: strings.Repeat("a", 64)}}
-	code, err := d.semanticSendTransactional("machine", "first", req, func() error { t.Fatal("native admission began over a direct-input draft"); return nil })
-	if code != protocol.CodeInputBusy || !errors.Is(err, managerproof.ErrDirectInputUnresolved) || !d.directInputUnresolved(b.Session) {
+	const operation = "first"
+	if _, _, err := d.core.ClaimComposerOperation(operation, protocol.OpSemanticSend, b.Session, b.SessionInstance, "request"); err != nil {
+		t.Fatal(err)
+	}
+	code, err := d.semanticSendTransactional("machine", operation, req, func() error { t.Fatal("native admission began over a direct-input draft"); return nil })
+	if code != protocol.CodeManagerDirectInput || !errors.Is(err, managerproof.ErrDirectInputUnresolved) || !d.directInputUnresolved(b.Session) {
 		t.Fatalf("draft fence: %s %v", code, err)
+	}
+	outcome, err := json.Marshal(map[string]protocol.ErrorCode{"code": code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.core.CommitComposerOperation(operation, outcome, false); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := d.semanticOperation(b.Session, operation)
+	if err != nil || receipt.State != "rejected" || receipt.RejectionCode != protocol.CodeManagerDirectInput ||
+		receipt.NativeInputID != "" || receipt.NativeTurnID != "" {
+		t.Fatalf("typed durable no-effect receipt: %+v, %v", receipt, err)
 	}
 }

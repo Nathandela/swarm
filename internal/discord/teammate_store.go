@@ -49,7 +49,7 @@ type teammateIngressGuard struct {
 
 type teammateBinding struct {
 	ProvisionalCancelled    bool
-	InputNoticeAdmission    string    `json:",omitempty"`
+	InputNoticeID           string    `json:",omitempty"`
 	InputNoticeAt           time.Time `json:",omitempty"`
 	StartupNoticePending    bool
 	StartupNoticeGeneration uint64

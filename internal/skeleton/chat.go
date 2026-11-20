@@ -621,7 +621,7 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	var sendErr error
 	err = d.withSessionInputFence(local, func() error {
 		if discordManager && d.directInputUnresolved(local) {
-			code, sendErr = protocol.CodeInputBusy, managerproof.ErrDirectInputUnresolved
+			code, sendErr = protocol.CodeManagerDirectInput, managerproof.ErrDirectInputUnresolved
 			return nil
 		}
 		if discussionCodex && (d.anyControlled(local) || d.directInputUnresolved(local)) {

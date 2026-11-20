@@ -222,4 +222,14 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 	if len(bodies) != 2 || !strings.Contains(bodies[1], "unfinished input") {
 		t.Fatalf("persistent second hold after cooldown: %q", bodies)
 	}
+	hold := &TeammateInputHold{AdmissionID: "two", EffectUncertain: true}
+	for range 2 {
+		if err := c.sendInputNotice(context.Background(), d, hold); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(bodies) != 3 || !strings.Contains(bodies[2], "cannot confirm the outcome") || strings.Contains(bodies[2], "ready for the next message") {
+		t.Fatalf("uncertain native effect did not publish its own receipt-backed notice: %q", bodies)
+	}
+
 }

@@ -621,8 +621,8 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				emitted = append(emitted, p.ID)
 				return nil
 			})
-			if managerErr == nil && b.InputNoticeAdmission != "" {
-				noticeErr = errors.Join(noticeErr, store.teammateClearInputNotice(b.TeammateDiscussion, b.InputNoticeAdmission))
+			if managerErr == nil && b.InputNoticeID != "" {
+				noticeErr = errors.Join(noticeErr, store.teammateClearInputNotice(b.TeammateDiscussion, b.InputNoticeID))
 			}
 			managerErr = t.managerStartupError(ctx, b.TeammateDiscussion, managerErr)
 			var ackErr error

@@ -202,6 +202,12 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 		result.State = "prepared"
 	case idempotency.PhaseFailed:
 		result.State = "rejected"
+		var outcome struct {
+			Code protocol.ErrorCode `json:"code"`
+		}
+		if json.Unmarshal(rec.Outcome, &outcome) == nil && outcome.Code == protocol.CodeManagerDirectInput {
+			result.RejectionCode = outcome.Code
+		}
 	case idempotency.PhaseCompleted:
 		result.State = "submitted"
 	}
