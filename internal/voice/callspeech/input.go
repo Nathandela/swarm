@@ -15,17 +15,19 @@ import (
 )
 
 const (
-	quietTime   = 420 * time.Millisecond
-	tailTime    = 1_100 * time.Millisecond
-	stableTime  = 220 * time.Millisecond
-	hardTail    = 2_200 * time.Millisecond
-	maxSamples  = 20 * 50 // Twenty seconds of 20ms frames.
-	maxTurnText = 4096
-	maxEvents   = 8192
+	quietTime         = 420 * time.Millisecond
+	personalQuietTime = 850 * time.Millisecond
+	tailTime          = 1_100 * time.Millisecond
+	stableTime        = 220 * time.Millisecond
+	hardTail          = 2_200 * time.Millisecond
+	maxSamples        = 20 * 50 // Twenty seconds of 20ms frames.
+	maxTurnText       = 4096
+	maxEvents         = 8192
 )
 
 type candidate struct {
 	turn                           Turn
+	delegationID                   string
 	start, end                     int64
 	first, last, eventAt           time.Time
 	text                           strings.Builder
@@ -52,9 +54,6 @@ func (l *Lane) run() {
 		return
 	}
 	defer func() { _ = live.Close() }()
-	l.mu.Lock()
-	l.live = live
-	l.mu.Unlock()
 	close(l.ready)
 
 	events := make(chan openailive.Event, queueSize)
@@ -69,9 +68,11 @@ func (l *Lane) run() {
 	var overlap bool
 	var silence [frameBytes]byte
 	var teamIngress <-chan frame
+	utteranceQuiet := personalQuietTime
 	if l.cfg.Team {
-		teamIngress = l.ingress
+		teamIngress, utteranceQuiet = l.ingress, quietTime
 	}
+	preroll := make([]byte, frameBytes*6)
 
 	send := func(pcm []byte) bool {
 		ctx, cancel := context.WithTimeout(l.ctx, 200*time.Millisecond)
@@ -86,8 +87,8 @@ func (l *Lane) run() {
 
 	for l.ctx.Err() == nil {
 		now := time.Now()
-		if tr.current != nil && now.Sub(tr.current.last) >= quietTime && team == nil {
-			tr.closeCurrent()
+		if tr.current != nil && now.Sub(tr.current.last) >= utteranceQuiet && team == nil {
+			tr.closeCurrent(l)
 		}
 		tr.settle(l, now)
 		var next <-chan utterance
@@ -99,6 +100,14 @@ func (l *Lane) run() {
 			return
 		case u := <-next:
 			team = &u
+		case c := <-l.comments:
+			ctx, cancel := context.WithTimeout(l.ctx, 500*time.Millisecond)
+			err := live.SpeakFor(ctx, c.delegationID, c.text)
+			cancel()
+			if err != nil {
+				l.fail(err)
+				return
+			}
 		case event := <-events:
 			if err := tr.add(event, time.Now()); err != nil {
 				l.fail(err)
@@ -115,7 +124,6 @@ func (l *Lane) run() {
 				buffered, overlap = utterance{}, false
 			}
 			if voiced {
-				l.voiced(f.at, buffered.turn.Speaker == "")
 				if buffered.turn.Speaker == "" {
 					buffered.turn.Speaker = f.speaker
 				}
@@ -147,7 +155,8 @@ func (l *Lane) run() {
 				if voiced {
 					l.voiced(f.at, tr.current == nil)
 					if tr.current == nil {
-						tr.current = &candidate{turn: Turn{Speaker: f.speaker}, first: f.at, start: clock}
+						tr.current = &candidate{turn: Turn{Speaker: f.speaker, ID: rand.Text()}, first: f.at, start: clock,
+							pcm: append([]byte(nil), preroll...)}
 					}
 					c := tr.current
 					if c.turn.Speaker != f.speaker || f.at.Sub(c.first) >= maxSamples*framePeriod {
@@ -158,12 +167,18 @@ func (l *Lane) run() {
 					c.end = clock + int64(framePeriod/time.Millisecond)
 				}
 				pcm := silence[:]
-				if voiced && !tr.current.invalid {
+				if f.speaker != "" && (tr.current == nil || !tr.current.invalid) {
 					pcm = f.pcm[:]
 				}
-				if c := tr.current; c != nil && !c.invalid && len(c.pcm) < maxSamples*frameBytes {
-					c.pcm = append(c.pcm, pcm...)
+				if c := tr.current; c != nil && !c.invalid {
+					if len(c.pcm)+len(pcm) > maxSamples*frameBytes {
+						c.invalid = true
+					} else {
+						c.pcm = append(c.pcm, pcm...)
+					}
 				}
+				copy(preroll, preroll[frameBytes:])
+				copy(preroll[len(preroll)-frameBytes:], pcm)
 				if !send(pcm) {
 					return
 				}
@@ -222,7 +237,12 @@ func (l *Lane) finishTeam(u utterance, overlap bool) {
 	}
 }
 
-func (t *transcript) closeCurrent() {
+func (t *transcript) closeCurrent(l *Lane) {
+	c := t.current
+	if !l.cfg.Team && !c.invalid && c.voicedFrames >= 5 && l.registerTurn(c.turn.ID) {
+		l.enqueue(utterance{turn: c.turn, pcm: c.pcm})
+	}
+	c.pcm = nil
 	t.pending = append(t.pending, t.current)
 	t.current = nil
 }
@@ -269,7 +289,7 @@ func (t *transcript) add(e openailive.Event, now time.Time) error {
 		}
 		if match != nil {
 			// Multiple model handoffs from one local utterance share a single native input.
-			match.turn.DelegationID = e.DelegationID
+			match.delegationID = e.DelegationID
 			match.eventAt = now
 		}
 	case "session.input_transcript.delta":
@@ -303,37 +323,17 @@ func (t *transcript) settle(l *Lane, now time.Time) {
 		if quiet < tailTime || (now.Sub(c.eventAt) < stableTime && quiet < hardTail) {
 			return
 		}
-		covered := c.turn.Text != "" || (c.text.Len() > 0 && c.transcriptStart <= c.start+240 && c.transcriptEnd >= c.end-240)
-		if (!covered || c.turn.DelegationID == "") && quiet < hardTail && !c.invalid {
+		id := c.delegationID
+		if id == "" && quiet < hardTail && !c.invalid {
 			return
 		}
 		t.pending[0] = nil
 		t.pending = t.pending[1:]
 		t.retiredUntil = max(t.retiredUntil, c.end+quietTime.Milliseconds()+351)
-		if c.invalid {
-			continue
+		if c.invalid || now.Sub(c.eventAt) < stableTime {
+			id = ""
 		}
-		if c.turn.DelegationID != "" && covered && now.Sub(c.eventAt) >= stableTime {
-			if c.turn.Text == "" {
-				c.turn.Text = strings.TrimSpace(c.text.String())
-			}
-			if c.turn.Text == "" {
-				continue
-			}
-			c.turn.ID = c.turn.DelegationID
-			l.mu.Lock()
-			l.delegations[c.turn.DelegationID] = struct{}{}
-			l.mu.Unlock()
-			l.enqueue(utterance{turn: c.turn})
-			continue
-		}
-		// A provider can omit delegation even for a clear request. This turn
-		// receives a local ID and never writes commentary to a guessed handoff.
-		if c.turn.Text != "" || c.voicedFrames >= 8 {
-			c.turn.DelegationID = ""
-			c.turn.ID = rand.Text()
-			l.enqueue(utterance{turn: c.turn, pcm: c.pcm})
-		}
+		l.routeCommentary(c.turn.ID, id)
 	}
 }
 

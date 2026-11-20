@@ -128,21 +128,21 @@ func TestTeamAddressGateAndDelegation(t *testing.T) {
 
 	pushTestSpeech(t, l, "bob")
 	await(t, transcribed)
+	turn := await(t, turns)
+	if turn.ID == "" || turn.Speaker != "bob" || turn.Text != "verify the latest build." {
+		t.Fatalf("wrong native turn: %+v", turn)
+	}
+	// Native dispatch and isolated publication can precede the provider's handoff.
+	if err := l.PublishForTurn("stale", "Verified publication."); !errors.Is(err, ErrPublication) {
+		t.Fatalf("stale turn accepted: %v", err)
+	}
+	if err := l.PublishForTurn(turn.ID, "Verified publication."); err != nil {
+		t.Fatal(err)
+	}
 	offset := await(t, live.signal)
 	delegation := openailive.Event{Type: "session.delegation.created", EventID: "delegate-1", OffsetMS: offset, DelegationID: "item-1"}
 	live.events <- delegation
 	live.events <- delegation
-	turn := await(t, turns)
-	if turn != (Turn{Speaker: "bob", Text: "verify the latest build.", DelegationID: "item-1", ID: "item-1"}) {
-		t.Fatalf("wrong native turn: %+v", turn)
-	}
-
-	if err := l.PublishFor("stale", "Verified publication."); !errors.Is(err, ErrPublication) {
-		t.Fatalf("stale delegation accepted: %v", err)
-	}
-	if err := l.PublishFor("item-1", "Verified publication."); err != nil {
-		t.Fatal(err)
-	}
 	if got := await(t, live.update); got != [2]string{"item-1", "Verified publication."} {
 		t.Fatalf("wrong scoped update: %v", got)
 	}
@@ -156,11 +156,11 @@ func TestTeamAddressGateAndDelegation(t *testing.T) {
 	}
 }
 
-func TestPersonalHandoffWaitsForLateUnicodeTail(t *testing.T) {
+func TestLateUnicodeCaptionDoesNotAuthorizeNativeText(t *testing.T) {
 	now := time.Now()
-	l := &Lane{turns: make(chan utterance, 2), delegations: make(map[string]struct{})}
-	c := &candidate{turn: Turn{Speaker: "owner"}, start: 400, end: 900, last: now}
-	tr := transcript{pending: []*candidate{c}, events: make(map[string]struct{}), delegations: make(map[string]struct{})}
+	l := &Lane{turns: make(chan utterance, 2), scopes: make(map[string]turnScope)}
+	c := &candidate{turn: Turn{Speaker: "owner", ID: "local"}, start: 400, end: 900, last: now, voicedFrames: 10}
+	tr := transcript{current: c, events: make(map[string]struct{}), delegations: make(map[string]struct{})}
 	add := func(event openailive.Event, offset time.Duration) {
 		if err := tr.add(event, now.Add(offset)); err != nil {
 			t.Fatal(err)
@@ -168,29 +168,26 @@ func TestPersonalHandoffWaitsForLateUnicodeTail(t *testing.T) {
 	}
 	add(openailive.Event{Type: "session.input_transcript.delta", EventID: "p1", Text: "Inspect ca", StartMS: 400, EndMS: 620}, 0)
 	add(openailive.Event{Type: "session.delegation.created", EventID: "d1", DelegationID: "item-1", OffsetMS: 600}, 100*time.Millisecond)
-	tr.settle(l, now.Add(tailTime))
-	if len(l.turns) != 0 {
-		t.Fatal("incomplete turn admitted")
+	tr.closeCurrent(l)
+	if got := await(t, l.turns).turn; got.Text != "" || got.ID != "local" {
+		t.Fatal("incremental caption escaped as authoritative text")
 	}
 	tail := openailive.Event{Type: "session.input_transcript.delta", EventID: "p2", Text: "fé ☕", StartMS: 620, EndMS: 900}
 	add(tail, tailTime+20*time.Millisecond)
 	add(tail, tailTime+30*time.Millisecond)
 	tr.settle(l, now.Add(tailTime+stableTime+30*time.Millisecond))
-	if got := await(t, l.turns).turn; got != (Turn{Speaker: "owner", Text: "Inspect café ☕", DelegationID: "item-1", ID: "item-1"}) {
-		t.Fatalf("unexpected native turn: %+v", got)
-	}
-	tr.settle(l, now.Add(hardTail+time.Second))
-	if len(l.turns) != 0 {
-		t.Fatal("turn admitted twice")
+	if got := c.text.String(); got != "Inspect café ☕" || l.scopes["local"].delegationID != "item-1" {
+		t.Fatal("late Unicode caption or original delegation was lost")
 	}
 }
 
-func TestOverlapAndBargeCancelOnlyPlayback(t *testing.T) {
+func TestTeamChatterAndOverlapDoNotCancelPlayback(t *testing.T) {
 	live := &fakeLive{events: make(chan openailive.Event)}
 	rendering := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
 	stopped := make(chan struct{}, 1)
 	transcribed := make(chan struct{}, 1)
+	var requests atomic.Int64
 	l := newLane(t.Context(), Config{Team: true,
 		Stop: func() { stopped <- struct{}{} },
 		Play: func(context.Context, []byte) error { return nil },
@@ -198,7 +195,10 @@ func TestOverlapAndBargeCancelOnlyPlayback(t *testing.T) {
 		open: func(context.Context, string, string) (liveSession, error) { return live, nil },
 		transcribe: func(context.Context, string, []byte, string) (string, error) {
 			transcribed <- struct{}{}
-			return "", nil
+			if requests.Add(1) == 1 {
+				return "This is unrelated.", nil
+			}
+			return "Dispatcher, check the build.", nil
 		},
 		render: func(ctx context.Context, _, _, _ string) ([]byte, error) {
 			rendering <- struct{}{}
@@ -209,24 +209,34 @@ func TestOverlapAndBargeCancelOnlyPlayback(t *testing.T) {
 	})
 	t.Cleanup(func() { l.Close(); await(t, l.Done()) })
 	await(t, l.Ready())
-	if err := l.Publish("Verified publication."); err != nil {
+	l.registerTurn("existing")
+	if err := l.PublishForTurn("existing", "Verified publication."); err != nil {
 		t.Fatal(err)
 	}
 	await(t, rendering)
-	for _, speaker := range []string{"alice", "bob", "alice", "bob"} {
+	for _, speaker := range []string{"alice", "bob", "alice", "bob", "bob"} {
 		if err := l.Push(speaker, playbackTestFrame()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	await(t, stopped)
-	await(t, canceled)
 	select {
 	case <-transcribed:
 		t.Fatal("overlapped speech entered the provider")
-	case <-l.Done():
-		t.Fatal("barge-in closed the call")
-	case <-time.After(quietTime + 100*time.Millisecond):
+	case <-canceled:
+		t.Fatal("overlap canceled verified playback")
+	case <-time.After(quietTime + 60*time.Millisecond):
 	}
+	pushTestSpeech(t, l, "alice")
+	await(t, transcribed)
+	select {
+	case <-canceled:
+		t.Fatal("unaddressed chatter canceled verified playback")
+	case <-time.After(60 * time.Millisecond):
+	}
+	pushTestSpeech(t, l, "alice")
+	await(t, transcribed)
+	await(t, stopped)
+	await(t, canceled)
 }
 
 func TestAddressRequiresVocative(t *testing.T) {
@@ -247,24 +257,25 @@ func TestAddressRequiresVocative(t *testing.T) {
 
 func TestAmbiguousHandoffFallsBackWithLocalIdentifiers(t *testing.T) {
 	now := time.Now()
-	l := &Lane{turns: make(chan utterance, 2), delegations: make(map[string]struct{})}
-	first := &candidate{turn: Turn{Speaker: "one", Text: "First"}, start: 100, end: 500, last: now}
-	second := &candidate{turn: Turn{Speaker: "two", Text: "Second"}, start: 950, end: 1050, last: now}
+	l := &Lane{turns: make(chan utterance, 2), scopes: make(map[string]turnScope)}
+	first := &candidate{turn: Turn{Speaker: "one", ID: "local-1"}, start: 100, end: 500, last: now}
+	second := &candidate{turn: Turn{Speaker: "two", ID: "local-2"}, start: 950, end: 1050, last: now}
 	tr := transcript{pending: []*candidate{first, second}, events: make(map[string]struct{}), delegations: make(map[string]struct{})}
 	event := openailive.Event{Type: "session.delegation.created", EventID: "ambiguous", DelegationID: "item-ambiguous", OffsetMS: 1000}
 	if err := tr.add(event, now); err != nil {
 		t.Fatal(err)
 	}
+	l.registerTurn("local-1")
+	l.registerTurn("local-2")
 	tr.settle(l, now.Add(hardTail+time.Millisecond))
-	a, b := await(t, l.turns).turn, await(t, l.turns).turn
-	if a.ID == "" || b.ID == "" || a.ID == b.ID || a.DelegationID != "" || b.DelegationID != "" ||
-		a.Speaker != "one" || b.Speaker != "two" || len(l.delegations) != 0 {
-		t.Fatal("ambiguous event yielded a provider-scoped or misattributed turn")
+	if !l.scopes["local-1"].settled || !l.scopes["local-2"].settled ||
+		l.scopes["local-1"].delegationID != "" || l.scopes["local-2"].delegationID != "" {
+		t.Fatal("ambiguous event acquired a provider scope")
 	}
 }
 
-func TestPersonalFallbackTranscribesIsolatedUtterance(t *testing.T) {
-	live := &fakeLive{events: make(chan openailive.Event)}
+func TestPersonalFinalTranscriptionOverridesPartialLiveCaption(t *testing.T) {
+	live := &fakeLive{events: make(chan openailive.Event, 2), signal: make(chan int64, 16)}
 	turns := make(chan Turn, 2)
 	l := newLane(t.Context(), Config{Turn: func(_ context.Context, turn Turn) { turns <- turn }},
 		provider{
@@ -273,7 +284,7 @@ func TestPersonalFallbackTranscribesIsolatedUtterance(t *testing.T) {
 				if len(pcm) < 8*frameBytes || !hasSignal(pcm) {
 					return "", errors.New("isolated utterance audio missing")
 				}
-				return "Check the service.", nil
+				return "Check the service, do not restart it.", nil
 			},
 		})
 	t.Cleanup(func() { l.Close(); await(t, l.Done()) })
@@ -284,8 +295,27 @@ func TestPersonalFallbackTranscribesIsolatedUtterance(t *testing.T) {
 		}
 		time.Sleep(framePeriod)
 	}
+	offset := await(t, live.signal)
+	live.events <- openailive.Event{Type: "session.input_transcript.delta", EventID: "caption", StartMS: offset,
+		EndMS: offset + 180, Text: "Check the service."}
+	live.events <- openailive.Event{Type: "session.delegation.created", EventID: "delegation", OffsetMS: offset + 160,
+		DelegationID: "live-item"}
 	turn := await(t, turns)
-	if turn.ID == "" || turn.DelegationID != "" || turn.Speaker != "owner" || turn.Text != "Check the service." {
-		t.Fatal("missing attributed fallback")
+	if turn.ID == "" || turn.Speaker != "owner" || turn.Text != "Check the service, do not restart it." {
+		t.Fatal("native turn did not preserve the authoritative qualifier")
+	}
+}
+
+func TestClippedUtteranceNeverQueuesNativeInput(t *testing.T) {
+	l := &Lane{turns: make(chan utterance, 1), scopes: make(map[string]turnScope)}
+	c := &candidate{
+		turn:    Turn{Speaker: "owner", ID: "clipped"},
+		invalid: true, voicedFrames: maxSamples,
+		pcm: playbackTestFrame(), delegationID: "live",
+	}
+	tr := transcript{current: c}
+	tr.closeCurrent(l)
+	if len(l.turns) != 0 || len(l.scopes) != 0 {
+		t.Fatal("clipped utterance acquired native admission or commentary scope")
 	}
 }

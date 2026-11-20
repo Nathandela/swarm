@@ -3,6 +3,7 @@ package callspeech
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"log/slog"
 	"strings"
@@ -29,7 +30,7 @@ var (
 )
 
 type Turn struct {
-	Speaker, Text, DelegationID, ID string
+	Speaker, Text, ID string
 }
 
 // Config callbacks belong to a single call generation. The caller must fence
@@ -70,9 +71,18 @@ type utterance struct {
 }
 
 type publication struct {
+	text  string
+	epoch uint64
+}
+
+type liveCommentary struct {
+	delegationID, text string
+}
+
+type turnScope struct {
 	delegationID string
-	text         string
-	epoch        uint64
+	pending      []string
+	settled      bool
 }
 
 type Lane struct {
@@ -84,20 +94,20 @@ type Lane struct {
 	turns     chan utterance
 	addressed chan utterance
 	output    chan publication
+	comments  chan liveCommentary
 	ready     chan struct{}
 	done      chan struct{}
 	failOnce  sync.Once
 	workers   sync.WaitGroup
 
 	mu            sync.Mutex
-	delegations   map[string]struct{}
+	scopes        map[string]turnScope
 	epoch         uint64
 	playCancel    context.CancelFunc
 	speakingUntil time.Time
-	live          liveSession
 }
 
-// New starts the speech workers. Personal mode waits for session.started
+// New starts the speech workers. Both modes wait for session.started
 // before sending PCM. The failure callback reports startup or later failure.
 func New(ctx context.Context, cfg Config) *Lane {
 	return newLane(ctx, cfg, provider{
@@ -113,8 +123,8 @@ func newLane(ctx context.Context, cfg Config, provider provider) *Lane {
 	ctx, cancel := context.WithCancel(ctx)
 	l := &Lane{cfg: cfg, provider: provider, ctx: ctx, cancel: cancel,
 		ingress: make(chan frame, queueSize), turns: make(chan utterance, 4), addressed: make(chan utterance, 2),
-		output: make(chan publication, 8), ready: make(chan struct{}), done: make(chan struct{}),
-		delegations: make(map[string]struct{}),
+		output: make(chan publication, 8), comments: make(chan liveCommentary, 16), ready: make(chan struct{}), done: make(chan struct{}),
+		scopes: make(map[string]turnScope),
 	}
 	for _, worker := range []func(){l.run, l.admit, l.play} {
 		l.workers.Go(worker)
@@ -146,42 +156,82 @@ func (l *Lane) Push(speaker string, pcm []byte) error {
 	}
 }
 
-// Publish queues verified native text for an isolated speech render.
-func (l *Lane) Publish(text string) error {
-	return l.PublishFor("", text)
-}
-
-// PublishFor additionally sends a copy of the verified publication to its
-// original Live delegation. The interactive session's audio is never played.
-func (l *Lane) PublishFor(delegationID, text string) error {
+// PublishForTurn queues verified publication text for isolated playback and
+// forwards commentary only once that turn has a correlated Live delegation.
+func (l *Lane) PublishForTurn(turnID, text string) error {
 	text = strings.TrimSpace(text)
-	if text == "" || !utf8.ValidString(text) {
+	if turnID == "" || text == "" || !utf8.ValidString(text) {
 		return ErrPublication
 	}
-	return l.queue(delegationID, text)
+	text = boundedSpeech(text)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	scope, ok := l.scopes[turnID]
+	if !ok {
+		return ErrPublication
+	}
+	if err := l.queueLocked(text); err != nil {
+		return err
+	}
+	if scope.delegationID != "" {
+		l.comment(liveCommentary{scope.delegationID, text})
+	} else if !scope.settled && len(scope.pending) < 4 {
+		scope.pending = append(scope.pending, text)
+		l.scopes[turnID] = scope
+	}
+	return nil
 }
 
 // Acknowledge queues a local nonverbal cue after the caller verified admission.
 func (l *Lane) Acknowledge() error {
-	return l.queue("", "")
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.queueLocked("")
 }
 
-func (l *Lane) queue(delegationID, text string) error {
+func (l *Lane) queueLocked(text string) error {
 	if l.ctx.Err() != nil {
 		return ErrClosed
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if delegationID != "" {
-		if _, ok := l.delegations[delegationID]; !ok {
-			return ErrPublication
-		}
-	}
 	select {
-	case l.output <- publication{delegationID: delegationID, text: text, epoch: l.epoch}:
+	case l.output <- publication{text: text, epoch: l.epoch}:
 		return nil
 	default:
 		return ErrBacklog
+	}
+}
+
+func (l *Lane) registerTurn(id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.scopes) >= maxDelegations {
+		l.fail(ErrBacklog)
+		return false
+	}
+	l.scopes[id] = turnScope{}
+	return true
+}
+
+func (l *Lane) routeCommentary(turnID, delegationID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	scope, ok := l.scopes[turnID]
+	if !ok {
+		return
+	}
+	for _, text := range scope.pending {
+		if delegationID != "" {
+			l.comment(liveCommentary{delegationID, text})
+		}
+	}
+	l.scopes[turnID] = turnScope{delegationID: delegationID, settled: true}
+}
+
+func (l *Lane) comment(c liveCommentary) {
+	select {
+	case l.comments <- c:
+	default:
+		l.fail(ErrBacklog)
 	}
 }
 
@@ -216,31 +266,36 @@ func (l *Lane) admit() {
 			if l.ctx.Err() != nil {
 				return
 			}
-			if u.turn.ID == "" || (!l.cfg.Team && u.turn.Text == "") {
-				ctx, cancel := context.WithTimeout(l.ctx, 8*time.Second)
-				text, err := l.provider.transcribe(ctx, l.cfg.Key, u.pcm, l.cfg.Language)
-				cancel()
-				if err != nil {
-					l.fail(err)
+			ctx, cancel := context.WithTimeout(l.ctx, 8*time.Second)
+			text, err := l.provider.transcribe(ctx, l.cfg.Key, u.pcm, l.cfg.Language)
+			cancel()
+			if err != nil {
+				l.fail(err)
+				return
+			}
+			u.turn.Text = strings.TrimSpace(text)
+			if l.cfg.Team {
+				u.turn.Text = addressedText(text)
+			}
+			if l.ctx.Err() != nil || u.turn.Text == "" || len(u.turn.Text) > maxTurnText {
+				continue
+			}
+			if l.cfg.Team {
+				u.turn.ID = rand.Text()
+				if !l.registerTurn(u.turn.ID) {
 					return
 				}
-				if l.cfg.Team {
-					u.turn.Text = addressedText(text)
-					if u.turn.Text != "" && len(u.turn.Text) <= maxTurnText {
-						select {
-						case l.addressed <- u:
-						case <-l.ctx.Done():
-							return
-						default:
-							l.fail(ErrBacklog)
-							return
-						}
-					}
-					continue
+				l.voiced(time.Time{}, true)
+				select {
+				case l.addressed <- u:
+				case <-l.ctx.Done():
+					return
+				default:
+					l.fail(ErrBacklog)
+					return
 				}
-				u.turn.Text = strings.TrimSpace(text)
 			}
-			if l.ctx.Err() == nil && u.turn.Text != "" && len(u.turn.Text) <= maxTurnText && l.cfg.Turn != nil {
+			if l.cfg.Turn != nil {
 				l.cfg.Turn(l.ctx, u.turn)
 			}
 		}
@@ -285,7 +340,6 @@ func (l *Lane) play() {
 
 func (l *Lane) playPublication(p publication) {
 	l.mu.Lock()
-	live := l.live
 	current := l.epoch == p.epoch && l.ctx.Err() == nil && !time.Now().Before(l.speakingUntil)
 	ctx, cancel := context.WithCancel(l.ctx)
 	if current {
@@ -296,16 +350,7 @@ func (l *Lane) playPublication(p publication) {
 	if l.ctx.Err() != nil {
 		return
 	}
-	text := boundedSpeech(p.text)
-	if p.delegationID != "" && live != nil {
-		commentaryCtx, stop := context.WithTimeout(l.ctx, 500*time.Millisecond)
-		err := live.SpeakFor(commentaryCtx, p.delegationID, text)
-		stop()
-		if err != nil {
-			l.fail(err)
-			return
-		}
-	}
+	text := p.text
 	if !current || ctx.Err() != nil || l.cfg.Play == nil {
 		return
 	}
