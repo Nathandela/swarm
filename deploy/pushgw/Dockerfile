@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# Go 1.26.10 fixes the crypto/x509 trust issue CVE-2026-111943.
-ARG GO_VERSION=1.26.10-bookworm
+# Go 1.26.11 fixes the HTTP server limit issue CVE-2026-97054.
+ARG GO_VERSION=1.26.11-bookworm
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS builder
 WORKDIR /src
 
