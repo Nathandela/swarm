@@ -43,6 +43,7 @@ type DiscordClient struct {
 	OnReady          func(*discordgo.Ready)
 	onDispatch       func(gatewayFrame, string) error
 	callGateway      *callGateway
+	callDisabled     atomic.Bool
 	channelRates     map[string]*discordChannelRate
 	globalReset      time.Time
 }
@@ -282,6 +283,21 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 			resumeURL = ""
 			seq = 0
 		}
+		// A missing optional team voice intent must leave the text connector usable.
+		if status == 4014 && !connected && c.callGateway != nil && !c.personal && c.callDisabled.CompareAndSwap(false, true) {
+			sessionID, resumeURL, seq = "", "", 0
+			if c.callGateway.unavailable != nil {
+				c.callGateway.unavailable("enable Server Members Intent in Discord Developer Portal > Bot > Privileged Gateway Intents and restart the connector to use team calls")
+			}
+			next := time.NewTimer(max(time.Second, time.Until(identifiedAt.Add(5*time.Second))))
+			select {
+			case <-ctx.Done():
+				next.Stop()
+				return
+			case <-next.C:
+			}
+			continue
+		}
 		fatal := status == 4004 || status == 4010 || status == 4011 || status == 4012 || status == 4013 || status == 4014
 		if fatal {
 			e := fmt.Errorf("discord: gateway authentication or configuration failure (%d)", status)
@@ -405,14 +421,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 	if resuming {
 		identify = map[string]any{"op": 6, "d": map[string]any{"token": "Bot " + c.token, "session_id": *sessionID, "seq": *seq}}
 	} else {
-		intents := discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
-		if c.personal {
-			intents = discordgo.IntentsDirectMessages
-		}
-		if c.callGateway != nil {
-			intents |= discordgo.IntentsGuilds | discordgo.IntentsGuildVoiceStates
-		}
-		identify = map[string]any{"op": 2, "d": map[string]any{"token": "Bot " + c.token, "intents": intents, "properties": map[string]string{"os": "swarm", "browser": "swarm", "device": "swarm"}}}
+		identify = map[string]any{"op": 2, "d": map[string]any{"token": "Bot " + c.token, "intents": c.gatewayIntents(), "properties": map[string]string{"os": "swarm", "browser": "swarm", "device": "swarm"}}}
 	}
 	if !resuming {
 		*identifiedAt = time.Now()
@@ -461,7 +470,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			// The text connector can suppress reserved call commands on
 			// replay without treating them as fresh voice invitations.
 			frame.replayed = replaying && frame.Type != "READY"
-			if c.callGateway != nil && freshReady && frame.Type != "READY" && (frame.Sequence == nil || *frame.Sequence > callSeq) {
+			if c.callGateway != nil && !c.callDisabled.Load() && freshReady && frame.Type != "READY" && (frame.Sequence == nil || *frame.Sequence > callSeq) {
 				if frame.Sequence != nil {
 					callSeq = *frame.Sequence
 				}
@@ -488,7 +497,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				}
 				freshReady = true
 				replaying = false
-				if c.callGateway != nil {
+				if c.callGateway != nil && !c.callDisabled.Load() {
 					callSeq = *seq
 					c.callGateway.handle(connCtx, conn, frame)
 				}
@@ -542,6 +551,21 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			}
 		}
 	}
+}
+
+func (c *DiscordClient) gatewayIntents() discordgo.Intent {
+	intents := discordgo.IntentsDirectMessages
+	if !c.personal {
+		intents |= discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
+	}
+	if c.callGateway != nil && !c.callDisabled.Load() {
+		intents |= discordgo.IntentsGuilds | discordgo.IntentsGuildVoiceStates
+		if !c.personal {
+			// Private-thread removals of other users require this privileged intent.
+			intents |= discordgo.IntentsGuildMembers
+		}
+	}
+	return intents
 }
 
 func discordUserAgent() string {

@@ -17,6 +17,7 @@ type callGateway struct {
 	guild, room string
 	dispatch    func(gatewayFrame)
 	disconnect  func()
+	unavailable func(string)
 
 	mu     sync.Mutex
 	active *callGatewaySession
@@ -59,11 +60,10 @@ func (c *DiscordClient) setCallVoiceState(ctx context.Context, guild, channel st
 	if channel != "" {
 		room = &channel
 	}
-	writeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	// Canceling a media generation must not cancel an in-flight shared socket write.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(active.ctx), time.Second)
 	defer cancel()
-	stop := context.AfterFunc(active.ctx, cancel)
-	defer stop()
-	if err := writeCtx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := active.ctx.Err(); err != nil {

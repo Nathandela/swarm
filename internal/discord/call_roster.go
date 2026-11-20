@@ -16,6 +16,8 @@ type callRoster struct {
 	botID            string
 	sessionID        string
 	sequence         int64
+	occupancyAt      int64
+	selfLeftAt       int64
 	guildID          string
 	roomID           string
 	discussionID     string
@@ -88,7 +90,7 @@ func (v callRosterVoiceState) occupant(user *callRosterUser, wasHuman bool) (cal
 // reset drops the anchor but keeps the authenticated Gateway session and its
 // sequence watermark. RESUMED and voice deltas alone cannot restore the anchor.
 func (r *callRoster) reset() {
-	*r = callRoster{botID: r.botID, sessionID: r.sessionID, sequence: r.sequence}
+	*r = callRoster{botID: r.botID, sessionID: r.sessionID, sequence: r.sequence, occupancyAt: r.sequence}
 }
 
 func (r *callRoster) invalidate() bool {
@@ -135,19 +137,20 @@ func (r *callRoster) apply(cfg Config, f gatewayFrame) bool {
 	}
 
 	switch f.Type {
-	case "GUILD_CREATE", "GUILD_DELETE", "GUILD_UPDATE", "VOICE_STATE_UPDATE",
-		"CHANNEL_UPDATE", "CHANNEL_DELETE", "GUILD_ROLE_CREATE", "GUILD_ROLE_UPDATE", "GUILD_ROLE_DELETE",
-		"GUILD_MEMBER_ADD", "GUILD_MEMBER_UPDATE", "GUILD_MEMBER_REMOVE",
-		"THREAD_CREATE", "THREAD_UPDATE", "THREAD_DELETE", "THREAD_MEMBER_UPDATE", "THREAD_MEMBERS_UPDATE", "THREAD_LIST_SYNC":
+	case "GUILD_CREATE", "GUILD_DELETE", "VOICE_STATE_UPDATE":
 	default:
-		return false
+		if !callPermissionEvent(f.Type) {
+			return false
+		}
 	}
 
 	var scope struct {
-		ID         string         `json:"id"`
-		GuildID    string         `json:"guild_id"`
-		User       callRosterUser `json:"user"`
-		ChannelIDs []string       `json:"channel_ids"`
+		ID          string         `json:"id"`
+		GuildID     string         `json:"guild_id"`
+		User        callRosterUser `json:"user"`
+		ChannelIDs  []string       `json:"channel_ids"`
+		Unavailable bool           `json:"unavailable"`
+		ParentID    *string        `json:"parent_id"`
 	}
 	if len(f.Data) > callRosterMaxPayload || json.Unmarshal(f.Data, &scope) != nil {
 		return r.invalidate()
@@ -194,9 +197,32 @@ func (r *callRoster) apply(cfg Config, f gatewayFrame) bool {
 			return r.update(f.Data)
 		}
 		return r.invalidate()
-	default:
+	case "GUILD_DELETE":
 		return r.invalidate()
+	default:
+		if scope.Unavailable || f.Type == "CHANNEL_DELETE" && scope.ID == calls.RoomID {
+			return r.invalidate()
+		}
+		if f.Type == "CHANNEL_UPDATE" && scope.ID == calls.RoomID && scope.ParentID != nil && snowflake(*scope.ParentID) {
+			r.roomParent = *scope.ParentID
+		}
+		if (f.Type == "THREAD_CREATE" || f.Type == "THREAD_UPDATE") && scope.ID == calls.DiscussionID && scope.ParentID != nil && snowflake(*scope.ParentID) {
+			r.discussionParent = *scope.ParentID
+		}
+		// Access changes retire media. Continuous voice states remain useful
+		// for selecting the audience of the next REST authorization check.
+		return r.matches(calls)
 	}
+}
+
+func callPermissionEvent(event string) bool {
+	switch event {
+	case "GUILD_UPDATE", "CHANNEL_UPDATE", "CHANNEL_DELETE", "GUILD_ROLE_CREATE", "GUILD_ROLE_UPDATE", "GUILD_ROLE_DELETE",
+		"GUILD_MEMBER_ADD", "GUILD_MEMBER_UPDATE", "GUILD_MEMBER_REMOVE", "THREAD_CREATE", "THREAD_UPDATE", "THREAD_DELETE",
+		"THREAD_MEMBER_UPDATE", "THREAD_MEMBERS_UPDATE", "THREAD_LIST_SYNC":
+		return true
+	}
+	return false
 }
 
 type callRosterChannel struct {
@@ -294,7 +320,9 @@ func (r *callRoster) update(raw json.RawMessage) bool {
 	}
 	if v.UserID == r.botID {
 		var self callRosterOccupant
-		if channel != "" {
+		if channel == "" {
+			r.selfLeftAt = r.sequence
+		} else {
 			self, ok = v.occupant(nil, false)
 			if !ok {
 				return r.invalidate()
@@ -310,6 +338,9 @@ func (r *callRoster) update(raw json.RawMessage) bool {
 	previous, present := r.occupants[v.UserID]
 	if channel != r.roomID {
 		delete(r.occupants, v.UserID)
+		if present {
+			r.occupancyAt = r.sequence
+		}
 		return present
 	}
 	occupant, ok := v.occupant(nil, previous.human)
@@ -317,7 +348,11 @@ func (r *callRoster) update(raw json.RawMessage) bool {
 		return r.invalidate()
 	}
 	r.occupants[v.UserID] = occupant
-	return !present || previous != occupant
+	if !present || previous != occupant {
+		r.occupancyAt = r.sequence
+		return true
+	}
+	return false
 }
 
 func (r *callRoster) speakers(cfg Config) ([]string, bool) {

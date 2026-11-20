@@ -144,14 +144,8 @@ func TestCallRosterAnchorInvalidation(t *testing.T) {
 		{"duplicate occupants", "GUILD_CREATE", callRosterGuild(owner, owner), 3},
 		{"missing channels", "GUILD_CREATE", `{"id":"10","voice_states":[]}`, 3},
 		{"stage", "GUILD_CREATE", strings.Replace(guild, `"type":2`, `"type":13`, 1), 3},
-		{"guild authority", "GUILD_UPDATE", `{"id":"10"}`, 3},
-		{"room permissions", "CHANNEL_UPDATE", `{"guild_id":"10","id":"20"}`, 3},
-		{"room parent", "CHANNEL_DELETE", `{"guild_id":"10","id":"21"}`, 3},
-		{"thread parent", "CHANNEL_UPDATE", `{"guild_id":"10","id":"31"}`, 3},
-		{"role", "GUILD_ROLE_UPDATE", `{"guild_id":"10","role":{"id":"10"}}`, 3},
-		{"room member", "GUILD_MEMBER_UPDATE", `{"guild_id":"10","user":{"id":"1"}}`, 3},
-		{"bot removal", "GUILD_MEMBER_REMOVE", `{"guild_id":"10","user":{"id":"99"}}`, 3},
-		{"thread membership", "THREAD_MEMBERS_UPDATE", `{"guild_id":"10","id":"30","removed_member_ids":["1"]}`, 3},
+		{"unavailable update", "GUILD_UPDATE", `{"id":"10","unavailable":true}`, 3},
+		{"room deleted", "CHANNEL_DELETE", `{"guild_id":"10","id":"20"}`, 3},
 		{"missing channel", "VOICE_STATE_UPDATE", `{"guild_id":"10","user_id":"1"}`, 3},
 		{"missing flags", "VOICE_STATE_UPDATE", callRosterDelta(callRosterState("1", `"20"`, "", `"mute":false`)), 3},
 		{"mismatched member", "VOICE_STATE_UPDATE", callRosterDelta(strings.Replace(owner, `"id":"1"`, `"id":"2"`, 1)), 3},
@@ -175,6 +169,37 @@ func TestCallRosterAnchorInvalidation(t *testing.T) {
 			applyCallRoster(t, &r, cfg, 6, "GUILD_CREATE", guild, true)
 			checkCallRoster(t, &r, cfg, "1")
 		})
+	}
+}
+
+func TestCallRosterPermissionChangesPreserveOccupancy(t *testing.T) {
+	cfg := callRosterConfig("team")
+	var r callRoster
+	owner := callRosterVoice("1", "20")
+	applyCallRoster(t, &r, cfg, 1, "READY", callRosterReady, false)
+	applyCallRoster(t, &r, cfg, 2, "GUILD_CREATE", callRosterGuild(owner), true)
+	for i, event := range []struct{ kind, data string }{
+		{"GUILD_UPDATE", `{"id":"10"}`},
+		{"CHANNEL_UPDATE", `{"guild_id":"10","id":"20"}`},
+		{"CHANNEL_DELETE", `{"guild_id":"10","id":"21"}`},
+		{"CHANNEL_UPDATE", `{"guild_id":"10","id":"31"}`},
+		{"GUILD_ROLE_UPDATE", `{"guild_id":"10","role":{"id":"10"}}`},
+		{"GUILD_MEMBER_UPDATE", `{"guild_id":"10","user":{"id":"1"}}`},
+		{"GUILD_MEMBER_REMOVE", `{"guild_id":"10","user":{"id":"99"}}`},
+		{"THREAD_MEMBERS_UPDATE", `{"guild_id":"10","id":"30","removed_member_ids":["1"]}`},
+	} {
+		applyCallRoster(t, &r, cfg, int64(3+i), event.kind, event.data, true)
+		checkCallRoster(t, &r, cfg, "1")
+		if r.occupancyAt != 2 {
+			t.Fatalf("%s changed the voice occupancy at %d", event.kind, r.occupancyAt)
+		}
+	}
+	applyCallRoster(t, &r, cfg, 11, "VOICE_STATE_UPDATE", callRosterDelta(callRosterVoice("1", "")), true)
+	checkCallRoster(t, &r, cfg)
+	applyCallRoster(t, &r, cfg, 12, "VOICE_STATE_UPDATE", callRosterDelta(owner), true)
+	checkCallRoster(t, &r, cfg, "1")
+	if r.occupancyAt != 12 {
+		t.Fatal("a leave and return must invalidate the previous occupancy")
 	}
 }
 
