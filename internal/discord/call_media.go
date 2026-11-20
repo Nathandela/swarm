@@ -11,8 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +29,7 @@ const (
 )
 
 var errCallMediaProtocol = errors.New("discord call media: invalid pipe message")
+var callMediaFaultCode = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type callMediaEvent struct {
 	Type   string          `json:"type"`
@@ -61,14 +62,18 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 	if err != nil {
 		return err
 	}
-	defer childIn.Close()
-	defer stdin.Close()
+	defer func() {
+		_ = childIn.Close()
+		_ = stdin.Close()
+	}()
 	stdout, childOut, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	defer stdout.Close()
-	defer childOut.Close()
+	defer func() {
+		_ = stdout.Close()
+		_ = childOut.Close()
+	}()
 	cmd := exec.Command(helperPath)
 	cmd.Env = []string{"PATH=" + callMediaPath}
 	cmd.Stdin, cmd.Stdout = childIn, childOut
@@ -218,7 +223,7 @@ func runCallMedia(ctx context.Context, helperPath, guildID, roomID, botID string
 }
 
 func writeCallMedia(ctx context.Context, stdin *os.File, pending <-chan []byte) error {
-	defer stdin.Close()
+	defer func() { _ = stdin.Close() }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -317,9 +322,7 @@ func decodeCallMedia(line []byte, fromHelper bool) (callMediaEvent, error) {
 		}
 	case "fault":
 		valid = fromHelper && len(fields) == 2 && json.Unmarshal(fields["code"], &event.Code) == nil &&
-			len(event.Code) > 0 && len(event.Code) <= 64 && strings.IndexFunc(event.Code, func(r rune) bool {
-			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
-		}) == -1
+			callMediaFaultCode.MatchString(event.Code)
 	}
 	if !valid {
 		return callMediaEvent{}, errCallMediaProtocol

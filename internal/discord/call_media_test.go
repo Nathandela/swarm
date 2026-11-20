@@ -63,7 +63,7 @@ IFS= read -r line
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stderr.Close()
+	defer func() { _ = stderr.Close() }()
 	previous := os.Stderr
 	os.Stderr = stderr
 	defer func() { os.Stderr = previous }()
@@ -213,8 +213,7 @@ printf '{"type":"gateway","data":{"pid":%s}}\n' "$$"
 			}
 			select {
 			case err := <-result:
-				if err == nil || (!strings.Contains(err.Error(), test.want) &&
-					!(test.name == "blocked writer" && strings.Contains(err.Error(), "helper write failed"))) {
+				if err == nil || !strings.Contains(err.Error(), test.want) {
 					t.Fatalf("expected %q, got %v", test.want, err)
 				}
 			case <-time.After(2 * time.Second):
