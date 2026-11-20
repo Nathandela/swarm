@@ -35,16 +35,17 @@ type ControllerRuntime interface {
 var _ ControllerRuntime = (*protocol.Client)(nil)
 
 type Controller struct {
-	discussion        *DiscussionScope
-	discussionEffects sync.Mutex
-	scheduler         sync.Mutex
-	reconcileAfter    string
-	metadata          sync.Mutex
-	store             *Store
-	runtime           ControllerRuntime
-	binding           ManagerBinding
-	refs              ManagerBridgeRefs
-	workers           ControllerWorkers
+	discussion         *DiscussionScope
+	managerSettingsDir string
+	discussionEffects  sync.Mutex
+	scheduler          sync.Mutex
+	reconcileAfter     string
+	metadata           sync.Mutex
+	store              *Store
+	runtime            ControllerRuntime
+	binding            ManagerBinding
+	refs               ManagerBridgeRefs
+	workers            ControllerWorkers
 }
 
 func NewController(store *Store, runtime ControllerRuntime, binding ManagerBinding, refs ManagerBridgeRefs) (*Controller, error) {
@@ -273,6 +274,15 @@ func (c *Controller) Tick(ctx context.Context) error {
 			}
 			if err != nil {
 				return err
+			}
+			if c.managerSettingsDir != "" {
+				prompt, err := LoadManagerStartingPrompt(c.managerSettingsDir)
+				if err != nil {
+					return err
+				}
+				if prompt != "" {
+					text = "Local manager starting instructions\n" + prompt + "\n\nCurrent input\n" + text
+				}
 			}
 			if a.RecoveryOnly {
 				text = recoveryInputNotice + text

@@ -229,6 +229,9 @@ func (m generalModel) groupKey(s protocol.SessionView) string {
 		if tag := strings.TrimSpace(s.Tag); tag != "" {
 			return tag
 		}
+		if s.Role == "manager" {
+			return "manager"
+		}
 		return untaggedGroup
 	default:
 		return string(s.Group)
@@ -613,6 +616,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.optionsGeneration++
 		var cmd tea.Cmd
 		m.options, cmd = newOptionsModel(m.general.grouping, m.general.ordering, m.touchBack, m.client, m.optionsGeneration)
+		m.loadManagerPrompt()
 		m.screen = screenOptions
 		return m, cmd
 	case k.Text == "h":
@@ -1131,6 +1135,9 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	// it: the summary yields, then the markers themselves clamp, so the row never
 	// exceeds the terminal.
 	var markers []string
+	if s.Role == "manager" {
+		markers = append(markers, "[manager]")
+	}
 	// THE INSTANT, NOT THE FLAG. RemoteControlled is still the daemon's answer to "is somebody
 	// driving this" -- it gates the supervisor and the roster poller's diff key -- but a row
 	// cannot be WORDED from a boolean, and a lease carries no instant to word it with. A row

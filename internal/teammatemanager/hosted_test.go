@@ -133,7 +133,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	})
 	cfg := discord.Config{Mode: "teammate", Name: "Teammate rehearsal", InstallationID: "synthetic-place", ManagerCLI: "codex", WorkDir: workdir, DaemonSocket: socket, Projects: map[string]string{"fixture": project}}
 	open := func() *Runtime {
-		r, err := New(ctx, connector, owner.EndpointID(), cfg)
+		r, err := New(ctx, connector, owner.EndpointID(), "", cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

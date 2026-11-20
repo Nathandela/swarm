@@ -34,7 +34,7 @@ func TestDiscussionSocketsArePrivateShortStableAndIndependent(t *testing.T) {
 	}
 	cfg := discord.Config{InstallationID: "install", Name: "Teammate", ManagerCLI: "codex", WorkDir: t.TempDir(), DaemonSocket: "/unavailable"}
 	makeRuntime := func() *Runtime {
-		r, err := New(context.Background(), state, "local", cfg)
+		r, err := New(context.Background(), state, "local", "", cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func TestDiscussionSocketsArePrivateShortStableAndIndependent(t *testing.T) {
 func TestDormantDiscussionClosesSocketAndSkipsIdleSync(t *testing.T) {
 	dir := t.TempDir()
 	cfg := discord.Config{InstallationID: "install", Name: "Teammate", ManagerCLI: "codex", WorkDir: t.TempDir(), DaemonSocket: "/unavailable"}
-	r, err := New(context.Background(), dir, "local", cfg)
+	r, err := New(context.Background(), dir, "local", "", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +109,26 @@ func TestProjectSelectionIsRememberedAndSwitchesExplicitly(t *testing.T) {
 	} {
 		if got := r.resolveProject(tc.selected, tc.text, tc.history); got != tc.want {
 			t.Fatalf("%+v selected %q", tc, got)
+		}
+	}
+}
+
+func TestPersonalDiscussionPinnedToOneDMAndOwner(t *testing.T) {
+	cfg := discord.Config{Mode: "personal", DMChannelID: "200", OwnerID: "100", InstallationID: "install", Name: "Personal", ManagerCLI: "codex", WorkDir: t.TempDir(), DaemonSocket: "/unavailable"}
+	r, err := New(context.Background(), t.TempDir(), "local", "", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.socketRoot = privateTestSockets(t)
+	t.Cleanup(func() { _ = r.Close() })
+	d := discord.TeammateDiscussion{ID: "d", InstallationID: "install", Route: discord.Route{ChannelID: "200"}}
+	if _, err := r.discussion(d, nil, false); err != nil {
+		t.Fatalf("pinned DM: %v", err)
+	}
+	for _, route := range []discord.Route{{ChannelID: "201"}, {GuildID: "300", ChannelID: "200"}, {ChannelID: "200", ParentID: "300"}} {
+		d.Route = route
+		if _, err := r.discussion(d, nil, false); err == nil {
+			t.Fatalf("accepted wrong destination %+v", route)
 		}
 	}
 }

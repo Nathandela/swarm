@@ -219,6 +219,9 @@ func scheduledReviewMarked(s protocol.SessionView) bool {
 }
 
 func sessionBoardIcon(s protocol.SessionView, group status.Group, frame uint64) string {
+	if s.Role == "manager" {
+		return "◈"
+	}
 	if scheduledReviewMarked(s) {
 		return "◆"
 	}
@@ -279,6 +282,9 @@ func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 	name := displayName(s)
 	if name == "" {
 		name = s.ID
+	}
+	if s.Role == "manager" {
+		name = "[manager] " + name
 	}
 	return prefix + groupStyle(s.Group).Render(sessionBoardIcon(s, s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(ellipsis(name, nameWidth), nameWidth)) + " " + groupStyle(s.Group).Render(state)
 }

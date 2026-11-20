@@ -253,7 +253,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	opts := []tui.Option{scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
+	opts := []tui.Option{scheduleUIOption(), tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)), tui.WithManagerSettingsDir(cc.StateDir)}
 	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
 		return dialClient(tuiCaps())
 	}), tui.WithLoginRunner(loginRunner(tui.TerminalHandoff{
