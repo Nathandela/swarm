@@ -101,8 +101,9 @@ func (d *Daemon) retireManager(ctx context.Context, local string, req protocol.M
 		if req.Replacement != "" {
 			// A submitted terminal line is retained as an uncertain old effect. A draft or attached
 			// operator above always vetoes the claim. Retry only the exact durable physical claim.
-			if !redrive && !(req.Replacement == schema.ManagerReplaceCustody && errors.Is(err, managerproof.ErrQuarantined) ||
-				req.Replacement == schema.ManagerReplaceQuota && err == nil && current.ProviderExhausted && current.ReadyForInput && current.Binding == req.Binding && !current.Turn.ExternallySteered) {
+			lostCustody := req.Replacement == schema.ManagerReplaceCustody && errors.Is(err, managerproof.ErrQuarantined)
+			exhausted := req.Replacement == schema.ManagerReplaceQuota && err == nil && current.ProviderExhausted && current.ReadyForInput && current.Binding == req.Binding && !current.Turn.ExternallySteered
+			if !redrive && !lostCustody && !exhausted {
 				return managerproof.ErrStale
 			}
 		} else if err != nil {

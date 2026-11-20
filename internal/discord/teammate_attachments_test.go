@@ -48,7 +48,7 @@ func TestPersonalAttachmentOnlyHandoff(t *testing.T) {
 	conn, manager := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels/20":
-			fmt.Fprint(w, personalFixture)
+			_, _ = fmt.Fprint(w, personalFixture)
 		case "/channels/20/messages/200":
 			_ = json.NewEncoder(w).Encode(msg)
 		default:
@@ -231,7 +231,7 @@ func TestPersonalAttachmentOutageNotifiesOnceAndReleasesFIFO(t *testing.T) {
 	conn, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /channels/20":
-			fmt.Fprint(w, personalFixture)
+			_, _ = fmt.Fprint(w, personalFixture)
 		case "POST /channels/20/messages":
 			posts++
 			var p struct{ Content string }

@@ -20,9 +20,9 @@ func TestPersonalReconnectRecoversMissedOriginalIDs(t *testing.T) {
 	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels/20":
-			fmt.Fprint(w, personalFixture)
+			_, _ = fmt.Fprint(w, personalFixture)
 		case "/channels/20/messages":
-			fmt.Fprint(w, `[{"id":"52","channel_id":"20","content":"second","author":{"id":"30","username":"Owner"},"type":0},{"id":"51","channel_id":"20","content":"first","author":{"id":"30","username":"Owner"},"type":0}]`)
+			_, _ = fmt.Fprint(w, `[{"id":"52","channel_id":"20","content":"second","author":{"id":"30","username":"Owner"},"type":0},{"id":"51","channel_id":"20","content":"first","author":{"id":"30","username":"Owner"},"type":0}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -77,7 +77,7 @@ func TestPersonalReconnectResumesVerifiedPagesAndKeepsNativeFIFO(t *testing.T) {
 			t.Errorf("history recovery made an unintended Discord effect: %s %s", r.Method, r.URL)
 			http.NotFound(w, r)
 		case r.URL.Path == "/channels/20":
-			fmt.Fprint(w, personalFixture)
+			_, _ = fmt.Fprint(w, personalFixture)
 		case r.URL.Path == "/channels/20/messages":
 			before := r.URL.Query().Get("before")
 			requests = append(requests, before)
@@ -255,14 +255,14 @@ func TestPersonalReconnectContextStopsAtInvokingMessageAndConsent(t *testing.T) 
 	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels/20":
-			fmt.Fprint(w, personalFixture)
+			_, _ = fmt.Fprint(w, personalFixture)
 		case "/channels/20/messages/52":
-			fmt.Fprint(w, `{"id":"52","channel_id":"20","content":"current","author":{"id":"30","username":"Owner"},"type":19,"message_reference":{"message_id":"49","channel_id":"20"}}`)
+			_, _ = fmt.Fprint(w, `{"id":"52","channel_id":"20","content":"current","author":{"id":"30","username":"Owner"},"type":19,"message_reference":{"message_id":"49","channel_id":"20"}}`)
 		case "/channels/20/messages":
 			if got := r.URL.Query().Get("before"); got != "52" {
 				t.Errorf("initial context was not anchored to current admission: before=%q", got)
 			}
-			fmt.Fprint(w, `[{"id":"51","channel_id":"20","content":"earlier","author":{"id":"30"}},{"id":"50","channel_id":"20","content":"consent","author":{"id":"30"}},{"id":"49","channel_id":"20","content":"before consent","author":{"id":"30"}}]`)
+			_, _ = fmt.Fprint(w, `[{"id":"51","channel_id":"20","content":"earlier","author":{"id":"30"}},{"id":"50","channel_id":"20","content":"consent","author":{"id":"30"}},{"id":"49","channel_id":"20","content":"before consent","author":{"id":"30"}}]`)
 		default:
 			t.Errorf("context read outside the consent boundary: %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -302,9 +302,9 @@ func TestPersonalReconnectHistoryHoldNoticeIsScopedAndDurable(t *testing.T) {
 				switch {
 				case r.URL.Path == "/channels/20":
 					if tc.audience {
-						fmt.Fprint(w, personalFixture)
+						_, _ = fmt.Fprint(w, personalFixture)
 					} else {
-						fmt.Fprint(w, `{"id":"20","type":3,"recipients":[{"id":"30"},{"id":"31"}]}`)
+						_, _ = fmt.Fprint(w, `{"id":"20","type":3,"recipients":[{"id":"30"},{"id":"31"}]}`)
 					}
 				case r.URL.Path == "/channels/20/messages" && r.Method == http.MethodGet:
 					http.Error(w, "history unavailable", tc.page)
@@ -316,7 +316,7 @@ func TestPersonalReconnectHistoryHoldNoticeIsScopedAndDurable(t *testing.T) {
 					posts++
 					body, nonce = req.Content, req.Nonce
 					// Discord created the notice, but REST did not return a valid receipt.
-					fmt.Fprint(w, "{}")
+					_, _ = fmt.Fprint(w, "{}")
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL)
 					http.NotFound(w, r)

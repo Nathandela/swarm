@@ -20,7 +20,7 @@ import (
 
 var errAttachmentURLExpired = errors.New("attachment URL expired")
 
-var errAttachmentRetry = errors.New("Discord attachment is temporarily unavailable; the original message is queued for retry")
+var errAttachmentRetry = errors.New("attachment download is temporarily unavailable. The original message is queued for retry")
 
 const (
 	attachmentMaxFile     = 16 << 20
@@ -284,7 +284,7 @@ func (c *DiscordClient) downloadAttachment(ctx context.Context, channel string, 
 	if err != nil {
 		return errAttachmentRetry
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusRequestTimeout || res.StatusCode >= 500 {
 		return errAttachmentRetry
 	}
