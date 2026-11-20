@@ -58,9 +58,17 @@ type sessionConfig struct {
 type serverEvent struct {
 	Type          string `json:"type"`
 	ClientEventID string `json:"client_event_id"`
-	Delta         string `json:"delta"`
-	Reason        string `json:"reason"`
-	Session       struct {
+	EventID       string `json:"event_id"`
+	StartMS       int64  `json:"start_ms"`
+	EndMS         int64  `json:"end_ms"`
+	OffsetMS      int64  `json:"offset_ms"`
+	Delegation    struct {
+		ID     string `json:"id"`
+		Target string `json:"target"`
+	} `json:"delegation"`
+	Delta   string `json:"delta"`
+	Reason  string `json:"reason"`
+	Session struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 		sessionConfig
@@ -71,6 +79,11 @@ type serverEvent struct {
 type Event struct {
 	Type          string
 	ClientEventID string
+	EventID       string
+	StartMS       int64
+	EndMS         int64
+	OffsetMS      int64
+	DelegationID  string
 	Text          string
 	Audio         []byte
 }
@@ -91,7 +104,7 @@ func Open(ctx context.Context, key, voice string) (*Session, error) {
 }
 
 func open(ctx context.Context, url, key, voice string) (*Session, error) {
-	return openSeeded(ctx, url, key, voice, "")
+	return openConfigured(ctx, url, key, voice, "", instructions)
 }
 
 // OpenPreview seeds a developer greeting for a single owner's speech preview.
@@ -103,6 +116,16 @@ func OpenPreview(ctx context.Context, key, voice, greeting string) (*Session, er
 }
 
 func openSeeded(ctx context.Context, url, key, voice, greeting string) (*Session, error) {
+	return openConfigured(ctx, url, key, voice, greeting, instructions)
+}
+
+// OpenDispatcher starts the caller-audio session. Application code owns all work.
+func OpenDispatcher(ctx context.Context, key, voice string) (*Session, error) {
+	const dispatcher = "You are the Swarm Dispatcher speech interface. Delegate each caller request and follow-up to the client, including short replies, corrections and cancellation requests. Wait for complete caller speech. Never perform work yourself or invent results or confirmations."
+	return openConfigured(ctx, endpoint, key, voice, "", dispatcher)
+}
+
+func openConfigured(ctx context.Context, url, key, voice, greeting, prompt string) (*Session, error) {
 	if key == "" || strings.IndexFunc(key, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
 		return nil, errors.New("OpenAI Live requires a valid API key")
 	}
@@ -134,7 +157,7 @@ func openSeeded(ctx context.Context, url, key, voice, greeting string) (*Session
 	}
 	session := &Session{conn: conn, writeGate: make(chan struct{}, 1)}
 	conn.SetReadLimit(maxEventBytes)
-	config := sessionConfig{Model: model, Instructions: instructions}
+	config := sessionConfig{Model: model, Instructions: prompt}
 	config.Audio.Format.Type = "audio/pcm"
 	config.Audio.Format.Rate = sampleRate
 	config.Audio.Output.Voice = voice
@@ -178,26 +201,37 @@ func (s *Session) SendAudio(ctx context.Context, pcm []byte) error {
 // Speak supplies manager-authored commentary as speech context. Live controls
 // whether and when to speak it, and can paraphrase.
 func (s *Session) Speak(ctx context.Context, text string) error {
-	return s.writeCommentary(ctx, text, "")
+	return s.writeCommentary(ctx, text, "", "")
 }
 
 // Greet repeats a seeded greeting and returns the unique acknowledgement ID.
 func (s *Session) Greet(ctx context.Context, greeting string) (string, error) {
 	id := rand.Text()
-	return id, s.writeCommentary(ctx, greeting, id)
+	return id, s.writeCommentary(ctx, greeting, id, "")
 }
 
 func validCommentary(text string) bool {
 	return strings.TrimSpace(text) != "" && len(text) <= MaxCommentaryBytes && utf8.ValidString(text)
 }
 
-func (s *Session) writeCommentary(ctx context.Context, text, id string) error {
+// SpeakFor appends an update to its original client delegation.
+func (s *Session) SpeakFor(ctx context.Context, delegationID, text string) error {
+	if delegationID == "" || len(delegationID) > 512 || strings.IndexFunc(delegationID, unicode.IsControl) >= 0 {
+		return errors.New("OpenAI Live requires a valid delegation ID")
+	}
+	return s.writeCommentary(ctx, text, rand.Text(), delegationID)
+}
+
+func (s *Session) writeCommentary(ctx context.Context, text, id, delegationID string) error {
 	if !validCommentary(text) {
 		return errors.New("OpenAI Live requires valid UTF-8 commentary of 1–500 bytes")
 	}
 	event := map[string]any{"type": "session.commentary.append", "content": text, "delegation_id": nil}
 	if id != "" {
 		event["event_id"] = id
+	}
+	if delegationID != "" {
+		event["delegation_id"] = delegationID
 	}
 	return s.write(ctx, event, false)
 }
@@ -275,8 +309,12 @@ func (s *Session) Next(ctx context.Context) (Event, error) {
 			}
 			return Event{Type: event.Type, Audio: audio}, nil
 		case "session.input_transcript.delta", "session.output_transcript.delta":
-			return Event{Type: event.Type, Text: event.Delta}, nil
-		case "session.commentary.appended", "session.delegation.created":
+			return Event{Type: event.Type, Text: event.Delta, EventID: event.EventID, StartMS: event.StartMS, EndMS: event.EndMS}, nil
+		case "session.delegation.created":
+			if event.Delegation.Target == "client" {
+				return Event{Type: event.Type, EventID: event.EventID, OffsetMS: event.OffsetMS, DelegationID: event.Delegation.ID}, nil
+			}
+		case "session.commentary.appended":
 			return Event{Type: event.Type, ClientEventID: event.ClientEventID}, nil
 		case "session.closed":
 			_ = s.Close()

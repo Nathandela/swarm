@@ -258,3 +258,48 @@ func TestSeededGreetingMatchesOneCorrelatedCommentary(t *testing.T) {
 		t.Fatalf("event = %+v, %v", event, err)
 	}
 }
+
+func TestDispatcherSessionDelegationWire(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	url := fixture(t, func(ws *websocket.Conn) {
+		if _, _, err := ws.Read(ctx); err != nil {
+			t.Error(err)
+			return
+		}
+		emit(t, ctx, ws, started)
+		emit(t, ctx, ws, `{"type":"session.delegation.created","event_id":"other","delegation":{"id":"wrong","target":"responses"}}`)
+		emit(t, ctx, ws, `{"type":"session.delegation.created","event_id":"del","offset_ms":123,"delegation":{"id":"item","target":"client"}}`)
+		emit(t, ctx, ws, `{"type":"session.input_transcript.delta","event_id":"ascii","start_ms":80,"end_ms":140,"delta":"caf"}`)
+		emit(t, ctx, ws, `{"type":"session.input_transcript.delta","event_id":"unicode","start_ms":140,"end_ms":160,"delta":"é\uD83D\uDE00"}`)
+		_, data, err := ws.Read(ctx)
+		var update map[string]string
+		if err != nil || json.Unmarshal(data, &update) != nil || update["type"] != "session.commentary.append" ||
+			update["delegation_id"] != "item" || update["event_id"] == "" || update["content"] != "Verified result." {
+			t.Error("missing scoped delegation update")
+		}
+		emit(t, ctx, ws, `{"type":"session.commentary.appended"}`)
+	})
+	s, err := openConfigured(ctx, url, testKey, "", "", "Delegate each complete utterance.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	for _, want := range []Event{
+		{Type: "session.delegation.created", EventID: "del", OffsetMS: 123, DelegationID: "item"},
+		{Type: "session.input_transcript.delta", EventID: "ascii", StartMS: 80, EndMS: 140, Text: "caf"},
+		{Type: "session.input_transcript.delta", EventID: "unicode", StartMS: 140, EndMS: 160, Text: "é😀"},
+	} {
+		got, err := s.Next(ctx)
+		if err != nil || got.Type != want.Type || got.EventID != want.EventID || got.OffsetMS != want.OffsetMS ||
+			got.DelegationID != want.DelegationID || got.StartMS != want.StartMS || got.EndMS != want.EndMS || got.Text != want.Text {
+			t.Fatalf("wire event got %+v, %v, want %+v", got, err, want)
+		}
+	}
+	if err := s.SpeakFor(ctx, "item", "Verified result."); err != nil {
+		t.Fatal(err)
+	}
+	if ev, err := s.Next(ctx); err != nil || ev.Type != "session.commentary.appended" {
+		t.Fatalf("commentary was not acknowledged, %v", err)
+	}
+}
