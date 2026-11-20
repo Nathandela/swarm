@@ -158,7 +158,7 @@ func TestResumeThreadExcludesHistoricalTurnsOnTheInitialAndRetryCalls(t *testing
 	t.Cleanup(func() { _ = client.Close() })
 
 	sk := assemble(t)
-	subscribed, err := sk.resumeThreadOnce(client, threadID)
+	subscribed, err := sk.resumeThreadOnce(client, threadID, nil)
 	if subscribed || !isMissingRollout(err) {
 		t.Fatalf("initial history-free resume should reach the recorded rollout retry: subscribed=%v err=%v", subscribed, err)
 	}

@@ -219,7 +219,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	send("301", "402", "What did Alice call our synthetic check? Reply with its name.")
 	wait("cold context answer", 90*time.Second, func() bool {
-		return len(outputs) > 0 && strings.Contains(strings.ToLower(outputs[0].Body), "violet orchard")
+		for _, p := range outputs {
+			if p.AdmissionID == "input-301" && strings.Contains(strings.ToLower(p.Body), "violet orchard") {
+				return true
+			}
+		}
+		return false
 	})
 	if messageMode := os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE"); messageMode == "1" || messageMode == "claude" {
 		reply := "manager-reply-" + hex.EncodeToString(marker[:])

@@ -180,7 +180,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				return err
 			}
 			p := Publication{ID: "continuity-" + hashValue(identity(previous)), ConversationID: id, OutputSequence: sequence, DiscussionSource: DiscussionOutputSource{SystemCause: "manager_continuity_gap"},
-				Text: "I recovered this discussion after the previous manager exited. Its native conversation history could not be resumed. I kept the discussion and tracked jobs, and I will not replay uncertain work."}
+				Text: "Swarm started a replacement manager in this thread. The previous manager’s native history was unavailable. Queued messages and tracked jobs were preserved. Actions with uncertain outcomes remain on hold."}
 			p.TextHash = hashBytes([]byte(p.Text))
 			putRecord(st, "publications", &st.Publications, key(id, p.ID), p)
 		}

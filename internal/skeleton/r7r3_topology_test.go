@@ -280,7 +280,7 @@ func TestR7R3_ATransportFaultOnTheThreadJoinFAILSFASTRatherThanRetryingTheWholeW
 
 	conn := &r7ResumeConn{errs: []error{errors.New("write unix @->codex.sock: broken pipe")}}
 	start := time.Now()
-	subscribed, err := sk.resumeThreadOnce(conn, "01a00339-a80e-72a0-966f-116427b6b9ce")
+	subscribed, err := sk.resumeThreadOnce(conn, "01a00339-a80e-72a0-966f-116427b6b9ce", nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -317,7 +317,7 @@ func TestR7R3_TheRecordedRolloutRaceIsRETRIEDWithoutClaimingAnythingWasMissed(t 
 	conn := &r7ResumeConn{errs: []error{missing, missing}}
 
 	// Attempt one: the recorded pre-first-turn failure. It is WAIT, not FAIL.
-	subscribed, err := sk.resumeThreadOnce(conn, "01a00339-a80e-72a0-966f-116427b6b9ce")
+	subscribed, err := sk.resumeThreadOnce(conn, "01a00339-a80e-72a0-966f-116427b6b9ce", nil)
 	if subscribed || !isMissingRollout(err) {
 		t.Fatalf("the recorded pre-first-turn failure was not recognized: subscribed=%v err=%v", subscribed, err)
 	}

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 	"golang.org/x/mod/semver"
 )
@@ -211,7 +213,20 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		}
 	}
 	// THE GO-AHEAD, sent before there is a thread: the agent is the party that creates it.
-	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs, backendResumeCommandArgs(ch, feed.userAgent)); aerr != nil {
+	commandArgs := backendResumeCommandArgs(ch, feed.userAgent)
+	manager := d.resumedDiscussionManager(id, feed.userAgent)
+	if manager != nil {
+		var ok bool
+		commandArgs, ok = verifiedManagerResumeArgs(conn, *manager, commandArgs)
+		if !ok {
+			// Codex managers require a backend. An empty attachment declines startup.
+			_ = d.core.SendBackendAttach(id, nil)
+			_ = conn.Close()
+			d.noteBackendUnavailableForInstance(id, expectedInstance)
+			return
+		}
+	}
+	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs, commandArgs); aerr != nil {
 		log.Printf("skeleton: release session %s with its backend: %v", id, aerr)
 	}
 	var threadID string
@@ -245,8 +260,8 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	//	it SUCCEEDED immediately            -> subscribe immediately. A durable boundary is
 	//	  emitted only when this launch explicitly named a prior conversation before go-ahead.
 	//	anything else                       -> this daemon will never read this thread.
-	subscribed, serr := d.resumeThreadOnce(conn, threadID)
-	if serr != nil && !isMissingRollout(serr) {
+	subscribed, serr := d.resumeThreadOnce(conn, threadID, manager)
+	if serr != nil && (manager != nil || !isMissingRollout(serr)) {
 		_ = conn.Close()
 		log.Printf("skeleton: session %s could not join thread %s: %v", id, threadID, serr)
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
@@ -321,8 +336,9 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
-	subscribed, serr := d.resumeThreadOnce(conn, threadID)
-	if serr != nil && !isMissingRollout(serr) {
+	manager := d.resumedDiscussionManager(id, feed.userAgent)
+	subscribed, serr := d.resumeThreadOnce(conn, threadID, manager)
+	if serr != nil && (manager != nil || !isMissingRollout(serr)) {
 		_ = conn.Close()
 		log.Printf("skeleton: session %s could not rejoin thread %s: %v", id, threadID, serr)
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
@@ -411,10 +427,11 @@ func (d *Daemon) awaitAdoptedThread(id string, within time.Duration) (string, bo
 // It takes the backendConn INTERFACE rather than the concrete client so its rule can be driven
 // by behaviour: which errors are retried is a control-flow property, and a source-grep for the
 // error string is satisfied by that string's own declaration (review round 3 MEDIUM 3).
-func (d *Daemon) resumeThreadOnce(conn backendConn, threadID string) (bool, error) {
+func (d *Daemon) resumeThreadOnce(conn backendConn, threadID string, manager *persist.Meta) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer cancel()
 	var resumed struct {
+		Cwd    string `json:"cwd"`
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
@@ -427,6 +444,9 @@ func (d *Daemon) resumeThreadOnce(conn backendConn, threadID string) (bool, erro
 	}
 	if !adapter.IsCanonicalConversationID(resumed.Thread.ID) || resumed.Thread.ID != threadID {
 		return false, errBackendProbe("thread/resume returned a different or invalid thread identity")
+	}
+	if manager != nil && (!filepath.IsAbs(resumed.Cwd) || filepath.Clean(resumed.Cwd) != resumed.Cwd || resumed.Cwd != manager.ProviderCwd()) {
+		return false, errBackendProbe("manager native workspace differs from the authorized workspace")
 	}
 	return true, nil
 }
@@ -465,7 +485,7 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 		if !d.backendFeedCurrent(id, expectedFeed) {
 			return // the session ended, or this exact connection was reaped/replaced
 		}
-		ok, err := d.resumeThreadOnce(conn, threadID)
+		ok, err := d.resumeThreadOnce(conn, threadID, nil)
 		if ok {
 			if !d.markBackendSubscribedForFeed(id, expectedFeed) {
 				return
@@ -698,9 +718,19 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 		}
 		select {
 		case <-ctx.Done():
+			discardCodexManagerFeed(feed)
 			return nil, nil, err
 		case <-time.After(backendReadyInterval):
 		}
+	}
+
+	// A manager claims its input ledger before dialing. A frontend can exit
+	// before its thread is registered, so roster teardown alone cannot release it.
+	if feed.manager.actor.Load() != nil {
+		go func() {
+			<-conn.Done()
+			discardCodexManagerFeed(feed)
+		}()
 	}
 
 	// The recorded boot handshake, in the recorded order (frame-samples.json): initialize with
@@ -782,4 +812,63 @@ func backendResumeCommandArgs(ch daemon.BackendChannel, userAgent string) []stri
 		return nil
 	}
 	return ch.AgentCommandArgs
+}
+
+// Only automatic Discord manager continuation can inherit an already verified thread's
+// native workspace. Ordinary and relocated worker resumes retain their explicit --cd.
+func (d *Daemon) resumedDiscussionManager(id, userAgent string) *persist.Meta {
+	if d.core != nil {
+		if m, ok := d.core.Get(id); ok && managerInheritsResumeWorkspace(m, userAgent) {
+			return &m
+		}
+	}
+	return nil
+}
+
+func managerInheritsResumeWorkspace(m persist.Meta, userAgent string) bool {
+	if m.AgentType != "codex" || m.Role != "manager" || m.ResumedFrom == "" || !strings.HasPrefix(m.ManagerConversationID, "discord-teammate-") {
+		return false
+	}
+	ad, _ := registry.New("codex")
+	version, ok := ad.ParseVersion(userAgent)
+	return ok && version == "0.170.0"
+}
+
+func verifiedManagerResumeArgs(conn backendConn, m persist.Meta, args []string) ([]string, bool) {
+	cwd := m.ProviderCwd()
+	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd || !adapter.IsCanonicalConversationID(m.ConversationID) || len(args) < 4 || args[0] != "resume" || args[1] != m.ConversationID {
+		return nil, false
+	}
+	var index int
+	for i := 2; i < len(args); i += 2 {
+		if i+1 >= len(args) {
+			return nil, false
+		}
+		switch args[i] {
+		case "--cd":
+			if index != 0 || args[i+1] != cwd {
+				return nil, false
+			}
+			index = i
+		case "-c", "--model":
+		default:
+			return nil, false
+		}
+	}
+	if index == 0 {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var history struct {
+		Thread struct {
+			ID  string `json:"id"`
+			Cwd string `json:"cwd"`
+		} `json:"thread"`
+	}
+	if err := conn.Call(ctx, "thread/read", map[string]any{"threadId": m.ConversationID, "includeTurns": false}, &history); err != nil || history.Thread.ID != m.ConversationID || history.Thread.Cwd != cwd {
+		return nil, false
+	}
+	result := append([]string(nil), args[:index]...)
+	return append(result, args[index+2:]...), true
 }
