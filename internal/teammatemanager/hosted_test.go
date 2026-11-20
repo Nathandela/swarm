@@ -132,8 +132,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		t.Error("rehearsal processes did not finish before cleanup deadline")
 	})
 	cfg := discord.Config{Mode: "teammate", Name: "Teammate rehearsal", InstallationID: "synthetic-place", ManagerCLI: "codex", WorkDir: workdir, DaemonSocket: socket, Projects: map[string]string{"fixture": project}}
+	personal := os.Getenv("SWARM_TEAMMATE_TEST_PERSONAL") == "1"
+	if personal {
+		cfg.Mode, cfg.DMChannelID, cfg.OwnerID = "personal", "202", "401"
+	}
 	open := func() *Runtime {
-		r, err := New(ctx, connector, owner.EndpointID(), "", cfg)
+		r, err := New(ctx, connector, owner.EndpointID(), state, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,12 +146,19 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	r := open()
 	t.Cleanup(func() { _ = r.Close() })
 	thread := discord.TeammateDiscussion{ID: "fixture-discussion", InstallationID: cfg.InstallationID, Route: discord.Route{GuildID: "101", ChannelID: "202", ParentID: "201"}}
+	if personal {
+		thread.Route = discord.Route{ChannelID: cfg.DMChannelID}
+	}
 	reader := func(_ context.Context, _ discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
 		return discord.TeammateHistoryPage{Messages: []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}}, nil
 	}
 	send := func(id, actor, body string) {
 		t.Helper()
 		a := discord.TeammateAdmission{Discussion: thread, OperationID: "input-" + id, Revision: "rev-" + id, Text: body, Route: discord.Route{GuildID: "101", ChannelID: "202", MessageID: id}, Author: discord.Actor{ID: actor, Name: actor}, InvokerID: actor, Authority: discord.AuthorityExternal}
+		if personal {
+			a.Authority = discord.AuthorityOwnerDirect
+			a.Route.GuildID = ""
+		}
 		if err := r.Admit(ctx, a, reader); err != nil {
 			t.Fatal(err)
 		}
@@ -184,6 +195,22 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	if n := len(roster()); n != 0 {
 		t.Fatalf("native sessions before first contact: %d", n)
+	}
+	if personal {
+		for i, prefix := range []string{"birch", "cedar"} {
+			code := prefix + "-" + hex.EncodeToString(marker[:])
+			if err := voice.SaveManagerStartingPrompt(state, "When the owner asks for the check word, reply with "+code); err != nil {
+				t.Fatal(err)
+			}
+			send(fmt.Sprint(301+i), cfg.OwnerID, "What is the current check word?")
+			wait("personal owner received current standing instruction", 90*time.Second, func() bool {
+				return len(outputs) > i && strings.Contains(outputs[len(outputs)-1].Body, code)
+			})
+		}
+		if rows := roster(); len(rows) != 1 || rows[0].Role != "manager" {
+			t.Fatalf("personal check expected a single manager, observed %d sessions", len(rows))
+		}
+		return
 	}
 	send("301", "402", "What did Alice call our synthetic check? Reply with its name.")
 	wait("cold context answer", 90*time.Second, func() bool {
