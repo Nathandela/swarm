@@ -74,6 +74,53 @@ func TestConfigRejectsMalformedAndSecretDiagnostics(t *testing.T) {
 		t.Fatal("accepted control character")
 	}
 }
+
+func TestDispatcherCallsConfigValidation(t *testing.T) {
+	dir := t.TempDir()
+	team := sampleConfig(dir)
+	team.Mode, team.ManagerCLI = "teammate", "codex"
+	team.Calls = &DispatcherCallsConfig{Mode: "team", GuildID: "789", RoomID: "123456789012345678", DiscussionID: "223456789012345678", HelperPath: "/usr/local/bin/swarm-discord-voice", SpeechStateDir: "/home/user/.local/share/swarm/voice", UserIDs: []string{"323456789012345678"}}
+	if err := team.Validate(); err != nil {
+		t.Fatalf("valid team calls config: %v", err)
+	}
+
+	personal := sampleConfig(dir)
+	personal.Mode, personal.ManagerCLI, personal.GuildIDs, personal.UserIDs = "personal", "codex", nil, nil
+	personal.DMChannelID = "423456789012345678"
+	personal.Calls = &DispatcherCallsConfig{Mode: "personal", GuildID: "789", RoomID: "123456789012345678", DiscussionID: personal.DMChannelID, HelperPath: "/usr/local/bin/swarm-discord-voice", SpeechStateDir: "/home/user/.local/share/swarm/voice"}
+	if err := personal.Validate(); err != nil {
+		t.Fatalf("valid personal calls config: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Config){
+		"unknown mode":              func(c *Config) { c.Calls.Mode = "group" },
+		"non-snowflake room":        func(c *Config) { c.Calls.RoomID = "01" },
+		"guild outside allowlist":   func(c *Config) { c.Calls.GuildID = "923456789012345678" },
+		"no explicit team users":    func(c *Config) { c.Calls.UserIDs = nil },
+		"too many team users":       func(c *Config) { c.Calls.UserIDs = make([]string, 33) },
+		"invalid team speaker":      func(c *Config) { c.Calls.UserIDs = []string{"01"} },
+		"relative helper":           func(c *Config) { c.Calls.HelperPath = "helper" },
+		"personal wrong discussion": func(c *Config) { c.Calls.DiscussionID = "523456789012345678" },
+		"personal extra user":       func(c *Config) { c.Calls.UserIDs = []string{"323456789012345678"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := team
+			calls := *team.Calls
+			calls.UserIDs = append([]string(nil), team.Calls.UserIDs...)
+			c.Calls = &calls
+			if strings.HasPrefix(name, "personal") {
+				c = personal
+				calls = *personal.Calls
+				calls.UserIDs = append([]string(nil), personal.Calls.UserIDs...)
+				c.Calls = &calls
+			}
+			mutate(&c)
+			if err := c.Validate(); err == nil {
+				t.Fatal("accepted invalid calls configuration")
+			}
+		})
+	}
+}
 func TestLoadToken(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(p, []byte("secret\n"), 0644); err != nil {

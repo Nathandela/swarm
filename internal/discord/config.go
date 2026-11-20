@@ -20,27 +20,39 @@ const (
 )
 
 type Config struct {
-	ProjectAccess      string              `json:"project_access,omitempty"`
-	PreviousSupervisor *PreviousSupervisor `json:"previous_supervisor,omitempty"`
-	Supervisor         *SupervisorPaths    `json:"supervisor,omitempty"`
-	Mode               string              `json:"mode,omitempty"`
-	ManagerCLI         string              `json:"manager_cli,omitempty"`
-	Projects           map[string]string   `json:"projects,omitempty"`
-	Enabled            bool                `json:"enabled"`
-	Version            int                 `json:"version"`
-	InstallationID     string              `json:"installation_id"`
-	Name               string              `json:"name"`
-	ApplicationID      string              `json:"application_id"`
-	DMChannelID        string              `json:"dm_channel_id,omitempty"`
-	OwnerID            string              `json:"owner_id"`
-	TokenFile          string              `json:"token_file"`
-	DaemonSocket       string              `json:"daemon_socket"`
-	GuildIDs           []string            `json:"guild_ids"`
-	ChannelIDs         []string            `json:"channel_ids"`
-	UserIDs            []string            `json:"user_ids"`
-	ReceptionistCLI    string              `json:"receptionist_cli"`
-	ReceptionistModel  string              `json:"receptionist_model"`
-	WorkDir            string              `json:"work_dir"`
+	ProjectAccess      string                 `json:"project_access,omitempty"`
+	PreviousSupervisor *PreviousSupervisor    `json:"previous_supervisor,omitempty"`
+	Supervisor         *SupervisorPaths       `json:"supervisor,omitempty"`
+	Mode               string                 `json:"mode,omitempty"`
+	ManagerCLI         string                 `json:"manager_cli,omitempty"`
+	Projects           map[string]string      `json:"projects,omitempty"`
+	Enabled            bool                   `json:"enabled"`
+	Version            int                    `json:"version"`
+	InstallationID     string                 `json:"installation_id"`
+	Name               string                 `json:"name"`
+	ApplicationID      string                 `json:"application_id"`
+	DMChannelID        string                 `json:"dm_channel_id,omitempty"`
+	Calls              *DispatcherCallsConfig `json:"calls,omitempty"`
+	OwnerID            string                 `json:"owner_id"`
+	TokenFile          string                 `json:"token_file"`
+	DaemonSocket       string                 `json:"daemon_socket"`
+	GuildIDs           []string               `json:"guild_ids"`
+	ChannelIDs         []string               `json:"channel_ids"`
+	UserIDs            []string               `json:"user_ids"`
+	ReceptionistCLI    string                 `json:"receptionist_cli"`
+	ReceptionistModel  string                 `json:"receptionist_model"`
+	WorkDir            string                 `json:"work_dir"`
+}
+
+// DispatcherCallsConfig opts this place into Discord voice calls.
+type DispatcherCallsConfig struct {
+	Mode           string   `json:"mode"`
+	GuildID        string   `json:"guild_id"`
+	RoomID         string   `json:"room_id"`
+	DiscussionID   string   `json:"discussion_id"`
+	HelperPath     string   `json:"helper_path"`
+	SpeechStateDir string   `json:"speech_state_dir"`
+	UserIDs        []string `json:"user_ids,omitempty"`
 }
 
 // SupervisorPaths retain the operator's chosen place when the user service starts after logout.
@@ -191,6 +203,21 @@ func (c Config) Validate() error {
 	}
 	if !id(c.ApplicationID) {
 		return errors.New("discord: invalid application or owner ID")
+	}
+	if calls := c.Calls; calls != nil {
+		if calls.Mode != "team" && calls.Mode != "personal" ||
+			calls.Mode == "team" && (c.Mode != "teammate" || !containsID(c.GuildIDs, calls.GuildID) || len(calls.UserIDs) == 0 || len(calls.UserIDs) > 32) ||
+			calls.Mode == "personal" && (c.Mode != "personal" || calls.DiscussionID != c.DMChannelID || len(calls.UserIDs) != 0) ||
+			!snowflake(calls.GuildID) || !snowflake(calls.RoomID) || !snowflake(calls.DiscussionID) ||
+			!filepath.IsAbs(calls.HelperPath) || !validText(calls.HelperPath, 4096) ||
+			!filepath.IsAbs(calls.SpeechStateDir) || !validText(calls.SpeechStateDir, 4096) {
+			return errors.New("discord: invalid dispatcher calls configuration")
+		}
+		for _, userID := range calls.UserIDs {
+			if !snowflake(userID) {
+				return errors.New("discord: invalid dispatcher calls user ID")
+			}
+		}
 	}
 	for _, ids := range [][]string{c.GuildIDs, c.ChannelIDs, c.UserIDs} {
 		for _, s := range ids {

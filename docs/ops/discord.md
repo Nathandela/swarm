@@ -2,6 +2,26 @@
 
 Each connection belongs to one local Swarm place and uses its own Discord app identity. Choose personal mode for an owner-only direct message or teammate mode for a bot that joins server discussions on demand. Existing configurations can still use legacy directory mode.
 
+## Opt in to dispatcher calls
+
+Calls are disabled unless the connector's `config.json` contains a `calls` object. Add this example to a teammate connector after preparing the helper and speech key:
+
+```json
+"calls": {
+  "mode": "team",
+  "guild_id": "GUILD_SNOWFLAKE",
+  "room_id": "VOICE_ROOM_SNOWFLAKE",
+  "discussion_id": "LINKED_THREAD_SNOWFLAKE",
+  "helper_path": "/absolute/path/to/swarm-discord-voice",
+  "speech_state_dir": "/absolute/path/to/swarm/voice",
+  "user_ids": ["CONSENTING_USER_SNOWFLAKE"]
+}
+```
+
+Use Discord snowflakes for all IDs. The team guild must already be in `guild_ids`, and `user_ids` must explicitly list 1–32 trusted, consenting speakers. For a personal connector, set `mode` to `personal`, set `discussion_id` to its exact `dm_channel_id`, and omit `user_ids`; the guild and voice room still identify the voice destination. `helper_path` must name an absolute executable path. `speech_state_dir` is the directory containing the existing `openai.key` credential used by `swarm voice setup` (see [voice setup](../operations/voice.md#configure-a-machine)).
+
+After editing the private config, restart the connector for the setting to take effect. To turn calls off, remove the entire `calls` object and restart; disconnecting the connector stops it immediately.
+
 The main board groups managers under **DISPATCHER**. Dispatched workers get the **DSP** tag by default. Select a dispatcher and press **Ctrl+X**, then **Y**, to stop a running session or delete an ended one. The connector remains available for future messages.
 
 ## Connect a personal manager on Mac
