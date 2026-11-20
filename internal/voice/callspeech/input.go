@@ -342,19 +342,32 @@ func (t *transcript) settle(l *Lane, now time.Time) {
 func addressedText(text string) string {
 	text = strings.TrimSpace(text)
 	const address = "dispatcher"
+	const separators = ",.:!?;—–"
+	delim := func(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune(separators, r) }
+	// A spoken greeting gives the address an explicit boundary even when STT omits its comma.
+	greeted := false
+	if len(text) > 3 && strings.EqualFold(text[:3], "hey") {
+		next, _ := utf8.DecodeRuneInString(text[3:])
+		if delim(next) {
+			greeted = true
+			text = strings.TrimLeftFunc(text[3:], delim)
+		}
+	}
 	if len(text) <= len(address) || !strings.EqualFold(text[:len(address)], address) {
 		return ""
 	}
-	remainder := strings.TrimSpace(text[len(address):])
-	r, size := utf8.DecodeRuneInString(remainder)
-	const separators = ",.:!?;—–"
-	// shortcut: require vocative punctuation from isolated STT, calibrate on hosted team speech before broadening the wake phrase.
-	if !strings.ContainsRune(separators, r) {
+	tail := text[len(address):]
+	r, _ := utf8.DecodeRuneInString(tail)
+	if !delim(r) {
 		return ""
 	}
-	return strings.TrimLeftFunc(remainder[size:], func(r rune) bool {
-		return unicode.IsSpace(r) || strings.ContainsRune(separators, r)
-	})
+	if !greeted {
+		r, _ = utf8.DecodeRuneInString(strings.TrimSpace(tail))
+		if !strings.ContainsRune(separators, r) {
+			return ""
+		}
+	}
+	return strings.TrimLeftFunc(tail, delim)
 }
 
 func hasSignal(pcm []byte) bool {

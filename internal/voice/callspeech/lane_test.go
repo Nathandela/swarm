@@ -317,6 +317,10 @@ func TestAddressRequiresVocative(t *testing.T) {
 		{"I called Dispatcher, yesterday.", ""},
 		{"Dispatchers, build.", ""},
 		{"Dispatcher!", ""},
+		{"Hey dispatcher check the build.", "check the build."},
+		{"Hey, Dispatcher, check the build.", "check the build."},
+		{"Hey dispatchers check the build.", ""},
+		{"They said hey dispatcher check the build.", ""},
 	} {
 		if got := addressedText(tc.text); got != tc.want {
 			t.Errorf("%q gave %q, want %q", tc.text, got, tc.want)
