@@ -78,7 +78,7 @@ func runAttach(r AttachRunner, s protocol.SessionView, readOnly, touchBack bool,
 func (m generalModel) sessionRing(initial ...protocol.SessionView) SessionRing {
 	var rows []protocol.SessionView
 	m.navigation(func(l boardLine, _ int) {
-		if l.kind == lineSession && l.session.Status.Process == status.ProcessRunning {
+		if l.kind == lineSession && !m.linkedDispatcherIDs[l.session.ID] && l.session.Status.Process == status.ProcessRunning {
 			rows = append(rows, l.session)
 		}
 	})

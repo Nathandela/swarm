@@ -468,7 +468,9 @@ func (m rootModel) boardSection(section string) string {
 		marker = "▌ "
 	}
 	label := strings.ToUpper(section)
-	if m.general.grouping == groupByStatus {
+	if section == dispatcherSection {
+		label = "DISPATCHER"
+	} else if m.general.grouping == groupByStatus {
 		label = groupHeader(status.Group(section))
 	}
 	counts := " (" + itoa(count) + " · " + itoa(needs) + " input · " + itoa(review) + " review)"
@@ -477,7 +479,7 @@ func (m rootModel) boardSection(section string) string {
 		label = ellipsis(label, m.width-ansi.StringWidth(marker+counts))
 	}
 	text := marker + label + counts
-	if m.general.grouping == groupByStatus {
+	if section != dispatcherSection && m.general.grouping == groupByStatus {
 		return groupHeaderStyle(status.Group(section)).Render(text)
 	}
 	return styleTitle.Render(text)

@@ -58,6 +58,11 @@ var discordServiceRun = func(ctx context.Context, dir string, unattended bool) e
 		return err
 	}
 	defer func() { _ = manager.Close() }()
+	if unattended {
+		if err := recordInstalledDiscord(dir); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "discord: main board registration: %v\n", err)
+		}
+	}
 	return discord.Run(ctx, dir, manager)
 }
 

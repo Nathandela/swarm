@@ -31,6 +31,10 @@ swarm discord doctor --channel CHANNEL_ID
 swarm discord status
 ```
 
+Open the main Swarm board to find Discord managers in **DISPATCHER**, including when grouping by tag or repository. Enter on a running manager opens its terminal. When an installed connector uses a separate local supervisor, the board also lists its directly delegated workers and routes terminal attachment to their owning supervisor. A parked manager wakes on a new message in its thread.
+
+New dispatcher-created workers receive the same adapter defaults as the terminal launch form. Codex defaults to workspace-write. The worker name starts with `DSP-`. Project enrollment still sets the working directory, and the service environment supplies the available command-line tools.
+
 For a previously configured installation, `connect --mode teammate --manager codex --install` reuses its identity and credentials. When the credential belongs to a bot installed in exactly one server, setup can discover the application ID, name and server. Use `--guild` to choose among servers. `--channel` can limit a rehearsal to a dedicated channel. To remove an old channel restriction, explicitly reconnect with `--all-channels --install`. Discord still controls which discussions the app can see. Keep private conversations in their intended audiences.
 
 Enable Message Content on the app and grant View Channel, Read Message History, Send Messages, Send Messages in Threads, and Create Public Threads where you want to invite the teammate. Private threads require native access. Granting visibility to a parent channel is a Discord server administration action. Starting the local service alone cannot grant that permission.

@@ -74,6 +74,17 @@ func TestDiscussionLaunchChecksGrantBeforePreparationAndDispatch(t *testing.T) {
 			if !errors.Is(err, ErrDiscussionSourceChanged) || workers.launches != 0 || len(st.Actions) != tc.wantActions {
 				t.Fatalf("revoked grant: checks=%d launches=%d actions=%d err=%v", checks, workers.launches, len(st.Actions), err)
 			}
+			if tc.tool == "swarm_create" && tc.wantActions == 1 {
+				for _, action := range st.Actions {
+					var req controllerActionRequest
+					if err := json.Unmarshal(action.Request, &req); err != nil {
+						t.Fatal(err)
+					}
+					if req.Launch == nil || req.Launch.Options["sandbox"] != "workspace-write" || req.Launch.Name != "DSP-codex" {
+						t.Fatalf("incorrect worker launch %+v", req.Launch)
+					}
+				}
+			}
 		})
 	}
 }
