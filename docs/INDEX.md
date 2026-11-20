@@ -28,7 +28,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
-- [On-demand Discord teammate manager](specifications/discord-teammate-manager.md) — interaction, native lifecycle, delegated work, [plan spikes and reviews](verification/discord-teammate-manager.md), and [implementation qualification](verification/discord-teammate-implementation.md).
+- [On-demand Discord teammate manager](specifications/discord-teammate-manager.md) — interaction, native lifecycle, delegated work, [plan spikes and reviews](verification/discord-teammate-manager.md), and [implementation qualification](verification/discord-teammate-implementation.md). See the [durable dispatcher delivery plan](specifications/discord-dispatcher-delivery-plan.md) for ordinary worker notifications, retirement and model qualification.
 
 - [Broader voice manager integration](verification/voice-manager/controller-integration.md) — native turns, durable worker receipts, desktop and SSH, device enrollment, the Apple binding foundation, and qualification boundaries. [Operator commands](operations/voice.md).
 - [Voice manager implementation plan](specifications/voice-manager-plan.md) — owner-selected locked-screen Android/iOS voice, SSH first, both native managers, unrestricted tools, per-place BYO OpenAI speech and existing app design reuse, with requirements, interfaces, ordered epics and physical/release gates. [Proposed ADR-038](adr/ADR-038-voice-manager.md) and [independent review](verification/voice-manager-plan-review.md). Physical handset, signed iOS, duplex and soak qualification gates remain open.
