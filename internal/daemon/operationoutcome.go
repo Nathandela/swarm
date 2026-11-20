@@ -68,6 +68,9 @@ func (d *Daemon) OperationOutcome(operationID string) (OpOutcome, bool) {
 	// operation_status's launch-era vocabulary can express only applied/outcome_unknown.
 	// A running target session is not evidence that a FAILED message was delivered: report
 	// applied only for the completed phase and otherwise choose the honest non-positive.
+	if rec.WorkerLaunchGate && rec.Phase == idempotency.PhasePrepared {
+		return OpOutcome{State: OpStateOutcomeUnknown}, true
+	}
 	if rec.Action == "composer_send" {
 		if rec.Phase == idempotency.PhaseCompleted {
 			return OpOutcome{State: OpStateApplied, SessionID: rec.SessionID}, true

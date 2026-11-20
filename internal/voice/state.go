@@ -192,20 +192,22 @@ type Event struct {
 }
 
 type Wake struct {
-	WorkerReply    string          `json:"worker_reply,omitempty"`
-	RecoveryOnly   bool            `json:"recovery_only,omitempty"`
-	ID             string          `json:"id"`
-	ConversationID string          `json:"conversation_id"`
-	EventID        string          `json:"event_id"`
-	OperationID    string          `json:"operation_id"`
-	Request        json.RawMessage `json:"request"`
-	RequestHash    string          `json:"request_hash"`
-	State          string          `json:"state"`
-	Admission      uint64          `json:"admission,omitempty"`
-	NativeInputID  string          `json:"native_input_id,omitempty"`
+	WorkerReplyExported bool            `json:"worker_reply_exported,omitempty"`
+	WorkerReply         string          `json:"worker_reply,omitempty"`
+	RecoveryOnly        bool            `json:"recovery_only,omitempty"`
+	ID                  string          `json:"id"`
+	ConversationID      string          `json:"conversation_id"`
+	EventID             string          `json:"event_id"`
+	OperationID         string          `json:"operation_id"`
+	Request             json.RawMessage `json:"request"`
+	RequestHash         string          `json:"request_hash"`
+	State               string          `json:"state"`
+	Admission           uint64          `json:"admission,omitempty"`
+	NativeInputID       string          `json:"native_input_id,omitempty"`
 }
 
 type WorkerAssociation struct {
+	Mailbox          bool   `json:"mailbox,omitempty"`
 	VMChild          bool   `json:"vm_child,omitempty"`
 	EvidenceLimited  bool   `json:"evidence_limited,omitempty"`
 	Parent           string `json:"parent,omitempty"`

@@ -141,6 +141,9 @@ func (c *Client) managerRequest(ctx context.Context, request Control) (Control, 
 	if operation.Err() != nil {
 		return Control{}, operation.Err()
 	}
+	if response.Op == OpError && response.ErrorCode == CodeManagerDirectInput {
+		return Control{}, managerproof.ErrDirectInputUnresolved
+	}
 	if response.Op == OpError && response.ErrorCode == CodeManagerCustodyLost {
 		return Control{}, managerproof.ErrQuarantined
 	}
@@ -173,6 +176,10 @@ func (cc *clientConn) handleManagerRuntime(c Control) {
 			return
 		}
 		status, err := source.ManagerRuntime(local, c.ManagerRuntimeRequest.SessionInstance)
+		if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+			cc.replyErrorCode(err.Error(), CodeManagerDirectInput)
+			return
+		}
 		if errors.Is(err, managerproof.ErrQuarantined) {
 			cc.replyErrorCode("native custody lost; explicitly replace this manager session", CodeManagerCustodyLost)
 			return

@@ -13,7 +13,7 @@ const managerRetireReason = "is retiring a quiescent manager"
 
 func (a *coreAPI) ManagerRetireSupported() bool { return a.managerRetire != nil }
 
-func (a *coreAPI) ManagerRetire(ctx context.Context, local, operation string, req protocol.ManagerRetireReq, statusOnly bool) (protocol.ManagerRetireReceipt, error) {
+func (a *coreAPI) ManagerRetire(ctx context.Context, local, operation string, req protocol.ManagerRetireReq, op string) (protocol.ManagerRetireReceipt, error) {
 	receipt := protocol.ManagerRetireReceipt{OperationID: operation, State: "unknown"}
 	if a.core == nil || !a.ManagerRetireSupported() || req.Validate() != nil || req.Binding.Session != local {
 		return receipt, managerproof.ErrUnavailable
@@ -35,12 +35,22 @@ func (a *coreAPI) ManagerRetire(ctx context.Context, local, operation string, re
 			return receipt, managerproof.ErrStale
 		}
 		receipt.State = a.core.ManagerRetirementStatus(m, target)
-		if !statusOnly && receipt.State == "uncertain" {
+		if op == protocol.OpManagerRetire && receipt.State == "uncertain" {
 			_, _ = a.managerRetire(ctx, local, req, target)
 		}
 		return receipt, nil
 	}
-	if statusOnly {
+	if op == protocol.OpManagerRetireCancel {
+		if a.matchResumeInstance == nil || !a.matchResumeInstance(m, target.Instance) {
+			return receipt, managerproof.ErrStale
+		}
+		err := a.core.CancelManagerRetire(ctx, local, req.Binding.ConversationID, req.Binding.Provider, target)
+		if err == nil {
+			receipt.State = "cancelled"
+		}
+		return receipt, err
+	}
+	if op == protocol.OpManagerRetireStatus {
 		return receipt, nil
 	}
 	claimed, err := a.managerRetire(ctx, local, req, target)

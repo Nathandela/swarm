@@ -20,6 +20,7 @@ import (
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/Nathandela/swarm/internal/worktree"
 )
 
@@ -159,7 +160,19 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		*isolate = true
 	}
 	parent := os.Getenv(hookclient.EnvSessionID)
-	if *operationID == "" && parent != "" && os.Getenv(schema.EnvManagerVMCLI) == "1" {
+	dispatcher := os.Getenv(schema.EnvManagerVMCLI) == "1"
+	var dispatcherProof string
+	if dispatcher && intent == protocol.SpawnIntentDelegate {
+		dispatcherProof = os.Getenv(workermail.ProofEnv)
+		if dispatcherProof == "" {
+			dispatcherProof = workermail.Proof(os.Getenv(hookclient.EnvToken), "spawn")
+		}
+		if parent == "" || dispatcherProof == "" {
+			_, _ = fmt.Fprintln(stderr, "spawn: this retained dispatcher lacks its worker mailbox credential; allow this manager to park and resume the same discussion on the upgraded supervisor")
+			return 1
+		}
+	}
+	if *operationID == "" && parent != "" && dispatcher {
 		*operationID, err = protocol.NewLaunchOperationID()
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
@@ -203,6 +216,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	// and the daemon refuses an intent without one, so neither field is sent there.
 	if parent != "" {
 		req.SpawnedFrom, req.SpawnIntent = parent, intent
+		req.DispatcherProof = dispatcherProof
 	}
 
 	var id, canonical string

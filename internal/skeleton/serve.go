@@ -360,6 +360,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		PreLaunch:          preLaunchWorktree,
 		FinalizeLaunch:     d.prepareLoginLaunch,
 		PreDelete:          preDeleteWorktree,
+		WorkerInstance:     d.adoptOrMintSessionInstance,
 		OnSessionStart:     d.registerSession,
 		OnSessionEnd:       d.endSession,
 		OpenCodeReady:      d.openCodeReady,
@@ -463,6 +464,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.onLaunched = d.authorLaunchedSessionCapabilities
 	d.api.matchResumeInstance = d.matchesResumeSourceInstance
 	d.api.sessionCaps = d.sessionCapabilities
+	d.api.semanticTarget = d.resolveSemanticTarget
 	d.api.ownerSessionCaps = d.ownerSessionCapabilities
 	// Freeze capability instance authors and chat-plane transitions outside the
 	// daemon's writeMu boundary. This follows the existing author -> transition ->
@@ -1502,6 +1504,12 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 	if isAgentHandoffLaunch(spec) {
 		if err := refuseTemporaryHandoffWorktree(spec); err != nil {
 			return "", err
+		}
+	}
+	if spec.RepairWorkerReservation {
+		existing, err := worktree.ReservedCheckout(spec.Cwd, id, spec.Name)
+		if err != nil || existing != "" {
+			return existing, err
 		}
 	}
 	return worktree.Create(spec.Cwd, id, spec.Name)

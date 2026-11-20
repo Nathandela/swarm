@@ -53,7 +53,7 @@ type ManagerRetireReceipt struct {
 
 func (r ManagerRetireReceipt) ValidState() bool {
 	switch r.State {
-	case "unknown", "prepared", "uncertain", "retired":
+	case "unknown", "prepared", "uncertain", "retired", "cancelled":
 		return true
 	default:
 		return false

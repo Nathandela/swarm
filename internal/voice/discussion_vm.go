@@ -31,16 +31,23 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 	}
 	changed := false
 	for _, row := range rows {
-		if row.SpawnedFrom == "" || row.Role == "manager" || !parents[protocol.NamespacedID(row.EndpointID, row.SpawnedFrom)] {
+		mailbox := row.WorkerDiscussion == c.binding.ConversationID && row.WorkerInstance != "" && row.WorkerAttempt != ""
+		if row.SpawnedFrom == "" || row.Role == "manager" || !mailbox && !parents[protocol.NamespacedID(row.EndpointID, row.SpawnedFrom)] {
 			continue
 		}
 		instance := row.ID // Fallback for adapters without native instance metadata.
 		if row.Capabilities != nil && row.Capabilities.SessionInstance != "" {
 			instance = row.Capabilities.SessionInstance
 		}
+		if mailbox {
+			instance = row.WorkerInstance
+		}
 		k := known[row.ID]
 		if k == "" {
 			k = key(c.binding.ConversationID, key(row.ID, row.ID))
+			if mailbox {
+				k = key(c.binding.ConversationID, key(row.ID, instance))
+			}
 		}
 		old, found := st.Workers[k]
 		if found {
@@ -55,6 +62,10 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 		if !found {
 			job := "vm-child-" + hashValue([]string{c.binding.ConversationID, row.ID})
 			w = WorkerAssociation{ConversationID: c.binding.ConversationID, Session: row.ID, Parent: row.SpawnedFrom, Project: row.Cwd, JobID: job, AttemptID: job}
+		}
+		if mailbox {
+			w.Mailbox = true
+			w.AttemptID = row.WorkerAttempt
 		}
 		w.VMChild, w.SessionInstance, w.Ended = true, instance, row.Status.Process != status.ProcessRunning
 		event := "vm-state-" + hashValue([]string{w.JobID, string(row.Group), row.GroupEnteredAt.UTC().Format(time.RFC3339Nano)})

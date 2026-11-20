@@ -9,6 +9,7 @@ type SemanticMessageReceipt struct {
 	Session            string         `json:"session"`
 	SessionInstance    string         `json:"session_instance,omitempty"`
 	State              string         `json:"state"`
+	RejectionCode      ErrorCode      `json:"rejection_code,omitempty"`
 	Reason             string         `json:"reason,omitempty"`
 	NativeSessionID    string         `json:"native_session_id,omitempty"`
 	NativeMessageID    string         `json:"native_message_id,omitempty"`

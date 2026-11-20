@@ -17,12 +17,13 @@ import (
 const MaxRecords = 1024
 
 var (
-	ErrConflict    = errors.New("manager proof: conflicting native evidence")
-	ErrStale       = errors.New("manager proof: stale native generation or turn")
-	ErrUnbound     = errors.New("manager proof: native call has no main input admission")
-	ErrUnavailable = errors.New("manager proof: native evidence unavailable")
-	ErrCapacity    = errors.New("manager proof: native evidence capacity reached")
-	ErrQuarantined = fmt.Errorf("%w: custody incomplete; fresh manager session required", ErrStale)
+	ErrDirectInputUnresolved = errors.New("manager proof: unresolved direct terminal input")
+	ErrConflict              = errors.New("manager proof: conflicting native evidence")
+	ErrStale                 = errors.New("manager proof: stale native generation or turn")
+	ErrUnbound               = errors.New("manager proof: native call has no main input admission")
+	ErrUnavailable           = errors.New("manager proof: native evidence unavailable")
+	ErrCapacity              = errors.New("manager proof: native evidence capacity reached")
+	ErrQuarantined           = fmt.Errorf("%w: custody incomplete; fresh manager session required", ErrStale)
 )
 
 type Binding = schema.ManagerRuntimeBinding

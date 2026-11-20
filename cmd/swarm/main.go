@@ -61,7 +61,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|schedule|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|dispatcher-guide|teammate|schedule|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -86,6 +86,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|schedule|voi
   swarm kill       terminate a session
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
+  swarm dispatcher-guide    read how to delegate and handle worker replies
   swarm teammate message --text s   send a note to your own Swarm manager
   swarm message    submit a semantic message <session> --text s [--operation-id id]
                    or read its receipt with --status --operation-id id
@@ -129,6 +130,9 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "-h", "--help", "help":
+		_, _ = fmt.Fprint(stdout, usage)
+		return 0
 	case "--pilot":
 		if len(args) != 1 {
 			_, _ = fmt.Fprint(stderr, usage)
@@ -159,6 +163,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchSchedule(args[1:], stdout, stderr)
 	case "discord":
 		return dispatchDiscord(args[1:], stdout, stderr)
+	case "dispatcher-guide":
+		return runDispatcherGuide(args[1:], stdout, stderr)
 	case "teammate":
 		return dispatchTeammate(args[1:], stdout, stderr)
 	case "voice":
@@ -169,7 +175,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		if len(args) == 2 && args[1] == "--new-operation-id" {
 			return runSpawn(args[1:], nil, stdout, stderr)
 		}
-		return dispatchAgentVerb(runSpawn, args[1:], []string{protocol.CapOwnerLaunch}, stdout, stderr)
+		return dispatchAgentVerb(runSpawn, args[1:], []string{protocol.CapOwnerLaunch, protocol.CapWorkerMail}, stdout, stderr)
 	case "handoff":
 		return dispatchAgentVerb(runHandoff, args[1:], nil, stdout, stderr)
 	case "reattach":
@@ -200,7 +206,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "send":
 		return dispatchAgentVerb(runSend, args[1:], nil, stdout, stderr)
 	case "message":
-		return dispatchAgentVerb(runMessage, args[1:], []string{protocol.CapSemanticSend}, stdout, stderr)
+		return dispatchAgentVerb(runMessage, args[1:], []string{protocol.CapSemanticSend, protocol.CapSemanticTarget}, stdout, stderr)
 	case "requests":
 		return dispatchAgentVerb(runNativeRequests, args[1:], []string{protocol.CapNativeRequests}, stdout, stderr)
 	case "decide":

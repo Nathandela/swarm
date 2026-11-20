@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
@@ -23,17 +24,30 @@ func semanticRequest(c agentClient, id, text string) (semanticClient, protocol.C
 	if !ok {
 		return nil, protocol.ComposerSendReq{}, errors.New("semantic messages require an updated daemon")
 	}
-	row, err := pilotTarget(c, id)
-	if err != nil {
-		return nil, protocol.ComposerSendReq{}, err
+	if resolver, ok := c.(interface{ SemanticTarget(string) (string, error) }); ok {
+		instance, err := resolver.SemanticTarget(id)
+		if !errors.Is(err, protocol.ErrSemanticTargetNotNegotiated) {
+			return sender, protocol.ComposerSendReq{Session: id, SessionInstance: instance, Text: text}, err
+		}
 	}
-	if row.Status.Process != status.ProcessRunning {
-		return nil, protocol.ComposerSendReq{}, errors.New("discussion is not running; resume it explicitly")
+	// An older daemon only offers roster hints. Refresh before creating any operation.
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for {
+		row, err := pilotTarget(c, id)
+		if err != nil {
+			return nil, protocol.ComposerSendReq{}, err
+		}
+		if row.Status.Process != status.ProcessRunning {
+			return nil, protocol.ComposerSendReq{}, errors.New("discussion is not running; resume it explicitly")
+		}
+		if row.Capabilities != nil && row.Capabilities.SessionInstance != "" {
+			return sender, protocol.ComposerSendReq{Session: id, SessionInstance: row.Capabilities.SessionInstance, Text: text}, nil
+		}
+		if !time.Now().Before(deadline) {
+			return nil, protocol.ComposerSendReq{}, errors.New("discussion has no current session incarnation; retry or update and restart the daemon")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if row.Capabilities == nil || row.Capabilities.SessionInstance == "" {
-		return nil, protocol.ComposerSendReq{}, errors.New("discussion has no current session incarnation; refresh the roster and daemon")
-	}
-	return sender, protocol.ComposerSendReq{Session: id, SessionInstance: row.Capabilities.SessionInstance, Text: text}, nil
 }
 
 func runMessage(args []string, c agentClient, stdout, stderr io.Writer) int {

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/workermail"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -29,14 +32,18 @@ const (
 )
 
 type TeammateNativeStatus struct {
-	State           string              `json:"state"`
-	ManagerSession  string              `json:"manager_session,omitempty"`
-	ManagerInstance string              `json:"manager_instance,omitempty"`
-	Project         string              `json:"project,omitempty"`
-	Diagnostic      string              `json:"diagnostic,omitempty"`
-	ExternalInput   uint64              `json:"external_input"`
-	Generation      uint64              `json:"generation"`
-	Jobs            []TeammateJobStatus `json:"jobs,omitempty"`
+	PendingAdmissions   int                     `json:"pending_admissions,omitempty"`
+	Notes               []workermail.NoteStatus `json:"worker_notes,omitempty"`
+	RetirementOperation string                  `json:"retirement_operation,omitempty"`
+	OldestPendingNote   time.Time               `json:"oldest_pending_note,omitzero"`
+	State               string                  `json:"state"`
+	ManagerSession      string                  `json:"manager_session,omitempty"`
+	ManagerInstance     string                  `json:"manager_instance,omitempty"`
+	Project             string                  `json:"project,omitempty"`
+	Diagnostic          string                  `json:"diagnostic,omitempty"`
+	ExternalInput       uint64                  `json:"external_input"`
+	Generation          uint64                  `json:"generation"`
+	Jobs                []TeammateJobStatus     `json:"jobs,omitempty"`
 }
 
 type TeammateJobStatus struct {
@@ -83,6 +90,24 @@ func PublicationBodyHash(body string) string { return digest(body) }
 type TeammateHistoryReader func(context.Context, TeammateHistoryQuery) (TeammateHistoryPage, error)
 
 var ErrTeammateSourceChanged = errors.New("discord: source message changed before native submission")
+
+// TeammateInputHold describes a durable human admission awaiting native input.
+type TeammateInputHold struct {
+	AdmissionID     string
+	DirectInput     bool
+	EffectUncertain bool
+}
+
+func (h *TeammateInputHold) Error() string {
+	if h.EffectUncertain {
+		return "discord: previous dispatcher submission outcome is unconfirmed"
+	}
+	if h.DirectInput {
+		return "discord: dispatcher delivery paused by direct terminal input"
+	}
+	return "discord: dispatcher delivery awaits native turn confirmation"
+}
+
 var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is unavailable")
 
 type TeammateHistoryQuery struct {

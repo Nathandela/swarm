@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	CapManagerRetire      = "manager-retire"
-	OpManagerRetire       = "manager_retire"
-	OpManagerRetireStatus = "manager_retire_status"
+	CapManagerRetire       = "manager-retire"
+	OpManagerRetire        = "manager_retire"
+	OpManagerRetireStatus  = "manager_retire_status"
+	CapManagerRetireCancel = "manager-retire-cancel"
+	OpManagerRetireCancel  = "manager_retire_cancel"
 )
 
 type ManagerRetireReq = schema.ManagerRetireReq
@@ -25,7 +27,7 @@ type ManagerRetireReceipt = schema.ManagerRetireReceipt
 
 type ManagerRetireSource interface {
 	ManagerRetireSupported() bool
-	ManagerRetire(context.Context, string, string, ManagerRetireReq, bool) (ManagerRetireReceipt, error)
+	ManagerRetire(context.Context, string, string, ManagerRetireReq, string) (ManagerRetireReceipt, error)
 }
 
 func validManagerRetireOperationID(id string) bool {
@@ -45,16 +47,24 @@ func ManagerRetireOperationID(req ManagerRetireReq) string {
 }
 
 func (c *Client) ManagerRetire(ctx context.Context, req ManagerRetireReq, statusOnly bool) (ManagerRetireReceipt, error) {
+	op := OpManagerRetire
+	if statusOnly {
+		op = OpManagerRetireStatus
+	}
+	return c.managerRetireRequest(ctx, req, op)
+}
+
+func (c *Client) CancelManagerRetire(ctx context.Context, req ManagerRetireReq) (ManagerRetireReceipt, error) {
+	return c.managerRetireRequest(ctx, req, OpManagerRetireCancel)
+}
+
+func (c *Client) managerRetireRequest(ctx context.Context, req ManagerRetireReq, op string) (ManagerRetireReceipt, error) {
 	var none ManagerRetireReceipt
-	if !slices.Contains(c.caps, CapManagerRetire) {
+	if !slices.Contains(c.caps, CapManagerRetire) || op == OpManagerRetireCancel && !slices.Contains(c.caps, CapManagerRetireCancel) {
 		return none, managerproof.ErrUnavailable
 	}
 	if req.Validate() != nil {
 		return none, managerproof.ErrInvalid
-	}
-	op := OpManagerRetire
-	if statusOnly {
-		op = OpManagerRetireStatus
 	}
 	id := ManagerRetireOperationID(req)
 	r, err := c.managerRequest(ctx, Control{Op: op, BodyVersion: 1, EndpointID: c.endpointID,
@@ -78,7 +88,7 @@ func (cc *clientConn) handleManagerRetire(c Control) {
 		return
 	}
 	source, ok := cc.srv.d.(ManagerRetireSource)
-	if !ok || !cc.hasCap(CapManagerRetire) {
+	if !ok || !cc.hasCap(CapManagerRetire) || c.Op == OpManagerRetireCancel && !cc.hasCap(CapManagerRetireCancel) {
 		cc.replyErrorCode("manager retirement was not negotiated", CodeNotImplemented)
 		return
 	}
@@ -100,7 +110,7 @@ func (cc *clientConn) handleManagerRetire(c Control) {
 	defer cancel()
 	req := *c.ManagerRetireRequest
 	req.Binding.Session = local
-	receipt, err := source.ManagerRetire(ctx, local, c.OperationID, req, c.Op == OpManagerRetireStatus)
+	receipt, err := source.ManagerRetire(ctx, local, c.OperationID, req, c.Op)
 	if errors.Is(err, managerproof.ErrStale) {
 		cc.replyErrorCode("manager retirement target changed", CodeStaleInstance)
 		return

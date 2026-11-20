@@ -65,31 +65,44 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	armResumeFailures := prepareHostedResumeFailures(t, root)
 	socket := filepath.Join(state, "daemon.sock")
-	cmd := exec.Command(bin, "daemon")
-	cmd.Dir = project
-	cmd.Env = []string{"SWARM_DAEMON_STATE=" + state, "SWARM_DAEMON_SOCK=" + socket, "SWARM_DAEMON_LOCK=" + filepath.Join(state, "daemon.lock"), "SWARM_DAEMON_LOG=" + filepath.Join(state, "daemon.log")}
-	for _, key := range []string{"HOME", "PATH", "USER", "LOGNAME", "LANG", "SHELL"} {
-		if value, ok := os.LookupEnv(key); ok {
-			cmd.Env = append(cmd.Env, key+"="+value)
+	startDaemon := func(binary string) *exec.Cmd {
+		cmd := exec.Command(binary, "daemon")
+		cmd.Dir = project
+		cmd.Env = []string{"SWARM_DAEMON_STATE=" + state, "SWARM_DAEMON_SOCK=" + socket, "SWARM_DAEMON_LOCK=" + filepath.Join(state, "daemon.lock"), "SWARM_DAEMON_LOG=" + filepath.Join(state, "daemon.log")}
+		for _, key := range []string{"HOME", "PATH", "USER", "LOGNAME", "LANG", "SHELL"} {
+			if value, ok := os.LookupEnv(key); ok {
+				cmd.Env = append(cmd.Env, key+"="+value)
+			}
 		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return cmd
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+	upgradeFrom := os.Getenv("SWARM_TEAMMATE_TEST_UPGRADE_FROM")
+	initial := bin
+	if upgradeFrom != "" {
+		initial = upgradeFrom
 	}
+	cmd := startDaemon(initial)
 	t.Cleanup(func() { _ = cmd.Process.Signal(syscall.SIGTERM); _ = cmd.Wait() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
-	var owner *protocol.Client
-	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); {
-		owner, err = protocol.DialContext(ctx, socket, nil)
-		if err == nil {
-			break
+	dialOwner := func() *protocol.Client {
+		var owner *protocol.Client
+		for end := time.Now().Add(20 * time.Second); time.Now().Before(end); {
+			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance})
+			if err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		time.Sleep(100 * time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return owner
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	owner := dialOwner()
 	t.Cleanup(func() {
 		_ = owner.Close()
 		end, done := context.WithTimeout(context.Background(), 20*time.Second)
@@ -205,6 +218,202 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	if n := len(roster()); n != 0 {
 		t.Fatalf("native sessions before first contact: %d", n)
+	}
+	if provider := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE"); provider != "" {
+		if !vmMode || (provider != "codex" && provider != "claude") {
+			t.Fatal("durable rehearsal requires VM mode and a codex or claude worker")
+		}
+		activeUpgrade := upgradeFrom != "" && os.Getenv("SWARM_TEAMMATE_TEST_ACTIVE_UPGRADE") == "1"
+		var retainedManager string
+		var previousNative protocol.ManagerRuntimeBinding
+		if upgradeFrom != "" {
+			send("299", "401", "Reply here with exactly ready-to-upgrade.")
+			wait("pre-upgrade manager published and settled the native turn", 90*time.Second, func() bool {
+				st, err := r.Status(thread)
+				if err != nil || st.State != "active" || st.PendingAdmissions != 0 {
+					return false
+				}
+				native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+				if err != nil || !native.ReadyForInput || (native.Turn.State != "idle" && native.Turn.State != "completed") {
+					return false
+				}
+				for _, p := range outputs {
+					if strings.Contains(p.Body, "ready-to-upgrade") {
+						previousNative = native.Binding
+						return true
+					}
+				}
+				return false
+			})
+			before := roster()
+			if len(before) != 1 || before[0].Role != "manager" {
+				t.Fatal("expected one original manager")
+			}
+			retainedManager = before[0].ID
+			expectedProcess := status.ProcessRunning
+			if !activeUpgrade {
+				expectedProcess = status.ProcessExited
+				wait("outgoing supervisor parked the original manager", voice.DiscussionIdleGrace+45*time.Second, func() bool {
+					st, err := r.Status(thread)
+					if err != nil || st.State != "parked" || st.ManagerSession != before[0].ID || st.RetirementOperation == "" {
+						return false
+					}
+					rows := roster()
+					return len(rows) == 1 && rows[0].ID == before[0].ID && rows[0].Status.Process == status.ProcessExited
+				})
+			}
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+			_ = owner.Close()
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatal(err)
+			}
+			cmd = startDaemon(bin)
+			owner = dialOwner()
+			after := roster()
+			if len(after) != 1 || after[0].ID != before[0].ID || after[0].Status.Process != expectedProcess {
+				t.Fatal("upgrade lost the original manager")
+			}
+			r = open()
+			st, err := r.Status(thread)
+			if err != nil || !activeUpgrade && st.State != "parked" || st.ManagerSession != after[0].ID {
+				t.Fatalf("retained parked binding: %+v, %v", st, err)
+			}
+			t.Logf("retained pre-upgrade dispatcher %s (%s)", after[0].ID, st.State)
+		}
+		question := "question-" + hex.EncodeToString(marker[:4])
+		answer := "answer-" + hex.EncodeToString(marker[4:])
+		if err := os.WriteFile(filepath.Join(project, "question.txt"), []byte(question), 0600); err != nil {
+			t.Fatal(err)
+		}
+		a := "Use one " + provider + " worker in " + project + ". Ask it to send its first question with the marker from question.txt immediately, using a needs-input note. " +
+			"Have it retrieve your reply with the question ID, write your exact answer into answer.txt, and stay in that same turn until the file release appears (allow up to ten minutes). " +
+			"It should then send the contents of proof.txt with a complete note, save its queued receipt to sent.txt, and include the result in its native final answer. " +
+			"Only the worker may open these files. When the question arrives, answer it with exactly " + answer + " and publish its question marker. Publish the verified final result when it arrives. Do not give the worker the answer in advance."
+		send("301", "401", a)
+		if activeUpgrade {
+			// The old observer can no longer prove all native events were consumed.
+			// Only an operator releasing the exact isolated manager permits recovery.
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(300 * time.Millisecond) {
+				_ = r.Sync(ctx, thread, reader, func(discord.TeammatePublication) error {
+					return fmt.Errorf("unexpected publication before custody recovery")
+				})
+				st, err := r.Status(thread)
+				if err == nil && st.State == "blocked" && st.ManagerSession == retainedManager && st.Diagnostic != "" && st.PendingAdmissions == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("missing retained custody hold: %+v, %v", st, err)
+				}
+			}
+			rows := roster()
+			if len(rows) != 1 || rows[0].ID != retainedManager || rows[0].Status.Process != status.ProcessRunning {
+				t.Fatal("quarantine started a competing manager")
+			}
+			t.Log("native custody hold visible; simulating operator exit of exact isolated manager")
+			if err := owner.Kill(retainedManager); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var job, attempt string
+		wait("manager received early explicit question", 150*time.Second, func() bool {
+			for _, p := range outputs {
+				if strings.HasPrefix(p.AdmissionID, "worker-message-") && p.JobID != "" && p.AttemptID != "" && strings.Contains(p.Body, question) {
+					job, attempt = p.JobID, p.AttemptID
+					return true
+				}
+			}
+			return false
+		})
+		if upgradeFrom != "" {
+			st, err := r.Status(thread)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+			if err != nil || native.Binding.ConversationID != previousNative.ConversationID || native.Binding.Session == retainedManager ||
+				(native.Binding.NativeSessionID == previousNative.NativeSessionID) == activeUpgrade {
+				t.Fatalf("unexpected upgrade binding: %+v, %v", native.Binding, err)
+			}
+			var gaps int
+			for _, p := range outputs {
+				if p.SystemCause == discord.TeammateSystemContinuityGap {
+					gaps++
+				}
+			}
+			if activeUpgrade && gaps != 1 || !activeUpgrade && gaps != 0 {
+				t.Fatalf("unexpected continuity notices: %d", gaps)
+			}
+			t.Logf("native history %s -> %s, logical discussion %s; %d continuity notices", previousNative.NativeSessionID, native.Binding.NativeSessionID, native.Binding.ConversationID, gaps)
+		}
+		wait("held worker received the exact answer", 90*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "answer.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == answer
+		})
+		// A native worker status transition can legitimately restart the idle grace.
+		wait("manager parked with the same worker running", 2*voice.DiscussionIdleGrace+90*time.Second, func() bool {
+			st, err := r.Status(thread)
+			if err != nil || st.State != "parked" {
+				return false
+			}
+			for _, row := range roster() {
+				if row.SpawnedFrom != "" && strings.HasPrefix(row.Name, "DSP-") && row.Status.Process == status.ProcessRunning {
+					return true
+				}
+			}
+			return false
+		})
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		for end := time.Now().Add(time.Minute); ; time.Sleep(200 * time.Millisecond) {
+			raw, err := os.ReadFile(filepath.Join(project, "sent.txt"))
+			if err == nil && strings.Contains(string(raw), "queued") {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatal("worker did not record queued completion during connector downtime")
+			}
+		}
+		r = open()
+		wait("same attempt completion published after retirement and restart", 150*time.Second, func() bool {
+			for _, p := range outputs {
+				if strings.HasPrefix(p.AdmissionID, "worker-message-") && p.JobID == job && p.AttemptID == attempt && strings.Contains(p.Body, proof) {
+					t.Logf("job %s attempt %s publication %s", job, attempt, p.ID)
+					return true
+				}
+			}
+			return false
+		})
+		got, err := r.Status(thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kinds := make(map[string]bool)
+		for _, note := range got.Notes {
+			if note.JobID != job || note.AttemptID != attempt || note.Admission == 0 {
+				continue
+			}
+			if note.Kind == "needs-input" && !note.Answered {
+				t.Fatal("missing durable reply export")
+			}
+			if kinds[note.Kind] {
+				t.Fatalf("duplicate admitted %s note", note.Kind)
+			}
+			kinds[note.Kind] = true
+			t.Logf("%s note %s admitted as %d on %s", note.Kind, note.ID, note.Admission, note.Instance)
+		}
+		if !kinds["needs-input"] || !kinds["complete"] {
+			t.Fatalf("explicit admissions: %v", kinds)
+		}
+		return
 	}
 	if personal {
 		for i, prefix := range []string{"birch", "cedar"} {

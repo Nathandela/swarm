@@ -310,3 +310,42 @@ func TestSlugsCapBytesWithoutSplittingUnicode(t *testing.T) {
 		t.Fatalf("branch slug %q lost its full session-id suffix", branchSlug)
 	}
 }
+
+func TestReservedCheckoutUsesOnlyRegisteredOriginalBranchAndPath(t *testing.T) {
+	repo := newGitRepo(t)
+	const id = "liveworker123456"
+	first, err := Create(repo, id, "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := ReservedCheckout(repo, id, "review"); err != nil || found != canonical {
+		t.Fatalf("reserved checkout %q, %v", found, err)
+	}
+	if found, err := ReservedCheckout(repo, "another12345", "review"); err != nil || found != "" {
+		t.Fatalf("inherited another session checkout %q, %v", found, err)
+	}
+	moved := filepath.Join(repo, "moved")
+	if err := os.Rename(first, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(first, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := ReservedCheckout(repo, id, "review"); err == nil || found != "" {
+		t.Fatalf("adopted replacement directory %q, %v", found, err)
+	}
+	if err := os.Remove(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(moved, first); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "worktree", "move", first, moved)
+	if found, err := ReservedCheckout(repo, id, "review"); err == nil || found != "" {
+		t.Fatalf("adopted moved checkout %q, %v", found, err)
+	}
+}

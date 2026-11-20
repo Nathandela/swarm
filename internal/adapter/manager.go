@@ -11,5 +11,5 @@ type ManagerSpec struct {
 // DiscordTransportTools names the operations authorized by installation of the
 // discussion bridge. Provider approval for shell commands remains independent.
 func DiscordTransportTools() []string {
-	return []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer"}
+	return []string{"publish", "ask", "swarm_discussion_history", "swarm_discussion_answer", "swarm_reply", "swarm_read_note"}
 }

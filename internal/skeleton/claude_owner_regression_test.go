@@ -1,14 +1,15 @@
 package skeleton
 
 import (
+	"os"
+	"path/filepath"
+	"testing"
+
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/protocol"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 func TestReviewOrdinaryClaudeOwnerSendRemainsAvailable(t *testing.T) {
@@ -25,6 +26,28 @@ func TestReviewOrdinaryClaudeOwnerSendRemainsAvailable(t *testing.T) {
 	code, err := sk.api.SemanticSendTransactional(sk.api.endpointID, "ordinary-owner", protocol.ComposerSendReq{Session: protocol.NamespacedID(sk.api.endpointID, m.ID), Text: "ordinary owner input"}, func() error { began = true; return nil })
 	if err != nil || code != "" || !began || len(upstream.recordedOrder()) != 1 {
 		t.Fatalf("ordinary owner input regressed: code=%s error=%v begin=%t writes=%v", code, err, began, upstream.recordedOrder())
+	}
+
+	client, err := protocol.Dial(sk.SocketPath(), []string{protocol.CapSemanticTarget, protocol.CapSemanticSend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	target := protocol.NamespacedID(client.EndpointID(), m.ID)
+	instance, err := client.SemanticTarget(target)
+	if err != nil || instance == "" {
+		t.Fatalf("ordinary Claude target lookup: %q %v", instance, err)
+	}
+	op, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := protocol.ComposerSendReq{Session: target, SessionInstance: instance, Text: "first exact owner message"}
+	if err := client.SemanticSend(op, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SemanticSend(op, req); err != nil || len(upstream.recordedOrder()) != 2 {
+		t.Fatalf("exact protocol replay changed composer effects: %v writes=%v", err, upstream.recordedOrder())
 	}
 }
 

@@ -91,8 +91,11 @@ func TestLaunchGate_OneTapPollAnswersTheFolderTrustDialogWithDownThenEnter(t *te
 }
 
 func TestLaunchGate_AnAnsweredSessionIsNeverTypedAtAgain(t *testing.T) {
-	sk, id, att := launchGateRig(t, claudeResolver)
+	// The live sampler runs during fixture setup. Enable gate recognition only
+	// after marking the session so its first eligible poll sees the test state.
+	sk, id, att := launchGateRig(t, nil)
 	sk.markLaunchGateAnswered(id)
+	sk.setAdapterForTest(claudeResolver)
 
 	sk.sampleGrid(id)
 

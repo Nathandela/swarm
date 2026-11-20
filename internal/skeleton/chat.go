@@ -36,8 +36,10 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/appserver"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -595,7 +597,8 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	}
 	if req.SessionInstance != "" {
 		currentInstance, ok := d.sessionInstance(local)
-		if !ok || currentInstance != req.SessionInstance {
+		if !ok || currentInstance != req.SessionInstance || meta.ShimPID > 0 && meta.ShimStartTime > 0 &&
+			!d.matchesResumeSourceInstance(meta, req.SessionInstance) {
 			return protocol.CodeStaleInstance, errIsLife5(
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
@@ -610,17 +613,22 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 			return protocol.CodeStructuredUnsupported, errors.New("discussion send requires an exact local delegated worker")
 		}
 	}
-	if !discussionCodex {
+	discordManager := req.ManagerAdmission != nil && schema.IsDiscordManager(meta.Role, meta.ManagerConversationID)
+	if !discussionCodex && !discordManager {
 		return d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, false)
 	}
 	var code protocol.ErrorCode
 	var sendErr error
 	err = d.withSessionInputFence(local, func() error {
-		if d.anyControlled(local) || d.directInputUnresolved(local) {
+		if discordManager && d.directInputUnresolved(local) {
+			code, sendErr = protocol.CodeManagerDirectInput, managerproof.ErrDirectInputUnresolved
+			return nil
+		}
+		if discussionCodex && (d.anyControlled(local) || d.directInputUnresolved(local)) {
 			code, sendErr = protocol.CodeInputBusy, errors.New("discussion worker is under manual input control")
 			return nil
 		}
-		code, sendErr = d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, true)
+		code, sendErr = d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, discussionCodex)
 		return nil
 	})
 	if err != nil {
@@ -689,6 +697,10 @@ func (d *Daemon) composerSendAtHead(local, operationID string, req protocol.Comp
 		return code, serr
 	}
 
+	// A known, unenrolled Claude session uses its existing guarded composer.
+	if source == adapter.SourceOwner && sink.backend == nil && meta.AgentType != "claude" {
+		return protocol.CodeStructuredUnsupported, errors.New("native semantic input is unavailable; nothing was submitted")
+	}
 	if discussionCodex && !discussionCodexThreadIdle(sink.backend) {
 		return protocol.CodeInputBusy, errors.New("discussion worker has no verified native idle turn")
 	}

@@ -116,8 +116,8 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		resumeSource = &daemon.ResumeSourceFence{Instance: req.ResumeSourceInstance}
 	}
 	return daemon.LaunchSpec{
-		ResumeSource:  resumeSource,
-		WorkerBridge:  req.WorkerBridge,
+		ResumeSource: resumeSource,
+		WorkerBridge: req.WorkerBridge, DispatcherProof: req.DispatcherProof,
 		Manager:       manager,
 		HermesOrigins: hermesOrigins,
 		AgentType:     req.Agent,
@@ -293,7 +293,7 @@ var serverCaps = []string{
 	CapContextGuardSettings,
 	CapLoginsManage,
 	CapSchedule, CapScheduleRunID, CapScheduleWorkspace, CapScheduleHostTime, CapScheduleRoute,
-	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire,
+	CapSemanticSend, CapSemanticTarget, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapWorkerMail, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire, CapManagerRetireCancel,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1417,6 +1417,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleComposerSend(c)
 	case OpSemanticSend:
 		cc.handleSemanticSend(c)
+	case OpWorkerMail:
+		cc.handleWorkerMail(c)
 	case OpOwnerLaunch:
 		cc.handleOwnerLaunch(c)
 	case OpScheduleRoute:
@@ -1427,13 +1429,15 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleSchedule(c)
 	case OpOwnerLaunchStatus:
 		cc.handleOwnerLaunchStatus(c)
+	case OpSemanticTarget:
+		cc.handleSemanticTarget(c)
 	case OpSemanticStatus:
 		cc.handleSemanticStatus(c)
 	case OpNativeDecide:
 		cc.handleNativeDecide(c)
 	case OpNativeRequests:
 		cc.handleNativeRequests(c)
-	case OpManagerRetire, OpManagerRetireStatus:
+	case OpManagerRetire, OpManagerRetireStatus, OpManagerRetireCancel:
 		cc.handleManagerRetire(c)
 	case OpManagerInterrupt, OpManagerInterruptStatus:
 		cc.handleManagerInterrupt(c)
@@ -1543,7 +1547,7 @@ func (s *Server) supportedCaps() []string {
 		if cap == CapManagerInterrupt && (s.remoteTier || !hasManagerInterrupt || !managerInterrupt.ManagerInterruptSupported()) {
 			continue
 		}
-		if cap == CapManagerRetire && (s.remoteTier || !hasManagerRetire || !managerRetire.ManagerRetireSupported()) {
+		if (cap == CapManagerRetire || cap == CapManagerRetireCancel) && (s.remoteTier || !hasManagerRetire || !managerRetire.ManagerRetireSupported()) {
 			continue
 		}
 		if cap == CapManagerProvenance && (s.remoteTier || !managerProvenance) {
@@ -1568,6 +1572,11 @@ func (s *Server) supportedCaps() []string {
 		if (cap == CapSchedule || cap == CapScheduleRunID || cap == CapScheduleHostTime) && (s.remoteTier || !scheduled) {
 			continue
 		}
+		if cap == CapWorkerMail {
+			if _, ok := s.d.(workerMailSource); !ok || s.remoteTier || s.completionTier {
+				continue
+			}
+		}
 		if (cap == CapOwnerLaunch || cap == CapTeammateWorkerBridge) && (s.remoteTier || !ownerLaunch) {
 			continue
 		}
@@ -1579,6 +1588,11 @@ func (s *Server) supportedCaps() []string {
 		}
 		if cap == CapJournalSubscribeFrom && !journalFrom {
 			continue
+		}
+		if cap == CapSemanticTarget {
+			if _, ok := s.d.(semanticTargetSource); !ok || s.remoteTier || s.completionTier || !durable || !sender || !transactional || !semantic {
+				continue
+			}
 		}
 		if (cap == CapSemanticSend || cap == CapMessageOrigin) && (s.remoteTier || !durable || !sender || !transactional || !semantic) {
 			continue
@@ -1781,6 +1795,10 @@ func (cc *clientConn) handleLaunch(c Control) {
 	}
 	if req.Cols < 1 || req.Cols > maxDim || req.Rows < 1 || req.Rows > maxDim {
 		cc.replyError("launch: cols/rows out of range")
+		return
+	}
+	if req.DispatcherProof != "" && (len(req.DispatcherProof) != 64 || cc.srv.remoteTier || c.Op != OpOwnerLaunch || !cc.hasCap(CapWorkerMail) || req.WorkerBridge != "" || req.Manager != nil || req.SpawnIntent != SpawnIntentDelegate) {
+		cc.replyErrorCode("invalid dispatcher child binding", CodeInvalidField)
 		return
 	}
 	if req.WorkerBridge != "" {
@@ -3631,6 +3649,7 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
+	view.WorkerDiscussion, view.WorkerAttempt, view.WorkerInstance = m.WorkerDiscussion, m.WorkerAttempt, m.WorkerInstance
 	if m.Role == "manager" && m.Status.Process == status.ProcessExited {
 		view.ManagerExitCode, view.ManagerExitSignal = m.ExitCode, m.ManagerExitSignal
 	}

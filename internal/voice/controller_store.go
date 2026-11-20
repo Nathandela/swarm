@@ -485,6 +485,36 @@ func (s *Store) refreshPreparedInput(b ManagerBinding, expected Admission, opera
 	})
 	return cloneAdmission(result), err
 }
+
+// A durable draft refusal proves the prior operation never reached provider input.
+func (s *Store) deferDraftRefusal(b ManagerBinding, expected Admission, operation string) error {
+	return s.update(func(st *State) error {
+		if err := checkBinding(st, b); err != nil {
+			return err
+		}
+		k := admissionKey(b.ConversationID, expected.Sequence)
+		a, ok := st.Admissions[k]
+		if !ok || !a.SettledAt.IsZero() || a.NativeTurnID != "" || a.NativeBindingRetired ||
+			a.Phase != "executing" && a.Phase != "uncertain" ||
+			a.OperationID != expected.OperationID || a.NativeInputID != expected.NativeInputID || string(a.Request) != string(expected.Request) {
+			return ErrConflict
+		}
+		for wk, w := range st.Wakes {
+			if w.ConversationID == b.ConversationID && w.Admission == a.Sequence {
+				if w.State != "admitted" || w.OperationID != a.OperationID {
+					return ErrConflict
+				}
+				w.OperationID = operation
+				putRecord(st, "wakes", &st.Wakes, wk, w)
+			}
+		}
+		// Keep the original Discord source sealed after crossing its cutover.
+		a.Phase, a.OperationID, a.Reason = "prepared", operation, ""
+		putRecord(st, "admissions", &st.Admissions, k, a)
+		return nil
+	})
+}
+
 func (s *Store) beginControllerInput(b ManagerBinding, expected Admission) error {
 	return s.update(func(st *State) error {
 		if err := checkBinding(st, b); err != nil {

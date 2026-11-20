@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/managerproof"
 )
 
 type managerRuntimeStub struct{ *stubDaemon }
@@ -14,6 +16,9 @@ func (s *managerRuntimeStub) ManagerInputStatus(ctx context.Context, local strin
 	return ManagerNativeTurn{NativeInputID: req.Nonce, NativeTurnID: "historical", State: "completed", Reason: "answer"}, nil
 }
 func (s *managerRuntimeStub) ManagerRuntime(local, instance string) (ManagerRuntimeStatus, error) {
+	if instance == "draft" {
+		return ManagerRuntimeStatus{}, managerproof.ErrDirectInputUnresolved
+	}
 	return ManagerRuntimeStatus{Binding: ManagerRuntimeBinding{Session: local, SessionInstance: instance, ConversationID: "conversation", Provider: "claude", NativeSessionID: "native", NativeGeneration: "generation", ObservationGeneration: "observer-generation", LoginEpoch: "account"}, Turn: ManagerNativeTurn{State: "idle"}}, nil
 }
 func (s *managerRuntimeStub) ResolveManagerCall(ctx context.Context, local string, req ManagerCallReq) (ManagerCallProof, error) {
@@ -27,6 +32,9 @@ func TestManagerRuntimeFacadeOwnerOnlyAndCancellable(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 	session := c.EndpointID() + "/sess1"
+	if _, err := c.ManagerRuntime(session, "draft"); !errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+		t.Fatalf("draft diagnostic lost over owner RPC: %v", err)
+	}
 	result, err := c.ManagerRuntime(session, "instance")
 	if err != nil || result.Binding.Session != session {
 		t.Fatalf("runtime: %+v %v", result, err)

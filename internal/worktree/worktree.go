@@ -105,6 +105,64 @@ func IsRepo(dir string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
+// ReservedCheckout recovers the exact registered checkout when a supervisor
+// crashed after git worktree add and before the reserved session metadata save.
+func ReservedCheckout(repoDir, id, name string) (string, error) {
+	if !validID(id) {
+		return "", fmt.Errorf("invalid worktree session ID %q", id)
+	}
+	friendly, unique := slugs(id, name)
+	root, err := filepath.EvalSymlinks(repoDir)
+	if err != nil {
+		return "", err
+	}
+	ref := "refs/heads/swarm/" + unique
+	// for-each-ref prints the registered checkout, including paths containing newlines.
+	raw, err := exec.Command("git", "-C", root, "for-each-ref", "--format=%(refname)%00%(worktreepath)", ref).Output()
+	if err != nil {
+		return "", err
+	}
+	if len(raw) == 0 {
+		return "", nil
+	}
+	refName, path, ok := strings.Cut(strings.TrimSuffix(string(raw), "\n"), "\x00")
+	if !ok || refName != ref {
+		return "", fmt.Errorf("unexpected registered branch for %q", id)
+	}
+	if path != worktreeDir(root, friendly) && path != worktreeDir(root, unique) {
+		return "", fmt.Errorf("reserved worker branch has moved to %q", path)
+	}
+	actual, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if actual != path {
+		return "", fmt.Errorf("reserved checkout %q is redirected", path)
+	}
+	// A stale Git registration can survive a plain directory move and path reuse.
+	gitValue := func(dir string, args ...string) (string, error) {
+		raw, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+		return strings.TrimSuffix(string(raw), "\n"), err
+	}
+	head, err := gitValue(path, "symbolic-ref", "-q", "HEAD")
+	if err != nil || head != ref {
+		return "", fmt.Errorf("reserved checkout HEAD does not match %s", ref)
+	}
+	top, err := gitValue(path, "rev-parse", "--show-toplevel")
+	if err != nil || top != path {
+		return "", fmt.Errorf("registered worker checkout %q is unavailable", path)
+	}
+	sourceCommon, err := gitValue(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	common, err := gitValue(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || common != sourceCommon {
+		return "", fmt.Errorf("reserved checkout %q has another owning repository", path)
+	}
+	return path, nil
+}
+
 // Create makes an isolated git worktree for session id. When name has usable
 // letters or numbers, its preferred directory is <name-slug> and its branch is
 // swarm/<name-slug>-<id>. If that friendly directory is occupied by another

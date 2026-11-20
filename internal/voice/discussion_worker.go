@@ -238,6 +238,29 @@ func storedDiscussionWorkerProof(event Event, worker WorkerAssociation) (*schema
 	return &metadata.Data, nil
 }
 
+func (c *Controller) readDiscussionWorkerNote(input SessionInput, admission Admission) (json.RawMessage, error) {
+	wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:")
+	if !fromWake || admission.Sequence == 0 || c.discussion == nil || !c.discussion.VMProjectAccess {
+		return nil, ErrExpired
+	}
+	st, err := c.store.readView()
+	if err != nil {
+		return nil, err
+	}
+	if err := checkBinding(&st, c.binding); err != nil {
+		return nil, err
+	}
+	wake := st.Wakes[key(c.binding.ConversationID, wakeID)]
+	event := st.Events[key(c.binding.ConversationID, wake.EventID)]
+	var source workerNoteMetadata
+	if wake.Admission != admission.Sequence || !event.WorkerMessage ||
+		json.Unmarshal(event.Metadata, &source) != nil || source.NoteID == "" ||
+		source.Session != input.Session || source.Instance != input.SessionInstance {
+		return nil, ErrStale
+	}
+	return event.Metadata, nil
+}
+
 func truncateDiscussionWakeEvidence(text string) string {
 	end := min(len(text), 1024)
 	for end < len(text) && !utf8.RuneStart(text[end]) {

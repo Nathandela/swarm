@@ -115,7 +115,7 @@ func TestVMManagerBridgeOnlyHandlesConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"swarm_discussion_history": true, "swarm_discussion_answer": true, "publish": true, "ask": true}
+	want := map[string]bool{"swarm_read_note": true, "swarm_reply": true, "swarm_discussion_history": true, "swarm_discussion_answer": true, "publish": true, "ask": true}
 	for _, tool := range list.Tools {
 		if !want[tool.Name] {
 			t.Fatal("unexpected discussion tool", tool.Name)

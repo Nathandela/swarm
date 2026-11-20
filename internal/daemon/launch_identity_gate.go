@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
@@ -54,6 +55,11 @@ func (d *Daemon) admitScheduledShim(m *persist.Meta, pipe *os.File) error {
 	if err := d.persistScheduledLaunch(m); err != nil {
 		return fmt.Errorf("persist shim identity: %w", err)
 	}
+	if m.WorkerDiscussion != "" {
+		if err := d.idem.Begin(strings.TrimPrefix(m.WorkerAttempt, "vm-child-")); err != nil {
+			return fmt.Errorf("persist worker execution gate: %w", err)
+		}
+	}
 	if _, err := pipe.Write([]byte{shim.LaunchIdentityRelease}); err != nil {
 		return fmt.Errorf("release shim identity gate: %w", err)
 	}
@@ -74,7 +80,7 @@ func (d *Daemon) abortScheduledShim(m persist.Meta, cmd *exec.Cmd, s *session, p
 // scheduledLaunchApplied keeps a persisted identity alone from becoming a
 // positive owner receipt while the shim is still gated or starting up.
 func (d *Daemon) scheduledLaunchApplied(m persist.Meta) bool {
-	if m.ScheduleAttempt == "" || m.Status.Process == status.ProcessExited {
+	if m.ScheduleAttempt == "" && m.WorkerDiscussion == "" || m.Status.Process == status.ProcessExited {
 		return true
 	}
 	return d.shimIdentityMatches(m) && confirmShimServing(shimSocketPath(d.cfg.StateDir, m.ID))

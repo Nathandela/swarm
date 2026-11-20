@@ -27,10 +27,26 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
+// WorkerMailReq is authenticated against the exact ordinary child that owns this note.
+type WorkerMailReq struct {
+	Action string `json:"action"`
+	ID     string `json:"id"`
+	Proof  string `json:"proof"`
+	Kind   string `json:"kind,omitempty"`
+	Text   string `json:"text,omitempty"`
+}
+type WorkerMailReceipt struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+	Text  string `json:"text,omitempty"`
+}
+
 // Control is the single JSON envelope for every control message (F-1: every
 // message carries endpoint_id; a session-scoped op carries a namespaced
 // session_id, <endpoint_id>/<local>). Which other fields matter depends on Op.
 type Control struct {
+	WorkerMail              *WorkerMailReq           `json:"worker_mail,omitempty"`
+	WorkerMailReceipt       *WorkerMailReceipt       `json:"worker_mail_receipt,omitempty"`
 	ScheduleAgent           string                   `json:"schedule_agent,omitempty"`
 	ScheduleUnavailable     string                   `json:"schedule_unavailable,omitempty"`
 	ScheduleWorkspace       string                   `json:"schedule_workspace,omitempty"`
@@ -156,6 +172,7 @@ type Control struct {
 	ManagerCall               *ManagerCallReq         `json:"manager_call,omitempty"`
 	ManagerCallProof          *ManagerCallProof       `json:"manager_call_proof,omitempty"`
 	ComposerSend              *ComposerSendReq        `json:"composer_send,omitempty"`
+	SemanticTargetInstance    string                  `json:"semantic_target_instance,omitempty"`
 	SemanticReceipt           *SemanticMessageReceipt `json:"semantic_receipt,omitempty"`
 	NativeDecision            *NativeDecisionReq      `json:"native_decision,omitempty"`
 	NativeDecisionReceipt     *NativeDecisionReceipt  `json:"native_decision_receipt,omitempty"`
@@ -265,6 +282,9 @@ type AgentInstanceRef struct {
 type SessionView struct {
 	ScheduledCompleted    bool   `json:"scheduled_completed,omitempty"`
 	Role                  string `json:"role,omitempty"`
+	WorkerDiscussion      string `json:"worker_discussion,omitempty"`
+	WorkerAttempt         string `json:"worker_attempt,omitempty"`
+	WorkerInstance        string `json:"worker_instance,omitempty"`
 	ManagerConversationID string `json:"manager_conversation_id,omitempty"`
 	ManagerExitCode       *int   `json:"manager_exit_code,omitempty"`
 	ManagerExitSignal     int    `json:"manager_exit_signal,omitempty"`
@@ -415,6 +435,7 @@ const WorkerBridgeEnv = "SWARM_TEAMMATE_WORKER_BRIDGE"
 // LaunchReq is a client's request to launch a new session. Every field is
 // re-validated server-side (E6.6) before it reaches the DaemonAPI.
 type LaunchReq struct {
+	DispatcherProof      string            `json:"dispatcher_proof,omitempty"`
 	WorkerBridge         string            `json:"worker_bridge,omitempty"`
 	ResumeSourceInstance string            `json:"resume_source_instance,omitempty"`
 	Manager              *ManagerLaunchReq `json:"manager,omitempty"`

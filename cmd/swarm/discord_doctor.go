@@ -72,6 +72,9 @@ func runDiscordDoctor(ctx context.Context, cc daemon.ClientConfig, dir, channel 
 		check("bot credential", "", err)
 	}
 	caps := []string{protocol.CapManagerLaunch, protocol.CapManagerProvenance, protocol.CapManagerRetire, protocol.CapTeammateWorkerBridge, protocol.CapOwnerLaunch, protocol.CapMessageOrigin, protocol.CapJournalSubscribeFrom, protocol.CapLoginsManage}
+	if cfg.EffectiveProjectAccess() == discord.ProjectAccessVM {
+		caps = append(caps, protocol.CapManagerRetireCancel, protocol.CapWorkerMail)
+	}
 	c, err := protocol.DialContext(ctx, cfg.DaemonSocket, caps)
 	managed := false
 	if err == nil {

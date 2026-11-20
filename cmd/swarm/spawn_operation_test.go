@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 type spawnOperationFixture struct {
@@ -165,6 +167,7 @@ func TestHandoffRecoversInterruptedCopyAndBindsDigestInDaemonRequest(t *testing.
 func TestDispatcherShellUsesOrdinaryReliableSpawnForEveryProvider(t *testing.T) {
 	t.Setenv(schema.EnvManagerVMCLI, "1")
 	t.Setenv("SWARM_SESSION_ID", "manager")
+	t.Setenv(workermail.ProofEnv, strings.Repeat("a", 64))
 	for _, agent := range []string{"codex", "claude", "agy", "hermes", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			f := &spawnOperationFixture{fakeSpawnClient: newFakeSpawnClient()}
@@ -183,5 +186,22 @@ func TestDispatcherShellUsesOrdinaryReliableSpawnForEveryProvider(t *testing.T) 
 				t.Fatal("explicit retry could not reuse generated operation")
 			}
 		})
+	}
+}
+
+func TestRetainedDispatcherSpawnUsesHookProofOrStopsBeforeLaunch(t *testing.T) {
+	t.Setenv(schema.EnvManagerVMCLI, "1")
+	t.Setenv(hookclient.EnvSessionID, "retained")
+	t.Setenv(workermail.ProofEnv, "")
+	args := []string{"--cli", "codex", "--prompt", "inspect", "--dir", t.TempDir()}
+	client := &spawnOperationFixture{fakeSpawnClient: newFakeSpawnClient()}
+	t.Setenv(hookclient.EnvToken, "")
+	var stderr bytes.Buffer
+	if code := runSpawn(args, client, io.Discard, &stderr); code != 1 || len(client.launches) != 0 || !strings.Contains(stderr.String(), "resume the same discussion") || strings.Contains(stderr.String(), "operation_id=") {
+		t.Fatalf("unqualified launch: %d %q", code, stderr.String())
+	}
+	t.Setenv(hookclient.EnvToken, "retained-token")
+	if code := runSpawn(args, client, io.Discard, io.Discard); code != 0 || len(client.launches) != 1 || client.launches[0].DispatcherProof != workermail.Proof("retained-token", "spawn") {
+		t.Fatalf("retained hook did not authenticate launch: %d", code)
 	}
 }

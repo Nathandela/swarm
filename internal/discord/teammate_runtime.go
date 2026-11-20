@@ -488,11 +488,30 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	if err != nil {
 		return err
 	}
-	bindings, err := store.teammateActiveBindings(install)
+	checkpoint, err := store.teammateCheckpoint(install)
 	if err != nil {
 		return err
 	}
-	checkpoint, err := store.teammateCheckpoint(install)
+	if source, ok := t.manager.(interface {
+		PendingWorkerDiscussions() (func(TeammateDiscussion) bool, error)
+	}); ok {
+		matches, readErr := source.PendingWorkerDiscussions()
+		issue := ""
+		if readErr != nil {
+			issue = readErr.Error()
+		}
+		if checkpoint.WorkerMailIssue != issue {
+			if err = store.teammateMailIssue(install, issue); err != nil {
+				return err
+			}
+		}
+		if matches != nil {
+			if err = store.teammateActivateWorkerMail(install, matches); err != nil {
+				return err
+			}
+		}
+	}
+	bindings, err := store.teammateActiveBindings(install)
 	if err != nil {
 		return err
 	}
@@ -572,7 +591,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		waiting, hasAccepted := accepted[b.Route.ChannelID]
 		if !b.Opened && !hasAccepted && !b.ProvisionalCancelled {
 			if !predecessors[b.Route.ChannelID] {
-				if err := store.teammatePark(b.TeammateDiscussion, through); err != nil {
+				if err := store.teammatePark(b.TeammateDiscussion, through, nil); err != nil {
 					return err
 				}
 			}
@@ -602,6 +621,9 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				emitted = append(emitted, p.ID)
 				return nil
 			})
+			if managerErr == nil && b.InputNoticeID != "" {
+				noticeErr = errors.Join(noticeErr, store.teammateClearInputNotice(b.TeammateDiscussion, b.InputNoticeID))
+			}
 			managerErr = t.managerStartupError(ctx, b.TeammateDiscussion, managerErr)
 			var ackErr error
 			if managerErr == nil {
@@ -636,7 +658,17 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 						return err
 					}
 					if dormant {
-						return store.teammatePark(b.TeammateDiscussion, through)
+						var parked *TeammateNativeStatus
+						if reporter, ok := t.manager.(interface {
+							Status(TeammateDiscussion) (TeammateNativeStatus, error)
+						}); ok && t.service.Config.EffectiveProjectAccess() == ProjectAccessVM {
+							view, err := reporter.Status(b.TeammateDiscussion)
+							if err != nil {
+								return err
+							}
+							parked = &view
+						}
+						return store.teammatePark(b.TeammateDiscussion, through, parked)
 					}
 				}
 			}
