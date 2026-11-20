@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/agyacp"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
@@ -38,6 +40,14 @@ func (b scheduleBackend) Launch(request scheduledexec.Launch) (string, error) {
 	}
 	options := make(map[string]string)
 	var conversation string
+	var argv []string
+	if request.Agent == schedule.RouteAgy {
+		provider, err := b.api.scheduledAgyExecutable()
+		if err != nil {
+			return "", errors.Join(scheduledexec.ErrAdmission, err)
+		}
+		argv = []string{b.api.core.ManagerBridgeCommand(), "schedule-agy-worker", provider}
+	}
 	if request.Agent == schedule.RouteClaude {
 		// An interactive Claude session may only publish SessionStart after its
 		// first prompt. Pin a native identity before opening the private composer.
@@ -75,7 +85,7 @@ func (b scheduleBackend) Launch(request scheduledexec.Launch) (string, error) {
 	sum := sha256.Sum256(wire)
 	m, err := b.api.Launch(daemon.LaunchSpec{
 		AgentType: request.Agent, Cwd: request.Workspace, Name: request.Name, ConversationID: conversation,
-		Cols: 100, Rows: 32, Options: options,
+		Cols: 100, Rows: 32, Options: options, Argv: argv,
 		OperationID: request.OperationID, OwnerLaunchHash: hex.EncodeToString(sum[:]),
 		ScheduledCodexSandbox: options["sandbox"], CodexPolicy: codexPolicy,
 		Scheduled: &daemon.ScheduledLaunch{
@@ -89,6 +99,49 @@ func (b scheduleBackend) Launch(request scheduledexec.Launch) (string, error) {
 		return "", err
 	}
 	return protocol.NamespacedID(b.api.endpointID, m.ID), err
+}
+
+// ScheduleRouteAvailability previews executor-local provider discovery without
+// starting a worker or touching account configuration.
+func (a *coreAPI) ScheduleRouteAvailability(agent string) string {
+	if agent == schedule.RouteAgy {
+		if _, err := a.scheduledAgyExecutable(); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	env := a.core.LaunchPolicyEnv(nil)
+	if _, err := scheduledProviderPath(agent, env); err != nil {
+		return err.Error()
+	}
+	if managedLoginProvider(agent) {
+		spec := daemon.LaunchSpec{AgentType: agent, ClientEnv: env}
+		if err := a.bindLoginLaunch(&spec); err != nil {
+			return fmt.Sprintf("%s login is unavailable on the executor: %s", agent, err)
+		}
+	}
+	return ""
+}
+
+func scheduledProviderPath(agent string, env []string) (string, error) {
+	harness, found := registry.New(agent)
+	if !found {
+		return "", fmt.Errorf("scheduled runs are not supported for %s", agent)
+	}
+	path, err := lookPathIn(harness.Binary(), env)
+	if err != nil || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("install %s on the executor and add it to the executor PATH", harness.Binary())
+	}
+	return path, nil
+}
+
+func (a *coreAPI) scheduledAgyExecutable() (string, error) {
+	env := a.core.LaunchPolicyEnv(nil)
+	provider, err := scheduledProviderPath(schedule.RouteAgy, env)
+	if err != nil {
+		return "", err
+	}
+	return provider, agyacp.Qualify(provider, env)
 }
 
 func scheduledCodexSandboxPolicy(sandbox string) []string {
@@ -108,12 +161,30 @@ func scheduledCodexSandboxPolicy(sandbox string) []string {
 }
 
 func (b scheduleBackend) SendPrompt(sessionID, attemptID, prompt string, begin func() error) error {
-	_, local, valid := protocol.ParseID(sessionID)
-	if !valid {
+	endpoint, local, valid := protocol.ParseID(sessionID)
+	if !valid || endpoint != b.api.endpointID {
 		return errors.New("invalid scheduled session identity")
 	}
 	m, ok := b.api.core.Get(local)
-	if !ok || m.ScheduleAttempt != attemptID || m.ConversationID == "" ||
+	if !ok || m.ScheduleAttempt != attemptID {
+		return nil
+	}
+	if m.AgentType == schedule.RouteAgy {
+		dir := filepath.Join(b.api.scheduleStateDir, local)
+		evidence, ready := agyacp.ReadEvidence(dir, attemptID)
+		if !ready || evidence.NeedsInput || evidence.EndTurn || m.Status.Process != status.ProcessRunning ||
+			!adapter.IsCanonicalConversationID(evidence.Conversation) {
+			return nil
+		}
+		if err := b.api.core.SetConversationID(local, evidence.Conversation); err != nil {
+			return err
+		}
+		if err := begin(); err != nil {
+			return err
+		}
+		return agyacp.QueuePrompt(dir, attemptID, prompt)
+	}
+	if m.ConversationID == "" ||
 		m.Status.Process != status.ProcessRunning || m.Status.Turn != status.TurnIdle ||
 		m.Status.Interaction != status.InteractionNone {
 		return nil
@@ -144,12 +215,19 @@ func (b scheduleBackend) Session(sessionID, attemptID string) (scheduledexec.Ses
 	if !exists || m.ScheduleAttempt != attemptID || m.ShimPID == 0 {
 		return scheduledexec.Session{}, false
 	}
+	var needsInput, startupRejected bool
+	if m.AgentType == schedule.RouteAgy {
+		evidence, available := agyacp.ReadEvidence(filepath.Join(b.api.scheduleStateDir, local), attemptID)
+		needsInput = available && evidence.NeedsInput
+		startupRejected = available && evidence.StartupRejected
+	}
 	return scheduledexec.Session{
 		Running: m.Status.Process == status.ProcessRunning,
-		NeedsInput: m.Status.Interaction == status.InteractionPrompt ||
+		NeedsInput: needsInput || m.Status.Interaction == status.InteractionPrompt ||
 			m.Status.Interaction == status.InteractionPermission || m.Status.Interaction == status.InteractionError,
-		Exhausted: m.ScheduleExhausted,
-		Stopped:   b.api.core.ScheduledExit(local, attemptID),
+		Exhausted:       m.ScheduleExhausted,
+		StartupRejected: startupRejected,
+		Stopped:         b.api.core.ScheduledExit(local, attemptID),
 	}, true
 }
 
@@ -173,15 +251,20 @@ func (b scheduleBackend) ProjectCompletion(sessionID, attemptID string) error {
 // ClosingMessage checks the same durable, session-bound assistant items shown
 // in chat. A tool response or the receipt itself cannot satisfy this check.
 func (b scheduleBackend) ClosingMessage(sessionID, attemptID, summary string) bool {
-	if b.api.history == nil {
-		return false
-	}
 	endpoint, local, valid := protocol.ParseID(sessionID)
 	if !valid || endpoint != b.api.endpointID {
 		return false
 	}
 	m, found := b.api.core.Get(local)
-	if !found || m.ScheduleAttempt != attemptID || m.Status.Turn != status.TurnIdle && !b.api.core.ScheduledExit(local, attemptID) {
+	if !found || m.ScheduleAttempt != attemptID {
+		return false
+	}
+	if m.AgentType == schedule.RouteAgy {
+		evidence, available := agyacp.ReadEvidence(filepath.Join(b.api.scheduleStateDir, local), attemptID)
+		return available && evidence.EndTurn && evidence.Conversation == m.ConversationID &&
+			strings.Contains(strings.Join(strings.Fields(evidence.Text), " "), strings.Join(strings.Fields(summary), " "))
+	}
+	if b.api.history == nil || m.Status.Turn != status.TurnIdle && !b.api.core.ScheduledExit(local, attemptID) {
 		return false
 	}
 	items, _, _, err := b.api.history(sessionID, "", 64)
@@ -189,6 +272,30 @@ func (b scheduleBackend) ClosingMessage(sessionID, attemptID, summary string) bo
 		return false
 	}
 	return closingMessageInHistory(items, summary)
+}
+
+// scheduledAgyHistory exposes the exact assistant text retained from the
+// completed native ACP turn, including when an interactive resume is refused.
+func (a *coreAPI) scheduledAgyHistory(session, beforeItem string) ([]protocol.JournalRecord, bool) {
+	endpoint, local, valid := protocol.ParseID(session)
+	if !valid || endpoint != a.endpointID {
+		return nil, false
+	}
+	m, found := a.core.Get(local)
+	if !found || m.AgentType != schedule.RouteAgy || !m.ScheduledCompleted || m.RosterHidden {
+		return nil, false
+	}
+	evidence, found := agyacp.ReadEvidence(filepath.Join(a.scheduleStateDir, local), m.ScheduleAttempt)
+	if !found || !evidence.EndTurn || evidence.Conversation != m.ConversationID {
+		return nil, false
+	}
+	if beforeItem != "" {
+		return nil, true
+	}
+	item, _ := json.Marshal(map[string]string{
+		"kind": "agent_message", "item_id": "agy-schedule-closing", "status": "completed", "text": evidence.Text,
+	})
+	return []protocol.JournalRecord{{SessionID: session, Type: "interaction", Item: item}}, true
 }
 
 func closingMessageInHistory(items []protocol.JournalRecord, summary string) bool {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter/codex"
+	"github.com/Nathandela/swarm/internal/agyacp"
 	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/hermesinput"
@@ -418,7 +419,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			return persist.Meta{}, ErrResumeSourceChanged
 		}
 	}
-	if d.scheduledWorkspaceConflictLocked(spec.Cwd, scheduled) {
+	if d.scheduledWorkspaceConflictLocked(spec.Cwd, scheduled) != "" {
 		d.mu.Unlock()
 		return persist.Meta{}, ErrScheduledWorkspaceBusy
 	}
@@ -840,6 +841,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 	}
 	if spec.Scheduled != nil {
 		lc.Env = append(lc.Env, d.scheduledEnvironment(spec.Scheduled, id)...)
+		if spec.AgentType == "agy" {
+			lc.Env = append(lc.Env, agyacp.StateEnv+"="+dir)
+		}
 	}
 	if d.NativeInputEnabled() && spec.AgentType == "agy" && spec.CLIIdentity != nil && agyinput.SupportedVersion(spec.CLIIdentity.Version) {
 		command := agyinput.BootstrapCommand(d.cfg.ShimBinary, filepath.Join(dir, agyinput.DescriptorFile))
