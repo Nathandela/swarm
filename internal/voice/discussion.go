@@ -18,6 +18,16 @@ import (
 )
 
 var ErrDiscussionActivationUnavailable = errors.New("voice: discussion manager could not become ready")
+var ErrDiscussionDirectInputHeld = errors.New("voice: queued Discord message is waiting for you to submit or clear the draft in the Swarm terminal")
+var ErrDiscussionNativeProofHeld = errors.New("voice: queued Discord message is waiting for the dispatcher native input proof; inspect the dispatcher in Swarm")
+
+type DiscussionInputHold struct {
+	AdmissionID string
+	Reason      error
+}
+
+func (e *DiscussionInputHold) Error() string { return e.Reason.Error() }
+func (e *DiscussionInputHold) Unwrap() error { return e.Reason }
 
 func discussionActivationError(err error) error {
 	if errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrControllerNativeUnavailable) {
@@ -205,8 +215,25 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	if a.Origin != nil && (a.Phase != "superseded" || a.Origin.Revision != input.Supersedes) {
 		return ErrConflict
 	}
-	if err := d.activate(ctx, st); err != nil {
-		return err
+	// Existing discussions already have durable admission custody. Store verified
+	// human input before touching retirement or consulting native readiness.
+	controller := d.controller
+	if st.CurrentConversation == d.cfg.ConversationID {
+		if d.scope.VerifyOrigin != nil {
+			if err := d.scope.VerifyOrigin(ctx, input.Origin); err != nil {
+				return err
+			}
+		}
+		if controller == nil {
+			b := st.Conversations[d.cfg.ConversationID].Binding
+			b.Generation = st.Generation
+			controller = &Controller{store: d.store, binding: b, discussion: &d.scope}
+		}
+	} else {
+		if err := d.activate(ctx, st); err != nil {
+			return err
+		}
+		controller = d.controller
 	}
 	project, explicit := "", false
 	if input.Project != nil {
@@ -215,7 +242,7 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	if input.QuestionID == "" {
 		input.QuestionID, input.QuestionHash = matchingDiscussionQuestion(st, input.Answer, d.now())
 	}
-	_, err = d.controller.submitDiscussionInProject(input.Origin, input.Text, input.Answer, input.QuestionID, input.QuestionHash, project, explicit)
+	_, err = controller.submitDiscussionInProject(input.Origin, input.Text, input.Answer, input.QuestionID, input.QuestionHash, project, explicit)
 	if err == nil {
 		d.idleSince = time.Time{}
 	}
@@ -310,8 +337,13 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 		}
 		conv = st.Conversations[d.cfg.ConversationID]
 	}
-	if d.controller != nil && !conv.Parked {
-		return nil
+	if !conv.Parked && st.CurrentConversation == d.cfg.ConversationID {
+		if d.controller != nil {
+			return nil
+		}
+		b := conv.Binding
+		b.Generation = st.Generation
+		return d.bind(b)
 	}
 	if runtime, ok := d.runtime.(*ProtocolControllerClient); ok {
 		if err := runtime.discussionSupported(ctx); err != nil {
@@ -526,12 +558,21 @@ func (d *DiscussionController) Dormant() (bool, error) {
 func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOutput) error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.controller == nil {
-		return nil
-	}
 	st, err := d.store.Snapshot()
 	if err != nil {
 		return err
+	}
+	if d.controller == nil {
+		if st.CurrentConversation == "" || !discussionPending(st) {
+			return nil
+		}
+		if err := d.activate(ctx, st); err != nil {
+			return err
+		}
+		st, err = d.store.Snapshot()
+		if err != nil {
+			return err
+		}
 	}
 	if err = d.export(st, emit); err != nil {
 		return err
@@ -589,12 +630,34 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	}
 	if err := d.controller.Tick(ctx); err != nil {
 		d.idleSince = time.Time{}
+		if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+			return discussionInputHold(st, ErrDiscussionDirectInputHeld, err)
+		}
 		if discussionRecoverableBindingError(err) {
-			return d.recoverActive(ctx, err)
+			recoveryErr := d.recoverActive(ctx, err)
+			if recoveryErr != nil && (errors.Is(err, managerproof.ErrUnavailable) || errors.Is(err, ErrControllerNativeUnavailable)) {
+				return discussionInputHold(st, ErrDiscussionNativeProofHeld, recoveryErr)
+			}
+			return recoveryErr
 		}
 		return err
 	}
 	return d.maybeRetire(ctx)
+}
+
+// Only report a hold against the oldest open admission, the one the FIFO can attempt.
+func discussionInputHold(st State, reason, fallback error) error {
+	var head Admission
+	for _, a := range st.Admissions {
+		if a.ConversationID == st.CurrentConversation && a.SettledAt.IsZero() &&
+			(head.Sequence == 0 || a.Sequence < head.Sequence) {
+			head = a
+		}
+	}
+	if head.Origin != nil && (head.Phase == "" || head.Phase == "prepared") {
+		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: reason}
+	}
+	return fallback
 }
 
 func discussionPending(st State) bool {
@@ -808,12 +871,13 @@ func (d *DiscussionController) cancelRetirement(ctx context.Context, req protoco
 
 func (d *DiscussionController) recordRetirement(req protocol.ManagerRetireReq, parked bool) error {
 	return d.store.update(func(st *State) error {
-		b := d.controller.binding
+		c := st.Conversations[req.Binding.ConversationID]
+		b := c.Binding
+		b.Generation = st.Generation
 		if err := checkBinding(st, b); err != nil {
 			return err
 		}
-		c := st.Conversations[b.ConversationID]
-		if c.Retirement == nil || *c.Retirement != req {
+		if runtimeBinding(b) != req.Binding || c.Retirement == nil || *c.Retirement != req {
 			return ErrConflict
 		}
 		c.Parked = parked

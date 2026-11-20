@@ -305,6 +305,10 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 }
 
 func activationNotice(err error) error {
+	var hold *voice.DiscussionInputHold
+	if errors.As(err, &hold) {
+		return errors.Join(&discord.TeammateInputHold{AdmissionID: hold.AdmissionID, DirectInput: errors.Is(err, voice.ErrDiscussionDirectInputHeld)}, err)
+	}
 	if errors.Is(err, voice.ErrDiscussionActivationUnavailable) {
 		return errors.Join(discord.ErrTeammateManagerUnavailable, err)
 	}
@@ -331,7 +335,7 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 		return discord.TeammateNativeStatus{}, err
 	}
 	result := discord.TeammateNativeStatus{
-		Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
+		PendingAdmissions: status.PendingAdmissions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
 	}
@@ -622,6 +626,7 @@ func (r *Runtime) PendingWorkerDiscussions() (func(discord.TeammateDiscussion) b
 	if r.previous != nil && r.previous.StateDir != r.managerSettingsDir {
 		dirs = append(dirs, r.previous.StateDir)
 	}
+	var scanErr error
 	byDir := map[string]map[string]bool{}
 	for _, dir := range dirs {
 		if dir == "" {
@@ -629,17 +634,18 @@ func (r *Runtime) PendingWorkerDiscussions() (func(discord.TeammateDiscussion) b
 		}
 		pending, err := workermail.Discussions(dir)
 		if err != nil {
-			return nil, err
+			scanErr = errors.Join(scanErr, fmt.Errorf("supervisor worker mailbox at %s: %w", dir, err))
+			continue
 		}
 		if len(pending) > 0 {
 			byDir[dir] = pending
 		}
 	}
 	if len(byDir) == 0 {
-		return nil, nil
+		return nil, scanErr
 	}
 	return func(b discord.TeammateDiscussion) bool {
 		ep, _, dir, err := r.supervisorForDiscussion(b)
 		return err == nil && byDir[dir][voice.DiscussionConversationPrefix+r.mailDiscussionID(b, ep)]
-	}, nil
+	}, scanErr
 }

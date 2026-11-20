@@ -105,3 +105,24 @@ func TestManagerRetireReleasesTheOldComposerLaneOnExit(t *testing.T) {
 		t.Fatal("a parked manager retained its process-only composer lane")
 	}
 }
+
+func TestDiscordDraftSurvivesReconnectAndFencesNativeAdmission(t *testing.T) {
+	d, b, _ := newCodexManagerSendRigForConversation(t, "discord-teammate-owner-dm")
+	d.restoreDirectInputState([]string{b.Session})
+	if err := d.markDirectInputUnresolved(b.Session, protocol.DirectInputDraft); err != nil {
+		t.Fatal(err)
+	}
+	d.restoreDirectInputState([]string{b.Session})
+	delete(d.backend.live, b.Session)
+	if _, err := d.managerRuntime(b.Session, b.SessionInstance); !errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+		t.Fatalf("native proof masked the draft: %v", err)
+	}
+	if _, err := d.managerRuntime(b.Session, "replacement"); errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+		t.Fatal("draft attributed to the wrong incarnation")
+	}
+	req := protocol.ComposerSendReq{Session: "machine/" + b.Session, SessionInstance: b.SessionInstance, Text: "first", ManagerAdmission: &protocol.ManagerAdmission{Binding: b, Nonce: strings.Repeat("a", 64)}}
+	code, err := d.semanticSendTransactional("machine", "first", req, func() error { t.Fatal("native admission began over a direct-input draft"); return nil })
+	if code != protocol.CodeInputBusy || !errors.Is(err, managerproof.ErrDirectInputUnresolved) || !d.directInputUnresolved(b.Session) {
+		t.Fatalf("draft fence: %s %v", code, err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/voice"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 func TestDiscussionSupervisorIsPinnedAcrossCutover(t *testing.T) {
@@ -64,5 +65,22 @@ func TestVMProjectAccessRequiresExistingCanonicalDirectory(t *testing.T) {
 	}
 	if got := r.resolveProject(other, "switch to work", ""); got != work {
 		t.Fatal("lost named alias", got)
+	}
+}
+
+func TestMailboxDiscoveryKeepsHealthySupervisorWhenHistoricalIndexUnavailable(t *testing.T) {
+	current, old := t.TempDir(), t.TempDir()
+	r := Runtime{vmProjectAccess: true, cfg: voice.Config{DaemonSocket: "/current.sock"}, endpoint: "current", managerSettingsDir: current, previous: &discord.PreviousSupervisor{SupervisorPaths: discord.SupervisorPaths{StateDir: old}, Endpoint: "old", Socket: "/old.sock"}}
+	b := discord.TeammateDiscussion{ID: "thread", InstallationID: "place", SupervisorSocket: "/current.sock", Route: discord.Route{ChannelID: "1"}}
+	binding := workermail.Binding{Discussion: voice.DiscussionConversationPrefix + r.mailDiscussionID(b, "current"), Session: "current/child", Instance: "i", Attempt: "a", Parent: "p"}
+	if _, err := workermail.Submit(current, binding, "note", "complete", "done", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(old, "dispatcher-mail.db"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	match, err := r.PendingWorkerDiscussions()
+	if err == nil || match == nil || !match(b) {
+		t.Fatalf("healthy discussion lost when old supervisor unavailable: %v", err)
 	}
 }

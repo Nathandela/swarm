@@ -36,8 +36,10 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/appserver"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -611,17 +613,22 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 			return protocol.CodeStructuredUnsupported, errors.New("discussion send requires an exact local delegated worker")
 		}
 	}
-	if !discussionCodex {
+	discordManager := req.ManagerAdmission != nil && schema.IsDiscordManager(meta.Role, meta.ManagerConversationID)
+	if !discussionCodex && !discordManager {
 		return d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, false)
 	}
 	var code protocol.ErrorCode
 	var sendErr error
 	err = d.withSessionInputFence(local, func() error {
-		if d.anyControlled(local) || d.directInputUnresolved(local) {
+		if discordManager && d.directInputUnresolved(local) {
+			code, sendErr = protocol.CodeInputBusy, managerproof.ErrDirectInputUnresolved
+			return nil
+		}
+		if discussionCodex && (d.anyControlled(local) || d.directInputUnresolved(local)) {
 			code, sendErr = protocol.CodeInputBusy, errors.New("discussion worker is under manual input control")
 			return nil
 		}
-		code, sendErr = d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, true)
+		code, sendErr = d.composerSendAtHead(local, operationID, req, begin, source, meta, lane, admittedBarrier, discussionCodex)
 		return nil
 	})
 	if err != nil {

@@ -46,7 +46,7 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes := []workermail.NoteStatus{{ID: "note", AttemptID: "attempt", Publications: []workermail.PublicationStatus{{ID: "publication"}}}}
-	if err := s.teammatePark(d, 0, notes); err != nil {
+	if err := s.teammatePark(d, 0, &TeammateNativeStatus{State: "parked", Notes: notes}); err != nil {
 		t.Fatal(err)
 	}
 	status, err := s.teammateStatus(d.InstallationID, func(TeammateDiscussion) (TeammateNativeStatus, error) {
@@ -77,7 +77,7 @@ func TestParkedWorkerStatusRetainsBoundedRecentReceipts(t *testing.T) {
 		if err := s.teammateBind(teammateBinding{TeammateDiscussion: last, Opened: true}); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.teammatePark(last, 0, []workermail.NoteStatus{{ID: "note-" + id}}); err != nil {
+		if err := s.teammatePark(last, 0, &TeammateNativeStatus{State: "parked", ManagerSession: id, RetirementOperation: "retire-" + id}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,6 +105,9 @@ func TestParkedWorkerStatusRetainsBoundedRecentReceipts(t *testing.T) {
 	got := map[string]int{}
 	for _, d := range status.Discussions {
 		got[d.ID]++
+		if d.ID == "116" && (d.Native == nil || d.Native.RetirementOperation != "retire-116" || d.Native.ManagerSession != "116") {
+			t.Fatalf("missing outgoing retirement proof %+v", d.Native)
+		}
 	}
 	if len(status.Discussions) != 15 || got["118"] != 1 || got["117"] != 0 || got["116"] != 1 || got["101"] != 0 || got["102"] != 0 {
 		t.Fatalf("recent status: %v", got)

@@ -1,12 +1,12 @@
 # A Discord teammate for a Swarm place
 
-## VM manager behavior in 0.29.3
+## VM manager behavior
 
 New teammate and personal installations launch a native manager with the ordinary Swarm user's shell, provider defaults, environment and supervisor endpoint. The manager can run the same installed CLI commands as its operator. The VM and the provider determine file access and tool permissions. Discord supplies a conversation transport for publishing, clarifications and attributed history.
 
 1. A mention or follow-up wakes the thread's manager. Its own words acknowledge work; ordinary user messages keep their author and destination.
 2. The manager runs `swarm spawn` in its native shell. The supervisor records the parent, applies shared worker defaults, and prefixes a direct dispatcher's child name with `DSP-`. Durable launch IDs let an uncertain caller inspect or retry the original operation.
-3. The bridge observes changes to those child sessions and wakes the manager. The manager reads the ordinary session and steers it using the public CLI. A status change signals that inspection is due. Only a deliberate publication sends a result to Discord.
+3. A delegated worker sends a durable needs-input or completion note to its owning supervisor. That note wakes the logical discussion, including after the dispatcher parks or the connector restarts. The dispatcher can answer the same worker by note ID. It reads and steers the ordinary session through the public CLI. A board status change can prompt inspection. The manager publishes results deliberately. See the [notification contract](discord-dispatcher-delivery-plan.md) and [native qualification](../verification/dispatcher-worker-notes.md).
 4. The home terminal shows managers in **DISPATCHER** for each board grouping. Cutover retains existing threads on their original supervisor and sends new threads to the home supervisor. At a safe parked boundary a pre-existing enrolled manager can hand its thread and workers to a native CLI manager.
 5. Existing installations preserve their saved launch behavior on upgrade. An explicit switch to VM mode adopts the operator behavior above. The original enrolled-mode requirements below document compatibility for those installations.
 

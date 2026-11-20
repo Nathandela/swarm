@@ -103,6 +103,7 @@ const (
 	// body as whole.
 	CodeUnavailable               ErrorCode = "unavailable"
 	CodeManagerLaunchPrerequisite ErrorCode = "manager_launch_prerequisite"
+	CodeManagerDirectInput        ErrorCode = "manager_direct_input_unresolved"
 	CodeManagerCustodyLost        ErrorCode = "manager_custody_lost"
 	// CodeStructuredUnsupported refuses a composer_send against a session whose
 	// structured_chat capability is absent or has been degraded by a proven

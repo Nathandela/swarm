@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,4 +147,64 @@ func TestWorkerLaunchRepairsUnexecutedReservationAcrossDaemonRestart(t *testing.
 		t.Fatalf("restored %s -> %s, err %v", before.ID, after.ID, err)
 	}
 	readPIDFile(t, path)
+}
+
+func TestWorkerLaunchRepairFailureKeepsInheritedCheckout(t *testing.T) {
+	cfg := daemonConfig(t)
+	inherited := t.TempDir()
+	path := filepath.Join(inherited, "unsaved")
+	if err := os.WriteFile(path, []byte("operator work"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.WorkerInstance = func(string, int, ...int64) (string, error) { return "instance", nil }
+	cfg.PreLaunch = func(_ string, spec LaunchSpec) (string, error) {
+		if spec.RepairWorkerReservation {
+			return inherited, nil
+		}
+		return "", nil
+	}
+	cfg.FinalizeLaunch = func(_ string, spec LaunchSpec) (LaunchSpec, error) {
+		if spec.RepairWorkerReservation {
+			return spec, errors.New("injected finalize failure")
+		}
+		return spec, nil
+	}
+	cfg.PreDelete = func(m persist.Meta) error {
+		if m.AgentCwd == inherited {
+			return os.Remove(path)
+		}
+		return nil
+	}
+	d, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { killSessions(d); _ = d.Close() })
+	m := announceSpec(t, filepath.Join(t.TempDir(), "manager"))
+	m.AgentType = "claude"
+	m.CLIIdentity = &persist.CLIIdentity{Path: m.Argv[0], Version: "2.1.319"}
+	m.Manager = &ManagerLaunchSpec{NativeCLI: true, ConversationID: "discord-teammate-test", Command: cfg.ShimBinary}
+	parent, err := d.Launch(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _ := readShimLaunchToken(d.sessionDir(parent.ID))
+	spec := announceSpec(t, filepath.Join(t.TempDir(), "child"))
+	spec.OperationID = "repair"
+	spec.OwnerLaunchHash = "exact"
+	spec.SpawnedFrom = parent.ID
+	spec.SpawnIntent = "delegate"
+	spec.DispatcherProof = workermail.Proof(token, "spawn")
+	if _, _, err = d.idem.PrepareWorkerLaunch(spec.OperationID, "reservedworker", spec.OwnerLaunchHash); err != nil {
+		t.Fatal(err)
+	}
+	d.abandon()
+	restored := openDaemon(t, cfg)
+	_, err = restored.Launch(spec)
+	if err == nil || !strings.Contains(err.Error(), "injected finalize failure") {
+		t.Fatalf("missing repair fault: %v", err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "operator work" {
+		t.Fatalf("existing checkout changed on failed repair: %v", err)
+	}
 }

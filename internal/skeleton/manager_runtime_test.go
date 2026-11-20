@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -52,5 +53,9 @@ func TestManagerFacadeDerivesBridgeAndBindingFromNativeCustody(t *testing.T) {
 	feed.retired.Store(true)
 	if _, err := d.managerRuntime(b.Session, b.SessionInstance); err == nil {
 		t.Fatal("lost observer retained runtime authority")
+	}
+	d.backend.managerFailures.Store(b.Session, struct{}{})
+	if _, err := d.managerRuntime(b.Session, b.SessionInstance); !errors.Is(err, managerproof.ErrQuarantined) {
+		t.Fatalf("missing live backend concealed lost custody: %v", err)
 	}
 }

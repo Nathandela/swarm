@@ -156,6 +156,11 @@ func (c *codexManagerTestConn) CallAtWriteBoundary(ctx context.Context, m string
 
 func newCodexManagerSendRig(t *testing.T) (*Daemon, managerproof.Binding, *backendFeed) {
 	t.Helper()
+	return newCodexManagerSendRigForConversation(t, "manager-conversation")
+}
+
+func newCodexManagerSendRigForConversation(t *testing.T, conversation string) (*Daemon, managerproof.Binding, *backendFeed) {
+	t.Helper()
 	buildBinaries(t)
 	dir, err := os.MkdirTemp("", "swcm-")
 	if err != nil {
@@ -191,6 +196,7 @@ func newCodexManagerSendRig(t *testing.T) (*Daemon, managerproof.Binding, *backe
 		t.Fatal(err)
 	}
 	meta = managerLifecycleMeta(meta)
+	meta.ManagerConversationID = conversation
 	meta.ManagerReplayID, err = managerproof.InitializeReplay(filepath.Join(dir, meta.ID), meta.ID, meta.ManagerConversationID)
 	if err != nil {
 		t.Fatal(err)

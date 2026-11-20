@@ -113,3 +113,34 @@ func TestSettlementRetentionPreservesPendingAndUnreadQuestions(t *testing.T) {
 		t.Fatal("delivered answer never pruned")
 	}
 }
+
+func TestFullPendingMailboxPreservesAcceptedReceiptAndRefusesNewNote(t *testing.T) {
+	dir := t.TempDir()
+	b := Binding{"discussion", "parent", "ep/worker", "i", "attempt", "codex", "/project"}
+	first, err := Submit(dir, b, "first", "needs-input", "which file?", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = transact(dir, true, func(tx *bolt.Tx) error {
+		p := tx.Bucket([]byte("pending"))
+		for i := 1; i < 4096; i++ {
+			if err := p.Put([]byte(fmt.Sprintf("fixture-%04d", i)), []byte{1}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Submit(dir, b, "next", "complete", "finished", true); err == nil {
+		t.Fatal("accepted a new note into a full pending queue")
+	}
+	again, err := Submit(dir, b, "first", "needs-input", "which file?", false)
+	if err != nil || again.Sequence != first.Sequence {
+		t.Fatalf("full queue lost prior receipt: %+v, %v", again, err)
+	}
+	notes, err := Pending(dir, b.Discussion)
+	if err != nil || len(notes) != 1 || notes[0].ID != first.ID {
+		t.Fatalf("missing accepted note: %+v, %v", notes, err)
+	}
+}

@@ -32,6 +32,7 @@ const (
 )
 
 type TeammateNativeStatus struct {
+	PendingAdmissions   int                     `json:"pending_admissions,omitempty"`
 	Notes               []workermail.NoteStatus `json:"worker_notes,omitempty"`
 	RetirementOperation string                  `json:"retirement_operation,omitempty"`
 	OldestPendingNote   time.Time               `json:"oldest_pending_note,omitzero"`
@@ -89,6 +90,20 @@ func PublicationBodyHash(body string) string { return digest(body) }
 type TeammateHistoryReader func(context.Context, TeammateHistoryQuery) (TeammateHistoryPage, error)
 
 var ErrTeammateSourceChanged = errors.New("discord: source message changed before native submission")
+
+// TeammateInputHold describes a durable human admission awaiting native input.
+type TeammateInputHold struct {
+	AdmissionID string
+	DirectInput bool
+}
+
+func (h *TeammateInputHold) Error() string {
+	if h.DirectInput {
+		return "discord: dispatcher delivery paused by direct terminal input"
+	}
+	return "discord: dispatcher delivery awaits native turn confirmation"
+}
+
 var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is unavailable")
 
 type TeammateHistoryQuery struct {

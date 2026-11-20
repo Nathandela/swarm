@@ -246,6 +246,8 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 
 Runtime `bridge_socket` and `auth_file` are private server-derived references checked before controller adoption; they are absent from device projections and the public roster. Input admission and call resolution revalidate binding and account/process custody. Historical receipts cannot reconstruct native permissions after a lost feed or restart. Evidence tables are bounded; exhausted or conflicting custody fails closed instead of evicting unresolved authority or permitting replay.
 
+An owner runtime lookup can return `manager_direct_input_unresolved` for the exact Discord manager incarnation. A terminal draft can survive while the board shows idle. Automatic Discord input waits for resolution and preserves the draft.
+
 Any of the three manager proof reads can return `manager_custody_lost` in `error_code`. This reports lost native custody for the selected manager session and requires explicit fresh-session replacement. Clients retain the original operation and admission receipts for reconciliation and preserve the typed error when the daemon closes after sending its reply. An ordinary `unavailable` response reports missing evidence for that read.
 
 The owner-only `manager-interrupt` capability exposes `manager_interrupt` and

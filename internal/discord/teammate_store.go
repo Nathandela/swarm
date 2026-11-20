@@ -49,6 +49,8 @@ type teammateIngressGuard struct {
 
 type teammateBinding struct {
 	ProvisionalCancelled    bool
+	InputNoticeAdmission    string    `json:",omitempty"`
+	InputNoticeAt           time.Time `json:",omitempty"`
 	StartupNoticePending    bool
 	StartupNoticeGeneration uint64
 	TeammateDiscussion
@@ -66,6 +68,7 @@ type teammateBinding struct {
 }
 
 type teammateCheckpoint struct {
+	WorkerMailIssue string `json:",omitempty"`
 	Session         string
 	GatewaySequence int64
 	GapEpoch        uint64
@@ -402,7 +405,7 @@ func teammateActivate(tx *bolt.Tx, b *teammateBinding) error {
 
 type parkedWorkerNotes struct {
 	Discussion TeammateDiscussion
-	Notes      []workermail.NoteStatus
+	Native     TeammateNativeStatus
 	At         time.Time
 }
 
@@ -415,7 +418,7 @@ func recentWorkerNotes(tx *bolt.Tx, installation string) ([]parkedWorkerNotes, e
 	return recent, err
 }
 
-func (s *Store) teammatePark(d TeammateDiscussion, through uint64, notes []workermail.NoteStatus) error {
+func (s *Store) teammatePark(d TeammateDiscussion, through uint64, native *TeammateNativeStatus) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		key := teammateKey(d.InstallationID, d.Route.ChannelID)
 		var binding teammateBinding
@@ -443,7 +446,7 @@ func (s *Store) teammatePark(d TeammateDiscussion, through uint64, notes []worke
 		if hasOutput {
 			return nil
 		}
-		if len(notes) > 0 {
+		if native != nil && native.State == "parked" && (native.RetirementOperation != "" || len(native.Notes) > 0) {
 			recent, err := recentWorkerNotes(tx, d.InstallationID)
 			if err != nil {
 				return err
@@ -452,7 +455,10 @@ func (s *Store) teammatePark(d TeammateDiscussion, through uint64, notes []worke
 			if len(recent) >= 16 {
 				recent = recent[:15]
 			}
-			row := parkedWorkerNotes{Discussion: d, Notes: notes[:min(len(notes), 16)], At: time.Now().UTC()}
+			snapshot := *native
+			snapshot.Jobs = nil
+			snapshot.Notes = snapshot.Notes[:min(len(snapshot.Notes), 16)]
+			row := parkedWorkerNotes{Discussion: d, Native: snapshot, At: time.Now().UTC()}
 			recent = append([]parkedWorkerNotes{row}, recent...)
 			if err := putJSON(tx, teammateMetaBucket, teammateKey(d.InstallationID, "parked-worker-notes"), recent); err != nil {
 				return err
@@ -608,6 +614,7 @@ type teammateOutput struct {
 }
 
 type TeammateStatus struct {
+	WorkerMailIssue string                     `json:"worker_mail_issue,omitempty"`
 	GatewaySequence int64                      `json:"gateway_sequence"`
 	GapEpoch        uint64                     `json:"gap_epoch"`
 	IngressIssue    string                     `json:"ingress_issue,omitempty"`
@@ -687,6 +694,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 	if err != nil {
 		return status, err
 	}
+	status.WorkerMailIssue = checkpoint.WorkerMailIssue
 	status.GatewaySequence, status.GapEpoch, status.IngressIssue = checkpoint.GatewaySequence, checkpoint.GapEpoch, checkpoint.Error
 	rows, err := s.teammateActiveBindings(install)
 	if err != nil {
@@ -744,10 +752,10 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 		if time.Since(row.At) > workermail.ReceiptRetention || slices.ContainsFunc(rows, func(b teammateBinding) bool { return b.ID == row.Discussion.ID }) {
 			continue
 		}
-		if err := s.workerPublicationStatus(row.Discussion, row.Notes); err != nil {
+		if err := s.workerPublicationStatus(row.Discussion, row.Native.Notes); err != nil {
 			return status, err
 		}
-		status.Discussions = append(status.Discussions, TeammateDiscussionStatus{ID: row.Discussion.ID, Thread: row.Discussion.Route, Native: &TeammateNativeStatus{State: "parked", Notes: row.Notes}})
+		status.Discussions = append(status.Discussions, TeammateDiscussionStatus{ID: row.Discussion.ID, Thread: row.Discussion.Route, Native: &row.Native})
 	}
 	notices, err := s.teammateOutputs(install, "")
 	status.PendingNotices = len(notices)
@@ -785,5 +793,17 @@ func (s *Store) teammateActivateWorkerMail(installation string, matches func(Tea
 			}
 		}
 		return nil
+	})
+}
+
+func (s *Store) teammateMailIssue(installation, issue string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		key := teammateKey(installation, "checkpoint")
+		var checkpoint teammateCheckpoint
+		if err := teammateGet(tx.Bucket([]byte(teammateMetaBucket)), key, &checkpoint); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		checkpoint.WorkerMailIssue = issue
+		return putJSON(tx, teammateMetaBucket, key, checkpoint)
 	})
 }

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -489,12 +488,22 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	if err != nil {
 		return err
 	}
+	checkpoint, err := store.teammateCheckpoint(install)
+	if err != nil {
+		return err
+	}
 	if source, ok := t.manager.(interface {
 		PendingWorkerDiscussions() (func(TeammateDiscussion) bool, error)
 	}); ok {
-		matches, err := source.PendingWorkerDiscussions()
-		if err != nil {
-			return err
+		matches, readErr := source.PendingWorkerDiscussions()
+		issue := ""
+		if readErr != nil {
+			issue = readErr.Error()
+		}
+		if checkpoint.WorkerMailIssue != issue {
+			if err = store.teammateMailIssue(install, issue); err != nil {
+				return err
+			}
 		}
 		if matches != nil {
 			if err = store.teammateActivateWorkerMail(install, matches); err != nil {
@@ -503,10 +512,6 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		}
 	}
 	bindings, err := store.teammateActiveBindings(install)
-	if err != nil {
-		return err
-	}
-	checkpoint, err := store.teammateCheckpoint(install)
 	if err != nil {
 		return err
 	}
@@ -616,6 +621,9 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				emitted = append(emitted, p.ID)
 				return nil
 			})
+			if managerErr == nil && b.InputNoticeAdmission != "" {
+				noticeErr = errors.Join(noticeErr, store.teammateClearInputNotice(b.TeammateDiscussion, b.InputNoticeAdmission))
+			}
 			managerErr = t.managerStartupError(ctx, b.TeammateDiscussion, managerErr)
 			var ackErr error
 			if managerErr == nil {
@@ -650,7 +658,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 						return err
 					}
 					if dormant {
-						var notes []workermail.NoteStatus
+						var parked *TeammateNativeStatus
 						if reporter, ok := t.manager.(interface {
 							Status(TeammateDiscussion) (TeammateNativeStatus, error)
 						}); ok && t.service.Config.EffectiveProjectAccess() == ProjectAccessVM {
@@ -658,9 +666,9 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 							if err != nil {
 								return err
 							}
-							notes = view.Notes
+							parked = &view
 						}
-						return store.teammatePark(b.TeammateDiscussion, through, notes)
+						return store.teammatePark(b.TeammateDiscussion, through, parked)
 					}
 				}
 			}

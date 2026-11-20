@@ -249,7 +249,7 @@ func TestMailboxCompletionRetryKeepsOriginalEvidence(t *testing.T) {
 }
 
 func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
-	c, s, _, binding := newControllerFixture(t)
+	c, s, runtime, binding := newControllerFixture(t)
 	c.discussion = &DiscussionScope{VMProjectAccess: true}
 	workers := &discussionEvidenceWorker{text: strings.Repeat("<", 4096)}
 	c.workers = workers
@@ -262,6 +262,13 @@ func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
 	if _, err := c.queueWorkerNote(worker, input, src); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.Tick(context.Background()); err != nil || len(runtime.sent) != 1 {
+		t.Fatalf("native admission: %d sends, %v", len(runtime.sent), err)
+	}
+	nonce := runtime.sent[0].ManagerAdmission.Nonce
+	runtime.status.ReadyForInput = false
+	runtime.status.Turn = protocol.ManagerNativeTurn{State: "running", NativeInputID: nonce, NativeTurnID: "manager-turn"}
+	runtime.proof = protocol.ManagerCallProof{Main: true, NativeInputID: nonce, NativeTurnID: "manager-turn", NativeCallID: "native-note-read"}
 	st, err := s.Snapshot()
 	if err != nil || len(st.Wakes) != 1 {
 		t.Fatalf("expected one wake: %d, %v", len(st.Wakes), err)
@@ -274,7 +281,11 @@ func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
 			t.Fatalf("invalid preview: %d bytes, %v", len(prompt), err)
 		}
 		read := SessionInput{Session: worker.Session, SessionInstance: worker.SessionInstance}
-		raw, err := c.readDiscussionWorkerNote(read, admission)
+		args, err := json.Marshal(read)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := c.ManagerCall(context.Background(), ManagerToolCall{Name: "swarm_read_note", Arguments: args})
 		var stored workerNoteMetadata
 		if err != nil || json.Unmarshal(raw, &stored) != nil || stored.Text != note ||
 			stored.LaunchTurnEvidence == nil || stored.LaunchTurnEvidence.Text != workers.text {

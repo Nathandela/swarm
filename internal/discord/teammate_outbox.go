@@ -15,11 +15,13 @@ import (
 )
 
 const teammateNonceWindow = time.Minute
+const teammateInputNotice = "manager_input_held"
+const teammateInputNoticeInterval = 15 * time.Minute
 const teammateStartupNotice = "manager_startup_unavailable"
 
 func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
 	if d.ID == "" || d.Route.MessageID != "" || p.BodyHash != "" || p.ActivationGeneration != 0 ||
-		strings.HasPrefix(p.ID, teammateStartupNotice+"_") {
+		(strings.HasPrefix(p.ID, teammateStartupNotice+"_") || strings.HasPrefix(p.ID, teammateInputNotice+"_")) {
 		return ErrInvalid
 	}
 	switch p.SystemCause {
@@ -51,6 +53,10 @@ func (t *teammateConnector) queueGap(d TeammateDiscussion) error {
 	return t.service.Store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true)
 }
 
+func teammateInputNoticeID(d TeammateDiscussion, admission string) string {
+	return teammateInputNotice + "_" + digest([]string{d.ID, admission})[:32]
+}
+
 func teammateStartupNoticeID(d TeammateDiscussion, generation uint64) string {
 	if generation == 0 {
 		return teammateStartupNotice + "_" + digest(d.ID)[:32]
@@ -59,7 +65,11 @@ func teammateStartupNoticeID(d TeammateDiscussion, generation uint64) string {
 }
 
 func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion, generation uint64) error {
-	key := teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d, generation))
+	return teammateCancelPreparedNotice(tx, d, teammateStartupNoticeID(d, generation), teammateStartupNotice)
+}
+
+func teammateCancelPreparedNotice(tx *bolt.Tx, d TeammateDiscussion, id, cause string) error {
+	key := teammateOutputKey(d.InstallationID, d.ID, id)
 	var out teammateOutput
 	err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), key, &out)
 	if errors.Is(err, ErrNotFound) {
@@ -68,7 +78,7 @@ func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion, genera
 	if err != nil {
 		return err
 	}
-	if !out.Internal || out.Publication.SystemCause != teammateStartupNotice {
+	if !out.Internal || out.Publication.SystemCause != cause {
 		return ErrConflict
 	}
 	for _, part := range out.Chunks {
@@ -83,10 +93,62 @@ func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion, genera
 }
 
 func (t *teammateConnector) managerStartupError(ctx context.Context, d TeammateDiscussion, managerErr error) error {
+	var hold *TeammateInputHold
+	if errors.As(managerErr, &hold) {
+		return errors.Join(managerErr, t.sendInputNotice(ctx, d, hold))
+	}
 	if !errors.Is(managerErr, ErrTeammateManagerUnavailable) {
 		return managerErr
 	}
 	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, true))
+}
+
+// Only retry a hold notice while native Sync still identifies the same held input.
+func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscussion, hold *TeammateInputHold) error {
+	cfg := t.service.Config
+	if cfg.Mode != "personal" || d.InstallationID != cfg.InstallationID || d.Route != (Route{ChannelID: cfg.DMChannelID}) || hold.AdmissionID == "" {
+		return nil
+	}
+	id := teammateInputNoticeID(d, hold.AdmissionID)
+	body := "Swarm delivery paused. Your messages are kept in order. No need to resend. Swarm cannot confirm the previous turn. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status`."
+	if hold.DirectInput {
+		body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in Swarm. Finish the unfinished input, or save the draft and exit that manager normally. For deliberate terminal steering, use `swarm discord resume-manual` with the coordinates from `swarm discord status`."
+	}
+	store := t.service.Store
+	p := TeammatePublication{ID: id, AdmissionID: hold.AdmissionID, Body: body, SystemCause: teammateInputNotice}
+	if err := store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
+		return err
+	}
+	var out teammateOutput
+	err := store.db.View(func(tx *bolt.Tx) error {
+		return teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), teammateOutputKey(d.InstallationID, d.ID, id), &out)
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return t.sendOutput(ctx, d.InstallationID, out)
+}
+
+func (s *Store) teammateClearInputNotice(d TeammateDiscussion, admission string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		key := teammateKey(d.InstallationID, d.Route.ChannelID)
+		var b teammateBinding
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &b); err != nil {
+			return err
+		}
+		if b.ID != d.ID || b.Route != d.Route || b.InputNoticeAdmission != admission {
+			return ErrConflict
+		}
+		id := teammateInputNoticeID(d, admission)
+		if err := teammateCancelPreparedNotice(tx, d, id, teammateInputNotice); err != nil {
+			return err
+		}
+		b.InputNoticeAdmission = ""
+		return putJSON(tx, teammateDiscussionBucket, key, b)
+	})
 }
 
 func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, prepare bool) error {
@@ -173,6 +235,12 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(teammateOutboxBucket))
 		k := teammateOutputKey(install, id, p.ID)
+		// A hold can move from ambiguous proof to a draft on a later tick. Keep
+		// its first notice and nonce immutable across both observations.
+		if internal && p.SystemCause == teammateInputNotice &&
+			(b.Get(k) != nil || tx.Bucket([]byte(teammateReceiptBucket)).Get(k) != nil) {
+			return nil
+		}
 		var old teammateOutput
 		err := teammateGet(b, k, &old)
 		bodyHash := PublicationBodyHash(p.Body)
@@ -192,15 +260,12 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		err = teammateGet(tx.Bucket([]byte(teammateReceiptBucket)), k, &compacted)
 		if err == nil {
 			p.Body = ""
-			if compacted.PublicationHash != digest(p) || compacted.BodyHash != bodyHash || compacted.Route != route {
+			if compacted.PublicationHash != digest(p) || compacted.Route != route || compacted.BodyHash != bodyHash {
 				return ErrConflict
 			}
 			return nil
 		}
 		if !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		if err = teammateOutboxCount(tx, install, 1); err != nil {
 			return err
 		}
 		if id != "" {
@@ -210,6 +275,21 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 			}
 			if binding.ID != id || binding.Route != route {
 				return ErrConflict
+			}
+			if internal && p.SystemCause == teammateInputNotice {
+				if binding.InputNoticeAdmission == p.AdmissionID || now.Sub(binding.InputNoticeAt) < teammateInputNoticeInterval {
+					return nil
+				}
+				if binding.InputNoticeAdmission != "" {
+					oldID := teammateInputNoticeID(binding.TeammateDiscussion, binding.InputNoticeAdmission)
+					if err = teammateCancelPreparedNotice(tx, binding.TeammateDiscussion, oldID, teammateInputNotice); err != nil {
+						return err
+					}
+				}
+				binding.InputNoticeAdmission, binding.InputNoticeAt = p.AdmissionID, now
+				if err = putJSON(tx, teammateDiscussionBucket, teammateKey(install, route.ChannelID), binding); err != nil {
+					return err
+				}
 			}
 			if err = teammateActivate(tx, &binding); err != nil {
 				return err
@@ -221,6 +301,9 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 					return err
 				}
 			}
+		}
+		if err = teammateOutboxCount(tx, install, 1); err != nil {
+			return err
 		}
 		out := teammateOutput{Publication: p, Route: route, DiscussionID: id, BodyHash: bodyHash, Created: now, Internal: internal}
 		out.Publication.Body = ""
@@ -389,7 +472,7 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 		if err := ctx.Err(); err != nil {
 			return errors.Join(sendErr, err)
 		}
-		if out.Publication.SystemCause != teammateStartupNotice {
+		if out.Publication.SystemCause != teammateStartupNotice && out.Publication.SystemCause != teammateInputNotice {
 			sendErr = errors.Join(sendErr, t.sendOutput(ctx, d.InstallationID, out))
 		}
 	}

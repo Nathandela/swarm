@@ -13,6 +13,7 @@ import (
 )
 
 type DiscussionNativeStatus struct {
+	PendingAdmissions                                           int
 	State, ManagerSession, ManagerInstance, Project, Diagnostic string
 	Generation, ExternalInput                                   uint64
 	Jobs                                                        []DiscussionJobStatus
@@ -40,6 +41,11 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 			return result, err
 		}
 		return result, nil
+	}
+	for _, admission := range st.Admissions {
+		if admission.ConversationID == d.cfg.ConversationID && admission.SettledAt.IsZero() {
+			result.PendingAdmissions++
+		}
 	}
 	result.Generation = max(c.ManagerGeneration, 1)
 	result.ExternalInput = c.ExternalInput

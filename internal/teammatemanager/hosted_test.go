@@ -91,7 +91,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	dialOwner := func() *protocol.Client {
 		var owner *protocol.Client
 		for end := time.Now().Add(20 * time.Second); time.Now().Before(end); {
-			owner, err = protocol.DialContext(ctx, socket, nil)
+			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance})
 			if err == nil {
 				break
 			}
@@ -223,11 +223,23 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if !vmMode || (provider != "codex" && provider != "claude") {
 			t.Fatal("durable rehearsal requires VM mode and a codex or claude worker")
 		}
+		activeUpgrade := upgradeFrom != "" && os.Getenv("SWARM_TEAMMATE_TEST_ACTIVE_UPGRADE") == "1"
+		var retainedManager string
+		var previousNative protocol.ManagerRuntimeBinding
 		if upgradeFrom != "" {
 			send("299", "401", "Reply here with exactly ready-to-upgrade.")
-			wait("pre-upgrade dispatcher is active", 90*time.Second, func() bool {
+			wait("pre-upgrade manager published and settled the native turn", 90*time.Second, func() bool {
+				st, err := r.Status(thread)
+				if err != nil || st.State != "active" || st.PendingAdmissions != 0 {
+					return false
+				}
+				native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+				if err != nil || !native.ReadyForInput || (native.Turn.State != "idle" && native.Turn.State != "completed") {
+					return false
+				}
 				for _, p := range outputs {
 					if strings.Contains(p.Body, "ready-to-upgrade") {
+						previousNative = native.Binding
 						return true
 					}
 				}
@@ -236,6 +248,19 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			before := roster()
 			if len(before) != 1 || before[0].Role != "manager" {
 				t.Fatal("expected one original manager")
+			}
+			retainedManager = before[0].ID
+			expectedProcess := status.ProcessRunning
+			if !activeUpgrade {
+				expectedProcess = status.ProcessExited
+				wait("outgoing supervisor parked the original manager", voice.DiscussionIdleGrace+45*time.Second, func() bool {
+					st, err := r.Status(thread)
+					if err != nil || st.State != "parked" || st.ManagerSession != before[0].ID || st.RetirementOperation == "" {
+						return false
+					}
+					rows := roster()
+					return len(rows) == 1 && rows[0].ID == before[0].ID && rows[0].Status.Process == status.ProcessExited
+				})
 			}
 			if err := r.Close(); err != nil {
 				t.Fatal(err)
@@ -250,11 +275,15 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			cmd = startDaemon(bin)
 			owner = dialOwner()
 			after := roster()
-			if len(after) != 1 || after[0].ID != before[0].ID || after[0].Status.Process != status.ProcessRunning {
+			if len(after) != 1 || after[0].ID != before[0].ID || after[0].Status.Process != expectedProcess {
 				t.Fatal("upgrade lost the original manager")
 			}
 			r = open()
-			t.Logf("retained pre-upgrade dispatcher %s", after[0].ID)
+			st, err := r.Status(thread)
+			if err != nil || !activeUpgrade && st.State != "parked" || st.ManagerSession != after[0].ID {
+				t.Fatalf("retained parked binding: %+v, %v", st, err)
+			}
+			t.Logf("retained pre-upgrade dispatcher %s (%s)", after[0].ID, st.State)
 		}
 		question := "question-" + hex.EncodeToString(marker[:4])
 		answer := "answer-" + hex.EncodeToString(marker[4:])
@@ -262,10 +291,34 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		a := "Use one " + provider + " worker in " + project + ". Ask it to send its first question with the marker from question.txt immediately, using a needs-input note. " +
-			"Have it retrieve your reply with the question ID, write your exact answer into answer.txt, and stay in that same turn until the file release appears (allow up to five minutes). " +
+			"Have it retrieve your reply with the question ID, write your exact answer into answer.txt, and stay in that same turn until the file release appears (allow up to ten minutes). " +
 			"It should then send the contents of proof.txt with a complete note, save its queued receipt to sent.txt, and include the result in its native final answer. " +
 			"Only the worker may open these files. When the question arrives, answer it with exactly " + answer + " and publish its question marker. Publish the verified final result when it arrives. Do not give the worker the answer in advance."
 		send("301", "401", a)
+		if activeUpgrade {
+			// The old observer can no longer prove all native events were consumed.
+			// Only an operator releasing the exact isolated manager permits recovery.
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(300 * time.Millisecond) {
+				_ = r.Sync(ctx, thread, reader, func(discord.TeammatePublication) error {
+					return fmt.Errorf("unexpected publication before custody recovery")
+				})
+				st, err := r.Status(thread)
+				if err == nil && st.State == "blocked" && st.ManagerSession == retainedManager && st.Diagnostic != "" && st.PendingAdmissions == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("missing retained custody hold: %+v, %v", st, err)
+				}
+			}
+			rows := roster()
+			if len(rows) != 1 || rows[0].ID != retainedManager || rows[0].Status.Process != status.ProcessRunning {
+				t.Fatal("quarantine started a competing manager")
+			}
+			t.Log("native custody hold visible; simulating operator exit of exact isolated manager")
+			if err := owner.Kill(retainedManager); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var job, attempt string
 		wait("manager received early explicit question", 150*time.Second, func() bool {
 			for _, p := range outputs {
@@ -276,11 +329,33 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return false
 		})
+		if upgradeFrom != "" {
+			st, err := r.Status(thread)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+			if err != nil || native.Binding.ConversationID != previousNative.ConversationID || native.Binding.Session == retainedManager ||
+				(native.Binding.NativeSessionID == previousNative.NativeSessionID) == activeUpgrade {
+				t.Fatalf("unexpected upgrade binding: %+v, %v", native.Binding, err)
+			}
+			var gaps int
+			for _, p := range outputs {
+				if p.SystemCause == discord.TeammateSystemContinuityGap {
+					gaps++
+				}
+			}
+			if activeUpgrade && gaps != 1 || !activeUpgrade && gaps != 0 {
+				t.Fatalf("unexpected continuity notices: %d", gaps)
+			}
+			t.Logf("native history %s -> %s, logical discussion %s; %d continuity notices", previousNative.NativeSessionID, native.Binding.NativeSessionID, native.Binding.ConversationID, gaps)
+		}
 		wait("held worker received the exact answer", 90*time.Second, func() bool {
 			raw, err := os.ReadFile(filepath.Join(project, "answer.txt"))
 			return err == nil && strings.TrimSpace(string(raw)) == answer
 		})
-		wait("manager parked with the same worker running", voice.DiscussionIdleGrace+90*time.Second, func() bool {
+		// A native worker status transition can legitimately restart the idle grace.
+		wait("manager parked with the same worker running", 2*voice.DiscussionIdleGrace+90*time.Second, func() bool {
 			st, err := r.Status(thread)
 			if err != nil || st.State != "parked" {
 				return false

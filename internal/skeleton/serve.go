@@ -1506,6 +1506,12 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 			return "", err
 		}
 	}
+	if spec.RepairWorkerReservation {
+		existing, err := worktree.ReservedCheckout(spec.Cwd, id, spec.Name)
+		if err != nil || existing != "" {
+			return existing, err
+		}
+	}
 	return worktree.Create(spec.Cwd, id, spec.Name)
 }
 

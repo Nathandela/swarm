@@ -12,6 +12,7 @@ import (
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -78,6 +79,12 @@ func (d *Daemon) managerMeta(local, instance, retirement string) (persist.Meta, 
 	return meta, epoch, nil
 }
 func (d *Daemon) managerRuntime(local, instance string) (managerproof.Status, error) {
+	// A terminal editor can retain a draft while the provider reports an idle turn.
+	if d.core != nil && d.directInputUnresolved(local) {
+		if m, ok := d.core.Get(local); ok && m.Status.Process == status.ProcessRunning && m.ManagerRetirement.OperationID == "" && schema.IsDiscordManager(m.Role, m.ManagerConversationID) && d.matchesResumeSourceInstance(m, instance) {
+			return managerproof.Status{}, managerproof.ErrDirectInputUnresolved
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	return d.managerRuntimeContext(ctx, local, instance, "")
@@ -136,6 +143,10 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance, ret
 		}
 		result = managerproof.Status{Binding: binding, ReadyForInput: turn.ReadyForInput, Turn: managerproof.Turn{NativeInputID: turn.NativeInputID, NativeTurnID: turn.TurnID, State: turn.State, Reason: turn.Reason, ExternalInput: turn.ExternalInput, ExternallySteered: turn.ExternallySteered}}
 	case "codex":
+		// A refused replay claim precedes backend registration on supervisor restart.
+		if err := d.codexManagerCustodyError(local); err != nil {
+			return result, err
+		}
 		if !codex.SupportsNativeTurns(meta.CLIIdentity.Version) {
 			return result, managerproof.ErrUnavailable
 		}

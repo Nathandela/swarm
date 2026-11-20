@@ -165,30 +165,31 @@ type ResumeSourceFence struct {
 }
 
 type LaunchSpec struct {
-	DispatcherProof       string `json:"-"`
-	workerDiscussion      string
-	WorkerBridge          string   `json:"-"`
-	ScheduledCodexSandbox string   `json:"-"`
-	CodexPolicy           []string `json:"-"`
-	managerLogin          *managerLoginBinding
-	Manager               *ManagerLaunchSpec
-	HermesOrigins         []string                   `json:"-"`
-	HermesInput           *hermesinput.SessionConfig `json:"-"`
-	RequiredRuntime       string                     `json:"-"`
-	OpenCodeBinding       *persist.OpenCodeBinding   `json:"-"`
-	OpenCodeEnv           []string                   `json:"-"`
-	OpenCodeLaunch        *shim.OpenCodeConfig       `json:"-"`
-	LoginRuntime          *logins.Runtime
-	LoginStateRoot        string
-	LoginSwitchID         string
-	LoginSwitchSource     string
-	InputEmbargo          string
-	AgentType             string
-	Argv                  []string
-	Cwd                   string
-	ClientEnv             []string
-	Cols, Rows            int
-	Options               map[string]string
+	RepairWorkerReservation bool   `json:"-"`
+	DispatcherProof         string `json:"-"`
+	workerDiscussion        string
+	WorkerBridge            string   `json:"-"`
+	ScheduledCodexSandbox   string   `json:"-"`
+	CodexPolicy             []string `json:"-"`
+	managerLogin            *managerLoginBinding
+	Manager                 *ManagerLaunchSpec
+	HermesOrigins           []string                   `json:"-"`
+	HermesInput             *hermesinput.SessionConfig `json:"-"`
+	RequiredRuntime         string                     `json:"-"`
+	OpenCodeBinding         *persist.OpenCodeBinding   `json:"-"`
+	OpenCodeEnv             []string                   `json:"-"`
+	OpenCodeLaunch          *shim.OpenCodeConfig       `json:"-"`
+	LoginRuntime            *logins.Runtime
+	LoginStateRoot          string
+	LoginSwitchID           string
+	LoginSwitchSource       string
+	InputEmbargo            string
+	AgentType               string
+	Argv                    []string
+	Cwd                     string
+	ClientEnv               []string
+	Cols, Rows              int
+	Options                 map[string]string
 	// Name is the optional user-provided session label. The daemon only stamps it
 	// into the session meta; an empty name falls back to the agent name at display
 	// time (P2 / bd agents-tracker-4e2).

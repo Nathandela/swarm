@@ -22,9 +22,13 @@ Only messages from the enrolled owner in that one-to-one DM can direct the perso
 
 To set standing instructions for this place, press `o` on the Swarm board, choose **Manager prompt**, and press Enter to save. The prompt is empty by default, accepts up to 1,024 UTF-8 bytes, and applies when a manager wakes.
 
+Upgrade the connector first. For an active Codex discussion, let the outgoing supervisor park its manager before replacing that supervisor. Confirm `native.state` is `parked` and its retirement operation is recorded. A published acknowledgement or zero pending admissions alone is insufficient. After replacement the next message resumes the original logical discussion from the parked checkpoint. Workers keep their own shims.
+
+A supervisor replacement while the Codex manager process is still live can lose native observation custody. The new supervisor refuses to adopt the previous observer's replay authority. Inspect the blocked manager identified in status. If it has exited through the local dashboard, the connector can reconstruct the discussion for pending input and disclose the continuity gap. Keep the original session history and do not replay an ambiguous action.
+
 On upgrade, a running VM dispatcher can authenticate a new worker with its existing per-session hook credential. Some 0.29.5 Codex backends lack this credential. A delegation from such a dispatcher stops before launching a child and reports the missing credential. Let the manager finish and park, then resume the same Discord discussion on the upgraded supervisor. Keep existing workers and discussion history. An unfinished worker without a proven mailbox binding keeps the manager active. Follow its progress in the existing session and let it finish before parking.
 
-`swarm discord status` includes up to 16 recently parked discussions with worker notes for seven days after parking. Their recorded publication IDs and confirmed Discord message IDs remain available after the manager parks, without reopening its native session.
+`swarm discord status` includes up to 16 recently parked VM discussions and their worker notes for seven days after parking. Their recorded publication IDs and confirmed Discord message IDs remain available after the manager parks, without reopening its native session.
 
 Run `swarm dispatcher-guide` for the worker notification and reply workflow. To expose the same guidance through native skill discovery, install the bundled skill in the dispatcher account. For Codex use `$HOME/.agents/skills`. For Claude use `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills`.
 

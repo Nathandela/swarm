@@ -99,6 +99,7 @@ const (
 	CodeStructuredUnsupported = schema.CodeStructuredUnsupported
 	CodeInputBusy             = schema.CodeInputBusy
 	CodeUnavailable           = schema.CodeUnavailable
+	CodeManagerDirectInput    = schema.CodeManagerDirectInput
 	CodeManagerCustodyLost    = schema.CodeManagerCustodyLost
 	CodeOutcomeUnknown        = schema.CodeOutcomeUnknown
 )

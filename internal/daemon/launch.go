@@ -444,11 +444,14 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	id := d.freshIDLocked()
 	repair := false
 	var previousCwd string
+	var previousMeta persist.Meta
 	if spec.workerDiscussion != "" {
 		if rec, ok := d.idem.Get(spec.OperationID); ok && d.workerLaunchCanRetryLocked(rec, spec.OwnerLaunchHash) {
 			id, repair = rec.SessionID, true
+			spec.RepairWorkerReservation = true
 			if old := d.sessions[id]; old != nil {
 				previousCwd = old.meta.AgentCwd
+				previousMeta = old.meta
 			}
 		}
 	}
@@ -612,6 +615,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// meta and no future Delete() could otherwise ever reach this id again.
 	preLaunchOK := false
 	if previousCwd != "" {
+		// Verify the persisted checkout still belongs to the exact reserved branch.
+		if spec.Options["worktree"] == "true" {
+			path, err := worktree.ReservedCheckout(spec.Cwd, id, spec.Name)
+			canonical, cerr := filepath.EvalSymlinks(previousCwd)
+			if err != nil || cerr != nil || path != canonical {
+				d.putMem(previousMeta)
+				return persist.Meta{}, fmt.Errorf("daemon: original reserved checkout unavailable: %w", errors.Join(ErrLaunchOutcomeUnknown, err, cerr))
+			}
+		}
 		// Keep the original isolated checkout and its contents when repairing a reservation.
 		spec.Cwd, m.AgentCwd = previousCwd, previousCwd
 	} else if d.cfg.PreLaunch != nil {
@@ -620,7 +632,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: pre-launch hook for %s: %w", id, err)
 		}
-		preLaunchOK = true
+		// A repairing hook can return a pre-existing checkout with user edits.
+		preLaunchOK = !repair
 		if cwd != "" {
 			spec.Cwd = cwd
 			// This is the ONLY moment the resolved agent cwd exists. Without stamping it

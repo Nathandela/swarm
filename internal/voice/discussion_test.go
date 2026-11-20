@@ -666,3 +666,68 @@ func TestDiscussionJournalGapWithTrackedJobUsesPassiveRecovery(t *testing.T) {
 			len(st.Wakes), len(st.Admissions), st.Workers[workerKey])
 	}
 }
+
+func TestDiscussionPersistsHumanIngressBeforeFencingRetirement(t *testing.T) {
+	for _, tc := range []struct {
+		name, retirement string
+		managerErr, hold error
+	}{
+		{"unclaimed with draft", "unknown", managerproof.ErrDirectInputUnresolved, ErrDiscussionDirectInputHeld},
+		{"unclaimed with no native proof", "unknown", managerproof.ErrUnavailable, ErrDiscussionNativeProofHeld},
+		{"claimed", "uncertain", managerproof.ErrDirectInputUnresolved, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store, fixture, b := newControllerFixture(t)
+			req := protocol.ManagerRetireReq{Binding: runtimeBinding(b), Generation: 1, Checkpoint: strings.Repeat("a", 64)}
+			if err := store.update(func(st *State) error {
+				c := st.Conversations[b.ConversationID]
+				c.Retirement = &req
+				putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &discussionTestRuntime{controllerRuntimeFixture: fixture, managerErr: tc.managerErr,
+				retirement: protocol.ManagerRetireReceipt{State: tc.retirement}}
+			scope := DiscussionScope{InstallationID: "install", DiscussionID: "discord-discussion", ThreadID: "thread", DMOwnerID: "owner"}
+			scope.VerifyOrigin = func(_ context.Context, origin schema.MessageOrigin) error {
+				if origin.RequestID == "withdrawn" {
+					return ErrDiscussionSourceChanged
+				}
+				return nil
+			}
+			d := &DiscussionController{store: store, runtime: runtime, scope: scope, cfg: Config{ConversationID: b.ConversationID},
+				now: time.Now, ctx: t.Context(), dir: filepath.Dir(fixture.status.AuthFile), bridge: &privateHTTP{socket: fixture.status.BridgeSocket},
+				handler: newManagerHandler(b.ConversationID, "fixture")}
+			t.Cleanup(d.stopFollowing)
+			for _, id := range []string{"withdrawn", "first", "second", "first"} {
+				origin := schema.MessageOrigin{Kind: "owner_direct", InstallationID: "install", DiscussionID: "discord-discussion",
+					ChannelID: "thread", RequestID: id, MessageID: id, ActorID: "owner", RequesterID: "owner", Revision: "current"}
+				err := d.Admit(t.Context(), DiscussionInput{Origin: origin, Text: "message " + id})
+				if id == "withdrawn" && !errors.Is(err, ErrDiscussionSourceChanged) || id != "withdrawn" && err != nil {
+					t.Fatalf("admit %s: %v", id, err)
+				}
+			}
+			before, err := store.Snapshot()
+			if err != nil || len(before.Admissions) != 2 || len(runtime.retirements) != 0 || d.controller != nil {
+				t.Fatalf("native or retirement consultation preceded persistence: %d admissions, retire=%v, %v", len(before.Admissions), runtime.retirements, err)
+			}
+			err = d.Sync(t.Context(), nil)
+			after, snapErr := store.Snapshot()
+			if snapErr != nil || len(after.Admissions) != 2 || len(fixture.sent) != 0 {
+				t.Fatalf("preservation: admissions=%d sends=%d %v", len(after.Admissions), len(fixture.sent), snapErr)
+			}
+			if tc.retirement == "uncertain" {
+				if !errors.Is(err, ErrControllerUncertain) || after.Conversations[b.ConversationID].Retirement == nil || d.controller != nil {
+					t.Fatalf("claimed retirement lost: %v", err)
+				}
+				return
+			}
+			var hold *DiscussionInputHold
+			if !errors.Is(err, tc.hold) || !errors.As(err, &hold) || hold.AdmissionID != "first" ||
+				after.Conversations[b.ConversationID].Retirement != nil {
+				t.Fatalf("unclaimed retirement did not clear before reporting the exact draft hold: %v", err)
+			}
+		})
+	}
+}
