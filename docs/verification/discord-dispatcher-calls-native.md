@@ -22,3 +22,10 @@ On macOS with Codex 0.170.0 and a candidate built from the integration worktree 
 The earlier marker run also returned the exact value, but active native history paging was unavailable. The passing run counts only real user message records in the separately bound isolated rollout. It excludes Codex completion telemetry describing the same input.
 
 A fresh native-personal run in VM project-access mode passed on the clean `a8a7bd7` candidate after merging the upstream continuity and attachment-recovery changes. The run took 18.73 seconds, with an 8-second written seed and a 5-second typed call reply from the same manager. It counted one actual native user input, one canonical publication, and two pre-admission checks. It used the same disposable profile and removed its temporary authentication file after the run.
+
+
+## Two real workers returning in reverse order
+
+A later personal VM rehearsal exercised Codex 0.170.0 with on-request approval, a disposable enrolled project and synthetic Discord identities. Two distinct voice-origin turns launched separate native workers. The fixture withheld the first worker’s result until the second worker’s marker had been verified against its admission, job and attempt. The second result arrived first, and the first result then matched its own original turn. Isolated rollouts recorded two calls to `swarm_create` and two to `swarm_read`. The green rehearsal took 79.62 seconds. The launches took 14 and 12 seconds in that run. Earlier attempts timed out at the first verified launch; they were not counted as successes.
+
+Run `TestHostedTeammateLifecycle` with `SWARM_TEAMMATE_TEST_CALL_WORKERS=1`, the existing call, personal and VM flags, and an authorized isolated native test profile to repeat. This tests real Codex and workers with a local publication sink. Live room delivery, the Claude hosted-account route and human hearing remain separate gates.
