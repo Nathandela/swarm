@@ -1,10 +1,11 @@
 package callspeech_test
 
 import (
+	"compress/gzip"
 	"context"
+	"io"
 	"os"
-	"os/exec"
-	"runtime"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,39 +27,44 @@ func TestHostedDispatcherSpeech(t *testing.T) {
 	if dir == "" {
 		t.Skip("set SWARM_TEST_HOSTED_DISPATCHER_CALL_DIR to an approved local Swarm voice test settings directory")
 	}
-	if runtime.GOOS != "darwin" {
-		t.Skip("the in-memory source uses the local macOS Swift speech synthesizer")
-	}
 	key, err := voice.LoadOpenAIKey(dir)
 	if err != nil {
 		t.Fatal("approved test speech credential unavailable")
 	}
 	for _, test := range []struct {
-		name, phrase string
-		team         bool
+		name string
+		team bool
 	}{
-		{name: "personal", phrase: "Check the blue notebook."},
-		{name: "team", phrase: "Dispatcher, check the blue notebook.", team: true},
+		{name: "personal"},
+		{name: "team", team: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			positive := syntheticPCM(t, test.phrase)
+			positive := syntheticPCM(t, test.name)
 			var chatter []byte
 			if test.team {
-				chatter = syntheticPCM(t, "I left the blue notebook on the table.")
+				chatter = syntheticPCM(t, "chatter")
 			}
 			qualifyHostedLane(t, key, test.team, positive, chatter)
 		})
 	}
 }
 
-func syntheticPCM(t *testing.T, phrase string) []byte {
+// Fixtures are offline eSpeak syntheses. No microphone, system voice, or paid service is used for input.
+func syntheticPCM(t *testing.T, name string) []byte {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "swift", "testdata/synthesize.swift", phrase)
-	pcm, err := cmd.Output()
-	if err != nil || len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > 24000*2*10 {
-		t.Fatalf("in-memory synthetic speech failed (%d PCM bytes): %v", len(pcm), err)
+	f, err := os.Open(filepath.Join("testdata", name+".pcm.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gz.Close() }()
+	pcm, err := io.ReadAll(io.LimitReader(gz, 480001))
+	if err != nil || len(pcm) == 0 || len(pcm) > 480000 || len(pcm)%2 != 0 {
+		t.Fatalf("invalid %s synthetic speech", name)
 	}
 	return pcm
 }
