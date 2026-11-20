@@ -106,6 +106,14 @@ func (d *DiscussionController) ValidatePublication(ctx context.Context, output D
 }
 
 func (d *DiscussionController) validatePublicationAttempt(st State, id string) error {
+	if strings.HasPrefix(id, "vm-child-") {
+		for _, w := range st.Workers {
+			if w.VMChild && w.ConversationID == d.cfg.ConversationID && w.AttemptID == id {
+				return nil
+			}
+		}
+		return ErrStale
+	}
 	attempt, ok := st.Actions[key(d.cfg.ConversationID, id)]
 	if !ok || attempt.State != "settled" {
 		return ErrStale

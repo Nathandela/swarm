@@ -20,6 +20,7 @@ const maxConfigBytes = 16 << 10
 
 // Config contains only settings; the speech key is kept in a separate private file.
 type Config struct {
+	VMProjectAccess      bool   `json:"-"`
 	Version              int    `json:"version"`
 	PlaceID              string `json:"place_id"`
 	Name                 string `json:"name"`

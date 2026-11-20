@@ -11,6 +11,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/tui"
 )
 
@@ -33,42 +34,59 @@ func recordInstalledDiscord(dir string) error {
 	}
 	return discord.SelectState(slot, dir)
 }
-func linkedDispatcherSocket(local string) (string, error) {
-	slot, e := installedDiscordDirectory()
-	if e != nil {
-		return "", e
+func dialLinkedDispatcher(ctx context.Context, local, localEndpoint string, capabilities []string) (*protocol.Client, error) {
+	slot, err := installedDiscordDirectory()
+	if err != nil {
+		return nil, err
 	}
-	dir, e := discord.SelectedState(slot)
-	if e != nil {
-		return "", e
+	dir, err := discord.SelectedState(slot)
+	if err != nil {
+		return nil, err
 	}
-	cfg, e := discord.LoadConfig(dir)
-	if e != nil {
-		return "", e
+	cfg, err := discord.LoadConfig(dir)
+	if err != nil {
+		return nil, err
 	}
-	if !cfg.Enabled || !cfg.TeammateMode() || cfg.DaemonSocket == local {
-		return "", nil
+	if !cfg.Enabled || !cfg.TeammateMode() {
+		return nil, nil
 	}
-	a, err := os.Stat(local)
-	b, e := os.Stat(cfg.DaemonSocket)
-	if e != nil {
-		return "", e
+	socket, endpoint := cfg.DaemonSocket, ""
+	if cfg.Supervisor != nil {
+		endpoint = skeleton.EndpointIDForStateDir(cfg.Supervisor.StateDir)
 	}
-	if err == nil && os.SameFile(a, b) {
-		return "", nil
+	if p := cfg.PreviousSupervisor; p != nil {
+		if localEndpoint != endpoint {
+			return nil, nil
+		}
+		socket, endpoint = p.Socket, p.Endpoint
 	}
-	return cfg.DaemonSocket, nil
+	if socket == local {
+		return nil, nil
+	}
+	localInfo, localErr := os.Stat(local)
+	linked, err := os.Stat(socket)
+	if err != nil {
+		return nil, err
+	}
+	if localErr == nil && os.SameFile(localInfo, linked) {
+		return nil, nil
+	}
+	client, err := protocol.DialContext(ctx, socket, capabilities)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint != "" && client.EndpointID() != endpoint {
+		_ = client.Close()
+		return nil, errors.New("dispatcher supervisor identity changed")
+	}
+	return client, nil
 }
 func linkedDispatcherOption(cc daemon.ClientConfig, localEndpoint string, hand tui.TerminalHandoff) tui.Option {
 	list := func() ([]protocol.SessionView, error) {
-		socket, err := linkedDispatcherSocket(cc.SocketPath)
-		if socket == "" || err != nil {
-			return nil, err
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		client, err := protocol.DialContext(ctx, socket, nil)
-		if err != nil {
+		client, err := dialLinkedDispatcher(ctx, cc.SocketPath, localEndpoint, nil)
+		if err != nil || client == nil {
 			return nil, err
 		}
 		defer func() { _ = client.Close() }()
@@ -78,14 +96,21 @@ func linkedDispatcherOption(cc daemon.ClientConfig, localEndpoint string, hand t
 		return client.List()
 	}
 	dial := func(id string) (attach.Session, func(), error) {
-		socket, err := linkedDispatcherSocket(cc.SocketPath)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		client, err := dialLinkedDispatcher(ctx, cc.SocketPath, localEndpoint, []string{"attach"})
 		if err != nil {
 			return nil, nil, err
 		}
-		if socket == "" {
+		if client == nil {
 			return nil, nil, errors.New("dispatcher supervisor unavailable")
 		}
-		return attachDialer(daemon.ClientConfig{SocketPath: socket})(id)
+		terminal, err := client.Attach(id)
+		if err != nil {
+			_ = client.Close()
+			return nil, nil, err
+		}
+		return terminal, func() { _ = client.Close() }, nil
 	}
 	return tui.WithLinkedDispatchers(list, tui.NewAttachRunner(dial, hand))
 }

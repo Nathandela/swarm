@@ -51,6 +51,7 @@ func runMessage(args []string, c agentClient, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "message: requires --text <exact message> or --status --operation-id <id>")
 		return misuseExit
 	}
+
 	if *statusOnly {
 		reader, ok := c.(semanticReceiptClient)
 		if !ok {

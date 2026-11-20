@@ -45,10 +45,6 @@ func (c *Controller) workerPage(input ListInput) (json.RawMessage, error) {
 		if row.ID == c.binding.SessionID || row.Role == "manager" || row.ID <= input.AfterSessionID {
 			continue
 		}
-		if len(page.Workers) == limit {
-			page.NextSessionID = page.Workers[len(page.Workers)-1].Session
-			break
-		}
 		instance := ""
 		if row.Capabilities != nil {
 			instance = row.Capabilities.SessionInstance
@@ -60,6 +56,10 @@ func (c *Controller) workerPage(input ListInput) (json.RawMessage, error) {
 		}
 		if c.discussion != nil && (tracking == nil || tracking.Reserved) {
 			continue
+		}
+		if len(page.Workers) == limit {
+			page.NextSessionID = page.Workers[len(page.Workers)-1].Session
+			break
 		}
 		candidate := WorkerPage{Workers: append(page.Workers, WorkerView{Session: row.ID, SessionInstance: instance, Agent: row.Agent, Name: row.Name, Cwd: row.Cwd, Group: row.Group, Capabilities: row.Capabilities, Tracking: tracking}), NextSessionID: row.ID}
 		raw, err := json.Marshal(candidate)

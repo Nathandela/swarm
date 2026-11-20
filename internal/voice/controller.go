@@ -86,7 +86,7 @@ func (c *Controller) nativeStatus(ctx context.Context) (protocol.ManagerRuntimeS
 	if err != nil {
 		return status, c.nativeError(err)
 	}
-	if status.Binding != runtimeBinding(c.binding) || status.BridgeSocket != c.refs.Socket || status.AuthFile != c.refs.AuthFile {
+	if status.NativeCLI != c.binding.NativeCLI || status.Binding != runtimeBinding(c.binding) || status.BridgeSocket != c.refs.Socket || status.AuthFile != c.refs.AuthFile {
 		return status, ErrStale
 	}
 	if err = c.store.checkControllerBinding(c.binding); err != nil {
@@ -455,6 +455,9 @@ func (c *Controller) admissionText(st State, a Admission) (string, error) {
 			}
 		}
 		if c.discussion != nil && a.Origin != nil {
+			if c.discussion.VMProjectAccess {
+				return a.InputText, nil
+			}
 			projectContext := "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action."
 			if a.Project != "" {
 				value, _ := json.Marshal(a.Project)

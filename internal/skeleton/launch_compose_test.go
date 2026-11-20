@@ -14,6 +14,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -410,4 +411,66 @@ func argvContains(argv []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func TestFreshWorkerUsesAdapterDefaultsWithoutChangingResumePolicy(t *testing.T) {
+	const nativeID = "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b"
+	for _, tc := range []struct {
+		name    string
+		options map[string]string
+		sandbox string
+	}{
+		{"fresh worker", nil, "workspace-write"},
+		{"explicit choice", map[string]string{"sandbox": "read-only"}, "read-only"},
+		{"external resume", map[string]string{protocol.OptionResumeConversationID: nativeID}, ""},
+		{"historical resume", map[string]string{protocol.OptionResumeFrom: testEndpoint + "/old"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := persist.Meta{ID: "old", AgentType: "codex", Cwd: "/work", ConversationID: nativeID, Status: status.Status{Process: status.ProcessExited}}
+			got, err := composeLaunchSpec(daemon.LaunchSpec{AgentType: "codex", Cwd: "/work", Options: tc.options}, testEndpoint, "", srcGetter("old", src), stubLookPath)
+			if err != nil || got.Options["sandbox"] != tc.sandbox || argvContains(got.Argv, "--sandbox") != (tc.sandbox != "") {
+				t.Fatalf("sandbox = %q, argv = %v, err = %v", got.Options["sandbox"], got.Argv, err)
+			}
+		})
+	}
+}
+
+func TestExistingCodexWorkerKeepsHistoricalLaunchSettingsOnResume(t *testing.T) {
+	const local = "olderworker"
+	for _, original := range []map[string]string{nil, {"sandbox": "read-only", "model": "historical-model"}} {
+		src := persist.Meta{
+			ID: local, AgentType: "codex", Cwd: "/work", ConversationID: "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b",
+			Status: status.Status{Process: status.ProcessExited}, LaunchOptions: original,
+		}
+		req := daemon.LaunchSpec{AgentType: "codex", Cwd: "/work", Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + local}}
+		got, err := composeLaunchSpec(req, testEndpoint, "", srcGetter(local, src), stubLookPath)
+		if err != nil || got.Options["model"] != original["model"] || got.Options["sandbox"] != original["sandbox"] {
+			t.Fatalf("resuming historical settings %v produced %v, %v", original, got.Options, err)
+		}
+		if _, changed := req.Options["sandbox"]; changed {
+			t.Fatal("resume composition mutated the caller's request")
+		}
+	}
+}
+
+func TestPublicSpawnNamesChildrenFromActualDispatcherRecord(t *testing.T) {
+	parent := persist.Meta{ID: "manager", Role: "manager", ManagerConversationID: schema.DiscussionConversationPrefix + "thread"}
+	for _, agent := range []string{"codex", "claude", "agy", "hermes", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			for _, tc := range []struct{ name, want string }{{"", "DSP-" + agent}, {"audit", "DSP-audit"}, {"DSP-audit", "DSP-audit"}} {
+				req := daemon.LaunchSpec{AgentType: agent, Name: tc.name, Cwd: "/work", SpawnedFrom: parent.ID, SpawnIntent: schema.SpawnIntentDelegate}
+				got, err := composeLaunchSpec(req, testEndpoint, "", srcGetter(parent.ID, parent), stubLookPath)
+				if err != nil || got.Name != tc.want || got.SpawnedFrom != parent.ID || got.SpawnIntent != schema.SpawnIntentDelegate {
+					t.Fatalf("worker %s name=%q parent=%q intent=%q: %v", agent, got.Name, got.SpawnedFrom, got.SpawnIntent, err)
+				}
+			}
+		})
+	}
+	for _, other := range []persist.Meta{{ID: "absent"}, {ID: "manager", Role: "manager", ManagerConversationID: "voice-conversation"}, {ID: "manager", ManagerConversationID: parent.ManagerConversationID}} {
+		req := daemon.LaunchSpec{AgentType: "codex", Name: "audit", Cwd: "/work", SpawnedFrom: parent.ID, SpawnIntent: schema.SpawnIntentDelegate}
+		got, err := composeLaunchSpec(req, testEndpoint, "", srcGetter(other.ID, other), stubLookPath)
+		if err != nil || got.Name != "audit" {
+			t.Fatalf("misattributed worker to a dispatcher: %q %v", got.Name, err)
+		}
+	}
 }

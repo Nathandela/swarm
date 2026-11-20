@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 )
 
 const CapManagerLaunch = "manager-launch"
+const CapManagerNativeCLI = "manager-native-cli"
 
 type ManagerLaunchSource interface{ ManagerLaunchSupported() bool }
 
@@ -44,10 +46,13 @@ func validateManagerLaunch(req LaunchReq) error {
 	if m.ConversationID == "" || len(m.ConversationID) > 128 || strings.TrimSpace(m.ConversationID) != m.ConversationID || strings.ContainsFunc(m.ConversationID, unicode.IsControl) {
 		return errors.New("invalid manager conversation identity")
 	}
-	if mode := req.Options["sandbox"]; mode != "" && mode != "danger-full-access" {
+	if m.NativeCLI && !schema.IsDiscordManager("manager", m.ConversationID) {
+		return errors.New("native CLI manager requires a Discord conversation")
+	}
+	if mode := req.Options["sandbox"]; !m.NativeCLI && mode != "" && mode != "danger-full-access" {
 		return errors.New("manager requires full native tool access")
 	}
-	if mode := req.Options["dangerously-skip-permissions"]; mode != "" && mode != "true" {
+	if mode := req.Options["dangerously-skip-permissions"]; !m.NativeCLI && mode != "" && mode != "true" {
 		return errors.New("manager requires full native tool access")
 	}
 	for _, item := range []struct {

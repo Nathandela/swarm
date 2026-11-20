@@ -164,7 +164,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "relay":
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
-		return dispatchAgentVerb(runSpawn, args[1:], nil, stdout, stderr)
+		if len(args) == 2 && args[1] == "--new-operation-id" {
+			return runSpawn(args[1:], nil, stdout, stderr)
+		}
+		return dispatchAgentVerb(runSpawn, args[1:], []string{protocol.CapOwnerLaunch}, stdout, stderr)
 	case "handoff":
 		return dispatchAgentVerb(runHandoff, args[1:], nil, stdout, stderr)
 	case "reattach":

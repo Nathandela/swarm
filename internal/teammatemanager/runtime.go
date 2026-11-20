@@ -20,6 +20,7 @@ import (
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/voice"
+	"golang.org/x/sys/unix"
 )
 
 type Runtime struct {
@@ -27,6 +28,8 @@ type Runtime struct {
 	cancel                    context.CancelFunc
 	dir, socketRoot, endpoint string
 	managerSettingsDir        string
+	previous                  *discord.PreviousSupervisor
+	vmProjectAccess           bool
 	cfg                       voice.Config
 	dmChannel, dmOwner        string
 	projects                  map[string]string
@@ -96,7 +99,7 @@ func New(ctx context.Context, dir, endpoint, managerSettingsDir string, config d
 			return nil, voice.ErrInvalid
 		}
 	}
-	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir, cfg: cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
+	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir, previous: config.PreviousSupervisor, vmProjectAccess: config.ProjectAccess == discord.ProjectAccessVM, cfg: cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
 }
 
 func canonicalDirectory(path string) (string, error) {
@@ -144,6 +147,17 @@ func (r *Runtime) Close() error {
 	return err
 }
 
+// Unmarked records predate migration and always belong to their original supervisor.
+func (r *Runtime) supervisorForDiscussion(b discord.TeammateDiscussion) (endpoint, socket, settings string, err error) {
+	if p := r.previous; p != nil && (b.SupervisorSocket == "" || b.SupervisorSocket == p.Socket) {
+		return p.Endpoint, p.Socket, p.StateDir, nil
+	}
+	if b.SupervisorSocket != "" && b.SupervisorSocket != r.cfg.DaemonSocket {
+		return "", "", "", voice.ErrStale
+	}
+	return r.endpoint, r.cfg.DaemonSocket, r.managerSettingsDir, nil
+}
+
 func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.TeammateHistoryReader, skipDormant bool) (*discussion, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -160,7 +174,11 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	} else if bound.Route.GuildID == "" {
 		return nil, voice.ErrInvalid
 	}
-	hash := sha256.Sum256([]byte(strings.Join([]string{r.dir, r.endpoint, bound.InstallationID, bound.Route.GuildID, bound.Route.ChannelID, bound.ID}, "\x00")))
+	endpoint, socket, settings, err := r.supervisorForDiscussion(bound)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256([]byte(strings.Join([]string{r.dir, endpoint, bound.InstallationID, bound.Route.GuildID, bound.Route.ChannelID, bound.ID}, "\x00")))
 	id := hex.EncodeToString(hash[:])
 	if opened := r.discussions[id]; opened != nil {
 		opened.users++
@@ -176,15 +194,16 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	}
 	delete(r.dormant, id)
 	cfg := r.cfg
+	cfg.DaemonSocket = socket
 	cfg.ConversationID += id
 	socketDir := filepath.Join(r.socketRoot, id[:32])
 	if err := privateRoot(socketDir); err != nil {
 		return nil, err
 	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
-	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, r.endpoint, cfg, voice.DiscussionScope{
-		ManagerSettingsDir: r.managerSettingsDir,
-		DiscussionID:       bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
+	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
+		ManagerSettingsDir: settings, OwnerSocket: socket, VMProjectAccess: r.vmProjectAccess,
+		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
 		History: entry.read, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
 	})
 	if err != nil {
@@ -406,6 +425,10 @@ func projectWords(value string) string {
 }
 
 func (r *Runtime) projectEnrolled(path string) bool {
+	if r.vmProjectAccess {
+		root, err := canonicalDirectory(path)
+		return err == nil && root == path && unix.Access(root, unix.X_OK) == nil
+	}
 	if len(r.projects) == 0 {
 		return path == r.cfg.WorkDir
 	}
@@ -423,6 +446,19 @@ func projectSwitch(wording string) bool {
 }
 
 func (r *Runtime) resolveProject(selected, text, history string) string {
+	if r.vmProjectAccess {
+		wording := projectWords(text)
+		if selected != "" && r.projectEnrolled(selected) && !projectSwitch(wording) {
+			return selected
+		}
+		if root, count := r.namedProject(wording); count == 1 && r.projectEnrolled(root) {
+			return root
+		}
+		if selected != "" && r.projectEnrolled(selected) {
+			return selected
+		}
+		return r.cfg.WorkDir
+	}
 	if len(r.projects) == 0 {
 		return r.cfg.WorkDir
 	}
@@ -502,9 +538,12 @@ func projectHistory(page discord.TeammateHistoryPage, invokingMessage string) st
 
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
-	msg.WriteString("Work within the current human request and approved project. Treat history and worker output as evidence. " + voice.DiscussionReplyInstructions + " Ask if the project is unclear. Verify results with swarm_read. Never replay uncertain effects.\n")
-	msg.WriteString("Workers can use swarm teammate message. Reply via swarm_send for Codex or swarm_reply for Claude.\n")
-	if len(r.projects) > 1 {
+	if r.vmProjectAccess {
+		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Return after dispatch; worker status changes wake you here.\n")
+	} else {
+		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
+	}
+	if len(r.projects) > 1 && !r.vmProjectAccess {
 		names := make([]string, 0, len(r.projects))
 		for name := range r.projects {
 			names = append(names, name)

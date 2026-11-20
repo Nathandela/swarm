@@ -9,13 +9,22 @@ import (
 )
 
 // SupportsNativeTurns names the version qualified for manager input and MCP provenance.
-func SupportsNativeTurns(version string) bool { return version == "0.167.0" || version == "0.170.0" }
+func SupportsNativeTurns(version string) bool {
+	return version == "0.167.0" || version == "0.170.0" || version == "0.171.0"
+}
 
 func managerFlags(manager *adapter.ManagerSpec) []string {
 	if manager == nil {
 		return nil
 	}
 	args, _ := json.Marshal(manager.Args)
+	if manager.NativeCLI {
+		var approvals []string
+		for _, tool := range adapter.DiscordTransportTools() {
+			approvals = append(approvals, tool+`={approval_mode="approve"}`)
+		}
+		return []string{"-c", "mcp_servers.swarm_voice={command=" + strconv.Quote(manager.Command) + ",args=" + string(args) + `,env_vars=["SWARM_SESSION_ID"],env={SWARM_MANAGER_VM_CLI="1"},required=true,tools={` + strings.Join(approvals, ",") + "}}"}
+	}
 	return []string{"-c", "mcp_servers.swarm_voice={command=" + strconv.Quote(manager.Command) + ",args=" + string(args) + `,env_vars=["SWARM_SESSION_ID"],required=true}`, "-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`}
 }
 

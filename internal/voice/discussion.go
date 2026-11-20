@@ -79,6 +79,7 @@ func OpenDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Co
 }
 
 func openDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Config, scope DiscussionScope, runtime discussionRuntime) (*DiscussionController, error) {
+	cfg.VMProjectAccess = scope.VMProjectAccess
 	validAudience := (configText(scope.GuildID, 128) && scope.DMOwnerID == "") || (scope.GuildID == "" && configText(scope.DMOwnerID, 128))
 	if cfg.Validate() != nil || !strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) || !configText(scope.InstallationID, 128) || !validAudience || !configText(scope.ThreadID, 128) {
 		return nil, ErrInvalid
@@ -148,6 +149,7 @@ func (d *DiscussionController) bind(b ManagerBinding) error {
 		return ErrStale
 	}
 	scope := d.scope
+	scope.VMProjectAccess = scope.VMProjectAccess && b.NativeCLI
 	scope.journalReady = d.journalReady.Load
 	controller.discussion = &scope
 	controller.managerSettingsDir = scope.ManagerSettingsDir
@@ -366,10 +368,25 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 				file = "retry-" + suffix
 			}
 		}
+		// A legacy native thread can restore its old unrestricted policy on resume.
+		// Start a new native history only after confirming retirement and ruling out
+		// any in-flight legacy resume. Preserve the thread's tracked work and outbox.
+		migrate := false
+		if d.cfg.VMProjectAccess && !conv.Binding.NativeCLI && stage != 2 {
+			var err error
+			migrate, err = d.canMigrateParked(ctx, conv, file, req)
+			if err != nil {
+				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
+			}
+			if migrate {
+				req = managerLaunchRequest(d.cfg, d.refs())
+				file = "native-cli-" + suffix
+			}
+		}
 		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
 		if err != nil {
 			var failed *failedResume
-			if stage == 2 || !errors.As(err, &failed) {
+			if migrate || stage == 2 || !errors.As(err, &failed) {
 				if errors.Is(err, ErrControllerUncertain) || errors.Is(err, ErrStale) || errors.Is(err, ErrConflict) {
 					return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
 				}
@@ -394,7 +411,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		if next.LoginEpoch != conv.Binding.LoginEpoch || next.SessionInstance == conv.Binding.SessionInstance || next.SessionID == conv.Binding.SessionID {
 			return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 		}
-		if stage == 2 {
+		if migrate || stage == 2 {
 			if next.NativeSessionID == conv.Binding.NativeSessionID {
 				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 			}
@@ -408,6 +425,43 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		return d.resume(generation, conv, next, selected.Runtime.Turn.ExternalInput)
 	}
 }
+func (d *DiscussionController) canMigrateParked(ctx context.Context, conv Conversation, file string, expected protocol.LaunchReq) (bool, error) {
+	raw, err := readVoiceFile(d.dir, file, MaxControlFrameBytes)
+	if err == nil {
+		var intent managerLaunchIntent
+		// An executing/applied resume must reconcile its existing owner receipt.
+		if json.Unmarshal(raw, &intent) != nil {
+			return false, ErrCorrupt
+		}
+		if intent.Phase != "prepared" {
+			return false, nil
+		}
+		old := *expected.Manager
+		old.NativeCLI = false
+		expected.Manager = &old
+		a, _ := json.Marshal(expected)
+		b, _ := json.Marshal(intent.Request)
+		if intent.Version != 1 || intent.ConversationID != d.cfg.ConversationID || intent.OperationID == "" || intent.SessionID != "" || string(a) != string(b) {
+			return false, ErrConflict
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if d.scope.VerifyAudience != nil {
+		if err := d.scope.VerifyAudience(ctx); err != nil {
+			return false, err
+		}
+	}
+	receipt, err := d.runtime.ManagerRetire(ctx, *conv.Retirement, true)
+	if err != nil {
+		return false, err
+	}
+	if receipt.State != "retired" || receipt.OperationID != protocol.ManagerRetireOperationID(*conv.Retirement) {
+		return false, ErrControllerUncertain
+	}
+	return true, nil
+}
+
 func sameParkedManager(st *State, generation uint64, c, previous Conversation) bool {
 	if st.CurrentConversation != previous.Binding.ConversationID || st.Generation != generation || !c.Parked || c.Binding != previous.Binding ||
 		c.Retirement == nil || previous.Retirement == nil || *c.Retirement != *previous.Retirement || c.ManagerGeneration == ^uint64(0) {
@@ -463,7 +517,7 @@ func (d *DiscussionController) Dormant() (bool, error) {
 		if !worker.Ended {
 			return false, nil
 		}
-		if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified && !worker.EvidenceLimited {
+		if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified && !worker.EvidenceLimited && !worker.VMChild {
 			return false, nil
 		}
 	}
@@ -482,6 +536,18 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	}
 	if err = d.export(st, emit); err != nil {
 		return err
+	}
+	if d.controller.discussion != nil && d.controller.discussion.VMProjectAccess && d.controller.workers != nil {
+		changed, err := d.controller.observeVMWorkers(st)
+		if err != nil {
+			return err
+		}
+		if changed {
+			st, err = d.store.Snapshot()
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if len(st.Workers) > 0 {
 		if err := d.controller.reconcileDiscussionWorkerEvidence(ctx); err != nil {
@@ -644,7 +710,7 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 			}
 			binding := d.controller.binding
 			observed, probeErr := d.runtime.ManagerRuntime(binding.SessionID, binding.SessionInstance)
-			if probeErr != nil || !discussionSameNative(binding, discussionBindingFromNative(observed.Binding)) ||
+			if probeErr != nil || !discussionSameNative(binding, discussionBindingFromNative(observed)) ||
 				observed.AuthFile != d.controller.refs.AuthFile || observed.BridgeSocket != d.controller.refs.Socket {
 				return err
 			}

@@ -90,6 +90,23 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 		if validateObjectMembers(raw, "version", "conversation_id", "operation_id", "request", "phase", "session_id") != nil || json.Unmarshal(raw, &intent) != nil || intent.Version != 1 || intent.ConversationID != cfg.ConversationID || intent.OperationID == "" {
 			return none, ErrCorrupt
 		}
+		// Reconcile a pre-upgrade receipt using its immutable request. A prepared
+		// intent never reached dispatch and may adopt the new launch configuration.
+		if req.Manager != nil && req.Manager.NativeCLI && intent.Request.Manager != nil && !intent.Request.Manager.NativeCLI {
+			legacyManager := *req.Manager
+			legacyManager.NativeCLI = false
+			legacy := req
+			legacy.Manager = &legacyManager
+			want, _ := json.Marshal(legacy)
+			old, _ := json.Marshal(intent.Request)
+			if string(old) == string(want) {
+				if intent.Phase == "prepared" {
+					intent.Request = req
+				} else {
+					req = legacy
+				}
+			}
+		}
 		original, _ := json.Marshal(intent.Request)
 		current, _ := json.Marshal(req)
 		if string(original) != string(current) {
@@ -196,6 +213,9 @@ func (e *failedResume) Unwrap() error { return ErrDiscussionActivationUnavailabl
 
 func observeLaunchedManager(ctx context.Context, cfg Config, refs ManagerBridgeRefs, endpoint string, intent managerLaunchIntent, client managerBootstrapClient) (managerSelection, error) {
 	selected, err := findBootstrapManager(ctx, cfg, refs, endpoint, intent.SessionID, nil, client)
+	if err == nil && intent.Request.Manager != nil && selected.Binding.NativeCLI != intent.Request.Manager.NativeCLI {
+		return managerSelection{}, ErrStale
+	}
 	var exited *bootstrapExit
 	if !errors.As(err, &exited) || intent.Request.Manager == nil || intent.Request.Manager.RetireOperationID == "" {
 		return selected, err
@@ -227,7 +247,7 @@ func managerLaunchRequest(cfg Config, refs ManagerBridgeRefs) protocol.LaunchReq
 	if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
 		name = cfg.Name
 	}
-	return protocol.LaunchReq{Agent: cfg.Provider, Name: name, Cwd: cfg.WorkDir, Options: options, Cols: 120, Rows: 32, Manager: &protocol.ManagerLaunchReq{ConversationID: cfg.ConversationID, BridgeSocket: refs.Socket, AuthFile: refs.AuthFile}}
+	return protocol.LaunchReq{Agent: cfg.Provider, Name: name, Cwd: cfg.WorkDir, Options: options, Cols: 120, Rows: 32, Manager: &protocol.ManagerLaunchReq{NativeCLI: cfg.VMProjectAccess, ConversationID: cfg.ConversationID, BridgeSocket: refs.Socket, AuthFile: refs.AuthFile}}
 }
 
 func saveManagerIntent(dir, file string, intent managerLaunchIntent) error {
@@ -332,7 +352,7 @@ func selectBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeR
 	if b.Validate() != nil || b.Session != row.ID || b.SessionInstance != row.Capabilities.SessionInstance || b.ConversationID != cfg.ConversationID || b.Provider != cfg.Provider || native.BridgeSocket != refs.Socket || native.AuthFile != refs.AuthFile {
 		return result, ErrStale
 	}
-	result = managerSelection{LocalID: local, Runtime: native, Binding: ManagerBinding{ConversationID: b.ConversationID, Provider: b.Provider, SessionID: b.Session, SessionInstance: b.SessionInstance, NativeSessionID: b.NativeSessionID, NativeGeneration: b.NativeGeneration, ObservationGeneration: b.ObservationGeneration, LoginEpoch: b.LoginEpoch}}
+	result = managerSelection{LocalID: local, Runtime: native, Binding: ManagerBinding{NativeCLI: native.NativeCLI, ConversationID: b.ConversationID, Provider: b.Provider, SessionID: b.Session, SessionInstance: b.SessionInstance, NativeSessionID: b.NativeSessionID, NativeGeneration: b.NativeGeneration, ObservationGeneration: b.ObservationGeneration, LoginEpoch: b.LoginEpoch}}
 	if existing != nil && identity(*existing) != identity(result.Binding) {
 		return result, ErrStale
 	}

@@ -383,18 +383,6 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		}
 		prompt := input.Prompt
 		if c.discussion != nil {
-			ad, _ := registry.New(input.Agent)
-			for _, opt := range ad.Options() {
-				if opt.Default != "" && options[opt.Key] == "" {
-					options[opt.Key] = opt.Default
-				}
-			}
-			if input.Name == "" {
-				input.Name = input.Agent
-			}
-			if !strings.HasPrefix(input.Name, "DSP-") {
-				input.Name = "DSP-" + input.Name
-			}
 			provenance, _ := json.Marshal(admission.Origin)
 			prompt = discussionWorkerGuidance(input.Agent) + "\n\nSupervisor-verified Discord work attribution " + string(provenance) + "\n\n" + prompt
 		}

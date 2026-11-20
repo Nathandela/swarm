@@ -516,7 +516,18 @@ func (t *teammateConnector) checkPublication(ctx context.Context, install string
 	}
 	p := out.Publication
 	p.BodyHash = out.BodyHash
-	return validator.ValidatePublication(ctx, TeammateDiscussion{ID: out.DiscussionID, InstallationID: install, Route: out.Route}, p)
+	bound := TeammateDiscussion{ID: out.DiscussionID, InstallationID: install, Route: out.Route}
+	if t.service.Config.PreviousSupervisor != nil {
+		binding, err := t.service.Store.teammateBindingByID(install, out.DiscussionID)
+		if err != nil {
+			return err
+		}
+		if binding.Route.ChannelID != out.Route.ChannelID || binding.Route.GuildID != out.Route.GuildID {
+			return ErrConflict
+		}
+		bound = binding.TeammateDiscussion
+	}
+	return validator.ValidatePublication(ctx, bound, p)
 }
 
 func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutput) error {

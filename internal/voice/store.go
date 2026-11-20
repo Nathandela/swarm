@@ -1411,7 +1411,7 @@ func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake
 	if err := checkBinding(st, b); err != nil {
 		return err
 	}
-	scopedWorker := (e.WorkerProof && !e.WorkerMessage && e.NativeTurnID != "" ||
+	scopedWorker := (e.VMWorkerStatus || e.WorkerProof && !e.WorkerMessage && e.NativeTurnID != "" ||
 		e.WorkerMessage && !e.WorkerProof && e.NativeTurnID == "") && e.JobID != "" && e.AttemptID != "" && e.Cursor == (JournalCursor{})
 	if e.ID == "" || (!scopedWorker && (e.Cursor.Binding == "" || e.Cursor.Sequence == 0)) || !json.Valid(e.Metadata) || len(e.Metadata) > 128<<10 || e.WakeID == "" || e.WakeID != w.ID || w.OperationID == "" || !json.Valid(w.Request) || len(w.Request) > 128<<10 || (e.ConversationID != "" && e.ConversationID != b.ConversationID) || (w.ConversationID != "" && w.ConversationID != b.ConversationID) {
 		return ErrInvalid

@@ -71,7 +71,7 @@ func TestParkedManagerRequiresEffectiveWorkspaceAfterAttach(t *testing.T) {
 func TestManagerWorkspaceInheritanceIsQualifiedAndScoped(t *testing.T) {
 	m := persist.Meta{AgentType: "codex", Role: "manager", ResumedFrom: "parked", ManagerConversationID: "discord-teammate-one"}
 	for _, version := range []string{"0.169.0", "0.170.0", "0.171.0", "unknown"} {
-		if got := managerInheritsResumeWorkspace(m, "swarm/"+version+" (Linux)"); got != (version == "0.170.0") {
+		if got := managerInheritsResumeWorkspace(m, "swarm/"+version+" (Linux)"); got != (version == "0.170.0" || version == "0.171.0") {
 			t.Fatalf("version %s: %t", version, got)
 		}
 	}

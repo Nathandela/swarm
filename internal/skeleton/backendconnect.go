@@ -831,7 +831,7 @@ func managerInheritsResumeWorkspace(m persist.Meta, userAgent string) bool {
 	}
 	ad, _ := registry.New("codex")
 	version, ok := ad.ParseVersion(userAgent)
-	return ok && version == "0.170.0"
+	return ok && (version == "0.170.0" || version == "0.171.0")
 }
 
 func verifiedManagerResumeArgs(conn backendConn, m persist.Meta, args []string) ([]string, bool) {

@@ -43,6 +43,7 @@ type LocalWorker struct {
 	Excluded bool `json:"excluded"`
 }
 type LocalStatus struct {
+	ProjectAccess  string          `json:"project_access,omitempty"`
 	Name           string          `json:"name"`
 	InstallationID string          `json:"installation_id"`
 	Connected      bool            `json:"connected"`
@@ -155,7 +156,7 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 }
 
 func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
-	status := LocalStatus{Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true, Mode: s.Config.Mode}
+	status := LocalStatus{ProjectAccess: s.Config.EffectiveProjectAccess(), Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true, Mode: s.Config.Mode}
 	if connection, ok := s.Messenger.(interface{ Connected() bool }); ok {
 		status.Connected = connection.Connected()
 	}

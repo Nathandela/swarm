@@ -461,6 +461,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	if spec.Manager != nil {
 		m.Role = "manager"
 		m.ManagerConversationID = spec.Manager.ConversationID
+		m.ManagerNativeCLI = spec.Manager.NativeCLI
 		m.ManagerBridgeSocket = spec.Manager.BridgeSocket
 		m.ManagerAuthFile = spec.Manager.AuthFile
 		if spec.Manager.ClaudeConfigDir != nil {
@@ -835,6 +836,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		HookDrainToken: drainToken,
 	}
 
+	if spec.Manager != nil && spec.Manager.NativeCLI {
+		lc.Env = append(lc.Env, schema.EnvManagerVMCLI+"=1", EnvStateDir+"="+d.cfg.StateDir, EnvLock+"="+d.cfg.LockPath, EnvLog+"="+d.cfg.LogPath)
+	}
 	if spec.WorkerBridge != "" {
 		lc.Env = append(lc.Env, schema.WorkerBridgeEnv+"="+spec.WorkerBridge)
 	}
@@ -910,6 +914,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token, replayI
 		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock
 		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
+		if len(lc.BackendEnv) > 0 && spec.Manager != nil && spec.Manager.NativeCLI {
+			lc.BackendEnv = append(lc.BackendEnv, schema.EnvManagerVMCLI+"=1", EnvStateDir+"="+d.cfg.StateDir, EnvLock+"="+d.cfg.LockPath, EnvLog+"="+d.cfg.LogPath, EnvSocket+"="+d.cfg.SocketPath, hookclient.EnvSessionID+"="+id)
+		}
 		lc.BackendArgs = append(lc.BackendArgs, spec.CodexPolicy...)
 		if spec.Scheduled != nil {
 			if len(lc.BackendEnv) != 0 {

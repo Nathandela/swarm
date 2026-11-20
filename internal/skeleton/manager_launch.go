@@ -8,6 +8,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 func (*coreAPI) ManagerLaunchSupported() bool { return true }
@@ -16,7 +17,7 @@ func managerAdapterSpec(m *daemon.ManagerLaunchSpec) *adapter.ManagerSpec {
 	if m == nil {
 		return nil
 	}
-	return &adapter.ManagerSpec{Command: m.Command, Args: []string{"voice", "mcp", "--socket", m.BridgeSocket, "--auth-file", m.AuthFile, "--conversation", m.ConversationID}}
+	return &adapter.ManagerSpec{NativeCLI: m.NativeCLI, Command: m.Command, Args: []string{"voice", "mcp", "--socket", m.BridgeSocket, "--auth-file", m.AuthFile, "--conversation", m.ConversationID}}
 }
 
 func validateManagerSource(spec daemon.LaunchSpec, endpoint string, get func(string) (persist.Meta, bool)) error {
@@ -52,6 +53,9 @@ func validateManagerSelection(spec daemon.LaunchSpec, selected persist.Meta) err
 		return nil
 	}
 	m := spec.Manager
+	if selected.Status.Process == status.ProcessRunning && selected.ManagerNativeCLI != m.NativeCLI {
+		return errors.New("existing manager uses a different native CLI policy; finish its current turn first")
+	}
 	if selected.Role != "manager" || selected.ManagerConversationID != m.ConversationID || selected.ManagerBridgeSocket != m.BridgeSocket || selected.ManagerAuthFile != m.AuthFile {
 		return errors.New("existing native conversation has a different manager bridge binding; reconcile it before relaunch")
 	}
