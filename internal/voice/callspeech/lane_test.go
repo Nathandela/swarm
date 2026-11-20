@@ -183,14 +183,19 @@ func TestLateUnicodeCaptionDoesNotAuthorizeNativeText(t *testing.T) {
 
 func TestTeamChatterAndOverlapDoNotCancelPlayback(t *testing.T) {
 	live := &fakeLive{events: make(chan openailive.Event)}
-	rendering := make(chan struct{}, 1)
+	playing := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
 	stopped := make(chan struct{}, 1)
 	transcribed := make(chan struct{}, 1)
 	var requests atomic.Int64
 	l := newLane(t.Context(), Config{Team: true,
 		Stop: func() { stopped <- struct{}{} },
-		Play: func(context.Context, []byte) error { return nil },
+		Play: func(ctx context.Context, _ []byte) error {
+			playing <- struct{}{}
+			<-ctx.Done()
+			canceled <- struct{}{}
+			return ctx.Err()
+		},
 	}, provider{
 		open: func(context.Context, string, string) (liveSession, error) { return live, nil },
 		transcribe: func(context.Context, string, []byte, string) (string, error) {
@@ -200,11 +205,8 @@ func TestTeamChatterAndOverlapDoNotCancelPlayback(t *testing.T) {
 			}
 			return "Dispatcher, check the build.", nil
 		},
-		render: func(ctx context.Context, _, _, _ string) ([]byte, error) {
-			rendering <- struct{}{}
-			<-ctx.Done()
-			canceled <- struct{}{}
-			return nil, ctx.Err()
+		render: func(context.Context, string, string, string) ([]byte, error) {
+			return playbackTestFrame(), nil
 		},
 	})
 	t.Cleanup(func() { l.Close(); await(t, l.Done()) })
@@ -213,7 +215,7 @@ func TestTeamChatterAndOverlapDoNotCancelPlayback(t *testing.T) {
 	if err := l.PublishForTurn("existing", "Verified publication."); err != nil {
 		t.Fatal(err)
 	}
-	await(t, rendering)
+	await(t, playing)
 	for _, speaker := range []string{"alice", "bob", "alice", "bob", "bob"} {
 		if err := l.Push(speaker, playbackTestFrame()); err != nil {
 			t.Fatal(err)
@@ -237,6 +239,69 @@ func TestTeamChatterAndOverlapDoNotCancelPlayback(t *testing.T) {
 	await(t, transcribed)
 	await(t, stopped)
 	await(t, canceled)
+}
+
+func TestPendingPublicationWaitsForPersonalQuiet(t *testing.T) {
+	for _, closeWhileSpeaking := range []bool{false, true} {
+		name := "plays once after quiet"
+		if closeWhileSpeaking {
+			name = "hangup discards pending speech"
+		}
+		t.Run(name, func(t *testing.T) {
+			playing := make(chan byte, 4)
+			rendered := make(chan string, 4)
+			interrupted := make(chan struct{}, 1)
+			l := newLane(t.Context(), Config{Play: func(ctx context.Context, pcm []byte) error {
+				playing <- pcm[0]
+				if pcm[0] == 'o' {
+					<-ctx.Done()
+					interrupted <- struct{}{}
+					return ctx.Err()
+				}
+				return nil
+			}}, provider{
+				open: func(context.Context, string, string) (liveSession, error) {
+					return &fakeLive{events: make(chan openailive.Event)}, nil
+				},
+				render: func(_ context.Context, _, _, text string) ([]byte, error) {
+					rendered <- text
+					return []byte{text[0], 0}, nil
+				},
+			})
+			t.Cleanup(func() { l.Close(); await(t, l.Done()) })
+			l.registerTurn("verified")
+			if err := l.PublishForTurn("verified", "old result"); err != nil {
+				t.Fatal(err)
+			}
+			await(t, rendered)
+			if await(t, playing) != 'o' {
+				t.Fatal("expected the original playback to start")
+			}
+			l.voiced(time.Now(), true)
+			await(t, interrupted)
+			if err := l.PublishForTurn("verified", "new result"); err != nil {
+				t.Fatal(err)
+			}
+			if await(t, rendered) != "new result" {
+				t.Fatal("interrupted speech was rendered again")
+			}
+			lastSpeech := time.Now()
+			l.voiced(lastSpeech, false)
+			if closeWhileSpeaking {
+				l.Close()
+				await(t, l.Done())
+			} else {
+				if got := await(t, playing); got != 'n' || time.Since(lastSpeech) < personalQuietTime {
+					t.Fatal("pending result did not wait for the latest quiet window")
+				}
+			}
+			select {
+			case <-playing:
+				t.Fatal("unexpected extra playback")
+			case <-time.After(2 * framePeriod):
+			}
+		})
+	}
 }
 
 func TestAddressRequiresVocative(t *testing.T) {

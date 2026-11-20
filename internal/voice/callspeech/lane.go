@@ -104,6 +104,7 @@ type Lane struct {
 	scopes        map[string]turnScope
 	epoch         uint64
 	playCancel    context.CancelFunc
+	stopping      chan struct{}
 	speakingUntil time.Time
 }
 
@@ -312,7 +313,7 @@ func (l *Lane) enqueue(u utterance) {
 
 func (l *Lane) voiced(now time.Time, start bool) {
 	l.mu.Lock()
-	l.speakingUntil = now.Add(quietTime)
+	l.speakingUntil = now.Add(personalQuietTime)
 	if !start {
 		l.mu.Unlock()
 		return
@@ -321,10 +322,18 @@ func (l *Lane) voiced(now time.Time, start bool) {
 	if l.playCancel != nil {
 		l.playCancel()
 	}
-	l.mu.Unlock()
-	if l.cfg.Stop != nil && l.ctx.Err() == nil {
-		l.cfg.Stop()
+	if l.cfg.Stop == nil || l.ctx.Err() != nil {
+		l.mu.Unlock()
+		return
 	}
+	stopping := make(chan struct{})
+	l.stopping = stopping
+	l.mu.Unlock()
+	l.cfg.Stop()
+	l.mu.Lock()
+	close(stopping)
+	l.stopping = nil
+	l.mu.Unlock()
 }
 
 func (l *Lane) play() {
@@ -339,27 +348,17 @@ func (l *Lane) play() {
 }
 
 func (l *Lane) playPublication(p publication) {
-	l.mu.Lock()
-	current := l.epoch == p.epoch && l.ctx.Err() == nil && !time.Now().Before(l.speakingUntil)
+	if l.ctx.Err() != nil || l.cfg.Play == nil {
+		return
+	}
 	ctx, cancel := context.WithCancel(l.ctx)
-	if current {
-		l.playCancel = cancel
-	}
-	l.mu.Unlock()
 	defer cancel()
-	if l.ctx.Err() != nil {
-		return
-	}
-	text := p.text
-	if !current || ctx.Err() != nil || l.cfg.Play == nil {
-		return
-	}
 	var pcm []byte
-	if text == "" {
+	if p.text == "" {
 		pcm = localCue()
 	} else {
 		var err error
-		pcm, err = l.provider.render(ctx, l.cfg.Key, l.cfg.Voice, text)
+		pcm, err = l.provider.render(ctx, l.cfg.Key, l.cfg.Voice, p.text)
 		if err != nil {
 			if ctx.Err() == nil {
 				slog.Debug("call publication speech rendering failed", "error", err)
@@ -367,6 +366,14 @@ func (l *Lane) playPublication(p publication) {
 			return
 		}
 	}
+	if !l.beginPlayback(p, cancel) {
+		return
+	}
+	defer func() {
+		l.mu.Lock()
+		l.playCancel = nil
+		l.mu.Unlock()
+	}()
 	ticker := time.NewTicker(framePeriod)
 	defer ticker.Stop()
 	for len(pcm) != 0 && ctx.Err() == nil {
@@ -383,6 +390,39 @@ func (l *Lane) playPublication(p publication) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+func (l *Lane) beginPlayback(p publication, cancel context.CancelFunc) bool {
+	for {
+		l.mu.Lock()
+		wait := time.Until(l.speakingUntil)
+		stopping := l.stopping
+		if l.ctx.Err() != nil || (p.text == "" && (p.epoch != l.epoch || wait > 0)) {
+			l.mu.Unlock()
+			return false
+		}
+		if stopping == nil && wait <= 0 {
+			l.playCancel = cancel
+			l.mu.Unlock()
+			return true
+		}
+		l.mu.Unlock()
+		if stopping != nil {
+			select {
+			case <-l.ctx.Done():
+				return false
+			case <-stopping:
+			}
+			continue
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-l.ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 		}
 	}
 }
