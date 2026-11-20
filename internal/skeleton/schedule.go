@@ -282,7 +282,7 @@ func (a *coreAPI) scheduledAgyHistory(session, beforeItem string) ([]protocol.Jo
 		return nil, false
 	}
 	m, found := a.core.Get(local)
-	if !found || m.AgentType != schedule.RouteAgy || !m.ScheduledCompleted || m.RosterHidden {
+	if !found || m.AgentType != schedule.RouteAgy || !m.ScheduleProjected || m.RosterHidden {
 		return nil, false
 	}
 	evidence, found := agyacp.ReadEvidence(filepath.Join(a.scheduleStateDir, local), m.ScheduleAttempt)
