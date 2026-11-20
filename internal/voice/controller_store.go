@@ -404,7 +404,7 @@ func (s *Store) rejectQueuedControllerInput(b ManagerBinding, expected Admission
 			}
 		}
 		a.Reason = reason
-		if reason == ErrDiscussionSourceChanged.Error() {
+		if reason == ErrDiscussionSourceChanged.Error() && (a.Origin == nil || a.Origin.Voice.Generation == 0) {
 			a.Phase = "superseded"
 			putRecord(st, "admissions", &st.Admissions, k, a)
 			return nil

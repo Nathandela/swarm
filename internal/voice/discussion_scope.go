@@ -26,6 +26,7 @@ type DiscussionScope struct {
 	InstallationID     string
 	GuildID            string
 	ThreadID           string
+	SupervisorSocket   string
 	VerifyAudience     func(context.Context) error
 	ProjectEnrolled    func(string) bool
 	VerifyOrigin       func(context.Context, schema.MessageOrigin) error
@@ -45,7 +46,8 @@ func (s *DiscussionScope) validateOrigin(origin schema.MessageOrigin) bool {
 		return false
 	}
 	return (origin.Kind == "external" || origin.Kind == "owner_direct") && origin.Validate() == nil &&
-		origin.DiscussionID == s.DiscussionID && origin.InstallationID == s.InstallationID && origin.GuildID == s.GuildID && origin.ChannelID == s.ThreadID && origin.MessageID != ""
+		origin.DiscussionID == s.DiscussionID && origin.InstallationID == s.InstallationID && origin.GuildID == s.GuildID && origin.ChannelID == s.ThreadID &&
+		(origin.MessageID != "" || origin.Voice.SupervisorSocket != "" && origin.Voice.SupervisorSocket == s.SupervisorSocket)
 }
 
 func (c *Controller) submitDiscussion(origin schema.MessageOrigin, text, questionID, questionHash string) (Admission, error) {

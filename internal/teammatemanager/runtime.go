@@ -212,7 +212,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
 		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
-		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
+		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID, SupervisorSocket: socket,
 		History: entry.read, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
 	})
 	if err != nil {
@@ -263,7 +263,7 @@ func (d *discussion) checkOrigin(ctx context.Context, origin schema.MessageOrigi
 		return voice.ErrNotFound
 	}
 	_, err := reader(ctx, discord.TeammateHistoryQuery{Source: stage, AdmissionID: origin.RequestID,
-		Revision: origin.Revision, MessageID: origin.MessageID, AuthorID: origin.ActorID})
+		Revision: origin.Revision, MessageID: origin.MessageID, AuthorID: origin.ActorID, Voice: origin.Voice, Authority: discord.Authority(origin.Kind)})
 	if errors.Is(err, discord.ErrTeammateSourceChanged) {
 		return voice.ErrDiscussionSourceChanged
 	}
@@ -370,11 +370,22 @@ func (r *Runtime) ValidatePublication(ctx context.Context, bound discord.Teammat
 	return err
 }
 
+func (r *Runtime) PublicationCallAdmission(ctx context.Context, bound discord.TeammateDiscussion, p discord.TeammatePublication) (string, error) {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return "", err
+	}
+	defer r.release(entry)
+	source := voice.DiscussionOutputSource{AdmissionID: p.AdmissionID, JobID: p.JobID, AttemptID: p.AttemptID, SystemCause: p.SystemCause}
+	output := voice.DiscussionOutput{DiscussionOutputSource: source, ID: p.ID, QuestionID: p.QuestionID, QuestionHash: p.QuestionHash, Sequence: p.Sequence}
+	return entry.voice.PublicationCallAdmission(ctx, output, p.BodyHash)
+}
+
 func discussionOrigin(input discord.TeammateAdmission) schema.MessageOrigin {
 	return schema.MessageOrigin{
 		Kind: string(input.Authority), InstallationID: input.Discussion.InstallationID, DiscussionID: input.Discussion.ID, RequestID: input.OperationID,
 		ActorID: input.Author.ID, ActorName: input.Author.Name, RequesterID: input.InvokerID, GuildID: input.Discussion.Route.GuildID,
-		ChannelID: input.Discussion.Route.ChannelID, MessageID: input.Route.MessageID, Revision: input.Revision,
+		ChannelID: input.Discussion.Route.ChannelID, MessageID: input.Route.MessageID, Revision: input.Revision, Voice: input.Voice,
 	}
 }
 
@@ -603,6 +614,14 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 				fmt.Fprintf(&msg, "History: %s\n", page.Notice)
 			}
 		}
+	}
+	if input.Voice != (schema.VoiceOrigin{}) {
+		body, _ := json.Marshal(struct {
+			Author               discord.Actor
+			CallID, TurnID, Text string
+		}{input.Author, input.Voice.CallID, input.Voice.TurnID, input.Text})
+		fmt.Fprintf(&msg, "Current verified Discord call transcript (JSON) %s", body)
+		return msg.String()
 	}
 	body, _ := json.Marshal(struct {
 		Author                   discord.Actor

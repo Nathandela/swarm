@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 
 	"github.com/bwmarrin/discordgo"
@@ -75,6 +76,7 @@ type TeammateAdmission struct {
 	InvokerID                            string
 	Authority                            Authority
 	Sequence                             uint64
+	Voice                                schema.VoiceOrigin `json:",omitzero"`
 }
 
 type TeammatePublication struct {
@@ -83,6 +85,7 @@ type TeammatePublication struct {
 	SystemCause                                                       string
 	ID, Body, AdmissionID, JobID, AttemptID, QuestionID, QuestionHash string
 	Sequence                                                          uint64
+	callAdmission                                                     string
 }
 
 func PublicationBodyHash(body string) string { return digest(body) }
@@ -113,6 +116,8 @@ var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is una
 type TeammateHistoryQuery struct {
 	Source, Cursor, Anchor                     string
 	AdmissionID, Revision, MessageID, AuthorID string
+	Voice                                      schema.VoiceOrigin
+	Authority                                  Authority
 }
 type TeammateHistoryPage struct {
 	EvidenceFragment                    string `json:",omitempty"`

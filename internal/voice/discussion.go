@@ -199,7 +199,9 @@ func (d *DiscussionController) stopFollowing() {
 func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !d.scope.validateOrigin(input.Origin) {
+	voiceOrigin := input.Origin.Voice != (schema.VoiceOrigin{})
+	if !d.scope.validateOrigin(input.Origin) || voiceOrigin && (d.scope.VerifyOrigin == nil || d.scope.VerifyGrant == nil ||
+		input.Supersedes != "" || hashValue(input.Answer) != input.Origin.Voice.BodyHash) {
 		return ErrInvalid
 	}
 	st, err := d.store.Snapshot()
@@ -210,7 +212,7 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	if err != nil {
 		return err
 	}
-	if a.Origin != nil && *a.Origin == input.Origin {
+	if a.Origin != nil && (*a.Origin == input.Origin || voiceOrigin) {
 		return nil
 	}
 	if a.Origin != nil && (a.Phase != "superseded" || a.Origin.Revision != input.Supersedes) {
@@ -219,8 +221,13 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	// Existing discussions already have durable admission custody. Store verified
 	// human input before touching retirement or consulting native readiness.
 	controller := d.controller
+	if voiceOrigin {
+		if err := d.scope.VerifyOrigin(ctx, input.Origin); err != nil {
+			return err
+		}
+	}
 	if st.CurrentConversation == d.cfg.ConversationID {
-		if d.scope.VerifyOrigin != nil {
+		if !voiceOrigin && d.scope.VerifyOrigin != nil {
 			if err := d.scope.VerifyOrigin(ctx, input.Origin); err != nil {
 				return err
 			}
@@ -235,6 +242,11 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 			return err
 		}
 		controller = d.controller
+		if voiceOrigin {
+			if err := d.scope.VerifyOrigin(ctx, input.Origin); err != nil {
+				return err
+			}
+		}
 	}
 	project, explicit := "", false
 	if input.Project != nil {
@@ -267,7 +279,7 @@ func (d *DiscussionController) AdmissionState(origin schema.MessageOrigin) (stri
 	if err != nil || a.Origin == nil {
 		return "missing", err
 	}
-	if *a.Origin != origin {
+	if *a.Origin != origin && origin.Voice == (schema.VoiceOrigin{}) {
 		if a.Phase != "superseded" {
 			return "missing", ErrConflict
 		}
@@ -317,7 +329,10 @@ func findDiscussionAdmission(st State, origin schema.MessageOrigin) (Admission, 
 			continue
 		}
 		previous := *a.Origin
-		previous.Revision, previous.ActorName = origin.Revision, origin.ActorName
+		if origin.Voice == (schema.VoiceOrigin{}) && previous.Voice == (schema.VoiceOrigin{}) {
+			previous.Revision = origin.Revision
+		}
+		previous.ActorName = origin.ActorName
 		if previous != origin {
 			return Admission{}, ErrConflict
 		}

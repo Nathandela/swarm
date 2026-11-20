@@ -10,16 +10,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
 
 type teammateConnector struct {
-	service   *Service
-	client    *DiscordClient
-	manager   TeammateManager
-	cursorKey []byte
-	wake      chan struct{}
+	service                *Service
+	client                 *DiscordClient
+	manager                TeammateManager
+	cursorKey              []byte
+	wake                   chan struct{}
+	verifyCallTurn         func(context.Context, TeammateDiscussion, schema.VoiceOrigin, bool) error
+	observeCallPublication func(TeammateDiscussion, TeammatePublication)
+	callAdmissionMu        sync.Mutex
+	callAdmissions         map[string]int
 }
 
 func (t *teammateConnector) signal() {
@@ -591,7 +596,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		waiting, hasAccepted := accepted[b.Route.ChannelID]
 		if !b.Opened && !hasAccepted && !b.ProvisionalCancelled {
 			if !predecessors[b.Route.ChannelID] {
-				if err := store.teammatePark(b.TeammateDiscussion, through, nil); err != nil {
+				if err := t.parkCallDiscussion(b.TeammateDiscussion, through, nil); err != nil {
 					return err
 				}
 			}
@@ -614,11 +619,15 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				cancel()
 			}
 			var emitted []string
+			var callOutputs []TeammatePublication
 			managerErr := t.manager.Sync(ctx, b.TeammateDiscussion, t.history(b.TeammateDiscussion), func(p TeammatePublication) error {
 				if err := store.teammateQueueOutput(b.TeammateDiscussion, p, t.service.Now()); err != nil {
 					return err
 				}
 				emitted = append(emitted, p.ID)
+				if t.observeCallPublication != nil && t.service.Config.Calls != nil && b.Route.ChannelID == t.service.Config.Calls.DiscussionID {
+					callOutputs = append(callOutputs, p)
+				}
 				return nil
 			})
 			if managerErr == nil && b.InputNoticeID != "" {
@@ -639,6 +648,11 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 			var outputErr error
 			if b.Opened {
 				outputErr = t.sendPending(ctx, b.TeammateDiscussion)
+			}
+			if ackErr == nil {
+				for _, p := range callOutputs {
+					t.dispatchCallPublication(ctx, b.TeammateDiscussion, p)
+				}
 			}
 			if err := errors.Join(repairErr, noticeErr, managerErr, ackErr, compactErr, outputErr); err != nil {
 				return err
@@ -668,7 +682,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 							}
 							parked = &view
 						}
-						return store.teammatePark(b.TeammateDiscussion, through, parked)
+						return t.parkCallDiscussion(b.TeammateDiscussion, through, parked)
 					}
 				}
 			}

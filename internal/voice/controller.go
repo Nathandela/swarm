@@ -249,7 +249,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 			if c.discussion.journalReady != nil && !c.discussion.journalReady() {
 				return ErrControllerJournalResync
 			}
-			if a.Origin != nil && !a.SourceCutover && c.discussion.VerifyOrigin != nil {
+			if a.Origin != nil && a.Origin.Voice.Generation == 0 && !a.SourceCutover && c.discussion.VerifyOrigin != nil {
 				if err := c.discussion.VerifyOrigin(ctx, *a.Origin); err != nil {
 					if !errors.Is(err, ErrDiscussionSourceChanged) {
 						return err
@@ -344,6 +344,17 @@ func (c *Controller) Tick(ctx context.Context) error {
 		}
 		if err = ctx.Err(); err != nil {
 			return err
+		}
+		if c.discussion != nil && a.Origin != nil && a.Origin.Voice.Generation != 0 && !a.SourceCutover {
+			if c.discussion.VerifyOrigin == nil {
+				return ErrInvalid
+			}
+			if err := c.discussion.VerifyOrigin(ctx, *a.Origin); err != nil {
+				if !errors.Is(err, ErrDiscussionSourceChanged) {
+					return err
+				}
+				return c.store.rejectQueuedControllerInput(c.binding, a, ErrDiscussionSourceChanged.Error())
+			}
 		}
 		// The exact prepared tuple is a CAS: stale dispatchers cannot execute a renewed operation.
 		if err = c.store.beginControllerInput(c.binding, a); err != nil {

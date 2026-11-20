@@ -132,3 +132,42 @@ func (d *DiscussionController) validatePublicationAttempt(st State, id string) e
 	}
 	return nil
 }
+
+// PublicationCallAdmission resolves the exact human input for a validated
+// publication. A worker wake needs an exact durable attempt and origin.
+func (d *DiscussionController) PublicationCallAdmission(ctx context.Context, output DiscussionOutput, bodyHash string) (string, error) {
+	if err := d.ValidatePublication(ctx, output, bodyHash); err != nil {
+		return "", err
+	}
+	st, err := d.store.readView()
+	if err != nil {
+		return "", err
+	}
+	conversation := d.cfg.ConversationID
+	request := output.AdmissionID
+	if output.JobID != "" && !strings.HasPrefix(request, "dv_") {
+		wake, ok := st.Wakes[key(conversation, request)]
+		event := st.Events[key(conversation, wake.EventID)]
+		if !ok || event.JobID != output.JobID || event.AttemptID != output.AttemptID {
+			return "", ErrNotFound
+		}
+		var initialSource string
+		for _, worker := range st.Workers {
+			if worker.ConversationID == conversation && worker.JobID == output.JobID && worker.AttemptID == output.AttemptID &&
+				!worker.Reserved && worker.InitialSourceID != "" {
+				if initialSource != "" && initialSource != worker.InitialSourceID {
+					return "", ErrStale
+				}
+				initialSource = worker.InitialSourceID
+			}
+		}
+		request, _ = strings.CutPrefix(initialSource, "discussion:")
+	}
+	for _, admission := range st.Admissions {
+		if admission.ConversationID == conversation && admission.SourceCutover && admission.Origin != nil &&
+			admission.Origin.RequestID == request && admission.Origin.Voice.Generation != 0 {
+			return request, nil
+		}
+	}
+	return "", ErrNotFound
+}

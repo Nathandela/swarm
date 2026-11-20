@@ -27,7 +27,7 @@ var (
 	ErrNotFound = errors.New("discord: reference not found")
 	ErrInvalid  = errors.New("discord: invalid request or transition")
 )
-var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases", "publication_index", teammateIngressBucket, teammateIngressGuardBucket, teammatePendingBucket, teammateDiscussionBucket, teammateActiveBindingBucket, teammateBindingIDBucket, teammateMetaBucket, teammateOutboxBucket, teammateReceiptBucket}
+var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases", "publication_index", callAdmissionBucket, teammateIngressBucket, teammateIngressGuardBucket, teammatePendingBucket, teammateDiscussionBucket, teammateActiveBindingBucket, teammateBindingIDBucket, teammateMetaBucket, teammateOutboxBucket, teammateReceiptBucket}
 
 type Store struct{ db *bolt.DB }
 type requestRecord struct {
