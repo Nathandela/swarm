@@ -21,7 +21,7 @@ func TestDispatcherCallPreflightRedactsFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &dispatcherCalls{ctx: context.Background(), t: &teammateConnector{service: &Service{Config: Config{Calls: &DispatcherCallsConfig{HelperPath: helper, SpeechStateDir: keyDir}}}}}
-	if got := d.preflight(); got != "voice helper check failed; verify helper installation and Node 22.12+" || strings.Contains(got, "private") {
+	if got := d.preflight(); got != "voice helper check failed. Verify the helper installation and Node 24.17+ within Node 24" || strings.Contains(got, "private") {
 		t.Fatalf("helper failure = %q", got)
 	}
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {

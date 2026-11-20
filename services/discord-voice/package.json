@@ -4,15 +4,15 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.12.0 <23"
+    "node": ">=24.17.0 <25"
   },
   "scripts": {
     "test": "node --test"
   },
   "dependencies": {
-    "@discordjs/voice": "0.19.2",
+    "@discordjs/voice": "1.0.0-dev.1795176133-cd7400323",
     "@noble/ciphers": "2.0.1",
-    "@snazzah/davey": "0.1.12",
+    "@snazzah/davey": "0.2.0",
     "opusscript": "0.1.1"
   }
 }

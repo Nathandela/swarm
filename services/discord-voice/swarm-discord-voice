@@ -14,9 +14,9 @@ const maxPlayback = 6;
 const maxReceive = 3;
 const maxFrameAge = 120;
 
-if (version !== '0.19.2' || process.versions.node.split('.')[0] !== '22' ||
-    Number(process.versions.node.split('.')[1]) < 12) {
-  process.stderr.write('swarm-discord-voice requires Node 22.12+ within Node 22 and the pinned dependencies\n');
+if (version !== '1.0.0-dev.1795176133-cd7400323' || process.versions.node.split('.')[0] !== '24' ||
+    Number(process.versions.node.split('.')[1]) < 17) {
+  process.stderr.write('swarm-discord-voice requires Node 24.17+ within Node 24 and the pinned dependencies\n');
   process.exit(1);
 }
 
@@ -166,16 +166,17 @@ function start(message) {
     speakers.set(userId, speaker);
     const stream = receiver.subscribe(userId);
     stream.on('error', () => stop('receive_error'));
-    stream.on('data', (opus) => {
-      if (!gate() || opus.length > OpusScript.MAX_PACKET_SIZE) return;
+    stream.on('data', ({payload: opus}) => {
+      if (!gate()) return;
+      if (opus.length > OpusScript.MAX_PACKET_SIZE) return stop('invalid_opus');
       let pcm;
       try {
         pcm = decoder.decode(opus);
       } catch {
-        return;
+        return stop('invalid_opus');
       }
-      if (pcm.length !== frameBytes) return;
-      if (speaker.frames.length === maxReceive) speaker.frames.shift();
+      if (pcm.length !== frameBytes) return stop('invalid_opus');
+      if (speaker.frames.length === maxReceive) return stop('receive_backlog');
       speaker.frames.push({pcm, receivedAt: performance.now()});
       scheduleTick();
     });
@@ -253,9 +254,9 @@ function tick() {
   const now = performance.now();
   let pending = false;
   for (const [userId, speaker] of speakers) {
-    while (speaker.frames.length && now - speaker.frames[0].receivedAt > maxFrameAge) speaker.frames.shift();
     const frame = speaker.frames.shift();
-    if (frame) send({type: 'audio', userId, pcm: frame.pcm.toString('base64')});
+    if (frame && now - frame.receivedAt > maxFrameAge) return stop('receive_stale');
+    if (frame && !send({type: 'audio', userId, pcm: frame.pcm.toString('base64')})) return stop('pipe_blocked');
     pending ||= speaker.frames.length > 0;
   }
   while (playback.length && now - playback[0].receivedAt > maxFrameAge) playback.shift();

@@ -27,7 +27,7 @@ func (d *dispatcherCalls) preflight() string {
 	cmd.Env = []string{"PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"}
 	cmd.Stdout, cmd.Stderr = nil, nil
 	if err := cmd.Run(); err != nil {
-		return "voice helper check failed; verify helper installation and Node 22.12+"
+		return "voice helper check failed. Verify the helper installation and Node 24.17+ within Node 24"
 	}
 	return ""
 }

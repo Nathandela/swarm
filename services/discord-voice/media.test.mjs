@@ -8,18 +8,21 @@ import OpusScript from 'opusscript';
 import { daveState, frameBytes, frameSamples, guardReceiver, maxLine, pcmFrame } from './media.mjs';
 
 const helper = fileURLToPath(new URL('./swarm-discord-voice', import.meta.url));
+const childTimeout = 10000;
 const start = {type: 'start', guildId: '1', channelId: '2', botId: '3', speakers: ['4']};
 
 function run(...messages) {
-  return spawnSync(process.execPath, [helper], {
+  const result = spawnSync(process.execPath, [helper], {
     input: messages.map((message) => JSON.stringify(message) + '\n').join(''),
     encoding: 'utf8',
-    timeout: 3000,
+    timeout: childTimeout,
   });
+  assert.ifError(result.error);
+  return result;
 }
 
 test('dependency probe and a single scoped gateway join', () => {
-  assert.equal(spawnSync(process.execPath, [helper, '--check']).status, 0);
+  assert.equal(spawnSync(process.execPath, [helper, '--check'], {timeout: childTimeout}).status, 0);
   const result = run(start, {type: 'clear'}, {type: 'stop'});
   assert.equal(result.status, 0);
   assert.equal(result.stderr, '');
@@ -49,7 +52,7 @@ test('rejects unscoped gateway material, self audio, and oversized commands', ()
 test('MLS readiness, rekey, and legacy RTP checks', () => {
   const dave = {
     protocolVersion: 1,
-    session: {ready: true, protocolVersion: 1, epoch: 1n},
+    session: {ready: true, canEncrypt: true, protocolVersion: 1, epoch: 1n},
     pendingTransitions: new Map(),
     downgraded: false,
     reinitializing: false,
@@ -81,7 +84,7 @@ test('MLS readiness, rekey, and legacy RTP checks', () => {
 });
 
 test('receive gate refuses replay, late packets, passthrough, and SSRC rebinding', () => {
-  const opus = Buffer.from('test-fixture');
+  const opus = {payload: Buffer.from('test-fixture')};
   let decrypts = 0;
   const receiver = {parsePacket: () => { decrypts++; return opus; }};
   let active = true;
@@ -95,12 +98,13 @@ test('receive gate refuses replay, late packets, passthrough, and SSRC rebinding
     const rtp = Buffer.alloc(32);
     rtp.writeUInt16BE(seq, 2);
     rtp.writeUInt32BE(ssrc, 8);
-    return receiver.parsePacket(rtp, '', null, null, user);
+    return receiver.parsePacket(rtp, '', null, null, user, ssrc);
   }
   assert.equal(packet(65534, 2, 'other'), null);
   assert.equal(packet(65534, 2), opus);
   assert.equal(packet(65534, 2), null);
   assert.equal(packet(65533, 2), null);
+  assert.equal(packet(65535, 2), opus);
   assert.equal(packet(0, 2), opus);
   passthrough = true;
   assert.equal(packet(1, 2), null);
@@ -109,7 +113,7 @@ test('receive gate refuses replay, late packets, passthrough, and SSRC rebinding
   assert.equal(packet(2, 2), null);
   active = true;
   assert.equal(packet(2, 3), null);
-  assert.equal(decrypts, 3);
+  assert.equal(decrypts, 4);
   assert.deepEqual(retires, ['speaker_rebound']);
 });
 
@@ -143,14 +147,16 @@ const server = {type: 'voice_server', data: {
 
 function mockConnection(change, ...messages) {
   const voice = import.meta.resolve('@discordjs/voice');
+  const opus = import.meta.resolve('opusscript');
   const mock = `
     import { EventEmitter } from 'node:events';
+    import OpusScript from ${JSON.stringify(opus)};
     import { NetworkingStatusCode, VoiceConnection, VoiceConnectionStatus } from ${JSON.stringify(voice)};
     VoiceConnection.prototype.configureNetworking = function() {
       if (!this.packets.state || !this.packets.server) return;
       const dave = {
         protocolVersion: 1,
-        session: {ready: true, protocolVersion: 1, epoch: 1n, getUserIds: () => ['3', '4']},
+        session: {ready: true, canEncrypt: true, protocolVersion: 1, epoch: 1n, getUserIds: () => ['3', '4']},
         pendingTransitions: new Map(),
         downgraded: false,
         reinitializing: false,
@@ -171,8 +177,9 @@ function mockConnection(change, ...messages) {
   const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(mock), helper], {
     input: [start, ...messages].map((message) => JSON.stringify(message) + '\n').join(''),
     encoding: 'utf8',
-    timeout: 3000,
+    timeout: childTimeout,
   });
+  assert.ifError(result.error);
   assert.equal(result.stderr, '');
   return {status: result.status, events: result.stdout.trim().split('\n').map(JSON.parse)};
 }
@@ -211,6 +218,7 @@ test('sole member without an established MLS group cannot open the media gate', 
   `;
   assert.equal(spawnSync(process.execPath, ['--input-type=module', '-e', fixture], {
     cwd: fileURLToPath(new URL('.', import.meta.url)),
+    timeout: childTimeout,
   }).status, 0);
 });
 
@@ -237,9 +245,51 @@ test('pinned voice package round-trips both negotiated RTP AEAD modes', async ()
     const transport = {encryptionMode, secretKey, nonceBuffer: Buffer.alloc(nonceBytes), nonce: 0};
     const encrypted = Networking.prototype.encryptOpusPacket(packet, transport, header);
     const rtp = Buffer.concat([header, ...encrypted]);
-    const decrypt = () => VoiceReceiver.prototype.decrypt(rtp, encryptionMode, Buffer.alloc(nonceBytes), secretKey);
+    const decrypt = () => VoiceReceiver.prototype.decrypt(rtp, encryptionMode, Buffer.alloc(nonceBytes), secretKey, 12);
     assert.deepEqual(decrypt(), packet);
     rtp[12] ^= 1;
     assert.throws(decrypt);
   }
+});
+
+test('active RTP gaps fault while Discord silence and idle gaps never emit audio', () => {
+  const audio = {payload: Buffer.from('voice')};
+  const silence = {payload: Buffer.from([0xf8, 0xff, 0xfe])};
+  const dave = {session: {canPassthrough: () => false}};
+  const faults = [];
+  let at = 0;
+  let next = audio;
+  const receiver = {parsePacket: () => next};
+  guardReceiver(receiver, () => dave, new Map([['speaker', {}]]), (code) => faults.push(code), () => at);
+  function packet(seq) {
+    const rtp = Buffer.alloc(32);
+    rtp.writeUInt16BE(seq, 2);
+    return receiver.parsePacket(rtp, '', null, null, 'speaker', 0);
+  }
+  assert.equal(packet(1), audio);
+  next = silence;
+  at = 20;
+  assert.equal(packet(2), null);
+  next = audio;
+  at = 40;
+  assert.equal(packet(3), audio);
+  assert.equal(packet(3), null);
+  at = 500;
+  assert.equal(packet(10), audio);
+  at = 540;
+  assert.equal(packet(12), null);
+  assert.deepEqual(faults, ['receive_discontinuity']);
+});
+
+test('receive overflow faults before exporting a partial burst', () => {
+  const result = mockConnection(`
+    const codec = new OpusScript(24000, 1, OpusScript.Application.VOIP);
+    const payload = codec.encode(Buffer.alloc(960), 480);
+    const stream = this.receiver.subscriptions.get('4');
+    for (let i = 0; i < 4; i++) stream.emit('data', {payload});
+    codec.delete();
+  `, state, server);
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.events.map((event) => event.type), ['gateway', 'ready', 'fault']);
+  assert.equal(result.events.at(-1).code, 'receive_backlog');
 });
