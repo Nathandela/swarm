@@ -42,6 +42,7 @@ type DiscordClient struct {
 	OnInteraction    func(*discordgo.InteractionCreate)
 	OnReady          func(*discordgo.Ready)
 	onDispatch       func(gatewayFrame, string) error
+	callGateway      *callGateway
 	channelRates     map[string]*discordChannelRate
 	globalReset      time.Time
 }
@@ -232,11 +233,14 @@ func (c *DiscordClient) Close() error {
 	return nil
 }
 
+var errCallGatewayIdentify = errors.New("discord: call Gateway needs a fresh roster")
+
 type gatewayFrame struct {
 	Op       int             `json:"op"`
 	Data     json.RawMessage `json:"d"`
 	Sequence *int64          `json:"s"`
 	Type     string          `json:"t"`
+	replayed bool
 }
 
 func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done chan<- struct{}) {
@@ -260,13 +264,14 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 	sessionID := ""
 	resumeURL := ""
 	var seq int64
+	var identifiedAt time.Time
 	backoff := time.Second
 	for ctx.Err() == nil {
 		base := gateway.URL
 		if sessionID != "" && resumeURL != "" {
 			base = resumeURL
 		}
-		err := c.gatewayConnection(ctx, base, &sessionID, &resumeURL, &seq, func() {
+		err := c.gatewayConnection(ctx, base, &sessionID, &resumeURL, &seq, &identifiedAt, func() {
 			if !connected {
 				connected = true
 				ready <- nil
@@ -274,7 +279,7 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 			backoff = time.Second
 		})
 		status := websocket.CloseStatus(err)
-		if status == 4007 || status == 4009 {
+		if status == 4007 || status == 4009 || errors.Is(err, errCallGatewayIdentify) {
 			sessionID = ""
 			resumeURL = ""
 			seq = 0
@@ -300,8 +305,12 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 		if ctx.Err() != nil {
 			return
 		}
-		_ = err
-		timer := time.NewTimer(backoff)
+		delay := backoff
+		if sessionID == "" && c.callGateway != nil {
+			// Discord admits one Identify per concurrency bucket per five seconds.
+			delay = max(delay, time.Until(identifiedAt.Add(5*time.Second)))
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
@@ -313,7 +322,8 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 		}
 	}
 }
-func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sessionID, resumeURL *string, seq *int64, onReady func()) error {
+
+func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sessionID, resumeURL *string, seq *int64, identifiedAt *time.Time, onReady func()) error {
 	defer c.connected.Store(false)
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
@@ -381,14 +391,33 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 	}()
 	defer func() { stop(); <-heartbeatDone }()
 	var identify any
-	if *sessionID != "" {
+	resuming := *sessionID != ""
+	replaying := resuming
+	freshReady := false
+	var callSeq int64
+	if g := c.callGateway; g != nil {
+		defer func() {
+			g.invalidate()
+			c.connected.Store(false)
+			if freshReady && g.disconnect != nil {
+				g.disconnect()
+			}
+		}()
+	}
+	if resuming {
 		identify = map[string]any{"op": 6, "d": map[string]any{"token": "Bot " + c.token, "session_id": *sessionID, "seq": *seq}}
 	} else {
 		intents := discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 		if c.personal {
 			intents = discordgo.IntentsDirectMessages
 		}
+		if c.callGateway != nil {
+			intents |= discordgo.IntentsGuilds | discordgo.IntentsGuildVoiceStates
+		}
 		identify = map[string]any{"op": 2, "d": map[string]any{"token": "Bot " + c.token, "intents": intents, "properties": map[string]string{"os": "swarm", "browser": "swarm", "device": "swarm"}}}
+	}
+	if !resuming {
+		*identifiedAt = time.Now()
 	}
 	if err = wsjson.Write(connCtx, conn, identify); err != nil {
 		return err
@@ -431,7 +460,16 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			}
 			return errors.New("discord: invalid gateway session")
 		case 0:
-			if c.onDispatch != nil && frame.Type != "READY" {
+			// The text connector can suppress reserved call commands on
+			// replay without treating them as fresh voice invitations.
+			frame.replayed = replaying && frame.Type != "READY"
+			if c.callGateway != nil && freshReady && frame.Type != "READY" && (frame.Sequence == nil || *frame.Sequence > callSeq) {
+				if frame.Sequence != nil {
+					callSeq = *frame.Sequence
+				}
+				c.callGateway.handle(connCtx, conn, frame)
+			}
+			if c.onDispatch != nil && frame.Type != "READY" && !callPrivateDispatch(frame.Type) {
 				if err = c.onDispatch(frame, *sessionID); err != nil {
 					*seq = durableSeq
 					return err
@@ -450,6 +488,12 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 					}
 					durableSeq = *seq
 				}
+				freshReady = true
+				replaying = false
+				if c.callGateway != nil {
+					callSeq = *seq
+					c.callGateway.handle(connCtx, conn, frame)
+				}
 				*sessionID = ready.SessionID
 				var details struct {
 					ResumeURL string `json:"resume_gateway_url"`
@@ -463,6 +507,12 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 					c.OnReady(&ready)
 				}
 			case "RESUMED":
+				replaying = false
+				if c.callGateway != nil && resuming {
+					// Text replay reached its durable boundary. A new READY
+					// records the cutover gap through the existing repair path.
+					return errCallGatewayIdentify
+				}
 				first = false
 				c.connected.Store(true)
 				onReady()
