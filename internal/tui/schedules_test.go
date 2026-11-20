@@ -96,6 +96,25 @@ func scheduleTestUpdate(t *testing.T, model tea.Model, msg tea.Msg) rootModel {
 	return next.(rootModel)
 }
 
+func scheduleEditorKey(t *testing.T, model rootModel, row string, key tea.KeyPressMsg) rootModel {
+	t.Helper()
+	model.selectScheduleRow(row)
+	if got := model.selectedScheduleRow(); got != row {
+		t.Fatalf("row %q unavailable, selected %q", row, got)
+	}
+	return send(model, key).(rootModel)
+}
+
+func applyScheduleCheck(t *testing.T, model rootModel) rootModel {
+	t.Helper()
+	next, cmd := model.Update(schedulePreflightTick{generation: model.scheduleEditorGeneration})
+	if cmd == nil {
+		t.Fatal("editor did not start preflight")
+	}
+	next, _ = next.Update(cmd())
+	return next.(rootModel)
+}
+
 func TestScheduleFromBoardKeepsDraftAndPersistsOrderedRoutes(t *testing.T) {
 	db, err := schedule.Open(t.TempDir())
 	if err != nil {
@@ -104,53 +123,54 @@ func TestScheduleFromBoardKeepsDraftAndPersistsOrderedRoutes(t *testing.T) {
 	dir := t.TempDir()
 	fake := newFakeClient(sWorking("endpoint/a", "codex", dir, "current", time.Minute))
 	m := New(fake, nil, WithSchedules(ScheduleConfig{
-		Open:   func() (ScheduleCatalog, error) { return db, nil },
-		Prompt: func(prompt string) string { return prompt + "\nCompletion instructions" },
+		Open: func() (ScheduleCatalog, error) { return db, nil },
 	}))
 	model := send(m, tea.WindowSizeMsg{Width: 78, Height: 16}).(rootModel)
 	model = send(model, keyRune('m')).(rootModel)
 	model = scheduleTestUpdate(t, model, keyRune('c'))
-	if model.schedules.draft.directory.text != dir || model.schedules.page != scheduleTask {
+	if model.schedules.draft.directory.text != dir || model.schedules.page != scheduleEditor {
 		t.Fatalf("schedule action failed to capture selected directory: %+v", model.schedules)
+	}
+	defaults := model.schedules.draft.spec()
+	if defaults.Calendar.Kind != schedule.CalendarDaily || defaults.Calendar.TimeZone != schedule.HostTimeZone ||
+		defaults.Calendar.Time != "09:00" || defaults.Authority != schedule.AuthorityObserve || defaults.Workspace != schedule.WorkspaceDirectory {
+		t.Fatalf("unexpected defaults: %+v", defaults)
+	}
+	if strings.Contains(ansi.Strip(model.View().Content), "Fallback 1") {
+		t.Fatal("advanced editor opened by default")
 	}
 	model = send(model, tea.PasteMsg{Content: "Nightly review"}).(rootModel)
 	model = send(model, keyDown).(rootModel)
 	model = send(model, tea.PasteMsg{Content: "First line\r\nSecond line"}).(rootModel)
-	model = send(model, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}).(rootModel)
+	model = send(model, scheduleActionKey("ctrl+e")).(rootModel)
 	model = scheduleTestUpdate(t, model, keyEnter)
 	templates, err := db.Templates()
 	if err != nil || len(templates) != 1 || templates[0].Prompt != "First line\nSecond line" {
 		t.Fatalf("template prompt snapshot = %+v, %v", templates, err)
 	}
+	model = scheduleTestUpdate(t, model, scheduleActionKey("ctrl+t"))
 	model = send(model, keyEnter).(rootModel)
-	model = send(model, keyDown).(rootModel)
-	model = sendType(model, "08:00").(rootModel)
-	model = send(model, keyEnter).(rootModel)
-	model = scheduleTestUpdate(t, model, keyEnter)
-	if model.schedules.page != scheduleRoute || model.schedules.errorText == "" {
-		t.Fatal("validation must preserve the route draft")
+	model = scheduleEditorKey(t, model, "primary", scheduleActionKey("right"))
+	if model.schedules.draft.authority != schedule.AuthorityObserve {
+		t.Fatal("selecting Claude broadened authority")
 	}
-	model = send(model, tea.KeyPressMsg{Code: tea.KeyLeft}).(rootModel) // selected directory
-	model = send(model, keyDown).(rootModel)
-	model = send(model, tea.KeyPressMsg{Code: tea.KeyLeft}).(rootModel) // configured authority
-	for range 2 {
-		model = send(model, keyDown).(rootModel)
+	model = scheduleEditorKey(t, model, "authority", scheduleActionKey("left"))
+	model = scheduleEditorKey(t, model, "advanced", keyEnter)
+	model = scheduleEditorKey(t, model, "fallback-agy", keyEnter)
+	model = scheduleEditorKey(t, model, "fallback-codex", keyEnter)
+	model = scheduleEditorKey(t, model, "fallback-codex", keyRune('-'))
+	model = applyScheduleCheck(t, model)
+	if !strings.Contains(model.schedules.nextFiring, "09:00") {
+		t.Fatalf("missing next firing: %q", model.schedules.nextFiring)
 	}
-	model = send(model, keyRune(' ')).(rootModel) // codex
-	model = send(model, keyDown).(rootModel)
-	model = send(model, keyRune(' ')).(rootModel) // claude
-	model = send(model, keyRune('-')).(rootModel) // promote Claude
-	model = scheduleTestUpdate(t, model, keyEnter)
-	if model.schedules.page != scheduleReview || !strings.Contains(model.schedules.preview, "claude → codex") || !strings.Contains(model.schedules.preview, "Completion instructions") {
-		t.Fatalf("unexpected review: %q / %q", model.schedules.preview, model.schedules.errorText)
-	}
-	model = scheduleTestUpdate(t, model, keyEnter)
+	model = scheduleTestUpdate(t, model, scheduleActionKey("ctrl+d"))
 	jobs, err := db.Jobs()
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("job was not persisted: %+v, %v", jobs, err)
 	}
-	if !reflect.DeepEqual(jobs[0].Spec.Agents, []string{"claude", "codex"}) || jobs[0].Spec.Prompt != templates[0].Prompt || filepath.Base(jobs[0].Spec.Directory) != filepath.Base(dir) || model.schedules.page != scheduleJob {
-		t.Fatalf("saved draft differs from review: %+v", jobs[0].Spec)
+	if !reflect.DeepEqual(jobs[0].Spec.Agents, []string{"claude", "codex", "agy"}) || jobs[0].Spec.Prompt != templates[0].Prompt ||
+		filepath.Base(jobs[0].Spec.Directory) != filepath.Base(dir) || jobs[0].State != schedule.JobPaused || model.schedules.page != scheduleJob {
+		t.Fatalf("saved draft differs from editor: %+v", jobs[0])
 	}
 }
 
@@ -335,5 +355,153 @@ func TestScheduleRunRetainsRecentNativeMessagesWhenResumeFails(t *testing.T) {
 	}
 	if strings.Contains(view, "hidden tool output") || strings.Contains(view, "\x1b[2J") {
 		t.Fatal("run detail rendered hidden tool output or a terminal escape from chat")
+	}
+}
+
+func TestScheduleEditorLegacyZoneRequiresExplicitConversion(t *testing.T) {
+	db, err := schedule.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := db.CreateJob(schedule.JobSpec{
+		Name: "Keep my schedule", Prompt: "Review fixture", Directory: t.TempDir(),
+		Authority: schedule.AuthorityObserve, Workspace: schedule.WorkspaceDirectory,
+		Agents:   []string{schedule.RouteCodex},
+		Calendar: schedule.Calendar{Kind: schedule.CalendarWeekly, TimeZone: "America/New_York", Weekday: "Friday", Time: "08:45"},
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := send(New(newFakeClient(), nil), tea.WindowSizeMsg{Width: 90, Height: 22}).(rootModel)
+	model.screen = screenSchedules
+	model.schedules = scheduleModel{catalog: db, page: scheduleJob, job: legacy}
+	model = send(model, keyRune('e')).(rootModel)
+	if !strings.Contains(ansi.Strip(model.View().Content), "America/New_York (fixed)") {
+		t.Fatal("legacy zone not displayed")
+	}
+	model = scheduleEditorKey(t, model, "zone", scheduleActionKey("right"))
+	model = scheduleEditorKey(t, model, "convert-zone", keyEnter)
+	if model.schedules.page != scheduleConvertZone {
+		t.Fatal("conversion should show its effect before accepting")
+	}
+	model = send(model, keyEsc).(rootModel)
+	if model.schedules.draft.spec().Calendar != legacy.Spec.Calendar {
+		t.Fatal("opening editor and cancelling conversion changed the legacy calendar")
+	}
+	model = scheduleTestUpdate(t, model, scheduleActionKey("ctrl+s"))
+	if model.schedules.job.Spec.Calendar != legacy.Spec.Calendar {
+		t.Fatal("saving a changed job silently converted its legacy zone")
+	}
+	model = send(model, keyRune('e')).(rootModel)
+	model = scheduleEditorKey(t, model, "convert-zone", keyEnter)
+	model = send(model, keyRune('y')).(rootModel)
+	model = scheduleTestUpdate(t, model, scheduleActionKey("ctrl+s"))
+	want := legacy.Spec.Calendar
+	want.TimeZone = schedule.HostTimeZone
+	if model.schedules.job.Spec.Calendar != want {
+		t.Fatalf("converted calendar = %+v, want %+v", model.schedules.job.Spec.Calendar, want)
+	}
+}
+
+func TestScheduleEditorFailedEnableKeepsFieldsAndRetryDoesNotDuplicate(t *testing.T) {
+	db, err := schedule.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	timer := "not installed, inactive"
+	model := send(New(newFakeClient(), nil, WithSchedules(ScheduleConfig{
+		TimerStatus: func() (string, error) { return timer, nil },
+		Save: func(spec schedule.JobSpec, id, rev string, enable, allowTimerInstall bool) (schedule.Job, error) {
+			if !enable || !allowTimerInstall {
+				t.Fatal("enable confirmation did not authorize timer installation")
+			}
+			attempts++
+			if attempts == 1 {
+				return schedule.Job{}, errors.New("timer start failed")
+			}
+			timer = "installed, active"
+			return db.SaveJob(id, rev, spec, schedule.JobActive, time.Now())
+		},
+	})), tea.WindowSizeMsg{Width: 80, Height: 20}).(rootModel)
+	model.screen = screenSchedules
+	model.schedules = scheduleModel{catalog: db, page: scheduleEditor, timerStatus: timer, draft: blankSchedule(t.TempDir())}
+	model.schedules.draft.name.set("Review")
+	model.schedules.draft.prompt.set("Inspect previous run")
+	model = send(model, scheduleActionKey("ctrl+s")).(rootModel)
+	if model.schedules.page != scheduleEditorEnable || attempts != 0 ||
+		!strings.Contains(ansi.Strip(model.View().Content), "this user's catalog") {
+		t.Fatal("enable skipped host timer confirmation")
+	}
+	model = scheduleTestUpdate(t, model, keyRune('y'))
+	if model.schedules.page != scheduleEditor || model.schedules.draft.prompt.text != "Inspect previous run" ||
+		!strings.Contains(model.schedules.errorText, "timer start failed") {
+		t.Fatal("failed install discarded the editor or hid the error")
+	}
+	jobs, err := db.Jobs()
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("failed install persisted a job: %+v, %v", jobs, err)
+	}
+	model = send(model, scheduleActionKey("ctrl+s")).(rootModel)
+	model = scheduleTestUpdate(t, model, keyRune('y'))
+	jobs, err = db.Jobs()
+	if err != nil || len(jobs) != 1 || jobs[0].State != schedule.JobActive ||
+		model.schedules.page != scheduleJob || model.schedules.timerStatus != "installed, active" {
+		t.Fatalf("successful retry = %+v, %v", jobs, err)
+	}
+	history, err := db.History(jobs[0].ID)
+	if err != nil || len(history) != 0 {
+		t.Fatalf("saving unexpectedly started a run: %+v, %v", history, err)
+	}
+}
+
+func TestScheduleEditorPreflightUpdatesAfterFixAndSupportsSmallMouse(t *testing.T) {
+	db, err := schedule.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict, fixed := t.TempDir(), t.TempDir()
+	client := newFakeClient()
+	model := send(New(client, nil, WithSchedules(ScheduleConfig{
+		Preflight: func(spec schedule.JobSpec) (SchedulePreflight, error) {
+			if spec.Directory == conflict {
+				return SchedulePreflight{Blocking: []string{"Conflicting checkout. Select an isolated Git worktree."}}, nil
+			}
+			if spec.Directory != fixed {
+				t.Fatalf("preflight directory = %q", spec.Directory)
+			}
+			return SchedulePreflight{Warnings: []string{"Task may need GitHub network access."}}, nil
+		},
+	})), tea.WindowSizeMsg{Width: 48, Height: 10}).(rootModel)
+	model.screen = screenSchedules
+	model.schedules = scheduleModel{catalog: db, page: scheduleEditor, draft: blankSchedule(conflict)}
+	model = applyScheduleCheck(t, model)
+	model = send(model, scheduleActionKey("ctrl+s")).(rootModel)
+	if !strings.Contains(model.schedules.errorText, "Conflicting checkout") {
+		t.Fatal("editor omitted overlap remediation")
+	}
+
+	model.schedules.draft.directory.set(fixed)
+	model = send(model, scheduleActionKey("ctrl+r")).(rootModel)
+	staleGeneration := model.scheduleEditorGeneration - 1
+	model = send(model, schedulePreflightResult{generation: staleGeneration, report: SchedulePreflight{Blocking: []string{"stale"}}}).(rootModel)
+	model = applyScheduleCheck(t, model)
+	if got := model.schedules.preflight; len(got.Blocking) > 0 || len(got.Warnings) != 1 {
+		t.Fatalf("new preflight = %+v", got)
+	}
+
+	model.selectScheduleRow("advanced")
+	layout := model.scheduleLayout()
+	y := model.schedules.sel - layout.top + 1
+	model = send(model, tea.MouseClickMsg{X: 3, Y: y, Button: tea.MouseLeft}).(rootModel)
+	model = send(model, tea.MouseReleaseMsg{X: 3, Y: y, Button: tea.MouseLeft}).(rootModel)
+	if !model.schedules.draft.advanced {
+		t.Fatal("mouse did not expand Advanced")
+	}
+	model = send(model, tea.WindowSizeMsg{Width: 24, Height: 4}).(rootModel)
+	model.selectScheduleRow("save-draft")
+	view := ansi.Strip(model.View().Content)
+	if lines := strings.Split(view, "\n"); len(lines) != 4 || !strings.Contains(lines[3], "[esc]") || !strings.Contains(lines[2], "Save draft") {
+		t.Fatalf("small editor lost focused control or Back: %q", view)
 	}
 }

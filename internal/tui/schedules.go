@@ -29,9 +29,9 @@ type ScheduleCatalog interface {
 
 type ScheduleConfig struct {
 	Open          func() (ScheduleCatalog, error)
-	Validate      func(schedule.JobSpec) error
 	ValidateRoute func(agent, authority string) error
-	Prompt        func(string) string
+	Preflight     func(schedule.JobSpec) (SchedulePreflight, error)
+	Save          func(spec schedule.JobSpec, id, revision string, enable, allowTimerInstall bool) (schedule.Job, error)
 	TimerStatus   func() (string, error)
 	InstallTimer  func() error
 }
@@ -44,10 +44,9 @@ type schedulePage uint8
 
 const (
 	scheduleList schedulePage = iota
-	scheduleTask
-	scheduleCalendar
-	scheduleRoute
-	scheduleReview
+	scheduleEditor
+	scheduleEditorEnable
+	scheduleConvertZone
 	scheduleJob
 	scheduleHistory
 	scheduleRun
@@ -82,7 +81,11 @@ type scheduleModel struct {
 	saveDraftTemplate            bool
 	draft                        scheduleDraft
 	draftReturn                  schedulePage
-	preview                      string
+	preflight                    SchedulePreflight
+	preflightPending             bool
+	nextFiring                   string
+	hostZone                     string
+	resolvedDirectory            string
 	sel, top                     int
 	mouseTarget                  string
 	mouseX, mouseY               int
@@ -108,7 +111,6 @@ type scheduleResultMsg struct {
 	templates   []schedule.Template
 	runID       string
 	runJobID    string
-	preview     string
 	page        schedulePage
 	err         error
 }
@@ -123,7 +125,7 @@ func (m rootModel) openSchedules(directory string) (tea.Model, tea.Cmd) {
 	to := scheduleList
 	if directory != "" {
 		m.schedules.draft = blankSchedule(directory)
-		to = scheduleTask
+		to = scheduleEditor
 	}
 	open, timer := m.scheduleConfig.Open, m.scheduleConfig.TimerStatus
 	return m.scheduleRequest(func() scheduleResultMsg {
@@ -131,7 +133,7 @@ func (m rootModel) openSchedules(directory string) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return scheduleResultMsg{err: err}
 		}
-		if to == scheduleTask {
+		if to == scheduleEditor {
 			return scheduleResultMsg{catalog: catalog, page: to, timerStatus: scheduleTimerStatus(timer)}
 		}
 		jobs, err := catalog.Jobs()
@@ -154,14 +156,14 @@ func (m rootModel) applyScheduleResult(result scheduleResultMsg) (tea.Model, tea
 	if result.catalog != nil {
 		s.catalog = result.catalog
 	}
+	if result.timerStatus != "" {
+		s.timerStatus = result.timerStatus
+	}
 	if result.err != nil {
 		s.errorText = result.err.Error()
 		return m, nil
 	}
 	s.gotoPage(result.page)
-	if result.timerStatus != "" {
-		s.timerStatus = result.timerStatus
-	}
 	switch result.page {
 	case scheduleList:
 		s.jobs = result.jobs
@@ -186,10 +188,10 @@ func (m rootModel) applyScheduleResult(result scheduleResultMsg) (tea.Model, tea
 			s.gotoPage(scheduleHistory)
 			s.errorText = "Run record is unavailable."
 		}
-	case scheduleTemplates, scheduleTask:
+	case scheduleTemplates:
 		s.templates = result.templates
-	case scheduleReview:
-		s.preview = result.preview
+	case scheduleEditor:
+		return m.checkScheduleEditor()
 	}
 	return m, nil
 }
@@ -455,17 +457,16 @@ func (s scheduleModel) controls() []scheduleControl {
 		}
 		toggle := "Pause"
 		if s.job.State == schedule.JobPaused {
-			toggle = "Resume"
+			toggle = "Enable…"
 		}
 		return scheduleControls("e", "Edit", "p", toggle, "r", runLabel, "h", "History", "x", "Archive", "esc", "Back")
-	case scheduleTask:
-		return scheduleControls("enter", "Next", "ctrl+t", "Use template", "ctrl+s", "Save prompt as template", "esc", "Back")
-	case scheduleCalendar:
-		return scheduleControls("enter", "Next", "left", "Previous choice", "right", "Next choice", "esc", "Back")
-	case scheduleRoute:
-		return scheduleControls("enter", "Review", "left", "Previous choice", "right", "Next choice", "space", "Add/remove", "-", "Move up", "+", "Move down", "esc", "Back")
-	case scheduleReview:
-		return scheduleControls("enter", "Save", "esc", "Back")
+	case scheduleEditor:
+		draft, enable := s.editorSaveLabels()
+		return scheduleControls("ctrl+s", enable, "ctrl+d", draft, "ctrl+t", "Use template", "ctrl+e", "Save template", "left", "Previous choice", "right", "Next choice", "-", "Move fallback up", "+", "Move fallback down", "esc", "Back")
+	case scheduleEditorEnable:
+		return scheduleControls("y", "Save and enable", "esc", "Back")
+	case scheduleConvertZone:
+		return scheduleControls("y", "Use host wall time", "esc", "Back")
 	case scheduleHistory:
 		return scheduleControls("enter", "Open", "r", "Refresh", "esc", "Back")
 	case scheduleRun:
@@ -480,7 +481,7 @@ func (s scheduleModel) controls() []scheduleControl {
 	case scheduleArchive:
 		return scheduleControls("y", "Archive job", "esc", "Cancel")
 	case scheduleTemplates:
-		if s.templateReturn == scheduleTask {
+		if s.templateReturn == scheduleEditor {
 			return scheduleControls("enter", "Use", "esc", "Back")
 		}
 		return scheduleControls("n", "New", "enter", "Edit", "d", "Delete", "esc", "Back")
@@ -494,7 +495,7 @@ func (s scheduleModel) controls() []scheduleControl {
 	return nil
 }
 
-func (s scheduleModel) content(width int) (string, []scheduleRow) {
+func (s scheduleModel) content(width int, agents []AgentInfo) (string, []scheduleRow) {
 	switch s.page {
 	case scheduleList:
 		return s.listContent(width)
@@ -551,8 +552,20 @@ func (s scheduleModel) content(width int) (string, []scheduleRow) {
 			}
 		}
 		return "History / Run", scheduleTextRows(rows, width)
-	case scheduleReview:
-		return "Automation / Review", scheduleTextRows(strings.Split(s.preview, "\n"), width)
+	case scheduleEditor:
+		return s.editorContent(width, agents)
+	case scheduleEditorEnable:
+		return "Save and enable automation?", scheduleTextRows([]string{
+			"Timer · " + s.timerStatus,
+			"This installs or starts the automation timer for this user's catalog on this host.",
+			"Eligible saved automations use the timer. Saving does not run this job now.",
+		}, width)
+	case scheduleConvertZone:
+		return "Use host wall time?", scheduleTextRows([]string{
+			"Current zone · " + scheduleZoneLabel(s.draft.spec().Calendar),
+			"New zone · " + scheduleZoneLabel(schedule.Calendar{TimeZone: schedule.HostTimeZone}),
+			"The saved clock time stays the same. Its next firing can move when the zone changes.",
+		}, width)
 	case scheduleArchive:
 		return "Archive " + s.job.Spec.Name + "?", []scheduleRow{{text: "Future triggers stop. Run history stays available in Archived."}}
 	case scheduleTemplates:
@@ -574,7 +587,7 @@ func (s scheduleModel) content(width int) (string, []scheduleRow) {
 	case scheduleTemplateDelete:
 		return "Delete " + s.template.Name + "?", []scheduleRow{{text: "Saved jobs keep their own copy of the instructions."}}
 	default:
-		return s.draft.content(s.page, s.sel, width)
+		return "Automations", nil
 	}
 }
 
@@ -628,7 +641,10 @@ func scheduleWhen(run schedule.Occurrence) string {
 	if due.IsZero() {
 		due = run.ClaimedAt
 	}
-	if loc, err := time.LoadLocation(run.Spec.Calendar.TimeZone); err == nil {
+	if run.Spec.Calendar.TimeZone == schedule.HostTimeZone {
+		return due.Format("2006-01-02 15:04 -07:00") + " · " + kind
+	}
+	if loc, err := run.Spec.Calendar.Location(); err == nil {
 		due = due.In(loc)
 	}
 	return due.Format("2006-01-02 15:04 MST") + " · " + kind
