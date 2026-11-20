@@ -1,9 +1,12 @@
 package teammatemanager
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/voice"
 )
@@ -65,14 +70,36 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	armResumeFailures := prepareHostedResumeFailures(t, root)
 	socket := filepath.Join(state, "daemon.sock")
+	callCanary := os.Getenv("SWARM_TEAMMATE_TEST_CALL") == "1"
+	nativeHome := os.Getenv("SWARM_TEAMMATE_TEST_NATIVE_HOME")
+	if callCanary {
+		resolvedHome, resolveErr := filepath.EvalSymlinks(nativeHome)
+		ownerHome, ownerErr := filepath.EvalSymlinks(os.Getenv("HOME"))
+		if !filepath.IsAbs(nativeHome) || resolveErr != nil || ownerErr != nil || resolvedHome == ownerHome {
+			t.Fatal("call canary requires an isolated SWARM_TEAMMATE_TEST_NATIVE_HOME")
+		}
+		nativeHome = resolvedHome
+	}
 	startDaemon := func(binary string) *exec.Cmd {
 		cmd := exec.Command(binary, "daemon")
 		cmd.Dir = project
 		cmd.Env = []string{"SWARM_DAEMON_STATE=" + state, "SWARM_DAEMON_SOCK=" + socket, "SWARM_DAEMON_LOCK=" + filepath.Join(state, "daemon.lock"), "SWARM_DAEMON_LOG=" + filepath.Join(state, "daemon.log")}
 		for _, key := range []string{"HOME", "PATH", "USER", "LOGNAME", "LANG", "SHELL"} {
+			if key == "HOME" && callCanary {
+				cmd.Env = append(cmd.Env, key+"="+nativeHome)
+				continue
+			}
 			if value, ok := os.LookupEnv(key); ok {
 				cmd.Env = append(cmd.Env, key+"="+value)
 			}
+		}
+		if callCanary {
+			startup, err := os.OpenFile(filepath.Join(root, "supervisor-startup.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = startup.Close() }()
+			cmd.Stderr = startup
 		}
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -218,6 +245,105 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	if n := len(roster()); n != 0 {
 		t.Fatalf("native sessions before first contact: %d", n)
+	}
+	if callCanary {
+		if upgradeFrom != "" {
+			t.Fatal("call canary requires a single candidate supervisor")
+		}
+		send("301", "401", "Remember this exact marker in our discussion: "+proof+". Publish only seeded to acknowledge it. No shell, file writes, or delegated work.")
+		var manager, instance string
+		wait("written seed settled in one native discussion", 90*time.Second, func() bool {
+			st, statusErr := r.Status(thread)
+			if statusErr != nil || st.State != "active" || st.PendingAdmissions != 0 {
+				return false
+			}
+			for _, p := range outputs {
+				if p.AdmissionID == "input-301" && strings.TrimSpace(p.Body) == "seeded" {
+					manager, instance = st.ManagerSession, st.ManagerInstance
+					return true
+				}
+			}
+			return false
+		})
+		const canaryText = "For the call continuity canary, publish only the exact marker you remember from our previous written instruction. No shell, file reads, network, or delegated work."
+		const callOperation = "dv_hosted_canary"
+		authority := discord.AuthorityExternal
+		if personal {
+			authority = discord.AuthorityOwnerDirect
+		}
+		hash := discord.PublicationBodyHash(canaryText)
+		coord := schema.VoiceOrigin{CallID: "hosted-canary-call", TurnID: "hosted-canary-turn", SpeakerID: "401", SupervisorSocket: socket, BodyHash: hash, Generation: 1}
+		admission := discord.TeammateAdmission{Discussion: thread, OperationID: callOperation, Revision: hash, Text: canaryText,
+			Route: thread.Route, Author: discord.Actor{ID: coord.SpeakerID, Name: "Synthetic Alice"}, InvokerID: coord.SpeakerID, Authority: authority, Voice: coord}
+		textReader := reader
+		admissionChecks := 0
+		reader = func(callCtx context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
+			if q.Source != "admission" && q.Source != "grant" {
+				return textReader(callCtx, q)
+			}
+			if q.Voice != coord || q.AdmissionID != callOperation || q.AuthorID != coord.SpeakerID || q.Revision != hash ||
+				q.Authority != authority || q.MessageID != "" || q.Anchor != "" || q.Cursor != "" {
+				return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
+			}
+			if q.Source == "admission" {
+				admissionChecks++
+			}
+			return discord.TeammateHistoryPage{}, nil
+		}
+		if err := r.Admit(ctx, admission, reader); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Admit(ctx, admission, reader); err != nil {
+			t.Fatal("queued replay", err)
+		}
+		wait("verified call marker returned by the same native discussion", 90*time.Second, func() bool {
+			st, statusErr := r.Status(thread)
+			if statusErr != nil || st.State != "active" || st.PendingAdmissions != 0 {
+				return false
+			}
+			if st.ManagerSession != manager || st.ManagerInstance != instance {
+				t.Fatal("call selected different native manager")
+			}
+			for _, p := range outputs {
+				if p.AdmissionID == callOperation && strings.TrimSpace(p.Body) == proof {
+					p.BodyHash = discord.PublicationBodyHash(p.Body)
+					origin, originErr := r.PublicationCallAdmission(ctx, thread, p)
+					if originErr != nil || origin != callOperation {
+						t.Fatalf("canonical call publication origin: %q %v", origin, originErr)
+					}
+					return true
+				}
+			}
+			return false
+		})
+		if err := r.Admit(ctx, admission, reader); err != nil {
+			t.Fatal("cutover replay", err)
+		}
+		if phase, err := r.AdmissionState(ctx, admission); phase != discord.TeammateAdmissionCutover || err != nil || admissionChecks < 2 {
+			t.Fatalf("voice admission receipt: %q, %v; live checks %d", phase, err, admissionChecks)
+		}
+		if err := r.Sync(ctx, thread, reader, func(p discord.TeammatePublication) error {
+			return fmt.Errorf("cutover replay produced another publication %s", p.ID)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		native, err := owner.ManagerRuntime(manager, instance)
+		if err != nil || !adapter.IsCanonicalConversationID(native.Binding.NativeSessionID) {
+			t.Fatalf("unconfirmed canary native context: %v", err)
+		}
+		const voiceInputMarker = "For the call continuity canary"
+		nativeInputs := codexCanaryInputs(t, nativeHome, native.Binding.NativeSessionID, voiceInputMarker)
+		spokenOutputs := 0
+		for _, p := range outputs {
+			if p.AdmissionID == callOperation {
+				spokenOutputs++
+			}
+		}
+		if nativeInputs != 1 || spokenOutputs != 1 || len(roster()) != 1 {
+			t.Fatalf("canary custody counts: native inputs=%d canonical outputs=%d", nativeInputs, spokenOutputs)
+		}
+		t.Logf("native canary observed %d input, %d canonical output and %d live grant checks; no Discord or speech traffic", nativeInputs, spokenOutputs, admissionChecks)
+		return
 	}
 	if provider := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE"); provider != "" {
 		if !vmMode || (provider != "codex" && provider != "claude") {
@@ -634,4 +760,45 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if workers != 1 {
 		t.Fatalf("wanted exactly one worker, observed %d", workers)
 	}
+}
+
+func codexCanaryInputs(t *testing.T, home, session, marker string) int {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+session+".jsonl"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("isolated Codex rollout unavailable for bound native context: %v", err)
+	}
+	file, err := os.Open(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 16<<20 {
+		t.Fatalf("invalid canary Codex rollout: %v", err)
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 2<<20)
+	matches := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if !bytes.Contains(line, []byte(marker)) {
+			continue
+		}
+		var row struct {
+			Type    string
+			Payload struct{ Type, Role string }
+		}
+		if err := json.Unmarshal(line, &row); err != nil {
+			t.Fatal("malformed canary rollout row")
+		}
+		// Codex also records an item_completed telemetry row for the same input.
+		if row.Type == "response_item" && row.Payload.Type == "message" && row.Payload.Role == "user" {
+			matches++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return matches
 }

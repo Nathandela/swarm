@@ -10,3 +10,11 @@ The local fixtures exercise the existing native discussion ledger with typed cal
 Existing VM shell delegation uses a process-scoped dispatcher credential. That credential proves the parent manager and worker attempt, but carries no native turn identity. A later shell worker result with only that proof stays eligible for the canonical written outbox. Calls direct new delegation through the existing native manager tool, which can record the exact launch or resume grant against the input. Neither observing a currently active native turn nor matching a job ID establishes that a prior shell command came from that turn. Attributing shell-launched workers to live calls remains open until the launch carries an independently verified native call coordinate.
 
 These fixtures use synthetic input and no Discord or speech credentials. Actual personal and team calls, provider tool adoption, audible stop, and human end-to-end acceptance remain open.
+
+## Hosted native personal canary
+
+`TestHostedTeammateLifecycle` with `SWARM_TEAMMATE_TEST_CALL=1` and `SWARM_TEAMMATE_TEST_PERSONAL=1` uses an isolated Codex home supplied through `SWARM_TEAMMATE_TEST_NATIVE_HOME`, a trusted disposable workspace, and a candidate binary supplied through `SWARM_TEAMMATE_TEST_BINARY`. It uses synthetic coordinates and a local publication sink.
+
+On macOS with Codex 0.170.0 and a candidate built from the integration worktree at `f5fa46a`, one complete run passed in 21.23 seconds. The typed written seed settled in 8 seconds. A read-only voice-origin turn returned the random marker in 6 seconds from the same native manager and instance. The exact voice submission was retried before and after native cutover. The bound Codex rollout contained one matching user input, the canonical publication resolved to that call admission, and the connector observed two pre-admission checks. No worker launched. The candidate used the real Codex account, with no Discord or speech-service access.
+
+The earlier marker run also returned the exact value, but active native history paging was unavailable. The passing run counts only real user message records in the separately bound isolated rollout. It excludes Codex completion telemetry describing the same input.
