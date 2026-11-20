@@ -189,7 +189,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	wait("cold context answer", 90*time.Second, func() bool {
 		return len(outputs) > 0 && strings.Contains(strings.ToLower(outputs[0].Body), "violet orchard")
 	})
-	if os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE") == "1" {
+	if messageMode := os.Getenv("SWARM_TEAMMATE_TEST_WORKER_MESSAGE"); messageMode == "1" || messageMode == "claude" {
 		reply := "manager-reply-" + hex.EncodeToString(marker[:])
 		var workerNonce [8]byte
 		if _, err := rand.Read(workerNonce[:]); err != nil {
@@ -200,9 +200,16 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		workerCommand := fmt.Sprintf(`%q teammate message --text "My marker is $(cat question.txt). What exact string should I write to reply.txt?"`, bin)
-		send("302", "401", "Launch exactly one Codex worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
-			". Tell the worker to finish its native turn after queuing the question and wait for your separate follow-up. Do not tell the worker the answer during creation. "+
-			"When you receive its actual message as a new turn, reply to that exact worker with swarm_send. Ask it to write this exact value to reply.txt: "+reply+
+		provider := "Codex"
+		workerFollowup := "Tell the worker to finish its native turn after queuing the question and wait for your separate follow-up."
+		managerFollowup := "When the worker message wakes you, use swarm_send to ask that same worker to write this exact value to reply.txt: "
+		if messageMode == "claude" {
+			provider = "Claude"
+			workerFollowup = fmt.Sprintf("Tell the worker to take the queued message ID, run %q teammate reply --id MESSAGE_ID --wait 90s with that ID, then write the exact response text into reply.txt.", bin)
+			managerFollowup = "When the worker message wakes you, call swarm_reply with this exact text: "
+		}
+		send("302", "401", "Launch exactly one "+provider+" worker in project fixture. Its initial assignment is to run this exact shell command: "+workerCommand+
+			". "+workerFollowup+" Do not tell the worker the answer during creation. "+managerFollowup+reply+
 			". After you receive the worker's actual message, also publish its exact marker in Discord. Do not access the files yourself. Publish a brief acknowledgment now.")
 		wait("scoped worker message reached the native manager", 180*time.Second, func() bool {
 			for _, p := range outputs {

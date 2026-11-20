@@ -188,6 +188,7 @@ type Event struct {
 }
 
 type Wake struct {
+	WorkerReply    string          `json:"worker_reply,omitempty"`
 	RecoveryOnly   bool            `json:"recovery_only,omitempty"`
 	ID             string          `json:"id"`
 	ConversationID string          `json:"conversation_id"`

@@ -1449,6 +1449,7 @@ func acceptEventState(st *State, b ManagerBinding, e Event, w Wake, result *Wake
 		}
 		candidate := prior
 		candidate.State = "prepared"
+		candidate.WorkerReply = ""
 		candidate.RecoveryOnly = w.RecoveryOnly
 		candidate.Admission = 0
 		candidate.NativeInputID = ""

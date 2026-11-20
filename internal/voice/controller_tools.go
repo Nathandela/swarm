@@ -154,6 +154,15 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		}
 		return c.managerQuestion(input, args, proof, admission)
 
+	case "swarm_reply":
+		input, err := decodeControllerInput[WorkerReplyInput](args)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.replyToDiscussionWorker(ctx, admission, input.Text); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"state":"available"}`), nil
 	case "swarm_discussion_answer":
 		input, err := decodeControllerInput[DiscussionAnswerInput](args)
 		if err != nil {
@@ -375,7 +384,7 @@ func (c *Controller) managerEffect(ctx context.Context, name string, args json.R
 		prompt := input.Prompt
 		if c.discussion != nil {
 			provenance, _ := json.Marshal(admission.Origin)
-			prompt = discussionWorkerGuidance + "\n\nSupervisor-verified Discord work attribution " + string(provenance) + "\n\n" + prompt
+			prompt = discussionWorkerGuidance(input.Agent) + "\n\nSupervisor-verified Discord work attribution " + string(provenance) + "\n\n" + prompt
 		}
 		request.Launch = &protocol.LaunchReq{Agent: input.Agent, Name: input.Name, Cwd: input.Cwd, Options: options, InitialPrompt: prompt, Worktree: input.Worktree, Cols: 120, Rows: 32, SpawnedFrom: parent, SpawnIntent: schema.SpawnIntentDelegate}
 	case "swarm_resume":
