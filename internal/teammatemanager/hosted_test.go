@@ -80,7 +80,14 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		return cmd
 	}
 	upgradeFrom := os.Getenv("SWARM_TEAMMATE_TEST_UPGRADE_FROM")
+	interruption := os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION")
 	initial := bin
+	if interruption == "upgrade" {
+		initial = os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION_FROM")
+		if !filepath.IsAbs(initial) {
+			t.Fatal("set the installed release binary for the in-flight upgrade")
+		}
+	}
 	if upgradeFrom != "" {
 		initial = upgradeFrom
 	}
@@ -219,12 +226,18 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if n := len(roster()); n != 0 {
 		t.Fatalf("native sessions before first contact: %d", n)
 	}
+	if fixture := os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_FIXTURE"); fixture != "" {
+		if !personal || !vmMode {
+			t.Fatal("attachment rehearsal requires personal VM mode")
+		}
+		runHostedAttachment(t, ctx, r, thread, reader, project, state, fixture, wait, &outputs, roster)
+		return
+	}
 	if provider := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE"); provider != "" {
 		if !vmMode || (provider != "codex" && provider != "claude") {
 			t.Fatal("durable rehearsal requires VM mode and a codex or claude worker")
 		}
 		activeUpgrade := upgradeFrom != "" && os.Getenv("SWARM_TEAMMATE_TEST_ACTIVE_UPGRADE") == "1"
-		var retainedManager string
 		var previousNative protocol.ManagerRuntimeBinding
 		if upgradeFrom != "" {
 			send("299", "401", "Reply here with exactly ready-to-upgrade.")
@@ -249,7 +262,6 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			if len(before) != 1 || before[0].Role != "manager" {
 				t.Fatal("expected one original manager")
 			}
-			retainedManager = before[0].ID
 			expectedProcess := status.ProcessRunning
 			if !activeUpgrade {
 				expectedProcess = status.ProcessExited
@@ -295,30 +307,6 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			"It should then send the contents of proof.txt with a complete note, save its queued receipt to sent.txt, and include the result in its native final answer. " +
 			"Only the worker may open these files. When the question arrives, answer it with exactly " + answer + " and publish its question marker. Publish the verified final result when it arrives. Do not give the worker the answer in advance."
 		send("301", "401", a)
-		if activeUpgrade {
-			// The old observer can no longer prove all native events were consumed.
-			// Only an operator releasing the exact isolated manager permits recovery.
-			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(300 * time.Millisecond) {
-				_ = r.Sync(ctx, thread, reader, func(discord.TeammatePublication) error {
-					return fmt.Errorf("unexpected publication before custody recovery")
-				})
-				st, err := r.Status(thread)
-				if err == nil && st.State == "blocked" && st.ManagerSession == retainedManager && st.Diagnostic != "" && st.PendingAdmissions == 1 {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("missing retained custody hold: %+v, %v", st, err)
-				}
-			}
-			rows := roster()
-			if len(rows) != 1 || rows[0].ID != retainedManager || rows[0].Status.Process != status.ProcessRunning {
-				t.Fatal("quarantine started a competing manager")
-			}
-			t.Log("native custody hold visible; simulating operator exit of exact isolated manager")
-			if err := owner.Kill(retainedManager); err != nil {
-				t.Fatal(err)
-			}
-		}
 		var job, attempt string
 		wait("manager received early explicit question", 150*time.Second, func() bool {
 			for _, p := range outputs {
@@ -335,7 +323,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
-			if err != nil || native.Binding.ConversationID != previousNative.ConversationID || native.Binding.Session == retainedManager ||
+			if err != nil || native.Binding.ConversationID != previousNative.ConversationID || native.Binding.Session == previousNative.Session ||
 				(native.Binding.NativeSessionID == previousNative.NativeSessionID) == activeUpgrade {
 				t.Fatalf("unexpected upgrade binding: %+v, %v", native.Binding, err)
 			}
@@ -354,26 +342,61 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join(project, "answer.txt"))
 			return err == nil && strings.TrimSpace(string(raw)) == answer
 		})
-		// A native worker status transition can legitimately restart the idle grace.
-		wait("manager parked with the same worker running", 2*voice.DiscussionIdleGrace+90*time.Second, func() bool {
-			st, err := r.Status(thread)
-			if err != nil || st.State != "parked" {
-				return false
-			}
-			for _, row := range roster() {
-				if row.SpawnedFrom != "" && strings.HasPrefix(row.Name, "DSP-") && row.Status.Process == status.ProcessRunning {
-					return true
+		beforeGap, err := r.Status(thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch interruption {
+		case "":
+			// A native worker status transition can legitimately restart the idle grace.
+			wait("manager parked with the same worker running", 2*voice.DiscussionIdleGrace+90*time.Second, func() bool {
+				st, err := r.Status(thread)
+				if err != nil || st.State != "parked" {
+					return false
 				}
+				for _, row := range roster() {
+					if row.SpawnedFrom != "" && strings.HasPrefix(row.Name, "DSP-") && row.Status.Process == status.ProcessRunning {
+						return true
+					}
+				}
+				return false
+			})
+		case "connector", "restart", "upgrade", "death", "quota":
+			if !personal || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
+				t.Fatal("interruption drill needs an active personal manager", beforeGap, err)
 			}
-			return false
-		})
+		default:
+			t.Fatal("unknown interruption", interruption)
+		}
+		var quotaTurn string
+		if interruption == "quota" {
+			quotaTurn = armHostedManagerQuota(t, state, project, beforeGap, owner, send, wait)
+		}
 		if err := r.Close(); err != nil {
 			t.Fatal(err)
+		}
+		switch interruption {
+		case "restart", "upgrade":
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			_ = cmd.Wait()
+			cmd = startDaemon(bin)
+			owner = dialOwner()
+		case "quota":
+			finishHostedManagerQuota(t, state, project, beforeGap, owner, quotaTurn)
+		case "death":
+			if err := owner.Kill(beforeGap.ManagerSession); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
-		for end := time.Now().Add(time.Minute); ; time.Sleep(200 * time.Millisecond) {
+		for end := time.Now().Add(3 * time.Minute); ; time.Sleep(200 * time.Millisecond) {
 			raw, err := os.ReadFile(filepath.Join(project, "sent.txt"))
 			if err == nil && strings.Contains(string(raw), "queued") {
 				break
@@ -383,7 +406,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 		}
 		r = open()
-		wait("same attempt completion published after retirement and restart", 150*time.Second, func() bool {
+		wait("same attempt completion published after reconnect", 150*time.Second, func() bool {
 			for _, p := range outputs {
 				if strings.HasPrefix(p.AdmissionID, "worker-message-") && p.JobID == job && p.AttemptID == attempt && strings.Contains(p.Body, proof) {
 					t.Logf("job %s attempt %s publication %s", job, attempt, p.ID)
@@ -409,6 +432,24 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			kinds[note.Kind] = true
 			t.Logf("%s note %s admitted as %d on %s", note.Kind, note.ID, note.Admission, note.Instance)
+		}
+		if interruption != "" {
+			var activeManagers, children int
+			for _, row := range roster() {
+				if row.Role == "manager" && row.Status.Process == status.ProcessRunning {
+					activeManagers++
+				}
+				if strings.HasPrefix(row.Name, "DSP-") {
+					children++
+				}
+			}
+			if interruption == "quota" && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
+				t.Fatal("quota did not replace the original dispatcher exactly once", beforeGap, got)
+			}
+			if activeManagers > 1 || children != 1 {
+				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
+			}
+			t.Logf("%s recovered on same DM %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
 		}
 		if !kinds["needs-input"] || !kinds["complete"] {
 			t.Fatalf("explicit admissions: %v", kinds)

@@ -437,7 +437,7 @@ func (a *coreAPI) ScheduleComplete(localSession string, receipt schema.ScheduleC
 
 func (d *Daemon) observeScheduledClaudeFailure(cb engine.Callback) error {
 	meta, found := d.core.Get(cb.SessionID)
-	if !found || meta.ScheduleAttempt == "" || meta.AgentType != schedule.RouteClaude {
+	if !found || meta.ScheduleAttempt == "" && !schema.IsDiscordManager(meta.Role, meta.ManagerConversationID) || meta.AgentType != schedule.RouteClaude {
 		return nil
 	}
 	var body struct {
@@ -475,6 +475,9 @@ func (d *Daemon) observeScheduledClaudeFailure(cb engine.Callback) error {
 	if err != nil || reset.IsZero() {
 		return err
 	}
+	if schema.IsDiscordManager(meta.Role, meta.ManagerConversationID) {
+		return d.core.RecordManagerQuota(cb.SessionID, meta.ConversationID, body.PromptID)
+	}
 	return d.core.MarkScheduledExhaustion(cb.SessionID, true)
 }
 
@@ -483,11 +486,25 @@ func (d *Daemon) observeScheduledCodexFailure(local, method string, raw []byte) 
 		return
 	}
 	meta, found := d.core.Get(local)
-	if !found || meta.ScheduleAttempt == "" || meta.AgentType != schedule.RouteCodex ||
+	if !found || meta.ScheduleAttempt == "" && !schema.IsDiscordManager(meta.Role, meta.ManagerConversationID) || meta.AgentType != schedule.RouteCodex ||
 		len(raw) > 1<<20 || rejectDuplicateJSONKeys(raw) != nil {
 		return
 	}
 	if codexTerminalFailure(meta.ConversationID, method, raw) != "usageLimitExceeded" {
+		return
+	}
+	if schema.IsDiscordManager(meta.Role, meta.ManagerConversationID) {
+		var frame struct {
+			Params struct {
+				Turn struct{ ID, RootTurnID string }
+			}
+		}
+		if json.Unmarshal(raw, &frame) != nil || frame.Params.Turn.ID == "" || frame.Params.Turn.RootTurnID != "" && frame.Params.Turn.RootTurnID != frame.Params.Turn.ID {
+			return
+		}
+		if err := d.core.RecordManagerQuota(local, meta.ConversationID, frame.Params.Turn.ID); err != nil {
+			log.Printf("dispatcher quota evidence: %v", err)
+		}
 		return
 	}
 	if err := d.core.MarkScheduledExhaustion(local, true); err != nil {

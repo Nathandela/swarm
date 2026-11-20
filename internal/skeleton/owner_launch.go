@@ -15,7 +15,7 @@ func (a *coreAPI) OwnerLaunchOutcome(operationID string) (schema.OperationOutcom
 	if out.SessionID != "" {
 		view.SessionID = a.endpointID + "/" + out.SessionID
 		if out.State == schema.OutcomeApplied {
-			if meta, ok := a.core.Get(out.SessionID); ok && meta.Role == "manager" && meta.ResumedFrom != "" && verifyNativeWritersStopped(a.stateDir, meta, false) == nil {
+			if meta, ok := a.core.Get(out.SessionID); ok && meta.Role == "manager" && (meta.ResumedFrom != "" || schema.IsDiscordManager(meta.Role, meta.ManagerConversationID)) && verifyNativeWritersStopped(a.stateDir, meta, false) == nil {
 				view.FailedManagerInstance = a.core.FailedManagerStartupInstance(meta)
 			}
 		}

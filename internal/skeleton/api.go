@@ -1376,8 +1376,10 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 			return persist.Meta{}, daemon.ErrResumeSourceChanged
 		}
 	}
-	if resolved.Scheduled != nil && resolved.AgentType == "claude" && resolved.ConversationID != "" {
-		resolved.Argv = append(resolved.Argv, "--session-id", resolved.ConversationID)
+	if resolved.AgentType == "claude" && (resolved.Scheduled != nil && resolved.ConversationID != "" || resolved.Manager != nil && schema.IsDiscordManager("manager", resolved.Manager.ConversationID)) {
+		if resolved.Scheduled != nil {
+			resolved.Argv = append(resolved.Argv, "--session-id", resolved.ConversationID)
+		}
 		if resolved.LoginRuntime == nil {
 			argv, err := loginClaudeObserverArgs(resolved.Argv)
 			if err != nil {
@@ -1410,6 +1412,9 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		*coreAttempted = true
 	}
 	m, err := a.core.Launch(resolved)
+	if errors.Is(err, daemon.ErrDiscussionManagerOwned) {
+		return m, errors.Join(protocol.ErrManagerLaunchPrerequisite, err)
+	}
 	if err != nil {
 		return m, err
 	}

@@ -21,7 +21,7 @@ const teammateStartupNotice = "manager_startup_unavailable"
 
 func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
 	if d.ID == "" || d.Route.MessageID != "" || p.BodyHash != "" || p.ActivationGeneration != 0 ||
-		(strings.HasPrefix(p.ID, teammateStartupNotice+"_") || strings.HasPrefix(p.ID, teammateInputNotice+"_")) {
+		(strings.HasPrefix(p.ID, teammateStartupNotice+"_") || strings.HasPrefix(p.ID, teammateInputNotice+"_") || strings.HasPrefix(p.ID, personalHistoryNotice+"_")) {
 		return ErrInvalid
 	}
 	switch p.SystemCause {
@@ -211,7 +211,7 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	}
 	id := teammateStartupNoticeID(d, gen)
 	if prepare {
-		p := TeammatePublication{ID: id, Body: "I couldn’t start my configured manager. Ask the Swarm operator to check the teammate status for details.",
+		p := TeammatePublication{ID: id, Body: "Swarm is waiting for its configured dispatcher. Your request is queued. Check the supervisor and dispatcher login with `swarm discord status`. You do not need to resend.",
 			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
 		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
 			return err
@@ -240,7 +240,7 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		k := teammateOutputKey(install, id, p.ID)
 		// A hold can move from ambiguous proof to a draft on a later tick. Keep
 		// its first notice and nonce immutable across both observations.
-		if internal && p.SystemCause == teammateInputNotice &&
+		if internal && (p.SystemCause == teammateInputNotice || p.SystemCause == teammateStartupNotice) &&
 			(b.Get(k) != nil || tx.Bucket([]byte(teammateReceiptBucket)).Get(k) != nil) {
 			return nil
 		}
@@ -407,28 +407,32 @@ func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateO
 
 func (s *Store) teammateObserve(install string, route Route, id, nonce, body string, now time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		key := tx.Bucket([]byte(teammateMetaBucket)).Get(teammateKey(install, "nonce:"+nonce))
-		if key == nil {
-			return nil
+		return teammateObserveReceipt(tx, install, route, id, nonce, body, now)
+	})
+}
+
+func teammateObserveReceipt(tx *bolt.Tx, install string, route Route, id, nonce, body string, now time.Time) error {
+	key := tx.Bucket([]byte(teammateMetaBucket)).Get(teammateKey(install, "nonce:"+nonce))
+	if key == nil {
+		return nil
+	}
+	var out teammateOutput
+	if err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), key, &out); err != nil {
+		return err
+	}
+	if out.Route.GuildID != route.GuildID || out.Route.ChannelID != route.ChannelID {
+		return nil
+	}
+	for n, c := range out.Chunks {
+		if c.ID != nonce || out.ChunkHashes[n] != digest(body) || c.State == StatePrepared {
+			continue
 		}
-		var out teammateOutput
-		if err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), key, &out); err != nil {
+		if err := teammateFinishChunk(tx, key, install, &out, n, id, true, now); err != nil {
 			return err
 		}
-		if out.Route.GuildID != route.GuildID || out.Route.ChannelID != route.ChannelID {
-			return nil
-		}
-		for n, c := range out.Chunks {
-			if c.ID != nonce || out.ChunkHashes[n] != digest(body) || c.State == StatePrepared {
-				continue
-			}
-			if err := teammateFinishChunk(tx, key, install, &out, n, id, true, now); err != nil {
-				return err
-			}
-			return putJSON(tx, teammateOutboxBucket, key, out)
-		}
-		return nil
-	})
+		return putJSON(tx, teammateOutboxBucket, key, out)
+	}
+	return nil
 }
 
 func (s *Store) teammateOutputs(install, discussion string) (out []teammateOutput, err error) {
@@ -483,7 +487,10 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 		if err := ctx.Err(); err != nil {
 			return errors.Join(sendErr, err)
 		}
-		if out.Publication.SystemCause != teammateStartupNotice && out.Publication.SystemCause != teammateInputNotice {
+		if isPersonalDiscussion(t.service.Config, d) && isLegacyGapNotice(out) {
+			continue
+		}
+		if out.Publication.SystemCause != teammateStartupNotice && out.Publication.SystemCause != teammateInputNotice && out.Publication.SystemCause != personalHistoryNotice {
 			sendErr = errors.Join(sendErr, t.sendOutput(ctx, d.InstallationID, out))
 		}
 	}

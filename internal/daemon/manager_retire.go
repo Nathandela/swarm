@@ -12,6 +12,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
@@ -79,7 +80,7 @@ func (d *Daemon) RetireManager(ctx context.Context, local, conversation, provide
 		if err != nil {
 			return false, err
 		}
-		if pending {
+		if pending && target.Replacement == "" {
 			return false, managerproof.ErrStale
 		}
 		target.ClaimedAt = time.Now().UTC()
@@ -157,7 +158,7 @@ func (d *Daemon) BindParkedManagerResume(spec LaunchSpec) error {
 // FailedManagerStartupInstance corroborates a failed startup with the physical exit and
 // the incarnation's verified empty proof ledger. A missing record is inconclusive.
 func (d *Daemon) FailedManagerStartupInstance(m persist.Meta) string {
-	if m.Role != "manager" || m.ResumedFrom == "" || m.ManagerRetirement.OperationID != "" ||
+	if m.Role != "manager" || m.ResumedFrom == "" && !schema.IsDiscordManager(m.Role, m.ManagerConversationID) || m.ManagerRetirement.OperationID != "" ||
 		m.Status.Process != status.ProcessExited || m.ExitCode == nil || *m.ExitCode == 0 ||
 		m.ShimPID <= 0 || m.ShimStartTime <= 0 || retirementShimMayLive(m) {
 		return ""
@@ -212,10 +213,29 @@ func matchesBoundResumeRole(source persist.Meta, spec LaunchSpec) bool {
 		return source.Role != "manager"
 	}
 	retirement := source.ManagerRetirement
-	return source.Role == "manager" && source.ManagerConversationID == spec.Manager.ConversationID &&
+	return retirement.Replacement == "" && source.Role == "manager" && source.ManagerConversationID == spec.Manager.ConversationID &&
 		source.ManagerBridgeSocket == spec.Manager.BridgeSocket && source.ManagerAuthFile == spec.Manager.AuthFile &&
 		((retirement.OperationID == "" && source.ResumedFrom != "" && spec.Manager.RetireOperationID != "") ||
 			(retirement.OperationID != "" && retirement.OperationID == spec.Manager.RetireOperationID &&
 				retirement.Instance == spec.ResumeSource.Instance && retirement.NativeSessionID == spec.ConversationID &&
 				retirement.ShimPID == spec.ResumeSource.ShimPID && retirement.ShimStartTime == spec.ResumeSource.ShimStartTime))
+}
+
+// RecordManagerQuota binds authenticated terminal quota evidence to its native thread and turn.
+func (d *Daemon) RecordManagerQuota(local, thread, turn string) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	m, ok := d.Get(local)
+	if !ok || !schema.IsDiscordManager(m.Role, m.ManagerConversationID) || m.ConversationID != thread || thread == "" || turn == "" || m.Status.Process != status.ProcessRunning {
+		return managerproof.ErrStale
+	}
+	if m.ManagerQuotaTurn == turn {
+		return nil
+	}
+	m.ManagerQuotaTurn = turn
+	written, err := d.saveMetaLocked(&m)
+	if !written {
+		return errors.Join(managerproof.ErrUnavailable, err)
+	}
+	return err
 }

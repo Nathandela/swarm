@@ -244,6 +244,8 @@ func (d *Daemon) SessionHookChannel(id string) (HookChannel, bool) {
 }
 
 // Launch starts a new session (Launch == launch(spec, nil)).
+var ErrDiscussionManagerOwned = errors.New("daemon: an existing manager owns this Discord discussion")
+
 func (d *Daemon) Launch(spec LaunchSpec) (persist.Meta, error) {
 	return d.launch(spec, nil)
 }
@@ -417,6 +419,16 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	if d.closed {
 		d.mu.Unlock()
 		return persist.Meta{}, errors.New("daemon: closed")
+	}
+	// The connector's roster snapshot is advisory. Two independent owner operations
+	// must compete here under the same lock that reserves the eventual session.
+	if spec.Manager != nil && schema.IsDiscordManager("manager", spec.Manager.ConversationID) {
+		for _, candidate := range d.sessions {
+			if candidate.meta.Role == "manager" && candidate.meta.ManagerConversationID == spec.Manager.ConversationID && candidate.meta.Status.Process != status.ProcessExited {
+				d.mu.Unlock()
+				return persist.Meta{}, ErrDiscussionManagerOwned
+			}
+		}
 	}
 	if expected := spec.ResumeSource; expected != nil {
 		source, ok := d.sessions[spec.ResumedFrom]

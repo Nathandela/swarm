@@ -670,6 +670,10 @@ func cloneState(st State) State {
 	return st
 }
 func cloneAdmission(a Admission) Admission {
+	if a.RecoveryOutput != nil {
+		source := *a.RecoveryOutput
+		a.RecoveryOutput = &source
+	}
 	a.Request = bytes.Clone(a.Request)
 	if a.Origin != nil {
 		origin := *a.Origin
