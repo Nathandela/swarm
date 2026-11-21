@@ -27,6 +27,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/voice"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 // This opt-in rehearsal uses a real native account. Discord messages and authors are synthetic.
@@ -416,7 +417,20 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			if _, err := rand.Read(nonce[:]); err != nil {
 				t.Fatal(err)
 			}
-			first := job{id: "first", marker: "amber-" + hex.EncodeToString(nonce[:8]), assignment: `Run touch call-first-waiting; for i in $(seq 1 240); do if test -s call-first.txt; then cat call-first.txt; exit; fi; sleep 1; done. Return only the file contents in your normal final answer.`}
+			// Keep the held worker inside a real native tool call across the interruption.
+			waitScript := filepath.Join(project, "wait-for-first.sh")
+			if err := os.WriteFile(waitScript, []byte(`set -eu
+cd "$(dirname "$0")"
+touch call-first-waiting
+for i in $(seq 1 600); do
+  if test -s call-first.txt; then exec cat call-first.txt; fi
+  sleep 1
+done
+exit 1
+`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			first := job{id: "first", marker: "amber-" + hex.EncodeToString(nonce[:8]), assignment: "Run /bin/sh " + waitScript + " and wait for it to finish. Return only its output in your normal final answer."}
 			second := job{id: "second", marker: "indigo-" + hex.EncodeToString(nonce[8:]), assignment: "Read call-second.txt and return only its contents in your normal final answer."}
 			if err := os.WriteFile(filepath.Join(project, "call-second.txt"), []byte(second.marker+"\n"), 0600); err != nil {
 				t.Fatal(err)
@@ -625,7 +639,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 						for _, got := range st.Jobs {
 							if got.ID == j.launch.ID && got.AttemptID == j.launch.AttemptID && got.Session == j.launch.Session &&
 								got.Instance == j.launch.Instance && got.State == "turn_completed" && adapter.IsCanonicalConversationID(got.NativeTurnID) &&
-								got.NativeTurnPublication != nil && got.NativeTurnPublication.ID == p.ID {
+								hostedWorkerResultReceipt(got, st.Notes, p.ID) {
 								j.result, j.nativeTurn = p, got.NativeTurnID
 								return true
 							}
@@ -1356,6 +1370,34 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	if workers != 1 {
 		t.Fatalf("wanted exactly one worker, observed %d", workers)
+	}
+}
+
+// Either wake may publish first. The caller separately verifies the exact native completion.
+func hostedWorkerResultReceipt(job discord.TeammateJobStatus, notes []workermail.NoteStatus, id string) bool {
+	if job.NativeTurnPublication != nil && job.NativeTurnPublication.ID == id {
+		return true
+	}
+	for _, n := range notes {
+		if n.Kind == "complete" && n.State == "settled" && n.JobID == job.ID && n.AttemptID == job.AttemptID &&
+			n.Session == job.Session && n.Instance == job.Instance &&
+			slices.ContainsFunc(n.Publications, func(p workermail.PublicationStatus) bool { return p.ID == id }) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestHostedWorkerResultReceipt(t *testing.T) {
+	j := discord.TeammateJobStatus{ID: "job", AttemptID: "attempt", Session: "worker", Instance: "instance"}
+	n := workermail.NoteStatus{Kind: "complete", State: "settled", JobID: j.ID, AttemptID: j.AttemptID, Session: j.Session, Instance: j.Instance,
+		Publications: []workermail.PublicationStatus{{ID: "note-final"}}}
+	if !hostedWorkerResultReceipt(j, []workermail.NoteStatus{n}, "note-final") {
+		t.Fatal("missing exact completion note receipt")
+	}
+	n.AttemptID = "other"
+	if hostedWorkerResultReceipt(j, []workermail.NoteStatus{n}, "note-final") {
+		t.Fatal("accepted a receipt from a different attempt")
 	}
 }
 
