@@ -399,14 +399,14 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		default:
 			t.Fatal("unknown interruption", interruption)
 		}
-		var heldChild string
+		var heldChild, heldInstance string
 		if interruption == "restart" {
 			for _, row := range roster() {
-				if row.SpawnedFrom != "" && strings.HasPrefix(row.Name, "DSP-") && row.Status.Process == status.ProcessRunning {
+				if row.WorkerAttempt == attempt && row.WorkerInstance != "" && row.Status.Process == status.ProcessRunning {
 					if heldChild != "" {
 						t.Fatal("multiple live workers before restart")
 					}
-					heldChild = row.ID
+					heldChild, heldInstance = row.ID, row.WorkerInstance
 				}
 			}
 			if heldChild == "" {
@@ -470,8 +470,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			})
 			var liveWorker bool
 			for _, row := range roster() {
-				if len(beforeGap.Jobs) == 1 && row.ID == beforeGap.Jobs[0].Session && row.WorkerAttempt == attempt &&
-					row.WorkerInstance != "" && row.WorkerInstance == beforeGap.Jobs[0].Instance && row.Status.Process == status.ProcessRunning {
+				if row.ID == heldChild && row.WorkerAttempt == attempt && row.WorkerInstance == heldInstance && row.Status.Process == status.ProcessRunning {
 					liveWorker = true
 				}
 			}
