@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/version"
 )
 
 type RequestHeader struct {
@@ -42,7 +44,19 @@ type LocalWorker struct {
 	Worker
 	Excluded bool `json:"excluded"`
 }
+// CallRuntime identifies the running connector when comparing candidate and published calls.
+type CallRuntime struct {
+	Version string `json:"version"`
+	Commit string `json:"commit,omitempty"`
+	PID int `json:"pid"`
+	ApplicationID string `json:"application_id"`
+	GuildID string `json:"guild_id"`
+	RoomID string `json:"room_id"`
+	DiscussionID string `json:"discussion_id"`
+}
+
 type LocalStatus struct {
+	CallRuntime *CallRuntime `json:"call_runtime,omitempty"`
 	CallMetrics    *dispatcherCallMetrics `json:"call_metrics,omitempty"`
 	Calls          string                 `json:"calls,omitempty"`
 	ProjectAccess  string                 `json:"project_access,omitempty"`
@@ -160,6 +174,12 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
 	status := LocalStatus{ProjectAccess: s.Config.EffectiveProjectAccess(), Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true, Mode: s.Config.Mode}
 	if s.calls != nil {
+		cfg := s.Config.Calls
+		status.CallRuntime = &CallRuntime{
+			Version: version.Version, Commit: version.Commit, PID: os.Getpid(),
+			ApplicationID: s.Config.ApplicationID, GuildID: cfg.GuildID,
+			RoomID: cfg.RoomID, DiscussionID: cfg.DiscussionID,
+		}
 		status.Calls = s.calls.status()
 		status.CallMetrics = s.calls.metricsSnapshot()
 	}
