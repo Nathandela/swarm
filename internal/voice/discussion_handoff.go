@@ -176,7 +176,9 @@ func workerReportOrigin(st State, p Publication, project string, pending map[str
 	if worker.VMChild || worker.RecoveryRequired || worker.Project != project || worker.ActionID != src.AttemptID || worker.AttemptID != src.AttemptID || worker.JobID != src.JobID || pending[target] {
 		return ""
 	}
-	if !(event.WorkerProof && event.ID == discussionEvidenceID(worker)) && !(event.WorkerMessage && metadata.Kind == "complete") {
+	nativeProof := event.WorkerProof && event.ID == discussionEvidenceID(worker)
+	completionNote := event.WorkerMessage && metadata.Kind == "complete"
+	if !nativeProof && !completionNote {
 		return ""
 	}
 	launch := st.Actions[key(p.ConversationID, src.AttemptID)]
@@ -185,7 +187,9 @@ func workerReportOrigin(st State, p Publication, project string, pending map[str
 	if launch.State != "settled" || launch.Admission != worker.Admission || json.Unmarshal(launch.Request, &grant) != nil || json.Unmarshal(launch.Receipt, &receipt) != nil || grant.Project != project || grant.Origin == nil || receipt.Session != worker.Session || receipt.SessionInstance != worker.SessionInstance {
 		return ""
 	}
-	if !(grant.Tool == "swarm_create" && receipt.State == "created") && !(grant.Tool == "swarm_resume" && receipt.State == "resumed") {
+	created := grant.Tool == "swarm_create" && receipt.State == "created"
+	resumed := grant.Tool == "swarm_resume" && receipt.State == "resumed"
+	if !created && !resumed {
 		return ""
 	}
 	original := st.Admissions[admissionKey(p.ConversationID, launch.Admission)]
