@@ -363,11 +363,25 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				return false
 			})
 		case "connector", "restart", "upgrade", "death", "quota", "replay-refusal":
-			if !personal || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
-				t.Fatal("interruption drill needs an active personal manager", beforeGap, err)
+			if (!personal && interruption != "restart") || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
+				t.Fatal("interruption drill needs an active manager in the selected mode", beforeGap, err)
 			}
 		default:
 			t.Fatal("unknown interruption", interruption)
+		}
+		var heldChild string
+		if interruption == "restart" {
+			for _, row := range roster() {
+				if row.SpawnedFrom != "" && strings.HasPrefix(row.Name, "DSP-") && row.Status.Process == status.ProcessRunning {
+					if heldChild != "" {
+						t.Fatal("multiple live workers before restart")
+					}
+					heldChild = row.ID
+				}
+			}
+			if heldChild == "" {
+				t.Fatal("worker must be running at restart")
+			}
 		}
 		var quotaTurn string
 		if interruption == "quota" {
@@ -434,6 +448,28 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return false
 		})
+		if interruption == "restart" {
+			wait("restarted manager settled after publication", 90*time.Second, func() bool {
+				st, err := r.Status(thread)
+				if err != nil || st.PendingAdmissions != 0 {
+					return false
+				}
+				if st.State == "parked" {
+					return true
+				}
+				native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+				return err == nil && native.ReadyForInput && (native.Turn.State == "idle" || native.Turn.State == "completed")
+			})
+			var reports int
+			for _, p := range outputs {
+				if strings.Contains(p.Body, proof) {
+					reports++
+				}
+			}
+			if reports != 1 {
+				t.Fatalf("expected one substantive result across restart, observed %d", reports)
+			}
+		}
 		got, err := r.Status(thread)
 		if err != nil {
 			t.Fatal(err)
@@ -460,6 +496,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				if strings.HasPrefix(row.Name, "DSP-") {
 					children++
+					if heldChild != "" && row.ID != heldChild {
+						t.Fatalf("worker changed across restart: %s -> %s", heldChild, row.ID)
+					}
 				}
 			}
 			if (interruption == "quota" || interruption == "replay-refusal") && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
@@ -485,7 +524,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			if activeManagers > 1 || children != 1 {
 				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
 			}
-			t.Logf("%s recovered on same DM %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
+			t.Logf("%s recovered on same channel %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
 		}
 		if !kinds["needs-input"] || !kinds["complete"] {
 			t.Fatalf("explicit admissions: %v", kinds)
