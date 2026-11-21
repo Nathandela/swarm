@@ -29,6 +29,8 @@ The corrected Linux `go test -count=1 -timeout 35m ./...` exited **0**, with **9
 
 The Linux `go test -race -count=1 -timeout 45m ./...` exited **1**, from 16:01:09 to 16:32:53 UTC. Its monitor identified failures in `internal/verify` (11.735 s) and `internal/voice` (19.550 s). The race-instrumented Discord package passed in 82.037 s. A failing test under the race detector does not by itself establish a detected data race. The detailed log remains at `tf_nathan:/run/user/1000/swarm-87a8d600.9CA5TyRg/race.log`. The monitor captured the exit status before a local macOS account lookup failure prevented a new SSH connection. Treat this gate as red until the cause is established and the complete check passes.
 
+Separate frozen macOS race replays passed for `internal/verify` (51.648 s) and `internal/voice` (78.927 s). The Linux race result remains red.
+
 An earlier ordinary Mac pass timed out probing the OpenCode fixture. Three focused reruns of that test at the same commit passed in 1.148 s. The Linux full-suite result above is the qualification record.
 
 ## Private-listener window
