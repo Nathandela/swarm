@@ -8,7 +8,21 @@ import subprocess
 import time
 
 
+def check_profile(state_dir, expected):
+    with (state_dir / "config.json").open("rb") as source:
+        data = source.read(1024 * 1024 + 1)
+    if len(data) > 1024 * 1024:
+        raise ValueError("connector configuration exceeds local inspection limit")
+    config = json.loads(data)
+    calls = config.get("calls") or {}
+    if config.get("application_id") != expected["application_id"] or any(
+        calls.get(k) != expected[k] for k in ("guild_id", "room_id", "discussion_id")
+    ):
+        raise ValueError("local profile does not match designated test surface")
+
+
 def sample(binary, state_dir, expected):
+    check_profile(state_dir, expected)
     cmd = [str(binary), "discord", "status", "--state-dir", str(state_dir)]
     raw = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
     status = json.loads(raw.stdout)
@@ -31,6 +45,9 @@ def main():
     p.add_argument("--state-dir", required=True, type=Path)
     for key in ("application-id", "guild-id", "room-id", "discussion-id", "commit"):
         p.add_argument("--" + key, required=True)
+    p.add_argument("--version", required=True, help="expected version reported by the running connector")
+    p.add_argument("--pid", required=True, type=int, help="PID recorded when launching the isolated connector")
+    p.add_argument("--binary-sha256", required=True, help="digest of the prepared or verified release executable")
     p.add_argument("--stage", choices=("candidate", "published"), required=True)
     p.add_argument("--seconds", type=int, default=0)
     args = p.parse_args()
@@ -38,12 +55,14 @@ def main():
         p.error("sampling duration must be between zero and 1800 seconds")
     binary = args.binary.resolve(strict=True)
     state_dir = args.state_dir.resolve(strict=True)
-    expected = {k: getattr(args, k) for k in ("application_id", "guild_id", "room_id", "discussion_id", "commit")}
+    expected = {k: getattr(args, k) for k in ("application_id", "guild_id", "room_id", "discussion_id", "commit", "version", "pid")}
     with binary.open("rb") as source:
         checksum = hashlib.sha256()
         for block in iter(lambda: source.read(1024 * 1024), b""):
             checksum.update(block)
         digest = checksum.hexdigest()
+    if args.pid <= 0 or digest != args.binary_sha256:
+        p.error("PID or status client digest does not match the recorded trial launch")
     started = time.monotonic()
     while True:
         result = sample(binary, state_dir, expected)
