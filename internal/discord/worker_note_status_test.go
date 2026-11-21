@@ -2,9 +2,11 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,4 +160,51 @@ func TestParkedWorkerNoteReactivatesConnectorWithoutHumanInput(t *testing.T) {
 	default:
 		t.Fatal("parked discussion was never synced")
 	}
+}
+
+func TestAnchoredDeliveryRequiresExactPublicationAndEveryChunk(t *testing.T) {
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	d := TeammateDiscussion{InstallationID: "I", ID: "D", Route: Route{ChannelID: "201"}}
+	p := TeammatePublication{ID: "pub", AdmissionID: "op", Sequence: 7, Body: strings.Repeat("a", 1901)}
+	key := teammateOutputKey(d.InstallationID, d.ID, p.ID)
+	metadata := p
+	metadata.Body = ""
+	out := teammateOutput{DiscussionID: d.ID, Route: d.Route, BodyHash: PublicationBodyHash(p.Body), Publication: metadata, Chunks: []Chunk{{State: StateSent, MessageID: "301", GatewaySeen: true}, {State: StateUncertain}}}
+	put := func() {
+		t.Helper()
+		if err := s.db.Update(func(tx *bolt.Tx) error { return putJSON(tx, teammateOutboxBucket, key, out) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(q TeammatePublication, want []string, wantErr error) {
+		t.Helper()
+		ids, err := s.confirmedPublication(d, q)
+		if !reflect.DeepEqual(ids, want) || !errors.Is(err, wantErr) {
+			t.Fatalf("delivery %v %v, wanted %v %v", ids, err, want, wantErr)
+		}
+	}
+	put()
+	check(p, nil, nil)
+	out.Chunks[1] = Chunk{State: StateSent, MessageID: "302", RESTAcknowledged: true}
+	put()
+	for i := 0; i < 2; i++ {
+		check(p, []string{"301", "302"}, nil)
+		wrong := p
+		wrong.Body = "edited"
+		check(wrong, nil, ErrConflict)
+		wrong = p
+		wrong.AdmissionID = "other"
+		check(wrong, nil, ErrConflict)
+		if i == 0 {
+			if err := s.db.Update(func(tx *bolt.Tx) error { return teammateCompactOutput(tx, key, d, out) }); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	d.Route.ChannelID = "other"
+	check(p, nil, nil)
 }

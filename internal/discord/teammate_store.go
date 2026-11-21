@@ -668,42 +668,80 @@ func (s *Store) workerPublicationStatus(d TeammateDiscussion, notes []workermail
 	return s.db.View(func(tx *bolt.Tx) error {
 		for _, note := range notes {
 			for i := range note.Publications {
-				pub := &note.Publications[i]
-				k := teammateOutputKey(d.InstallationID, d.ID, pub.ID)
-				var out teammateOutput
-				err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), k, &out)
-				if errors.Is(err, ErrNotFound) {
-					var receipt teammateReceipt
-					err = teammateGet(tx.Bucket([]byte(teammateReceiptBucket)), k, &receipt)
-					if errors.Is(err, ErrNotFound) {
-						continue
-					}
-					if err != nil {
-						return err
-					}
-					if receipt.Route == d.Route && len(receipt.DiscordMessageIDs) > 0 {
-						pub.State, pub.MessageIDs = StateSent, receipt.DiscordMessageIDs
-					}
-					continue
-				}
-				if err != nil {
+				if err := readPublicationStatus(tx, d, &note.Publications[i], nil); err != nil {
 					return err
-				}
-				if out.Route != d.Route || len(out.Chunks) == 0 {
-					continue
-				}
-				pub.State = StateSent
-				for _, part := range out.Chunks {
-					if part.State == StateSent && part.MessageID != "" {
-						pub.MessageIDs = append(pub.MessageIDs, part.MessageID)
-					} else if pub.State == StateSent {
-						pub.State = part.State
-					}
 				}
 			}
 		}
 		return nil
 	})
+}
+
+func (s *Store) confirmedPublication(d TeammateDiscussion, expected TeammatePublication) ([]string, error) {
+	chunks := len(splitUTF16(expected.Body, 1900))
+	pub := workermail.PublicationStatus{ID: expected.ID}
+	if err := s.db.View(func(tx *bolt.Tx) error { return readPublicationStatus(tx, d, &pub, &expected) }); err != nil {
+		return nil, err
+	}
+	if pub.State != StateSent || chunks == 0 || len(pub.MessageIDs) != chunks {
+		return nil, nil
+	}
+	for _, id := range pub.MessageIDs {
+		if !snowflake(id) {
+			return nil, ErrConflict
+		}
+	}
+	return pub.MessageIDs, nil
+}
+
+func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.PublicationStatus, expected *TeammatePublication) error {
+	var bodyHash string
+	if expected != nil {
+		bodyHash = PublicationBodyHash(expected.Body)
+		expected.Body = ""
+	}
+	k := teammateOutputKey(d.InstallationID, d.ID, pub.ID)
+	var out teammateOutput
+	err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), k, &out)
+	if errors.Is(err, ErrNotFound) {
+		var receipt teammateReceipt
+		err = teammateGet(tx.Bucket([]byte(teammateReceiptBucket)), k, &receipt)
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if receipt.Route != d.Route || len(receipt.DiscordMessageIDs) == 0 {
+			return nil
+		}
+		if expected != nil && (receipt.BodyHash != bodyHash || receipt.PublicationHash != digest(*expected)) {
+			return ErrConflict
+		}
+		pub.State, pub.MessageIDs = StateSent, receipt.DiscordMessageIDs
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if out.Route != d.Route || len(out.Chunks) == 0 {
+		return nil
+	}
+	if expected != nil && (out.DiscussionID != d.ID || out.BodyHash != bodyHash || out.Publication != *expected || out.Internal) {
+		return ErrConflict
+	}
+	pub.State = StateSent
+	for _, part := range out.Chunks {
+		if part.State == StateSent && snowflake(part.MessageID) && (expected == nil || part.GatewaySeen || part.RESTAcknowledged) {
+			pub.MessageIDs = append(pub.MessageIDs, part.MessageID)
+		} else if pub.State == StateSent {
+			pub.State = part.State
+			if pub.State == StateSent {
+				pub.State = StateUncertain
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (TeammateNativeStatus, error)) (status TeammateStatus, err error) {

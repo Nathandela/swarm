@@ -113,13 +113,15 @@ func (h *TeammateInputHold) Error() string {
 var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is unavailable")
 
 type TeammateHistoryQuery struct {
+	Publication                                *TeammatePublication
 	Source, Cursor, Anchor                     string
 	AdmissionID, Revision, MessageID, AuthorID string
 }
 type TeammateHistoryPage struct {
-	EvidenceFragment                    string `json:",omitempty"`
-	FragmentMessageID                   string `json:",omitempty"`
-	StarterCursor                       string `json:",omitempty"`
+	ConfirmedMessageIDs                 []string `json:",omitempty"`
+	EvidenceFragment                    string   `json:",omitempty"`
+	FragmentMessageID                   string   `json:",omitempty"`
+	StarterCursor                       string   `json:",omitempty"`
 	Messages                            []TeammateHistoryMessage
 	Cursor, HighWater, LowWater, Notice string
 	Starter                             *TeammateHistoryMessage

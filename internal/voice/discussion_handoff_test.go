@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,11 +91,18 @@ func TestDiscussionHandoffShowsReplyDispositionWithoutPrivateContent(t *testing.
 
 func TestDiscussionReplyReceiptVerifiesExactSource(t *testing.T) {
 	human := schema.MessageOrigin{Kind: "owner_direct", ActorID: "owner", RequesterID: "owner", InstallationID: "install", DiscussionID: "dm", ChannelID: "channel", MessageID: "101", Revision: "revision", RequestID: "op-101"}
-	st := State{Admissions: map[string]Admission{"old": {Sequence: 1, ConversationID: "dm", Origin: &human, Project: "work"}}, Publications: map[string]Publication{"final": {Final: true, ConversationID: "dm", DiscussionSource: DiscussionOutputSource{AdmissionID: "op-101"}}}}
+	st := State{Admissions: map[string]Admission{"old": {Sequence: 1, ConversationID: "dm", Origin: &human, Project: "work"}}, Publications: map[string]Publication{key("dm", "final"): {ID: "final", Text: "original final", Exported: true, Final: true, ConversationID: "dm", DiscussionSource: DiscussionOutputSource{AdmissionID: "op-101"}}}}
 	current := Admission{ConversationID: "dm", Sequence: 2, Project: "work"}
 	var grantErr, audienceErr error
+	deliveries := 0
 	grants := 0
-	c := Controller{discussion: &DiscussionScope{DMOwnerID: "owner", InstallationID: "install", DiscussionID: "dm", ThreadID: "channel", VerifyAudience: func(context.Context) error { return audienceErr }, VerifyGrant: func(_ context.Context, o schema.MessageOrigin) error {
+	c := Controller{discussion: &DiscussionScope{DMOwnerID: "owner", InstallationID: "install", DiscussionID: "dm", ThreadID: "channel", ConfirmedDelivery: func(_ context.Context, p DiscussionOutput) ([]string, error) {
+		deliveries++
+		if p.ID != "final" || p.Text != "original final" || p.AdmissionID != "op-101" {
+			t.Fatalf("wrong publication %+v", p)
+		}
+		return []string{"201"}, nil
+	}, VerifyAudience: func(context.Context) error { return audienceErr }, VerifyGrant: func(_ context.Context, o schema.MessageOrigin) error {
 		grants++
 		if o != human {
 			t.Fatalf("wrong source %+v", o)
@@ -108,12 +116,13 @@ func TestDiscussionReplyReceiptVerifiesExactSource(t *testing.T) {
 	}{
 		{"101", nil, nil, nil, 1}, {"101", ErrDiscussionSourceChanged, nil, ErrDiscussionSourceChanged, 1}, {"101", nil, ErrExpired, ErrExpired, 0}, {"unrelated", nil, nil, ErrNotFound, 0},
 	} {
+		deliveries = 0
 		grantErr, audienceErr, grants = tc.grant, tc.audience, 0
 		raw, err := c.discussionReplyReceipt(t.Context(), st, current, tc.anchor)
 		if !errors.Is(err, tc.want) || grants != tc.calls {
 			t.Fatalf("anchor %s: err %v, verified %d", tc.anchor, err, grants)
 		}
-		if err == nil && string(raw) != `{"message":"101","reply":"final scheduled"}` || err != nil && len(raw) != 0 {
+		if err == nil && (deliveries != 1 || string(raw) != `{"message":"101","reply":"final scheduled","confirmed_discord_message_ids":["201"]}`) || err != nil && (len(raw) != 0 || deliveries != 0) {
 			t.Fatalf("unexpected evidence %q", raw)
 		}
 	}
@@ -181,5 +190,19 @@ func TestFormerDiscussionTurnEndBoundToNativeAndDiscordIdentities(t *testing.T) 
 	c.binding.ConversationID = "other-thread"
 	if got := c.formerDiscussionTurnEnd(t.Context(), a); got != "" || r.reads != reads {
 		t.Fatal("looked up another discussion")
+	}
+}
+
+func TestOlderDiscussionReceiptRemainsAddressableBeyondHandoffWindow(t *testing.T) {
+	current := Admission{ConversationID: "same", Sequence: 21}
+	st := State{Admissions: map[string]Admission{}}
+	for seq := uint64(1); seq < current.Sequence; seq++ {
+		msg := fmt.Sprint(seq)
+		st.Admissions[admissionKey("same", seq)] = Admission{ConversationID: "same", Sequence: seq, Origin: &schema.MessageOrigin{MessageID: msg, RequestID: "op" + msg}}
+	}
+	old := priorDiscussionReplies(st, current, "2")
+	recent := priorDiscussionReplies(st, current, "")
+	if len(recent) != 8 || recent[7].Message != "13" || len(old) != 1 || old[0].Message != "2" {
+		t.Fatalf("recent %v old %v", recent, old)
 	}
 }

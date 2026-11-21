@@ -237,3 +237,9 @@ Upgrade the owning supervisor, connector and CLI together. Run `swarm discord do
 Inside an eligible worker, inspect a note with `swarm teammate receipt --id MESSAGE_ID`. Retry a lost response with the original ID, kind and text. The supervisor keeps accepted notes across connector downtime. A queued note is waiting for ingestion. Use `swarm discord status --state-dir "$connector"` to inspect the worker attempt, manager admission, retirement operation and Discord publication receipts. Preserve the original receipt while an outcome is uncertain.
 
 Before downgrading, finish active mailbox jobs and their replies with the compatible supervisor and connector. Check for queued notes, pending admissions, retirement claims and uncertain publications. Leave the compatible consumer running while any are unresolved. Keep the supervisor state directory, connector database and session shims in place during the change.
+
+### Following up after dispatcher replacement
+
+In the same DM or thread, ask about the original request or reply to its Discord message. The dispatcher can look up that human message’s verified revision, whether it scheduled a progress or final reply, and an available end reason from the former manager’s native turn. For an exported reply, the same lookup includes confirmed Discord message IDs once the connector has receipts for every part. These IDs establish historical delivery even if a participant later removes the reply. A worker’s completion evidence identifies the result of the job. An uncertain action stays on hold while its original receipt is checked.
+
+A new human message retains its own identity even if two people ask the same question. Messages from Discord bots can provide context to the next human turn. They do not start independent dispatcher turns.
