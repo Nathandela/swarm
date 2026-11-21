@@ -91,11 +91,11 @@ func TestLocalFixtureTurnCycle(t *testing.T) {
 				for len(pcm) > 0 {
 					var frame [frameBytes]byte
 					n := copy(frame[:], pcm)
-					if first.IsZero() && hasSignal(frame[:]) {
+					if first.IsZero() && HasSignal(frame[:]) {
 						first = time.Now()
 					}
 					push(who, frame[:])
-					if overlap && hasSignal(frame[:]) {
+					if overlap && HasSignal(frame[:]) {
 						push("interloper", frame[:])
 					}
 					pcm = pcm[n:]
