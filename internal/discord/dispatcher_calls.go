@@ -249,7 +249,7 @@ func (d *dispatcherCalls) command(cmd callCommand) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	previous := d.lastControl[cmd.user]
-	if cmd.id == "" || d.lastLeave != "" && !snowflakeLess(d.lastLeave, cmd.id) {
+	if cmd.id == "" || cmd.id == previous || d.lastLeave != "" && !snowflakeLess(d.lastLeave, cmd.id) {
 		return
 	}
 	if previous == "" || snowflakeLess(previous, cmd.id) {
