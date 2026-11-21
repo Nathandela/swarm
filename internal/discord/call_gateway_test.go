@@ -410,7 +410,7 @@ func TestCallPermissionRearmRechecksRevokedThreadMember(t *testing.T) {
 	}
 	dispatch(1, "READY", callRosterReady)
 	dispatch(2, "GUILD_CREATE", callRosterGuild(callRosterVoice("1", "20")))
-	d.command("voice join", "1", "101")
+	d.command(callCommand{action: "voice join", user: "1", id: "101", issued: time.Now()})
 	checkREST(false)
 	oldSpeech := receiveCallGatewayFixture(t, ctx, ack)
 	revoked.Store(true)

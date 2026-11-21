@@ -269,7 +269,11 @@ func (d *dispatcherCalls) command(cmd callCommand) {
 	if !eligible || !slices.Contains(speakers, cmd.user) {
 		return
 	}
-	d.consent[cmd.user] = now.Add(30 * time.Minute)
+	grantedAt := cmd.issued
+	if grantedAt.After(now) {
+		grantedAt = now
+	}
+	d.consent[cmd.user] = grantedAt.Add(30 * time.Minute)
 	if d.active != nil && d.active.ctx.Err() == nil {
 		return
 	}

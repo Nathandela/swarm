@@ -96,3 +96,25 @@ func TestAbruptMediaExitRevokesPendingNativeInput(t *testing.T) {
 		t.Fatalf("ended call could admit queued native input: %v", err)
 	}
 }
+
+func TestTeamConsentLifetimeStartsNoLaterThanReceipt(t *testing.T) {
+	f := newDispatcherCallFixture(t, true)
+	f.begin()
+	for _, tc := range []struct {
+		id   string
+		skew time.Duration
+	}{{"105", -15 * time.Second}, {"106", time.Second}} {
+		msg := teammateTestMessage(tc.id, "30", "71", "<@99> voice consent", true)
+		msg.GuildID = "10"
+		receivedFrom := time.Now()
+		msg.Timestamp = receivedFrom.Add(tc.skew)
+		f.message(msg)
+		receivedThrough := time.Now()
+		f.calls.mu.Lock()
+		start := f.calls.consent["71"].Add(-30 * time.Minute)
+		f.calls.mu.Unlock()
+		if tc.skew < 0 && !start.Equal(msg.Timestamp) || tc.skew > 0 && (start.Before(receivedFrom) || start.After(receivedThrough)) {
+			t.Errorf("client timestamp skew %v yielded a grant starting %v after message issue", tc.skew, start.Sub(msg.Timestamp))
+		}
+	}
+}
