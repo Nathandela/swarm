@@ -264,14 +264,14 @@ func (c *Controller) Tick(ctx context.Context) error {
 			if wakeID, ok := strings.CutPrefix(a.SourceID, "wake:"); ok {
 				wake := st.Wakes[key(a.ConversationID, wakeID)]
 				event := st.Events[key(a.ConversationID, wake.EventID)]
-				if event.WorkerMessage || event.WorkerProof {
+				if event.WorkerMessage || event.WorkerProof || event.VMWorkerStatus {
 					var source workerNoteMetadata
 					if wake.Admission != a.Sequence || event.WakeID != wake.ID || json.Unmarshal(event.Metadata, &source) != nil {
 						return ErrCorrupt
 					}
 					if err := c.verifyStoredWorkerEvent(ctx, st, event, source); err != nil {
 						if errors.Is(err, ErrDiscussionSourceChanged) || errors.Is(err, ErrExpired) {
-							return c.store.rejectQueuedControllerInput(c.binding, a, "worker note grant expired: "+err.Error())
+							return c.store.rejectQueuedControllerInput(c.binding, a, "worker wake no longer authorized: "+err.Error())
 						}
 						return err
 					}
@@ -402,6 +402,12 @@ func (c *Controller) Tick(ctx context.Context) error {
 
 // Stored results can outlive their sender. Recheck the original audience and launch grant before disclosure.
 func (c *Controller) verifyStoredWorkerEvent(ctx context.Context, st State, event Event, source workerNoteMetadata) error {
+	if event.VMWorkerStatus {
+		if !c.discussion.VMProjectAccess || event.WorkerProof || event.WorkerMessage || !currentVMStatusWorker(st, c.binding.ConversationID, event, source) {
+			return ErrExpired
+		}
+		return nil
+	}
 	worker := st.Workers[key(c.binding.ConversationID, key(source.Session, source.Instance))]
 	if worker.Session != source.Session || worker.SessionInstance != source.Instance ||
 		worker.ConversationID != c.binding.ConversationID || worker.JobID != event.JobID || worker.AttemptID != event.AttemptID ||

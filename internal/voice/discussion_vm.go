@@ -124,6 +124,27 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 	return changed, nil
 }
 
+// Old roster observers queued VM status prompts for enrolled children. A genuine
+// VM record may still be keyed by its session ID even after learning its instance.
+func currentVMStatusWorker(st State, conversation string, event Event, source workerNoteMetadata) bool {
+	if source.Session == "" || source.Instance == "" || event.JobID == "" || event.AttemptID == "" {
+		return false
+	}
+	matched := false
+	for _, worker := range st.Workers {
+		if worker.ConversationID != conversation || worker.Session != source.Session || worker.Reserved {
+			continue
+		}
+		if worker.ActionID != "" {
+			return false
+		}
+		if worker.VMChild && worker.SessionInstance == source.Instance && worker.JobID == event.JobID && worker.AttemptID == event.AttemptID {
+			matched = true
+		}
+	}
+	return matched
+}
+
 // Restore only a unique settled enrolled launch of this physical worker; absence leaves it fenced.
 func exactEnrolledLaunchAttempt(st *State, w WorkerAssociation) string {
 	var match string

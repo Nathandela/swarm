@@ -1,8 +1,10 @@
 package voice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,5 +125,100 @@ func TestVMObserverCannotAdoptConcurrentEnrolledLaunch(t *testing.T) {
 	st, err := store.Snapshot()
 	if err != nil || len(st.Workers) != 1 || st.Workers[k] != w || len(st.Wakes) != 0 {
 		t.Fatal("observer changed original worker or woke the dispatcher", err)
+	}
+}
+
+func TestStoredVMStatusUsesCurrentWorkerProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name                            string
+		enrolled, mailbox, vm, wantSend bool
+	}{
+		{"enrolled old status in VM", true, false, true, false},
+		{"enrolled old status after rollback", true, false, false, false},
+		{"ambiguous old mailbox", true, true, true, false},
+		{"ordinary VM without mailbox", false, false, true, true},
+		{"ordinary VM with mailbox", false, true, true, true},
+		{"VM status outside VM policy", false, false, false, false},
+	} {
+		for _, phase := range []string{"", "prepared"} {
+			t.Run(tc.name+"/"+phase, func(t *testing.T) {
+				c, store, runtime, b := newControllerFixture(t)
+				ep, parent, _ := protocol.ParseID(b.SessionID)
+				row := protocol.SessionView{ID: ep + "/child", EndpointID: ep, SpawnedFrom: parent, Group: status.GroupReadyForReview, Status: status.Status{Process: status.ProcessRunning}, Capabilities: &protocol.SessionCapabilities{SessionInstance: "physical"}}
+				if tc.mailbox {
+					row.WorkerDiscussion, row.WorkerInstance, row.WorkerAttempt = b.ConversationID, "physical", "vm-attempt"
+				}
+				c.workers = &controllerWorkerFixture{rows: []protocol.SessionView{row}}
+				c.discussion = &DiscussionScope{VMProjectAccess: true, VerifyAudience: func(context.Context) error { return nil }}
+				st, err := store.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = c.observeVMWorkers(st); err != nil {
+					t.Fatal(err)
+				}
+				st, err = store.Snapshot()
+				if err != nil || len(st.Wakes) != 1 {
+					t.Fatalf("expected one original VM status: %v %v", st.Wakes, err)
+				}
+				var wake Wake
+				for _, entry := range st.Wakes {
+					wake = entry
+					break
+				}
+				wake, err = store.AdvanceWake(b, wake.ID, "admitted", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = store.update(func(st *State) error {
+					if tc.enrolled {
+						for k, w := range st.Workers {
+							w.ActionID = "original-enrolled-launch"
+							putRecord(st, "workers", &st.Workers, k, w)
+						}
+					}
+					if phase == "prepared" {
+						a := st.Admissions[admissionKey(b.ConversationID, wake.Admission)]
+						a.Phase, a.OperationID, a.NativeInputID = phase, wake.OperationID, strings.Repeat("a", 64)
+						a.Request, err = json.Marshal(protocol.ComposerSendReq{Session: b.SessionID, SessionInstance: b.SessionInstance, Text: "worker status", ManagerAdmission: &protocol.ManagerAdmission{Binding: runtimeBinding(b), Nonce: a.NativeInputID}})
+						if err != nil {
+							return err
+						}
+						putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				c.discussion.VMProjectAccess = tc.vm
+				if tc.vm {
+					st, err = store.Snapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = c.observeVMWorkers(st); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err = c.reconcileDiscussionWorkerEvidence(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if err = c.Tick(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				st, err = store.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				a := st.Admissions[admissionKey(b.ConversationID, wake.Admission)]
+				if tc.wantSend {
+					if len(runtime.sent) != 1 {
+						t.Fatalf("genuine VM status lost: %+v", a)
+					}
+				} else if len(runtime.sent) != 0 || a.Phase != "rejected" || a.SettledAt.IsZero() {
+					t.Fatalf("legacy status sent %d, phase %q", len(runtime.sent), a.Phase)
+				}
+			})
+		}
 	}
 }
