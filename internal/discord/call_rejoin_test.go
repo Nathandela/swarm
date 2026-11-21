@@ -58,3 +58,51 @@ func TestCallRejoinFencesOldAudioAndDelayedAnswers(t *testing.T) {
 		})
 	}
 }
+
+func TestConnectorRestartRetainsDiscussionAndFencesOldGeneration(t *testing.T) {
+	for _, route := range []string{"personal", "team"} {
+		t.Run(route, func(t *testing.T) {
+			team := route == "team"
+			dir := t.TempDir()
+			var old TeammateAdmission
+			var native *callFixtureNative
+			if !t.Run("before_restart", func(t *testing.T) {
+				f := openDispatcherCallFixture(t, team, dir, nil)
+				native = f.native
+				_, old = f.begin()
+			}) {
+				return
+			}
+			// Reopen the same connector ledger while its native dispatcher survives.
+			f := openDispatcherCallFixture(t, team, dir, native)
+			f.expectWaiting()
+			f.expectConsent()
+			states := []string{callRosterVoice(f.speakers[0], "20")}
+			if team {
+				states = append(states, callRosterVoice(f.speakers[1], "20"))
+			}
+			f.send("GUILD_CREATE", json.RawMessage(callRosterGuild(states...)))
+			if team {
+				f.command("105", "30", "70", "join", 0)
+				f.command("106", "30", "71", "consent", 0)
+			}
+			f.completeJoinHandshake()
+			callFixtureReceive(t, f.ctx, f.ack, "new connector media ready")
+			f.audio(1)
+			fresh := callFixtureReceive(t, f.ctx, native.accepted, "fresh input after restart")
+			if fresh.Voice.CallID == old.Voice.CallID || fresh.Discussion != old.Discussion || fresh.OperationID == old.OperationID {
+				t.Fatal("connector restart failed to separate the new call from the old admission")
+			}
+			f.publish(TeammatePublication{ID: "old", AdmissionID: old.OperationID, Body: "old receipt", Sequence: 1},
+				TeammatePublication{ID: "fresh", AdmissionID: fresh.OperationID, Body: "current receipt", Sequence: 2})
+			if got := callFixtureReceive(t, f.ctx, f.render, "render after restart"); got.body != "current receipt" {
+				t.Fatalf("restarted connector spoke %q", got.body)
+			}
+			for _, want := range []string{"old receipt", "current receipt"} {
+				if got := callFixtureReceive(t, f.ctx, f.written, "durable receipt"); got != want {
+					t.Fatalf("restarted connector wrote %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}

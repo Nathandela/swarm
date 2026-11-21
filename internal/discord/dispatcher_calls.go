@@ -20,25 +20,26 @@ const callIdleTimeout = 2 * time.Minute
 
 // Gateway callbacks only change in-memory authority and enqueue bounded work.
 type dispatcherCalls struct {
-	lastMetrics  dispatcherCallMetrics
-	dependencies dispatcherCallDependencies
-	checkStartup bool
-	lastControl  string
-	statusReason string
-	t            *teammateConnector
-	ctx          context.Context
-	mu           sync.Mutex
-	roster       callRoster
-	active       *dispatcherCall
-	leaving      bool
-	rearmOnLeave bool
-	generation   uint64
-	consent      map[string]time.Time
-	invited      bool
-	suspended    bool
-	stopped      bool
-	wake         chan struct{}
-	wg           sync.WaitGroup
+	lastMetrics     dispatcherCallMetrics
+	dependencies    dispatcherCallDependencies
+	checkStartup    bool
+	lastControl     string
+	statusReason    string
+	t               *teammateConnector
+	ctx             context.Context
+	mu              sync.Mutex
+	roster          callRoster
+	active          *dispatcherCall
+	leaving         bool
+	rearmOnLeave    bool
+	generation      uint64
+	consent         map[string]time.Time
+	invitedUntil    time.Time
+	suspended       bool
+	stopped         bool
+	wake            chan struct{}
+	historyRepaired chan struct{}
+	wg              sync.WaitGroup
 }
 
 type dispatcherCall struct {
@@ -73,7 +74,7 @@ func enableDispatcherCalls(ctx context.Context, t *teammateConnector, injected .
 		dependencies = injected[0]
 	}
 	cfg := t.service.Config.Calls
-	d := &dispatcherCalls{dependencies: dependencies, checkStartup: len(injected) == 0, ctx: ctx, t: t, consent: make(map[string]time.Time), wake: make(chan struct{}, 1)}
+	d := &dispatcherCalls{dependencies: dependencies, checkStartup: len(injected) == 0, ctx: ctx, t: t, consent: make(map[string]time.Time), wake: make(chan struct{}, 1), historyRepaired: make(chan struct{}, 1)}
 	t.service.calls = d
 	t.client.onDispatch = d.gateway
 	t.client.callGateway = &callGateway{guild: cfg.GuildID, room: cfg.RoomID, dispatch: d.dispatch, disconnect: d.disconnect, unavailable: func(reason string) {
@@ -107,7 +108,7 @@ func (d *dispatcherCalls) disconnect() {
 	d.roster.reset()
 	d.leaving, d.rearmOnLeave = false, false
 	clear(d.consent)
-	d.invited = false
+	d.invitedUntil = time.Time{}
 	d.invalidateLocked()
 }
 
@@ -217,7 +218,7 @@ func (d *dispatcherCalls) command(action, user, id string) {
 	}
 	d.lastControl = id
 	if action == "voice leave" {
-		d.invited = false
+		d.invitedUntil = time.Time{}
 		clear(d.consent)
 		d.invalidateLocked()
 		return
@@ -230,8 +231,11 @@ func (d *dispatcherCalls) command(action, user, id string) {
 		return
 	}
 	d.consent[user] = time.Now().Add(30 * time.Minute)
+	if d.active != nil && d.active.ctx.Err() == nil {
+		return
+	}
 	if action == "voice join" {
-		d.invited = true
+		d.invitedUntil = d.consent[user]
 	}
 	d.signalLocked()
 }
@@ -253,7 +257,7 @@ func (d *dispatcherCalls) permittedLocked() ([]string, bool) {
 		return nil, false
 	}
 	if cfg.Mode == "teammate" {
-		if !d.invited {
+		if !time.Now().Before(d.invitedUntil) {
 			return nil, false
 		}
 		for _, id := range speakers {
@@ -282,6 +286,11 @@ func (d *dispatcherCalls) run() {
 		case <-d.wake:
 		}
 		d.mu.Lock()
+		// All triggers already received refer to the roster evaluated below.
+		select {
+		case <-d.wake:
+		default:
+		}
 		ids, ok := d.permittedLocked()
 		if !ok || d.active != nil {
 			retry = nil
@@ -305,6 +314,7 @@ func (d *dispatcherCalls) run() {
 		}
 		deadline := time.Now().Add(30 * time.Minute)
 		if d.t.service.Config.Mode == "teammate" {
+			deadline = d.invitedUntil
 			for _, user := range ids {
 				if d.consent[user].Before(deadline) {
 					deadline = d.consent[user]
@@ -317,6 +327,9 @@ func (d *dispatcherCalls) run() {
 				deadline = previousDeadline
 			}
 		}
+		if d.t.service.Config.Mode == "teammate" {
+			d.invitedUntil = deadline
+		}
 		mediaCtx, cancel := context.WithDeadline(gatewayCtx, deadline)
 		ctx, revoke := context.WithCancel(mediaCtx)
 		d.generation++
@@ -326,25 +339,10 @@ func (d *dispatcherCalls) run() {
 		c.occupancyAt, c.retriedDAVE = d.roster.occupancyAt, retry != nil
 		retry = nil
 		d.active = c
-		// A blocked native admission cannot keep media authorized past the idle deadline.
-		c.idleTimer = time.AfterFunc(callIdleTimeout, func() {
-			d.mu.Lock()
-			defer d.mu.Unlock()
-			if c.ctx.Err() != nil {
-				return
-			}
-			if remaining := time.Until(c.lastSpeech.Add(callIdleTimeout)); remaining > 0 {
-				c.idleTimer.Reset(remaining)
-				return
-			}
-			c.failure = "call ended after two minutes without speech"
-			c.cancel()
-		})
 		d.mu.Unlock()
 		err := d.serve(c, mediaCtx, revoke)
 		cancel()
 		d.mu.Lock()
-		c.idleTimer.Stop()
 		// Wait for the bot's leave dispatch before a replacement helper can join.
 		left := d.roster.selfLeftAt > c.joinAt
 		bound, _ := c.ctx.Value(callGatewaySessionKey{}).(*callGatewaySession)
@@ -429,7 +427,19 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 		fail("configured dispatcher discussion unavailable; open it by text first")
 		return err
 	}
-	if err = d.checkAudience(c.ctx, b, c.speakers); err != nil {
+	for {
+		err = d.checkAudience(c.ctx, b, c.speakers)
+		if !errors.Is(err, errPersonalHistoryRepair) {
+			break
+		}
+		// Fresh Discord occupancy can precede completion of owner DM history repair.
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-d.historyRepaired:
+		}
+	}
+	if err != nil {
 		fail("participant no longer has access to the linked discussion")
 		return err
 	}
@@ -603,6 +613,23 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 		d.mu.Unlock()
 		return c.ctx.Err()
 	}
+	// A blocked native admission cannot keep media authorized past the idle deadline.
+	c.idleTimer = time.AfterFunc(callIdleTimeout, func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if c.ctx.Err() != nil {
+			return
+		}
+		if remaining := time.Until(c.lastSpeech.Add(callIdleTimeout)); remaining > 0 {
+			c.idleTimer.Reset(remaining)
+			return
+		}
+		d.invitedUntil = time.Time{}
+		c.failure = "call ended after two minutes without speech"
+		c.cancel()
+	})
+	defer c.idleTimer.Stop()
+	c.lastSpeech = time.Now()
 	c.ready = true
 	c.metrics.ReadyMS = time.Since(c.started).Milliseconds()
 	d.mu.Unlock()

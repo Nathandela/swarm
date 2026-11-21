@@ -36,7 +36,7 @@ func (d *dispatcherCalls) stopCall() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.suspended = true
-	d.invited = false
+	d.invitedUntil = time.Time{}
 	clear(d.consent)
 	if d.active != nil {
 		d.active.cancel()

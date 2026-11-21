@@ -13,6 +13,13 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 		t.Run(route, func(t *testing.T) {
 			f := newDispatcherCallFixture(t, route == "team")
 			speech, first := f.begin()
+			if f.team {
+				f.command("105", "30", "71", "consent", 0)
+				f.command("106", "30", "70", "join", 0)
+				if len(f.calls.wake) != 0 {
+					t.Error("a command during an active call queued a replacement")
+				}
+			}
 			inactiveSince := time.Now().Add(-3 * time.Minute)
 			f.calls.mu.Lock()
 			f.calls.active.lastSpeech = inactiveSince
@@ -64,7 +71,9 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 			f.expectRoom("")
 			f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
 			if f.team {
-				f.command("105", "30", "70", "join", 0)
+				f.command("107", "30", "71", "consent", 0)
+				f.expectWaiting()
+				f.command("108", "30", "70", "join", 0)
 			} else {
 				f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("70", ""))))
 				f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("70", "20"))))
@@ -77,7 +86,7 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 				t.Fatal("blocked admission leaked across AFK resumption")
 			}
 			if f.team {
-				f.command("106", "30", "70", "leave", 0)
+				f.command("109", "30", "70", "leave", 0)
 				f.expectConsent()
 			} else {
 				f.calls.stopCall()

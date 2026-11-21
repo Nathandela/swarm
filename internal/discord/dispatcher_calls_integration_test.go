@@ -173,9 +173,17 @@ type dispatcherCallFixture struct {
 
 func newDispatcherCallFixture(t *testing.T, team bool) *dispatcherCallFixture {
 	t.Helper()
+	return openDispatcherCallFixture(t, team, t.TempDir(), nil)
+}
+
+func openDispatcherCallFixture(t *testing.T, team bool, storeDir string, native *callFixtureNative) *dispatcherCallFixture {
+	t.Helper()
+	if native == nil {
+		native = &callFixtureNative{admissions: make(map[string]TeammateAdmission), accepted: make(chan TeammateAdmission, 8)}
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	f := &dispatcherCallFixture{t: t, ctx: ctx, team: team,
-		native:   &callFixtureNative{admissions: make(map[string]TeammateAdmission), accepted: make(chan TeammateAdmission, 8)},
+		native:   native,
 		gateways: make(chan callFixtureGateway, 3), messages: make(chan string, 16),
 		mediaAudio: make(chan callMediaEvent, 8), spoken: make(chan []byte, 8),
 		ack: make(chan *callFixtureSpeech, 1), render: make(chan callFixtureRender, 8), written: make(chan string, 8),
@@ -199,7 +207,7 @@ func newDispatcherCallFixture(t *testing.T, team bool) *dispatcherCallFixture {
 		t.Fatal(err)
 	}
 
-	store, err := OpenStore(t.TempDir())
+	store, err := OpenStore(storeDir)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -471,8 +479,9 @@ func (f *dispatcherCallFixture) expectConsent(ids ...string) {
 	f.t.Helper()
 	f.calls.mu.Lock()
 	defer f.calls.mu.Unlock()
-	if len(f.calls.consent) != len(ids) || f.calls.invited != (len(ids) != 0) {
-		f.t.Fatalf("call invite = %t, consent = %v, want %v", f.calls.invited, f.calls.consent, ids)
+	invited := time.Now().Before(f.calls.invitedUntil)
+	if len(f.calls.consent) != len(ids) || invited != (len(ids) != 0) {
+		f.t.Fatalf("call invite = %t, consent = %v, want %v", invited, f.calls.consent, ids)
 	}
 	for _, id := range ids {
 		if f.calls.consent[id].IsZero() {

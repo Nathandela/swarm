@@ -207,6 +207,12 @@ func (t *teammateConnector) repairPersonalHistory(ctx context.Context, b teammat
 			return err
 		}
 		if done {
+			if d := t.service.calls; d != nil {
+				select {
+				case d.historyRepaired <- struct{}{}:
+				default:
+				}
+			}
 			return nil
 		}
 		b.RepairUpper, b.RepairAfter = upper, low
