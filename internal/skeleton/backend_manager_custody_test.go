@@ -106,15 +106,23 @@ func TestCodexManagerCustodyQueuedDuringBeginPreventsNativeWrite(t *testing.T) {
 }
 
 func TestCodexManagerDirtyOwnerPreventsInitialDialAndLeavesNativeAlive(t *testing.T) {
-	sk, b, _ := newCodexManagerSendRig(t)
+	sk, b, owner := newCodexManagerSendRig(t)
 	server := newR7R4Server(t)
-	conn, _, err := sk.dialSessionBackend(b.Session, b.SessionInstance, daemon.BackendChannel{SocketPath: server.sock})
-	if conn != nil {
-		_ = conn.Close()
+	expectRefusal := func(want error) {
+		t.Helper()
+		conn, _, err := sk.dialSessionBackend(b.Session, b.SessionInstance, daemon.BackendChannel{SocketPath: server.sock})
+		if conn != nil {
+			_ = conn.Close()
+			t.Fatal("unclaimed manager connected to the backend")
+		}
+		if !errors.Is(err, want) || errors.Is(err, managerproof.ErrQuarantined) != (want == managerproof.ErrQuarantined) {
+			t.Fatalf("expected %v, got %v", want, err)
+		}
 	}
-	if !errors.Is(err, managerproof.ErrQuarantined) {
-		t.Fatalf("dirty owner was reattached: %v", err)
-	}
+	expectRefusal(managerproof.ErrUnavailable)
+	// Closing the observer releases the database lock but leaves its durable claim.
+	discardCodexManagerFeed(owner)
+	expectRefusal(managerproof.ErrQuarantined)
 	server.mu.Lock()
 	connections := len(server.conns)
 	server.mu.Unlock()
