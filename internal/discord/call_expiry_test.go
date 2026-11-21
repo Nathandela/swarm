@@ -120,21 +120,27 @@ func TestTeamConsentLifetimeStartsNoLaterThanReceipt(t *testing.T) {
 }
 
 func TestTeamWithdrawalSurvivesReorderedParticipantControls(t *testing.T) {
-	f := newDispatcherCallFixture(t, true)
-	speech, _ := f.begin()
-	f.command("108", "30", "71", "consent", 0)
-	f.command("106", "30", "70", "leave", 0)
-	if speech.ctx.Err() == nil {
-		t.Fatal("another participant's later consent suppressed withdrawal")
+	for _, consenting := range []string{"70", "71"} {
+		t.Run("consent-by-"+consenting, func(t *testing.T) {
+			f := newDispatcherCallFixture(t, true)
+			speech, _ := f.begin()
+			f.command("108", "30", consenting, "consent", 0)
+			f.command("106", "30", "70", "leave", 0)
+			if speech.ctx.Err() == nil {
+				t.Fatal("later consent suppressed withdrawal")
+			}
+			f.expectRoom("")
+			f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
+			f.expectConsent()
+			f.command("110", "30", "71", "leave", 0)
+			f.command("109", "30", "70", "join", 0)
+			f.expectConsent()
+			f.command("111", "30", "70", "join", 0)
+			f.command("112", "30", "71", "consent", 0)
+			f.completeJoinHandshake()
+			callFixtureReceive(t, f.ctx, f.ack, "fresh per-participant grants after withdrawal")
+			f.command("106", "30", "70", "leave", 0)
+			f.expectConsent("70", "71")
+		})
 	}
-	f.expectRoom("")
-	f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
-	f.expectConsent()
-	f.command("110", "30", "71", "leave", 0)
-	f.command("109", "30", "70", "join", 0)
-	f.expectConsent()
-	f.command("111", "30", "70", "join", 0)
-	f.command("112", "30", "71", "consent", 0)
-	f.completeJoinHandshake()
-	callFixtureReceive(t, f.ctx, f.ack, "fresh per-participant grants after withdrawal")
 }

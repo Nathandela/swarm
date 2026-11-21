@@ -249,10 +249,14 @@ func (d *dispatcherCalls) command(cmd callCommand) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	previous := d.lastControl[cmd.user]
-	if cmd.id == "" || previous != "" && !snowflakeLess(previous, cmd.id) || d.lastLeave != "" && !snowflakeLess(d.lastLeave, cmd.id) {
+	if cmd.id == "" || d.lastLeave != "" && !snowflakeLess(d.lastLeave, cmd.id) {
 		return
 	}
-	d.lastControl[cmd.user] = cmd.id
+	if previous == "" || snowflakeLess(previous, cmd.id) {
+		d.lastControl[cmd.user] = cmd.id
+	} else if cmd.action != "voice leave" {
+		return
+	}
 	if cmd.action == "voice leave" {
 		d.lastLeave = cmd.id
 		d.invitedUntil = time.Time{}
