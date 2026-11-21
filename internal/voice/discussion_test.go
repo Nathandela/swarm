@@ -777,3 +777,91 @@ func TestDiscussionReportsOwnerDraftHoldBehindWorkerWake(t *testing.T) {
 		t.Fatal("reporting the hold changed admission order, worker or manager custody")
 	}
 }
+
+func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name                                            string
+		proofFirst, changed, steered, human, correction bool
+		want                                            int
+	}{
+		{name: "note then proof", want: 1},
+		{name: "proof then note", proofFirst: true, want: 1},
+		{name: "corrected evidence", changed: true, want: 2},
+		{name: "manager correction", correction: true, want: 2},
+		{name: "new worker directive", steered: true, want: 2},
+		{name: "new human request", human: true, want: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, original, _ := testStore(t)
+			original.ConversationID = DiscussionConversationPrefix + "duplicate"
+			b, err := s.BindManager(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := WorkerAssociation{ConversationID: b.ConversationID, Session: "machine/worker", SessionInstance: "instance", JobID: "job", ActionID: "attempt", AttemptID: "attempt"}
+			note := Event{ID: "note", WakeID: "note-wake", WorkerMessage: true, Metadata: json.RawMessage(`{"session":"machine/worker","instance":"instance","kind":"complete","text":"seven checks passed"}`)}
+			text := "seven checks passed"
+			if tc.changed {
+				text = "six checks passed, one failed"
+			}
+			proof := Event{ID: discussionEvidenceID(w), WakeID: "proof-wake", WorkerProof: true, NativeTurnID: "worker-turn", Metadata: json.RawMessage(fmt.Sprintf(`{"session":"machine/worker","instance":"instance","data":{"turn_id":"worker-turn","state":"completed","text":%q}}`, text))}
+			events := []Event{note, proof}
+			if tc.proofFirst {
+				events[0], events[1] = events[1], events[0]
+			}
+			for i, e := range events {
+				e.ConversationID, e.JobID, e.AttemptID = b.ConversationID, w.JobID, w.AttemptID
+				seq := uint64(i + 1)
+				if err := s.update(func(st *State) error {
+					if i == 1 && tc.steered {
+						w.ActionID = "new-directive"
+					}
+					putRecord(st, "workers", &st.Workers, key(b.ConversationID, key(w.Session, w.SessionInstance)), w)
+					a, err := allocateAdmission(st, b, "wake:"+e.WakeID)
+					if err != nil {
+						return err
+					}
+					if i == 1 && tc.human {
+						a.Origin = &schema.MessageOrigin{RequestID: "new-human"}
+						putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
+					}
+					putRecord(st, "events", &st.Events, key(b.ConversationID, e.ID), e)
+					wake := Wake{ID: e.WakeID, EventID: e.ID, Admission: a.Sequence}
+					putRecord(st, "wakes", &st.Wakes, key(b.ConversationID, wake.ID), wake)
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				input, turn := fmt.Sprint("input-", i), fmt.Sprint("manager-turn-", i)
+				if err := s.BindNativeInput(b, seq, input); err != nil {
+					t.Fatal(err)
+				}
+				permit, err := s.GrantSpeech(b, seq, input, turn, seq)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := "The worker reported seven passing checks."
+				if tc.correction && i == 1 {
+					body = "Correction: only six of those checks used the required fixture."
+				}
+				got, err := s.PublishSpeech(b, permit, Publication{ID: fmt.Sprint("publication-", i), NativeTurnID: turn, Sequence: 1, Text: body, Final: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i == 1 && tc.want == 1 && (got.ID != "publication-0" || got.Exported) {
+					t.Fatalf("duplicate manufactured a new receipt or acknowledged export: %+v", got)
+				}
+				if err := s.SettleAdmission(b, seq); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, err := s.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Publications) != tc.want {
+				t.Fatalf("got %d durable finals, want %d", len(st.Publications), tc.want)
+			}
+		})
+	}
+}

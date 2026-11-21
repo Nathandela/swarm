@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 const discussionEvidenceLimitNotice = "I couldn't verify the worker's final result within the configured evidence limit. The job and its native session are available in Swarm."
@@ -131,4 +133,66 @@ func (d *DiscussionController) validatePublicationAttempt(st State, id string) e
 		return ErrExpired
 	}
 	return nil
+}
+
+// A worker's completion note and its full native result can wake two manager turns.
+func priorWorkerCompletion(st *State, p Publication) (Publication, bool) {
+	src := p.DiscussionSource
+	if !p.Final || src.AttemptID == "" || src.JobID == "" {
+		return Publication{}, false
+	}
+	var latest Publication
+	for _, old := range st.Publications {
+		if old.ConversationID == p.ConversationID && old.Final && old.DiscussionSource.JobID == src.JobID &&
+			old.DiscussionSource.AttemptID == src.AttemptID && old.OutputSequence > latest.OutputSequence {
+			latest = old
+		}
+	}
+	if latest.ID == "" || latest.Text != p.Text || latest.DiscussionProjects != p.DiscussionProjects || latest.DiscussionAttempts != p.DiscussionAttempts {
+		return Publication{}, false
+	}
+	current, note := workerCompletionEvidence(st, p)
+	if current == "" {
+		return Publication{}, false
+	}
+	previous, wasNote := workerCompletionEvidence(st, latest)
+	return latest, previous == current && wasNote != note
+}
+
+// The bool identifies the worker's own note. Empty text means the evidence cannot be matched.
+func workerCompletionEvidence(st *State, pub Publication) (string, bool) {
+	src := pub.DiscussionSource
+	a := st.Admissions[admissionKey(pub.ConversationID, pub.Admission)]
+	wake := st.Wakes[key(pub.ConversationID, pub.DiscussionSource.AdmissionID)]
+	e := st.Events[key(pub.ConversationID, wake.EventID)]
+	if a.Origin != nil || a.RecoveryOnly || a.SourceID != "wake:"+wake.ID || wake.Admission != a.Sequence ||
+		e.WakeID != wake.ID || e.RecoveryOnly || e.JobID != src.JobID || e.AttemptID != src.AttemptID {
+		return "", false
+	}
+	var meta struct {
+		Session, Instance, Kind, Text string
+		Data                          schema.WorkerTurnEvidence
+	}
+	if json.Unmarshal(e.Metadata, &meta) != nil {
+		return "", false
+	}
+	target := key(meta.Session, meta.Instance)
+	w := st.Workers[key(pub.ConversationID, target)]
+	if w.RecoveryRequired || w.VMChild || w.ActionID != src.AttemptID || w.AttemptID != src.AttemptID || w.JobID != src.JobID ||
+		!singleReportScope(pub.DiscussionAttempts, src.AttemptID) || !singleReportScope(pub.DiscussionProjects, w.Project) {
+		return "", false
+	}
+	for _, a := range st.Actions {
+		if a.ConversationID == pub.ConversationID && a.Target == target && a.State != "settled" {
+			return "", false
+		}
+	}
+	if e.WorkerMessage && meta.Kind == "complete" {
+		return meta.Text, true
+	}
+	if e.WorkerProof && e.ID == discussionEvidenceID(w) && e.NativeTurnID != "" && meta.Data.TurnID == e.NativeTurnID &&
+		meta.Data.State == "completed" && !meta.Data.TextTruncated {
+		return meta.Data.Text, false
+	}
+	return "", false
 }

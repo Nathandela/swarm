@@ -1384,6 +1384,10 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
 			p.DiscussionProjects = addDiscussionScopeValue(admission.WorkerProjects, admission.Project)
 			p.DiscussionAttempts = admission.WorkerAttempts
+			if prior, ok := priorWorkerCompletion(st, p); ok {
+				result = prior
+				return nil
+			}
 			p.OutputSequence, err = nextDiscussionOutput(st, b.ConversationID)
 			if err != nil {
 				return err
