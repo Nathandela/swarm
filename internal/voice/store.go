@@ -1108,6 +1108,7 @@ func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) err
 				budget--
 			}
 		}
+		retainedFinals := make(map[string]bool)
 		for k, a := range st.Admissions {
 			if budget == 0 {
 				return nil
@@ -1115,13 +1116,15 @@ func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) err
 			if a.ConversationID == b.ConversationID && a.Sequence <= floor && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
 				deleteRecord(st, "admissions", &st.Admissions, k)
 				budget--
+			} else if a.ConversationID == b.ConversationID && a.ReusedFinal != nil {
+				retainedFinals[a.ReusedFinal.PublicationID] = true
 			}
 		}
 		for k, p := range st.Publications {
 			if budget == 0 {
 				return nil
 			}
-			if p.ConversationID == b.ConversationID && p.Admission > 0 && p.Admission <= floor {
+			if p.ConversationID == b.ConversationID && p.Admission > 0 && p.Admission <= floor && !retainedFinals[p.ID] {
 				if _, retained := st.Admissions[admissionKey(b.ConversationID, p.Admission)]; !retained {
 					deleteRecord(st, "publications", &st.Publications, k)
 					budget--
