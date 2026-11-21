@@ -15,12 +15,20 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+type parkedStatusManager struct {
+	*teammateTestManager
+	view TeammateNativeStatus
+}
+
+func (*parkedStatusManager) Dormant(TeammateDiscussion) (bool, error) { return true, nil }
+func (m *parkedStatusManager) Status(TeammateDiscussion) (TeammateNativeStatus, error) {
+	return m.view, nil
+}
+
 func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
-	s, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = s.Close() }()
+	c, manager := teammateTestConnector(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	c.service.Config.ProjectAccess = ProjectAccessEnrolled
+	s := c.service.Store
 	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{ChannelID: "201"}}
 	k := teammateOutputKey(d.InstallationID, d.ID, "publication")
 	out := teammateOutput{Route: d.Route, Chunks: []Chunk{{State: StateSent, MessageID: "301"}, {State: StateUncertain}}}
@@ -48,8 +56,15 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes := []workermail.NoteStatus{{ID: "note", AttemptID: "attempt", Publications: []workermail.PublicationStatus{{ID: "publication"}}}}
-	if err := s.teammatePark(d, 0, &TeammateNativeStatus{State: "parked", Notes: notes, Jobs: []TeammateJobStatus{{State: "turn_completed", RecoveryRequired: true, NativeTurnPublication: &workermail.PublicationStatus{ID: "publication"}}}}); err != nil {
+	c.manager = &parkedStatusManager{teammateTestManager: manager, view: TeammateNativeStatus{State: "parked", Notes: notes, Jobs: []TeammateJobStatus{{State: "turn_completed", RecoveryRequired: true, NativeTurnPublication: &workermail.PublicationStatus{ID: "publication"}}}}}
+	var tasks sync.WaitGroup
+	done := make(chan teammateTaskResult, 1)
+	if err := c.schedule(t.Context(), 1, map[string]bool{}, map[string]bool{}, map[string]time.Time{}, map[string]time.Time{}, done, &tasks); err != nil {
 		t.Fatal(err)
+	}
+	tasks.Wait()
+	if result := <-done; result.retry {
+		t.Fatal("enrolled discussion could not park or retain its worker result")
 	}
 	status, err := s.teammateStatus(d.InstallationID, func(TeammateDiscussion) (TeammateNativeStatus, error) {
 		t.Fatal("status reopened a parked manager")

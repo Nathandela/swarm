@@ -698,7 +698,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 						var parked *TeammateNativeStatus
 						if reporter, ok := t.manager.(interface {
 							Status(TeammateDiscussion) (TeammateNativeStatus, error)
-						}); ok && t.service.Config.EffectiveProjectAccess() == ProjectAccessVM {
+						}); ok {
 							view, err := reporter.Status(b.TeammateDiscussion)
 							if err != nil {
 								return err

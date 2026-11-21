@@ -167,6 +167,18 @@ func TestEnrolledBridgeAfterCustodyLoss(t *testing.T) {
 			t.Fatal("recovered note conferred ordinary authority")
 		}
 	}
+	// Switching to VM policy cannot convert a previously enrolled worker note into a VM mailbox grant.
+	c.discussion.VMProjectAccess = true
+	grantErr = ErrDiscussionSourceChanged
+	read := SessionInput{Session: w.Session, SessionInstance: w.SessionInstance}
+	if _, err := c.readDiscussionWorkerNote(t.Context(), read, a); !errors.Is(err, ErrDiscussionSourceChanged) {
+		t.Fatal("VM policy exposed withdrawn enrolled note", err)
+	}
+	grantErr = nil
+	if _, err := c.readDiscussionWorkerNote(t.Context(), read, a); err != nil {
+		t.Fatal("exact original grant did not authorize retained note", err)
+	}
+	c.discussion.VMProjectAccess = false
 	if _, _, err := c.discussionContinuation(st, a, key(w.Session, w.SessionInstance), "new-action"); !errors.Is(err, ErrExpired) {
 		t.Fatal("allowed new input to uncertain worker", err)
 	}

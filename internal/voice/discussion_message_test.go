@@ -18,6 +18,7 @@ func TestDiscussionWorkerMessageIsScopedAndRetrySafe(t *testing.T) {
 	origin.DiscussionID, origin.Revision = "discussion", "revision"
 	var changed atomic.Bool
 	c.discussion = &DiscussionScope{DiscussionID: origin.DiscussionID, InstallationID: origin.InstallationID, GuildID: origin.GuildID, ThreadID: origin.ChannelID,
+		VerifyAudience: func(context.Context) error { return nil },
 		VerifyGrant: func(_ context.Context, actual schema.MessageOrigin) error {
 			if changed.Load() || actual != origin {
 				return ErrDiscussionSourceChanged
@@ -59,6 +60,11 @@ func TestDiscussionWorkerMessageIsScopedAndRetrySafe(t *testing.T) {
 			t.Fatalf("wrong worker identity got %v", err)
 		}
 	}
+	changed.Store(true)
+	if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "I need clarification", ""); err == nil || !strings.Contains(err.Error(), "discussion_source_changed") {
+		t.Fatalf("ordinary enrolled note passed a revoked source grant: %v", err)
+	}
+	changed.Store(false)
 	for i := 0; i < 2; i++ {
 		if err := SendDiscussionWorkerMessage(ctx, bridge, "worker", operation, "I need clarification", ""); err != nil {
 			t.Fatalf("message %d: %v", i, err)

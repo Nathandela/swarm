@@ -211,15 +211,11 @@ func (c *Controller) acceptDiscussionWorkerMessage(ctx context.Context, localSes
 	if worker.Ended || !c.projectPath(worker.Project, worker.Project) {
 		return workerMessageReceipt{}, ErrStale
 	}
-	if worker.RecoveryRequired {
-		if input.Kind != "needs-input" && input.Kind != "complete" {
-			return workerMessageReceipt{}, ErrStale
-		}
-		if err := c.verifyWorkerReplyGrant(ctx, st, worker); err != nil {
-			return workerMessageReceipt{}, err
-		}
-	} else if c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {
-		return workerMessageReceipt{}, errDiscussionGrantUnverified
+	if worker.RecoveryRequired && input.Kind != "needs-input" && input.Kind != "complete" {
+		return workerMessageReceipt{}, ErrStale
+	}
+	if err := c.verifyWorkerReplyGrant(ctx, st, worker); err != nil {
+		return workerMessageReceipt{}, err
 	}
 	if err = ctx.Err(); err != nil {
 		return workerMessageReceipt{}, err
@@ -507,6 +503,9 @@ func (c *Controller) verifyWorkerReplyGrant(ctx context.Context, st State, worke
 		}
 		return ctx.Err()
 	}
+	if c.discussion.VerifyGrant == nil || c.discussion.VerifyAudience == nil {
+		return errDiscussionGrantUnverified
+	}
 	attempt := st.Actions[key(c.binding.ConversationID, worker.AttemptID)]
 	var launch controllerActionRequest
 	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &launch) != nil || launch.Origin == nil ||
@@ -538,20 +537,18 @@ func (c *Controller) verifyWorkerReplyGrant(ctx context.Context, st State, worke
 			return err
 		}
 		if row.RosterHidden || row.Status.Process != status.ProcessRunning || row.Agent != launch.Launch.Agent || row.Cwd != worker.Project ||
-			row.SpawnedFrom != worker.Parent || row.SpawnIntent != schema.SpawnIntentDelegate || c.discussion.VerifyGrant == nil || c.discussion.VerifyAudience == nil {
+			row.SpawnedFrom != worker.Parent || row.SpawnIntent != schema.SpawnIntentDelegate {
 			return ErrStale
 		}
 	}
-	if c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {
+	if c.discussion.VerifyAudience(ctx) != nil {
 		return errDiscussionGrantUnverified
 	}
-	if c.discussion.VerifyGrant != nil {
-		if err := c.discussion.VerifyGrant(ctx, *launch.Origin); err != nil {
-			if errors.Is(err, ErrDiscussionSourceChanged) {
-				return err
-			}
-			return errDiscussionGrantUnverified
+	if err := c.discussion.VerifyGrant(ctx, *launch.Origin); err != nil {
+		if errors.Is(err, ErrDiscussionSourceChanged) {
+			return err
 		}
+		return errDiscussionGrantUnverified
 	}
 	return ctx.Err()
 }
