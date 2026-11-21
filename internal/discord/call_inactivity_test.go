@@ -60,7 +60,7 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 			}
 			// Advance only the generation's inactivity clock and deliver its scheduled wakeup.
 			f.calls.mu.Lock()
-			f.calls.active.lastSpeech = inactiveSince
+			f.calls.active.lastSpeech = time.Now().Add(-callIdleTimeout - 10*time.Millisecond)
 			f.calls.active.idleTimer.Reset(0)
 			f.calls.mu.Unlock()
 			callFixtureReceive(t, f.ctx, speech.ctx.Done(), "idle authority revoked during admission")
@@ -71,7 +71,7 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 			f.expectRoom("")
 			f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
 			if f.team {
-				f.command("107", "30", "71", "consent", 0)
+				f.command("107", "30", "71", "join", 20*time.Second)
 				f.expectWaiting()
 				f.command("108", "30", "70", "join", 0)
 			} else {
@@ -93,5 +93,25 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 			}
 			f.expectRoom("")
 		})
+	}
+}
+
+// Delivery can precede the idle timer callback even when the author sent the command after expiry.
+func TestFreshTeamJoinSurvivesRetiringIdleGeneration(t *testing.T) {
+	f := newDispatcherCallFixture(t, true)
+	speech, first := f.begin()
+	f.calls.mu.Lock()
+	f.calls.active.lastSpeech = time.Now().Add(-callIdleTimeout - time.Second)
+	f.calls.mu.Unlock()
+	f.command("105", "30", "70", "join", 0)
+	callFixtureReceive(t, f.ctx, speech.ctx.Done(), "command observed the elapsed idle deadline")
+	f.expectRoom("")
+	f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
+	f.completeJoinHandshake()
+	callFixtureReceive(t, f.ctx, f.ack, "fresh join survived the previous call cleanup")
+	f.audio(2)
+	second := callFixtureReceive(t, f.ctx, f.native.accepted, "fresh generation accepted one turn")
+	if second.Voice.Generation != first.Voice.Generation+1 {
+		t.Fatalf("new generation %d after %d", second.Voice.Generation, first.Voice.Generation)
 	}
 }

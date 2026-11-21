@@ -37,6 +37,15 @@ func TestTeamConsentExpiresWhileManagerIsBlocked(t *testing.T) {
 		f.native.mu.Unlock()
 		t.Fatal("a blocked manager kept expired media authorized")
 	}
+	f.calls.mu.Lock()
+	oldConsent := f.calls.consent["70"]
+	f.calls.mu.Unlock()
+	f.command("104", "30", "70", "join", 20*time.Second)
+	f.calls.mu.Lock()
+	if !f.calls.consent["70"].Equal(oldConsent) || time.Now().Before(f.calls.invitedUntil) {
+		t.Error("pre-expiry join renewed consent or invitation during blocked teardown")
+	}
+	f.calls.mu.Unlock()
 	err := speech.cfg.Play(f.ctx, make([]byte, callMediaPCMBytes))
 	f.native.mu.Unlock()
 	if !errors.Is(err, ErrNotAuthorized) {
@@ -44,9 +53,9 @@ func TestTeamConsentExpiresWhileManagerIsBlocked(t *testing.T) {
 	}
 	f.expectRoom("")
 	f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
-	f.command("104", "30", "71", "consent", 0)
+	f.command("105", "30", "71", "join", 20*time.Second)
 	f.expectWaiting()
-	f.command("105", "30", "70", "join", 0)
+	f.command("106", "30", "70", "join", 0)
 	f.expectRoom("20")
 	select {
 	case <-f.native.accepted:

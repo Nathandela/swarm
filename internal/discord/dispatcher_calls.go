@@ -35,6 +35,7 @@ type dispatcherCalls struct {
 	generation      uint64
 	consent         map[string]time.Time
 	invitedUntil    time.Time
+	rearmAfter      time.Time
 	suspended       bool
 	stopped         bool
 	wake            chan struct{}
@@ -184,14 +185,19 @@ func (d *dispatcherCalls) queueLocked(c *dispatcherCall, v any) bool {
 	}
 }
 
+type callCommand struct {
+	action, user, id string
+	issued           time.Time
+}
+
 // Consent commands belong exclusively to the call control surface. Suppress them even on replay.
-func callControl(cfg Config, f gatewayFrame) (string, string, string, bool) {
+func callControl(cfg Config, f gatewayFrame) (callCommand, bool) {
 	if cfg.Calls == nil || cfg.Mode != "teammate" || f.Type != "MESSAGE_CREATE" {
-		return "", "", "", false
+		return callCommand{}, false
 	}
 	var msg discordgo.Message
 	if json.Unmarshal(f.Data, &msg) != nil || msg.GuildID != cfg.Calls.GuildID || msg.ChannelID != cfg.Calls.DiscussionID {
-		return "", "", "", false
+		return callCommand{}, false
 	}
 	cmd := strings.TrimSpace(msg.Content)
 	for _, prefix := range []string{"<@" + cfg.ApplicationID + "> ", "<@!" + cfg.ApplicationID + "> "} {
@@ -200,50 +206,83 @@ func callControl(cfg Config, f gatewayFrame) (string, string, string, bool) {
 		}
 		action := strings.TrimPrefix(cmd, prefix)
 		if action != "voice join" && action != "voice consent" && action != "voice leave" {
-			return "", "", "", false
+			return callCommand{}, false
 		}
 		if !snowflake(msg.ID) || msg.Author == nil || msg.Author.Bot || msg.WebhookID != "" || msg.Type != discordgo.MessageTypeDefault || !containsID(cfg.Calls.UserIDs, msg.Author.ID) || msg.Timestamp.IsZero() || time.Since(msg.Timestamp) > 30*time.Second || time.Until(msg.Timestamp) > 2*time.Second {
-			return "", "", "", true
+			return callCommand{}, true
 		}
-		return action, msg.Author.ID, msg.ID, true
+		return callCommand{action: action, user: msg.Author.ID, id: msg.ID, issued: msg.Timestamp}, true
 	}
-	return "", "", "", false
+	return callCommand{}, false
 }
 
-func (d *dispatcherCalls) command(action, user, id string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if id == "" || d.lastControl != "" && !snowflakeLess(d.lastControl, id) {
+// A control may arrive after expiry while the timer or the retiring manager is still blocked.
+func (d *dispatcherCalls) expireDueLocked(c *dispatcherCall, now time.Time) {
+	if c == nil || errors.Is(c.ctx.Err(), context.Canceled) {
+		if !now.Before(d.invitedUntil) && d.invitedUntil.After(d.rearmAfter) {
+			d.rearmAfter = d.invitedUntil
+		}
 		return
 	}
-	d.lastControl = id
-	if action == "voice leave" {
+	cutoff, ok := c.ctx.Deadline()
+	if !ok {
+		return
+	}
+	idleAt := c.lastSpeech.Add(callIdleTimeout)
+	idle := c.idleTimer != nil && idleAt.Before(cutoff)
+	if idle {
+		cutoff = idleAt
+	}
+	if now.Before(cutoff) || !cutoff.After(d.rearmAfter) {
+		return
+	}
+	d.rearmAfter = cutoff
+	d.invitedUntil = time.Time{}
+	if idle {
+		c.failure = "call ended after two minutes without speech"
+	}
+	c.cancel()
+}
+
+func (d *dispatcherCalls) command(cmd callCommand) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if cmd.id == "" || d.lastControl != "" && !snowflakeLess(d.lastControl, cmd.id) {
+		return
+	}
+	d.lastControl = cmd.id
+	if cmd.action == "voice leave" {
 		d.invitedUntil = time.Time{}
 		clear(d.consent)
 		d.invalidateLocked()
 		return
 	}
-	if action != "voice join" && action != "voice consent" {
+	now := time.Now()
+	d.expireDueLocked(d.active, now)
+	if !cmd.issued.After(d.rearmAfter) {
+		return
+	}
+	if cmd.action != "voice join" && cmd.action != "voice consent" {
 		return
 	}
 	speakers, eligible := d.roster.speakers(d.t.service.Config)
-	if !eligible || !slices.Contains(speakers, user) {
+	if !eligible || !slices.Contains(speakers, cmd.user) {
 		return
 	}
-	d.consent[user] = time.Now().Add(30 * time.Minute)
+	d.consent[cmd.user] = now.Add(30 * time.Minute)
 	if d.active != nil && d.active.ctx.Err() == nil {
 		return
 	}
-	if action == "voice join" {
-		d.invitedUntil = d.consent[user]
+	if cmd.action == "voice join" {
+		d.invitedUntil = d.consent[cmd.user]
 	}
 	d.signalLocked()
 }
 
 func (d *dispatcherCalls) gateway(f gatewayFrame, session string) error {
-	if action, user, id, reserved := callControl(d.t.service.Config, f); reserved {
+	if cmd, reserved := callControl(d.t.service.Config, f); reserved {
 		if !f.replayed {
-			d.command(action, user, id)
+			d.command(cmd)
 		}
 		return nil
 	}
@@ -343,6 +382,7 @@ func (d *dispatcherCalls) run() {
 		err := d.serve(c, mediaCtx, revoke)
 		cancel()
 		d.mu.Lock()
+		d.expireDueLocked(c, time.Now())
 		// Wait for the bot's leave dispatch before a replacement helper can join.
 		left := d.roster.selfLeftAt > c.joinAt
 		bound, _ := c.ctx.Value(callGatewaySessionKey{}).(*callGatewaySession)
@@ -624,9 +664,7 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 			c.idleTimer.Reset(remaining)
 			return
 		}
-		d.invitedUntil = time.Time{}
-		c.failure = "call ended after two minutes without speech"
-		c.cancel()
+		d.expireDueLocked(c, time.Now())
 	})
 	defer c.idleTimer.Stop()
 	c.lastSpeech = time.Now()
