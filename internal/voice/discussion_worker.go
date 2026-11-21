@@ -77,9 +77,31 @@ func (c *Controller) reconcileDiscussionWorkerEvidence(ctx context.Context) erro
 	if err != nil {
 		return err
 	}
-	for _, worker := range st.Workers {
-		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.EvidenceLimited || worker.ActionID == "" || worker.JobID == "" ||
-			!c.projectPath(worker.Project, worker.Project) {
+	for k, worker := range st.Workers {
+		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.ActionID == "" {
+			continue
+		}
+		if worker.VMChild || worker.Mailbox {
+			// Older VM roster observation mislabeled enrolled workers. Repair even after switching back to enrolled policy.
+			if err := c.store.update(func(current *State) error {
+				if err := checkBinding(current, c.binding); err != nil {
+					return err
+				}
+				if current.Workers[k] != worker {
+					return ErrStale
+				}
+				worker.VMChild = false
+				if worker.Mailbox {
+					worker.Mailbox, worker.RecoveryRequired = false, true
+					worker.AttemptID = exactEnrolledLaunchAttempt(current, worker)
+				}
+				putRecord(current, "workers", &current.Workers, k, worker)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		if worker.EvidenceLimited || worker.JobID == "" || worker.AttemptID == "" || !c.projectPath(worker.Project, worker.Project) {
 			continue
 		}
 		id := discussionEvidenceID(worker)

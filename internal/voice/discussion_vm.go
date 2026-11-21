@@ -24,13 +24,22 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 	}
 	// Remember the original record key even while an adapter is reconnecting.
 	known := make(map[string]string)
+	enrolled := make(map[string]bool)
 	for k, w := range st.Workers {
-		if w.ConversationID == c.binding.ConversationID && !w.Reserved {
+		if w.ConversationID != c.binding.ConversationID || w.Reserved {
+			continue
+		}
+		if w.ActionID != "" {
+			enrolled[w.Session] = true
+		} else {
 			known[w.Session] = k
 		}
 	}
 	changed := false
 	for _, row := range rows {
+		if enrolled[row.ID] {
+			continue
+		}
 		mailbox := row.WorkerDiscussion == c.binding.ConversationID && row.WorkerInstance != "" && row.WorkerAttempt != ""
 		if row.SpawnedFrom == "" || row.Role == "manager" || !mailbox && !parents[protocol.NamespacedID(row.EndpointID, row.SpawnedFrom)] {
 			continue
@@ -78,6 +87,15 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 			if err := checkBinding(state, c.binding); err != nil {
 				return err
 			}
+			if current, exists := state.Workers[k]; current != old || exists != found {
+				return ErrStale
+			}
+			// An enrolled launch can settle under its exact instance key after the roster snapshot.
+			for _, current := range state.Workers {
+				if current.ConversationID == w.ConversationID && current.Session == w.Session && current.ActionID != "" {
+					return ErrStale
+				}
+			}
 			putRecord(state, "workers", &state.Workers, k, w)
 			if !notify {
 				return nil
@@ -104,4 +122,29 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 		changed = true
 	}
 	return changed, nil
+}
+
+// Restore only a unique settled enrolled launch of this physical worker; absence leaves it fenced.
+func exactEnrolledLaunchAttempt(st *State, w WorkerAssociation) string {
+	var match string
+	for _, a := range st.Actions {
+		if a.ConversationID != w.ConversationID || a.ID == "" || a.State != "settled" {
+			continue
+		}
+		var result createdWorkerResult
+		if json.Unmarshal(a.Receipt, &result) != nil || result.Session != w.Session || result.SessionInstance != w.SessionInstance {
+			continue
+		}
+		var request controllerActionRequest
+		if json.Unmarshal(a.Request, &request) != nil || request.Origin == nil || request.Project != w.Project || request.Launch == nil ||
+			w.Parent == "" || request.Launch.SpawnedFrom != w.Parent || request.Launch.Cwd != w.Project ||
+			!(request.Tool == "swarm_create" && result.State == "created" || request.Tool == "swarm_resume" && result.State == "resumed") {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = a.ID
+	}
+	return match
 }
