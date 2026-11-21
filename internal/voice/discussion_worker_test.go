@@ -296,7 +296,7 @@ func TestMailboxWakeFitsNativeInputAndReadsFullExactNote(t *testing.T) {
 			t.Fatalf("full note does not fit its tool envelope: %v", err)
 		}
 		read.SessionInstance = "different-worker-instance"
-		if _, err = c.readDiscussionWorkerNote(read, admission); !errors.Is(err, ErrStale) {
+		if _, err = c.readDiscussionWorkerNote(t.Context(), read, admission); !errors.Is(err, ErrStale) {
 			t.Fatalf("foreign worker note read: %v", err)
 		}
 	}

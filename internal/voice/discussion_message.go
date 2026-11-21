@@ -16,16 +16,16 @@ import (
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/workermail"
 )
 
-func discussionWorkerGuidance(agent string) string {
-	common := "You are a Swarm worker delegated by the manager of this discussion. Run swarm teammate message --text 'your message' to queue a note to your own manager. Record final results in your normal native reply so Swarm can verify them. "
-	if agent == "claude" {
-		return common + "For a clarification, take the id from the queue receipt and run swarm teammate reply --id MESSAGE_ID --wait 90s. You can check again with the same id if the reply is pending."
-	}
-	return common + "If blocked, send your question and finish your current turn so Codex can accept your manager's new instruction. Do not wait in your shell for a reply."
+func discussionWorkerGuidance() string {
+	return "You are a Swarm worker delegated by the manager of this discussion. For clarification, run swarm teammate message --kind needs-input --text 'your question', then swarm teammate reply --id MESSAGE_ID --wait 90s with the returned ID. Use the same ID to check a pending reply. Send your result with swarm teammate message --kind complete --text 'result and evidence' and include it in your native final answer."
+
 }
+
+var ErrWorkerReplySuperseded = errors.New("teammate: this question closed without an answer")
 
 const workerMessagePath = "/worker/message"
 
@@ -130,6 +130,15 @@ func (c *Controller) acceptDiscussionWorkerMessage(ctx context.Context, localSes
 	if !retry && !protocol.SemanticOperationReplayable(input.ID, time.Now()) {
 		return workerMessageReceipt{}, ErrInvalid
 	}
+	closedQuestion := false
+	if retry && prior.WorkerReply == "" && prior.Admission != 0 {
+		a := st.Admissions[admissionKey(c.binding.ConversationID, prior.Admission)]
+		if a.NativeBindingRetired || !a.SettledAt.IsZero() || a.Phase == "rejected" || a.Phase == "completed" || prior.State == "settled" {
+			event := st.Events[key(c.binding.ConversationID, prior.EventID)]
+			var source workerNoteMetadata
+			closedQuestion = event.WorkerMessage && json.Unmarshal(event.Metadata, &source) == nil && source.Kind == "needs-input"
+		}
+	}
 	if input.ReadReceipt {
 		if !retry {
 			return workerMessageReceipt{}, ErrNotFound
@@ -137,17 +146,35 @@ func (c *Controller) acceptDiscussionWorkerMessage(ctx context.Context, localSes
 		state := prior.State
 		if prior.WorkerReply != "" {
 			state = "answered"
+		} else if closedQuestion {
+			state = "superseded"
 		}
 		return workerMessageReceipt{State: state, ID: input.ID}, nil
 	}
 	if input.ReadReply {
-		if !retry || agent != "claude" {
+		if !retry {
 			return workerMessageReceipt{}, ErrNotFound
 		}
-		if worker.Ended || worker.RecoveryRequired || !c.projectPath(worker.Project, worker.Project) {
+		event := st.Events[key(c.binding.ConversationID, prior.EventID)]
+		var source workerNoteMetadata
+		if !event.WorkerMessage || json.Unmarshal(event.Metadata, &source) != nil || source.Session != worker.Session || source.Instance != worker.SessionInstance ||
+			event.JobID != worker.JobID || event.AttemptID != worker.AttemptID {
 			return workerMessageReceipt{}, ErrStale
 		}
-		if prior.WorkerReply == "" {
+		if closedQuestion {
+			return workerMessageReceipt{State: "superseded", ID: input.ID}, nil
+		}
+		question := source.Kind == "needs-input" && (source.NoteID == input.ID || source.NoteID == "")
+		if event.RecoveryOnly && !worker.RecoveryRequired {
+			return workerMessageReceipt{}, ErrStale
+		}
+		if !question && (agent != "claude" || worker.RecoveryRequired || source.Kind == "complete") {
+			return workerMessageReceipt{}, ErrNotFound
+		}
+		if worker.Ended || !c.projectPath(worker.Project, worker.Project) {
+			return workerMessageReceipt{}, ErrStale
+		}
+		if prior.WorkerReply == "" && !worker.RecoveryRequired {
 			return workerMessageReceipt{State: "pending", ID: input.ID}, nil
 		}
 		if err := c.verifyWorkerReplyGrant(ctx, st, worker); err != nil {
@@ -160,19 +187,52 @@ func (c *Controller) acceptDiscussionWorkerMessage(ctx context.Context, localSes
 		if checkBinding(&current, c.binding) != nil || current.Workers[key(c.binding.ConversationID, key(worker.Session, worker.SessionInstance))] != worker {
 			return workerMessageReceipt{}, ErrStale
 		}
+		if worker.RecoveryRequired && pendingWorkerAction(current, worker) {
+			return workerMessageReceipt{}, ErrControllerUncertain
+		}
+		if prior.WorkerReply == "" {
+			return workerMessageReceipt{State: "pending", ID: input.ID}, nil
+		}
 		return workerMessageReceipt{State: "available", ID: input.ID, Text: prior.WorkerReply}, nil
 	}
-	if !retry && (worker.Ended || worker.RecoveryRequired || !c.projectPath(worker.Project, worker.Project)) {
+	if retry {
+		event := st.Events[key(c.binding.ConversationID, prior.EventID)]
+		var source workerNoteMetadata
+		if !event.WorkerMessage || event.JobID != worker.JobID || event.AttemptID != worker.AttemptID ||
+			json.Unmarshal(event.Metadata, &source) != nil || source.Session != worker.Session || source.Instance != worker.SessionInstance ||
+			source.Agent != agent || source.Kind != input.Kind || source.Text != input.Text {
+			return workerMessageReceipt{}, ErrConflict
+		}
+		if closedQuestion {
+			return workerMessageReceipt{State: "superseded", ID: input.ID}, nil
+		}
+		return c.finishWorkerNote(prior, input.ID)
+	}
+	if worker.Ended || !c.projectPath(worker.Project, worker.Project) {
 		return workerMessageReceipt{}, ErrStale
 	}
-	if !retry && c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {
+	if worker.RecoveryRequired {
+		if input.Kind != "needs-input" && input.Kind != "complete" {
+			return workerMessageReceipt{}, ErrStale
+		}
+		if err := c.verifyWorkerReplyGrant(ctx, st, worker); err != nil {
+			return workerMessageReceipt{}, err
+		}
+	} else if c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {
 		return workerMessageReceipt{}, errDiscussionGrantUnverified
 	}
 	if err = ctx.Err(); err != nil {
 		return workerMessageReceipt{}, err
 	}
-
-	return c.queueWorkerNote(worker, input, workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: agent, Text: input.Text, Kind: input.Kind})
+	source := workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: agent, Text: input.Text, Kind: input.Kind}
+	if input.Kind != "" {
+		created, ok := protocol.SemanticOperationIssuedAt(input.ID)
+		if !ok {
+			return workerMessageReceipt{}, ErrInvalid
+		}
+		source.NoteID, source.Created = input.ID, &created
+	}
+	return c.queueWorkerNote(worker, input, source)
 }
 
 type workerNoteMetadata struct {
@@ -215,6 +275,9 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 	if source.NoteID != "" {
 		direction = "If the worker needs input, answer once with swarm_reply during this turn. The worker reads that answer by note ID. Compare the claimed result with the attached native launch-turn evidence or inspect the same worker with swarm peek. Cite the specific evidence you observed. If you have only the note, attribute the claim to the worker."
 	}
+	if !worker.Mailbox && source.NoteID != "" {
+		direction = "For this needs-input note, use swarm_reply now to place one private answer in its reply slot. This is allowed during recovery: it answers this exact waiting worker without starting or steering a turn. Read the original human request with swarm_discussion_history if needed. The worker retrieves the answer by note ID."
+	}
 	if source.Kind == "complete" {
 		direction = "The queued receipt delivered the worker’s note to you. Verify its result against the attached launch-turn evidence or inspect the same worker with swarm peek. If only the note is available, attribute the result to the worker. Use publish with final=true during this turn to report the result in Discord, unless this completion already has a final publication."
 	}
@@ -229,6 +292,9 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 		text = wakeText(metadata)
 		// Keep the durable wake replayable across qualified manager providers.
 		maxNoteWakeText := min(protocol.MaxSendInputText, claudeinput.MaxManagerTextBytes)
+		if !worker.Mailbox {
+			maxNoteWakeText -= len(recoveryInputNotice)
+		}
 		if len(text) > maxNoteWakeText {
 			prefix += "Preview only. To read the full note and any attached evidence, call swarm_read_note with the session and instance below. "
 			if source.LaunchTurnEvidence != nil {
@@ -257,7 +323,7 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 	raw, _ := json.Marshal(struct {
 		Text string `json:"text"`
 	}{text})
-	event := Event{ID: id, WakeID: id, WorkerMessage: true, JobID: worker.JobID, AttemptID: worker.AttemptID, Metadata: metadata}
+	event := Event{ID: id, WakeID: id, WorkerMessage: true, RecoveryOnly: worker.RecoveryRequired, JobID: worker.JobID, AttemptID: worker.AttemptID, Metadata: metadata}
 	wake := Wake{ID: id, Request: raw}
 	// Native manager input requires a real semantic operation ID, persisted before admission.
 	var err error
@@ -275,6 +341,8 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 			}
 		} else if existing != worker {
 			return ErrStale
+		} else if worker.RecoveryRequired && pendingWorkerAction(*current, worker) {
+			return ErrControllerUncertain
 		}
 		if prior, ok := current.Wakes[key(c.binding.ConversationID, id)]; ok {
 			wake.OperationID = prior.OperationID
@@ -284,18 +352,25 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 	if err != nil {
 		return workerMessageReceipt{}, err
 	}
+	return c.finishWorkerNote(accepted, input.ID)
+}
+
+func (c *Controller) finishWorkerNote(accepted Wake, noteID string) (workerMessageReceipt, error) {
 	if accepted.State == "prepared" {
-		if _, err = c.store.AdvanceWake(c.binding, id, "admitted", ""); err != nil {
+		if _, err := c.store.AdvanceWake(c.binding, accepted.ID, "admitted", ""); err != nil {
 			return workerMessageReceipt{}, err
 		}
 	}
-	return workerMessageReceipt{State: "queued", ID: input.ID}, nil
+	return workerMessageReceipt{State: "queued", ID: noteID}, nil
 }
 
 // SendDiscussionWorkerMessage sends a receipt-backed note to the worker's own
 // manager. The worker capability cannot call the manager's tools.
 func SendDiscussionWorkerMessage(ctx context.Context, bridge, localSession, id, text, kind string) error {
 	reply, err := callDiscussionWorkerBridge(ctx, bridge, localSession, workerMessageInput{ID: id, Text: text, Kind: kind})
+	if err == nil && reply.State == "superseded" {
+		return ErrWorkerReplySuperseded
+	}
 	if err == nil && reply.State != "queued" {
 		return errors.New("teammate: manager queue receipt unavailable")
 	}
@@ -308,6 +383,9 @@ func DiscussionWorkerReceipt(ctx context.Context, bridge, localSession, id strin
 }
 func ReadDiscussionWorkerReply(ctx context.Context, bridge, localSession, id string) (string, error) {
 	reply, err := callDiscussionWorkerBridge(ctx, bridge, localSession, workerMessageInput{ID: id, ReadReply: true})
+	if err == nil && reply.State == "superseded" {
+		return "", ErrWorkerReplySuperseded
+	}
 	if err == nil && reply.State != "available" && reply.State != "pending" {
 		return "", errors.New("teammate: manager reply receipt unavailable")
 	}
@@ -352,7 +430,7 @@ func callDiscussionWorkerBridge(ctx context.Context, bridge, localSession string
 
 func (c *Controller) replyToDiscussionWorker(ctx context.Context, admission Admission, text string) error {
 	id, fromWake := strings.CutPrefix(admission.SourceID, "wake:")
-	if c.discussion == nil || !fromWake || admission.RecoveryOnly || !validWorkerMessageText(text) {
+	if c.discussion == nil || !fromWake || !validWorkerMessageText(text) {
 		return ErrExpired
 	}
 	st, err := c.store.readView()
@@ -368,7 +446,11 @@ func (c *Controller) replyToDiscussionWorker(ctx context.Context, admission Admi
 	}
 	workerKey := key(c.binding.ConversationID, key(source.Session, source.Instance))
 	worker := st.Workers[workerKey]
-	if !worker.Mailbox && source.Agent != "claude" {
+	question := !worker.Mailbox && !worker.VMChild && source.Kind == "needs-input"
+	if admission.RecoveryOnly && (!worker.RecoveryRequired || !question) || worker.RecoveryRequired && !question {
+		return ErrExpired
+	}
+	if !worker.Mailbox && !question && (source.Agent != "claude" || source.Kind == "complete") {
 		return ErrExpired
 	}
 	if worker.JobID != event.JobID || worker.AttemptID != event.AttemptID {
@@ -385,13 +467,16 @@ func (c *Controller) replyToDiscussionWorker(ctx context.Context, admission Admi
 		if err != nil {
 			return err
 		}
-		if current.SourceID != admission.SourceID || current.Phase != "running" || current.RecoveryOnly ||
+		if current.SourceID != admission.SourceID || current.Phase != "running" || current.NativeBindingRetired || current.RecoveryOnly != admission.RecoveryOnly ||
 			current.NativeInputID != admission.NativeInputID || current.NativeTurnID != admission.NativeTurnID {
 			return ErrStale
 		}
 		wake := st.Wakes[wk]
 		if st.Workers[workerKey] != worker || wake.Admission != current.Sequence || wake.EventID != event.ID {
 			return ErrStale
+		}
+		if worker.RecoveryRequired && pendingWorkerAction(*st, worker) {
+			return ErrControllerUncertain
 		}
 		if wake.WorkerReply == text {
 			return nil
@@ -410,11 +495,11 @@ func (c *Controller) replyToDiscussionWorker(ctx context.Context, admission Admi
 }
 
 func (c *Controller) verifyWorkerReplyGrant(ctx context.Context, st State, worker WorkerAssociation) error {
-	if worker.Session == "" || worker.Ended || worker.RecoveryRequired || !c.projectPath(worker.Project, worker.Project) {
+	if worker.Session == "" || worker.Ended || !c.projectPath(worker.Project, worker.Project) {
 		return ErrStale
 	}
 	if worker.Mailbox {
-		if !c.discussion.VMProjectAccess {
+		if worker.RecoveryRequired || !c.discussion.VMProjectAccess {
 			return ErrExpired
 		}
 		if c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {
@@ -428,6 +513,35 @@ func (c *Controller) verifyWorkerReplyGrant(ctx context.Context, st State, worke
 		!c.discussion.validateOrigin(*launch.Origin) {
 		return ErrExpired
 	}
+	if worker.RecoveryRequired {
+		var receipt createdWorkerResult
+		if worker.VMChild || worker.Reserved || worker.AttemptID != worker.ActionID || worker.JobID != worker.AttemptID ||
+			attempt.ID != worker.AttemptID || attempt.ConversationID != c.binding.ConversationID || launch.Tool != "swarm_create" ||
+			launch.Launch == nil || launch.Project != worker.Project || launch.Launch.Cwd != worker.Project ||
+			worker.Parent == "" || launch.Launch.SpawnedFrom != worker.Parent ||
+			json.Unmarshal(attempt.Receipt, &receipt) != nil || receipt.State != "created" ||
+			receipt.Session != worker.Session || receipt.SessionInstance != worker.SessionInstance {
+			return ErrStale
+		}
+		if pendingWorkerAction(st, worker) {
+			return ErrControllerUncertain
+		}
+		row, err := c.workerTarget(SessionInput{Session: worker.Session, SessionInstance: worker.SessionInstance}, false)
+		if errors.Is(err, ErrControllerNativeUnavailable) && row.ID == worker.Session && row.Capabilities == nil {
+			// Roster capability hints go cold on rejoin. The scoped history RPC independently verifies the exact incarnation and parent.
+			_, err = c.discussionWorkerEvidence(ctx, worker, attempt)
+			if errors.Is(err, ErrControllerWorkerEvidenceLimit) {
+				err = nil // The exact scope was verified even when the result exceeded the transcript scan limit.
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if row.RosterHidden || row.Status.Process != status.ProcessRunning || row.Agent != launch.Launch.Agent || row.Cwd != worker.Project ||
+			row.SpawnedFrom != worker.Parent || row.SpawnIntent != schema.SpawnIntentDelegate || c.discussion.VerifyGrant == nil || c.discussion.VerifyAudience == nil {
+			return ErrStale
+		}
+	}
 	if c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {
 		return errDiscussionGrantUnverified
 	}
@@ -440,4 +554,14 @@ func (c *Controller) verifyWorkerReplyGrant(ctx context.Context, st State, worke
 		}
 	}
 	return ctx.Err()
+}
+
+func pendingWorkerAction(st State, w WorkerAssociation) bool {
+	target := key(w.Session, w.SessionInstance)
+	for _, action := range st.Actions {
+		if action.ConversationID == w.ConversationID && action.Target == target && action.State != "settled" {
+			return true
+		}
+	}
+	return false
 }

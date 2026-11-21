@@ -63,22 +63,27 @@ func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
 }
 
 func validSemanticOperationID(id string, now time.Time) bool {
+	issued, ok := SemanticOperationIssuedAt(id)
+	return ok && !issued.After(now.Add(semanticClockSkew)) && now.Sub(issued) <= semanticReplayWindow
+}
+
+// SemanticOperationIssuedAt reads the issuer timestamp without granting replay authority.
+func SemanticOperationIssuedAt(id string) (time.Time, bool) {
 	if len(id) > 128 {
-		return false
+		return time.Time{}, false
 	}
 	parts := strings.Split(id, ":")
 	if len(parts) != 3 || parts[0] != "semantic" || len(parts[1]) > 13 || len(parts[2]) != 32 {
-		return false
+		return time.Time{}, false
 	}
 	ms, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || ms <= 0 || strconv.FormatInt(ms, 10) != parts[1] {
-		return false
+		return time.Time{}, false
 	}
 	if _, err := hex.DecodeString(parts[2]); err != nil || strings.ToLower(parts[2]) != parts[2] {
-		return false
+		return time.Time{}, false
 	}
-	issued := time.UnixMilli(ms)
-	return !issued.After(now.Add(semanticClockSkew)) && now.Sub(issued) <= semanticReplayWindow
+	return time.UnixMilli(ms).UTC(), true
 }
 
 func (cc *clientConn) handleSemanticSend(c Control) {

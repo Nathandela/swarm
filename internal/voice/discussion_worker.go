@@ -238,9 +238,9 @@ func storedDiscussionWorkerProof(event Event, worker WorkerAssociation) (*schema
 	return &metadata.Data, nil
 }
 
-func (c *Controller) readDiscussionWorkerNote(input SessionInput, admission Admission) (json.RawMessage, error) {
+func (c *Controller) readDiscussionWorkerNote(ctx context.Context, input SessionInput, admission Admission) (json.RawMessage, error) {
 	wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:")
-	if !fromWake || admission.Sequence == 0 || c.discussion == nil || !c.discussion.VMProjectAccess {
+	if !fromWake || admission.Sequence == 0 || c.discussion == nil {
 		return nil, ErrExpired
 	}
 	st, err := c.store.readView()
@@ -257,6 +257,19 @@ func (c *Controller) readDiscussionWorkerNote(input SessionInput, admission Admi
 		json.Unmarshal(event.Metadata, &source) != nil || source.NoteID == "" ||
 		source.Session != input.Session || source.Instance != input.SessionInstance {
 		return nil, ErrStale
+	}
+	if !c.discussion.VMProjectAccess {
+		worker := st.Workers[key(c.binding.ConversationID, key(source.Session, source.Instance))]
+		if err := c.verifyStoredWorkerNote(ctx, st, event, source); err != nil {
+			return nil, err
+		}
+		current, err := c.store.readView()
+		if err != nil {
+			return nil, err
+		}
+		if checkBinding(&current, c.binding) != nil || current.Workers[key(c.binding.ConversationID, key(worker.Session, worker.SessionInstance))] != worker {
+			return nil, ErrStale
+		}
 	}
 	return event.Metadata, nil
 }
