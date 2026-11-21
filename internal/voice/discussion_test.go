@@ -782,6 +782,7 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name                                            string
 		proofFirst, changed, steered, human, correction bool
+		readFirst, readSecond, splitScope               bool
 		recovered, repeatedNote, liveProse              bool
 		want                                            int
 	}{
@@ -789,6 +790,11 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 		{name: "proof then note", proofFirst: true, want: 1},
 		{name: "recovered note then proof", recovered: true, liveProse: true, want: 1},
 		{name: "recovered proof then note", recovered: true, liveProse: true, proofFirst: true, want: 1},
+		{name: "recovered note implicit and proof read", recovered: true, readSecond: true, want: 1},
+		{name: "recovered proof read and note implicit", recovered: true, proofFirst: true, readFirst: true, want: 1},
+		{name: "recovered note read and proof implicit", recovered: true, readFirst: true, want: 1},
+		{name: "recovered proof implicit and note read", recovered: true, proofFirst: true, readSecond: true, want: 1},
+		{name: "other attempt read", recovered: true, splitScope: true, want: 2},
 		{name: "recovered distinct note IDs", recovered: true, repeatedNote: true, want: 1},
 		{name: "recovered note correction", recovered: true, repeatedNote: true, changed: true, want: 2},
 		{name: "recovered changed answer", recovered: true, correction: true, want: 2},
@@ -800,13 +806,13 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 		{name: "new human request", human: true, want: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, original, _ := testStore(t)
+			s, original, dir := testStore(t)
 			original.ConversationID = DiscussionConversationPrefix + "duplicate"
 			b, err := s.BindManager(original)
 			if err != nil {
 				t.Fatal(err)
 			}
-			w := WorkerAssociation{ConversationID: b.ConversationID, Session: "machine/worker", SessionInstance: "instance", JobID: "job", ActionID: "attempt", AttemptID: "attempt"}
+			w := WorkerAssociation{ConversationID: b.ConversationID, Project: "/project", Session: "machine/worker", SessionInstance: "instance", JobID: "job", ActionID: "attempt", AttemptID: "attempt"}
 			note := Event{ID: "note", WakeID: "note-wake", WorkerMessage: true, Metadata: json.RawMessage(`{"session":"machine/worker","instance":"instance","kind":"complete","text":"seven checks passed"}`)}
 			text := "seven checks passed"
 			if tc.changed {
@@ -858,6 +864,13 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 					if err != nil {
 						return err
 					}
+					if i == 0 && tc.readFirst || i == 1 && tc.readSecond {
+						a.WorkerAttempts = addDiscussionScopeValue("", w.AttemptID)
+						a.WorkerProjects = addDiscussionScopeValue("", w.Project)
+					}
+					if i == 1 && tc.splitScope {
+						a.WorkerAttempts = addDiscussionScopeValue(addDiscussionScopeValue("", w.AttemptID), "unrelated")
+					}
 					if tc.recovered {
 						a.RecoveryOnly = true
 						putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
@@ -888,7 +901,7 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 					}
 					a := st.Admissions[admissionKey(b.ConversationID, seq)]
 					notice := discussionPriorFinalNotice(st, a, "new wake", "codex", "")
-					wantNotice := tc.want == 1 || tc.correction
+					wantNotice := tc.want == 1 || tc.correction || tc.splitScope
 					if strings.Contains(notice, "already scheduled") != wantNotice {
 						t.Fatalf("prior-final guidance = %q, want notice %v", notice, wantNotice)
 					}
@@ -908,12 +921,58 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 				if tc.correction && i == 1 {
 					body = "Correction: only six of those checks used the required fixture."
 				}
-				got, err := s.PublishSpeech(b, permit, Publication{ID: fmt.Sprint("publication-", i), NativeTurnID: turn, Sequence: 1, Text: body, Final: true})
+				got, err := s.PublishSpeech(b, permit, Publication{ID: fmt.Sprint("publication:", i), NativeTurnID: turn, Sequence: 1, Text: body, Final: true})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if i == 1 && tc.want == 1 && (got.ID != "publication-0" || got.Exported) {
+				if i == 1 && tc.want == 1 && (got.ID != "publication:0" || got.Exported) {
 					t.Fatalf("duplicate manufactured a new receipt or acknowledged export: %+v", got)
+				}
+				if i == 1 && tc.want == 1 {
+					if err := s.Close(); err != nil {
+						t.Fatal(err)
+					}
+					s, err = OpenStore(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = s.Close() })
+					b, err = s.BindManager(b)
+					if err != nil {
+						t.Fatal(err)
+					}
+					snapshot, err := s.Snapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					a := snapshot.Admissions[admissionKey(b.ConversationID, seq)]
+					expected := ReusedFinalReceipt{PublicationID: got.ID, OutputID: "publication:1", NativeTurnID: turn, Sequence: 1}
+					if a.ReusedFinal == nil || *a.ReusedFinal != expected {
+						t.Fatalf("missing persistent final alias: %+v", a.ReusedFinal)
+					}
+					controller := Controller{binding: b}
+					for _, id := range []string{expected.OutputID, expected.PublicationID} {
+						if ref, err := controller.publicationReference(snapshot, id, seq, turn); err != nil || ref != expected.OutputID {
+							t.Fatalf("failed to resolve final %s in its admission: %s %v", id, ref, err)
+						}
+					}
+					if _, err := controller.publicationReference(snapshot, expected.PublicationID, seq, "other-turn"); !errors.Is(err, ErrExpired) {
+						t.Fatalf("wrong turn resolved prior final: %v", err)
+					}
+					retry := Publication{ID: "publication:1", NativeTurnID: turn, Sequence: 1, Text: body, Final: true}
+					if replay, err := s.PublishSpeech(b, permit, retry); err != nil || replay.ID != got.ID {
+						t.Fatalf("recovered final retry: %v %v", replay, err)
+					}
+					retry.ID = "later"
+					retry.Sequence++
+					retry.Final = false
+					if _, err := s.PublishSpeech(b, permit, retry); !errors.Is(err, ErrConflict) {
+						t.Fatalf("second turn allowed progress after final: %v", err)
+					}
+					retry.Final = true
+					if _, err := s.PublishSpeech(b, permit, retry); !errors.Is(err, ErrConflict) {
+						t.Fatalf("second turn allowed another final: %v", err)
+					}
 				}
 				if err := s.SettleAdmission(b, seq); err != nil {
 					t.Fatal(err)

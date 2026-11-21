@@ -143,7 +143,7 @@ func priorWorkerCompletion(st *State, p Publication) (Publication, bool) {
 		return Publication{}, false
 	}
 	prior, ok := relatedWorkerFinal(st, p)
-	return prior, ok && prior.Text == p.Text && prior.DiscussionProjects == p.DiscussionProjects && prior.DiscussionAttempts == p.DiscussionAttempts
+	return prior, ok && prior.Text == p.Text
 }
 
 func relatedWorkerFinal(st *State, p Publication) (Publication, bool) {
@@ -163,7 +163,7 @@ func relatedWorkerFinal(st *State, p Publication) (Publication, bool) {
 	}
 	current := workerCompletionEvidence(st, p)
 	previous := workerCompletionEvidence(st, latest)
-	if current.text == "" || previous.text == "" {
+	if current.text == "" || previous.text == "" || current.target != previous.target {
 		return Publication{}, false
 	}
 	if current.note == previous.note {
@@ -194,7 +194,7 @@ func discussionPriorFinalNotice(st State, a Admission, input, provider, nonce st
 }
 
 type completionEvidence struct {
-	text            string
+	text, target    string
 	note, recovered bool
 }
 
@@ -229,11 +229,11 @@ func workerCompletionEvidence(st *State, pub Publication) completionEvidence {
 		if e.RecoveryOnly && (meta.NoteID == "" || e.ID != "worker-message-"+hashValue([]string{w.Session, w.SessionInstance, w.AttemptID, meta.NoteID}) || e.ID != wake.ID) {
 			return completionEvidence{}
 		}
-		return completionEvidence{text: meta.Text, note: true, recovered: e.RecoveryOnly}
+		return completionEvidence{text: meta.Text, target: target, note: true, recovered: e.RecoveryOnly}
 	}
 	if e.WorkerProof && e.ID == discussionEvidenceID(w) && e.NativeTurnID != "" && meta.Data.TurnID == e.NativeTurnID &&
 		meta.Data.State == "completed" && !meta.Data.TextTruncated {
-		return completionEvidence{text: meta.Data.Text, recovered: e.RecoveryOnly || a.RecoveryOnly}
+		return completionEvidence{text: meta.Data.Text, target: target, recovered: e.RecoveryOnly || a.RecoveryOnly}
 	}
 	return completionEvidence{}
 }

@@ -670,6 +670,10 @@ func cloneState(st State) State {
 	return st
 }
 func cloneAdmission(a Admission) Admission {
+	if a.ReusedFinal != nil {
+		receipt := *a.ReusedFinal
+		a.ReusedFinal = &receipt
+	}
 	if a.RecoveryOutput != nil {
 		source := *a.RecoveryOutput
 		a.RecoveryOutput = &source
@@ -1381,10 +1385,23 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 		if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
 			var err error
 			admission := st.Admissions[admissionKey(b.ConversationID, p.Admission)]
+			if receipt := admission.ReusedFinal; receipt != nil {
+				prior, ok := st.Publications[key(b.ConversationID, receipt.PublicationID)]
+				if !ok || !prior.Final {
+					return ErrCorrupt
+				}
+				if !p.Final || p.NativeTurnID != receipt.NativeTurnID || p.ID != receipt.OutputID || p.Sequence != receipt.Sequence || p.Text != prior.Text {
+					return ErrConflict
+				}
+				result = prior
+				return nil
+			}
 			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
 			p.DiscussionProjects = addDiscussionScopeValue(admission.WorkerProjects, admission.Project)
 			p.DiscussionAttempts = admission.WorkerAttempts
 			if prior, ok := priorWorkerCompletion(st, p); ok {
+				admission.ReusedFinal = &ReusedFinalReceipt{PublicationID: prior.ID, OutputID: p.ID, NativeTurnID: p.NativeTurnID, Sequence: p.Sequence}
+				putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, p.Admission), admission)
 				result = prior
 				return nil
 			}

@@ -185,7 +185,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				break
 			}
 		}
-		if reconstructed && interrupted.Sequence != 0 && !hasReadyInput {
+		if reconstructed && interrupted.Sequence != 0 && interrupted.ReusedFinal == nil && !hasReadyInput {
 			output := discussionOutputSource(st, id, interrupted)
 			for _, p := range st.Publications {
 				if p.ConversationID == id && p.Admission == interrupted.Sequence && p.Final {
