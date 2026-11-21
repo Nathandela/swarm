@@ -98,3 +98,11 @@ Several subprocesses consumed no measurable CPU for minutes before entering Go. 
 | `internal/skeleton` | Failed | Failed | Stopped at disk reserve before test execution |
 
 Office fetched the public commit archive directly from GitHub and ran Go 1.26.9 linux/amd64 in a private memory-backed checkout. Its first complete shim race run failed one test in 211.924 s. The SSH environment had umask 0002, which permitted group writes on the temporary spool parent. The exact dead-producer identity test passed in 2.429 s with umask 022. That single-test rerun leaves the complete shim race gate open. The disk guard stopped the later skeleton build when the shared-cache volume reached 1,011 MiB free, before the planned mobile retry. The Office rehearsal left no process in its scratch directory and the directory was removed.
+
+## Live personal DM on Office, 2026-11-21
+
+The candidate connector at clean revision `d6953901` took over the original personal DM ledger and the existing 0.29.9 supervisor. A cold copy of the ledger preserved the pretrial evidence. The candidate reconciled the original DM boundary with zero pending messages, the same generation-12 manager, and the existing uncertain worker attempt.
+
+At 10:51:22.797 UTC the enrolled owner asked for 37 times 14 and the word “mulberry.” The bot replied “37 times 14 is 518, and the word is mulberry.” at 10:51:31.630, a latency of 8.833 s. Across 48 samples through 10:53:34.746 UTC, only that human message and one substantive bot reply appeared beyond the original boundary. The native external input counter stayed at zero.
+
+The original connector resumed the same advanced ledger. The production supervisor PID, manager identity, generation and earlier uncertain job were unchanged. The cold posttrial ledger retained all 47 historical publications with their original Discord IDs and dispositions. It had one additional publication with matching REST and Gateway confirmations. This was a pre-release personal connector trial on the installed supervisor.
