@@ -41,3 +41,13 @@ Check that the saved config pins the candidate's socket and supervisor state, th
 Stop the exact candidate connector process or its unique transient unit. The regular `discord disconnect` command looks up the user's fixed service even with an explicit state directory, so it can stop the production connector. Preserve the candidate ledger, status and exit evidence. Confirm which candidate workers are still active before retiring its isolated supervisor.
 
 When Office-Swarm was paused, run `systemctl --user start swarm-discord.service`. Its original unit selects the saved personal state. Verify personal connectivity, installation and supervisor identity, discussion boundary, manager/worker continuity and repair results against the snapshot using an ordinary production shell. Count any deferred messages and reconcile by Discord ID. Leave ambiguous effects recorded as uncertain. Keep real conversation IDs and contents in the private evidence record.
+
+## First live candidate window, 2026-11-21
+
+The owner enabled Message Content and authorized a brief pause with rollback. The Linux amd64 candidate identified its clean source as `6d2b6fac`. Its local and remote SHA-256 was `482cae2e2b142ea1a6d9fc256cf946bfe0076254d35f7d10785e480bd8e212f6`. It used a separate supervisor, an empty enrolled workspace and the dedicated thread as its sole allowed channel.
+
+The first cutover attempt restored the production connector immediately when the isolated supervisor socket was absent. After starting that supervisor, the second attempt passed all seven doctor checks, including Gateway intents, thread permissions, supervisor capabilities, Codex 0.171.0 and native login. At 09:25:26 UTC the shared connector reported connected and the thread challenge was relayed to the owner.
+
+From 09:25:56 through 09:32:35 UTC, 76 observations recorded the candidate status and thread history. The thread remained empty, including a final REST read after rollback. No human request arrived. This window establishes shared connector readiness and rollback. Discord-only response latency, duplicate count and original-worker survival remain unmeasured in this live thread.
+
+At 09:32:36 UTC the independent systemd timer stopped the candidate and restored the production personal connector. Its service reported success. Production status confirmed the original installation, discussion, manager instance and worker attempt. Pending admissions were zero before and after, and the earlier uncertain job retained that state. The isolated supervisor was stopped after its roster returned empty.
