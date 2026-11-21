@@ -11,8 +11,8 @@ from dispatcher_call_window import sample
 class CallWindowTest(unittest.TestCase):
     def test_accepts_only_matching_connected_server_and_selects_metrics(self):
         expected = dict(commit="candidate", application_id="1", guild_id="2",
-                        room_id="3", discussion_id="4")
-        runtime = dict(expected, pid=300, version="trial")
+                        room_id="3", discussion_id="4", pid=300, version="trial")
+        runtime = dict(expected)
         state = dict(connected=True, calls="active", call_runtime=runtime,
                      call_metrics=dict(accepted_turns=2, secret="private"),
                      transcript="private")
@@ -39,6 +39,14 @@ class CallWindowTest(unittest.TestCase):
             response.stdout = json.dumps(state)
             with self.assertRaises(ValueError):
                 sample(binary, root, expected)
+            self.assertFalse(sample(binary, root, expected, started=True)["connected"])
+            state.pop("call_runtime")
+            response.stdout = json.dumps(state)
+            self.assertEqual(sample(binary, root, expected, started=True)["state"], "connector unobserved")
+            state.update(connected=True, call_runtime=dict(runtime, pid=400))
+            response.stdout = json.dumps(state)
+            with self.assertRaises(ValueError):
+                sample(binary, root, expected, started=True)
 
 
 if __name__ == "__main__":
