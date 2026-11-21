@@ -333,6 +333,14 @@ jobs:
         # gate to "unknown" fleet-wide (R2/R3 audit, Fable M5).
         run: |
           tar -Oxzf dist/swarm_*_linux_amd64.tar.gz compat.json | python3 -c 'import json,sys; m=json.load(sys.stdin); assert m["version"] == "v0.0.0" and m["shimwire"] > 0 and m["protocol"] > 0 and m["schema"] > 0'
+      - name: Verify packaged call helper against the checkout
+        run: |
+          for archive in dist/swarm_*tar.gz; do
+            for member in swarm-discord-voice media.mjs package.json package-lock.json; do
+              path="services/discord-voice/$member"
+              tar -Oxzf "$archive" "$path" | cmp - "$path"
+            done
+          done
       - name: Assert 3 artifacts (darwin universal + 2 linux) + a checksums file exist (E13.1, h07)
         run: |
           count=$(find dist -maxdepth 1 -name 'swarm_*.tar.gz' | wc -l)

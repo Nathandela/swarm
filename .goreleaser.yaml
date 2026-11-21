@@ -127,6 +127,10 @@ archives:
     files:
       - README.md
       - compat.json
+      - services/discord-voice/swarm-discord-voice
+      - services/discord-voice/media.mjs
+      - services/discord-voice/package.json
+      - services/discord-voice/package-lock.json
 
   - id: swarm-pushgw
     ids:

@@ -4,6 +4,9 @@ Each connection belongs to one local Swarm place and uses its own Discord app id
 
 ## Opt in to dispatcher calls
 
+The Swarm CLI release archive includes the matching helper source and lockfile in `services/discord-voice/`. Install its dependencies with `npm ci --omit=dev` in that directory and run its executable with `--check` before changing the connector. The CLI auto-updater stages only the Swarm binaries and compatibility card. When upgrading an opted-in connector, install the helper from the same signed release archive.
+
+
 Calls are disabled unless the connector's `config.json` contains a `calls` object. Add this example to a teammate connector after preparing the helper and speech key:
 
 ```json
