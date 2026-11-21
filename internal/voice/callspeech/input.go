@@ -34,7 +34,7 @@ type candidate struct {
 	pcm                            []byte
 	transcriptStart, transcriptEnd int64
 	voicedFrames                   int
-	invalid                        bool
+	invalid, yielded               bool
 }
 
 type transcript struct {
@@ -66,6 +66,7 @@ func (l *Lane) run() {
 	var lastVoiced time.Time
 	var clock int64
 	var overlap bool
+	var voicedRun int
 	var silence [frameBytes]byte
 	var teamIngress <-chan frame
 	utteranceQuiet := personalQuietTime
@@ -124,6 +125,7 @@ func (l *Lane) run() {
 				buffered, overlap = utterance{}, false
 			}
 			if voiced {
+				l.holdPlayback(f.at.Add(quietTime), false)
 				if buffered.turn.Speaker == "" {
 					buffered.turn.Speaker = f.speaker
 				}
@@ -153,8 +155,10 @@ func (l *Lane) run() {
 				default:
 				}
 				voiced := f.speaker != "" && HasSignal(f.pcm[:])
-				if voiced {
-					l.voiced(f.at, tr.current == nil)
+				if !voiced {
+					voicedRun = 0
+				} else {
+					voicedRun++
 					if tr.current == nil {
 						tr.current = &candidate{turn: Turn{Speaker: f.speaker, ID: rand.Text()}, first: f.at, start: clock,
 							pcm: append([]byte(nil), preroll...)}
@@ -163,6 +167,10 @@ func (l *Lane) run() {
 					if c.turn.Speaker != f.speaker || f.at.Sub(c.first) >= maxSamples*framePeriod {
 						c.invalid = true
 					}
+					// A single 20 ms click can straddle two packets.
+					interrupt := !c.yielded && voicedRun >= 3
+					l.holdPlayback(f.at.Add(personalQuietTime), interrupt)
+					c.yielded = c.yielded || interrupt
 					c.last = f.at
 					c.turn.LastVoicedAt = f.at
 					c.voicedFrames++

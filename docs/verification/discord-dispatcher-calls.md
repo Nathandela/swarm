@@ -25,6 +25,23 @@ The two sessions used about 152 seconds of wall time. At USD 0.05 per active min
 
 To reproduce the billed rehearsal, set `SWARM_TEST_HOSTED_DISPATCHER_CALL_DIR` to the private voice settings directory for the authorized test project. Set `SWARM_TEST_HOSTED_DISPATCHER_CALL_TURNS=10` for the repeated fixture, or omit it for one request per mode. Run `go test ./internal/voice/callspeech -run '^TestHostedDispatcherSpeech$' -count=1 -v -timeout 16m`. The three gzipped 24 kHz mono PCM inputs were generated locally with eSpeak NG en-us at speed 153 and SoX. Human input and provider output are never saved by this test.
 
+## Local turn-taking trials
+
+Replayed the committed eSpeak personal, team and chatter fixtures at 20 ms per packet against baseline `ea295bc8` and the revised speech lane. Each run exercised two personal requests, alternating team speakers, unaddressed chatter, simultaneous speakers and an already playing publication. A local provider stub identified known PCM signatures and returned the prescribed text. Three repetitions admitted all six expected turns per mode per revision, with zero team turns or interruptions for chatter and overlap.
+
+| Median host interval, six turns per mode | Baseline | Revised |
+|---|---:|---:|
+| Personal first voiced frame to stop callback | 16 ms | 60 ms |
+| Personal last voiced frame to admission / first result PCM | 858.5 / 858.5 ms | 859 / 859 ms |
+| Team first voiced frame to addressed stop callback | 2,598 ms | 2,599 ms |
+| Team last voiced frame to admission / first result PCM | 437.5 / 438 ms | 439 / 439 ms |
+
+Team interruption follows the full addressed request and recognition. A verified result that has yet to start also waits for room quiet while recognition is pending. In three single-speaker and three overlapping-speaker trials, baseline playback began at or before the final injected frame. Revised playback began 420–421 ms after that frame in all six. Recognizing an earlier addressed request during the later speech preserved the hold.
+
+For personal interruptions, three repetitions injected constant-amplitude pulses at 0 and 10 ms offsets into 20 ms packets while playback was active. Baseline canceled on all six 20 ms transients. A two-consecutive-packet candidate canceled on three, all at the split offset. The selected three-packet rule canceled on zero. All six 80 ms and all six 240 ms pulses canceled with the selected rule, 49–61 ms after simulated onset. A 40 ms pulse canceled only at the split offset (3/6). This timing filter detects sustained energy, including brief vocalizations. A separately synthesized “uh-huh” (local macOS Samantha voice, 726 ms PCM, prescribed transcript) stopped and admitted a personal turn in all three trials per revision. Median stop was 20 ms before and 60 ms after. Neither revision interrupted or admitted the unaddressed team backchannel. The timing filter cannot determine the speaker’s intent.
+
+Reproduce with `SWARM_TEST_LOCAL_DISPATCHER_TIMING=1 go test ./internal/voice/callspeech -run 'TestLocalFixtureTurnCycle|TestPersonalInterruptionPulse|TestTeamPendingPublicationYields' -count=3 -v`. Admission and isolated result rendering use immediate local callbacks. These measurements exclude network, hosted speech, native manager processing and device playback. [Local fixture trials](../../internal/voice/callspeech/turn_cycle_test.go)
+
 ## Review and release decision
 
 Astra and Sol independently reviewed the complete plan before product work. Luna handled config and local operator controls, Sol handled media, Gateway, native admission and speech, and Astra reviewed the combined implementation in successive rounds. The first review identified pre/post-cutover authority, optional intents, consent expiry, provider self-answer, delayed worker attribution, final transcript loss, team interruptions and DAVE recovery. The next review found actual VM tool registration, the personal utterance gap window, abrupt helper exit, a publication arriving mid-speech, and a privilege denial after an earlier successful connection. See the corresponding regression tests and fixes on the integration branch.

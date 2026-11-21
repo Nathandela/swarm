@@ -290,7 +290,7 @@ func (l *Lane) admit() {
 				if !l.registerTurn(u.turn.ID) {
 					return
 				}
-				l.voiced(time.Time{}, true)
+				l.holdPlayback(time.Time{}, true)
 				select {
 				case l.addressed <- u:
 				case <-l.ctx.Done():
@@ -315,10 +315,13 @@ func (l *Lane) enqueue(u utterance) {
 	}
 }
 
-func (l *Lane) voiced(now time.Time, start bool) {
+// All room speech postpones new audio. Only an interruption clears active playback.
+func (l *Lane) holdPlayback(until time.Time, interrupt bool) {
 	l.mu.Lock()
-	l.speakingUntil = now.Add(personalQuietTime)
-	if !start {
+	if until.After(l.speakingUntil) {
+		l.speakingUntil = until
+	}
+	if !interrupt {
 		l.mu.Unlock()
 		return
 	}

@@ -278,7 +278,7 @@ func TestPendingPublicationWaitsForPersonalQuiet(t *testing.T) {
 			if await(t, playing) != 'o' {
 				t.Fatal("expected the original playback to start")
 			}
-			l.voiced(time.Now(), true)
+			l.holdPlayback(time.Now().Add(personalQuietTime), true)
 			await(t, interrupted)
 			if err := l.PublishForTurn("verified", "new result"); err != nil {
 				t.Fatal(err)
@@ -287,7 +287,7 @@ func TestPendingPublicationWaitsForPersonalQuiet(t *testing.T) {
 				t.Fatal("interrupted speech was rendered again")
 			}
 			lastSpeech := time.Now()
-			l.voiced(lastSpeech, false)
+			l.holdPlayback(lastSpeech.Add(personalQuietTime), false)
 			if closeWhileSpeaking {
 				l.Close()
 				await(t, l.Done())
