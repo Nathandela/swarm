@@ -470,8 +470,8 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			})
 			var liveWorker bool
 			for _, row := range roster() {
-				if len(beforeGap.Jobs) == 1 && row.ID == beforeGap.Jobs[0].Session && row.Capabilities != nil &&
-					row.Capabilities.SessionInstance == beforeGap.Jobs[0].Instance && row.Status.Process == status.ProcessRunning {
+				if len(beforeGap.Jobs) == 1 && row.ID == beforeGap.Jobs[0].Session && row.WorkerAttempt == attempt &&
+					row.WorkerInstance != "" && row.WorkerInstance == beforeGap.Jobs[0].Instance && row.Status.Process == status.ProcessRunning {
 					liveWorker = true
 				}
 			}
