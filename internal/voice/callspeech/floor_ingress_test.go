@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/voice/openailive"
 )
 
 // This socket accepts one write but withholds its return until released.
