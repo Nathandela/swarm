@@ -710,6 +710,13 @@ func (d *DiscussionController) inputHold(reason, fallback error) error {
 	if head.Origin != nil && (head.Phase == "executing" || head.Phase == "uncertain") {
 		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: ErrDiscussionEffectUncertain}
 	}
+	// Native delivery already happened. Preserve its receipt while the draft prevents verifying the reply.
+	if head.Origin != nil && reason == ErrDiscussionDirectInputHeld {
+		switch head.Phase {
+		case "submitted", "admitted", "running":
+			return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: errors.Join(reason, ErrDiscussionEffectUncertain)}
+		}
+	}
 	if head.Origin == nil && strings.HasPrefix(head.SourceID, "wake:") && owner.Sequence != 0 {
 		head = owner
 	}

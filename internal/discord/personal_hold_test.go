@@ -233,5 +233,14 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 	if len(bodies) != 3 || !strings.Contains(bodies[2], "outcome unknown") || !strings.Contains(bodies[2], "Don’t resend") {
 		t.Fatalf("uncertain native effect did not publish its own receipt-backed notice: %q", bodies)
 	}
+	now = now.Add(teammateInputNoticeInterval)
+	for range 2 {
+		if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "three", DirectInput: true, EffectUncertain: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(bodies) != 4 || !strings.Contains(bodies[3], "reached the dispatcher") || !strings.Contains(bodies[3], "save any draft") || !strings.Contains(bodies[3], "Don’t resend") {
+		t.Fatalf("missing or repeated in-flight draft notice: %q", bodies)
+	}
 
 }
