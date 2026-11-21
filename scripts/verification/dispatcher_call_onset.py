@@ -10,15 +10,18 @@ from pathlib import Path
 def detect(samples, offset):
     signal = [0] * offset + list(samples)
     stops = [None, None, None]
-    packets = active_ms = 0
+    packets = active_samples = 0
     for start in range(0, len(signal), 480):
         hot = [abs(s) > 420 for s in signal[start:start + 480]]
         if sum(hot) < 24:
-            packets = active_ms = 0
+            packets = active_samples = 0
             continue
         packets += 1
-        active_ms += sum(any(hot[i:i + 24]) for i in range(0, len(hot), 24))
-        for j, condition in enumerate((True, packets >= 3, active_ms > 21)):
+        for i in range(0, len(hot), 24):
+            block = [j for j, hit in enumerate(hot[i:i + 24]) if hit]
+            if block:
+                active_samples += block[-1] - block[0] + 1
+        for j, condition in enumerate((True, packets >= 3, active_samples > 480)):
             if condition and stops[j] is None:
                 stops[j] = start // 24
         if all(stop is not None for stop in stops):
@@ -27,7 +30,7 @@ def detect(samples, offset):
 
 
 def summarize(label, rows):
-    for i, name in enumerate(("single", "three-packet", "occupied-ms")):
+    for i, name in enumerate(("single", "three-packet", "occupied-samples")):
         delays = [row[i] - row[0] for row in rows if row[i] is not None]
         print(label, name, "detections", len(delays), "/", len(rows),
               "added_ms_median_max", (statistics.median(delays), max(delays)) if delays else None)

@@ -66,7 +66,7 @@ func (l *Lane) run() {
 	var lastVoiced time.Time
 	var clock int64
 	var overlap bool
-	var activeMillis int
+	var activeSamples int
 	var silence [frameBytes]byte
 	var teamIngress <-chan frame
 	utteranceQuiet := personalQuietTime
@@ -156,13 +156,13 @@ func (l *Lane) run() {
 				}
 				activity := 0
 				if f.speaker != "" {
-					activity = signalMillis(f.pcm[:])
+					activity = signalSamples(f.pcm[:])
 				}
 				voiced := activity > 0
 				if !voiced {
-					activeMillis = 0
+					activeSamples = 0
 				} else {
-					activeMillis += activity
+					activeSamples += activity
 					if tr.current == nil {
 						tr.current = &candidate{turn: Turn{Speaker: f.speaker, ID: rand.Text()}, first: f.at, start: clock,
 							pcm: append([]byte(nil), preroll...)}
@@ -171,9 +171,9 @@ func (l *Lane) run() {
 					if c.turn.Speaker != f.speaker || f.at.Sub(c.first) >= maxSamples*framePeriod {
 						c.invalid = true
 					}
-					// A 20 ms click can touch at most 21 millisecond bins across packet boundaries.
+					// A split 20 ms click contributes at most one frame of occupied samples.
 					l.holdPlayback(f.at.Add(personalQuietTime))
-					if !c.yielded && activeMillis > 21 {
+					if !c.yielded && activeSamples > frameBytes/2 {
 						l.interruptPlayback(time.Now())
 						c.yielded = true
 					}
@@ -386,26 +386,29 @@ func addressedText(text string) string {
 
 // HasSignal reports whether a PCM16LE frame meets the call speech activity threshold.
 func HasSignal(pcm []byte) bool {
-	return signalMillis(pcm) != 0
+	return signalSamples(pcm) != 0
 }
 
-// signalMillis counts occupied 1 ms bins in a qualifying 24 kHz PCM16LE frame.
-func signalMillis(pcm []byte) int {
-	samples, bins, lastBin := 0, 0, -1
+// Within each 1 ms bin count only the span between its first and last active samples.
+func signalSamples(pcm []byte) int {
+	hits, occupied, previous := 0, 0, -1
 	for i := 0; i+1 < len(pcm); i += 2 {
 		s := int16(binary.LittleEndian.Uint16(pcm[i:]))
 		if s > 420 || s < -420 {
-			samples++
-			if bin := i / 48; bin != lastBin {
-				bins++
-				lastBin = bin
+			hits++
+			index := i / 2
+			if previous >= 0 && index/24 == previous/24 {
+				occupied += index - previous
+			} else {
+				occupied++
 			}
+			previous = index
 		}
 	}
-	if samples < 24 {
+	if hits < 24 {
 		return 0
 	}
-	return bins
+	return occupied
 }
 
 func localCue() []byte {

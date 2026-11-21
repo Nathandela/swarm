@@ -326,14 +326,14 @@ func TestOnsetBudgetAcrossSampleOffsets(t *testing.T) {
 	for offset := 0; offset < frameBytes/2; offset++ {
 		for _, samples := range []int{480, 1920, 5760} {
 			occupied, first, stopped := 0, -1, -1
-			for start := 0; start < offset+samples; start += frameBytes/2 {
+			for start := 0; start < offset+samples; start += frameBytes / 2 {
 				var frame [frameBytes]byte
 				for i := 0; i < len(frame)/2; i++ {
 					if start+i >= offset && start+i < offset+samples {
 						frame[2*i+1] = 4
 					}
 				}
-				active := signalMillis(frame[:])
+				active := signalSamples(frame[:])
 				if active == 0 {
 					occupied = 0
 					continue
@@ -342,7 +342,7 @@ func TestOnsetBudgetAcrossSampleOffsets(t *testing.T) {
 					first = start
 				}
 				occupied += active
-				if occupied > 21 {
+				if occupied > frameBytes/2 {
 					stopped = start
 					break
 				}
