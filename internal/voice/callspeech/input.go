@@ -66,7 +66,7 @@ func (l *Lane) run() {
 	var lastVoiced time.Time
 	var clock int64
 	var overlap bool
-	var voicedRun int
+	var activeMillis int
 	var silence [frameBytes]byte
 	var teamIngress <-chan frame
 	utteranceQuiet := personalQuietTime
@@ -154,11 +154,15 @@ func (l *Lane) run() {
 					}
 				default:
 				}
-				voiced := f.speaker != "" && HasSignal(f.pcm[:])
+				activity := 0
+				if f.speaker != "" {
+					activity = signalMillis(f.pcm[:])
+				}
+				voiced := activity > 0
 				if !voiced {
-					voicedRun = 0
+					activeMillis = 0
 				} else {
-					voicedRun++
+					activeMillis += activity
 					if tr.current == nil {
 						tr.current = &candidate{turn: Turn{Speaker: f.speaker, ID: rand.Text()}, first: f.at, start: clock,
 							pcm: append([]byte(nil), preroll...)}
@@ -167,9 +171,9 @@ func (l *Lane) run() {
 					if c.turn.Speaker != f.speaker || f.at.Sub(c.first) >= maxSamples*framePeriod {
 						c.invalid = true
 					}
-					// A single 20 ms click can straddle two packets.
+					// A 20 ms click can touch at most 21 millisecond bins across packet boundaries.
 					l.holdPlayback(f.at.Add(personalQuietTime))
-					if !c.yielded && voicedRun >= 3 {
+					if !c.yielded && activeMillis > 21 {
 						l.interruptPlayback(time.Now())
 						c.yielded = true
 					}
@@ -382,17 +386,26 @@ func addressedText(text string) string {
 
 // HasSignal reports whether a PCM16LE frame meets the call speech activity threshold.
 func HasSignal(pcm []byte) bool {
-	count := 0
+	return signalMillis(pcm) != 0
+}
+
+// signalMillis counts occupied 1 ms bins in a qualifying 24 kHz PCM16LE frame.
+func signalMillis(pcm []byte) int {
+	samples, bins, lastBin := 0, 0, -1
 	for i := 0; i+1 < len(pcm); i += 2 {
 		s := int16(binary.LittleEndian.Uint16(pcm[i:]))
 		if s > 420 || s < -420 {
-			count++
-			if count >= 24 {
-				return true
+			samples++
+			if bin := i / 48; bin != lastBin {
+				bins++
+				lastBin = bin
 			}
 		}
 	}
-	return false
+	if samples < 24 {
+		return 0
+	}
+	return bins
 }
 
 func localCue() []byte {

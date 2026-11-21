@@ -185,7 +185,7 @@ func TestPersonalInterruptionPulse(t *testing.T) {
 					pcm = pcm[frameBytes:]
 					<-ticker.C
 				}
-				wantCancel := ms >= 80 || (ms == 40 && offset == 10)
+				wantCancel := ms > 20
 				select {
 				case at := <-canceled:
 					if !wantCancel {
@@ -319,5 +319,37 @@ func TestLateTeamRecognitionPreservesNewPlayback(t *testing.T) {
 			case <-time.After(4 * framePeriod):
 			}
 		})
+	}
+}
+
+func TestOnsetBudgetAcrossSampleOffsets(t *testing.T) {
+	for offset := 0; offset < frameBytes/2; offset++ {
+		for _, samples := range []int{480, 1920, 5760} {
+			occupied, first, stopped := 0, -1, -1
+			for start := 0; start < offset+samples; start += frameBytes/2 {
+				var frame [frameBytes]byte
+				for i := 0; i < len(frame)/2; i++ {
+					if start+i >= offset && start+i < offset+samples {
+						frame[2*i+1] = 4
+					}
+				}
+				active := signalMillis(frame[:])
+				if active == 0 {
+					occupied = 0
+					continue
+				}
+				if first < 0 {
+					first = start
+				}
+				occupied += active
+				if occupied > 21 {
+					stopped = start
+					break
+				}
+			}
+			if samples == 480 && stopped >= 0 || samples > 480 && (stopped < 0 || stopped-first > frameBytes/2) {
+				t.Fatalf("offset=%d samples=%d first=%d stop=%d", offset, samples, first, stopped)
+			}
+		}
 	}
 }
