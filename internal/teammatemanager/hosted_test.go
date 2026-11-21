@@ -426,6 +426,32 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		challenge := "wake-" + hex.EncodeToString(marker[:])
+		if interruption == "restart" {
+			r = open()
+			send("302", "401", "Without contacting the worker, publish one reply containing exactly "+challenge+".")
+			wait("Discord input alone answered while the original worker was active", 90*time.Second, func() bool {
+				for _, p := range outputs {
+					if p.AdmissionID == "input-302" && strings.TrimSpace(p.Body) == challenge {
+						return true
+					}
+				}
+				return false
+			})
+			var liveWorker bool
+			for _, row := range roster() {
+				if len(beforeGap.Jobs) == 1 && row.ID == beforeGap.Jobs[0].Session && row.Capabilities != nil &&
+					row.Capabilities.SessionInstance == beforeGap.Jobs[0].Instance && row.Status.Process == status.ProcessRunning {
+					liveWorker = true
+				}
+			}
+			if !liveWorker {
+				t.Fatal("the original worker must still be running when the challenge is answered")
+			}
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -525,6 +551,17 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
 			}
 			t.Logf("%s recovered on same channel %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
+		}
+		if interruption == "restart" {
+			replies := 0
+			for _, p := range outputs {
+				if p.AdmissionID == "input-302" && strings.Contains(p.Body, challenge) {
+					replies++
+				}
+			}
+			if replies != 1 {
+				t.Fatalf("received %d challenge replies across connector reopen and worker completion", replies)
+			}
 		}
 		if !kinds["needs-input"] || !kinds["complete"] {
 			t.Fatalf("explicit admissions: %v", kinds)
