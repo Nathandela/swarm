@@ -101,6 +101,17 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 			job.State, job.Diagnostic = "evidence_limited", discussionEvidenceLimitNotice
 		case worker.RecoveryRequired:
 			job.State = "uncertain"
+		case worker.VMChild && !worker.Ended && !worker.Mailbox:
+			job.Diagnostic = "worker mailbox binding unavailable; manager retained"
+		case worker.VMChild && !worker.Ended:
+			job.Diagnostic = "awaiting worker evidence"
+		case worker.Ended:
+			job.State = "exited"
+			if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified && !worker.VMChild {
+				job.State = "exited_unconfirmed"
+			}
+		}
+		if !worker.Reserved && !worker.EvidenceLimited && (!worker.VMChild || worker.RecoveryRequired) {
 			event := st.Events[key(worker.ConversationID, discussionEvidenceID(worker))]
 			proof, err := storedDiscussionWorkerProof(event, worker)
 			if err != nil {
@@ -120,15 +131,6 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 				if p.Final && p.ID != "" && p.DiscussionSource.JobID == worker.JobID && p.DiscussionSource.AttemptID == worker.AttemptID {
 					job.NativeTurnPublication = &workermail.PublicationStatus{ID: p.ID, State: "awaiting_delivery_receipt"}
 				}
-			}
-		case worker.VMChild && !worker.Ended && !worker.Mailbox:
-			job.Diagnostic = "worker mailbox binding unavailable; manager retained"
-		case worker.VMChild && !worker.Ended:
-			job.Diagnostic = "awaiting worker evidence"
-		case worker.Ended:
-			job.State = "exited"
-			if _, verified := st.Events[key(d.cfg.ConversationID, discussionEvidenceID(worker))]; !verified && !worker.VMChild {
-				job.State = "exited_unconfirmed"
 			}
 		}
 		result.Jobs = append(result.Jobs, job)

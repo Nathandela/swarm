@@ -68,7 +68,11 @@ func discussionHandoff(st State, current Admission, input, provider, nonce strin
 		raw, _ := json.Marshal(replies)
 		replyText = "\nPrior human messages: " + string(raw)
 	}
-	const guidance = "Manager handoff. Handle the current instruction. Read current Discord evidence with swarm_discussion_history. Use source receipt and a human message ID as anchor to verify its original revision. A scheduled final covers the original revision only. Address new requests and edits once. Never replay uncertain actions. A manager turn ending or reply being queued does not prove worker success or delivery. Inspect retained worker and action receipts for outstanding work."
+	source := "Read current Discord evidence with swarm_discussion_history. Use source receipt and a human message ID as anchor to verify its original revision."
+	if current.Origin != nil && current.Origin.Voice.Generation != 0 {
+		source = "The verified call transcript above is the current request. It has no Discord message ID. Use swarm_discussion_history for prior written messages when needed."
+	}
+	guidance := "Manager handoff. Handle the current instruction. " + source + " A scheduled final covers the original revision only. Address new requests and edits once. Never replay uncertain actions. A manager turn ending or reply being queued does not prove worker success or delivery. Inspect retained worker and action receipts for outstanding work."
 	// Preserve the full current input. Prefer human reply dispositions when space is short.
 	for _, suffix := range []string{replyText + workerText + "\nRecent action references: " + string(refs), replyText + workerText, replyText, ""} {
 		text := input + "\n\n" + guidance + suffix

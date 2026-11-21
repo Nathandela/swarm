@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestJobStatusReportsOnlyExactRecoveredNativeTurn(t *testing.T) {
+func TestJobStatusReportsOnlyExactNativeTurnAcrossRecovery(t *testing.T) {
 	_, store, _, binding := newControllerFixture(t)
 	d := &DiscussionController{cfg: Config{ConversationID: binding.ConversationID}, store: store}
 	w := WorkerAssociation{ConversationID: binding.ConversationID, Session: "machine/worker", SessionInstance: "first", Project: "project", ActionID: "create", JobID: "job", AttemptID: "attempt", RecoveryRequired: true}
@@ -25,7 +25,7 @@ func TestJobStatusReportsOnlyExactRecoveredNativeTurn(t *testing.T) {
 	check := func(want string) {
 		t.Helper()
 		status, err := d.Status()
-		if err != nil || len(status.Jobs) != 1 || status.Jobs[0].State != want || !status.Jobs[0].RecoveryRequired {
+		if err != nil || len(status.Jobs) != 1 || status.Jobs[0].State != want || status.Jobs[0].RecoveryRequired != w.RecoveryRequired {
 			t.Fatalf("want %s, got %+v, %v", want, status.Jobs, err)
 		}
 		job := status.Jobs[0]
@@ -37,6 +37,14 @@ func TestJobStatusReportsOnlyExactRecoveredNativeTurn(t *testing.T) {
 		} else if job.NativeTurnID != "" || job.NativeTurnPublication != nil {
 			t.Fatalf("new action inherited the old result: %+v", job)
 		}
+	}
+	check("turn_completed")
+	if err := store.update(func(st *State) error {
+		w.RecoveryRequired = false
+		putRecord(st, "workers", &st.Workers, workerKey, w)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	check("turn_completed")
 	// The note may have published first. The native admission keeps the canonical final's receipt.
@@ -58,5 +66,5 @@ func TestJobStatusReportsOnlyExactRecoveredNativeTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	check("uncertain")
+	check("tracked")
 }

@@ -28,6 +28,14 @@ func TestDiscussionHandoffKeepsScopedReceiptReferences(t *testing.T) {
 	}
 }
 
+func TestDiscussionHandoffUsesVerifiedCallTranscript(t *testing.T) {
+	a := Admission{Origin: &schema.MessageOrigin{Voice: schema.VoiceOrigin{Generation: 2}}}
+	got := discussionHandoff(State{}, a, "Current verified Discord call transcript", "codex", "", false)
+	if !strings.Contains(got, "verified call transcript above is the current request") || strings.Contains(got, "human message ID as anchor") {
+		t.Fatal(got)
+	}
+}
+
 func TestHandoffPreservesNativeInputBudget(t *testing.T) {
 	nonce := strings.Repeat("a", 64)
 	for _, provider := range []string{"claude", "codex"} {
