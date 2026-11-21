@@ -214,11 +214,13 @@ The current native manager options are Codex and Claude on qualified versions. T
 A delegated worker can queue a progress note, blocker, or clarification for its own manager from the worker's shell.
 
 ```sh
-swarm teammate message --text 'Which fixture should I use?'
+swarm teammate message --kind needs-input --text 'Which fixture should I use?'
+swarm teammate reply --id MESSAGE_ID --wait 90s
 ```
 
-The worker receives a message ID and can retry the same text with that ID if its receipt is uncertain. The manager wakes for the note and runs `swarm reply --id WAKE_MESSAGE_ID --text TEXT` with the ID from its wake. Swarm delivers the answer to the originating worker. Codex receives a follow-up after its current turn; a Claude worker retrieves the response with `swarm teammate reply --id MESSAGE_ID --wait 90s` using its original receipt.
+Use the message ID returned by the first command. A Codex or Claude worker can retrieve the answer to that question with the second command. A completion report uses `--kind complete`. If a receipt is uncertain, reuse the original message ID, kind and text.
 
+After a supervisor restart, a worker in an enrolled project can report a result or ask for clarification when Swarm can verify its original launch, current incarnation, project and discussion grant. The manager can answer that specific question. Further worker commands still require their own authority. In `swarm discord status`, `turn_completed` identifies an observed native turn. The job can still have `recovery_required` set. The native turn’s publication and the worker note’s publications have their own delivery states and Discord message IDs.
 
 If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:
 
@@ -237,3 +239,9 @@ Upgrade the owning supervisor, connector and CLI together. Run `swarm discord do
 Inside an eligible worker, inspect a note with `swarm teammate receipt --id MESSAGE_ID`. Retry a lost response with the original ID, kind and text. The supervisor keeps accepted notes across connector downtime. A queued note is waiting for ingestion. Use `swarm discord status --state-dir "$connector"` to inspect the worker attempt, manager admission, retirement operation and Discord publication receipts. Preserve the original receipt while an outcome is uncertain.
 
 Before downgrading, finish active mailbox jobs and their replies with the compatible supervisor and connector. Check for queued notes, pending admissions, retirement claims and uncertain publications. Leave the compatible consumer running while any are unresolved. Keep the supervisor state directory, connector database and session shims in place during the change.
+
+### Following up after dispatcher replacement
+
+In the same DM or thread, ask about the original request or reply to its Discord message. The dispatcher can look up that human message’s verified revision, whether it scheduled a progress or final reply, and an available end reason from the former manager’s native turn. For an exported reply, the same lookup includes confirmed Discord message IDs once the connector has receipts for every part. These IDs establish historical delivery even if a participant later removes the reply. The lookup separately identifies the latest final worker report when its original human grant and unsteered attempt are unambiguous. A worker started from an ordinary VM shell may have only discussion-level attribution. A worker’s completion evidence identifies the result of the job. An uncertain action stays on hold while its original receipt is checked.
+
+A new human message retains its own identity even if two people ask the same question. Messages from Discord bots can provide context to the next human turn. They do not start independent dispatcher turns.

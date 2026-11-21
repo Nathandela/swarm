@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -46,6 +47,10 @@ func TestWorkerMailboxIngestionOrdersNotesAndReturnsHeldTurnAnswer(t *testing.T)
 			second := st.Admissions[admissionKey(b.Discussion, 2)]
 			if first.SourceID != "wake:worker-message-"+hashValue([]string{b.Session, b.Instance, b.Attempt, "early"}) || second.SourceID != "wake:worker-message-"+hashValue([]string{b.Session, b.Instance, b.Attempt, "late"}) {
 				t.Fatal("notes admitted out of order")
+			}
+			completion := st.Wakes[key(b.Discussion, strings.TrimPrefix(second.SourceID, "wake:"))]
+			if !strings.Contains(string(completion.Request), "publish with final=true during this turn") {
+				t.Fatal("completed worker note omitted the Discord publication step")
 			}
 			first.Phase, first.NativeInputID, first.NativeTurnID = "running", "input", "turn"
 			if err = s.update(func(st *State) error {

@@ -213,12 +213,14 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
 		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
 		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
-		History: entry.read, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
+		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
 	})
 	if err != nil {
 		return nil, err
 	}
+	entry.mu.Lock()
 	entry.voice = manager
+	entry.mu.Unlock()
 	r.discussions[id] = entry
 	return entry, nil
 }
@@ -268,6 +270,25 @@ func (d *discussion) checkOrigin(ctx context.Context, origin schema.MessageOrigi
 		return voice.ErrDiscussionSourceChanged
 	}
 	return err
+}
+
+func connectorPublication(o voice.DiscussionOutput) discord.TeammatePublication {
+	return discord.TeammatePublication{ID: o.ID, Body: o.Text, AdmissionID: o.AdmissionID, JobID: o.JobID, AttemptID: o.AttemptID, QuestionID: o.QuestionID, QuestionHash: o.QuestionHash, Sequence: o.Sequence, SystemCause: o.SystemCause}
+}
+
+func (d *discussion) confirmedDelivery(ctx context.Context, output voice.DiscussionOutput) ([]string, error) {
+	d.mu.RLock()
+	reader, manager := d.reader, d.voice
+	d.mu.RUnlock()
+	if reader == nil || manager == nil {
+		return nil, voice.ErrNotFound
+	}
+	if err := manager.ValidatePublication(ctx, output, discord.PublicationBodyHash(output.Text)); err != nil {
+		return nil, err
+	}
+	p := connectorPublication(output)
+	page, err := reader(ctx, discord.TeammateHistoryQuery{Source: "publication", Publication: &p})
+	return page.ConfirmedMessageIDs, err
 }
 
 func (d *discussion) read(ctx context.Context, q voice.DiscussionHistoryInput) (json.RawMessage, error) {
@@ -345,7 +366,8 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 	}
 	for _, job := range status.Jobs {
 		result.Jobs = append(result.Jobs, discord.TeammateJobStatus{ID: job.ID, AttemptID: job.AttemptID, Session: job.Session,
-			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic})
+			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic,
+			NativeTurnID: job.NativeTurnID, RecoveryRequired: job.RecoveryRequired, NativeTurnPublication: job.NativeTurnPublication})
 	}
 	return result, nil
 }
@@ -428,10 +450,7 @@ func (r *Runtime) Sync(ctx context.Context, bound discord.TeammateDiscussion, re
 	}
 	defer r.release(entry)
 	err = entry.voice.Sync(ctx, func(output voice.DiscussionOutput) error {
-		return emit(discord.TeammatePublication{
-			ID: output.ID, Body: output.Text, AdmissionID: output.AdmissionID, JobID: output.JobID, AttemptID: output.AttemptID,
-			QuestionID: output.QuestionID, QuestionHash: output.QuestionHash, Sequence: output.Sequence, SystemCause: output.SystemCause,
-		})
+		return emit(connectorPublication(output))
 	})
 	return activationNotice(err)
 }

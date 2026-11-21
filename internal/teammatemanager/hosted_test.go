@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/voice"
@@ -175,8 +178,31 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if personal {
 		thread.Route = discord.Route{ChannelID: cfg.DMChannelID}
 	}
-	reader := func(_ context.Context, _ discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
-		return discord.TeammateHistoryPage{Messages: []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}}, nil
+	history := []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}
+	var historyMu sync.Mutex
+	durable := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE")
+	reader := func(_ context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
+		historyMu.Lock()
+		defer historyMu.Unlock()
+		if durable == "" {
+			return discord.TeammateHistoryPage{Messages: slices.Clone(history)}, nil
+		}
+		switch q.Source {
+		case "", "thread":
+			return discord.TeammateHistoryPage{Messages: slices.Clone(history)}, nil
+		case "audience", "publication":
+			// This private rehearsal has a fixed audience and no Discord transport receipts.
+			return discord.TeammateHistoryPage{}, nil
+		case "admission", "grant":
+			for _, m := range history {
+				if m.ID == q.MessageID && m.Author.ID == q.AuthorID && q.AdmissionID == "input-"+m.ID && q.Revision == "rev-"+m.ID {
+					return discord.TeammateHistoryPage{}, nil
+				}
+			}
+			return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
+		default:
+			return discord.TeammateHistoryPage{}, discord.ErrNotAuthorized
+		}
 	}
 	admit := func(id, actor, body string) error {
 		t.Helper()
@@ -184,6 +210,11 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if personal {
 			a.Authority = discord.AuthorityOwnerDirect
 			a.Route.GuildID = ""
+		}
+		if durable != "" {
+			historyMu.Lock()
+			history = append(history, discord.TeammateHistoryMessage{ContextMessage: discord.ContextMessage{ID: id, Author: a.Author, Text: body, CreatedAt: time.Now().UTC()}})
+			historyMu.Unlock()
 		}
 		return r.Admit(ctx, a, reader)
 	}
@@ -233,7 +264,100 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		runHostedAttachment(t, ctx, r, thread, reader, project, state, fixture, wait, &outputs, roster)
 		return
 	}
-	if provider := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE"); provider != "" {
+	if !vmMode && durable == "codex" && interruption == "restart" {
+		question := "Which tree " + hex.EncodeToString(marker[:4]) + "?"
+		answer := "larch-" + hex.EncodeToString(marker[4:])
+		if err := os.WriteFile(filepath.Join(project, "question.txt"), []byte(question), 0600); err != nil {
+			t.Fatal(err)
+		}
+		send("301", "401", "Use one Codex worker in the fixture project. Its original turn must write the contents of question.txt to waiting.txt, then wait up to eight minutes for the file release. "+
+			"After release it must ask the exact question from question.txt using swarm teammate message --kind needs-input --text, get your answer with swarm teammate reply --id and --wait 90s, and write the returned answer text in answer.txt. "+
+			"Then it must send exactly the text from proof.txt using swarm teammate message --kind complete, save that queued receipt to sent.txt, and return exactly the same proof text in its native final. "+
+			"Only the worker may read the project files. When you receive its question answer privately with exactly "+answer+" using swarm_reply. Do not reveal the answer to the worker in advance. Publish only one final result consisting of the exact proof text.")
+		wait("enrolled worker waiting before restart", 150*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "waiting.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == question
+		})
+		before, err := r.Status(thread)
+		if err != nil || len(before.Jobs) != 1 || before.Jobs[0].Instance == "" {
+			t.Fatal("missing enrolled worker", before, err)
+		}
+		job := before.Jobs[0]
+		_, local, ok := protocol.ParseID(job.Session)
+		if !ok {
+			t.Fatal("bad enrolled worker session", job.Session)
+		}
+		store, err := persist.NewStore(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		original, err := store.Load(local)
+		if err != nil || original.ShimPID <= 0 || original.ShimStartTime <= 0 || original.Status.Process != status.ProcessRunning {
+			t.Fatal("original worker must be running", err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		_ = cmd.Wait()
+		cmd = startDaemon(bin)
+		owner = dialOwner()
+		challenge := "wake-" + hex.EncodeToString(marker[:])
+		send("302", "401", "While the worker continues, publish one short reply containing exactly "+challenge+".")
+		wait("Discord-only challenge after enrolled worker restart", 120*time.Second, func() bool {
+			return slices.ContainsFunc(outputs, func(p discord.TeammatePublication) bool {
+				return p.AdmissionID == "input-302" && strings.TrimSpace(p.Body) == challenge
+			})
+		})
+		current, err := store.Load(local)
+		if err != nil || current.ShimPID != original.ShimPID || current.ShimStartTime != original.ShimStartTime || current.Status.Process != status.ProcessRunning {
+			t.Fatal("enrolled worker did not survive", err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		wait("recovered question returned exact private answer", 150*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "answer.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == answer
+		})
+		wait("enrolled completion and native evidence settled", 180*time.Second, func() bool {
+			sent, readErr := os.ReadFile(filepath.Join(project, "sent.txt"))
+			view, err := r.Status(thread)
+			if readErr != nil || !strings.Contains(string(sent), "queued") || err != nil || view.PendingAdmissions != 0 || len(view.Jobs) != 1 || view.Jobs[0].State != "turn_completed" {
+				return false
+			}
+			questions, completions := 0, 0
+			for _, n := range view.Notes {
+				if n.Session != job.Session || n.Instance != job.Instance || n.JobID != job.ID || n.AttemptID != job.AttemptID || n.Admission == 0 || n.AdmissionPhase != "completed" {
+					continue
+				}
+				if n.Kind == "needs-input" && n.Answered {
+					questions++
+				}
+				if n.Kind == "complete" {
+					completions++
+				}
+			}
+			return questions == 1 && completions == 1
+		})
+		wakes, reports := 0, 0
+		for _, p := range outputs {
+			if p.AdmissionID == "input-302" && strings.Contains(p.Body, challenge) {
+				wakes++
+			}
+			if p.JobID == job.ID && p.AttemptID == job.AttemptID && strings.Contains(p.Body, proof) {
+				reports++
+			}
+		}
+		if wakes != 1 || reports != 1 {
+			t.Fatalf("enrolled attempt %s produced %d challenge answers and %d result publications", job.AttemptID, wakes, reports)
+		}
+		t.Logf("one challenge and one result for enrolled %s/%s, attempt %s, original shim %d", job.Session, job.Instance, job.AttemptID, original.ShimPID)
+		return
+	}
+	if provider := durable; provider != "" {
 		if !vmMode || (provider != "codex" && provider != "claude") {
 			t.Fatal("durable rehearsal requires VM mode and a codex or claude worker")
 		}
@@ -361,12 +485,26 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				return false
 			})
-		case "connector", "restart", "upgrade", "death", "quota":
-			if !personal || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
-				t.Fatal("interruption drill needs an active personal manager", beforeGap, err)
+		case "connector", "restart", "upgrade", "death", "quota", "replay-refusal":
+			if (!personal && interruption != "restart") || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
+				t.Fatal("interruption drill needs an active manager in the selected mode", beforeGap, err)
 			}
 		default:
 			t.Fatal("unknown interruption", interruption)
+		}
+		var heldChild, heldInstance string
+		if interruption == "restart" {
+			for _, row := range roster() {
+				if row.WorkerAttempt == attempt && row.WorkerInstance != "" && row.Status.Process == status.ProcessRunning {
+					if heldChild != "" {
+						t.Fatal("multiple live workers before restart")
+					}
+					heldChild, heldInstance = row.ID, row.WorkerInstance
+				}
+			}
+			if heldChild == "" {
+				t.Fatal("worker must be running at restart")
+			}
 		}
 		var quotaTurn string
 		if interruption == "quota" {
@@ -376,7 +514,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch interruption {
-		case "restart", "upgrade":
+		case "restart", "upgrade", "replay-refusal":
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -384,12 +522,55 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = cmd.Wait()
+			if interruption == "replay-refusal" {
+				_, local, ok := protocol.ParseID(beforeGap.ManagerSession)
+				if !ok {
+					t.Fatal("invalid original manager identity", beforeGap)
+				}
+				store, err := persist.NewStore(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m, err := store.Load(local)
+				if err != nil || m.Role != "manager" || m.Status.Process != status.ProcessRunning || m.ShimPID <= 0 || syscall.Kill(m.ShimPID, 0) != nil {
+					t.Fatal("original manager must still be running during supervisor outage", err)
+				}
+				m.ResumeError = "isolated rehearsal: previous native login unavailable"
+				if err := store.Save(m); err != nil {
+					t.Fatal(err)
+				}
+			}
 			cmd = startDaemon(bin)
 			owner = dialOwner()
 		case "quota":
 			finishHostedManagerQuota(t, state, project, beforeGap, owner, quotaTurn)
 		case "death":
 			if err := owner.Kill(beforeGap.ManagerSession); err != nil {
+				t.Fatal(err)
+			}
+		}
+		challenge := "wake-" + hex.EncodeToString(marker[:])
+		if interruption == "restart" {
+			r = open()
+			send("302", "401", "Without contacting the worker, publish one reply containing exactly "+challenge+".")
+			wait("Discord input alone answered while the original worker was active", 90*time.Second, func() bool {
+				for _, p := range outputs {
+					if p.AdmissionID == "input-302" && strings.TrimSpace(p.Body) == challenge {
+						return true
+					}
+				}
+				return false
+			})
+			var liveWorker bool
+			for _, row := range roster() {
+				if row.ID == heldChild && row.WorkerAttempt == attempt && row.WorkerInstance == heldInstance && row.Status.Process == status.ProcessRunning {
+					liveWorker = true
+				}
+			}
+			if !liveWorker {
+				t.Fatal("the original worker must still be running when the challenge is answered")
+			}
+			if err := r.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -415,6 +596,28 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return false
 		})
+		if interruption == "restart" {
+			wait("restarted manager settled after publication", 90*time.Second, func() bool {
+				st, err := r.Status(thread)
+				if err != nil || st.PendingAdmissions != 0 {
+					return false
+				}
+				if st.State == "parked" {
+					return true
+				}
+				native, err := owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+				return err == nil && native.ReadyForInput && (native.Turn.State == "idle" || native.Turn.State == "completed")
+			})
+			var reports int
+			for _, p := range outputs {
+				if strings.Contains(p.Body, proof) {
+					reports++
+				}
+			}
+			if reports != 1 {
+				t.Fatalf("expected one substantive result across restart, observed %d", reports)
+			}
+		}
 		got, err := r.Status(thread)
 		if err != nil {
 			t.Fatal(err)
@@ -441,15 +644,46 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				if strings.HasPrefix(row.Name, "DSP-") {
 					children++
+					if heldChild != "" && row.ID != heldChild {
+						t.Fatalf("worker changed across restart: %s -> %s", heldChild, row.ID)
+					}
 				}
 			}
-			if interruption == "quota" && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
-				t.Fatal("quota did not replace the original dispatcher exactly once", beforeGap, got)
+			if (interruption == "quota" || interruption == "replay-refusal") && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
+				t.Fatal(interruption, "did not replace the original dispatcher exactly once", beforeGap, got)
+			}
+			if interruption == "replay-refusal" {
+				var oldExited bool
+				for _, row := range roster() {
+					if row.ID == beforeGap.ManagerSession && row.Status.Process == status.ProcessExited {
+						oldExited = true
+					}
+				}
+				var reports int
+				for _, p := range outputs {
+					if p.JobID == job && p.AttemptID == attempt && strings.Contains(p.Body, proof) {
+						reports++
+					}
+				}
+				if !oldExited || reports != 1 {
+					t.Fatalf("original manager exited=%v, correlated completion publications=%d", oldExited, reports)
+				}
 			}
 			if activeManagers > 1 || children != 1 {
 				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
 			}
-			t.Logf("%s recovered on same DM %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
+			t.Logf("%s recovered on same channel %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
+		}
+		if interruption == "restart" {
+			replies := 0
+			for _, p := range outputs {
+				if p.AdmissionID == "input-302" && strings.Contains(p.Body, challenge) {
+					replies++
+				}
+			}
+			if replies != 1 {
+				t.Fatalf("received %d challenge replies across connector reopen and worker completion", replies)
+			}
 		}
 		if !kinds["needs-input"] || !kinds["complete"] {
 			t.Fatalf("explicit admissions: %v", kinds)

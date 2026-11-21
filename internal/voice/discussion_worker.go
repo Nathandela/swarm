@@ -77,9 +77,31 @@ func (c *Controller) reconcileDiscussionWorkerEvidence(ctx context.Context) erro
 	if err != nil {
 		return err
 	}
-	for _, worker := range st.Workers {
-		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.EvidenceLimited || worker.ActionID == "" || worker.JobID == "" ||
-			!c.projectPath(worker.Project, worker.Project) {
+	for k, worker := range st.Workers {
+		if worker.ConversationID != c.binding.ConversationID || worker.Reserved || worker.ActionID == "" {
+			continue
+		}
+		if worker.VMChild || worker.Mailbox {
+			// Older VM roster observation mislabeled enrolled workers. Repair even after switching back to enrolled policy.
+			if err := c.store.update(func(current *State) error {
+				if err := checkBinding(current, c.binding); err != nil {
+					return err
+				}
+				if current.Workers[k] != worker {
+					return ErrStale
+				}
+				worker.VMChild = false
+				if worker.Mailbox {
+					worker.Mailbox, worker.RecoveryRequired = false, true
+					worker.AttemptID = exactEnrolledLaunchAttempt(current, worker)
+				}
+				putRecord(current, "workers", &current.Workers, k, worker)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		if worker.EvidenceLimited || worker.JobID == "" || worker.AttemptID == "" || !c.projectPath(worker.Project, worker.Project) {
 			continue
 		}
 		id := discussionEvidenceID(worker)
@@ -114,7 +136,7 @@ func discussionEvidenceID(worker WorkerAssociation) string {
 	})
 }
 
-func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) (json.RawMessage, error) {
+func (c *Controller) readDiscussionWorker(ctx context.Context, input ReadInput, admission Admission) (json.RawMessage, error) {
 	if input.Cursor != "" || input.Source != "" && input.Source != "native" {
 		return nil, ErrControllerNativeUnavailable
 	}
@@ -137,6 +159,9 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 	attempt := st.Actions[key(c.binding.ConversationID, worker.AttemptID)]
 	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &original) != nil || original.Project != worker.Project {
 		return nil, ErrStale
+	}
+	if err := c.verifyStoredWorkerAttempt(ctx, st, worker); err != nil {
+		return nil, err
 	}
 	turn := input.NativeTurnID
 	if wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:"); fromWake && turn == "" {
@@ -177,7 +202,7 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 		if _, err = c.workerTarget(input.SessionInput, false); err != nil {
 			return nil, err
 		}
-		proof, err = c.discussionWorkerEvidence(context.Background(), worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
+		proof, err = c.discussionWorkerEvidence(ctx, worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
 		if err != nil {
 			return nil, err
 		}
@@ -238,9 +263,9 @@ func storedDiscussionWorkerProof(event Event, worker WorkerAssociation) (*schema
 	return &metadata.Data, nil
 }
 
-func (c *Controller) readDiscussionWorkerNote(input SessionInput, admission Admission) (json.RawMessage, error) {
+func (c *Controller) readDiscussionWorkerNote(ctx context.Context, input SessionInput, admission Admission) (json.RawMessage, error) {
 	wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:")
-	if !fromWake || admission.Sequence == 0 || c.discussion == nil || !c.discussion.VMProjectAccess {
+	if !fromWake || admission.Sequence == 0 || c.discussion == nil {
 		return nil, ErrExpired
 	}
 	st, err := c.store.readView()
@@ -257,6 +282,26 @@ func (c *Controller) readDiscussionWorkerNote(input SessionInput, admission Admi
 		json.Unmarshal(event.Metadata, &source) != nil || source.NoteID == "" ||
 		source.Session != input.Session || source.Instance != input.SessionInstance {
 		return nil, ErrStale
+	}
+	worker := st.Workers[key(c.binding.ConversationID, key(source.Session, source.Instance))]
+	if worker.Session != source.Session || worker.SessionInstance != source.Instance || worker.JobID != event.JobID || worker.AttemptID != event.AttemptID {
+		return nil, ErrStale
+	}
+	if worker.supervisorMailbox() {
+		if !c.discussion.VMProjectAccess {
+			return nil, ErrExpired
+		}
+	} else {
+		if err := c.verifyStoredWorkerEvent(ctx, st, event, source); err != nil {
+			return nil, err
+		}
+		current, err := c.store.readView()
+		if err != nil {
+			return nil, err
+		}
+		if checkBinding(&current, c.binding) != nil || current.Workers[key(c.binding.ConversationID, key(worker.Session, worker.SessionInstance))] != worker {
+			return nil, ErrStale
+		}
 	}
 	return event.Metadata, nil
 }

@@ -261,6 +261,22 @@ func (c *Controller) Tick(ctx context.Context) error {
 					return c.store.rejectQueuedControllerInput(c.binding, a, ErrDiscussionSourceChanged.Error())
 				}
 			}
+			if wakeID, ok := strings.CutPrefix(a.SourceID, "wake:"); ok {
+				wake := st.Wakes[key(a.ConversationID, wakeID)]
+				event := st.Events[key(a.ConversationID, wake.EventID)]
+				if event.WorkerMessage || event.WorkerProof || event.VMWorkerStatus {
+					var source workerNoteMetadata
+					if wake.Admission != a.Sequence || event.WakeID != wake.ID || json.Unmarshal(event.Metadata, &source) != nil {
+						return ErrCorrupt
+					}
+					if err := c.verifyStoredWorkerEvent(ctx, st, event, source); err != nil {
+						if errors.Is(err, ErrDiscussionSourceChanged) || errors.Is(err, ErrExpired) {
+							return c.store.rejectQueuedControllerInput(c.binding, a, "worker wake no longer authorized: "+err.Error())
+						}
+						return err
+					}
+				}
+			}
 			if c.discussion.VerifyAudience != nil && strings.HasPrefix(a.SourceID, "wake:") {
 				if err := c.discussion.VerifyAudience(ctx); err != nil {
 					return err
@@ -305,6 +321,9 @@ func (c *Controller) Tick(ctx context.Context) error {
 				return err
 			}
 			nonce := hex.EncodeToString(nonceBytes[:])
+			if c.discussion != nil && strings.HasPrefix(a.SourceID, "wake:") {
+				text = discussionPriorFinalNotice(st, a, text, c.binding.Provider, nonce)
+			}
 			if c.discussion != nil && st.Conversations[c.binding.ConversationID].NeedsHandoff {
 				text = discussionHandoff(st, a, text, c.binding.Provider, nonce, c.discussion.VMProjectAccess)
 			}
@@ -380,6 +399,43 @@ func (c *Controller) Tick(ctx context.Context) error {
 	}
 	return nil
 }
+
+// Stored results can outlive their sender. Recheck the original audience and launch grant before disclosure.
+func (c *Controller) verifyStoredWorkerEvent(ctx context.Context, st State, event Event, source workerNoteMetadata) error {
+	if event.VMWorkerStatus {
+		if !c.discussion.VMProjectAccess || event.WorkerProof || event.WorkerMessage || !currentVMStatusWorker(st, c.binding.ConversationID, event, source) {
+			return ErrExpired
+		}
+		return nil
+	}
+	worker := st.Workers[key(c.binding.ConversationID, key(source.Session, source.Instance))]
+	if worker.Session != source.Session || worker.SessionInstance != source.Instance ||
+		worker.ConversationID != c.binding.ConversationID || worker.JobID != event.JobID || worker.AttemptID != event.AttemptID ||
+		source.Session == "" || source.Instance == "" {
+		return ErrExpired
+	}
+	if worker.supervisorMailbox() {
+		if !c.discussion.VMProjectAccess {
+			return ErrExpired
+		}
+		// VM workers use the supervisor mailbox and the current discussion audience.
+		return nil
+	}
+	return c.verifyStoredWorkerAttempt(ctx, st, worker)
+}
+
+func (c *Controller) verifyStoredWorkerAttempt(ctx context.Context, st State, worker WorkerAssociation) error {
+	if c.discussion.VerifyGrant == nil || c.discussion.VerifyAudience == nil {
+		return ErrExpired
+	}
+	attempt := st.Actions[key(worker.ConversationID, worker.AttemptID)]
+	var launch controllerActionRequest
+	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &launch) != nil || (launch.Tool != "swarm_create" && launch.Tool != "swarm_resume") || launch.Project != worker.Project {
+		return ErrExpired
+	}
+	return c.verifyDiscussionLaunch(ctx, launch)
+}
+
 func (c *Controller) reconcileInput(ctx context.Context, a Admission, status protocol.ManagerRuntimeStatus) (bool, error) {
 	turn := status.Turn
 	// A later manual turn cannot erase the exact previous admission's lifecycle.
@@ -649,7 +705,7 @@ func (c *Controller) ReconcileJournal(cursor JournalCursor, snapshot JournalSnap
 	return c.store.ReconcileJournal(c.binding, cursor, snapshot)
 }
 
-const recoveryInputNotice = "Recovery-only context: inspect, report uncertainty, or ask the human. Do not rerun or replace uncertain work. Typed Swarm mutations are blocked for this input.\n"
+const recoveryInputNotice = "Recovery-only context: inspect, report uncertainty, or ask the human. Do not rerun or replace uncertain work. "
 
 type InputRecoveryAck struct {
 	Admission     uint64 `json:"admission"`

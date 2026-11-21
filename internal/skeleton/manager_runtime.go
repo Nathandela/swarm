@@ -39,7 +39,15 @@ func (d *Daemon) managerMeta(local, instance, retirement string) (persist.Meta, 
 		return persist.Meta{}, "", managerproof.ErrUnavailable
 	}
 	meta, ok := d.core.Get(local)
-	if !ok || meta.Role != "manager" || meta.ManagerConversationID == "" || meta.ManagerBridgeSocket == "" || meta.ManagerAuthFile == "" || meta.CLIIdentity == nil || meta.Status.Process != status.ProcessRunning || meta.ResumeError != "" || meta.ManagerRetirement.OperationID != retirement {
+	if !ok || meta.Role != "manager" || meta.ManagerConversationID == "" || meta.ManagerBridgeSocket == "" || meta.ManagerAuthFile == "" || meta.CLIIdentity == nil || meta.Status.Process != status.ProcessRunning || meta.ManagerRetirement.OperationID != retirement {
+		return persist.Meta{}, "", managerproof.ErrUnavailable
+	}
+	// An explicit refusal by this native replay ledger survives loss of the old login.
+	// Reporting it grants no input. The retirement path separately verifies the writers.
+	if owner, found := d.backend.refusedManagerReplay.Load(local); found && owner == (managerReplayOwner{instance, meta.ManagerReplayID, meta.ManagerConversationID, meta.ConversationID}) && d.matchesResumeSourceInstance(meta, instance) {
+		return persist.Meta{}, "", managerproof.ErrQuarantined
+	}
+	if meta.ResumeError != "" {
 		return persist.Meta{}, "", managerproof.ErrUnavailable
 	}
 	if meta.ManagerReplayID == "" {
@@ -150,15 +158,14 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance, ret
 		}
 		result = managerproof.Status{Binding: binding, ReadyForInput: turn.ReadyForInput, Turn: managerproof.Turn{NativeInputID: turn.NativeInputID, NativeTurnID: turn.TurnID, State: turn.State, Reason: turn.Reason, ExternalInput: turn.ExternalInput, ExternallySteered: turn.ExternallySteered}}
 	case "codex":
-		// A refused replay claim precedes backend registration on supervisor restart.
-		if err := d.codexManagerCustodyError(local); err != nil {
+		backend, ok := d.sessionBackendFor(local)
+		active := ok && backend.feed != nil && !backend.feed.retired.Load() && backend.sessionInstance == instance && backend.threadID != ""
+		// A late callback from a displaced observer cannot poison the new observer.
+		// For a disconnected dispatcher only the exact replay refusal above establishes loss.
+		if err := d.codexManagerCustodyError(local); err != nil && (!schema.IsDiscordManager(meta.Role, meta.ManagerConversationID) || active && backend.feed.manager.lost.Load()) {
 			return result, err
 		}
-		if !codex.SupportsNativeTurns(meta.CLIIdentity.Version) {
-			return result, managerproof.ErrUnavailable
-		}
-		backend, ok := d.sessionBackendFor(local)
-		if !ok || backend.feed == nil || backend.feed.retired.Load() || backend.sessionInstance != instance || backend.threadID == "" {
+		if !codex.SupportsNativeTurns(meta.CLIIdentity.Version) || !active {
 			return result, managerproof.ErrUnavailable
 		}
 		binding.NativeSessionID = backend.threadID

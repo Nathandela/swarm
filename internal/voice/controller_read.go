@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -61,7 +62,7 @@ func encodeWorkerReadCursor(source string, input ReadInput, value string) (strin
 }
 func (c *Controller) readWorker(input ReadInput) (json.RawMessage, error) {
 	if c.discussion != nil {
-		return c.readDiscussionWorker(input, Admission{})
+		return c.readDiscussionWorker(context.Background(), input, Admission{})
 	}
 	row, err := c.workerTarget(input.SessionInput, false)
 	if err != nil {

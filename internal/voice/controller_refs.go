@@ -29,6 +29,10 @@ func (c *Controller) actionReference(st State, id string, admission uint64, muta
 }
 func (c *Controller) publicationReference(st State, id string, admission uint64, turn string) (string, error) {
 	if strings.HasPrefix(id, "publication:") {
+		receipt := st.Admissions[admissionKey(c.binding.ConversationID, admission)].ReusedFinal
+		if receipt != nil && receipt.NativeTurnID == turn && (id == receipt.PublicationID || id == receipt.OutputID) {
+			return receipt.OutputID, nil
+		}
 		prior, ok := st.Publications[key(c.binding.ConversationID, id)]
 		if !ok {
 			return "", ErrNotFound

@@ -16,7 +16,12 @@ import (
 	"github.com/Nathandela/swarm/internal/jsontext"
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
+
+type managerReplayOwner struct {
+	instance, replayID, discussion, nativeThread string
+}
 
 type codexManagerIntent struct {
 	ExpectedExternalInput uint64               `json:"expected_external_input"`
@@ -393,6 +398,12 @@ func (d *Daemon) prepareCodexManagerFeed(local, instance string, feed *backendFe
 	if !ok || current != instance {
 		return managerproof.ErrStale
 	}
+	// A temporarily locked ledger cannot prove that a former observer lost custody.
+	replay, err := managerproof.OpenReplay(filepath.Join(d.stateDir, local), local, meta.ManagerConversationID, meta.ManagerReplayID)
+	if err != nil {
+		return errors.Join(managerproof.ErrUnavailable, err)
+	}
+	f.replay = replay
 	parent, cancel := context.WithCancel(context.Background())
 	f.cancel = cancel
 	f.done = make(chan struct{})
@@ -411,13 +422,12 @@ func (d *Daemon) prepareCodexManagerFeed(local, instance string, feed *backendFe
 	f.actor.Store(c)
 	ctx, stop := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer stop()
-	err := c.Do(ctx, 256, func(context.Context) error {
-		replay, err := managerproof.OpenReplay(filepath.Join(d.stateDir, local), local, meta.ManagerConversationID, meta.ManagerReplayID)
-		if err != nil {
-			return err
+	err = c.Do(ctx, 256, func(context.Context) error {
+		err := replay.Claim(feed.epoch)
+		if errors.Is(err, managerproof.ErrQuarantined) && meta.ConversationID != "" && schema.IsDiscordManager(meta.Role, meta.ManagerConversationID) {
+			d.backend.refusedManagerReplay.Store(local, managerReplayOwner{instance, meta.ManagerReplayID, meta.ManagerConversationID, meta.ConversationID})
 		}
-		f.replay = replay
-		return replay.Claim(feed.epoch)
+		return err
 	})
 	if err != nil {
 		f.lost.Store(true)

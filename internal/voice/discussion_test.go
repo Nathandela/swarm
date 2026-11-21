@@ -777,3 +777,214 @@ func TestDiscussionReportsOwnerDraftHoldBehindWorkerWake(t *testing.T) {
 		t.Fatal("reporting the hold changed admission order, worker or manager custody")
 	}
 }
+
+func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name                                            string
+		proofFirst, changed, steered, human, correction bool
+		readFirst, readSecond, splitScope               bool
+		recovered, repeatedNote, liveProse              bool
+		want                                            int
+	}{
+		{name: "note then proof", want: 1},
+		{name: "proof then note", proofFirst: true, want: 1},
+		{name: "recovered note then proof", recovered: true, liveProse: true, want: 1},
+		{name: "recovered proof then note", recovered: true, liveProse: true, proofFirst: true, want: 1},
+		{name: "recovered note implicit and proof read", recovered: true, readSecond: true, want: 1},
+		{name: "recovered proof read and note implicit", recovered: true, proofFirst: true, readFirst: true, want: 1},
+		{name: "recovered note read and proof implicit", recovered: true, readFirst: true, want: 1},
+		{name: "recovered proof implicit and note read", recovered: true, proofFirst: true, readSecond: true, want: 1},
+		{name: "other attempt read", recovered: true, splitScope: true, want: 2},
+		{name: "recovered distinct note IDs", recovered: true, repeatedNote: true, want: 1},
+		{name: "recovered note correction", recovered: true, repeatedNote: true, changed: true, want: 2},
+		{name: "recovered changed answer", recovered: true, correction: true, want: 2},
+		{name: "recovered worker after steering", recovered: true, steered: true, want: 2},
+		{name: "recovered human restatement", recovered: true, human: true, want: 2},
+		{name: "corrected evidence", changed: true, want: 2},
+		{name: "manager correction", correction: true, want: 2},
+		{name: "new worker directive", steered: true, want: 2},
+		{name: "new human request", human: true, want: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, original, dir := testStore(t)
+			original.ConversationID = DiscussionConversationPrefix + "duplicate"
+			b, err := s.BindManager(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := WorkerAssociation{ConversationID: b.ConversationID, Project: "/project", Session: "machine/worker", SessionInstance: "instance", JobID: "job", ActionID: "attempt", AttemptID: "attempt"}
+			note := Event{ID: "note", WakeID: "note-wake", WorkerMessage: true, Metadata: json.RawMessage(`{"session":"machine/worker","instance":"instance","kind":"complete","text":"seven checks passed"}`)}
+			text := "seven checks passed"
+			if tc.changed {
+				text = "six checks passed, one failed"
+			}
+			proof := Event{ID: discussionEvidenceID(w), WakeID: "proof-wake", WorkerProof: true, NativeTurnID: "worker-turn", Metadata: json.RawMessage(fmt.Sprintf(`{"session":"machine/worker","instance":"instance","data":{"turn_id":"worker-turn","state":"completed","text":%q}}`, text))}
+			if tc.recovered {
+				w.RecoveryRequired = true
+				noteText := "seven checks passed"
+				if tc.liveProse {
+					noteText = "The release file exists. Result: larch 713 (23 times 31)."
+					proof.Metadata = json.RawMessage(`{"session":"machine/worker","instance":"instance","data":{"turn_id":"worker-turn","state":"completed","text":"larch 713 (23 × 31). The regular-file check returned true within four minutes."}}`)
+				}
+				makeNote := func(noteID, claim string) Event {
+					id := "worker-message-" + hashValue([]string{w.Session, w.SessionInstance, w.AttemptID, noteID})
+					meta, _ := json.Marshal(workerNoteMetadata{Session: w.Session, Instance: w.SessionInstance, Kind: "complete", NoteID: noteID, Text: claim})
+					return Event{ID: id, WakeID: id, WorkerMessage: true, RecoveryOnly: true, Metadata: meta}
+				}
+				firstID, err := protocol.NewSemanticOperationID()
+				if err != nil {
+					t.Fatal(err)
+				}
+				note = makeNote(firstID, noteText)
+				proof.RecoveryOnly = true
+				if tc.repeatedNote {
+					nextID, err := protocol.NewSemanticOperationID()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if tc.changed {
+						noteText = "Correction: only six checks passed."
+					}
+					proof = makeNote(nextID, noteText)
+				}
+			}
+			events := []Event{note, proof}
+			if tc.proofFirst {
+				events[0], events[1] = events[1], events[0]
+			}
+			for i, e := range events {
+				e.ConversationID, e.JobID, e.AttemptID = b.ConversationID, w.JobID, w.AttemptID
+				seq := uint64(i + 1)
+				if err := s.update(func(st *State) error {
+					if i == 1 && tc.steered {
+						w.ActionID = "new-directive"
+					}
+					putRecord(st, "workers", &st.Workers, key(b.ConversationID, key(w.Session, w.SessionInstance)), w)
+					a, err := allocateAdmission(st, b, "wake:"+e.WakeID)
+					if err != nil {
+						return err
+					}
+					if i == 0 && tc.readFirst || i == 1 && tc.readSecond {
+						a.WorkerAttempts = addDiscussionScopeValue("", w.AttemptID)
+						a.WorkerProjects = addDiscussionScopeValue("", w.Project)
+					}
+					if i == 1 && tc.splitScope {
+						a.WorkerAttempts = addDiscussionScopeValue(addDiscussionScopeValue("", w.AttemptID), "unrelated")
+					}
+					if tc.recovered {
+						a.RecoveryOnly = true
+						putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
+					}
+					if i == 1 && tc.human {
+						a.Origin = &schema.MessageOrigin{RequestID: "new-human"}
+						putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
+					}
+					putRecord(st, "events", &st.Events, key(b.ConversationID, e.ID), e)
+					wake := Wake{ID: e.WakeID, EventID: e.ID, Admission: a.Sequence}
+					putRecord(st, "wakes", &st.Wakes, key(b.ConversationID, wake.ID), wake)
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				input, turn := fmt.Sprint("input-", i), fmt.Sprint("manager-turn-", i)
+				if err := s.BindNativeInput(b, seq, input); err != nil {
+					t.Fatal(err)
+				}
+				permit, err := s.GrantSpeech(b, seq, input, turn, seq)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i == 1 {
+					st, err := s.Snapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					a := st.Admissions[admissionKey(b.ConversationID, seq)]
+					notice := discussionPriorFinalNotice(st, a, "new wake", "codex", "")
+					wantNotice := tc.want == 1 || tc.correction || tc.splitScope
+					if strings.Contains(notice, "already scheduled") != wantNotice {
+						t.Fatalf("prior-final guidance = %q, want notice %v", notice, wantNotice)
+					}
+					if wantNotice {
+						for _, provider := range []string{"claude", "codex"} {
+							full := strings.Repeat("x", protocol.MaxSendInputText)
+							if got := discussionPriorFinalNotice(st, a, full, provider, strings.Repeat("a", 64)); got != full {
+								t.Fatal("changed full-size wake", provider)
+							}
+						}
+					}
+				}
+				body := "The worker reported seven passing checks."
+				if tc.liveProse {
+					body = "larch 713 (23 × 31)."
+				}
+				if tc.correction && i == 1 {
+					body = "Correction: only six of those checks used the required fixture."
+				}
+				got, err := s.PublishSpeech(b, permit, Publication{ID: fmt.Sprint("publication:", i), NativeTurnID: turn, Sequence: 1, Text: body, Final: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i == 1 && tc.want == 1 && (got.ID != "publication:0" || got.Exported) {
+					t.Fatalf("duplicate manufactured a new receipt or acknowledged export: %+v", got)
+				}
+				if i == 1 && tc.want == 1 {
+					if err := s.Close(); err != nil {
+						t.Fatal(err)
+					}
+					s, err = OpenStore(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = s.Close() })
+					b, err = s.BindManager(b)
+					if err != nil {
+						t.Fatal(err)
+					}
+					snapshot, err := s.Snapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					a := snapshot.Admissions[admissionKey(b.ConversationID, seq)]
+					expected := ReusedFinalReceipt{PublicationID: got.ID, OutputID: "publication:1", NativeTurnID: turn, Sequence: 1}
+					if a.ReusedFinal == nil || *a.ReusedFinal != expected {
+						t.Fatalf("missing persistent final alias: %+v", a.ReusedFinal)
+					}
+					controller := Controller{binding: b}
+					for _, id := range []string{expected.OutputID, expected.PublicationID} {
+						if ref, err := controller.publicationReference(snapshot, id, seq, turn); err != nil || ref != expected.OutputID {
+							t.Fatalf("failed to resolve final %s in its admission: %s %v", id, ref, err)
+						}
+					}
+					if _, err := controller.publicationReference(snapshot, expected.PublicationID, seq, "other-turn"); !errors.Is(err, ErrExpired) {
+						t.Fatalf("wrong turn resolved prior final: %v", err)
+					}
+					retry := Publication{ID: "publication:1", NativeTurnID: turn, Sequence: 1, Text: body, Final: true}
+					if replay, err := s.PublishSpeech(b, permit, retry); err != nil || replay.ID != got.ID {
+						t.Fatalf("recovered final retry: %v %v", replay, err)
+					}
+					retry.ID = "later"
+					retry.Sequence++
+					retry.Final = false
+					if _, err := s.PublishSpeech(b, permit, retry); !errors.Is(err, ErrConflict) {
+						t.Fatalf("second turn allowed progress after final: %v", err)
+					}
+					retry.Final = true
+					if _, err := s.PublishSpeech(b, permit, retry); !errors.Is(err, ErrConflict) {
+						t.Fatalf("second turn allowed another final: %v", err)
+					}
+				}
+				if err := s.SettleAdmission(b, seq); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, err := s.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Publications) != tc.want {
+				t.Fatalf("got %d durable finals, want %d", len(st.Publications), tc.want)
+			}
+		})
+	}
+}
