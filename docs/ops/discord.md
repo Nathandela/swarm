@@ -214,11 +214,13 @@ The current native manager options are Codex and Claude on qualified versions. T
 A delegated worker can queue a progress note, blocker, or clarification for its own manager from the worker's shell.
 
 ```sh
-swarm teammate message --text 'Which fixture should I use?'
+swarm teammate message --kind needs-input --text 'Which fixture should I use?'
+swarm teammate reply --id MESSAGE_ID --wait 90s
 ```
 
-The worker receives a message ID and can retry the same text with that ID if its receipt is uncertain. The manager wakes for the note and runs `swarm reply --id WAKE_MESSAGE_ID --text TEXT` with the ID from its wake. Swarm delivers the answer to the originating worker. Codex receives a follow-up after its current turn; a Claude worker retrieves the response with `swarm teammate reply --id MESSAGE_ID --wait 90s` using its original receipt.
+Use the message ID returned by the first command. A Codex or Claude worker can retrieve the answer to that question with the second command. A completion report uses `--kind complete`. If a receipt is uncertain, reuse the original message ID, kind and text.
 
+After a supervisor restart, a worker in an enrolled project can report a result or ask for clarification when Swarm can verify its original launch, current incarnation, project and discussion grant. The manager can answer that specific question. Further worker commands still require their own authority. In `swarm discord status`, `turn_completed` identifies an observed native turn. The job can still have `recovery_required` set. The native turn’s publication and the worker note’s publications have their own delivery states and Discord message IDs.
 
 If direct terminal input pauses a manager, inspect its instance and observed external-input count in local status, finish or detach the terminal intervention, and reconcile it locally:
 
