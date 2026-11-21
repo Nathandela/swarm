@@ -366,7 +366,8 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 	}
 	for _, job := range status.Jobs {
 		result.Jobs = append(result.Jobs, discord.TeammateJobStatus{ID: job.ID, AttemptID: job.AttemptID, Session: job.Session,
-			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic})
+			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic,
+			NativeTurnID: job.NativeTurnID, RecoveryRequired: job.RecoveryRequired, NativeTurnPublication: job.NativeTurnPublication})
 	}
 	return result, nil
 }

@@ -460,7 +460,18 @@ func (s *Store) teammatePark(d TeammateDiscussion, through uint64, native *Teamm
 		if hasOutput {
 			return nil
 		}
-		if native != nil && native.State == "parked" && (native.RetirementOperation != "" || len(native.Notes) > 0) {
+		var retainedJobs []TeammateJobStatus
+		if native != nil && native.State == "parked" {
+			for _, job := range native.Jobs {
+				if job.RecoveryRequired {
+					retainedJobs = append(retainedJobs, job)
+					if len(retainedJobs) == 16 {
+						break
+					}
+				}
+			}
+		}
+		if native != nil && native.State == "parked" && (native.RetirementOperation != "" || len(native.Notes) > 0 || len(retainedJobs) > 0) {
 			recent, err := recentWorkerNotes(tx, d.InstallationID)
 			if err != nil {
 				return err
@@ -470,7 +481,7 @@ func (s *Store) teammatePark(d TeammateDiscussion, through uint64, native *Teamm
 				recent = recent[:15]
 			}
 			snapshot := *native
-			snapshot.Jobs = nil
+			snapshot.Jobs = retainedJobs
 			snapshot.Notes = snapshot.Notes[:min(len(snapshot.Notes), 16)]
 			row := parkedWorkerNotes{Discussion: d, Native: snapshot, At: time.Now().UTC()}
 			recent = append([]parkedWorkerNotes{row}, recent...)
@@ -664,9 +675,16 @@ type TeammateOutputStatus struct {
 }
 
 // Read both sides of compaction in one snapshot so an observed send stays visible.
-func (s *Store) workerPublicationStatus(d TeammateDiscussion, notes []workermail.NoteStatus) error {
+func (s *Store) workerPublicationStatus(d TeammateDiscussion, native *TeammateNativeStatus) error {
 	return s.db.View(func(tx *bolt.Tx) error {
-		for _, note := range notes {
+		for _, job := range native.Jobs {
+			if job.NativeTurnPublication != nil {
+				if err := readPublicationStatus(tx, d, job.NativeTurnPublication, nil); err != nil {
+					return err
+				}
+			}
+		}
+		for _, note := range native.Notes {
 			for i := range note.Publications {
 				if err := readPublicationStatus(tx, d, &note.Publications[i], nil); err != nil {
 					return err
@@ -783,8 +801,8 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 			if err != nil {
 				view.Diagnostic = err.Error()
 			}
-			if err == nil && len(view.Notes) > 0 {
-				if e := s.workerPublicationStatus(b.TeammateDiscussion, view.Notes); e != nil {
+			if err == nil && (len(view.Notes) > 0 || len(view.Jobs) > 0) {
+				if e := s.workerPublicationStatus(b.TeammateDiscussion, &view); e != nil {
 					return status, e
 				}
 			}
@@ -807,7 +825,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 		if time.Since(row.At) > workermail.ReceiptRetention || slices.ContainsFunc(rows, func(b teammateBinding) bool { return b.ID == row.Discussion.ID }) {
 			continue
 		}
-		if err := s.workerPublicationStatus(row.Discussion, row.Native.Notes); err != nil {
+		if err := s.workerPublicationStatus(row.Discussion, &row.Native); err != nil {
 			return status, err
 		}
 		status.Discussions = append(status.Discussions, TeammateDiscussionStatus{ID: row.Discussion.ID, Thread: row.Discussion.Route, Native: &row.Native})

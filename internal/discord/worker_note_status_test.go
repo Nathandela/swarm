@@ -27,7 +27,7 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 	check := func(state string, ids ...string) {
 		t.Helper()
 		notes := []workermail.NoteStatus{{Publications: []workermail.PublicationStatus{{ID: "publication"}}}}
-		if err := s.workerPublicationStatus(d, notes); err != nil {
+		if err := s.workerPublicationStatus(d, &TeammateNativeStatus{Notes: notes}); err != nil {
 			t.Fatal(err)
 		}
 		pub := notes[0].Publications[0]
@@ -48,7 +48,7 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes := []workermail.NoteStatus{{ID: "note", AttemptID: "attempt", Publications: []workermail.PublicationStatus{{ID: "publication"}}}}
-	if err := s.teammatePark(d, 0, &TeammateNativeStatus{State: "parked", Notes: notes}); err != nil {
+	if err := s.teammatePark(d, 0, &TeammateNativeStatus{State: "parked", Notes: notes, Jobs: []TeammateJobStatus{{State: "turn_completed", RecoveryRequired: true, NativeTurnPublication: &workermail.PublicationStatus{ID: "publication"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	status, err := s.teammateStatus(d.InstallationID, func(TeammateDiscussion) (TeammateNativeStatus, error) {
@@ -57,6 +57,10 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 	})
 	if err != nil || len(status.Discussions) != 1 || status.Discussions[0].Native == nil || len(status.Discussions[0].Native.Notes) != 1 {
 		t.Fatalf("parked status %+v, %v", status, err)
+	}
+	jobs := status.Discussions[0].Native.Jobs
+	if len(jobs) != 1 || jobs[0].NativeTurnPublication.State != StateSent || !reflect.DeepEqual(jobs[0].NativeTurnPublication.MessageIDs, []string{"301", "302"}) {
+		t.Fatalf("parked job result: %+v", jobs)
 	}
 	p := status.Discussions[0].Native.Notes[0].Publications[0]
 	if p.State != StateSent || !reflect.DeepEqual(p.MessageIDs, []string{"301", "302"}) {
