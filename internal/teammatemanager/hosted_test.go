@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -388,27 +389,40 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			if !vmMode || !personal {
 				t.Fatal("call worker rehearsal requires personal VM mode")
 			}
+			if interruption != "" && interruption != "connector" && interruption != "restart" {
+				t.Fatal("call worker interruption must be connector or restart")
+			}
 			type job struct {
 				id, marker, assignment string
+				input                  discord.TeammateAdmission
 				launch                 discord.TeammateJobStatus
+				nativeTurn             string
+				result                 discord.TeammatePublication
 			}
 			var nonce [16]byte
 			if _, err := rand.Read(nonce[:]); err != nil {
 				t.Fatal(err)
 			}
-			first := job{id: "first", marker: "amber-" + hex.EncodeToString(nonce[:8]), assignment: `Run for i in $(seq 1 180); do if test -s call-first.txt; then cat call-first.txt; exit; fi; sleep 1; done. Return only the file contents in your normal final answer.`}
+			first := job{id: "first", marker: "amber-" + hex.EncodeToString(nonce[:8]), assignment: `Run touch call-first-waiting; for i in $(seq 1 240); do if test -s call-first.txt; then cat call-first.txt; exit; fi; sleep 1; done. Return only the file contents in your normal final answer.`}
 			second := job{id: "second", marker: "indigo-" + hex.EncodeToString(nonce[8:]), assignment: "Read call-second.txt and return only its contents in your normal final answer."}
 			if err := os.WriteFile(filepath.Join(project, "call-second.txt"), []byte(second.marker+"\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			grants := map[string]schema.VoiceOrigin{callOperation: coord}
+			activeCall := coord
+			var grantsMu sync.Mutex
 			reader = func(callCtx context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
 				if q.Source != "admission" && q.Source != "grant" {
 					return textReader(callCtx, q)
 				}
+				grantsMu.Lock()
+				defer grantsMu.Unlock()
 				v, ok := grants[q.AdmissionID]
 				if !ok || q.Voice != v || q.AuthorID != v.SpeakerID || q.Revision != v.BodyHash || q.Authority != authority ||
 					q.MessageID != "" || q.Anchor != "" || q.Cursor != "" {
+					return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
+				}
+				if q.Source == "admission" && (v.CallID != activeCall.CallID || v.Generation != activeCall.Generation) {
 					return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
 				}
 				return discord.TeammateHistoryPage{}, nil
@@ -416,10 +430,14 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			for i, j := range []*job{&first, &second} {
 				text := fmt.Sprintf("Switch project to fixture. Launch one Codex worker through swarm_create, using action_id call-worker-%s and cwd %s. Pass this as its initial prompt: %s Do not read the file yourself or send further instructions. End your turn promptly. When that completed worker wakes you, call swarm_read with its exact session, session_instance, job_id and attempt_id, then publish only the verified marker as a final reply.", j.id, project, j.assignment)
 				a := admission
+				a.Voice = activeCall
 				a.OperationID, a.Voice.TurnID, a.Text = "dv_worker_"+j.id, "hosted-worker-"+j.id, text
 				a.Revision = discord.PublicationBodyHash(text)
 				a.Voice.BodyHash = a.Revision
+				j.input = a
+				grantsMu.Lock()
 				grants[a.OperationID] = a.Voice
+				grantsMu.Unlock()
 				if err := r.Admit(ctx, a, reader); err != nil {
 					t.Fatal(err)
 				}
@@ -430,12 +448,88 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					}
 					for _, launch := range state.Jobs {
 						if launch.Session != "" && launch.Instance != "" && strings.HasPrefix(launch.AttemptID, "action:") && launch.ID != first.launch.ID {
+							if j == &first {
+								if _, err := os.Stat(filepath.Join(project, "call-first-waiting")); err != nil {
+									return false
+								}
+							}
 							j.launch = launch
 							return true
 						}
 					}
 					return false
 				})
+				if j == &first && interruption != "" {
+					_, local, ok := protocol.ParseID(first.launch.Session)
+					if !ok {
+						t.Fatal("invalid held worker session")
+					}
+					store, err := persist.NewStore(state)
+					if err != nil {
+						t.Fatal(err)
+					}
+					held, err := store.Load(local)
+					if err != nil || held.ShimPID <= 0 || held.ShimStartTime <= 0 || held.Status.Process != status.ProcessRunning {
+						t.Fatal("first worker must be running at the interruption", err)
+					}
+					if err := r.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := r.Status(thread); !errors.Is(err, context.Canceled) {
+						t.Fatalf("closed runtime still accessible: %v", err)
+					}
+					pid, endpoint := cmd.Process.Pid, owner.EndpointID()
+					if interruption == "restart" {
+						if err := owner.Close(); err != nil {
+							t.Fatal(err)
+						}
+						if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+							t.Fatal(err)
+						}
+						if err := cmd.Wait(); err != nil {
+							t.Fatal(err)
+						}
+						cmd = startDaemon(bin)
+						owner = dialOwner()
+					}
+					if changed := cmd.Process.Pid != pid; changed != (interruption == "restart") || owner.EndpointID() != endpoint {
+						t.Fatal("unexpected supervisor PID or endpoint after interruption")
+					}
+					t.Logf("%s interruption verified supervisor identity (PID changed: %t)", interruption, cmd.Process.Pid != pid)
+					r = open()
+					grantsMu.Lock()
+					activeCall.CallID, activeCall.Generation = "hosted-replacement-call", coord.Generation+1
+					grantsMu.Unlock()
+					current, err := store.Load(local)
+					if err != nil || current.ShimPID != held.ShimPID || current.ShimStartTime != held.ShimStartTime ||
+						current.Status.Process != status.ProcessRunning || syscall.Kill(current.ShimPID, 0) != nil {
+						t.Fatal("original worker shim did not survive the interruption", err)
+					}
+					if phase, err := r.AdmissionState(ctx, first.input); err != nil || phase != discord.TeammateAdmissionCutover {
+						t.Fatalf("original voice admission after interruption: %q %v", phase, err)
+					}
+					wrong := first.input
+					wrong.Voice.CallID, wrong.Voice.Generation = activeCall.CallID, activeCall.Generation
+					if _, err := r.AdmissionState(ctx, wrong); !errors.Is(err, voice.ErrConflict) {
+						t.Fatalf("old voice operation accepted replacement coordinates: %v", err)
+					}
+					t.Log("reopened ledger retained the original cutover and the waiting worker shim survived")
+					wait("reopened runtime found original waiting worker", 45*time.Second, func() bool {
+						st, err := r.Status(thread)
+						if err != nil || st.State != "active" || st.ManagerSession != manager || st.ManagerInstance != instance || len(roster()) != 2 {
+							return false
+						}
+						// The VM observer can retain a roster row for the same physical worker.
+						return slices.ContainsFunc(st.Jobs, func(got discord.TeammateJobStatus) bool {
+							return got.ID == first.launch.ID && got.AttemptID == first.launch.AttemptID &&
+								got.Session == first.launch.Session && got.Instance == first.launch.Instance
+						})
+					})
+					rebound, err := owner.ManagerRuntime(manager, instance)
+					if err != nil || rebound.Binding.NativeSessionID != native.Binding.NativeSessionID {
+						t.Fatal("manager native conversation changed after interruption", err)
+					}
+				}
 			}
 			for _, j := range []*job{&second, &first} {
 				wait("exact marked return for "+j.id+" voice turn", 100*time.Second, func() bool {
@@ -445,19 +539,87 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 						}
 						p.BodyHash = discord.PublicationBodyHash(p.Body)
 						origin, err := r.PublicationCallAdmission(ctx, thread, p)
-						if p.JobID != j.launch.ID || p.AttemptID != j.launch.AttemptID || origin != "dv_worker_"+j.id || err != nil {
+						if p.JobID != j.launch.ID || p.AttemptID != j.launch.AttemptID || origin != j.input.OperationID || err != nil {
 							t.Fatalf("worker return for %s: job=%s attempt=%s origin=%q err=%v", j.id, p.JobID, p.AttemptID, origin, err)
 						}
-						return true
+						st, err := r.Status(thread)
+						if err != nil || st.PendingAdmissions != 0 {
+							return false
+						}
+						for _, got := range st.Jobs {
+							if got.ID == j.launch.ID && got.AttemptID == j.launch.AttemptID && got.Session == j.launch.Session &&
+								got.Instance == j.launch.Instance && got.State == "turn_completed" && adapter.IsCanonicalConversationID(got.NativeTurnID) &&
+								got.NativeTurnPublication != nil && got.NativeTurnPublication.ID == p.ID {
+								j.result, j.nativeTurn = p, got.NativeTurnID
+								return true
+							}
+						}
 					}
 					return false
 				})
 				if j == &second {
+					if slices.ContainsFunc(outputs, func(p discord.TeammatePublication) bool { return strings.TrimSpace(p.Body) == first.marker }) {
+						t.Fatal("held result arrived before its release")
+					}
 					if err := os.WriteFile(filepath.Join(project, "call-first.txt"), []byte(first.marker+"\n"), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
 			}
+			if first.result.Sequence <= second.result.Sequence || first.nativeTurn == second.nativeTurn {
+				t.Fatal("expected reverse canonical publication order from distinct native worker turns")
+			}
+			var played []string
+			for _, j := range []*job{&second, &first} {
+				op, err := r.PublicationCallAdmission(ctx, thread, j.result)
+				grantsMu.Lock()
+				origin, found := grants[op]
+				grantsMu.Unlock()
+				if err != nil || !found || origin != j.input.Voice {
+					t.Fatal("canonical result lost its voice origin")
+				}
+				// Model only the call identity fence here. The Gateway fixture exercises the actual lane.
+				if origin.CallID == activeCall.CallID && origin.Generation == activeCall.Generation {
+					played = append(played, j.result.ID)
+				}
+				if err := r.Admit(ctx, j.input, reader); err != nil {
+					t.Fatal("worker admission replay", err)
+				}
+				forged := j.result
+				forged.BodyHash = discord.PublicationBodyHash("forged worker result")
+				if _, err := r.PublicationCallAdmission(ctx, thread, forged); !errors.Is(err, voice.ErrStale) {
+					t.Fatalf("altered worker result resolved to a call: %v", err)
+				}
+				forged = j.result
+				forged.AttemptID = second.launch.AttemptID
+				if j == &second {
+					forged.AttemptID = first.launch.AttemptID
+				}
+				if _, err := r.PublicationCallAdmission(ctx, thread, forged); !errors.Is(err, voice.ErrStale) {
+					t.Fatalf("crossed attempt resolved to a call: %v", err)
+				}
+			}
+			if interruption != "" && !slices.Equal(played, []string{second.result.ID}) {
+				t.Fatal("replacement call should receive only its own worker result")
+			}
+			if err := r.Sync(ctx, thread, reader, func(p discord.TeammatePublication) error {
+				return fmt.Errorf("settled replay exported another publication %s", p.ID)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, j := range []*job{&first, &second} {
+				inputs := codexCanaryInputs(t, nativeHome, native.Binding.NativeSessionID, "using action_id call-worker-"+j.id)
+				publications := 0
+				for _, p := range outputs {
+					if strings.TrimSpace(p.Body) == j.marker {
+						publications++
+					}
+				}
+				if inputs != 1 || publications != 1 {
+					t.Fatalf("%s worker custody counts: native inputs=%d canonical results=%d", j.id, inputs, publications)
+				}
+			}
+			t.Log("verified two exact native worker turns and canonical receipts in reverse order, with one native input and one marked result per worker")
 			if rows := roster(); len(rows) != 3 || first.launch.Session == second.launch.Session {
 				t.Fatalf("expected one manager and two distinct workers, observed %d sessions", len(rows))
 			}
