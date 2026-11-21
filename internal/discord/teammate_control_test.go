@@ -438,14 +438,20 @@ func TestTeammateStagesSecondHumanPingWhileFirstAwaitsCutover(t *testing.T) {
 	c, m := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels/20":
-			fmt.Fprint(w, teammateParent)
+			if _, err := fmt.Fprint(w, teammateParent); err != nil {
+				t.Error(err)
+			}
 		case "/channels/201":
-			fmt.Fprint(w, teammatePublic)
+			if _, err := fmt.Fprint(w, teammatePublic); err != nil {
+				t.Error(err)
+			}
 		case "/channels/20/permissions/member/99":
 			teammateTestPermissions(w)
 		case "/channels/201/messages/202", "/channels/201/messages/203", "/channels/201/messages/204":
 			id := strings.TrimPrefix(r.URL.Path, "/channels/201/messages/")
-			json.NewEncoder(w).Encode(message(id))
+			if err := json.NewEncoder(w).Encode(message(id)); err != nil {
+				t.Error(err)
+			}
 		default:
 			w.WriteHeader(404)
 		}
