@@ -520,12 +520,12 @@ func (f *dispatcherCallFixture) expectWaiting() {
 	}
 }
 
-func (f *dispatcherCallFixture) expectControlWatermark(id string) {
+func (f *dispatcherCallFixture) expectControlWatermark(user, id string) {
 	f.t.Helper()
 	f.calls.mu.Lock()
 	defer f.calls.mu.Unlock()
-	if f.calls.lastControl != id {
-		f.t.Fatalf("control watermark = %q, want %q", f.calls.lastControl, id)
+	if f.calls.lastControl[user] != id {
+		f.t.Fatalf("control watermark for %s = %q, want %q", user, f.calls.lastControl[user], id)
 	}
 }
 
@@ -585,7 +585,7 @@ func (f *dispatcherCallFixture) requestJoin() TeammateAdmission {
 		f.expectConsent("70", "71")
 		f.command("103", "30", "70", "leave", 0)
 		f.expectConsent("70", "71")
-		f.expectControlWatermark("104")
+		f.expectControlWatermark("71", "104")
 	}
 	f.completeJoinHandshake()
 	return text
@@ -880,7 +880,7 @@ func TestDispatcherCallsIntegration(t *testing.T) {
 	team.expectOpcode(6)
 	team.command("105", "30", "70", "leave", 0)
 	team.expectConsent()
-	team.expectControlWatermark("104")
+	team.expectControlWatermark("70", "103")
 	team.expectNoTextIngress()
 }
 

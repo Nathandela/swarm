@@ -23,7 +23,8 @@ type dispatcherCalls struct {
 	lastMetrics     dispatcherCallMetrics
 	dependencies    dispatcherCallDependencies
 	checkStartup    bool
-	lastControl     string
+	lastControl     map[string]string
+	lastLeave       string
 	statusReason    string
 	t               *teammateConnector
 	ctx             context.Context
@@ -75,7 +76,7 @@ func enableDispatcherCalls(ctx context.Context, t *teammateConnector, injected .
 		dependencies = injected[0]
 	}
 	cfg := t.service.Config.Calls
-	d := &dispatcherCalls{dependencies: dependencies, checkStartup: len(injected) == 0, ctx: ctx, t: t, consent: make(map[string]time.Time), wake: make(chan struct{}, 1), historyRepaired: make(chan struct{}, 1)}
+	d := &dispatcherCalls{dependencies: dependencies, checkStartup: len(injected) == 0, ctx: ctx, t: t, lastControl: make(map[string]string), consent: make(map[string]time.Time), wake: make(chan struct{}, 1), historyRepaired: make(chan struct{}, 1)}
 	t.service.calls = d
 	t.client.onDispatch = d.gateway
 	t.client.callGateway = &callGateway{guild: cfg.GuildID, room: cfg.RoomID, dispatch: d.dispatch, disconnect: d.disconnect, unavailable: func(reason string) {
@@ -247,11 +248,13 @@ func (d *dispatcherCalls) expireDueLocked(c *dispatcherCall, now time.Time) {
 func (d *dispatcherCalls) command(cmd callCommand) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if cmd.id == "" || d.lastControl != "" && !snowflakeLess(d.lastControl, cmd.id) {
+	previous := d.lastControl[cmd.user]
+	if cmd.id == "" || previous != "" && !snowflakeLess(previous, cmd.id) || d.lastLeave != "" && !snowflakeLess(d.lastLeave, cmd.id) {
 		return
 	}
-	d.lastControl = cmd.id
+	d.lastControl[cmd.user] = cmd.id
 	if cmd.action == "voice leave" {
+		d.lastLeave = cmd.id
 		d.invitedUntil = time.Time{}
 		clear(d.consent)
 		d.invalidateLocked()
@@ -414,6 +417,26 @@ func (d *dispatcherCalls) run() {
 	}
 }
 
+func (d *dispatcherCalls) readyLocked(c *dispatcherCall, now time.Time) bool {
+	if c == nil || c != d.active || !c.ready {
+		return false
+	}
+	d.expireDueLocked(c, now)
+	return c.ctx.Err() == nil
+}
+
+func (d *dispatcherCalls) checkReady(c *dispatcherCall) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.readyLocked(c, time.Now()) {
+		return nil
+	}
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+	return ErrNotAuthorized
+}
+
 func (d *dispatcherCalls) verify(ctx context.Context, b TeammateDiscussion, o schema.VoiceOrigin, live bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -424,7 +447,7 @@ func (d *dispatcherCalls) verify(ctx context.Context, b TeammateDiscussion, o sc
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	c := d.active
-	if _, eligible := d.permittedLocked(); !eligible || c == nil || c.ctx.Err() != nil || !c.ready || c.bound.ID != b.ID || c.id != o.CallID || c.generation != o.Generation || !slices.Contains(c.speakers, o.SpeakerID) {
+	if _, eligible := d.permittedLocked(); !eligible || !d.readyLocked(c, time.Now()) || c.bound.ID != b.ID || c.id != o.CallID || c.generation != o.Generation || !slices.Contains(c.speakers, o.SpeakerID) {
 		return ErrNotAuthorized
 	}
 	return nil
@@ -434,7 +457,7 @@ func (d *dispatcherCalls) publication(b TeammateDiscussion, p TeammatePublicatio
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	c := d.active
-	if c == nil || c.ctx.Err() != nil || !c.ready || c.bound.ID != b.ID {
+	if !d.readyLocked(c, time.Now()) || c.bound.ID != b.ID {
 		return
 	}
 	select {
@@ -502,7 +525,7 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 	play := func(ctx context.Context, pcm []byte) error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if ctx.Err() != nil || !c.ready || !d.queueLocked(c, map[string]any{"type": "play", "pcm": slices.Clone(pcm)}) {
+		if ctx.Err() != nil || !d.readyLocked(c, time.Now()) || !d.queueLocked(c, map[string]any{"type": "play", "pcm": slices.Clone(pcm)}) {
 			return ErrNotAuthorized
 		}
 		return nil
@@ -523,7 +546,9 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 		Stop:   func() { d.mu.Lock(); defer d.mu.Unlock(); d.queueLocked(c, map[string]any{"type": "clear"}) },
 		Failed: func(error) { fail("speech provider unavailable; continue in text"); c.cancel() },
 		Turn: func(ctx context.Context, turn callspeech.Turn) {
-			if c.ctx.Err() != nil {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if !d.readyLocked(c, time.Now()) {
 				return
 			}
 			select {
@@ -598,10 +623,11 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 					return ErrNotAuthorized
 				}
 				d.mu.Lock()
-				ready := c.ready && c.ctx.Err() == nil
+				now := time.Now()
+				ready := d.readyLocked(c, now)
 				if ready {
 					if callspeech.HasSignal(e.PCM) {
-						c.lastSpeech = time.Now()
+						c.lastSpeech = now
 					}
 					c.metrics.InputFrames++
 				}
@@ -701,7 +727,7 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 				return err
 			}
 		case turn := <-c.turns:
-			if err = c.ctx.Err(); err != nil {
+			if err = d.checkReady(c); err != nil {
 				return err
 			}
 			if !slices.Contains(c.speakers, turn.Speaker) || turn.ID == "" {
@@ -730,7 +756,7 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 				return err
 			}
 		case p := <-c.publications:
-			if err = c.ctx.Err(); err != nil {
+			if err = d.checkReady(c); err != nil {
 				return err
 			}
 			o, err := d.t.callPublicationOrigin(b, p)
@@ -741,7 +767,7 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 				fail("participant no longer has access to the linked discussion")
 				return err
 			}
-			if err = c.ctx.Err(); err != nil {
+			if err = d.checkReady(c); err != nil {
 				return err
 			}
 			if len(seen) >= 1024 {

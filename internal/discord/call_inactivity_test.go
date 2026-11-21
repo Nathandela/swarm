@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/voice/callspeech"
 )
 
 func TestSilentMediaPreservesCallInactivity(t *testing.T) {
@@ -20,7 +22,7 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 					t.Error("a command during an active call queued a replacement")
 				}
 			}
-			inactiveSince := time.Now().Add(-3 * time.Minute)
+			inactiveSince := time.Now().Add(-time.Minute)
 			f.calls.mu.Lock()
 			f.calls.active.lastSpeech = inactiveSince
 			f.calls.mu.Unlock()
@@ -30,7 +32,7 @@ func TestSilentMediaPreservesCallInactivity(t *testing.T) {
 			lastSpeech := f.calls.active.lastSpeech
 			f.calls.mu.Unlock()
 			if !lastSpeech.Equal(inactiveSince) {
-				t.Errorf("silent frame reset AFK age from 180s to %s", time.Since(lastSpeech))
+				t.Errorf("silent frame reset AFK age from 60s to %s", time.Since(lastSpeech))
 			}
 			f.audio(2)
 			callFixtureReceive(t, f.ctx, f.native.accepted, "speech after silence")
@@ -113,5 +115,47 @@ func TestFreshTeamJoinSurvivesRetiringIdleGeneration(t *testing.T) {
 	second := callFixtureReceive(t, f.ctx, f.native.accepted, "fresh generation accepted one turn")
 	if second.Voice.Generation != first.Voice.Generation+1 {
 		t.Fatalf("new generation %d after %d", second.Voice.Generation, first.Voice.Generation)
+	}
+}
+
+func TestExpiredCallRejectsWorkBeforeIdleTimerRuns(t *testing.T) {
+	for _, operation := range []string{"audio", "turn", "play", "admission"} {
+		t.Run(operation, func(t *testing.T) {
+			f := newDispatcherCallFixture(t, false)
+			speech, first := f.begin()
+			expired := time.Now().Add(-callIdleTimeout - time.Second)
+			f.calls.mu.Lock()
+			c := f.calls.active
+			c.lastSpeech = expired
+			frames := c.metrics.InputFrames
+			f.calls.mu.Unlock()
+			switch operation {
+			case "audio":
+				f.audio(3)
+			case "turn":
+				speech.cfg.Turn(f.ctx, callspeech.Turn{ID: "late", Speaker: "70", Text: "late turn"})
+			case "play":
+				if err := speech.cfg.Play(f.ctx, make([]byte, callMediaPCMBytes)); !errors.Is(err, ErrNotAuthorized) {
+					t.Fatalf("late playback returned %v", err)
+				}
+			case "admission":
+				if err := f.calls.verify(f.ctx, first.Discussion, first.Voice, true); !errors.Is(err, ErrNotAuthorized) {
+					t.Fatalf("late admission check returned %v", err)
+				}
+			}
+			select {
+			case <-speech.ctx.Done():
+			case <-f.native.accepted:
+				t.Fatal("work crossed the effective idle deadline")
+			case <-f.ctx.Done():
+				t.Fatal("expired generation retained media authority")
+			}
+			f.expectRoom("")
+			f.calls.mu.Lock()
+			defer f.calls.mu.Unlock()
+			if c.metrics.InputFrames != frames || !c.lastSpeech.Equal(expired) {
+				t.Fatal("an expired call consumed audio or extended its activity")
+			}
+		})
 	}
 }
