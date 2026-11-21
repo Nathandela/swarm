@@ -125,7 +125,7 @@ func (l *Lane) run() {
 				buffered, overlap = utterance{}, false
 			}
 			if voiced {
-				l.holdPlayback(f.at.Add(quietTime), false)
+				l.holdPlayback(f.at.Add(quietTime))
 				if buffered.turn.Speaker == "" {
 					buffered.turn.Speaker = f.speaker
 				}
@@ -168,9 +168,11 @@ func (l *Lane) run() {
 						c.invalid = true
 					}
 					// A single 20 ms click can straddle two packets.
-					interrupt := !c.yielded && voicedRun >= 3
-					l.holdPlayback(f.at.Add(personalQuietTime), interrupt)
-					c.yielded = c.yielded || interrupt
+					l.holdPlayback(f.at.Add(personalQuietTime))
+					if !c.yielded && voicedRun >= 3 {
+						l.interruptPlayback(time.Now())
+						c.yielded = true
+					}
 					c.last = f.at
 					c.turn.LastVoicedAt = f.at
 					c.voicedFrames++

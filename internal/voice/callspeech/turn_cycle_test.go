@@ -261,3 +261,63 @@ func TestTeamPendingPublicationYields(t *testing.T) {
 		})
 	}
 }
+
+func TestLateTeamRecognitionPreservesNewPlayback(t *testing.T) {
+	for _, text := range []string{"Dispatcher, check the build.", "Unaddressed chatter."} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			recognizing, release := make(chan struct{}), make(chan struct{})
+			playing, canceled := make(chan struct{}), make(chan struct{})
+			admitted, stopped := make(chan struct{}, 1), make(chan struct{}, 1)
+			l := newLane(t.Context(), Config{
+				Team: true,
+				Turn: func(context.Context, Turn) { admitted <- struct{}{} },
+				Stop: func() { stopped <- struct{}{} },
+				Play: func(ctx context.Context, _ []byte) error {
+					close(playing)
+					<-ctx.Done()
+					close(canceled)
+					return ctx.Err()
+				},
+			}, provider{
+				open: func(context.Context, string, string) (liveSession, error) { return &fakeLive{}, nil },
+				transcribe: func(ctx context.Context, _ string, _ []byte, _ string) (string, error) {
+					close(recognizing)
+					select {
+					case <-release:
+						return text, nil
+					case <-ctx.Done():
+						return "", ctx.Err()
+					}
+				},
+				render: func(context.Context, string, string, string) ([]byte, error) { return playbackTestFrame(), nil },
+			})
+			t.Cleanup(func() { l.Close(); await(t, l.Done()) })
+			await(t, l.Ready())
+			pushTestSpeech(t, l, "alice")
+			l.registerTurn("earlier")
+			if err := l.PublishForTurn("earlier", "Newly available result."); err != nil {
+				t.Fatal(err)
+			}
+			await(t, recognizing)
+			select {
+			case <-playing:
+			case <-time.After(time.Second):
+				t.Fatal("stalled recognition held playback after the room went quiet")
+			}
+			close(release)
+			if addressedText(text) != "" {
+				await(t, admitted)
+			}
+			select {
+			case <-admitted:
+				t.Fatal("unexpected additional or unaddressed admission")
+			case <-stopped:
+				t.Fatal("earlier speech cleared the media bridge after a newer result started")
+			case <-canceled:
+				t.Fatal("earlier speech canceled a newer result")
+			case <-time.After(4 * framePeriod):
+			}
+		})
+	}
+}

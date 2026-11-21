@@ -108,6 +108,7 @@ type Lane struct {
 	scopes        map[string]turnScope
 	epoch         uint64
 	playCancel    context.CancelFunc
+	playStarted   time.Time
 	stopping      chan struct{}
 	speakingUntil time.Time
 }
@@ -290,7 +291,7 @@ func (l *Lane) admit() {
 				if !l.registerTurn(u.turn.ID) {
 					return
 				}
-				l.holdPlayback(time.Time{}, true)
+				l.interruptPlayback(u.turn.LastVoicedAt)
 				select {
 				case l.addressed <- u:
 				case <-l.ctx.Done():
@@ -315,13 +316,18 @@ func (l *Lane) enqueue(u utterance) {
 	}
 }
 
-// All room speech postpones new audio. Only an interruption clears active playback.
-func (l *Lane) holdPlayback(until time.Time, interrupt bool) {
+func (l *Lane) holdPlayback(until time.Time) {
 	l.mu.Lock()
 	if until.After(l.speakingUntil) {
 		l.speakingUntil = until
 	}
-	if !interrupt {
+	l.mu.Unlock()
+}
+
+// Recognition can finish after the floor reopens and a new readout starts.
+func (l *Lane) interruptPlayback(lastVoiced time.Time) {
+	l.mu.Lock()
+	if l.playStarted.After(lastVoiced) {
 		l.mu.Unlock()
 		return
 	}
@@ -420,6 +426,7 @@ func (l *Lane) beginPlayback(p publication, cancel context.CancelFunc) bool {
 		}
 		if stopping == nil && wait <= 0 {
 			l.playCancel = cancel
+			l.playStarted = time.Now()
 			l.mu.Unlock()
 			return true
 		}
