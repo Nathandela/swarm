@@ -125,7 +125,6 @@ func (l *Lane) run() {
 				buffered, overlap = utterance{}, false
 			}
 			if voiced {
-				l.holdPlayback(f.at.Add(quietTime))
 				if buffered.turn.Speaker == "" {
 					buffered.turn.Speaker = f.speaker
 				}

@@ -153,6 +153,10 @@ func (l *Lane) Push(speaker string, pcm []byte) error {
 	}
 	next := frame{speaker: speaker, at: time.Now()}
 	copy(next.pcm[:], pcm)
+	// Claim the shared floor before a slow provider write can delay the ingress reader.
+	if l.cfg.Team && HasSignal(next.pcm[:]) {
+		l.holdPlayback(next.at.Add(quietTime))
+	}
 	select {
 	case l.ingress <- next:
 		return nil
