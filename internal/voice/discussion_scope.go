@@ -85,6 +85,7 @@ func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text
 		if err != nil {
 			return err
 		}
+		a.WaitingOnInput, _ = activeManagerInterruptTarget(*st, c.binding)
 		a.Origin = &origin
 		a.InputText = text
 		a.HumanReply = answer

@@ -152,8 +152,8 @@ func TestTeammateStartupBlockPostsOneNoticeWhileProvisional(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				t.Error(err)
 			}
-			if !strings.Contains(p.Content, "swarm discord status") || !strings.Contains(p.Content, "queued") {
-				t.Fatal("missing owner action or queue status")
+			if !strings.Contains(p.Content, "saved your message") || !strings.Contains(p.Content, "don’t need to resend or tag me") {
+				t.Fatal("missing queue and follow-up guidance")
 			}
 			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "303", ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})
 		default:
@@ -424,5 +424,52 @@ func TestIdleSyncRetainsDiagnosticForBlockedHumanMessage(t *testing.T) {
 	b, err := c.service.Store.teammateBindingByID("install", d.ID)
 	if err != nil || b.Error != failure {
 		t.Fatalf("pending input diagnostic %q, %v", b.Error, err)
+	}
+}
+
+func TestTeammateStagesSecondHumanPingWhileFirstAwaitsCutover(t *testing.T) {
+	message := func(id string) *discordgo.Message {
+		text := "hello"
+		if id == "202" {
+			text = "<@99> hello"
+		}
+		return teammateTestMessage(id, "201", "77", text, id == "202")
+	}
+	c, m := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages/202", "/channels/201/messages/203", "/channels/201/messages/204":
+			id := strings.TrimPrefix(r.URL.Path, "/channels/201/messages/")
+			json.NewEncoder(w).Encode(message(id))
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	post := func(seq int64, id string) {
+		teammateTestEvent(t, c, seq, "MESSAGE_CREATE", message(id))
+	}
+	tick := func() {
+		var tasks sync.WaitGroup
+		if err := c.schedule(t.Context(), 1, map[string]bool{}, map[string]bool{}, nil, map[string]time.Time{"201": time.Now().Add(time.Hour)}, make(chan teammateTaskResult, 1), &tasks); err != nil {
+			t.Fatal(err)
+		}
+		tasks.Wait()
+	}
+	post(1, "202")
+	tick()
+	m.phase = TeammateAdmissionAccepted
+	post(2, "203")
+	post(3, "204")
+	post(4, "204")
+	for range 4 {
+		tick()
+	}
+	if len(m.admitted) != 3 || m.admitted[1].Route.MessageID != "203" || m.admitted[2].Route.MessageID != "204" {
+		t.Fatalf("expected one admission per original message, in order: %+v", m.admitted)
 	}
 }

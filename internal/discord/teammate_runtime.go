@@ -596,6 +596,14 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 		if predecessors[id] || isPersonalDiscussion(t.service.Config, bound[id].TeammateDiscussion) && personalRepairPending(bound[id], checkpoint.GapEpoch) {
 			continue
 		}
+		// Once a discussion is open, accepted inputs already have FIFO slots in
+		// the manager ledger. A later message can join while the first waits.
+		if c.State == teammateStateAccepted && bound[id].Opened {
+			if _, exists := accepted[id]; !exists {
+				accepted[id] = c
+			}
+			continue
+		}
 		predecessors[id] = true
 		if c.Opening {
 			predecessors[c.Route.MessageID] = true
@@ -681,12 +689,12 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 				return err
 			}
 			// A successful idle sync can interleave with retries of a blocked human message.
-			if b.Error != "" && !predecessors[b.Route.ChannelID] {
+			if b.Error != "" && !hasAccepted && !predecessors[b.Route.ChannelID] {
 				if err := store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) { current.Error = "" }); err != nil {
 					return err
 				}
 			}
-			if !predecessors[b.Route.ChannelID] {
+			if !hasAccepted && !predecessors[b.Route.ChannelID] {
 				if native, ok := t.manager.(interface {
 					Dormant(TeammateDiscussion) (bool, error)
 				}); ok {

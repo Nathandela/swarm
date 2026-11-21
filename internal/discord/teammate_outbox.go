@@ -217,7 +217,7 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	}
 	id := teammateStartupNoticeID(d, gen)
 	if prepare {
-		p := TeammatePublication{ID: id, Body: "Request queued. Check the supervisor and dispatcher login with `swarm discord status`.",
+		p := TeammatePublication{ID: id, Body: "I’ve saved your message. I’ll reply here when the dispatcher picks it up. You don’t need to resend or tag me.",
 			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
 		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
 			return err

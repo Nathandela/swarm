@@ -83,6 +83,8 @@ type ReusedFinalReceipt struct {
 }
 
 type Admission struct {
+	WaitingOnInput       string                  `json:"waiting_on_input,omitempty"`
+	WaitingNotice        bool                    `json:"waiting_notice,omitempty"`
 	ReusedFinal          *ReusedFinalReceipt     `json:"reused_final,omitempty"`
 	RecoveryOutput       *DiscussionOutputSource `json:"recovery_output,omitempty"`
 	WorkerAttempts       string                  `json:"worker_attempts,omitempty"`
