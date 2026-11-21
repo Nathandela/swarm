@@ -75,3 +75,26 @@ The final hosted pair used binary revision 59f4e084. Its production code is iden
 | Shared thread | 34 s | 18 s | 1 / 1 | 133.89 s |
 
 Each final roster contained one child and one active dispatcher. The full Gateway and Discord POST path, real human author and independent Discord message IDs remain live acceptance criteria. Five race-detected repetitions of degraded connector, handoff and supervisor cases passed in 40.965, 22.650 and 23.825 seconds per package, respectively.
+
+## Repository gates on the integrated candidate
+
+The frozen production code at `6d2b6fac` passed `go build ./...`, `go vet ./...` and golangci-lint on macOS. Lint reported zero issues with a fresh analyzer cache. Both full test lanes remained red when the audit ended on November 21, 2026 at 10:03 UTC. The host ran Go 1.26.5 darwin/amd64 on Apple silicon with umask 022, two packages at a time and a 35-minute per-package timeout.
+
+| Original macOS run | Passed | No test files | Failed | No result before stop | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Normal | 92 | 5 | 3 | 4 | 104 |
+| Race | 75 | 5 | 5 | 19 | 104 |
+
+The normal run reported failures in `deploy/gcp`, `internal/skeleton` and `mobile`. The race run reported failures in `internal/persist`, `internal/shim`, `internal/skeleton`, `internal/testbin` and `internal/transcript`. Separate same-architecture retries passed the full GCP normal package in 0.585 s and the full persist race package in 5.186 s. Those retries are excluded from the original counts.
+
+Several subprocesses consumed no measurable CPU for minutes before entering Go. Stack samples showed a single startup thread in Rosetta, and a separate native arm64 Go version probe stopped in dyld before main. The skeleton supervisors were stopped after helper processes accumulated. At audit close both gate process groups and their tracked test scratch roots contained zero running processes.
+
+| Affected package | macOS normal | macOS race | Office Linux race |
+| --- | --- | --- | --- |
+| `cmd/swarm` | Passed, 219.245 s | Passed, 179.833 s | — |
+| `internal/discord` | Passed, 58.137 s | Passed, 72.298 s | — |
+| `internal/teammatemanager` | Passed, 1.504 s | Passed, 3.925 s | Passed, 1.039 s |
+| `internal/voice` | Passed, 89.706 s | No result before stop | Passed, 41.841 s |
+| `internal/skeleton` | Failed | Failed | Stopped at disk reserve before test execution |
+
+Office fetched the public commit archive directly from GitHub and ran Go 1.26.9 linux/amd64 in a private memory-backed checkout. Its first complete shim race run failed one test in 211.924 s. The SSH environment had umask 0002, which permitted group writes on the temporary spool parent. The exact dead-producer identity test passed in 2.429 s with umask 022. That single-test rerun leaves the complete shim race gate open. The disk guard stopped the later skeleton build when the shared-cache volume reached 1,011 MiB free, before the planned mobile retry. The Office rehearsal left no process in its scratch directory and the directory was removed.
