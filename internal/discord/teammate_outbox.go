@@ -120,6 +120,9 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 	if hold.EffectUncertain {
 		id = teammateInputNoticeID(d, hold.AdmissionID+":effect")
 		body = "Earlier message outcome unknown. Later messages are queued. Check `" + d.ID + "` in `swarm discord status` before taking action. Don’t resend."
+		if hold.DirectInput {
+			body = "Your request reached the dispatcher. Terminal input is holding its reply. Open dispatcher `" + d.ID + "` in Swarm, save any draft, and check the outcome before resuming. Don’t resend."
+		}
 	}
 	store := t.service.Store
 	p := TeammatePublication{ID: id, AdmissionID: hold.AdmissionID, Body: body, SystemCause: teammateInputNotice}
