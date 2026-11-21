@@ -208,7 +208,7 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 			return nil, err
 		}
 		if c.discussion != nil {
-			return c.readDiscussionWorker(input, admission)
+			return c.readDiscussionWorker(ctx, input, admission)
 		}
 		return c.readWorker(input)
 

@@ -114,7 +114,7 @@ func discussionEvidenceID(worker WorkerAssociation) string {
 	})
 }
 
-func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) (json.RawMessage, error) {
+func (c *Controller) readDiscussionWorker(ctx context.Context, input ReadInput, admission Admission) (json.RawMessage, error) {
 	if input.Cursor != "" || input.Source != "" && input.Source != "native" {
 		return nil, ErrControllerNativeUnavailable
 	}
@@ -137,6 +137,9 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 	attempt := st.Actions[key(c.binding.ConversationID, worker.AttemptID)]
 	if attempt.State != "settled" || json.Unmarshal(attempt.Request, &original) != nil || original.Project != worker.Project {
 		return nil, ErrStale
+	}
+	if err := c.verifyStoredWorkerAttempt(ctx, st, worker); err != nil {
+		return nil, err
 	}
 	turn := input.NativeTurnID
 	if wakeID, fromWake := strings.CutPrefix(admission.SourceID, "wake:"); fromWake && turn == "" {
@@ -177,7 +180,7 @@ func (c *Controller) readDiscussionWorker(input ReadInput, admission Admission) 
 		if _, err = c.workerTarget(input.SessionInput, false); err != nil {
 			return nil, err
 		}
-		proof, err = c.discussionWorkerEvidence(context.Background(), worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
+		proof, err = c.discussionWorkerEvidence(ctx, worker, st.Actions[key(c.binding.ConversationID, worker.ActionID)])
 		if err != nil {
 			return nil, err
 		}
@@ -258,9 +261,16 @@ func (c *Controller) readDiscussionWorkerNote(ctx context.Context, input Session
 		source.Session != input.Session || source.Instance != input.SessionInstance {
 		return nil, ErrStale
 	}
-	if !c.discussion.VMProjectAccess {
-		worker := st.Workers[key(c.binding.ConversationID, key(source.Session, source.Instance))]
-		if err := c.verifyStoredWorkerNote(ctx, st, event, source); err != nil {
+	worker := st.Workers[key(c.binding.ConversationID, key(source.Session, source.Instance))]
+	if worker.Session != source.Session || worker.SessionInstance != source.Instance || worker.JobID != event.JobID || worker.AttemptID != event.AttemptID {
+		return nil, ErrStale
+	}
+	if worker.VMChild && worker.Mailbox {
+		if !c.discussion.VMProjectAccess {
+			return nil, ErrExpired
+		}
+	} else {
+		if err := c.verifyStoredWorkerEvent(ctx, st, event, source); err != nil {
 			return nil, err
 		}
 		current, err := c.store.readView()

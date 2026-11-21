@@ -55,7 +55,8 @@ func (w *discussionEvidenceWorker) NativeHistoryPage(req schema.InteractionHisto
 
 func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testing.T) {
 	c, s, _, binding := newControllerFixture(t)
-	c.discussion = &DiscussionScope{}
+	origin := discussionFixtureOrigin("request")
+	c.discussion = &DiscussionScope{InstallationID: origin.InstallationID, GuildID: origin.GuildID, ThreadID: origin.ChannelID, VerifyGrant: func(context.Context, schema.MessageOrigin) error { return nil }, VerifyAudience: func(context.Context) error { return nil }}
 	workers := &discussionEvidenceWorker{}
 	c.workers = workers
 	project, err := filepath.EvalSymlinks(t.TempDir())
@@ -64,7 +65,7 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 	}
 	worker := WorkerAssociation{Project: project, ConversationID: binding.ConversationID, Session: "machine/created", SessionInstance: "created-instance", JobID: "job", AttemptID: "action", ActionID: "action"}
 	created, _ := json.Marshal(createdWorkerResult{State: "created", Session: worker.Session, SessionInstance: worker.SessionInstance})
-	intent, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Project: project, Origin: &schema.MessageOrigin{}, Launch: &protocol.LaunchReq{InitialPrompt: "authorized prompt", SpawnedFrom: "previous-manager"}})
+	intent, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Project: project, Origin: &origin, Launch: &protocol.LaunchReq{Cwd: project, InitialPrompt: "authorized prompt", SpawnedFrom: "previous-manager"}})
 	action := Action{ID: worker.ActionID, State: "settled", Request: intent, Receipt: created}
 	workerKey := key(binding.ConversationID, key(worker.Session, worker.SessionInstance))
 	if err := s.update(func(st *State) error {
@@ -113,6 +114,12 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 	if err != nil || workers.nativeReads != 1 || !strings.Contains(string(read), "verified result") || strings.Contains(string(read), "private answer") {
 		t.Fatalf("retained proof read: %s, %d, %v", read, workers.nativeReads, err)
 	}
+	allowed := c.discussion.VerifyGrant
+	c.discussion.VerifyGrant = func(context.Context, schema.MessageOrigin) error { return ErrDiscussionSourceChanged }
+	if denied, err := c.readWorker(ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}); !errors.Is(err, ErrDiscussionSourceChanged) || len(denied) > 0 {
+		t.Fatalf("cached proof after withdrawal: %s, %v", denied, err)
+	}
+	c.discussion.VerifyGrant = allowed
 	if _, err := c.readWorker(ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}, JobID: "different-job"}); !errors.Is(err, ErrStale) {
 		t.Fatalf("wrong job could read the worker: %v", err)
 	}
@@ -154,7 +161,7 @@ func TestDiscussionWorkerProofWakesOnceWithoutAttributingPrivateJournal(t *testi
 		t.Fatal(err)
 	}
 	input := ReadInput{SessionInput: SessionInput{worker.Session, worker.SessionInstance}}
-	read, err = c.readDiscussionWorker(input, Admission{SourceID: "wake:" + event.WakeID})
+	read, err = c.readDiscussionWorker(context.Background(), input, Admission{SourceID: "wake:" + event.WakeID})
 	if err != nil || !strings.Contains(string(read), "verified result") || strings.Contains(string(read), "newer result") {
 		t.Fatalf("earlier wake read the newer turn: %s, %v", read, err)
 	}
