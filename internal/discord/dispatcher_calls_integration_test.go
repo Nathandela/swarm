@@ -557,10 +557,15 @@ func (f *dispatcherCallFixture) requestJoin() TeammateAdmission {
 		f.expectConsent("70", "71")
 		f.expectControlWatermark("104")
 	}
+	f.completeJoinHandshake()
+	return text
+}
+
+func (f *dispatcherCallFixture) completeJoinHandshake() {
+	f.t.Helper()
 	f.expectRoom("20")
 	f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", "20"))))
 	f.send("VOICE_SERVER_UPDATE", json.RawMessage(`{"guild_id":"10","token":"fixture-voice","endpoint":"example.invalid"}`))
-	return text
 }
 
 func (f *dispatcherCallFixture) begin() (*callFixtureSpeech, TeammateAdmission) {

@@ -118,7 +118,7 @@ func (l *Lane) run() {
 				l.fail(ErrBacklog)
 				return
 			}
-			voiced := hasSignal(f.pcm[:])
+			voiced := HasSignal(f.pcm[:])
 			if gap := f.at.Sub(lastVoiced); buffered.turn.Speaker != "" && gap >= quietTime {
 				l.finishTeam(buffered, overlap)
 				buffered, overlap = utterance{}, false
@@ -152,7 +152,7 @@ func (l *Lane) run() {
 					}
 				default:
 				}
-				voiced := f.speaker != "" && hasSignal(f.pcm[:])
+				voiced := f.speaker != "" && HasSignal(f.pcm[:])
 				if voiced {
 					l.voiced(f.at, tr.current == nil)
 					if tr.current == nil {
@@ -370,15 +370,19 @@ func addressedText(text string) string {
 	return strings.TrimLeftFunc(tail, delim)
 }
 
-func hasSignal(pcm []byte) bool {
+// HasSignal reports whether a PCM16LE frame meets the call speech activity threshold.
+func HasSignal(pcm []byte) bool {
 	count := 0
-	for i := 0; i < len(pcm); i += 2 {
+	for i := 0; i+1 < len(pcm); i += 2 {
 		s := int16(binary.LittleEndian.Uint16(pcm[i:]))
 		if s > 420 || s < -420 {
 			count++
+			if count >= 24 {
+				return true
+			}
 		}
 	}
-	return count >= 24
+	return false
 }
 
 func localCue() []byte {

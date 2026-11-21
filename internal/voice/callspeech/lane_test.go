@@ -21,7 +21,7 @@ type fakeLive struct {
 
 func (s *fakeLive) SendAudio(_ context.Context, pcm []byte) error {
 	offset := s.writes.Add(20) - 20
-	if hasSignal(pcm) && s.signal != nil {
+	if HasSignal(pcm) && s.signal != nil {
 		s.signal <- offset
 	}
 	return nil
@@ -354,7 +354,7 @@ func TestPersonalFinalTranscriptionOverridesPartialLiveCaption(t *testing.T) {
 		provider{
 			open: func(context.Context, string, string) (liveSession, error) { return live, nil },
 			transcribe: func(_ context.Context, _ string, pcm []byte, _ string) (string, error) {
-				if len(pcm) < 8*frameBytes || !hasSignal(pcm) {
+				if len(pcm) < 8*frameBytes || !HasSignal(pcm) {
 					return "", errors.New("isolated utterance audio missing")
 				}
 				return "Check the service, do not restart it.", nil

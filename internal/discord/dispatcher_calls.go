@@ -16,6 +16,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+const callIdleTimeout = 2 * time.Minute
+
 // Gateway callbacks only change in-memory authority and enqueue bounded work.
 type dispatcherCalls struct {
 	lastMetrics  dispatcherCallMetrics
@@ -56,6 +58,7 @@ type dispatcherCall struct {
 	bound        TeammateDiscussion
 	ready        bool
 	lastSpeech   time.Time
+	idleTimer    *time.Timer
 	joinAt       int64
 	occupancyAt  int64
 	daveChanged  bool
@@ -323,10 +326,25 @@ func (d *dispatcherCalls) run() {
 		c.occupancyAt, c.retriedDAVE = d.roster.occupancyAt, retry != nil
 		retry = nil
 		d.active = c
+		// A blocked native admission cannot keep media authorized past the idle deadline.
+		c.idleTimer = time.AfterFunc(callIdleTimeout, func() {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if c.ctx.Err() != nil {
+				return
+			}
+			if remaining := time.Until(c.lastSpeech.Add(callIdleTimeout)); remaining > 0 {
+				c.idleTimer.Reset(remaining)
+				return
+			}
+			c.failure = "call ended after two minutes without speech"
+			c.cancel()
+		})
 		d.mu.Unlock()
 		err := d.serve(c, mediaCtx, revoke)
 		cancel()
 		d.mu.Lock()
+		c.idleTimer.Stop()
 		// Wait for the bot's leave dispatch before a replacement helper can join.
 		left := d.roster.selfLeftAt > c.joinAt
 		bound, _ := c.ctx.Value(callGatewaySessionKey{}).(*callGatewaySession)
@@ -528,7 +546,9 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 				d.mu.Lock()
 				ready := c.ready && c.ctx.Err() == nil
 				if ready {
-					c.lastSpeech = time.Now()
+					if callspeech.HasSignal(e.PCM) {
+						c.lastSpeech = time.Now()
+					}
 					c.metrics.InputFrames++
 				}
 				d.mu.Unlock()
@@ -603,9 +623,8 @@ func (d *dispatcherCalls) serve(c *dispatcherCall, mediaCtx context.Context, rev
 		case <-monitor.C:
 			d.mu.Lock()
 			ids, ok := d.permittedLocked()
-			idle := time.Since(c.lastSpeech)
 			d.mu.Unlock()
-			if !ok || !slices.Equal(ids, c.speakers) || idle > 2*time.Minute {
+			if !ok || !slices.Equal(ids, c.speakers) {
 				return ErrNotAuthorized
 			}
 			if err = d.checkAudience(c.ctx, b, c.speakers); err != nil {
