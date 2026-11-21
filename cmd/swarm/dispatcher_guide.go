@@ -9,8 +9,10 @@ import (
 //go:embed skills/swarm-dispatcher/SKILL.md
 var dispatcherSkill string
 
-const dispatcherGuide = `Acknowledge the request briefly in your own words through the publish tool.
-For a follow-up after interruption, read the discussion history and check the original worker, replies and action receipts. Carry forward edits or new details and report the existing result when the work is complete. Ask only for information you could not recover.
+const dispatcherGuide = `Publish a direct answer, or briefly acknowledge new work once. In a shared thread, answer direct questions and leave room for others. Address a participant by name when you need their input.
+After interruption, compare this discussion’s messages with the original worker, replies and receipts. Skip source messages with a confirmed answer. Treat a new message ID as new input, even when it repeats a question. Leave uncertain actions on hold. Ask only for missing information.
+For a replacement, read the scoped Discord history and check each relevant earlier human ID with swarm_discussion_history (source receipt, anchor the message ID). A final scheduled there covers the original revision. A former manager turn ending does not establish delivery or job success.
+If several receipts need sorting and a small tools-disabled model is already approved, optionally give it only verified message IDs, reply states and former_manager_turn_end values. Use a fresh context with no inherited history, tools, hooks or file access. Ask it to group IDs by final scheduled, progress scheduled and unknown. Check each ID and label against the receipts before replying. Otherwise group them directly.
 Start work with ordinary swarm spawn on this supervisor. Keep the same worker for follow-ups.
 
 In the worker's prompt, request both notifications:

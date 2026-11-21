@@ -1,11 +1,13 @@
 package voice
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 // The connector supplies fresh, attributed thread history. Only add receipt references
@@ -59,10 +61,15 @@ func discussionHandoff(st State, current Admission, input, provider, nonce strin
 	if len(workers) > 0 {
 		workerText = "\nRetained worker sessions: " + string(workerJSON)
 	}
-	const guidance = "Manager handoff for this Discord discussion. Read earlier requests, replies, and edits with swarm_discussion_history. Inspect existing workers, their evidence, and action receipts. A settled action alone does not prove successful work. Never repeat an uncertain action. Resume outstanding work. Treat a restatement as a follow-up, carrying forward any new instruction. If history is incomplete, ask only for the missing detail."
-	// Keep standing instructions, the recovery-only prefix and the full human input
-	// byte-for-byte. Optional handoff information uses the remaining wire budget.
-	for _, suffix := range []string{workerText + "\nRecent action references: " + string(refs), workerText, ""} {
+	replies := priorDiscussionReplies(st, current, "")
+	var replyText string
+	if len(replies) != 0 {
+		raw, _ := json.Marshal(replies)
+		replyText = "\nPrior human messages: " + string(raw)
+	}
+	const guidance = "Manager handoff. Handle the current instruction. Read current Discord evidence with swarm_discussion_history. Use source receipt and a human message ID as anchor to verify its original revision. A scheduled final covers the original revision only. Address new requests and edits once. Never replay uncertain actions. A manager turn ending or reply being queued does not prove worker success or delivery. Inspect retained worker and action receipts for outstanding work."
+	// Preserve the full current input. Prefer human reply dispositions when space is short.
+	for _, suffix := range []string{replyText + workerText + "\nRecent action references: " + string(refs), replyText + workerText, replyText, ""} {
 		text := input + "\n\n" + guidance + suffix
 		if len(text) > protocol.MaxSendInputText {
 			continue
@@ -75,4 +82,93 @@ func discussionHandoff(st State, current Admission, input, provider, nonce strin
 		return text
 	}
 	return input
+}
+
+type discussionReplyRef struct {
+	Message       string `json:"message"`
+	Reply         string `json:"reply"`
+	NativeTurnEnd string `json:"former_manager_turn_end,omitempty"`
+	seq           uint64
+	origin        *schema.MessageOrigin
+}
+
+func priorDiscussionReplies(st State, current Admission, anchor string) []discussionReplyRef {
+	// Same-discussion publications establish intent. Delivery receipts belong to the connector.
+	finals := map[string]bool{}
+	for _, p := range st.Publications {
+		id := p.DiscussionSource.AdmissionID
+		if p.ConversationID == current.ConversationID && id != "" && p.DiscussionSource.SystemCause == "" {
+			finals[id] = finals[id] || p.Final
+		}
+	}
+	var replies []discussionReplyRef
+	for _, a := range st.Admissions {
+		if a.ConversationID != current.ConversationID || a.Sequence >= current.Sequence || a.Project != current.Project || a.Origin == nil || a.Origin.MessageID == "" || (anchor != "" && a.Origin.MessageID != anchor) {
+			continue
+		}
+		reply := "outcome unknown"
+		if final, ok := finals[a.Origin.RequestID]; ok {
+			reply = "progress scheduled"
+			if final {
+				reply = "final scheduled"
+			}
+		}
+		replies = append(replies, discussionReplyRef{Message: a.Origin.MessageID, Reply: reply, seq: a.Sequence, origin: a.Origin})
+	}
+	sort.Slice(replies, func(i, j int) bool { return replies[i].seq > replies[j].seq })
+	if len(replies) > 8 {
+		replies = replies[:8]
+	}
+	return replies
+}
+
+// Read one original human revision through the connector's live discussion and grant checks.
+func (c *Controller) discussionReplyReceipt(ctx context.Context, st State, current Admission, anchor string) (json.RawMessage, error) {
+	if c.discussion.VerifyGrant == nil || c.discussion.VerifyAudience == nil {
+		return nil, ErrControllerUnsupported
+	}
+	if err := c.discussion.VerifyAudience(ctx); err != nil {
+		return nil, err
+	}
+	refs := priorDiscussionReplies(st, current, anchor)
+	if len(refs) == 0 {
+		return nil, ErrNotFound
+	}
+	ref := refs[0]
+	if !c.discussion.validateOrigin(*ref.origin) {
+		return nil, ErrExpired
+	}
+	if err := c.discussion.VerifyGrant(ctx, *ref.origin); err != nil {
+		return nil, err
+	}
+	ref.NativeTurnEnd = c.formerDiscussionTurnEnd(ctx, st.Admissions[admissionKey(current.ConversationID, ref.seq)])
+	return controllerResult(ref)
+}
+
+// Only query the original authenticated native ledger. Terminal prose and drafts stay private.
+func (c *Controller) formerDiscussionTurnEnd(ctx context.Context, a Admission) string {
+	reader, ok := c.runtime.(interface {
+		ManagerInputStatus(context.Context, protocol.ManagerRuntimeBinding, string) (protocol.ManagerNativeTurn, error)
+	})
+	if !ok || a.Origin == nil || a.NativeInputID == "" {
+		return ""
+	}
+	var req protocol.ComposerSendReq
+	if json.Unmarshal(a.Request, &req) != nil || req.ManagerAdmission == nil || req.ManagerAdmission.Validate() != nil || req.Origin == nil || *req.Origin != *a.Origin {
+		return ""
+	}
+	old := req.ManagerAdmission.Binding
+	if old.ConversationID != c.binding.ConversationID || old.Session != req.Session || old.SessionInstance != req.SessionInstance || old.Session == c.binding.SessionID || old.NativeSessionID == c.binding.NativeSessionID || req.ManagerAdmission.Nonce != a.NativeInputID {
+		return ""
+	}
+	turn, err := reader.ManagerInputStatus(ctx, old, a.NativeInputID)
+	if err != nil || turn.NativeInputID != a.NativeInputID || turn.State != "completed" || turn.NativeTurnID == "" || a.NativeTurnID != "" && a.NativeTurnID != turn.NativeTurnID || turn.ExternallySteered {
+		return ""
+	}
+	switch turn.Reason {
+	case "answer", "aborted", "error", "refusal":
+		return turn.Reason
+	default:
+		return ""
+	}
 }

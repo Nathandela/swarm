@@ -110,16 +110,16 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 		return nil
 	}
 	id := teammateInputNoticeID(d, hold.AdmissionID)
-	body := "Swarm delivery paused. Your messages are kept in order. No need to resend. Swarm cannot confirm the dispatcher is ready for the next message. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status`."
+	body := "Dispatcher readiness unknown. Messages queued. Check dispatcher `" + d.ID + "` with `swarm discord status`."
 	if hold.DirectInput {
-		body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in Swarm. Finish any unfinished input, or save the draft and exit that manager normally. If you already submitted a terminal turn, inspect its outcome before using `swarm discord resume-manual` with the coordinates from `swarm discord status`."
+		body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm. Finish your input, or save the draft and exit normally. Already submitted? Check its outcome, then use `swarm discord status` for the `resume-manual` coordinates."
 		if hold.CustodyLost {
-			body = "Swarm delivery paused. Your messages are kept in order. No need to resend. Open the dispatcher for `" + d.ID + "` in the Swarm dashboard, save any unfinished input, and exit the manager normally. Swarm will replace it after confirming the old process stopped."
+			body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm, save any draft and exit normally. Swarm will verify the exit before replacing it."
 		}
 	}
 	if hold.EffectUncertain {
 		id = teammateInputNoticeID(d, hold.AdmissionID+":effect")
-		body = "Swarm cannot confirm the outcome of an earlier message in this DM. Later messages stay queued in order. Please don’t resend. Inspect the dispatcher for `" + d.ID + "` in `swarm discord status` to reconcile the original submission."
+		body = "Earlier message outcome unknown. Later messages are queued. Check `" + d.ID + "` in `swarm discord status` before taking action. Don’t resend."
 	}
 	store := t.service.Store
 	p := TeammatePublication{ID: id, AdmissionID: hold.AdmissionID, Body: body, SystemCause: teammateInputNotice}
@@ -214,7 +214,7 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	}
 	id := teammateStartupNoticeID(d, gen)
 	if prepare {
-		p := TeammatePublication{ID: id, Body: "Swarm is waiting for its configured dispatcher. Your request is queued. Check the supervisor and dispatcher login with `swarm discord status`. You do not need to resend.",
+		p := TeammatePublication{ID: id, Body: "Request queued. Check the supervisor and dispatcher login with `swarm discord status`.",
 			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
 		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
 			return err

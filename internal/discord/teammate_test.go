@@ -166,6 +166,7 @@ func TestTeammateTopLevelRecoversLostThreadCreateAndAdmitsOtherParticipant(t *te
 	var created bool
 	opener := teammateTestMessage("201", "20", "77", "<@99> thoughts?", true)
 	follow := teammateTestMessage("202", "201", "88", "Please check the build", false)
+	repeated := teammateTestMessage("206", "201", "77", follow.Content, false)
 	bridge, mgr := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels/20":
@@ -176,6 +177,8 @@ func TestTeammateTopLevelRecoversLostThreadCreateAndAdmitsOtherParticipant(t *te
 			_ = json.NewEncoder(w).Encode(opener)
 		case "/channels/201/messages/202":
 			_ = json.NewEncoder(w).Encode(follow)
+		case "/channels/201/messages/206":
+			_ = json.NewEncoder(w).Encode(repeated)
 		case "/channels/20/messages/201/threads":
 			if r.Method != "POST" || created {
 				t.Error("unexpected duplicate thread creation")
@@ -214,6 +217,24 @@ func TestTeammateTopLevelRecoversLostThreadCreateAndAdmitsOtherParticipant(t *te
 	pending, err = bridge.service.Store.teammatePending("install")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("replay created %d candidates: %v", len(pending), err)
+	}
+
+	// Other agents may speak in the thread. Their messages must never start an echo loop.
+	for i, author := range []string{"99", "98"} {
+		post := teammateTestMessage(strconv.Itoa(204+i), "201", author, "<@99> checking", true)
+		post.Author.Bot = true
+		teammateTestEvent(t, bridge, int64(5+i), "MESSAGE_CREATE", post)
+	}
+	teammateTestEvent(t, bridge, 7, "MESSAGE_CREATE", repeated)
+	pending, err = bridge.service.Store.teammatePending("install")
+	if err != nil || len(pending) != 1 || pending[0].Route.MessageID != repeated.ID {
+		t.Fatalf("expected only the new human request, got %+v: %v", pending, err)
+	}
+	if err := bridge.process(ctx, pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	if len(mgr.admitted) != 3 || mgr.admitted[2].Author.ID != repeated.Author.ID || mgr.admitted[2].Discussion.ID != mgr.admitted[0].Discussion.ID {
+		t.Fatalf("lost new speaker or discussion: %+v", mgr.admitted)
 	}
 }
 

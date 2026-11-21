@@ -191,6 +191,9 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		if err != nil {
 			return nil, err
 		}
+		if input.Source == "receipt" {
+			return c.discussionReplyReceipt(ctx, st, admission, input.Anchor)
+		}
 		return c.discussion.History(ctx, input)
 	case "swarm_list":
 		input, err := decodeControllerInput[ListInput](args)

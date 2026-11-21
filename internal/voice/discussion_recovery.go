@@ -233,7 +233,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 				return err
 			}
 			p := Publication{ID: "continuity-" + hashValue(identity(previous)), ConversationID: id, OutputSequence: sequence, DiscussionSource: DiscussionOutputSource{SystemCause: "manager_continuity_gap"},
-				Text: "Swarm started a replacement manager in this thread. The previous manager’s native history was unavailable. Queued messages and tracked jobs were preserved. Actions with uncertain outcomes remain on hold."}
+				Text: "Dispatcher replaced. Native history unavailable. Queued messages and jobs are preserved. Uncertain actions stay on hold."}
 			if parked != nil && !previous.NativeCLI && next.NativeCLI {
 				p.Text = "Swarm moved this discussion to a new manager using the VM’s normal CLI permissions. Queued messages and tracked jobs were preserved."
 			}

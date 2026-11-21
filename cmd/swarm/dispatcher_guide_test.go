@@ -13,7 +13,7 @@ func TestDispatcherGuidanceDiscovery(t *testing.T) {
 	}{
 		{[]string{"--help"}, []string{"swarm dispatcher-guide"}},
 		{[]string{"teammate", "--help"}, []string{"swarm dispatcher-guide"}},
-		{[]string{"dispatcher-guide"}, []string{"--kind needs-input", "--kind complete", "same ID", "swarm teammate reply"}},
+		{[]string{"dispatcher-guide"}, []string{"--kind needs-input", "--kind complete", "same ID", "swarm teammate reply", "confirmed answer", "new message ID", "source receipt", "tools-disabled", "Check each ID"}},
 		{[]string{"dispatcher-guide", "--skill"}, []string{"name: swarm-dispatcher", "swarm dispatcher-guide"}},
 	} {
 		var out, errout bytes.Buffer
