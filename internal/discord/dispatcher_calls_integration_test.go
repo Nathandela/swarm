@@ -173,10 +173,10 @@ type dispatcherCallFixture struct {
 
 func newDispatcherCallFixture(t *testing.T, team bool) *dispatcherCallFixture {
 	t.Helper()
-	return openDispatcherCallFixture(t, team, t.TempDir(), nil)
+	return openDispatcherCallFixture(t, team, t.TempDir(), nil, nil)
 }
 
-func openDispatcherCallFixture(t *testing.T, team bool, storeDir string, native *callFixtureNative) *dispatcherCallFixture {
+func openDispatcherCallFixture(t *testing.T, team bool, storeDir string, native *callFixtureNative, repairGate <-chan bool) *dispatcherCallFixture {
 	t.Helper()
 	if native == nil {
 		native = &callFixtureNative{admissions: make(map[string]TeammateAdmission), accepted: make(chan TeammateAdmission, 8)}
@@ -212,7 +212,20 @@ func openDispatcherCallFixture(t *testing.T, team bool, storeDir string, native 
 		cancel()
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(f.serveDiscord))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if repairGate != nil && r.URL.Query().Get("limit") == "100" && strings.HasSuffix(r.URL.Path, "/messages") {
+			select {
+			case allowed, ok := <-repairGate:
+				if ok && !allowed {
+					http.Error(w, "history unavailable", http.StatusForbidden)
+					return
+				}
+			case <-r.Context().Done():
+				return
+			}
+		}
+		f.serveDiscord(w, r)
+	}))
 	client, err := NewDiscordClient("synthetic-bot-token")
 	if err != nil {
 		cancel()

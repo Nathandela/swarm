@@ -27,6 +27,8 @@ func TestTeamConsentExpiresWhileManagerIsBlocked(t *testing.T) {
 	if deadline, ok := speech.ctx.Deadline(); !ok || !deadline.Equal(expires) {
 		t.Fatalf("wrong team media deadline: %v", deadline)
 	}
+	// An active participant cannot extend the original limiting deadline.
+	f.command("103", "30", "70", "consent", 0)
 	f.native.mu.Lock()
 	f.audio(3)
 	select {
@@ -41,6 +43,11 @@ func TestTeamConsentExpiresWhileManagerIsBlocked(t *testing.T) {
 		t.Fatalf("expired participant heard new media: %v", err)
 	}
 	f.expectRoom("")
+	f.send("VOICE_STATE_UPDATE", json.RawMessage(callRosterDelta(callRosterVoice("99", ""))))
+	f.command("104", "30", "71", "consent", 0)
+	f.expectWaiting()
+	f.command("105", "30", "70", "join", 0)
+	f.expectRoom("20")
 	select {
 	case <-f.native.accepted:
 		t.Fatal("expired voice request reached native admission")

@@ -67,14 +67,14 @@ func TestConnectorRestartRetainsDiscussionAndFencesOldGeneration(t *testing.T) {
 			var old TeammateAdmission
 			var native *callFixtureNative
 			if !t.Run("before_restart", func(t *testing.T) {
-				f := openDispatcherCallFixture(t, team, dir, nil)
+				f := openDispatcherCallFixture(t, team, dir, nil, nil)
 				native = f.native
 				_, old = f.begin()
 			}) {
 				return
 			}
 			// Reopen the same connector ledger while its native dispatcher survives.
-			f := openDispatcherCallFixture(t, team, dir, native)
+			f := openDispatcherCallFixture(t, team, dir, native, nil)
 			f.expectWaiting()
 			f.expectConsent()
 			states := []string{callRosterVoice(f.speakers[0], "20")}
@@ -104,5 +104,41 @@ func TestConnectorRestartRetainsDiscussionAndFencesOldGeneration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFailedPersonalRepairAndManualStopFencePendingRestart(t *testing.T) {
+	dir := t.TempDir()
+	var native *callFixtureNative
+	var first TeammateAdmission
+	if !t.Run("before_restart", func(t *testing.T) {
+		f := openDispatcherCallFixture(t, false, dir, nil, nil)
+		native = f.native
+		_, first = f.begin()
+	}) {
+		return
+	}
+	gate := make(chan bool)
+	f := openDispatcherCallFixture(t, false, dir, native, gate)
+	f.send("GUILD_CREATE", json.RawMessage(callRosterGuild(callRosterVoice("70", "20"))))
+	select {
+	case gate <- false:
+	case <-f.ctx.Done():
+		t.Fatal("personal repair did not request history")
+	}
+	callFixtureReceive(t, f.ctx, f.written, "durable repair failure notice")
+	if err := f.connector.checkCallSpeaker(f.ctx, first.Discussion, "70"); !errors.Is(err, errPersonalHistoryRepair) {
+		t.Fatalf("failed repair opened the audience gate: %v", err)
+	}
+	f.calls.stopCall()
+	close(gate)
+	callFixtureReceive(t, f.ctx, f.calls.historyRepaired, "later successful history repair")
+	f.expectWaiting()
+	select {
+	case <-f.gateway.writes:
+		t.Fatal("old occupancy initiated a voice join after suspension")
+	case <-native.accepted:
+		t.Fatal("restart replayed a native admission")
+	default:
 	}
 }
