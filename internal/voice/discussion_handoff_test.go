@@ -206,3 +206,88 @@ func TestOlderDiscussionReceiptRemainsAddressableBeyondHandoffWindow(t *testing.
 		t.Fatalf("recent %v old %v", recent, old)
 	}
 }
+
+func TestHandoffCorrelatesWorkerReportWithOriginalHuman(t *testing.T) {
+	origin := schema.MessageOrigin{Kind: "external", InstallationID: "i", DiscussionID: "d", ChannelID: "c", GuildID: "g", ActorID: "u", RequesterID: "u", MessageID: "101", RequestID: "request", Revision: "rev"}
+	original := Admission{ConversationID: "d", Sequence: 1, Project: "work", Origin: &origin}
+	current := Admission{ConversationID: "d", Sequence: 3, Project: "work"}
+	w := WorkerAssociation{ConversationID: "d", Session: "m/w", SessionInstance: "instance", JobID: "job", AttemptID: "attempt", ActionID: "attempt", Project: "work", Admission: 1}
+	src := DiscussionOutputSource{AdmissionID: "wake", JobID: w.JobID, AttemptID: w.AttemptID}
+	event := Event{ID: "event", WakeID: "wake", WorkerMessage: true, ConversationID: "d", JobID: w.JobID, AttemptID: w.AttemptID, Metadata: json.RawMessage(`{"session":"m/w","instance":"instance","kind":"complete"}`)}
+	grant, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Project: "work", Origin: &origin})
+	launch := Action{ID: "attempt", State: "settled", ConversationID: "d", Request: grant, Admission: 1, Receipt: json.RawMessage(`{"state":"created","session":"m/w","session_instance":"instance"}`)}
+	report := Publication{ID: "report", Admission: 2, OutputSequence: 2, ConversationID: "d", Final: true, Exported: true, DiscussionSource: src, Text: "report"}
+	ack := Publication{ID: "ack", Admission: 1, OutputSequence: 1, ConversationID: "d", Exported: true, DiscussionSource: DiscussionOutputSource{AdmissionID: "request"}, Text: "working"}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*State)
+		want   bool
+	}{
+		{"one worker", nil, true},
+		{"exact native worker turn", func(st *State) {
+			v := event
+			v.ID = discussionEvidenceID(w)
+			v.WorkerMessage = false
+			v.WorkerProof = true
+			v.NativeTurnID = "worker-turn"
+			st.Events[key("d", v.ID)] = v
+			wake := st.Wakes[key("d", "wake")]
+			wake.EventID = v.ID
+			st.Wakes[key("d", "wake")] = wake
+		}, true},
+		{"worker progress only", func(st *State) { v := report; v.Final = false; st.Publications[key("d", "report")] = v }, false},
+		{"split attempt evidence", func(st *State) {
+			p := report
+			p.DiscussionAttempts = `["attempt","other"]`
+			st.Publications[key("d", "report")] = p
+		}, false},
+		{"split project evidence", func(st *State) {
+			p := report
+			p.DiscussionProjects = `["work","elsewhere"]`
+			st.Publications[key("d", "report")] = p
+		}, false},
+		{"settled later steering", func(st *State) {
+			v := w
+			v.ActionID = "steered"
+			st.Workers[key("d", key(w.Session, w.SessionInstance))] = v
+		}, false},
+		{"pending later steering", func(st *State) {
+			st.Actions[key("d", "steer")] = Action{ConversationID: "d", State: "executing", Target: key(w.Session, w.SessionInstance)}
+		}, false},
+		{"changed human grant", func(st *State) {
+			v := origin
+			v.Revision = "changed"
+			a := original
+			a.Origin = &v
+			st.Admissions[admissionKey("d", 1)] = a
+		}, false},
+		{"shell child", func(st *State) { v := w; v.VMChild = true; st.Workers[key("d", key(w.Session, w.SessionInstance))] = v }, false},
+		{"needs input", func(st *State) {
+			v := event
+			v.Metadata = json.RawMessage(`{"session":"m/w","instance":"instance","kind":"needs-input"}`)
+			st.Events[key("d", "event")] = v
+		}, false},
+		{"different wake", func(st *State) { v := event; v.WakeID = "elsewhere"; st.Events[key("d", "event")] = v }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := State{Admissions: map[string]Admission{admissionKey("d", 1): original}, Actions: map[string]Action{key("d", "attempt"): launch}, Workers: map[string]WorkerAssociation{key("d", key(w.Session, w.SessionInstance)): w}, Wakes: map[string]Wake{key("d", "wake"): {ID: "wake", ConversationID: "d", EventID: "event", Admission: 2}}, Events: map[string]Event{key("d", "event"): event}, Publications: map[string]Publication{key("d", "report"): report, key("d", "ack"): ack}}
+			if tc.mutate != nil {
+				tc.mutate(&st)
+			}
+			c := Controller{discussion: &DiscussionScope{DiscussionID: "d", InstallationID: "i", GuildID: "g", ThreadID: "c", VerifyAudience: func(context.Context) error { return nil }, VerifyGrant: func(context.Context, schema.MessageOrigin) error { return nil }, ConfirmedDelivery: func(_ context.Context, p DiscussionOutput) ([]string, error) {
+				switch p.ID {
+				case "report":
+					return []string{"303"}, nil
+				case "ack":
+					return []string{"201"}, nil
+				}
+				t.Fatal(p)
+				return nil, nil
+			}}}
+			raw, err := c.discussionReplyReceipt(t.Context(), st, current, "101")
+			if err != nil || !strings.Contains(string(raw), `"reply":"progress scheduled"`) || !strings.Contains(string(raw), `["201"]`) || strings.Contains(string(raw), `["303"]`) != tc.want {
+				t.Fatalf("receipt %s err %v", raw, err)
+			}
+		})
+	}
+}

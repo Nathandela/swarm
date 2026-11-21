@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
@@ -84,11 +85,19 @@ func discussionHandoff(st State, current Admission, input, provider, nonce strin
 	return input
 }
 
-type discussionReplyRef struct {
-	Message             string   `json:"message"`
-	Reply               string   `json:"reply"`
-	NativeTurnEnd       string   `json:"former_manager_turn_end,omitempty"`
+type discussionReportRef struct {
+	Job                 string   `json:"job"`
+	Attempt             string   `json:"attempt"`
 	ConfirmedMessageIDs []string `json:"confirmed_discord_message_ids,omitempty"`
+	publicationID       string
+}
+
+type discussionReplyRef struct {
+	LatestWorkerReport  *discussionReportRef `json:"latest_scheduled_worker_report,omitempty"`
+	Message             string               `json:"message"`
+	Reply               string               `json:"reply"`
+	NativeTurnEnd       string               `json:"former_manager_turn_end,omitempty"`
+	ConfirmedMessageIDs []string             `json:"confirmed_discord_message_ids,omitempty"`
 	publicationID       string
 	seq                 uint64
 	origin              *schema.MessageOrigin
@@ -107,6 +116,22 @@ func priorDiscussionReplies(st State, current Admission, anchor string) []discus
 			}
 		}
 	}
+	reports := make(map[string]Publication)
+	pendingTargets := make(map[string]bool)
+	for _, a := range st.Actions {
+		if a.ConversationID == current.ConversationID && a.State != "settled" {
+			pendingTargets[a.Target] = true
+		}
+	}
+	for _, p := range st.Publications {
+		if p.ConversationID != current.ConversationID || !p.Final || p.DiscussionSource.AttemptID == "" || p.DiscussionSource.SystemCause != "" {
+			continue
+		}
+		id := workerReportOrigin(st, p, current.Project, pendingTargets)
+		if id != "" && (reports[id].ID == "" || p.OutputSequence > reports[id].OutputSequence) {
+			reports[id] = p
+		}
+	}
 	var replies []discussionReplyRef
 	for _, a := range st.Admissions {
 		if a.ConversationID != current.ConversationID || a.Sequence >= current.Sequence || a.Project != current.Project || a.Origin == nil || a.Origin.MessageID == "" || (anchor != "" && a.Origin.MessageID != anchor) {
@@ -120,13 +145,62 @@ func priorDiscussionReplies(st State, current Admission, anchor string) []discus
 				reply = "final scheduled"
 			}
 		}
-		replies = append(replies, discussionReplyRef{Message: a.Origin.MessageID, Reply: reply, publicationID: p.ID, seq: a.Sequence, origin: a.Origin})
+		ref := discussionReplyRef{Message: a.Origin.MessageID, Reply: reply, publicationID: p.ID, seq: a.Sequence, origin: a.Origin}
+		if report, ok := reports[a.Origin.RequestID]; ok {
+			ref.LatestWorkerReport = &discussionReportRef{Job: report.DiscussionSource.JobID, Attempt: report.DiscussionSource.AttemptID, publicationID: report.ID}
+		}
+		replies = append(replies, ref)
 	}
 	sort.Slice(replies, func(i, j int) bool { return replies[i].seq > replies[j].seq })
 	if len(replies) > 8 {
 		replies = replies[:8]
 	}
 	return replies
+}
+
+// Recover only an unsteered, scoped launch or resume with an exact wake and worker incarnation.
+// VM shell launches retain discussion parentage but have no durable human admission grant.
+func workerReportOrigin(st State, p Publication, project string, pending map[string]bool) string {
+	src := p.DiscussionSource
+	wake := st.Wakes[key(p.ConversationID, src.AdmissionID)]
+	event := st.Events[key(p.ConversationID, wake.EventID)]
+	if wake.ID == "" || wake.Admission != p.Admission || event.WakeID != wake.ID || event.RecoveryOnly || event.JobID != src.JobID || event.AttemptID != src.AttemptID {
+		return ""
+	}
+	var metadata struct{ Session, Instance, Kind string }
+	if json.Unmarshal(event.Metadata, &metadata) != nil {
+		return ""
+	}
+	target := key(metadata.Session, metadata.Instance)
+	worker := st.Workers[key(p.ConversationID, target)]
+	if worker.VMChild || worker.RecoveryRequired || worker.Project != project || worker.ActionID != src.AttemptID || worker.AttemptID != src.AttemptID || worker.JobID != src.JobID || pending[target] {
+		return ""
+	}
+	if !(event.WorkerProof && event.ID == discussionEvidenceID(worker)) && !(event.WorkerMessage && metadata.Kind == "complete") {
+		return ""
+	}
+	launch := st.Actions[key(p.ConversationID, src.AttemptID)]
+	var grant controllerActionRequest
+	var receipt createdWorkerResult
+	if launch.State != "settled" || launch.Admission != worker.Admission || json.Unmarshal(launch.Request, &grant) != nil || json.Unmarshal(launch.Receipt, &receipt) != nil || grant.Project != project || grant.Origin == nil || receipt.Session != worker.Session || receipt.SessionInstance != worker.SessionInstance {
+		return ""
+	}
+	if !(grant.Tool == "swarm_create" && receipt.State == "created") && !(grant.Tool == "swarm_resume" && receipt.State == "resumed") {
+		return ""
+	}
+	original := st.Admissions[admissionKey(p.ConversationID, launch.Admission)]
+	if original.Origin == nil || *original.Origin != *grant.Origin || original.Project != project || !singleReportScope(p.DiscussionAttempts, src.AttemptID) || !singleReportScope(p.DiscussionProjects, project) {
+		return ""
+	}
+	return original.Origin.RequestID
+}
+
+func singleReportScope(encoded, value string) bool {
+	if encoded == "" {
+		return true
+	}
+	var scope []string
+	return json.Unmarshal([]byte(encoded), &scope) == nil && len(scope) == 1 && scope[0] == value
 }
 
 // Read one original human revision through the connector's live discussion and grant checks.
@@ -151,13 +225,24 @@ func (c *Controller) discussionReplyReceipt(ctx context.Context, st State, curre
 	if current.Project != "" && c.discussion.ProjectEnrolled != nil && !c.discussion.ProjectEnrolled(current.Project) {
 		return nil, ErrExpired
 	}
-	if p, ok := st.Publications[key(current.ConversationID, ref.publicationID)]; ok && p.Exported && c.discussion.ConfirmedDelivery != nil {
-		output := DiscussionOutput{DiscussionOutputSource: p.DiscussionSource, ID: p.ID, Sequence: p.OutputSequence, Text: p.Text}
-		ids, err := c.discussion.ConfirmedDelivery(ctx, output)
-		if err != nil {
+	delivery := func(id string) ([]string, error) {
+		p, ok := st.Publications[key(current.ConversationID, id)]
+		if !ok || !p.Exported || c.discussion.ConfirmedDelivery == nil {
+			return nil, nil
+		}
+		return c.discussion.ConfirmedDelivery(ctx, DiscussionOutput{DiscussionOutputSource: p.DiscussionSource, ID: p.ID, Sequence: p.OutputSequence, Text: p.Text})
+	}
+	var err error
+	if ref.ConfirmedMessageIDs, err = delivery(ref.publicationID); err != nil {
+		return nil, err
+	}
+	if report := ref.LatestWorkerReport; report != nil {
+		report.ConfirmedMessageIDs, err = delivery(report.publicationID)
+		if errors.Is(err, ErrExpired) || errors.Is(err, ErrStale) {
+			ref.LatestWorkerReport = nil
+		} else if err != nil {
 			return nil, err
 		}
-		ref.ConfirmedMessageIDs = ids
 	}
 	ref.NativeTurnEnd = c.formerDiscussionTurnEnd(ctx, st.Admissions[admissionKey(current.ConversationID, ref.seq)])
 	return controllerResult(ref)
