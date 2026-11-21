@@ -265,7 +265,7 @@ func (c *Controller) readDiscussionWorkerNote(ctx context.Context, input Session
 	if worker.Session != source.Session || worker.SessionInstance != source.Instance || worker.JobID != event.JobID || worker.AttemptID != event.AttemptID {
 		return nil, ErrStale
 	}
-	if worker.VMChild && worker.Mailbox {
+	if worker.supervisorMailbox() {
 		if !c.discussion.VMProjectAccess {
 			return nil, ErrExpired
 		}

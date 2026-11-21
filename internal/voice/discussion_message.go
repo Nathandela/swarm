@@ -332,7 +332,7 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 		if existing, ok := current.Workers[k]; worker.Mailbox {
 			if !ok {
 				putRecord(current, "workers", &current.Workers, k, worker)
-			} else if existing.AttemptID != worker.AttemptID || !existing.Mailbox || existing.Parent != worker.Parent || existing.RecoveryRequired {
+			} else if existing.AttemptID != worker.AttemptID || !existing.supervisorMailbox() || existing.Parent != worker.Parent || existing.RecoveryRequired {
 				return errSupersededWorkerMail
 			}
 		} else if existing != worker {
@@ -495,7 +495,7 @@ func (c *Controller) verifyWorkerReplyGrant(ctx context.Context, st State, worke
 		return ErrStale
 	}
 	if worker.Mailbox {
-		if worker.RecoveryRequired || !c.discussion.VMProjectAccess {
+		if !worker.supervisorMailbox() || worker.RecoveryRequired || !c.discussion.VMProjectAccess {
 			return ErrExpired
 		}
 		if c.discussion.VerifyAudience != nil && c.discussion.VerifyAudience(ctx) != nil {

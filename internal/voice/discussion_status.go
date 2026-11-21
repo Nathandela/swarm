@@ -180,7 +180,8 @@ func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStat
 		if meta.NoteID == "" || meta.Created == nil {
 			continue
 		}
-		n := workermail.NoteStatus{ID: meta.NoteID, JobID: e.JobID, AttemptID: e.AttemptID, Session: meta.Session, Instance: meta.Instance, Kind: meta.Kind, Created: *meta.Created, State: w.State, Admission: w.Admission, Source: "wake:" + w.ID, Answered: w.WorkerReplyExported || !d.scope.VMProjectAccess && w.WorkerReply != ""}
+		worker := st.Workers[key(w.ConversationID, key(meta.Session, meta.Instance))]
+		n := workermail.NoteStatus{ID: meta.NoteID, JobID: e.JobID, AttemptID: e.AttemptID, Session: meta.Session, Instance: meta.Instance, Kind: meta.Kind, Created: *meta.Created, State: w.State, Admission: w.Admission, Source: "wake:" + w.ID, Answered: w.WorkerReplyExported || worker.ActionID != "" && w.WorkerReply != ""}
 		if w.Admission != 0 {
 			admission := st.Admissions[admissionKey(w.ConversationID, w.Admission)]
 			n.AdmissionPhase = admission.Phase

@@ -54,7 +54,7 @@ func (c *Controller) ingestWorkerMail(ctx context.Context, st State) (bool, erro
 			continue
 		}
 		worker := st.Workers[key(c.binding.ConversationID, key(meta.Session, meta.Instance))]
-		if worker.Mailbox {
+		if worker.supervisorMailbox() {
 			if err = c.exportWorkerAnswer(worker, meta, wake, wake.WorkerReply); err != nil {
 				return false, err
 			}

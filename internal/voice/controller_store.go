@@ -902,7 +902,7 @@ func quarantineControllerState(st *State, b ManagerBinding, session, instance st
 		}
 		// Losing the dispatcher observation or journal does not revoke the
 		// independent supervisor grant of an ordinary mailbox worker.
-		if session == "" && worker.VMChild && worker.Mailbox {
+		if session == "" && worker.supervisorMailbox() {
 			continue
 		}
 		worker.RecoveryRequired = true
@@ -1117,6 +1117,6 @@ func queuedMailboxNote(st *State, conversation string, a Admission) bool {
 		return false
 	}
 	worker := st.Workers[key(conversation, key(meta.Session, meta.Instance))]
-	return worker.VMChild && worker.Mailbox && !worker.RecoveryRequired && worker.JobID == e.JobID && worker.AttemptID == e.AttemptID &&
+	return worker.supervisorMailbox() && !worker.RecoveryRequired && worker.JobID == e.JobID && worker.AttemptID == e.AttemptID &&
 		e.ID == "worker-message-"+hashValue([]string{worker.Session, worker.SessionInstance, worker.AttemptID, meta.NoteID})
 }

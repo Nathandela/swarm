@@ -112,7 +112,7 @@ func (d *DiscussionController) ValidatePublication(ctx context.Context, output D
 func (d *DiscussionController) validatePublicationAttempt(st State, id string) error {
 	if strings.HasPrefix(id, "vm-child-") {
 		for _, w := range st.Workers {
-			if w.VMChild && w.ConversationID == d.cfg.ConversationID && w.AttemptID == id {
+			if w.VMChild && w.ActionID == "" && w.ConversationID == d.cfg.ConversationID && w.AttemptID == id {
 				return nil
 			}
 		}

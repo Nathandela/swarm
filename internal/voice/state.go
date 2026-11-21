@@ -236,6 +236,11 @@ type WorkerAssociation struct {
 	ActionID         string `json:"action_id"`
 }
 
+// Enrolled launches retain an action receipt even if an older roster observer set VM flags.
+func (w WorkerAssociation) supervisorMailbox() bool {
+	return w.VMChild && w.Mailbox && w.ActionID == ""
+}
+
 type State struct {
 	changes             *stateChanges
 	Version             int                          `json:"version"`

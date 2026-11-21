@@ -408,7 +408,7 @@ func (c *Controller) verifyStoredWorkerEvent(ctx context.Context, st State, even
 		source.Session == "" || source.Instance == "" {
 		return ErrExpired
 	}
-	if worker.VMChild {
+	if worker.supervisorMailbox() {
 		if !c.discussion.VMProjectAccess {
 			return ErrExpired
 		}
