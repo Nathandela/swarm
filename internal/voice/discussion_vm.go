@@ -158,8 +158,12 @@ func exactEnrolledLaunchAttempt(st *State, w WorkerAssociation) string {
 		}
 		var request controllerActionRequest
 		if json.Unmarshal(a.Request, &request) != nil || request.Origin == nil || request.Project != w.Project || request.Launch == nil ||
-			w.Parent == "" || request.Launch.SpawnedFrom != w.Parent || request.Launch.Cwd != w.Project ||
-			!(request.Tool == "swarm_create" && result.State == "created" || request.Tool == "swarm_resume" && result.State == "resumed") {
+			w.Parent == "" || request.Launch.SpawnedFrom != w.Parent || request.Launch.Cwd != w.Project {
+			continue
+		}
+		created := request.Tool == "swarm_create" && result.State == "created"
+		resumed := request.Tool == "swarm_resume" && result.State == "resumed"
+		if !created && !resumed {
 			continue
 		}
 		if match != "" {
