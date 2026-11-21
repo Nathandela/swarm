@@ -941,6 +941,7 @@ func (d *Daemon) anyControlled(local string) bool {
 // engine registration and token (S6). Ending an unregistered session (e.g. one
 // adopted by reconcile, never registered) is a harmless no-op.
 func (d *Daemon) endSession(id string) {
+	d.backend.refusedManagerReplay.Delete(id)
 	d.ownerInputHints.invalidate(id)
 	d.stopOpenCodeObservation(id)
 	// A final conversation-id capture before the engine retires the session: a

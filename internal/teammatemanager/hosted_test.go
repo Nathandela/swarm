@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/voice"
@@ -361,7 +362,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				return false
 			})
-		case "connector", "restart", "upgrade", "death", "quota":
+		case "connector", "restart", "upgrade", "death", "quota", "replay-refusal":
 			if !personal || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
 				t.Fatal("interruption drill needs an active personal manager", beforeGap, err)
 			}
@@ -376,7 +377,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch interruption {
-		case "restart", "upgrade":
+		case "restart", "upgrade", "replay-refusal":
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -384,6 +385,24 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = cmd.Wait()
+			if interruption == "replay-refusal" {
+				_, local, ok := protocol.ParseID(beforeGap.ManagerSession)
+				if !ok {
+					t.Fatal("invalid original manager identity", beforeGap)
+				}
+				store, err := persist.NewStore(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m, err := store.Load(local)
+				if err != nil || m.Role != "manager" || m.Status.Process != status.ProcessRunning || m.ShimPID <= 0 || syscall.Kill(m.ShimPID, 0) != nil {
+					t.Fatal("original manager must still be running during supervisor outage", err)
+				}
+				m.ResumeError = "isolated rehearsal: previous native login unavailable"
+				if err := store.Save(m); err != nil {
+					t.Fatal(err)
+				}
+			}
 			cmd = startDaemon(bin)
 			owner = dialOwner()
 		case "quota":
@@ -443,8 +462,25 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					children++
 				}
 			}
-			if interruption == "quota" && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
-				t.Fatal("quota did not replace the original dispatcher exactly once", beforeGap, got)
+			if (interruption == "quota" || interruption == "replay-refusal") && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
+				t.Fatal(interruption, "did not replace the original dispatcher exactly once", beforeGap, got)
+			}
+			if interruption == "replay-refusal" {
+				var oldExited bool
+				for _, row := range roster() {
+					if row.ID == beforeGap.ManagerSession && row.Status.Process == status.ProcessExited {
+						oldExited = true
+					}
+				}
+				var reports int
+				for _, p := range outputs {
+					if p.JobID == job && p.AttemptID == attempt && strings.Contains(p.Body, proof) {
+						reports++
+					}
+				}
+				if !oldExited || reports != 1 {
+					t.Fatalf("original manager exited=%v, correlated completion publications=%d", oldExited, reports)
+				}
 			}
 			if activeManagers > 1 || children != 1 {
 				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
