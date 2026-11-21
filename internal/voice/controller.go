@@ -305,6 +305,9 @@ func (c *Controller) Tick(ctx context.Context) error {
 				return err
 			}
 			nonce := hex.EncodeToString(nonceBytes[:])
+			if c.discussion != nil && strings.HasPrefix(a.SourceID, "wake:") {
+				text = discussionPriorFinalNotice(st, a, text, c.binding.Provider, nonce)
+			}
 			if c.discussion != nil && st.Conversations[c.binding.ConversationID].NeedsHandoff {
 				text = discussionHandoff(st, a, text, c.binding.Provider, nonce, c.discussion.VMProjectAccess)
 			}

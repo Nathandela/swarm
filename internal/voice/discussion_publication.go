@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
@@ -137,8 +139,16 @@ func (d *DiscussionController) validatePublicationAttempt(st State, id string) e
 
 // A worker's completion note and its full native result can wake two manager turns.
 func priorWorkerCompletion(st *State, p Publication) (Publication, bool) {
+	if !p.Final {
+		return Publication{}, false
+	}
+	prior, ok := relatedWorkerFinal(st, p)
+	return prior, ok && prior.Text == p.Text && prior.DiscussionProjects == p.DiscussionProjects && prior.DiscussionAttempts == p.DiscussionAttempts
+}
+
+func relatedWorkerFinal(st *State, p Publication) (Publication, bool) {
 	src := p.DiscussionSource
-	if !p.Final || src.AttemptID == "" || src.JobID == "" {
+	if src.AttemptID == "" || src.JobID == "" {
 		return Publication{}, false
 	}
 	var latest Publication
@@ -148,51 +158,82 @@ func priorWorkerCompletion(st *State, p Publication) (Publication, bool) {
 			latest = old
 		}
 	}
-	if latest.ID == "" || latest.Text != p.Text || latest.DiscussionProjects != p.DiscussionProjects || latest.DiscussionAttempts != p.DiscussionAttempts {
+	if latest.ID == "" || latest.Admission == p.Admission {
 		return Publication{}, false
 	}
-	current, note := workerCompletionEvidence(st, p)
-	if current == "" {
+	current := workerCompletionEvidence(st, p)
+	previous := workerCompletionEvidence(st, latest)
+	if current.text == "" || previous.text == "" {
 		return Publication{}, false
 	}
-	previous, wasNote := workerCompletionEvidence(st, latest)
-	return latest, previous == current && wasNote != note
+	if current.note == previous.note {
+		// A retried completion may have a new semantic ID after its bridge receipt was lost.
+		return latest, current.note && (current.recovered || previous.recovered) && current.text == previous.text
+	}
+	// After a handoff the worker's note and its verified native final can describe
+	// the same result in different words. Only identical public finals are reused.
+	return latest, current.text == previous.text || current.recovered || previous.recovered
 }
 
-// The bool identifies the worker's own note. Empty text means the evidence cannot be matched.
-func workerCompletionEvidence(st *State, pub Publication) (string, bool) {
+// Attach the disposition at dispatch, after an earlier queued wake has had a chance to publish.
+func discussionPriorFinalNotice(st State, a Admission, input, provider, nonce string) string {
+	p := Publication{ConversationID: a.ConversationID, Admission: a.Sequence, DiscussionSource: discussionOutputSource(&st, a.ConversationID, a)}
+	if _, ok := relatedWorkerFinal(&st, p); !ok {
+		return input
+	}
+	text := input + "\nA final report for this worker attempt is already scheduled. Check Discord history for its delivery. Publish again only if this evidence changes or corrects the reported result."
+	if len(text) > protocol.MaxSendInputText {
+		return input
+	}
+	if provider == "claude" {
+		if _, err := claudeinput.ManagerEnvelope(nonce, text); err != nil {
+			return input
+		}
+	}
+	return text
+}
+
+type completionEvidence struct {
+	text            string
+	note, recovered bool
+}
+
+func workerCompletionEvidence(st *State, pub Publication) completionEvidence {
 	src := pub.DiscussionSource
 	a := st.Admissions[admissionKey(pub.ConversationID, pub.Admission)]
-	wake := st.Wakes[key(pub.ConversationID, pub.DiscussionSource.AdmissionID)]
+	wake := st.Wakes[key(pub.ConversationID, src.AdmissionID)]
 	e := st.Events[key(pub.ConversationID, wake.EventID)]
-	if a.Origin != nil || a.RecoveryOnly || a.SourceID != "wake:"+wake.ID || wake.Admission != a.Sequence ||
-		e.WakeID != wake.ID || e.RecoveryOnly || e.JobID != src.JobID || e.AttemptID != src.AttemptID {
-		return "", false
+	if a.Origin != nil || a.RecoveryOutput != nil || wake.ID == "" || a.SourceID != "wake:"+wake.ID || wake.Admission != a.Sequence ||
+		e.WakeID != wake.ID || e.JobID != src.JobID || e.AttemptID != src.AttemptID {
+		return completionEvidence{}
 	}
 	var meta struct {
-		Session, Instance, Kind, Text string
-		Data                          schema.WorkerTurnEvidence
+		Session, Instance, Kind, Text, NoteID string
+		Data                                  schema.WorkerTurnEvidence
 	}
 	if json.Unmarshal(e.Metadata, &meta) != nil {
-		return "", false
+		return completionEvidence{}
 	}
 	target := key(meta.Session, meta.Instance)
 	w := st.Workers[key(pub.ConversationID, target)]
-	if w.RecoveryRequired || w.VMChild || w.ActionID != src.AttemptID || w.AttemptID != src.AttemptID || w.JobID != src.JobID ||
+	if w.VMChild || w.ActionID != src.AttemptID || w.AttemptID != src.AttemptID || w.JobID != src.JobID ||
 		!singleReportScope(pub.DiscussionAttempts, src.AttemptID) || !singleReportScope(pub.DiscussionProjects, w.Project) {
-		return "", false
+		return completionEvidence{}
 	}
 	for _, a := range st.Actions {
 		if a.ConversationID == pub.ConversationID && a.Target == target && a.State != "settled" {
-			return "", false
+			return completionEvidence{}
 		}
 	}
 	if e.WorkerMessage && meta.Kind == "complete" {
-		return meta.Text, true
+		if e.RecoveryOnly && (meta.NoteID == "" || e.ID != "worker-message-"+hashValue([]string{w.Session, w.SessionInstance, w.AttemptID, meta.NoteID}) || e.ID != wake.ID) {
+			return completionEvidence{}
+		}
+		return completionEvidence{text: meta.Text, note: true, recovered: e.RecoveryOnly}
 	}
 	if e.WorkerProof && e.ID == discussionEvidenceID(w) && e.NativeTurnID != "" && meta.Data.TurnID == e.NativeTurnID &&
 		meta.Data.State == "completed" && !meta.Data.TextTruncated {
-		return meta.Data.Text, false
+		return completionEvidence{text: meta.Data.Text, recovered: e.RecoveryOnly || a.RecoveryOnly}
 	}
-	return "", false
+	return completionEvidence{}
 }
