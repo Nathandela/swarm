@@ -670,6 +670,10 @@ func cloneState(st State) State {
 	return st
 }
 func cloneAdmission(a Admission) Admission {
+	if a.ReusedFinal != nil {
+		receipt := *a.ReusedFinal
+		a.ReusedFinal = &receipt
+	}
 	if a.RecoveryOutput != nil {
 		source := *a.RecoveryOutput
 		a.RecoveryOutput = &source
@@ -1104,6 +1108,7 @@ func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) err
 				budget--
 			}
 		}
+		retainedFinals := make(map[string]bool)
 		for k, a := range st.Admissions {
 			if budget == 0 {
 				return nil
@@ -1111,13 +1116,15 @@ func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) err
 			if a.ConversationID == b.ConversationID && a.Sequence <= floor && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
 				deleteRecord(st, "admissions", &st.Admissions, k)
 				budget--
+			} else if a.ConversationID == b.ConversationID && a.ReusedFinal != nil {
+				retainedFinals[a.ReusedFinal.PublicationID] = true
 			}
 		}
 		for k, p := range st.Publications {
 			if budget == 0 {
 				return nil
 			}
-			if p.ConversationID == b.ConversationID && p.Admission > 0 && p.Admission <= floor {
+			if p.ConversationID == b.ConversationID && p.Admission > 0 && p.Admission <= floor && !retainedFinals[p.ID] {
 				if _, retained := st.Admissions[admissionKey(b.ConversationID, p.Admission)]; !retained {
 					deleteRecord(st, "publications", &st.Publications, k)
 					budget--
@@ -1381,9 +1388,26 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 		if strings.HasPrefix(b.ConversationID, DiscussionConversationPrefix) {
 			var err error
 			admission := st.Admissions[admissionKey(b.ConversationID, p.Admission)]
+			if receipt := admission.ReusedFinal; receipt != nil {
+				prior, ok := st.Publications[key(b.ConversationID, receipt.PublicationID)]
+				if !ok || !prior.Final {
+					return ErrCorrupt
+				}
+				if !p.Final || p.NativeTurnID != receipt.NativeTurnID || p.ID != receipt.OutputID || p.Sequence != receipt.Sequence || p.Text != prior.Text {
+					return ErrConflict
+				}
+				result = prior
+				return nil
+			}
 			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
 			p.DiscussionProjects = addDiscussionScopeValue(admission.WorkerProjects, admission.Project)
 			p.DiscussionAttempts = admission.WorkerAttempts
+			if prior, ok := priorWorkerCompletion(st, p); ok {
+				admission.ReusedFinal = &ReusedFinalReceipt{PublicationID: prior.ID, OutputID: p.ID, NativeTurnID: p.NativeTurnID, Sequence: p.Sequence}
+				putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, p.Admission), admission)
+				result = prior
+				return nil
+			}
 			p.OutputSequence, err = nextDiscussionOutput(st, b.ConversationID)
 			if err != nil {
 				return err

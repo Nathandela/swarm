@@ -48,13 +48,16 @@ type TeammateNativeStatus struct {
 }
 
 type TeammateJobStatus struct {
-	ID         string `json:"id"`
-	AttemptID  string `json:"attempt_id,omitempty"`
-	Session    string `json:"session,omitempty"`
-	Instance   string `json:"instance,omitempty"`
-	Project    string `json:"project,omitempty"`
-	State      string `json:"state"`
-	Diagnostic string `json:"diagnostic,omitempty"`
+	NativeTurnID          string                        `json:"native_turn_id,omitempty"`
+	RecoveryRequired      bool                          `json:"recovery_required,omitempty"`
+	NativeTurnPublication *workermail.PublicationStatus `json:"native_turn_publication,omitempty"`
+	ID                    string                        `json:"id"`
+	AttemptID             string                        `json:"attempt_id,omitempty"`
+	Session               string                        `json:"session,omitempty"`
+	Instance              string                        `json:"instance,omitempty"`
+	Project               string                        `json:"project,omitempty"`
+	State                 string                        `json:"state"`
+	Diagnostic            string                        `json:"diagnostic,omitempty"`
 }
 
 type TeammateDiscussion struct {
@@ -99,6 +102,7 @@ var ErrTeammateSourceChanged = errors.New("discord: source message changed befor
 type TeammateInputHold struct {
 	AdmissionID     string
 	DirectInput     bool
+	CustodyLost     bool
 	EffectUncertain bool
 }
 
@@ -115,15 +119,17 @@ func (h *TeammateInputHold) Error() string {
 var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is unavailable")
 
 type TeammateHistoryQuery struct {
+	Publication                                *TeammatePublication
 	Source, Cursor, Anchor                     string
 	AdmissionID, Revision, MessageID, AuthorID string
 	Voice                                      schema.VoiceOrigin
 	Authority                                  Authority
 }
 type TeammateHistoryPage struct {
-	EvidenceFragment                    string `json:",omitempty"`
-	FragmentMessageID                   string `json:",omitempty"`
-	StarterCursor                       string `json:",omitempty"`
+	ConfirmedMessageIDs                 []string `json:",omitempty"`
+	EvidenceFragment                    string   `json:",omitempty"`
+	FragmentMessageID                   string   `json:",omitempty"`
+	StarterCursor                       string   `json:",omitempty"`
 	Messages                            []TeammateHistoryMessage
 	Cursor, HighWater, LowWater, Notice string
 	Starter                             *TeammateHistoryMessage

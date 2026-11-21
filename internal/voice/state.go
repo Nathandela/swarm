@@ -75,7 +75,15 @@ type Utterance struct {
 	Admission      uint64 `json:"admission,omitempty"`
 }
 
+type ReusedFinalReceipt struct {
+	PublicationID string `json:"publication_id"`
+	OutputID      string `json:"output_id"`
+	NativeTurnID  string `json:"native_turn_id"`
+	Sequence      uint64 `json:"sequence"`
+}
+
 type Admission struct {
+	ReusedFinal          *ReusedFinalReceipt     `json:"reused_final,omitempty"`
 	RecoveryOutput       *DiscussionOutputSource `json:"recovery_output,omitempty"`
 	WorkerAttempts       string                  `json:"worker_attempts,omitempty"`
 	WorkerProjects       string                  `json:"worker_projects,omitempty"`
@@ -226,6 +234,11 @@ type WorkerAssociation struct {
 	Admission        uint64 `json:"admission"`
 	SourceID         string `json:"source_id"`
 	ActionID         string `json:"action_id"`
+}
+
+// Enrolled launches retain an action receipt even if an older roster observer set VM flags.
+func (w WorkerAssociation) supervisorMailbox() bool {
+	return w.VMChild && w.Mailbox && w.ActionID == ""
 }
 
 type State struct {

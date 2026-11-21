@@ -196,7 +196,7 @@ func TestDiscussionHumanFollowupCarriesEveryReadProjectGrant(t *testing.T) {
 		}
 	}
 	withdrawn := ""
-	scope := DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", ProjectEnrolled: func(p string) bool { return p != withdrawn }}
+	scope := DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", VerifyGrant: func(context.Context, schema.MessageOrigin) error { return nil }, VerifyAudience: func(context.Context) error { return nil }, ProjectEnrolled: func(p string) bool { return p != withdrawn }}
 	c := &Controller{binding: b, store: s, discussion: &scope}
 	a, err := c.submitDiscussionInProject(orig, "what did the workers find?", "", "", "", roots[0], false)
 	if err != nil {
@@ -208,7 +208,7 @@ func TestDiscussionHumanFollowupCarriesEveryReadProjectGrant(t *testing.T) {
 		for i, project := range roots[1:] {
 			w := WorkerAssociation{ConversationID: b.ConversationID, Project: project, Session: fmt.Sprintf("machine/w%d", i), SessionInstance: "instance", JobID: fmt.Sprintf("job-%d", i), AttemptID: fmt.Sprintf("attempt-%d", i), ActionID: "verified", Admission: 42}
 			putRecord(st, "workers", &st.Workers, key(b.ConversationID, key(w.Session, w.SessionInstance)), w)
-			intent, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Origin: &orig, Project: project})
+			intent, _ := json.Marshal(controllerActionRequest{Tool: "swarm_create", Origin: &orig, Project: project, Launch: &protocol.LaunchReq{Cwd: project}})
 			receipt, _ := json.Marshal(createdWorkerResult{State: "created", Session: w.Session, SessionInstance: w.SessionInstance})
 			effect := Action{ID: w.AttemptID, ConversationID: b.ConversationID, State: "settled", Request: intent, Receipt: receipt}
 			putRecord(st, "actions", &st.Actions, key(b.ConversationID, effect.ID), effect)

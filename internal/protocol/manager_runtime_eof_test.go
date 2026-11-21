@@ -31,3 +31,22 @@ func TestManagerRequestKeepsCustodyErrorWhenReplyAndEOFAreReady(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestKeepsCompleteReplyBeforeEOF(t *testing.T) {
+	for _, reply := range []Control{
+		{Op: OpOK, OperationID: "accepted-operation"},
+		{Op: OpError, ErrorCode: CodeInputBusy},
+	} {
+		for range 50 {
+			c := &Client{respCh: make(chan Control, 1), done: make(chan struct{})}
+			c.conn = managerReplyBeforeEOF{deliver: func() {
+				c.dispatchControl(reply)
+				close(c.done)
+			}}
+			got, err := c.request(Control{Op: OpSemanticSend})
+			if err != nil || got.Op != reply.Op || got.OperationID != reply.OperationID || got.ErrorCode != reply.ErrorCode {
+				t.Fatalf("lost completed reply %s: op=%q operation=%q code=%q err=%v", reply.Op, got.Op, got.OperationID, got.ErrorCode, err)
+			}
+		}
+	}
+}

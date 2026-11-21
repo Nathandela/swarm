@@ -2,9 +2,11 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,19 +15,27 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+type parkedStatusManager struct {
+	*teammateTestManager
+	view TeammateNativeStatus
+}
+
+func (*parkedStatusManager) Dormant(TeammateDiscussion) (bool, error) { return true, nil }
+func (m *parkedStatusManager) Status(TeammateDiscussion) (TeammateNativeStatus, error) {
+	return m.view, nil
+}
+
 func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
-	s, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = s.Close() }()
+	c, manager := teammateTestConnector(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	c.service.Config.ProjectAccess = ProjectAccessEnrolled
+	s := c.service.Store
 	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{ChannelID: "201"}}
 	k := teammateOutputKey(d.InstallationID, d.ID, "publication")
 	out := teammateOutput{Route: d.Route, Chunks: []Chunk{{State: StateSent, MessageID: "301"}, {State: StateUncertain}}}
 	check := func(state string, ids ...string) {
 		t.Helper()
 		notes := []workermail.NoteStatus{{Publications: []workermail.PublicationStatus{{ID: "publication"}}}}
-		if err := s.workerPublicationStatus(d, notes); err != nil {
+		if err := s.workerPublicationStatus(d, &TeammateNativeStatus{Notes: notes}); err != nil {
 			t.Fatal(err)
 		}
 		pub := notes[0].Publications[0]
@@ -46,8 +56,15 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes := []workermail.NoteStatus{{ID: "note", AttemptID: "attempt", Publications: []workermail.PublicationStatus{{ID: "publication"}}}}
-	if err := s.teammatePark(d, 0, &TeammateNativeStatus{State: "parked", Notes: notes}); err != nil {
+	c.manager = &parkedStatusManager{teammateTestManager: manager, view: TeammateNativeStatus{State: "parked", Notes: notes, Jobs: []TeammateJobStatus{{State: "turn_completed", RecoveryRequired: true, NativeTurnPublication: &workermail.PublicationStatus{ID: "publication"}}}}}
+	var tasks sync.WaitGroup
+	done := make(chan teammateTaskResult, 1)
+	if err := c.schedule(t.Context(), 1, map[string]bool{}, map[string]bool{}, map[string]time.Time{}, map[string]time.Time{}, done, &tasks); err != nil {
 		t.Fatal(err)
+	}
+	tasks.Wait()
+	if result := <-done; result.retry {
+		t.Fatal("enrolled discussion could not park or retain its worker result")
 	}
 	status, err := s.teammateStatus(d.InstallationID, func(TeammateDiscussion) (TeammateNativeStatus, error) {
 		t.Fatal("status reopened a parked manager")
@@ -55,6 +72,10 @@ func TestWorkerPublicationReceiptsSurviveCompaction(t *testing.T) {
 	})
 	if err != nil || len(status.Discussions) != 1 || status.Discussions[0].Native == nil || len(status.Discussions[0].Native.Notes) != 1 {
 		t.Fatalf("parked status %+v, %v", status, err)
+	}
+	jobs := status.Discussions[0].Native.Jobs
+	if len(jobs) != 1 || jobs[0].NativeTurnPublication.State != StateSent || !reflect.DeepEqual(jobs[0].NativeTurnPublication.MessageIDs, []string{"301", "302"}) {
+		t.Fatalf("parked job result: %+v", jobs)
 	}
 	p := status.Discussions[0].Native.Notes[0].Publications[0]
 	if p.State != StateSent || !reflect.DeepEqual(p.MessageIDs, []string{"301", "302"}) {
@@ -158,4 +179,51 @@ func TestParkedWorkerNoteReactivatesConnectorWithoutHumanInput(t *testing.T) {
 	default:
 		t.Fatal("parked discussion was never synced")
 	}
+}
+
+func TestAnchoredDeliveryRequiresExactPublicationAndEveryChunk(t *testing.T) {
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	d := TeammateDiscussion{InstallationID: "I", ID: "D", Route: Route{ChannelID: "201"}}
+	p := TeammatePublication{ID: "pub", AdmissionID: "op", Sequence: 7, Body: strings.Repeat("a", 1901)}
+	key := teammateOutputKey(d.InstallationID, d.ID, p.ID)
+	metadata := p
+	metadata.Body = ""
+	out := teammateOutput{DiscussionID: d.ID, Route: d.Route, BodyHash: PublicationBodyHash(p.Body), Publication: metadata, Chunks: []Chunk{{State: StateSent, MessageID: "301", GatewaySeen: true}, {State: StateUncertain}}}
+	put := func() {
+		t.Helper()
+		if err := s.db.Update(func(tx *bolt.Tx) error { return putJSON(tx, teammateOutboxBucket, key, out) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(q TeammatePublication, want []string, wantErr error) {
+		t.Helper()
+		ids, err := s.confirmedPublication(d, q)
+		if !reflect.DeepEqual(ids, want) || !errors.Is(err, wantErr) {
+			t.Fatalf("delivery %v %v, wanted %v %v", ids, err, want, wantErr)
+		}
+	}
+	put()
+	check(p, nil, nil)
+	out.Chunks[1] = Chunk{State: StateSent, MessageID: "302", RESTAcknowledged: true}
+	put()
+	for i := 0; i < 2; i++ {
+		check(p, []string{"301", "302"}, nil)
+		wrong := p
+		wrong.Body = "edited"
+		check(wrong, nil, ErrConflict)
+		wrong = p
+		wrong.AdmissionID = "other"
+		check(wrong, nil, ErrConflict)
+		if i == 0 {
+			if err := s.db.Update(func(tx *bolt.Tx) error { return teammateCompactOutput(tx, key, d, out) }); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	d.Route.ChannelID = "other"
+	check(p, nil, nil)
 }

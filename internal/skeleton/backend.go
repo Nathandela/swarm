@@ -145,8 +145,9 @@ func newBackendFeed() *backendFeed { return &backendFeed{epoch: newItemID()} }
 
 // backendState is the assembly's per-session backend bookkeeping.
 type backendState struct {
-	managerFailures sync.Map // session IDs whose persistent manager observation was lost
-	mu              sync.Mutex
+	managerFailures      sync.Map // session IDs whose persistent manager observation was lost
+	refusedManagerReplay sync.Map // session ID to the exact native owner whose replay claim was refused
+	mu                   sync.Mutex
 	// beforeRegisterInstall is a deterministic test seam at the instance-check/map-install
 	// boundary. Production leaves it nil.
 	beforeRegisterInstall func(local, expectedInstance string)

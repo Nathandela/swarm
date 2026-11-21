@@ -23,6 +23,9 @@ type DiscussionNativeStatus struct {
 }
 
 type DiscussionJobStatus struct {
+	NativeTurnID                                                 string
+	RecoveryRequired                                             bool
+	NativeTurnPublication                                        *workermail.PublicationStatus
 	ID, AttemptID, Session, Instance, Project, State, Diagnostic string
 }
 
@@ -79,8 +82,18 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 			result.Diagnostic = "daemon journal reconnecting"
 		}
 	}
+	finals := make(map[string]Publication)
+	for _, p := range st.Publications {
+		source := p.DiscussionSource
+		if p.ConversationID == d.cfg.ConversationID && p.Final && source.JobID != "" && source.SystemCause == "" && p.OutputSequence > finals[source.AdmissionID].OutputSequence {
+			finals[source.AdmissionID] = p
+		}
+	}
 	for _, worker := range st.Workers {
-		job := DiscussionJobStatus{ID: worker.JobID, AttemptID: worker.AttemptID, Session: worker.Session, Instance: worker.SessionInstance, Project: worker.Project, State: "tracked"}
+		if worker.ConversationID != d.cfg.ConversationID {
+			continue
+		}
+		job := DiscussionJobStatus{ID: worker.JobID, AttemptID: worker.AttemptID, Session: worker.Session, Instance: worker.SessionInstance, Project: worker.Project, State: "tracked", RecoveryRequired: worker.RecoveryRequired}
 		switch {
 		case worker.Reserved:
 			job.ID, job.AttemptID, job.State = worker.ActionID, worker.ActionID, "pending_launch"
@@ -88,6 +101,26 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 			job.State, job.Diagnostic = "evidence_limited", discussionEvidenceLimitNotice
 		case worker.RecoveryRequired:
 			job.State = "uncertain"
+			event := st.Events[key(worker.ConversationID, discussionEvidenceID(worker))]
+			proof, err := storedDiscussionWorkerProof(event, worker)
+			if err != nil {
+				return result, err
+			}
+			if proof != nil {
+				job.NativeTurnID = proof.TurnID
+				switch proof.State {
+				case "completed", "failed", "cancelled", "interrupted":
+					job.State = "turn_" + proof.State
+				}
+				p := finals[event.WakeID]
+				wake := st.Wakes[key(worker.ConversationID, event.WakeID)]
+				if alias := st.Admissions[admissionKey(worker.ConversationID, wake.Admission)].ReusedFinal; alias != nil {
+					p = st.Publications[key(worker.ConversationID, alias.PublicationID)]
+				}
+				if p.Final && p.ID != "" && p.DiscussionSource.JobID == worker.JobID && p.DiscussionSource.AttemptID == worker.AttemptID {
+					job.NativeTurnPublication = &workermail.PublicationStatus{ID: p.ID, State: "awaiting_delivery_receipt"}
+				}
+			}
 		case worker.VMChild && !worker.Ended && !worker.Mailbox:
 			job.Diagnostic = "worker mailbox binding unavailable; manager retained"
 		case worker.VMChild && !worker.Ended:
@@ -147,9 +180,14 @@ func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStat
 		if meta.NoteID == "" || meta.Created == nil {
 			continue
 		}
-		n := workermail.NoteStatus{ID: meta.NoteID, JobID: e.JobID, AttemptID: e.AttemptID, Session: meta.Session, Instance: meta.Instance, Kind: meta.Kind, Created: *meta.Created, State: w.State, Admission: w.Admission, Source: "wake:" + w.ID, Answered: w.WorkerReplyExported}
+		worker := st.Workers[key(w.ConversationID, key(meta.Session, meta.Instance))]
+		n := workermail.NoteStatus{ID: meta.NoteID, JobID: e.JobID, AttemptID: e.AttemptID, Session: meta.Session, Instance: meta.Instance, Kind: meta.Kind, Created: *meta.Created, State: w.State, Admission: w.Admission, Source: "wake:" + w.ID, Answered: w.WorkerReplyExported || worker.ActionID != "" && w.WorkerReply != ""}
 		if w.Admission != 0 {
-			n.AdmissionPhase = st.Admissions[admissionKey(w.ConversationID, w.Admission)].Phase
+			admission := st.Admissions[admissionKey(w.ConversationID, w.Admission)]
+			n.AdmissionPhase = admission.Phase
+			if alias := admission.ReusedFinal; alias != nil {
+				addOutput(w.ID, alias.PublicationID)
+			}
 			n.Publications = publications[w.ID]
 			sort.Slice(n.Publications, func(i, j int) bool { return n.Publications[i].ID < n.Publications[j].ID })
 		}

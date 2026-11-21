@@ -109,6 +109,16 @@ func (t *teammateConnector) history(d TeammateDiscussion, threadAnchor ...string
 }
 
 func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, threadAnchor string) (out TeammateHistoryPage, err error) {
+	if q.Source == "publication" {
+		if q.Publication == nil || q.Publication.ID == "" || q.Publication.AdmissionID == "" || q.Publication.SystemCause != "" {
+			return out, ErrInvalid
+		}
+		if err := t.checkDiscussion(ctx, d); err != nil {
+			return out, err
+		}
+		out.ConfirmedMessageIDs, err = t.service.Store.confirmedPublication(d, *q.Publication)
+		return out, err
+	}
 	if q.Source == "admission" || q.Source == "grant" {
 		if q.Voice != (schema.VoiceOrigin{}) {
 			return out, t.verifyCallAdmission(ctx, d, q)

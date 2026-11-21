@@ -151,7 +151,7 @@ func testPersonalHoldRecovery(t *testing.T, firstMissing bool) {
 	}
 	tick(true)
 	tick(false)
-	if len(posts) != 1 || !strings.Contains(posts[0], "unfinished input") || noticeNonce == "" {
+	if len(posts) != 1 || !strings.Contains(posts[0], "save the draft") || !strings.Contains(posts[0], "Check its outcome") || !strings.Contains(posts[0], "resume-manual") || noticeNonce == "" {
 		t.Fatalf("missing operational notice: %q", posts)
 	}
 	reopen()
@@ -214,12 +214,14 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 	notify(d, "one", false)
 	notify(d, "one", true)
 	notify(d, "two", true)
-	if len(bodies) != 1 || !strings.Contains(bodies[0], "cannot confirm") {
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "Messages queued") {
 		t.Fatalf("unexpected scope, cause or cooldown %q", bodies)
 	}
 	now = now.Add(teammateInputNoticeInterval)
-	notify(d, "two", true)
-	if len(bodies) != 2 || !strings.Contains(bodies[1], "unfinished input") {
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "two", DirectInput: true, CustodyLost: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || !strings.Contains(bodies[1], "save any draft") || !strings.Contains(bodies[1], "exit normally") || strings.Contains(bodies[1], "resume-manual") {
 		t.Fatalf("persistent second hold after cooldown: %q", bodies)
 	}
 	hold := &TeammateInputHold{AdmissionID: "two", EffectUncertain: true}
@@ -228,8 +230,17 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(bodies) != 3 || !strings.Contains(bodies[2], "cannot confirm the outcome") || strings.Contains(bodies[2], "ready for the next message") {
+	if len(bodies) != 3 || !strings.Contains(bodies[2], "outcome unknown") || !strings.Contains(bodies[2], "Don’t resend") {
 		t.Fatalf("uncertain native effect did not publish its own receipt-backed notice: %q", bodies)
+	}
+	now = now.Add(teammateInputNoticeInterval)
+	for range 2 {
+		if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "three", DirectInput: true, EffectUncertain: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(bodies) != 4 || !strings.Contains(bodies[3], "reached the dispatcher") || !strings.Contains(bodies[3], "save any draft") || !strings.Contains(bodies[3], "Don’t resend") {
+		t.Fatalf("missing or repeated in-flight draft notice: %q", bodies)
 	}
 
 }

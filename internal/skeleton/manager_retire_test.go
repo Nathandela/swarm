@@ -11,6 +11,7 @@ import (
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 func TestManagerRetireRefusesChangedNativeTurnControllerLeaseAndManualDraft(t *testing.T) {
@@ -55,6 +56,11 @@ func TestManagerRetireRefusesChangedNativeTurnControllerLeaseAndManualDraft(t *t
 	if claimed, err := d.retireManager(t.Context(), binding.Session, req, target); claimed || !errors.Is(err, managerproof.ErrUnavailable) {
 		t.Fatalf("controlled terminal reached the retirement effect: %v %v", claimed, err)
 	}
+	replace := req
+	replace.Replacement = schema.ManagerReplaceCustody
+	if claimed, err := d.retireManager(t.Context(), binding.Session, replace, target); claimed || !errors.Is(err, managerproof.ErrUnavailable) {
+		t.Fatalf("custody replacement ignored attached operator: %v %v", claimed, err)
+	}
 	if err := attach.Detach(); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +69,9 @@ func TestManagerRetireRefusesChangedNativeTurnControllerLeaseAndManualDraft(t *t
 	}
 	if claimed, err := d.retireManager(t.Context(), binding.Session, req, target); claimed || !errors.Is(err, managerproof.ErrUnavailable) {
 		t.Fatalf("manual draft reached the retirement effect: %v %v", claimed, err)
+	}
+	if claimed, err := d.retireManager(t.Context(), binding.Session, replace, target); claimed || !errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+		t.Fatalf("custody replacement ignored draft: %v %v", claimed, err)
 	}
 	final, _ := d.core.Get(binding.Session)
 	if final.ManagerRetirement.OperationID != "" {

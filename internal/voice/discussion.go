@@ -18,11 +18,12 @@ import (
 )
 
 var ErrDiscussionActivationUnavailable = errors.New("voice: discussion manager could not become ready")
-var ErrDiscussionDirectInputHeld = errors.New("voice: queued Discord message is waiting for you to submit or clear the draft in the Swarm terminal")
+var ErrDiscussionDirectInputHeld = errors.New("voice: queued Discord message is waiting for direct terminal input to be resolved")
 var ErrDiscussionEffectUncertain = errors.New("voice: native submission outcome is unconfirmed")
 var ErrDiscussionNativeProofHeld = errors.New("voice: queued Discord message is waiting for the dispatcher native input proof; inspect the dispatcher in Swarm")
 
 type DiscussionInputHold struct {
+	CustodyLost bool
 	AdmissionID string
 	Reason      error
 }
@@ -701,25 +702,41 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	return d.maybeRetire(ctx)
 }
 
-// Only report a hold against the oldest open admission, the one the FIFO can attempt.
+// Attribute uncertain effects only to the first open admission. A verified draft blocks the entire FIFO.
 func (d *DiscussionController) inputHold(reason, fallback error) error {
 	// Tick may have persisted an effect receipt or a proven pre-effect refusal.
 	st, err := d.store.readView()
 	if err != nil {
 		return errors.Join(fallback, err)
 	}
-	var head Admission
+	var head, owner Admission
 	for _, a := range st.Admissions {
-		if a.ConversationID == st.CurrentConversation && a.SettledAt.IsZero() &&
-			(head.Sequence == 0 || a.Sequence < head.Sequence) {
+		if a.ConversationID != st.CurrentConversation || !a.SettledAt.IsZero() {
+			continue
+		}
+		if head.Sequence == 0 || a.Sequence < head.Sequence {
 			head = a
+		}
+		if reason == ErrDiscussionDirectInputHeld && d.scope.DMOwnerID != "" && a.Origin != nil &&
+			d.scope.validateOrigin(*a.Origin) && (owner.Sequence == 0 || a.Sequence < owner.Sequence) {
+			owner = a
 		}
 	}
 	if head.Origin != nil && (head.Phase == "executing" || head.Phase == "uncertain") {
 		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: ErrDiscussionEffectUncertain}
 	}
+	// Native delivery already happened. Preserve its receipt while the draft prevents verifying the reply.
+	if head.Origin != nil && reason == ErrDiscussionDirectInputHeld {
+		switch head.Phase {
+		case "submitted", "admitted", "running":
+			return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: errors.Join(reason, ErrDiscussionEffectUncertain)}
+		}
+	}
+	if head.Origin == nil && strings.HasPrefix(head.SourceID, "wake:") && owner.Sequence != 0 {
+		head = owner
+	}
 	if reason != nil && head.Origin != nil && (head.Phase == "" || head.Phase == "prepared") {
-		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: reason}
+		return &DiscussionInputHold{AdmissionID: head.Origin.RequestID, Reason: reason, CustodyLost: st.Conversations[st.CurrentConversation].CustodyLost}
 	}
 	return fallback
 }

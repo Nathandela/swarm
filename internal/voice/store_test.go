@@ -585,3 +585,48 @@ func TestStoreTrustedSnapshotReconciliationRetainsGuardsAndCoalescesJournalPosit
 		t.Fatal("irrelevant journal positions created model work")
 	}
 }
+
+func TestCompactionRetainsOnlyFinalReferencedByYoungerAdmission(t *testing.T) {
+	s, b, _ := testStore(t)
+	now := time.Now().UTC()
+	if err := s.update(func(st *State) error {
+		for i, at := range []time.Time{now.Add(-8 * 24 * time.Hour), now} {
+			a, err := allocateAdmission(st, b, []string{"old", "new"}[i])
+			if err != nil {
+				return err
+			}
+			a.SettledAt = at
+			if i == 1 {
+				a.ReusedFinal = &ReusedFinalReceipt{PublicationID: "shared", OutputID: "reused", NativeTurnID: "turn", Sequence: 1}
+			}
+			putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, a.Sequence), a)
+		}
+		c := st.Conversations[b.ConversationID]
+		c.RetiredThrough = 2
+		putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
+		for _, id := range []string{"shared", "other"} {
+			p := Publication{ConversationID: b.ConversationID, Admission: 1, ID: id, Final: true}
+			putRecord(st, "publications", &st.Publications, key(b.ConversationID, id), p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Compact(b, now); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Admissions) != 1 || len(st.Publications) != 1 || st.Publications[key(b.ConversationID, "shared")].ID != "shared" {
+		t.Fatal("did not retain only the referenced canonical final", st.Publications)
+	}
+	if err := s.Compact(b, now.Add(8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Snapshot()
+	if err != nil || len(st.Admissions) != 0 || len(st.Publications) != 0 {
+		t.Fatal("canonical final outlived its last receipt", st.Publications, err)
+	}
+}
