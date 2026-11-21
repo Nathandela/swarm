@@ -21,6 +21,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -129,8 +130,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	t.Cleanup(cancel)
 	dialOwner := func() *protocol.Client {
 		var owner *protocol.Client
+		caps := []string{protocol.CapManagerProvenance}
+		if callWorkers && interruption == "restart" {
+			caps = append(caps, protocol.CapManagerRetire, protocol.CapManagerReplace)
+		}
 		for end := time.Now().Add(20 * time.Second); time.Now().Before(end); {
-			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance})
+			owner, err = protocol.DialContext(ctx, socket, caps)
 			if err == nil {
 				break
 			}
@@ -427,6 +432,20 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				return discord.TeammateHistoryPage{}, nil
 			}
+			managerSessions := []string{native.Binding.NativeSessionID}
+			retiredManager := ""
+			currentRoster := func() []protocol.SessionView {
+				rows := roster()
+				return slices.DeleteFunc(rows, func(row protocol.SessionView) bool {
+					return retiredManager != "" && row.ID == retiredManager && row.Status.Process == status.ProcessExited
+				})
+			}
+			hasFirstAttempt := func(st discord.TeammateNativeStatus) bool {
+				return slices.ContainsFunc(st.Jobs, func(got discord.TeammateJobStatus) bool {
+					return got.ID == first.launch.ID && got.AttemptID == first.launch.AttemptID &&
+						got.Session == first.launch.Session && got.Instance == first.launch.Instance
+				})
+			}
 			for i, j := range []*job{&first, &second} {
 				text := fmt.Sprintf("Switch project to fixture. Launch one Codex worker through swarm_create, using action_id call-worker-%s and cwd %s. Pass this as its initial prompt: %s Do not read the file yourself or send further instructions. End your turn promptly. When that completed worker wakes you, call swarm_read with its exact session, session_instance, job_id and attempt_id, then publish only the verified marker as a final reply.", j.id, project, j.assignment)
 				a := admission
@@ -441,9 +460,48 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				if err := r.Admit(ctx, a, reader); err != nil {
 					t.Fatal(err)
 				}
+				if j == &second && interruption == "restart" {
+					// This verified new input supplies the pending work required for custody replacement.
+					var replacement protocol.ManagerRuntimeStatus
+					wait("replacement manager after fresh admission", 90*time.Second, func() bool {
+						st, err := r.Status(thread)
+						if err != nil || st.State != "active" || st.ManagerSession == "" || st.ManagerInstance == "" ||
+							st.ManagerSession == manager || st.ManagerInstance == instance || !hasFirstAttempt(st) {
+							return false
+						}
+						replacement, err = owner.ManagerRuntime(st.ManagerSession, st.ManagerInstance)
+						return err == nil && replacement.ReadyForInput && replacement.Binding.ConversationID == native.Binding.ConversationID &&
+							adapter.IsCanonicalConversationID(replacement.Binding.NativeSessionID)
+					})
+					_, local, ok := protocol.ParseID(manager)
+					if !ok {
+						t.Fatal("invalid original manager session")
+					}
+					store, err := persist.NewStore(state)
+					if err != nil {
+						t.Fatal(err)
+					}
+					old, err := store.Load(local)
+					if err != nil {
+						t.Fatal(err)
+					}
+					target := old.ManagerRetirement
+					req := protocol.ManagerRetireReq{Binding: native.Binding, Generation: target.Generation, Checkpoint: target.Checkpoint,
+						Replacement: schema.ManagerReplaceCustody, ExpectedTurn: protocol.ManagerNativeTurn{State: "unknown"}}
+					receipt, err := owner.ManagerRetire(ctx, req, true)
+					if err != nil || target.Instance != instance || target.Replacement != req.Replacement || old.Status.Process != status.ProcessExited ||
+						receipt.State != "retired" || receipt.OperationID != target.OperationID || receipt.OperationID != protocol.ManagerRetireOperationID(req) {
+						t.Fatalf("exact old manager retirement: state=%q instanceMatch=%t cause=%q err=%v", receipt.State, target.Instance == instance, target.Replacement, err)
+					}
+					retiredManager = manager
+					if !slices.Contains(managerSessions, replacement.Binding.NativeSessionID) {
+						managerSessions = append(managerSessions, replacement.Binding.NativeSessionID)
+					}
+					t.Log("verified old manager retirement receipt and distinct replacement manager after fresh input")
+				}
 				wait("verified worker launch for "+j.id+" voice turn", 75*time.Second, func() bool {
 					state, err := r.Status(thread)
-					if err != nil || state.PendingAdmissions != 0 || len(roster()) != i+2 {
+					if err != nil || state.PendingAdmissions != 0 || len(currentRoster()) != i+2 {
 						return false
 					}
 					for _, launch := range state.Jobs {
@@ -514,16 +572,25 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 						t.Fatalf("old voice operation accepted replacement coordinates: %v", err)
 					}
 					t.Log("reopened ledger retained the original cutover and the waiting worker shim survived")
+					if interruption == "restart" {
+						var lost error
+						for end := time.Now().Add(15 * time.Second); time.Now().Before(end); {
+							if _, lost = owner.ManagerRuntime(manager, instance); errors.Is(lost, managerproof.ErrQuarantined) {
+								break
+							}
+							time.Sleep(100 * time.Millisecond)
+						}
+						if !errors.Is(lost, managerproof.ErrQuarantined) {
+							t.Fatalf("original manager after supervisor restart: expected typed custody loss, got %v", lost)
+						}
+						continue
+					}
 					wait("reopened runtime found original waiting worker", 45*time.Second, func() bool {
 						st, err := r.Status(thread)
 						if err != nil || st.State != "active" || st.ManagerSession != manager || st.ManagerInstance != instance || len(roster()) != 2 {
 							return false
 						}
-						// The VM observer can retain a roster row for the same physical worker.
-						return slices.ContainsFunc(st.Jobs, func(got discord.TeammateJobStatus) bool {
-							return got.ID == first.launch.ID && got.AttemptID == first.launch.AttemptID &&
-								got.Session == first.launch.Session && got.Instance == first.launch.Instance
-						})
+						return hasFirstAttempt(st)
 					})
 					rebound, err := owner.ManagerRuntime(manager, instance)
 					if err != nil || rebound.Binding.NativeSessionID != native.Binding.NativeSessionID {
@@ -608,7 +675,10 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, j := range []*job{&first, &second} {
-				inputs := codexCanaryInputs(t, nativeHome, native.Binding.NativeSessionID, "using action_id call-worker-"+j.id)
+				inputs := 0
+				for _, session := range managerSessions {
+					inputs += codexCanaryInputs(t, nativeHome, session, "using action_id call-worker-"+j.id)
+				}
 				publications := 0
 				for _, p := range outputs {
 					if strings.TrimSpace(p.Body) == j.marker {
@@ -620,7 +690,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 			}
 			t.Log("verified two exact native worker turns and canonical receipts in reverse order, with one native input and one marked result per worker")
-			if rows := roster(); len(rows) != 3 || first.launch.Session == second.launch.Session {
+			if rows := currentRoster(); len(rows) != 3 || first.launch.Session == second.launch.Session {
 				t.Fatalf("expected one manager and two distinct workers, observed %d sessions", len(rows))
 			}
 		}

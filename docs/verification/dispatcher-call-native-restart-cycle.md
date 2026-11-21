@@ -4,7 +4,7 @@ The uninterrupted `TestHostedTeammateLifecycle` worker canary passed in 99.51 se
 
 ## Interruption and acceptance checks
 
-The opt-in worker canary waits for a marker file written by the first worker and checks its running shim before closing the real `teammatemanager.Runtime`. Its result file remains withheld. The reopened runtime uses the same durable directory. The test verifies the same supervisor endpoint, native manager conversation, worker session and instance, attempt, and shim PID and start time.
+The opt-in worker canary waits for a marker file written by the first worker and checks its running shim before closing the real `teammatemanager.Runtime`. Its result file remains withheld. The reopened runtime uses the same durable directory. Both paths verify the supervisor endpoint and original worker session, instance, attempt, shim PID and start time. Connector-only recovery also checks that the original manager and its native conversation remain available.
 
 - `SWARM_TEAMMATE_TEST_INTERRUPTION=connector` closes and reopens the connector runtime with the same supervisor process.
 - `SWARM_TEAMMATE_TEST_INTERRUPTION=restart` also terminates the supervisor with SIGTERM, waits for it to exit, and starts the same binary on the original isolated state and socket. The replacement supervisor must have a different PID.
@@ -26,6 +26,14 @@ The baseline and first interruption runs used the same clean supervisor binary f
 | Supervisor restart and connector reopen | Verified a different supervisor PID on the same endpoint. Native reconciliation returned an uncertain input outcome. The retained ledger recorded custody loss and a paused scheduler. The original enrolled worker and cutover admission persisted. The run did not reach replacement-call submission or publication. |
 
 The deterministic call admission, reverse-attempt provenance, and synthetic Gateway playback fixtures passed. Repository build and vet passed, and scoped teammate-manager lint reported zero issues. The teammate-manager and voice focused race checks passed. Broader Discord race attempts hit a temporary-file mode mismatch under a restrictive umask and unrelated call-media timeouts.
+
+## What the retained restart ledger establishes
+
+The current voice ledger from the failed run (transaction 57) contains three completed, settled admissions, zero wakes and one worker still enrolled. The conversation recorded custody loss and a paused scheduler with no retirement request. The original manager proof ledger (transaction 26) retained its owner and 16 replay guards. The replacement supervisor recorded a typed custody rejection when it attempted to rejoin the original manager.
+
+The previous canary waited for the original manager to be active before it submitted the second request. At that point the waiting worker had no result, and there was no unsettled admission or active wake to trigger replacement. The production controller intentionally requires pending work before creating a replacement intent.
+
+The revised restart probe verifies typed quarantine and the original worker and cutover, then submits the fresh second admission while the first worker result is still withheld. It requires a ready replacement with distinct physical session and instance, an exact retired receipt for the original instance and checkpoint, and the original enrolled worker attempt. It counts matching native inputs across the distinct manager rollouts and checks both canonical results. The connector-only control still requires the same manager. The revised hosted probe has not yet produced a native result.
 
 ## Reproduction
 
