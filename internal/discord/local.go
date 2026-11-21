@@ -44,19 +44,20 @@ type LocalWorker struct {
 	Worker
 	Excluded bool `json:"excluded"`
 }
+
 // CallRuntime identifies the running connector when comparing candidate and published calls.
 type CallRuntime struct {
-	Version string `json:"version"`
-	Commit string `json:"commit,omitempty"`
-	PID int `json:"pid"`
+	Version       string `json:"version"`
+	Commit        string `json:"commit,omitempty"`
+	PID           int    `json:"pid"`
 	ApplicationID string `json:"application_id"`
-	GuildID string `json:"guild_id"`
-	RoomID string `json:"room_id"`
-	DiscussionID string `json:"discussion_id"`
+	GuildID       string `json:"guild_id"`
+	RoomID        string `json:"room_id"`
+	DiscussionID  string `json:"discussion_id"`
 }
 
 type LocalStatus struct {
-	CallRuntime *CallRuntime `json:"call_runtime,omitempty"`
+	CallRuntime    *CallRuntime           `json:"call_runtime,omitempty"`
 	CallMetrics    *dispatcherCallMetrics `json:"call_metrics,omitempty"`
 	Calls          string                 `json:"calls,omitempty"`
 	ProjectAccess  string                 `json:"project_access,omitempty"`
