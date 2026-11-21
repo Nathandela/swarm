@@ -169,6 +169,8 @@ type dispatcherCallFixture struct {
 	render     chan callFixtureRender
 	written    chan string
 	postID     atomic.Uint64
+	loseTail atomic.Bool
+	lostNonce chan string
 }
 
 func newDispatcherCallFixture(t *testing.T, team bool) *dispatcherCallFixture {
@@ -182,7 +184,7 @@ func openDispatcherCallFixture(t *testing.T, team bool, storeDir string, native 
 		native = &callFixtureNative{admissions: make(map[string]TeammateAdmission), accepted: make(chan TeammateAdmission, 8)}
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	f := &dispatcherCallFixture{t: t, ctx: ctx, team: team,
+	f := &dispatcherCallFixture{t: t, ctx: ctx, team: team, lostNonce: make(chan string, 1),
 		native:   native,
 		gateways: make(chan callFixtureGateway, 3), messages: make(chan string, 16),
 		mediaAudio: make(chan callMediaEvent, 8), spoken: make(chan []byte, 8),
@@ -345,13 +347,19 @@ func (f *dispatcherCallFixture) serveDiscord(w http.ResponseWriter, r *http.Requ
 		}
 		_ = json.NewEncoder(w).Encode(page)
 	case "POST " + discussion + "/messages":
-		var body struct{ Content string }
+		var body struct{ Content, Nonce string }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 			http.Error(w, "invalid fixture request", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(discordgo.Message{ID: strconv.FormatUint(200+f.postID.Add(1), 10), ChannelID: f.marker.ChannelID, GuildID: f.marker.GuildID,
+		id := strconv.FormatUint(200+f.postID.Add(1), 10)
+		if body.Content == "tail" && f.loseTail.CompareAndSwap(true, false) {
+			f.lostNonce <- body.Nonce
+			http.Error(w, "ambiguous result", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(discordgo.Message{ID: id, ChannelID: f.marker.ChannelID, GuildID: f.marker.GuildID,
 			Content: body.Content, Author: &discordgo.User{ID: "99", Bot: true}})
 		f.written <- body.Content
 	case "GET /channels/31", "GET /channels/31/permissions/member/99", "GET /channels/31/permissions/member/70", "GET /channels/31/permissions/member/71",
@@ -874,4 +882,46 @@ func TestDispatcherCallsIntegration(t *testing.T) {
 	team.expectConsent()
 	team.expectControlWatermark("104")
 	team.expectNoTextIngress()
+}
+
+func TestDispatcherCallMultipartUncertainWorkerReadout(t *testing.T) {
+	f := newDispatcherCallFixture(t, false)
+	_, a := f.begin()
+	f.loseTail.Store(true)
+	body := strings.Repeat("x", 1900) + "tail"
+	first := TeammatePublication{ID: "first", JobID: "job", AttemptID: "attempt", AdmissionID: a.OperationID, Body: body, Sequence: 1}
+	f.publish(first)
+	nonce := callFixtureReceive(t, f.ctx, f.lostNonce, "ambiguous tail POST")
+	expectRender := func(turn string) {
+		t.Helper()
+		if got := callFixtureReceive(t, f.ctx, f.render, "speech dispatch"); got != (callFixtureRender{turn, body}) {
+			t.Fatalf("unexpected speech dispatch for turn %q, got %q", turn, got.delegation)
+		}
+	}
+	expectRender("1")
+	expectIDs := func(p TeammatePublication, want ...string) {
+		t.Helper()
+		page, err := f.connector.history(a.Discussion)(f.ctx, TeammateHistoryQuery{Source:"publication", Publication:&p})
+		if err != nil || !slices.Equal(page.ConfirmedMessageIDs, want) {
+			t.Fatalf("publication %s: IDs %v, want %v, err %v", p.ID, page.ConfirmedMessageIDs, want, err)
+		}
+	}
+	expectIDs(first)
+	f.audio(2)
+	next := callFixtureReceive(t, f.ctx, f.native.accepted, "second request")
+	second := first
+	second.ID, second.JobID, second.AttemptID, second.AdmissionID, second.Sequence = "second", "job2", "attempt2", next.OperationID, 2
+	f.publish(first, second)
+	expectRender("2")
+	expectIDs(second, "203", "204")
+	expectIDs(first)
+	late := map[string]any{"id":"202", "channel_id":a.Route.ChannelID, "author":map[string]string{"id":"99"}, "nonce":nonce, "content":"edited tail"}
+	teammateTestEvent(t, f.connector, 40, "MESSAGE_CREATE", late)
+	expectIDs(first)
+	late["content"] = "tail"
+	teammateTestEvent(t, f.connector, 41, "MESSAGE_CREATE", late)
+	expectIDs(first, "201", "202")
+	if got := f.postID.Load(); got != 4 {
+		t.Fatalf("got %d POSTs for two two-part results", got)
+	}
 }

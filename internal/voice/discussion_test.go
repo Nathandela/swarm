@@ -783,7 +783,7 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 		name                                            string
 		proofFirst, changed, steered, human, correction bool
 		readFirst, readSecond, splitScope               bool
-		recovered, repeatedNote, liveProse              bool
+		recovered, repeatedNote, liveProse, paraphrase  bool
 		want                                            int
 	}{
 		{name: "note then proof", want: 1},
@@ -798,6 +798,7 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 		{name: "recovered distinct note IDs", recovered: true, repeatedNote: true, want: 1},
 		{name: "recovered note correction", recovered: true, repeatedNote: true, changed: true, want: 2},
 		{name: "recovered changed answer", recovered: true, correction: true, want: 2},
+		{name: "same recovered evidence with paraphrased final", recovered: true, paraphrase: true, want: 2},
 		{name: "recovered worker after steering", recovered: true, steered: true, want: 2},
 		{name: "recovered human restatement", recovered: true, human: true, want: 2},
 		{name: "corrected evidence", changed: true, want: 2},
@@ -901,7 +902,7 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 					}
 					a := st.Admissions[admissionKey(b.ConversationID, seq)]
 					notice := discussionPriorFinalNotice(st, a, "new wake", "codex", "")
-					wantNotice := tc.want == 1 || tc.correction || tc.splitScope
+					wantNotice := tc.want == 1 || tc.correction || tc.paraphrase || tc.splitScope
 					if strings.Contains(notice, "already scheduled") != wantNotice {
 						t.Fatalf("prior-final guidance = %q, want notice %v", notice, wantNotice)
 					}
@@ -917,6 +918,9 @@ func TestDiscussionCompletionNoteAndNativeProofPublishOnce(t *testing.T) {
 				body := "The worker reported seven passing checks."
 				if tc.liveProse {
 					body = "larch 713 (23 × 31)."
+				}
+				if tc.paraphrase && i == 1 {
+					body = "All seven checks passed according to the worker."
 				}
 				if tc.correction && i == 1 {
 					body = "Correction: only six of those checks used the required fixture."
