@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -176,8 +178,31 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if personal {
 		thread.Route = discord.Route{ChannelID: cfg.DMChannelID}
 	}
-	reader := func(_ context.Context, _ discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
-		return discord.TeammateHistoryPage{Messages: []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}}, nil
+	history := []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}
+	var historyMu sync.Mutex
+	durable := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE")
+	reader := func(_ context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
+		historyMu.Lock()
+		defer historyMu.Unlock()
+		if durable == "" {
+			return discord.TeammateHistoryPage{Messages: slices.Clone(history)}, nil
+		}
+		switch q.Source {
+		case "", "thread":
+			return discord.TeammateHistoryPage{Messages: slices.Clone(history)}, nil
+		case "audience", "publication":
+			// This private rehearsal has a fixed audience and no Discord transport receipts.
+			return discord.TeammateHistoryPage{}, nil
+		case "admission", "grant":
+			for _, m := range history {
+				if m.ID == q.MessageID && m.Author.ID == q.AuthorID && q.AdmissionID == "input-"+m.ID && q.Revision == "rev-"+m.ID {
+					return discord.TeammateHistoryPage{}, nil
+				}
+			}
+			return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
+		default:
+			return discord.TeammateHistoryPage{}, discord.ErrNotAuthorized
+		}
 	}
 	admit := func(id, actor, body string) error {
 		t.Helper()
@@ -185,6 +210,11 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if personal {
 			a.Authority = discord.AuthorityOwnerDirect
 			a.Route.GuildID = ""
+		}
+		if durable != "" {
+			historyMu.Lock()
+			history = append(history, discord.TeammateHistoryMessage{ContextMessage: discord.ContextMessage{ID: id, Author: a.Author, Text: body, CreatedAt: time.Now().UTC()}})
+			historyMu.Unlock()
 		}
 		return r.Admit(ctx, a, reader)
 	}
@@ -234,7 +264,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		runHostedAttachment(t, ctx, r, thread, reader, project, state, fixture, wait, &outputs, roster)
 		return
 	}
-	if provider := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE"); provider != "" {
+	if provider := durable; provider != "" {
 		if !vmMode || (provider != "codex" && provider != "claude") {
 			t.Fatal("durable rehearsal requires VM mode and a codex or claude worker")
 		}
