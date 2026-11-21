@@ -264,6 +264,99 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		runHostedAttachment(t, ctx, r, thread, reader, project, state, fixture, wait, &outputs, roster)
 		return
 	}
+	if !vmMode && durable == "codex" && interruption == "restart" {
+		question := "Which tree " + hex.EncodeToString(marker[:4]) + "?"
+		answer := "larch-" + hex.EncodeToString(marker[4:])
+		if err := os.WriteFile(filepath.Join(project, "question.txt"), []byte(question), 0600); err != nil {
+			t.Fatal(err)
+		}
+		send("301", "401", "Use one Codex worker in the fixture project. Its original turn must write the contents of question.txt to waiting.txt, then wait up to eight minutes for the file release. "+
+			"After release it must ask the exact question from question.txt using swarm teammate message --kind needs-input --text, get your answer with swarm teammate reply --id and --wait 90s, and write the returned answer text in answer.txt. "+
+			"Then it must send exactly the text from proof.txt using swarm teammate message --kind complete, save that queued receipt to sent.txt, and return exactly the same proof text in its native final. "+
+			"Only the worker may read the project files. When you receive its question answer privately with exactly "+answer+" using swarm_reply. Do not reveal the answer to the worker in advance. Publish only one final result consisting of the exact proof text.")
+		wait("enrolled worker waiting before restart", 150*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "waiting.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == question
+		})
+		before, err := r.Status(thread)
+		if err != nil || len(before.Jobs) != 1 || before.Jobs[0].Instance == "" {
+			t.Fatal("missing enrolled worker", before, err)
+		}
+		job := before.Jobs[0]
+		_, local, ok := protocol.ParseID(job.Session)
+		if !ok {
+			t.Fatal("bad enrolled worker session", job.Session)
+		}
+		store, err := persist.NewStore(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		original, err := store.Load(local)
+		if err != nil || original.ShimPID <= 0 || original.ShimStartTime <= 0 || original.Status.Process != status.ProcessRunning {
+			t.Fatal("original worker must be running", err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		_ = cmd.Wait()
+		cmd = startDaemon(bin)
+		owner = dialOwner()
+		challenge := "wake-" + hex.EncodeToString(marker[:])
+		send("302", "401", "While the worker continues, publish one short reply containing exactly "+challenge+".")
+		wait("Discord-only challenge after enrolled worker restart", 120*time.Second, func() bool {
+			return slices.ContainsFunc(outputs, func(p discord.TeammatePublication) bool {
+				return p.AdmissionID == "input-302" && strings.TrimSpace(p.Body) == challenge
+			})
+		})
+		current, err := store.Load(local)
+		if err != nil || current.ShimPID != original.ShimPID || current.ShimStartTime != original.ShimStartTime || current.Status.Process != status.ProcessRunning {
+			t.Fatal("enrolled worker did not survive", err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		wait("recovered question returned exact private answer", 150*time.Second, func() bool {
+			raw, err := os.ReadFile(filepath.Join(project, "answer.txt"))
+			return err == nil && strings.TrimSpace(string(raw)) == answer
+		})
+		wait("enrolled completion and native evidence settled", 180*time.Second, func() bool {
+			sent, readErr := os.ReadFile(filepath.Join(project, "sent.txt"))
+			view, err := r.Status(thread)
+			if readErr != nil || !strings.Contains(string(sent), "queued") || err != nil || view.PendingAdmissions != 0 || len(view.Jobs) != 1 || view.Jobs[0].State != "turn_completed" {
+				return false
+			}
+			questions, completions := 0, 0
+			for _, n := range view.Notes {
+				if n.Session != job.Session || n.Instance != job.Instance || n.JobID != job.ID || n.AttemptID != job.AttemptID || n.Admission == 0 || n.AdmissionPhase != "completed" {
+					continue
+				}
+				if n.Kind == "needs-input" && n.Answered {
+					questions++
+				}
+				if n.Kind == "complete" {
+					completions++
+				}
+			}
+			return questions == 1 && completions == 1
+		})
+		wakes, reports := 0, 0
+		for _, p := range outputs {
+			if p.AdmissionID == "input-302" && strings.Contains(p.Body, challenge) {
+				wakes++
+			}
+			if p.JobID == job.ID && p.AttemptID == job.AttemptID && strings.Contains(p.Body, proof) {
+				reports++
+			}
+		}
+		if wakes != 1 || reports != 1 {
+			t.Fatalf("enrolled attempt %s produced %d challenge answers and %d result publications", job.AttemptID, wakes, reports)
+		}
+		t.Logf("one challenge and one result for enrolled %s/%s, attempt %s, original shim %d", job.Session, job.Instance, job.AttemptID, original.ShimPID)
+		return
+	}
 	if provider := durable; provider != "" {
 		if !vmMode || (provider != "codex" && provider != "claude") {
 			t.Fatal("durable rehearsal requires VM mode and a codex or claude worker")
