@@ -375,7 +375,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 	if conv.Retirement == nil {
 		return ManagerBinding{}, ErrCorrupt
 	}
-	if conv.Retirement.Replacement != "" && conv.ReplacementAfter > d.now().Unix() {
+	if (conv.Retirement.Replacement != "" || conv.FailedResume != nil && conv.FailedResume.Attempt == 3) && conv.ReplacementAfter > d.now().Unix() {
 		return ManagerBinding{}, replacementRetryError(conv.ReplacementAfter)
 	}
 	retirement := protocol.ManagerRetireOperationID(*conv.Retirement)
@@ -387,7 +387,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		stage := 0
 		if prev := conv.FailedResume; prev != nil {
 			stage = prev.Attempt
-			if stage < 1 || stage > 2 || prev.Session == "" || prev.Instance == "" {
+			if stage < 1 || stage > 3 || prev.Session == "" || prev.Instance == "" {
 				return ManagerBinding{}, ErrCorrupt
 			}
 			if d.scope.VerifyAudience != nil {
@@ -398,9 +398,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 			source, instance = prev.Session, prev.Instance
 		}
 		file := "resume-" + suffix
-		if stage == 2 || conv.Retirement.Replacement != "" {
+		if stage >= 2 || conv.Retirement.Replacement != "" {
 			file = "reconstruct-" + suffix
-			if conv.Retirement.Replacement != "" && conv.FailedResume != nil {
+			if stage == 3 || conv.Retirement.Replacement != "" && conv.FailedResume != nil {
 				file = "reconstruct-" + hashValue([]string{retirement, conv.FailedResume.Session}) + ".json"
 			}
 		} else {
@@ -415,7 +415,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		// Start a new native history only after confirming retirement and ruling out
 		// any in-flight legacy resume. Preserve the thread's tracked work and outbox.
 		migrate := false
-		if conv.Retirement.Replacement == "" && d.cfg.VMProjectAccess && !conv.Binding.NativeCLI && stage != 2 {
+		if conv.Retirement.Replacement == "" && d.cfg.VMProjectAccess && !conv.Binding.NativeCLI && stage < 2 {
 			var err error
 			migrate, err = d.canMigrateParked(ctx, conv, file, req)
 			if err != nil {
@@ -429,7 +429,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
 		if err != nil {
 			var failed *failedResume
-			if conv.Retirement.Replacement != "" {
+			if conv.Retirement.Replacement != "" || stage >= 2 || migrate {
 				delayErr := d.store.update(func(st *State) error {
 					c := st.Conversations[d.cfg.ConversationID]
 					if !sameParkedManager(st, generation, c, conv) {
@@ -438,6 +438,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 					c.ReplacementAfter = d.now().Add(discussionReplacementInterval).Unix()
 					if errors.As(err, &failed) {
 						failed.Attempt = 1
+						if conv.Retirement.Replacement == "" {
+							failed.Attempt = 3
+						}
 						c.FailedResume = failed
 					}
 					putRecord(st, "conversations", &st.Conversations, d.cfg.ConversationID, c)
@@ -445,7 +448,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 				})
 				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err, delayErr)
 			}
-			if migrate || stage == 2 || !errors.As(err, &failed) {
+			if !errors.As(err, &failed) {
 				if errors.Is(err, ErrControllerUncertain) || errors.Is(err, ErrStale) || errors.Is(err, ErrConflict) {
 					return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
 				}
@@ -470,7 +473,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		if (conv.Retirement.Replacement == "" && next.LoginEpoch != conv.Binding.LoginEpoch) || next.SessionInstance == conv.Binding.SessionInstance || next.SessionID == conv.Binding.SessionID {
 			return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 		}
-		if migrate || stage == 2 || conv.Retirement.Replacement != "" {
+		if migrate || stage >= 2 || conv.Retirement.Replacement != "" {
 			if next.NativeSessionID == conv.Binding.NativeSessionID {
 				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 			}

@@ -128,7 +128,7 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 		c := st.Conversations[id]
 		if parked != nil {
 			migration := d.cfg.VMProjectAccess && !previous.NativeCLI && next.NativeCLI
-			exhausted := c.FailedResume != nil && c.FailedResume.Attempt == 2
+			exhausted := c.FailedResume != nil && c.FailedResume.Attempt >= 2
 			if !reconstructed || !sameParkedManager(st, previous.Generation, c, *parked) || (!migration && !exhausted && parked.Retirement.Replacement == "") {
 				return ErrStale
 			}
