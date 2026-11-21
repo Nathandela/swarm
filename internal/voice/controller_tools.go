@@ -67,7 +67,7 @@ func controllerResult(value any) (json.RawMessage, error) {
 }
 
 // ManagerCall runs only after private bridge authentication. Native coordinates come from the daemon proof.
-func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (json.RawMessage, error) {
+func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (result json.RawMessage, resultErr error) {
 	status, err := c.nativeStatus(ctx)
 	if err != nil {
 		return nil, err
@@ -119,6 +119,13 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (jso
 		return nil, err
 	}
 	admission.NativeTurnID = proof.NativeTurnID
+	if c.discussion != nil {
+		defer func() {
+			if resultErr == nil {
+				result = c.addWaitingNotice(admission, result)
+			}
+		}()
+	}
 	if err := c.discussionEffect(admission, call.Name); err != nil {
 		return nil, err
 	}

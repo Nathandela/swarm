@@ -473,7 +473,7 @@ func (c *Controller) reconcileInput(ctx context.Context, a Admission, status pro
 			return true, nil
 		}
 		if turn.State == "running" {
-			return false, nil
+			return false, c.interruptForWaitingMessages(ctx, a, status)
 		}
 	}
 	receipt, err := c.runtime.SemanticOperation(c.binding.SessionID, a.OperationID)

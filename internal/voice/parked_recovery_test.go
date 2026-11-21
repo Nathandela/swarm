@@ -71,6 +71,12 @@ func TestParkedResumeRecoversOldAppliedIntentWithoutReplayingItsLaunch(t *testin
 			_, store, controllerRuntime, binding := newControllerFixture(t)
 			r := &parkedRecoveryRuntime{discussionTestRuntime: discussionTestRuntime{controllerRuntimeFixture: controllerRuntime}, failures: tc.failures, uncertain: tc.uncertain, receipts: make(map[string]schema.OperationOutcomeView)}
 			cfg := testConfig()
+			binding.ConversationID = DiscussionConversationPrefix + "retry"
+			binding, err := store.BindManager(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.status.Binding = runtimeBinding(binding)
 			cfg.ConversationID = binding.ConversationID
 			dir := privateConfigDir(t)
 			d := &DiscussionController{cfg: cfg, store: store, runtime: r, dir: dir, endpoint: "machine", bridge: &privateHTTP{socket: dir + "/bridge.sock"}, now: time.Now}
@@ -112,7 +118,24 @@ func TestParkedResumeRecoversOldAppliedIntentWithoutReplayingItsLaunch(t *testin
 				return d.wakeParked(context.Background(), state.Generation, state.Conversations[cfg.ConversationID])
 			}
 			next, err := attempt()
-			if tc.uncertain || tc.failures == 3 {
+			if tc.failures == 3 && !tc.uncertain {
+				if err == nil {
+					t.Fatal("missing failed startup")
+				}
+				for range 3 {
+					_, _ = attempt()
+				}
+				if len(r.requests) != 3 {
+					t.Fatal("retry before deadline")
+				}
+				d.now = func() time.Time { return time.Now().Add(discussionReplacementInterval + time.Second) }
+				next, err = attempt()
+				if err != nil || next.SessionID != "machine/attempt4" || len(r.requests) != 4 || r.requests[3].ResumeSourceInstance != "" {
+					t.Fatalf("fresh recovery: %+v, %v, launches %d", next, err, len(r.requests))
+				}
+				return
+			}
+			if tc.uncertain {
 				if !errors.Is(err, ErrDiscussionActivationUnavailable) {
 					t.Fatalf("missing visible hold: %v", err)
 				}
