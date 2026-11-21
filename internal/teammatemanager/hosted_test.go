@@ -266,6 +266,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		t.Helper()
 		start := time.Now()
 		var last error
+		reported := map[string]bool{}
 		for time.Since(start) < limit && ctx.Err() == nil {
 			last = r.Sync(ctx, thread, reader, func(p discord.TeammatePublication) error {
 				if seen[p.ID] {
@@ -275,6 +276,13 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				outputs = append(outputs, p)
 				return nil
 			})
+			if label == "replacement manager after fresh admission" && last != nil {
+				reason := last.Error()
+				if !reported[reason] && len(reported) < 5 {
+					reported[reason] = true
+					t.Logf("replacement observation at %s: %s", time.Since(start).Round(time.Second), reason)
+				}
+			}
 			if last == nil && match() {
 				t.Logf("%s in %s", label, time.Since(start).Round(time.Second))
 				return
@@ -463,7 +471,8 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				if j == &second && interruption == "restart" {
 					// This verified new input supplies the pending work required for custody replacement.
 					var replacement protocol.ManagerRuntimeStatus
-					wait("replacement manager after fresh admission", 90*time.Second, func() bool {
+					// The released scheduler may defer a failed first replacement for five minutes.
+					wait("replacement manager after fresh admission", 6*time.Minute, func() bool {
 						st, err := r.Status(thread)
 						if err != nil || st.State != "active" || st.ManagerSession == "" || st.ManagerInstance == "" ||
 							st.ManagerSession == manager || st.ManagerInstance == instance || !hasFirstAttempt(st) {
