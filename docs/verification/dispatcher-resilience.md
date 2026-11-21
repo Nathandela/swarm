@@ -114,3 +114,18 @@ The live restart produced one Discord result through authenticated native eviden
 A hosted rehearsal with real Codex and synthetic Discord reached the successor manager with a recovered question, but the manager declined to answer because the generic recovery prompt said all typed operations were blocked. After the prompt and reply path changed, the worker retrieved the answer to the original question. At commit 72facf3a the full test passed in 181.01 seconds. The post-restart Discord-only challenge took 40 seconds, the private answer took 37 seconds, and the completion report took 33 seconds. The original worker, instance, attempt and shim survived. One challenge reply and one worker result were emitted.
 
 Independent review exercised queued and prepared-note revocation, a replaced manager with an unanswered question, receipt reuse across duplicate admissions, and native evidence limits with a cold roster. Reused finals now retain the canonical publication ID across reopening and compaction. A second review found three additional gaps in dispatch, cached native reads and the parked-status scheduler. Regression tests exercise ordinary and recovery-only notes, native proof, a change in project-access policy, and withdrawal of the original Discord grant. The repository gates below use a disposable Linux arm64 host with an init process, including distinct physical fixtures for an active replay-ledger lock and a previous native owner's persistent claim.
+
+## Complete Linux release gates
+
+The final code and tests at `4415f650c4f1b5e23761a31b8d83c5a671821bdf` passed build, vet, the complete normal suite and the complete race suite. The local Linux arm64 runner used Go 1.26.0, CGO, a non-root account, Docker's init process, umask 022, the repository-pinned mobile tools and shared Go caches. The checkout was clean before and after the run.
+
+| Command | Result | Elapsed |
+| --- | --- | ---: |
+| `go build -p 1 ./...` | Passed | 17.67 s |
+| `go vet -p 1 ./...` | Passed | 5.42 s |
+| `go test -json -p 2 -timeout 35m ./...` | 95 packages passed (87 cached), nine had no test files | 497.68 s |
+| `go test -json -p 2 -race -timeout 35m ./...` | 95 packages passed (69 cached), nine had no test files | 636.03 s |
+
+The first complete normal run failed one assertion in 544.89 s. `TestTerminalRestoreRedrawsUnchangedBoard` received no board marker after restoring the terminal. The isolated fixture failed once in ten trials on the candidate and eleven times in twenty trials on the unchanged v0.29.9 baseline at `fc7dbdf6`. The follow-up is `agents-tracker-6s9i`. The complete normal rerun used the same code, command and timeouts. The terminal-restore assertion executed and passed in 0.55 s. Both passing commands accounted for all 104 packages.
+
+The durable JSONL logs for the passing normal and race commands have SHA-256 digests `f7f7c19a1da19aed991f2cf24f0cf7f39bf1a999b83bfb1fa34370b12d04d333` and `6697847944caa2b3586c4750e41859245f1ebc5ca8e72c24a73ff8c4cbe8a402` respectively. Beads issue `agents-tracker-skpg.1` records their locations.
