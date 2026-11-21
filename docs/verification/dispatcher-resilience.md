@@ -64,3 +64,14 @@ A hosted shared-mode supervisor restart answered a fresh synthetic Discord chall
 Two earlier personal-mode rehearsals timed out waiting for the worker result. One successor explained in its native transcript that the available history contained only an earlier message naming the fixture. The old fixture omitted the human's delegation request. The durable rehearsal now retains the synthetic human requests it admitted and verifies their IDs, revisions and authors. It returns no confirmed Discord message IDs. These changes let a successor recover its actual instructions while keeping the evidentiary limit of synthetic transport visible.
 
 Independent review reproduced duplicate scheduled finals when the same enrolled worker's completion note and full native result reached the dispatcher in different turns. Both arrival orders produced two finals in the pre-fix store. The candidate reuses the scheduled publication only when the scoped worker evidence and final text agree. Changed evidence, changed text, steering and fresh human requests remain actionable. The regression group passed three times under the race detector in 15.876 seconds.
+
+### Integrated candidate
+
+The final hosted pair used binary revision 59f4e084. Its production code is identical to the staged Office build at 6d2b6fac. The intervening change strengthens the test’s before-and-after identity check. Both runs restarted their private supervisor, verified the original worker session, attempt and incarnation, admitted a new synthetic human challenge, then reopened the connector for the worker’s separate result. Neither run injected terminal input.
+
+| Synthetic surface | Challenge reply | Worker result after reconnect | Substantive challenge / worker publications through settlement | Total test |
+| --- | ---: | ---: | ---: | ---: |
+| Personal DM | 30 s | 17 s | 1 / 1 | 134.91 s |
+| Shared thread | 34 s | 18 s | 1 / 1 | 133.89 s |
+
+Each final roster contained one child and one active dispatcher. The full Gateway and Discord POST path, real human author and independent Discord message IDs remain live acceptance criteria. Five race-detected repetitions of degraded connector, handoff and supervisor cases passed in 40.965, 22.650 and 23.825 seconds per package, respectively.
