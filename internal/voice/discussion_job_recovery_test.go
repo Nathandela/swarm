@@ -39,6 +39,18 @@ func TestJobStatusReportsOnlyExactRecoveredNativeTurn(t *testing.T) {
 		}
 	}
 	check("turn_completed")
+	// The note may have published first. The native admission keeps the canonical final's receipt.
+	if err := store.update(func(st *State) error {
+		p := st.Publications[key(w.ConversationID, "final")]
+		p.DiscussionSource.AdmissionID = "other-wake"
+		putRecord(st, "publications", &st.Publications, key(w.ConversationID, p.ID), p)
+		putRecord(st, "wakes", &st.Wakes, key(w.ConversationID, "wake"), Wake{ID: "wake", ConversationID: w.ConversationID, Admission: 7})
+		putRecord(st, "admissions", &st.Admissions, admissionKey(w.ConversationID, 7), Admission{Sequence: 7, ConversationID: w.ConversationID, ReusedFinal: &ReusedFinalReceipt{PublicationID: p.ID}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check("turn_completed")
 	if err := store.update(func(st *State) error {
 		w.ActionID = "new-steering"
 		putRecord(st, "workers", &st.Workers, workerKey, w)

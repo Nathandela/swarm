@@ -112,7 +112,12 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 				case "completed", "failed", "cancelled", "interrupted":
 					job.State = "turn_" + proof.State
 				}
-				if p := finals[event.WakeID]; p.ID != "" && p.DiscussionSource.JobID == worker.JobID && p.DiscussionSource.AttemptID == worker.AttemptID {
+				p := finals[event.WakeID]
+				wake := st.Wakes[key(worker.ConversationID, event.WakeID)]
+				if alias := st.Admissions[admissionKey(worker.ConversationID, wake.Admission)].ReusedFinal; alias != nil {
+					p = st.Publications[key(worker.ConversationID, alias.PublicationID)]
+				}
+				if p.Final && p.ID != "" && p.DiscussionSource.JobID == worker.JobID && p.DiscussionSource.AttemptID == worker.AttemptID {
 					job.NativeTurnPublication = &workermail.PublicationStatus{ID: p.ID, State: "awaiting_delivery_receipt"}
 				}
 			}
@@ -177,7 +182,11 @@ func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStat
 		}
 		n := workermail.NoteStatus{ID: meta.NoteID, JobID: e.JobID, AttemptID: e.AttemptID, Session: meta.Session, Instance: meta.Instance, Kind: meta.Kind, Created: *meta.Created, State: w.State, Admission: w.Admission, Source: "wake:" + w.ID, Answered: w.WorkerReplyExported || !d.scope.VMProjectAccess && w.WorkerReply != ""}
 		if w.Admission != 0 {
-			n.AdmissionPhase = st.Admissions[admissionKey(w.ConversationID, w.Admission)].Phase
+			admission := st.Admissions[admissionKey(w.ConversationID, w.Admission)]
+			n.AdmissionPhase = admission.Phase
+			if alias := admission.ReusedFinal; alias != nil {
+				addOutput(w.ID, alias.PublicationID)
+			}
 			n.Publications = publications[w.ID]
 			sort.Slice(n.Publications, func(i, j int) bool { return n.Publications[i].ID < n.Publications[j].ID })
 		}
