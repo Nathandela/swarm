@@ -294,7 +294,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 				}
 			}
 			noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			noticeErr = t.sendStartupNotice(noticeCtx, a.Discussion, false)
+			noticeErr = t.sendStartupNotice(noticeCtx, a.Discussion, "")
 			cancel()
 		case TeammateAdmissionSuperseded:
 			return t.refreshAdmission(ctx, c)
@@ -355,6 +355,7 @@ func (t *teammateConnector) submitRevision(ctx context.Context, c teammateCandid
 	if c.State == teammateStateAccepted {
 		a.Supersedes = a.Revision
 	}
+	a.ExpectReply = t.addressed(m) || (m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil && m.ReferencedMessage.Author.ID == t.service.botUserID())
 	a.Revision, a.Text, a.ReplyTo = teammateRevision(m), m.Content, teammateReply(m)
 	var captureErr error
 	a.AttachmentManifest, captureErr = t.captureAttachments(ctx, a, m)
@@ -655,7 +656,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 			var noticeErr error
 			if b.StartupNoticePending && !b.ProvisionalCancelled {
 				noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				noticeErr = t.sendStartupNotice(noticeCtx, b.TeammateDiscussion, false)
+				noticeErr = t.sendStartupNotice(noticeCtx, b.TeammateDiscussion, "")
 				cancel()
 			}
 			var emitted []string

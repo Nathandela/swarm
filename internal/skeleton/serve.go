@@ -359,7 +359,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		MaxSessions:        cfg.MaxSessions,
 		ConnHandler:        d.handleConn,
 		PreLaunch:          preLaunchWorktree,
-		FinalizeLaunch:     d.prepareLoginLaunch,
+		FinalizeLaunch:     d.finalizeAgentLaunch,
 		PreDelete:          preDeleteWorktree,
 		WorkerInstance:     d.adoptOrMintSessionInstance,
 		OnSessionStart:     d.registerSession,

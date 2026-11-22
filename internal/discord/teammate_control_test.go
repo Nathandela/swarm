@@ -152,7 +152,7 @@ func TestTeammateStartupBlockPostsOneNoticeWhileProvisional(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				t.Error(err)
 			}
-			if !strings.Contains(p.Content, "saved your message") || !strings.Contains(p.Content, "don’t need to resend or tag me") {
+			if p.Content != "The dispatcher is unavailable. Your message is saved." {
 				t.Fatal("missing queue and follow-up guidance")
 			}
 			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "303", ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -17,6 +18,7 @@ import (
 const teammateNonceWindow = time.Minute
 const teammateInputNotice = "manager_input_held"
 const teammateInputNoticeInterval = 15 * time.Minute
+const genericStartupMessage = "The dispatcher is unavailable. Your message is saved."
 const teammateStartupNotice = "manager_startup_unavailable"
 
 func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
@@ -27,6 +29,10 @@ func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication,
 	switch p.SystemCause {
 	case "":
 		if p.AdmissionID == "" && p.JobID == "" {
+			return ErrInvalid
+		}
+	case "dispatcher_reply_status":
+		if p.AdmissionID == "" || p.JobID != "" || p.AttemptID != "" || p.QuestionID != "" || p.QuestionHash != "" {
 			return ErrInvalid
 		}
 	case TeammateSystemContinuityGap:
@@ -100,7 +106,12 @@ func (t *teammateConnector) managerStartupError(ctx context.Context, d TeammateD
 	if !errors.Is(managerErr, ErrTeammateManagerUnavailable) {
 		return managerErr
 	}
-	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, true))
+	body := genericStartupMessage
+	var notice *TeammateStartupNotice
+	if errors.As(managerErr, &notice) {
+		body = notice.Body
+	}
+	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, body))
 }
 
 // Only retry a hold notice while native Sync still identifies the same held input.
@@ -110,7 +121,7 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 		return nil
 	}
 	id := teammateInputNoticeID(d, hold.AdmissionID)
-	body := "Dispatcher readiness unknown. Messages queued. Check dispatcher `" + d.ID + "` with `swarm discord status`."
+	body := "Your message is saved. Open the dispatcher in Swarm to check whether it needs your help."
 	if hold.DirectInput {
 		body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm. Finish your input, or save the draft and exit normally. Already submitted? Check its outcome, then use `swarm discord status` for the `resume-manual` coordinates."
 		if hold.CustodyLost {
@@ -160,11 +171,19 @@ func (s *Store) teammateClearInputNotice(d TeammateDiscussion, id string) error 
 	})
 }
 
-func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, prepare bool) error {
+func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, body string) error {
 	store := t.service.Store
 	var binding teammateBinding
+	var prior workermail.PublicationStatus
 	err := store.db.View(func(tx *bolt.Tx) error {
-		return teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &binding)
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &binding); err != nil {
+			return err
+		}
+		if body == genericStartupMessage && binding.InputNoticeID != "" && t.service.Now().Sub(binding.InputNoticeAt) < teammateInputNoticeInterval {
+			prior.ID = binding.InputNoticeID
+			return readPublicationStatus(tx, d, &prior, nil)
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -172,7 +191,7 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	if binding.ID != d.ID || binding.Route != d.Route {
 		return ErrConflict
 	}
-	if binding.ProvisionalCancelled || !prepare && !binding.StartupNoticePending {
+	if prior.State == StateSent || binding.ProvisionalCancelled || body == "" && !binding.StartupNoticePending {
 		return nil
 	}
 	var gen uint64
@@ -211,13 +230,13 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 			current.StartupNoticePending = false
 			return putJSON(tx, teammateDiscussionBucket, key, current)
 		})
-		if err != nil || !prepare {
+		if err != nil || body == "" {
 			return err
 		}
 	}
 	id := teammateStartupNoticeID(d, gen)
-	if prepare {
-		p := TeammatePublication{ID: id, Body: "I’ve saved your message. I’ll reply here when the dispatcher picks it up. You don’t need to resend or tag me.",
+	if body != "" {
+		p := TeammatePublication{ID: id, Body: body,
 			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
 		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
 			return err

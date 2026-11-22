@@ -49,6 +49,8 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/managerproof"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/coder/websocket"
 )
@@ -628,6 +630,57 @@ func TestR7R4_AThreadNeverAnnouncedGapsDegradesAndCLOSESTheConnection(t *testing
 		"its read loop and its UDS are owned by nobody", func() bool {
 		return r.srv.livingConns() == 0
 	})
+}
+
+// The Discord manager can wait on a local setup prompt before any thread exists.
+func TestDispatcherObservesFirstThreadAfterStartupDeadline(t *testing.T) {
+	r := newR7R4Rig(t, "")
+	m, ok := r.sk.core.Get(r.local)
+	if !ok {
+		t.Fatal("missing test session")
+	}
+	dir := r.sk.stateDir
+	if err := r.sk.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m.Role, m.AgentType, m.ManagerConversationID = "manager", "codex", "discord-teammate-late-start"
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ManagerReplayID, err = managerproof.InitializeReplay(filepath.Join(dir, m.ID), m.ID, m.ManagerConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(m); err != nil {
+		t.Fatal(err)
+	}
+	sk, err := Serve(Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock"), LogPath: filepath.Join(dir, "d.log"), ShimBinary: swarmBin, MaxSessions: 4, FakeAgentBin: fakeAgentBin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sk.Close() })
+	r.sk = sk
+	r.sk.backendReady = 300 * time.Millisecond
+	go r.join()
+	awaitTrue(t, 3*time.Second, "dispatcher did not initialize", func() bool { return r.srv.counted("initialized") == 1 })
+	// The fixture shim consumes backend_attach without an ACK; its client read
+	// may occupy three seconds before the thread observation deadline starts.
+	time.Sleep(5 * time.Second)
+	if _, ready := r.sk.sessionBackendFor(r.local); ready {
+		t.Fatal("dispatcher appeared ready before it owned a thread")
+	}
+	r.srv.setRollout(true)
+	r.srv.mu.Lock()
+	r.srv.announce = fakeCodexThreadID
+	r.srv.mu.Unlock()
+	r.srv.push(fmt.Sprintf(`{"method":"thread/started","params":{"thread":{"id":%q,"status":{"type":"idle"}}}}`, fakeCodexThreadID))
+	r.awaitSink(t, 4*time.Second)
+	b, ok := r.sk.sessionBackendFor(r.local)
+	if !ok || b.threadID != fakeCodexThreadID || r.srv.counted("initialize") != 1 {
+		t.Fatal("late readiness failed to bind the original dispatcher")
+	}
+	r.noGap(t, "onboarding before the first thread produced no missing history")
 }
 
 // livingConns reports how many client connections this server still holds open.

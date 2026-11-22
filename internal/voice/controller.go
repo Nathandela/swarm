@@ -253,6 +253,14 @@ func (c *Controller) Tick(ctx context.Context) error {
 			if c.discussion.journalReady != nil && !c.discussion.journalReady() {
 				return ErrControllerJournalResync
 			}
+			if strings.HasPrefix(a.SourceID, "reply-check:") {
+				if err := c.checkReplyRecovery(ctx, st, a); err != nil {
+					if errors.Is(err, ErrDiscussionSourceChanged) || errors.Is(err, ErrExpired) {
+						return c.store.rejectQueuedControllerInput(c.binding, a, err.Error())
+					}
+					return err
+				}
+			}
 			if a.Origin != nil && !a.SourceCutover && c.discussion.VerifyOrigin != nil {
 				if err := c.discussion.VerifyOrigin(ctx, *a.Origin); err != nil {
 					if !errors.Is(err, ErrDiscussionSourceChanged) {

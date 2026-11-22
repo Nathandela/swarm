@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -54,6 +55,11 @@ func (c *Controller) submitDiscussion(origin schema.MessageOrigin, text, questio
 }
 
 func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text, answer, questionID, questionHash, project string, explicit bool) (Admission, error) {
+	return c.admitDiscussionInput(DiscussionInput{Origin: origin, Text: text, Answer: answer, QuestionID: questionID, QuestionHash: questionHash}, project, explicit)
+}
+
+func (c *Controller) admitDiscussionInput(input DiscussionInput, project string, explicit bool) (Admission, error) {
+	origin, text, answer, questionID, questionHash := input.Origin, input.Text, input.Answer, input.QuestionID, input.QuestionHash
 	if c.discussion == nil || !c.discussion.validateOrigin(origin) || (text == "" || len(text) > MaxUtteranceBytes || !utf8.ValidString(text) || strings.ContainsRune(text, 0)) {
 		return Admission{}, ErrInvalid
 	}
@@ -89,6 +95,9 @@ func (c *Controller) submitDiscussionInProject(origin schema.MessageOrigin, text
 		a.Origin = &origin
 		a.InputText = text
 		a.HumanReply = answer
+		if input.ExpectReply || origin.Kind == "owner_direct" && origin.GuildID == "" {
+			a.ReplyCheckAfter = time.Now().Add(discussionFirstReplyWait).Unix()
+		}
 		a.QuestionBoundary = st.Conversations[c.binding.ConversationID].LastOutput
 		a.Project, a.ProjectExplicit = project, explicit
 		putRecord(st, "admissions", &st.Admissions, admissionKey(c.binding.ConversationID, a.Sequence), a)

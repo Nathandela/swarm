@@ -61,7 +61,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|dispatcher-guide|teammate|schedule|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|voice|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -86,6 +86,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|dispatcher-g
   swarm kill       terminate a session
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
+  swarm setup-trust on|off|status /absolute/workspace   configure automatic native setup
   swarm dispatcher-guide    read how to delegate and handle worker replies
   swarm teammate message --text s   send a note to your own Swarm manager
   swarm message    submit a semantic message <session> --text s [--operation-id id]
@@ -163,6 +164,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchSchedule(args[1:], stdout, stderr)
 	case "discord":
 		return dispatchDiscord(args[1:], stdout, stderr)
+	case "setup-trust":
+		return runSetupTrust(args[1:], stdout, stderr)
 	case "dispatcher-guide":
 		return runDispatcherGuide(args[1:], stdout, stderr)
 	case "teammate":

@@ -271,6 +271,10 @@ func saveManagerIntent(dir, file string, intent managerLaunchIntent) error {
 	return writeVoiceFile(dir, file, raw)
 }
 
+// A successful launch already has an immutable session ID. Continue observing
+// it on the next sync without applying the cooldown for new launch attempts.
+var errManagerStillStarting = fmt.Errorf("%w: dispatcher session is still starting", ErrControllerNativeUnavailable)
+
 func managerObservationWindow(cfg Config) time.Duration {
 	if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
 		return 45 * time.Second
@@ -305,7 +309,7 @@ func findBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeRef
 			}
 			if observedExact {
 				if strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) {
-					return managerSelection{}, fmt.Errorf("%w: check the configured native CLI version and sign-in and resolve any workspace trust prompt on the home VM", ErrControllerNativeUnavailable)
+					return managerSelection{}, errManagerStillStarting
 				}
 				return managerSelection{}, ErrControllerNativeUnavailable
 			}

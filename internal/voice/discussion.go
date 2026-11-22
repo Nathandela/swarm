@@ -47,6 +47,7 @@ type discussionRuntime interface {
 }
 
 type DiscussionInput struct {
+	ExpectReply                                        bool
 	Origin                                             schema.MessageOrigin
 	Text, Answer, QuestionID, QuestionHash, Supersedes string
 	Project                                            func(string) (string, bool)
@@ -244,7 +245,7 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	if input.QuestionID == "" {
 		input.QuestionID, input.QuestionHash = matchingDiscussionQuestion(st, input.Answer, d.now())
 	}
-	_, err = controller.submitDiscussionInProject(input.Origin, input.Text, input.Answer, input.QuestionID, input.QuestionHash, project, explicit)
+	_, err = controller.admitDiscussionInput(input, project, explicit)
 	if err == nil {
 		d.idleSince = time.Time{}
 	}
@@ -428,6 +429,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		}
 		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
 		if err != nil {
+			if errors.Is(err, errManagerStillStarting) {
+				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
+			}
 			var failed *failedResume
 			if conv.Retirement.Replacement != "" || stage >= 2 || migrate {
 				delayErr := d.store.update(func(st *State) error {
@@ -556,12 +560,15 @@ func (d *DiscussionController) resume(generation uint64, previous Conversation, 
 func (d *DiscussionController) Dormant() (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.controller == nil {
-		return true, nil
-	}
 	st, err := d.store.readView()
 	if err != nil {
 		return false, err
+	}
+	if hasReplyObligation(st) {
+		return false, nil
+	}
+	if d.controller == nil {
+		return !discussionPending(st), nil
 	}
 	if !st.Conversations[d.cfg.ConversationID].Parked || !discussionQuiescent(st, d.now()) {
 		return false, nil
@@ -598,9 +605,16 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	if err != nil {
 		return err
 	}
+	if err = d.checkDiscussionReply(ctx, st); err != nil {
+		return err
+	}
+	st, err = d.store.readView()
+	if err != nil {
+		return err
+	}
 	if d.controller == nil {
 		if st.CurrentConversation == "" || !discussionPending(st) {
-			return nil
+			return d.export(st, emit)
 		}
 		if err := d.activate(ctx, st); err != nil {
 			return err
@@ -744,6 +758,11 @@ func discussionPending(st State) bool {
 }
 
 func discussionQuiescent(st State, now time.Time) bool {
+	for _, a := range st.Admissions {
+		if a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman {
+			return false
+		}
+	}
 	if discussionPending(st) || st.Conversations[st.CurrentConversation].SchedulerPaused || st.Journal[st.CurrentConversation].Binding == "" {
 		return false
 	}
