@@ -130,3 +130,12 @@ func TestSetupTrustProfileHooksRequireSeparateConsent(t *testing.T) {
 		t.Fatalf("profile hook received workspace approval: err=%v writes=%d", err, len(p.writes))
 	}
 }
+
+func TestSetupTrustUnknownHookStatusNeedsReview(t *testing.T) {
+	h := launchHook{Key: "k", Source: "user", CurrentHash: "sha256:" + strings.Repeat("a", 64), TrustStatus: "new-status", Enabled: true}
+	p := &hookSetupProbe{workspace: "/work", hook: h}
+	err := applyCodexLaunchTrust(context.Background(), p, setuptrust.Consent{Workspace: "/work", ProfileHooks: true}, func() bool { return true })
+	if err == nil || len(p.writes) != 0 {
+		t.Fatalf("unrecognized status: err=%v writes=%d", err, len(p.writes))
+	}
+}

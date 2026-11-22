@@ -121,8 +121,16 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, consent setupt
 	var pending error
 	updates := make(map[string]map[string]string)
 	for _, h := range hooks {
-		if !h.Enabled || h.TrustStatus != "untrusted" && h.TrustStatus != "modified" {
+		if !h.Enabled {
 			continue
+		}
+		switch h.TrustStatus {
+		case "trusted", "managed":
+			continue
+		case "modified", "untrusted":
+			// The current hook fingerprint must be checked below.
+		default:
+			return errors.New("unrecognized hook status needs your review")
 		}
 		switch h.Source {
 		case "user", "plugin":
