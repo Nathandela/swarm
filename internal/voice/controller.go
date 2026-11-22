@@ -318,7 +318,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 					return err
 				}
 				if prompt != "" {
-					text = "Local manager starting instructions\n" + prompt + "\n\nCurrent input\n" + text
+					text = "Current owner settings (supersede earlier settings)\n" + prompt + "\n\nCurrent input\n" + text
 				}
 			}
 			if a.RecoveryOnly {

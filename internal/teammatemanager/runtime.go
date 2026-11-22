@@ -654,7 +654,7 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 			}
 			sort.Slice(entries, func(i, j int) bool { return entries[i].CreatedAt.Before(entries[j].CreatedAt) })
 			history, _ := json.Marshal(entries)
-			fmt.Fprintf(&msg, "Recent Discord evidence (JSON) %s\n", history)
+			fmt.Fprintf(&msg, "Earlier Discord messages for context (JSON) %s\n", history)
 			fmt.Fprintf(&msg, "Evidence source %s, latest message %s. The history tool can retrieve remaining pages.\n", source, page.HighWater)
 			if page.Notice != "" {
 				fmt.Fprintf(&msg, "History: %s\n", page.Notice)
