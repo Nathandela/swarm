@@ -64,7 +64,9 @@ func TestMissingDiscordReplySurvivesRestartAndConfirmsFinal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	c.store, d.store = s, s
+	b.Generation = s.generation
+	r.status.Binding = runtimeBinding(b)
+	c.store, c.binding, d.store = s, b, s
 	if dormant, err := d.Dormant(); err != nil || dormant {
 		t.Fatalf("dormant=%v err=%v", dormant, err)
 	}
@@ -137,6 +139,14 @@ func TestDiscordOverdueTurnPostsOneNoticeWithoutNewInput(t *testing.T) {
 	st, _ := s.Snapshot()
 	if len(st.Publications) != 1 || len(r.sent) != 1 || len(st.Admissions) != 1 {
 		t.Fatalf("pubs=%d sends=%d admissions=%d phase=%s", len(st.Publications), len(r.sent), len(st.Admissions), st.Admissions[admissionKey(b.ConversationID, a.Sequence)].Phase)
+	}
+	now = now.Add(discussionReplyStall)
+	if err = d.checkDiscussionReply(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = s.Snapshot()
+	if p := st.Publications[key(b.ConversationID, replyNoticeID(a, true))]; !p.Final || !strings.Contains(p.Text, "check the dispatcher") || len(r.sent) != 1 {
+		t.Fatalf("stalled native turn left no actionable result or replayed work: %+v", p)
 	}
 }
 
@@ -251,6 +261,23 @@ func TestVMReplyCheckNeverStartsAnUnrestrictedRecovery(t *testing.T) {
 	if current.ReplyCheckAfter != 0 || !current.ReplyDeliveryUnknown || len(st.Publications) != 1 || len(st.Admissions) != 1 || len(r.sent) != 1 {
 		t.Fatalf("unknown=%v next=%d pubs=%d sends=%d", current.ReplyDeliveryUnknown, current.ReplyCheckAfter, len(st.Publications), len(r.sent))
 	}
+	status, err := d.Status()
+	if err != nil || status.UnconfirmedReplies != 1 || len(status.UnconfirmedOutputs) != 1 || len(status.UnconfirmedOutputs[0]) != 1 || status.UnconfirmedOutputs[0][0].ID != replyNoticeID(a, true) {
+		t.Fatalf("missing scoped output for late receipts: %+v %v", status, err)
+	}
+	if dormant, err := d.Dormant(); err != nil || dormant {
+		t.Fatalf("unexported status was abandoned: %v %v", dormant, err)
+	}
+	var published DiscussionOutput
+	if err = d.Sync(t.Context(), func(o DiscussionOutput) error { published = o; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if published.SystemCause != "" || published.AdmissionID != a.Origin.RequestID || published.ID != replyNoticeID(a, true) {
+		t.Fatalf("notice lost its ordinary admission-scoped publication envelope: %+v", published)
+	}
+	if err = d.ValidatePublication(t.Context(), published, hashValue(published.Text)); err != nil {
+		t.Fatal(err)
+	}
 	if dormant, err := d.Dormant(); err != nil || !dormant {
 		t.Fatalf("pending uncertainty pinned manager: %v %v", dormant, err)
 	}
@@ -290,5 +317,45 @@ func TestLegacyPendingReplyClassificationIsBounded(t *testing.T) {
 	v := st.Admissions[k]
 	if !v.ReplyTracked || !v.ReplyDeliveryUnknown || v.ReplyCheckAfter != 0 || len(st.Publications) != 0 {
 		t.Fatalf("migration guessed old message intent: %+v", v)
+	}
+}
+
+func TestSharedYieldRequiresCurrentQuietHumanTurn(t *testing.T) {
+	c, s, _, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread"}
+	a, err := c.admitDiscussionInput(DiscussionInput{Origin: discussionFixtureOrigin("chat"), Text: "FYI everyone", ExpectReply: true}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := admissionKey(b.ConversationID, a.Sequence)
+	if err = s.update(func(st *State) error {
+		a = st.Admissions[k]
+		a.Phase, a.NativeInputID, a.NativeTurnID = "running", "n", "t"
+		putRecord(st, "admissions", &st.Admissions, k, a)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale := a
+	stale.NativeInputID = "another"
+	if err = c.yieldSharedReply(stale); !errors.Is(err, ErrExpired) {
+		t.Fatalf("stale native input yielded: %v", err)
+	}
+	if err = c.yieldSharedReply(a); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Snapshot()
+	if err != nil || hasReplyObligation(st) || len(st.Publications) != 0 {
+		t.Fatalf("chatter produced a reply: %v", err)
+	}
+	if err = s.update(func(st *State) error {
+		pub := Publication{ID: "progress", ConversationID: b.ConversationID, OutputSequence: 1, DiscussionSource: DiscussionOutputSource{AdmissionID: a.Origin.RequestID}}
+		putRecord(st, "publications", &st.Publications, key(b.ConversationID, pub.ID), pub)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.yieldSharedReply(a); !errors.Is(err, ErrConflict) {
+		t.Fatalf("an acknowledged turn yielded: %v", err)
 	}
 }

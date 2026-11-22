@@ -31,10 +31,6 @@ func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication,
 		if p.AdmissionID == "" && p.JobID == "" {
 			return ErrInvalid
 		}
-	case "dispatcher_reply_status":
-		if p.AdmissionID == "" || p.JobID != "" || p.AttemptID != "" || p.QuestionID != "" || p.QuestionHash != "" {
-			return ErrInvalid
-		}
 	case TeammateSystemContinuityGap:
 		if p.AdmissionID != "" || p.JobID != "" || p.AttemptID != "" || p.QuestionID != "" || p.QuestionHash != "" {
 			return ErrInvalid
@@ -689,6 +685,7 @@ func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutpu
 }
 
 type teammateReceipt struct {
+	UnverifiedMessageIDs      []string `json:",omitempty"`
 	PublicationHash, BodyHash string
 	Route                     Route
 	DiscordMessageIDs         []string
@@ -786,7 +783,11 @@ func (s *Store) teammateCompactOutbox(d TeammateDiscussion, now time.Time, ackno
 func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out teammateOutput) error {
 	meta := tx.Bucket([]byte(teammateMetaBucket))
 	receipt := teammateReceipt{PublicationHash: digest(out.Publication), BodyHash: out.BodyHash, Route: out.Route}
+	completeProof := true
 	for _, part := range out.Chunks {
+		if part.State != StateSent || !snowflake(part.MessageID) || !part.GatewaySeen && !part.RESTAcknowledged {
+			completeProof = false
+		}
 		if part.MessageID != "" {
 			receipt.DiscordMessageIDs = append(receipt.DiscordMessageIDs, part.MessageID)
 		}
@@ -798,6 +799,10 @@ func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out te
 				return err
 			}
 		}
+	}
+	// Older connectors only consult DiscordMessageIDs for a confirmed publication.
+	if !completeProof {
+		receipt.UnverifiedMessageIDs, receipt.DiscordMessageIDs = receipt.DiscordMessageIDs, nil
 	}
 	if err := putJSON(tx, teammateReceiptBucket, key, receipt); err != nil {
 		return err

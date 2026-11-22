@@ -378,6 +378,13 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
 	}
+	for _, outputs := range status.UnconfirmedOutputs {
+		var receipts []discord.PublicationProof
+		for _, output := range outputs {
+			receipts = append(receipts, connectorPublication(output).Proof())
+		}
+		result.ReplyReceipts = append(result.ReplyReceipts, receipts)
+	}
 	for _, job := range status.Jobs {
 		result.Jobs = append(result.Jobs, discord.TeammateJobStatus{ID: job.ID, AttemptID: job.AttemptID, Session: job.Session,
 			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic,

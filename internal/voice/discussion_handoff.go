@@ -108,7 +108,7 @@ func priorDiscussionReplies(st State, current Admission, anchor string) []discus
 	representative := map[string]Publication{}
 	for _, p := range st.Publications {
 		id := p.DiscussionSource.AdmissionID
-		if p.ConversationID == current.ConversationID && id != "" && p.DiscussionSource.SystemCause == "" {
+		if p.ConversationID == current.ConversationID && id != "" && !p.ReplyMonitor && p.DiscussionSource.SystemCause == "" {
 			// Keep the latest final. Progress is relevant only until a final exists.
 			old, found := representative[id]
 			if !found || p.Final && !old.Final || p.Final == old.Final && p.OutputSequence > old.OutputSequence {

@@ -572,7 +572,7 @@ func (d *DiscussionController) Dormant() (bool, error) {
 		return false, nil
 	}
 	if d.controller == nil {
-		return !discussionPending(st), nil
+		return !discussionPending(st) && !discussionAwaitingExport(st, d.now()), nil
 	}
 	if !st.Conversations[d.cfg.ConversationID].Parked || !discussionQuiescent(st, d.now()) {
 		return false, nil
@@ -779,17 +779,21 @@ func discussionQuiescent(st State, now time.Time) bool {
 			return false
 		}
 	}
+	return !discussionAwaitingExport(st, now)
+}
+
+func discussionAwaitingExport(st State, now time.Time) bool {
 	for _, p := range st.Publications {
 		if !p.Exported {
-			return false
+			return true
 		}
 	}
 	for _, q := range st.Requests {
 		if q.Kind == "manager" && q.State == "pending" && !q.Exported && now.Before(q.ExpiresAt) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func (d *DiscussionController) canPark(st State, now time.Time) bool {

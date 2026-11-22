@@ -146,7 +146,7 @@ func TestDiscussionAcknowledgementFitsStandingInstructionsAndHumanText(t *testin
 		input := discord.TeammateAdmission{Route: discord.Route{MessageID: "100"}, Author: discord.Actor{ID: "42", Name: "Alice"}, Text: strings.Repeat("x", size)}
 		body := r.prompt(input, page, "thread", nil)
 		full := "Local manager starting instructions\n" + strings.Repeat("y", 1024) + "\n\nCurrent input\nApproved project for new work \"/work/fixture\"\n" + body
-		if !strings.Contains(body, input.Text) || !strings.Contains(body, "final=false") || !strings.Contains(body, "yield when others are talking to each other") {
+		if !strings.Contains(body, input.Text) || !strings.Contains(body, "final=false") || !strings.Contains(body, "swarm_discussion_yield") {
 			t.Fatal("human text or acknowledgement guidance lost")
 		}
 		if _, err := claudeinput.ManagerEnvelope(strings.Repeat("a", 64), full); err != nil {

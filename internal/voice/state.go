@@ -83,6 +83,7 @@ type ReusedFinalReceipt struct {
 }
 
 type Admission struct {
+	ReplyStallSince      int64                   `json:"reply_stall_since,omitempty"`
 	ReplyReceiptChecks   int                     `json:"reply_receipt_checks,omitempty"`
 	ReplyDeliveryUnknown bool                    `json:"reply_delivery_unknown,omitempty"`
 	ReplyTracked         bool                    `json:"reply_tracked,omitempty"`
@@ -164,6 +165,7 @@ type SpeechPermit struct {
 }
 
 type Publication struct {
+	ReplyMonitor       bool                   `json:"reply_monitor,omitempty"`
 	DiscussionAttempts string                 `json:"discussion_attempts,omitempty"`
 	DiscussionProjects string                 `json:"discussion_projects,omitempty"`
 	DiscussionSource   DiscussionOutputSource `json:"discussion_source,omitzero"`

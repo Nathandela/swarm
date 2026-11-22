@@ -12,7 +12,7 @@ import (
 // Native completion and a Discord reply have independent receipts.
 const discussionFirstReplyWait = 30 * time.Second
 const discussionReplyWait = 2 * time.Minute
-const replyMonitorCause = "dispatcher_reply_status"
+const discussionReplyStall = 10 * time.Minute
 
 func hasReplyObligation(st State) bool {
 	for _, a := range st.Admissions {
@@ -56,11 +56,11 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 			}
 			continue
 		}
-		if src.SystemCause != "" && src.SystemCause != replyMonitorCause {
+		if src.SystemCause != "" {
 			continue
 		}
 		if !p.Final {
-			if src.SystemCause == "" {
+			if !p.ReplyMonitor {
 				evidence.progress = max(evidence.progress, p.OutputSequence)
 			}
 			continue
@@ -258,6 +258,9 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		}
 		next := now.Add(discussionReplyWait).Unix()
 		input.ReplyWaitingForHuman = false
+		if input.ReplyStallSince == 0 || evidence.output.ID != "" || evidence.progress > input.ReplyProgress {
+			input.ReplyStallSince = now.Unix()
+		}
 		switch {
 		case evidence.answered, evidence.final && confirmed:
 			next = 0
@@ -279,7 +282,11 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			}
 		case evidence.progress > input.ReplyProgress:
 			input.ReplyProgress = evidence.progress
-		case evidence.workerRunning && current.Publications[key(input.ConversationID, replyNoticeID(input, false))].ID == "":
+		case !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) && (input.SettledAt.IsZero() || evidence.workerRunning || input.ReplyRecovery != 0):
+			if err := recordReplyNotice(current, input, "I still can’t verify a result. The work may be running. Please check the dispatcher in Swarm before trying again.", true); err != nil {
+				return err
+			}
+		case evidence.workerRunning:
 			if err := recordReplyNotice(current, input, "The worker hasn’t reported a result yet. Your request is saved.", false); err != nil {
 				return err
 			}
@@ -351,7 +358,7 @@ func recordReplyNotice(st *State, a Admission, body string, final bool) error {
 	if err != nil {
 		return err
 	}
-	p := Publication{ID: id, ConversationID: a.ConversationID, Admission: a.Sequence, OutputSequence: n, Text: body, TextHash: hashBytes([]byte(body)), Final: final, DiscussionSource: DiscussionOutputSource{AdmissionID: a.Origin.RequestID, SystemCause: replyMonitorCause}}
+	p := Publication{ID: id, ConversationID: a.ConversationID, Admission: a.Sequence, OutputSequence: n, Text: body, TextHash: hashBytes([]byte(body)), Final: final, ReplyMonitor: true, DiscussionSource: DiscussionOutputSource{AdmissionID: a.Origin.RequestID}}
 	putRecord(st, "publications", &st.Publications, k, p)
 	return nil
 }

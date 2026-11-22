@@ -13,6 +13,7 @@ import (
 )
 
 type DiscussionNativeStatus struct {
+	UnconfirmedOutputs                                          [][]DiscussionOutput
 	PendingAdmissions, PendingReplies, UnconfirmedReplies       int
 	State, ManagerSession, ManagerInstance, Project, Diagnostic string
 	Generation, ExternalInput                                   uint64
@@ -47,7 +48,13 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 	}
 	for _, admission := range st.Admissions {
 		if admission.ConversationID == d.cfg.ConversationID && admission.ReplyDeliveryUnknown {
-			result.UnconfirmedReplies++
+			evidence := discussionReplyEvidence(st, admission, d.now())
+			if !evidence.answered {
+				result.UnconfirmedReplies++
+				if evidence.output.ID != "" {
+					result.UnconfirmedOutputs = append(result.UnconfirmedOutputs, append(evidence.workerFinals, evidence.output))
+				}
+			}
 		}
 		if admission.ConversationID == d.cfg.ConversationID && admission.ReplyCheckAfter != 0 {
 			result.PendingReplies++
