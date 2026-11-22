@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -17,6 +19,7 @@ import (
 const teammateNonceWindow = time.Minute
 const teammateInputNotice = "manager_input_held"
 const teammateInputNoticeInterval = 15 * time.Minute
+const genericStartupMessage = "The dispatcher is unavailable. Your message is saved."
 const teammateStartupNotice = "manager_startup_unavailable"
 
 func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
@@ -64,8 +67,62 @@ func teammateStartupNoticeID(d TeammateDiscussion, generation uint64) string {
 	return teammateStartupNotice + "_" + digest([]any{d.ID, d.Route, generation})[:32]
 }
 
-func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion, generation uint64) error {
-	return teammateCancelPreparedNotice(tx, d, teammateStartupNoticeID(d, generation), teammateStartupNotice)
+func (b teammateBinding) startupNoticeID() string {
+	if b.StartupNoticeID != "" {
+		return b.StartupNoticeID
+	}
+	// Releases through v0.29.11 stored only the launch generation.
+	return teammateStartupNoticeID(b.TeammateDiscussion, b.StartupNoticeGeneration)
+}
+
+// A v0.29.11 binding write retains the generation but drops the newer notice ID.
+// The outbox still has its original nonce, body hash and immutable route.
+func pendingStartupNoticeID(tx *bolt.Tx, b teammateBinding) (string, error) {
+	base := teammateStartupNoticeID(b.TeammateDiscussion, b.StartupNoticeGeneration)
+	prefix := teammateOutputKey(b.InstallationID, b.ID, base)
+	cursor := tx.Bucket([]byte(teammateOutboxBucket)).Cursor()
+	var found string
+	for k, v := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = cursor.Next() {
+		var out teammateOutput
+		if err := json.Unmarshal(v, &out); err != nil {
+			return "", err
+		}
+		p := out.Publication
+		if !out.SettledAt.IsZero() {
+			continue
+		}
+		if !out.Internal || out.Route != b.Route || out.DiscussionID != b.ID || p.SystemCause != teammateStartupNotice || p.ActivationGeneration != b.StartupNoticeGeneration || !bytes.Equal(k, teammateOutputKey(b.InstallationID, b.ID, p.ID)) || len(out.BodyHash) != 64 || p.ID != base && p.ID != base+"_"+out.BodyHash[:16] || found != "" {
+			return "", ErrConflict
+		}
+		found = p.ID
+	}
+	return found, nil
+}
+
+func (s *Store) restoreStartupNotice(b *teammateBinding, observed string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		k := teammateKey(b.InstallationID, b.Route.ChannelID)
+		var current teammateBinding
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), k, &current); err != nil {
+			return err
+		}
+		if current.ID != b.ID || current.Route != b.Route || current.StartupNoticeGeneration != b.StartupNoticeGeneration {
+			return ErrConflict
+		}
+		*b = current
+		if current.StartupNoticeID != "" || current.ProvisionalCancelled {
+			return nil
+		}
+		id, err := pendingStartupNoticeID(tx, current)
+		if err != nil {
+			return err
+		}
+		if id != observed {
+			return ErrConflict
+		}
+		b.StartupNoticeID, b.StartupNoticePending = id, true
+		return putJSON(tx, teammateDiscussionBucket, k, *b)
+	})
 }
 
 func teammateCancelPreparedNotice(tx *bolt.Tx, d TeammateDiscussion, id, cause string) error {
@@ -81,9 +138,16 @@ func teammateCancelPreparedNotice(tx *bolt.Tx, d TeammateDiscussion, id, cause s
 	if !out.Internal || out.Publication.SystemCause != cause {
 		return ErrConflict
 	}
-	for _, part := range out.Chunks {
-		if part.State != StatePrepared {
-			return nil
+	if !out.SettledAt.IsZero() {
+		return nil
+	}
+	// Superseded startup notices have no outstanding action. Keep their original
+	// receipt as unconfirmed when a post may already have reached Discord.
+	if cause != teammateStartupNotice {
+		for _, part := range out.Chunks {
+			if part.State != StatePrepared {
+				return nil
+			}
 		}
 	}
 	if err = teammateOutboxCount(tx, d.InstallationID, -1); err != nil {
@@ -100,7 +164,12 @@ func (t *teammateConnector) managerStartupError(ctx context.Context, d TeammateD
 	if !errors.Is(managerErr, ErrTeammateManagerUnavailable) {
 		return managerErr
 	}
-	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, true))
+	body := genericStartupMessage
+	var notice *TeammateStartupNotice
+	if errors.As(managerErr, &notice) {
+		body = notice.Body
+	}
+	return errors.Join(managerErr, t.sendStartupNotice(ctx, d, body))
 }
 
 // Only retry a hold notice while native Sync still identifies the same held input.
@@ -110,7 +179,7 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 		return nil
 	}
 	id := teammateInputNoticeID(d, hold.AdmissionID)
-	body := "Dispatcher readiness unknown. Messages queued. Check dispatcher `" + d.ID + "` with `swarm discord status`."
+	body := "Your message is saved. Open the dispatcher in Swarm to check whether it needs your help."
 	if hold.DirectInput {
 		body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm. Finish your input, or save the draft and exit normally. Already submitted? Check its outcome, then use `swarm discord status` for the `resume-manual` coordinates."
 		if hold.CustodyLost {
@@ -160,11 +229,27 @@ func (s *Store) teammateClearInputNotice(d TeammateDiscussion, id string) error 
 	})
 }
 
-func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, prepare bool) error {
+func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDiscussion, body string) error {
 	store := t.service.Store
 	var binding teammateBinding
+	var recovered string
+	var prior workermail.PublicationStatus
 	err := store.db.View(func(tx *bolt.Tx) error {
-		return teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &binding)
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &binding); err != nil {
+			return err
+		}
+		if binding.StartupNoticeID == "" && !binding.ProvisionalCancelled {
+			var err error
+			recovered, err = pendingStartupNoticeID(tx, binding)
+			if err != nil {
+				return err
+			}
+		}
+		if body == genericStartupMessage && binding.InputNoticeID != "" && t.service.Now().Sub(binding.InputNoticeAt) < teammateInputNoticeInterval {
+			prior.ID = binding.InputNoticeID
+			return readPublicationStatus(tx, d, &prior, nil)
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -172,7 +257,12 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	if binding.ID != d.ID || binding.Route != d.Route {
 		return ErrConflict
 	}
-	if binding.ProvisionalCancelled || !prepare && !binding.StartupNoticePending {
+	if recovered != "" {
+		if err := store.restoreStartupNotice(&binding, recovered); err != nil {
+			return err
+		}
+	}
+	if prior.State == StateSent || binding.ProvisionalCancelled || body == "" && !binding.StartupNoticePending {
 		return nil
 	}
 	var gen uint64
@@ -192,7 +282,39 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 		}
 		gen = status.Generation
 	}
-	if binding.StartupNoticePending && binding.StartupNoticeGeneration != gen {
+	id := teammateStartupNoticeID(d, gen)
+	if body == "" {
+		id = binding.startupNoticeID()
+	} else if body != genericStartupMessage {
+		// Retain the legacy key for the first reason so v0.29.11 can drain it.
+		hash := digest(body)
+		changed := id + "_" + hash[:16]
+		if binding.StartupNoticeGeneration == gen && binding.StartupNoticeID == changed {
+			id = changed
+		} else if err := store.db.View(func(tx *bolt.Tx) error {
+			k := teammateOutputKey(d.InstallationID, d.ID, id)
+			for _, bucket := range []string{teammateOutboxBucket, teammateReceiptBucket} {
+				var prior struct{ BodyHash string }
+				err := teammateGet(tx.Bucket([]byte(bucket)), k, &prior)
+				if errors.Is(err, ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if prior.BodyHash != hash {
+					id = changed
+				}
+				break
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	} else if binding.StartupNoticeGeneration == gen && binding.StartupNoticeID != "" && binding.StartupNoticeID != id {
+		return nil // A more specific notice already describes this launch.
+	}
+	if binding.StartupNoticePending && (binding.StartupNoticeGeneration != gen || binding.startupNoticeID() != id) {
 		err = store.db.Update(func(tx *bolt.Tx) error {
 			key := teammateKey(d.InstallationID, d.Route.ChannelID)
 			var current teammateBinding
@@ -202,22 +324,21 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 			if current.ID != d.ID || current.Route != d.Route {
 				return ErrConflict
 			}
-			if !current.StartupNoticePending || current.StartupNoticeGeneration != binding.StartupNoticeGeneration {
+			if !current.StartupNoticePending || current.startupNoticeID() != binding.startupNoticeID() {
 				return nil
 			}
-			if err := teammateCancelUnsentStartupNotice(tx, d, current.StartupNoticeGeneration); err != nil {
+			if err := teammateCancelPreparedNotice(tx, d, current.startupNoticeID(), teammateStartupNotice); err != nil {
 				return err
 			}
 			current.StartupNoticePending = false
 			return putJSON(tx, teammateDiscussionBucket, key, current)
 		})
-		if err != nil || !prepare {
+		if err != nil || body == "" {
 			return err
 		}
 	}
-	id := teammateStartupNoticeID(d, gen)
-	if prepare {
-		p := TeammatePublication{ID: id, Body: "I’ve saved your message. I’ll reply here when the dispatcher picks it up. You don’t need to resend or tag me.",
+	if body != "" {
+		p := TeammatePublication{ID: id, Body: body,
 			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
 		if err = store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
 			return err
@@ -314,6 +435,7 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 			if internal && p.SystemCause == teammateStartupNotice {
 				binding.StartupNoticePending = true
 				binding.StartupNoticeGeneration = p.ActivationGeneration
+				binding.StartupNoticeID = p.ID
 				if err = putJSON(tx, teammateDiscussionBucket, teammateKey(install, route.ChannelID), binding); err != nil {
 					return err
 				}
@@ -398,7 +520,7 @@ func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateO
 				if binding.ID != out.DiscussionID || binding.Route != out.Route {
 					return ErrConflict
 				}
-				if binding.StartupNoticeGeneration == out.Publication.ActivationGeneration {
+				if binding.startupNoticeID() == out.Publication.ID {
 					binding.StartupNoticePending = false
 					if err := putJSON(tx, teammateDiscussionBucket, k, binding); err != nil {
 						return err
@@ -509,8 +631,11 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 		if chunk.State == StateSent {
 			continue
 		}
-		if out.Publication.JobID != "" && (chunk.State == StateSending || chunk.State == StateUncertain) {
-			const awaitingReceipt = "Worker publication awaiting an authenticated Discord receipt"
+		if (out.Publication.JobID != "" || out.Internal && out.Publication.SystemCause == teammateStartupNotice) && (chunk.State == StateSending || chunk.State == StateUncertain) {
+			awaitingReceipt := "Worker publication awaiting an authenticated Discord receipt"
+			if out.Internal {
+				awaitingReceipt = "Discord hasn’t confirmed this startup notice."
+			}
 			if out.Error == awaitingReceipt {
 				return ErrDeliveryUncertain
 			}
@@ -658,6 +783,7 @@ func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutpu
 }
 
 type teammateReceipt struct {
+	UnverifiedMessageIDs      []string `json:",omitempty"`
 	PublicationHash, BodyHash string
 	Route                     Route
 	DiscordMessageIDs         []string
@@ -755,7 +881,11 @@ func (s *Store) teammateCompactOutbox(d TeammateDiscussion, now time.Time, ackno
 func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out teammateOutput) error {
 	meta := tx.Bucket([]byte(teammateMetaBucket))
 	receipt := teammateReceipt{PublicationHash: digest(out.Publication), BodyHash: out.BodyHash, Route: out.Route}
+	completeProof := true
 	for _, part := range out.Chunks {
+		if part.State != StateSent || !snowflake(part.MessageID) || !part.GatewaySeen && !part.RESTAcknowledged {
+			completeProof = false
+		}
 		if part.MessageID != "" {
 			receipt.DiscordMessageIDs = append(receipt.DiscordMessageIDs, part.MessageID)
 		}
@@ -767,6 +897,10 @@ func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out te
 				return err
 			}
 		}
+	}
+	// Older connectors only consult DiscordMessageIDs for a confirmed publication.
+	if !completeProof {
+		receipt.UnverifiedMessageIDs, receipt.DiscordMessageIDs = receipt.DiscordMessageIDs, nil
 	}
 	if err := putJSON(tx, teammateReceiptBucket, key, receipt); err != nil {
 		return err

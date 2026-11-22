@@ -54,6 +54,7 @@ type coreAPI struct {
 	scheduler            *scheduledexec.Engine
 	scheduleStateDir     string
 	scheduleSocket       string
+	workerParentInstance func(string) (string, bool)
 	matchResumeInstance  func(persist.Meta, string) bool
 	managerRetire        func(context.Context, string, protocol.ManagerRetireReq, persist.ManagerRetirement) (bool, error)
 	managerInterruptTurn func(context.Context, string, string, protocol.ManagerInterruptReq, func() error) error
@@ -1065,6 +1066,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return m, err
 		}
 	}
+	a.captureWorkerParentInput(&spec)
 	if spec.Manager != nil {
 		manager := *spec.Manager
 		manager.Command = a.core.ManagerBridgeCommand()

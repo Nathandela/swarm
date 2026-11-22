@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -284,6 +285,35 @@ func TestHandoffCorrelatesWorkerReportWithOriginalHuman(t *testing.T) {
 				t.Fatal(p)
 				return nil, nil
 			}}}
+			evidence := discussionReplyEvidence(st, original, time.Now())
+			if (evidence.final && evidence.output.ID == "report") != tc.want {
+				t.Fatalf("unverified worker final: %+v", evidence)
+			}
+			if tc.name == "one worker" {
+				second := w
+				second.Session, second.AttemptID, second.ActionID, second.JobID = "m/second", "second-attempt", "second-attempt", "second-job"
+				st.Workers[key("d", key(second.Session, second.SessionInstance))] = second
+				if e := discussionReplyEvidence(st, original, time.Now()); e.final || e.progress != report.OutputSequence {
+					t.Fatalf("partial worker results closed the request: %+v", e)
+				}
+				launch2 := launch
+				launch2.ID = second.ActionID
+				launch2.Receipt = json.RawMessage(`{"state":"created","session":"m/second","session_instance":"instance"}`)
+				st.Actions[key("d", launch2.ID)] = launch2
+				event2 := event
+				event2.ID, event2.WakeID, event2.JobID, event2.AttemptID = "event2", "wake2", second.JobID, second.AttemptID
+				event2.Metadata = json.RawMessage(`{"session":"m/second","instance":"instance","kind":"complete"}`)
+				st.Events[key("d", event2.ID)] = event2
+				report2 := report
+				report2.ID, report2.OutputSequence, report2.Admission = "report2", 4, 4
+				report2.DiscussionSource = DiscussionOutputSource{AdmissionID: event2.WakeID, JobID: second.JobID, AttemptID: second.AttemptID}
+				st.Wakes[key("d", event2.WakeID)] = Wake{ID: event2.WakeID, ConversationID: "d", EventID: event2.ID, Admission: report2.Admission}
+				st.Publications[key("d", report2.ID)] = report2
+				if e := discussionReplyEvidence(st, original, time.Now()); !e.final || e.output.ID != report2.ID || len(e.workerFinals) != 1 || e.workerFinals[0].ID != report.ID {
+					t.Fatalf("expected both worker receipts: %+v", e)
+				}
+				delete(st.Publications, key("d", report2.ID))
+			}
 			raw, err := c.discussionReplyReceipt(t.Context(), st, current, "101")
 			if err != nil || !strings.Contains(string(raw), `"reply":"progress scheduled"`) || !strings.Contains(string(raw), `["201"]`) || strings.Contains(string(raw), `["303"]`) != tc.want {
 				t.Fatalf("receipt %s err %v", raw, err)

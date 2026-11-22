@@ -213,7 +213,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
 		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
 		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
-		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
+		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: r.projectEnrolled,
 	})
 	if err != nil {
 		return nil, err
@@ -254,6 +254,20 @@ func (d *discussion) verifyAudience(ctx context.Context) error {
 func (d *discussion) verifyOrigin(ctx context.Context, origin schema.MessageOrigin) error {
 	return d.checkOrigin(ctx, origin, "admission")
 }
+func (d *discussion) expectsReply(ctx context.Context, origin schema.MessageOrigin) (bool, error) {
+	d.mu.RLock()
+	reader := d.reader
+	d.mu.RUnlock()
+	if reader == nil {
+		return false, voice.ErrNotFound
+	}
+	page, err := reader(ctx, discord.TeammateHistoryQuery{Source: "expected_reply", AdmissionID: origin.RequestID, Revision: origin.Revision, MessageID: origin.MessageID, AuthorID: origin.ActorID})
+	if errors.Is(err, discord.ErrTeammateSourceChanged) {
+		return false, nil
+	}
+	return page.ExpectsReply, err
+}
+
 func (d *discussion) verifyGrant(ctx context.Context, origin schema.MessageOrigin) error {
 	return d.checkOrigin(ctx, origin, "grant")
 }
@@ -317,7 +331,7 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 		answer += "\n" + note
 	}
 	err = entry.voice.Admit(ctx, voice.DiscussionInput{
-		Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
+		ExpectReply: input.ExpectReply || input.RequireMention || input.Discussion.Route.GuildID == "", Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
 		Project: func(selected string) (string, bool) {
 			project := r.resolveProject(selected, input.Text, projectHistory(page, input.Route.MessageID))
 			wording := projectWords(input.Text)
@@ -335,7 +349,7 @@ func activationNotice(err error) error {
 		return errors.Join(&discord.TeammateInputHold{AdmissionID: hold.AdmissionID, CustodyLost: hold.CustodyLost, DirectInput: errors.Is(err, voice.ErrDiscussionDirectInputHeld), EffectUncertain: errors.Is(err, voice.ErrDiscussionEffectUncertain)}, err)
 	}
 	if errors.Is(err, voice.ErrDiscussionActivationUnavailable) {
-		return errors.Join(discord.ErrTeammateManagerUnavailable, err)
+		return errors.Join(&discord.TeammateStartupNotice{Body: voice.DiscussionStartupMessage(err)}, err)
 	}
 	return err
 }
@@ -360,9 +374,16 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 		return discord.TeammateNativeStatus{}, err
 	}
 	result := discord.TeammateNativeStatus{
-		PendingAdmissions: status.PendingAdmissions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
+		UnconfirmedReplies: status.UnconfirmedReplies, PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
+	}
+	for _, outputs := range status.UnconfirmedOutputs {
+		var receipts []discord.PublicationProof
+		for _, output := range outputs {
+			receipts = append(receipts, connectorPublication(output).Proof())
+		}
+		result.ReplyReceipts = append(result.ReplyReceipts, receipts)
 	}
 	for _, job := range status.Jobs {
 		result.Jobs = append(result.Jobs, discord.TeammateJobStatus{ID: job.ID, AttemptID: job.AttemptID, Session: job.Session,
@@ -633,7 +654,7 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 			}
 			sort.Slice(entries, func(i, j int) bool { return entries[i].CreatedAt.Before(entries[j].CreatedAt) })
 			history, _ := json.Marshal(entries)
-			fmt.Fprintf(&msg, "Recent Discord evidence (JSON) %s\n", history)
+			fmt.Fprintf(&msg, "Earlier Discord messages for context (JSON) %s\n", history)
 			fmt.Fprintf(&msg, "Evidence source %s, latest message %s. The history tool can retrieve remaining pages.\n", source, page.HighWater)
 			if page.Notice != "" {
 				fmt.Fprintf(&msg, "History: %s\n", page.Notice)

@@ -286,6 +286,10 @@ func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID stri
 		a.Origin, a.Project, a.ProjectExplicit = origin, project, explicit
 		a.InputText = "Human answer to the exact pending clarification: " + string(text)
 		if origin != nil {
+			a.ReplyTracked = true
+			a.ReplyCheckAfter = now.Add(discussionFirstReplyWait).Unix()
+		}
+		if origin != nil {
 			speaker, _ := json.Marshal(origin)
 			a.InputText += "\nVerified Discord author " + string(speaker) + ". Use publish to respond in the thread."
 
@@ -404,7 +408,7 @@ func (s *Store) rejectQueuedControllerInput(b ManagerBinding, expected Admission
 			}
 		}
 		a.Reason = reason
-		if reason == ErrDiscussionSourceChanged.Error() {
+		if reason == ErrDiscussionSourceChanged.Error() && !strings.HasPrefix(a.SourceID, "reply-check:") {
 			a.Phase = "superseded"
 			putRecord(st, "admissions", &st.Admissions, k, a)
 			return nil

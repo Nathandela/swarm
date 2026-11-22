@@ -3649,6 +3649,7 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
+	view.WorkerParentInputHash = m.WorkerParentInputHash
 	view.WorkerDiscussion, view.WorkerAttempt, view.WorkerInstance = m.WorkerDiscussion, m.WorkerAttempt, m.WorkerInstance
 	if m.Role == "manager" && m.Status.Process == status.ProcessExited {
 		view.ManagerExitCode, view.ManagerExitSignal = m.ExitCode, m.ManagerExitSignal

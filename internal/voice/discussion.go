@@ -47,6 +47,7 @@ type discussionRuntime interface {
 }
 
 type DiscussionInput struct {
+	ExpectReply                                        bool
 	Origin                                             schema.MessageOrigin
 	Text, Answer, QuestionID, QuestionHash, Supersedes string
 	Project                                            func(string) (string, bool)
@@ -131,6 +132,10 @@ func openDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Co
 	}
 	d := &DiscussionController{ctx: ctx, dir: dir, endpoint: endpoint, cfg: cfg, scope: scope, runtime: runtime, store: store, bridge: bridge, handler: handler, now: time.Now}
 	if state.CurrentConversation != "" {
+		if err = d.trackLegacyReplies(state); err != nil {
+			_ = bridge.Close()
+			return nil, err
+		}
 		b := state.Conversations[cfg.ConversationID].Binding
 		b.Generation = state.Generation
 		if err = d.bind(b); err != nil {
@@ -244,7 +249,7 @@ func (d *DiscussionController) Admit(ctx context.Context, input DiscussionInput)
 	if input.QuestionID == "" {
 		input.QuestionID, input.QuestionHash = matchingDiscussionQuestion(st, input.Answer, d.now())
 	}
-	_, err = controller.submitDiscussionInProject(input.Origin, input.Text, input.Answer, input.QuestionID, input.QuestionHash, project, explicit)
+	_, err = controller.admitDiscussionInput(input, project, explicit)
 	if err == nil {
 		d.idleSince = time.Time{}
 	}
@@ -428,6 +433,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		}
 		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
 		if err != nil {
+			if errors.Is(err, errManagerStillStarting) {
+				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
+			}
 			var failed *failedResume
 			if conv.Retirement.Replacement != "" || stage >= 2 || migrate {
 				delayErr := d.store.update(func(st *State) error {
@@ -556,12 +564,15 @@ func (d *DiscussionController) resume(generation uint64, previous Conversation, 
 func (d *DiscussionController) Dormant() (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.controller == nil {
-		return true, nil
-	}
 	st, err := d.store.readView()
 	if err != nil {
 		return false, err
+	}
+	if hasReplyObligation(st) {
+		return false, nil
+	}
+	if d.controller == nil {
+		return !discussionPending(st) && !discussionAwaitingExport(st, d.now()), nil
 	}
 	if !st.Conversations[d.cfg.ConversationID].Parked || !discussionQuiescent(st, d.now()) {
 		return false, nil
@@ -598,22 +609,7 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	if err != nil {
 		return err
 	}
-	if d.controller == nil {
-		if st.CurrentConversation == "" || !discussionPending(st) {
-			return nil
-		}
-		if err := d.activate(ctx, st); err != nil {
-			return err
-		}
-		st, err = d.store.Snapshot()
-		if err != nil {
-			return err
-		}
-	}
-	if err = d.export(st, emit); err != nil {
-		return err
-	}
-	if d.controller.discussion != nil && d.controller.discussion.VMProjectAccess && d.controller.workers != nil {
+	if d.controller != nil && d.controller.discussion != nil && d.controller.discussion.VMProjectAccess && d.controller.workers != nil {
 		mailChanged, err := d.controller.ingestWorkerMail(ctx, st)
 		if err != nil {
 			return err
@@ -634,6 +630,32 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 				return err
 			}
 		}
+	}
+	if err := d.checkDiscussionReply(ctx, st); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// One broken historical obligation must not suppress new input or a ready export.
+		defer func() { result = errors.Join(result, err) }()
+	}
+	st, err = d.store.readView()
+	if err != nil {
+		return err
+	}
+	if d.controller == nil {
+		if st.CurrentConversation == "" || !discussionPending(st) {
+			return d.export(st, emit)
+		}
+		if err := d.activate(ctx, st); err != nil {
+			return err
+		}
+		st, err = d.store.Snapshot()
+		if err != nil {
+			return err
+		}
+	}
+	if err = d.export(st, emit); err != nil {
+		return err
 	}
 	if len(st.Workers) > 0 {
 		if err := d.controller.reconcileDiscussionWorkerEvidence(ctx); err != nil {
@@ -744,6 +766,11 @@ func discussionPending(st State) bool {
 }
 
 func discussionQuiescent(st State, now time.Time) bool {
+	for _, a := range st.Admissions {
+		if a.ConversationID == st.CurrentConversation && a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman && a.ReplyReceiptChecks == 0 && (a.Origin == nil || !discussionReplyEvidence(st, a, now).workerRunning) {
+			return false
+		}
+	}
 	if discussionPending(st) || st.Conversations[st.CurrentConversation].SchedulerPaused || st.Journal[st.CurrentConversation].Binding == "" {
 		return false
 	}
@@ -752,17 +779,21 @@ func discussionQuiescent(st State, now time.Time) bool {
 			return false
 		}
 	}
+	return !discussionAwaitingExport(st, now)
+}
+
+func discussionAwaitingExport(st State, now time.Time) bool {
 	for _, p := range st.Publications {
 		if !p.Exported {
-			return false
+			return true
 		}
 	}
 	for _, q := range st.Requests {
 		if q.Kind == "manager" && q.State == "pending" && !q.Exported && now.Before(q.ExpiresAt) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func (d *DiscussionController) canPark(st State, now time.Time) bool {

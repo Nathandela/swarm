@@ -32,6 +32,9 @@ const (
 )
 
 type TeammateNativeStatus struct {
+	ReplyReceipts       [][]PublicationProof    `json:"-"`
+	UnconfirmedReplies  int                     `json:"unconfirmed_replies,omitempty"`
+	PendingReplies      int                     `json:"pending_replies,omitempty"`
 	PendingAdmissions   int                     `json:"pending_admissions,omitempty"`
 	Notes               []workermail.NoteStatus `json:"worker_notes,omitempty"`
 	RetirementOperation string                  `json:"retirement_operation,omitempty"`
@@ -68,6 +71,7 @@ type TeammateDiscussion struct {
 }
 
 type TeammateAdmission struct {
+	ExpectReply                          bool   `json:",omitempty"`
 	AttachmentManifest                   string `json:",omitempty"`
 	RequireMention                       bool
 	Supersedes                           string
@@ -113,6 +117,12 @@ func (h *TeammateInputHold) Error() string {
 	return "discord: dispatcher delivery awaits native turn confirmation"
 }
 
+// TeammateStartupNotice carries locally generated, audience-safe guidance only.
+type TeammateStartupNotice struct{ Body string }
+
+func (n *TeammateStartupNotice) Error() string { return n.Body }
+func (n *TeammateStartupNotice) Unwrap() error { return ErrTeammateManagerUnavailable }
+
 var ErrTeammateManagerUnavailable = errors.New("discord: teammate manager is unavailable")
 
 type TeammateHistoryQuery struct {
@@ -121,6 +131,7 @@ type TeammateHistoryQuery struct {
 	AdmissionID, Revision, MessageID, AuthorID string
 }
 type TeammateHistoryPage struct {
+	ExpectsReply                        bool     `json:",omitempty"`
 	ConfirmedMessageIDs                 []string `json:",omitempty"`
 	EvidenceFragment                    string   `json:",omitempty"`
 	FragmentMessageID                   string   `json:",omitempty"`

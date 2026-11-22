@@ -33,6 +33,7 @@ import (
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"golang.org/x/mod/semver"
 )
@@ -226,28 +227,20 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 			return
 		}
 	}
+	d.prepareCodexLaunchTrust(id, expectedInstance, feed.userAgent, conn)
 	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs, commandArgs); aerr != nil {
 		log.Printf("skeleton: release session %s with its backend: %v", id, aerr)
 	}
-	var threadID string
-	var ok bool
-	if preexistingConversation {
-		// Codex resume need not broadcast thread/started. Wait for the TUI to
-		// load the saved conversation, using the same ownership check as rejoin.
-		for deadline := time.Now().Add(d.backendDeadline()); time.Now().Before(deadline); {
-			if threadID, err = d.discoverRejoinThread(id, expectedInstance, conn); err == nil {
-				ok = true
-				break
-			}
-			time.Sleep(backendReadyInterval)
-		}
-	} else {
-		threadID, ok = d.awaitAdoptedThread(id, d.backendDeadline())
-	}
+	threadID, ok := d.awaitLaunchThread(id, expectedInstance, conn, preexistingConversation)
 	if !ok {
 		_ = conn.Close()
-		log.Printf("skeleton: session %s did not expose its conversation within %s", id, d.backendDeadline())
-		d.noteBackendUnavailableForInstance(id, expectedInstance)
+		select {
+		case <-d.closing:
+			// An orderly observer shutdown is not evidence of a backend failure.
+		default:
+			log.Printf("skeleton: session %s could not establish its native conversation", id)
+			d.noteBackendUnavailableForInstance(id, expectedInstance)
+		}
 		return
 	}
 	// THE PRE-GO-AHEAD IDENTITY carries the history classification; the first resume only joins
@@ -398,17 +391,48 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 	go d.subscribeSessionThread(id, conn, threadID, feed.epoch, expectedInstance, false)
 }
 
-// awaitAdoptedThread blocks until the pump has seen the agent's `thread/started`, or the
-// bound elapses.
-func (d *Daemon) awaitAdoptedThread(id string, within time.Duration) (string, bool) {
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if threadID, ok := d.adoptedThread(id); ok {
-			return threadID, true
+// A dispatcher can spend arbitrarily long in onboarding before it creates its
+// first thread. Keep the original observer while this exact launch is alive.
+func (d *Daemon) awaitLaunchThread(id, instance string, conn *appserver.Client, resume bool) (string, bool) {
+	deadline := time.Now().Add(d.backendDeadline())
+	tick := time.NewTicker(backendReadyInterval)
+	defer tick.Stop()
+	for {
+		m, found := d.core.Get(id)
+		current, ok := d.sessionInstance(id)
+		if !found || m.Status.Process != status.ProcessRunning || !ok || current != instance {
+			return "", false
 		}
-		time.Sleep(backendReadyInterval)
+		if resume {
+			// Resuming may not emit thread/started. Require the persisted thread.
+			thread, err := d.discoverRejoinThread(id, instance, conn)
+			if err == nil {
+				return thread, true
+			}
+			// While the native backend is starting, even an inventory RPC can
+			// fail transiently. Only a missing saved thread extends that wait.
+			if !errors.Is(err, errThreadNotLoaded) && (deadline.IsZero() || !time.Now().Before(deadline)) {
+				return "", false
+			}
+		} else if thread, ok := d.adoptedThread(id); ok {
+			return thread, true
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			if !schema.IsDiscordManager(m.Role, m.ManagerConversationID) {
+				return "", false
+			}
+			log.Printf("skeleton: dispatcher %s is still waiting for Codex to open its conversation", id)
+			deadline = time.Time{}
+			tick.Reset(time.Second)
+		}
+		select {
+		case <-d.closing:
+			return "", false
+		case <-conn.Done():
+			return "", false
+		case <-tick.C:
+		}
 	}
-	return "", false
 }
 
 // resumeThreadOnce makes EXACTLY ONE `thread/resume` attempt against a thread this connection
@@ -559,6 +583,8 @@ func (d *Daemon) discoverLoadedThread(conn backendConn) (string, error) {
 	return selectOnlyLoadedThread(loaded)
 }
 
+const errThreadNotLoaded = errBackendProbe("the saved conversation is not loaded yet")
+
 // discoverRejoinThread selects the provider thread owned by this exact Swarm session
 // instance. A Codex app-server can legitimately hold the main thread plus guardian or
 // sub-agent threads, so the loaded list is an inventory, not an ownership proof. The
@@ -585,6 +611,9 @@ func (d *Daemon) discoverRejoinThread(id, expectedInstance string, conn backendC
 		if candidate == persisted {
 			matches++
 		}
+	}
+	if matches == 0 {
+		return "", errThreadNotLoaded
 	}
 	if matches != 1 {
 		return "", errBackendProbe(fmt.Sprintf(

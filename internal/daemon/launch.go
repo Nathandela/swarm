@@ -451,6 +451,9 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			return persist.Meta{}, errors.New("dispatcher spawn proof is stale")
 		}
 		spec.workerDiscussion = parent.meta.ManagerConversationID
+		if parent.meta.ShimPID != spec.WorkerParentShimPID || parent.meta.ShimStartTime != spec.WorkerParentShimStart {
+			spec.WorkerParentInputHash = ""
+		}
 	}
 	gated := scheduled || spec.workerDiscussion != ""
 	id := d.freshIDLocked()
@@ -503,6 +506,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		if spec.InitialPrompt != "" {
 			promptHash := sha256.Sum256([]byte(spec.InitialPrompt))
 			m.WorkerPromptHash = hex.EncodeToString(promptHash[:])
+		}
+		m.WorkerParentInputHash = spec.WorkerParentInputHash
+		if repair {
+			m.WorkerParentInputHash = previousMeta.WorkerParentInputHash
 		}
 		m.WorkerDiscussion = spec.workerDiscussion
 		m.WorkerAttempt = "vm-child-" + spec.OperationID

@@ -165,6 +165,9 @@ type ResumeSourceFence struct {
 }
 
 type LaunchSpec struct {
+	WorkerParentInputHash   string `json:"-"`
+	WorkerParentShimPID     int    `json:"-"`
+	WorkerParentShimStart   int64  `json:"-"`
 	RepairWorkerReservation bool   `json:"-"`
 	DispatcherProof         string `json:"-"`
 	workerDiscussion        string

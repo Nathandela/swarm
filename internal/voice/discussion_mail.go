@@ -30,6 +30,7 @@ func (c *Controller) ingestWorkerMail(ctx context.Context, st State) (bool, erro
 			return false, ErrStale
 		}
 		worker := WorkerAssociation{VMChild: true, Mailbox: true, ConversationID: n.Discussion, Parent: n.Parent, Session: n.Session, SessionInstance: n.Instance, Project: n.Project, AttemptID: n.Attempt, JobID: "vm-child-" + hashValue([]string{n.Discussion, n.Session})}
+		linkVMWorkerInput(st, &worker, n.ParentInputHash)
 		meta := workerNoteMetadata{Session: n.Session, Instance: n.Instance, Agent: n.Agent, Text: n.Text, NoteID: n.ID, Sequence: n.Sequence, Created: &n.Created, Kind: n.Kind}
 		if _, err = c.queueWorkerNote(worker, workerMessageInput{ID: n.ID, Text: n.Text, Kind: n.Kind}, meta); err != nil {
 			if errors.Is(err, errSupersededWorkerMail) {

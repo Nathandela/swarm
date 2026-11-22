@@ -52,6 +52,7 @@ type teammateBinding struct {
 	InputNoticeID           string    `json:",omitempty"`
 	InputNoticeAt           time.Time `json:",omitempty"`
 	StartupNoticePending    bool
+	StartupNoticeID         string `json:",omitempty"`
 	StartupNoticeGeneration uint64
 	TeammateDiscussion
 	Opened                      bool
@@ -418,9 +419,10 @@ func teammateActivate(tx *bolt.Tx, b *teammateBinding) error {
 }
 
 type parkedWorkerNotes struct {
-	Discussion TeammateDiscussion
-	Native     TeammateNativeStatus
-	At         time.Time
+	ReplyReceipts [][]PublicationProof `json:",omitempty"`
+	Discussion    TeammateDiscussion
+	Native        TeammateNativeStatus
+	At            time.Time
 }
 
 func recentWorkerNotes(tx *bolt.Tx, installation string) ([]parkedWorkerNotes, error) {
@@ -471,7 +473,7 @@ func (s *Store) teammatePark(d TeammateDiscussion, through uint64, native *Teamm
 				}
 			}
 		}
-		if native != nil && native.State == "parked" && (native.RetirementOperation != "" || len(native.Notes) > 0 || len(retainedJobs) > 0) {
+		if native != nil && native.State == "parked" && (native.UnconfirmedReplies > 0 || native.RetirementOperation != "" || len(native.Notes) > 0 || len(retainedJobs) > 0) {
 			recent, err := recentWorkerNotes(tx, d.InstallationID)
 			if err != nil {
 				return err
@@ -483,7 +485,7 @@ func (s *Store) teammatePark(d TeammateDiscussion, through uint64, native *Teamm
 			snapshot := *native
 			snapshot.Jobs = retainedJobs
 			snapshot.Notes = snapshot.Notes[:min(len(snapshot.Notes), 16)]
-			row := parkedWorkerNotes{Discussion: d, Native: snapshot, At: time.Now().UTC()}
+			row := parkedWorkerNotes{Discussion: d, Native: snapshot, ReplyReceipts: native.ReplyReceipts, At: time.Now().UTC()}
 			recent = append([]parkedWorkerNotes{row}, recent...)
 			if err := putJSON(tx, teammateMetaBucket, teammateKey(d.InstallationID, "parked-worker-notes"), recent); err != nil {
 				return err
@@ -566,7 +568,7 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 				binding.ProvisionalCancelled = true
 			}
 			if binding.StartupNoticePending && binding.StartupNoticeGeneration == 0 && (binding.Opened || binding.ProvisionalCancelled) {
-				if err := teammateCancelUnsentStartupNotice(tx, d, 0); err != nil {
+				if err := teammateCancelPreparedNotice(tx, d, binding.startupNoticeID(), teammateStartupNotice); err != nil {
 					return err
 				}
 				binding.StartupNoticePending = false
@@ -677,6 +679,26 @@ type TeammateOutputStatus struct {
 // Read both sides of compaction in one snapshot so an observed send stays visible.
 func (s *Store) workerPublicationStatus(d TeammateDiscussion, native *TeammateNativeStatus) error {
 	return s.db.View(func(tx *bolt.Tx) error {
+		var pending [][]PublicationProof
+		for _, group := range native.ReplyReceipts {
+			delivered := len(group) != 0
+			for _, proof := range group {
+				ids, err := confirmedPublicationIDs(tx, d, proof)
+				if err != nil && !errors.Is(err, ErrConflict) {
+					return err
+				}
+				if len(ids) == 0 {
+					delivered = false
+					break
+				}
+			}
+			if delivered && native.UnconfirmedReplies > 0 {
+				native.UnconfirmedReplies--
+			} else {
+				pending = append(pending, group)
+			}
+		}
+		native.ReplyReceipts = pending
 		for _, job := range native.Jobs {
 			if job.NativeTurnPublication != nil {
 				if err := readPublicationStatus(tx, d, job.NativeTurnPublication, nil); err != nil {
@@ -695,13 +717,36 @@ func (s *Store) workerPublicationStatus(d TeammateDiscussion, native *TeammateNa
 	})
 }
 
-func (s *Store) confirmedPublication(d TeammateDiscussion, expected TeammatePublication) ([]string, error) {
-	chunks := len(splitUTF16(expected.Body, 1900))
-	pub := workermail.PublicationStatus{ID: expected.ID}
-	if err := s.db.View(func(tx *bolt.Tx) error { return readPublicationStatus(tx, d, &pub, &expected) }); err != nil {
+// PublicationProof contains the same immutable hashes as a compacted outbox receipt.
+// Parked status can reconcile a late acknowledgement without retaining message bodies.
+type PublicationProof struct {
+	ID, BodyHash, PublicationHash string
+	Chunks                        int
+}
+
+func (p TeammatePublication) Proof() PublicationProof {
+	proof := PublicationProof{ID: p.ID, BodyHash: PublicationBodyHash(p.Body), Chunks: len(splitUTF16(p.Body, 1900))}
+	p.Body = ""
+	proof.PublicationHash = digest(p)
+	return proof
+}
+
+func (s *Store) confirmedPublication(d TeammateDiscussion, expected TeammatePublication) (ids []string, err error) {
+	proof := expected.Proof()
+	err = s.db.View(func(tx *bolt.Tx) error {
+		var readErr error
+		ids, readErr = confirmedPublicationIDs(tx, d, proof)
+		return readErr
+	})
+	return ids, err
+}
+
+func confirmedPublicationIDs(tx *bolt.Tx, d TeammateDiscussion, proof PublicationProof) ([]string, error) {
+	pub := workermail.PublicationStatus{ID: proof.ID}
+	if err := readPublicationStatus(tx, d, &pub, &proof); err != nil {
 		return nil, err
 	}
-	if pub.State != StateSent || chunks == 0 || len(pub.MessageIDs) != chunks {
+	if pub.State != StateSent || proof.Chunks == 0 || len(pub.MessageIDs) != proof.Chunks {
 		return nil, nil
 	}
 	for _, id := range pub.MessageIDs {
@@ -712,12 +757,7 @@ func (s *Store) confirmedPublication(d TeammateDiscussion, expected TeammatePubl
 	return pub.MessageIDs, nil
 }
 
-func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.PublicationStatus, expected *TeammatePublication) error {
-	var bodyHash string
-	if expected != nil {
-		bodyHash = PublicationBodyHash(expected.Body)
-		expected.Body = ""
-	}
+func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.PublicationStatus, expected *PublicationProof) error {
 	k := teammateOutputKey(d.InstallationID, d.ID, pub.ID)
 	var out teammateOutput
 	err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), k, &out)
@@ -730,13 +770,17 @@ func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.Pu
 		if err != nil {
 			return err
 		}
-		if receipt.Route != d.Route || len(receipt.DiscordMessageIDs) == 0 {
+		ids := receipt.DiscordMessageIDs
+		if expected == nil && len(receipt.UnverifiedMessageIDs) > 0 {
+			ids = receipt.UnverifiedMessageIDs
+		}
+		if receipt.Route != d.Route || len(ids) == 0 {
 			return nil
 		}
-		if expected != nil && (receipt.BodyHash != bodyHash || receipt.PublicationHash != digest(*expected)) {
+		if expected != nil && (receipt.BodyHash != expected.BodyHash || receipt.PublicationHash != expected.PublicationHash) {
 			return ErrConflict
 		}
-		pub.State, pub.MessageIDs = StateSent, receipt.DiscordMessageIDs
+		pub.State, pub.MessageIDs = StateSent, ids
 		return nil
 	}
 	if err != nil {
@@ -745,7 +789,7 @@ func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.Pu
 	if out.Route != d.Route || len(out.Chunks) == 0 {
 		return nil
 	}
-	if expected != nil && (out.DiscussionID != d.ID || out.BodyHash != bodyHash || out.Publication != *expected || out.Internal) {
+	if expected != nil && (out.DiscussionID != d.ID || out.BodyHash != expected.BodyHash || digest(out.Publication) != expected.PublicationHash || out.Internal) {
 		return ErrConflict
 	}
 	pub.State = StateSent
@@ -801,7 +845,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 			if err != nil {
 				view.Diagnostic = err.Error()
 			}
-			if err == nil && (len(view.Notes) > 0 || len(view.Jobs) > 0) {
+			if err == nil && (len(view.ReplyReceipts) > 0 || len(view.Notes) > 0 || len(view.Jobs) > 0) {
 				if e := s.workerPublicationStatus(b.TeammateDiscussion, &view); e != nil {
 					return status, e
 				}
@@ -825,6 +869,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 		if time.Since(row.At) > workermail.ReceiptRetention || slices.ContainsFunc(rows, func(b teammateBinding) bool { return b.ID == row.Discussion.ID }) {
 			continue
 		}
+		row.Native.ReplyReceipts = row.ReplyReceipts
 		if err := s.workerPublicationStatus(row.Discussion, &row.Native); err != nil {
 			return status, err
 		}

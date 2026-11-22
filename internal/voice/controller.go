@@ -253,6 +253,18 @@ func (c *Controller) Tick(ctx context.Context) error {
 			if c.discussion.journalReady != nil && !c.discussion.journalReady() {
 				return ErrControllerJournalResync
 			}
+			if strings.HasPrefix(a.SourceID, "reply-check:") {
+				if err := c.checkReplyRecovery(ctx, st, a); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					if errors.Is(err, ErrDiscussionSourceChanged) {
+						return c.store.rejectQueuedControllerInput(c.binding, a, ErrDiscussionSourceChanged.Error())
+					}
+					// Retire the optional reporting turn even when the old grant cannot be verified.
+					return c.store.rejectQueuedControllerInput(c.binding, a, ErrExpired.Error())
+				}
+			}
 			if a.Origin != nil && !a.SourceCutover && c.discussion.VerifyOrigin != nil {
 				if err := c.discussion.VerifyOrigin(ctx, *a.Origin); err != nil {
 					if !errors.Is(err, ErrDiscussionSourceChanged) {
@@ -306,7 +318,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 					return err
 				}
 				if prompt != "" {
-					text = "Local manager starting instructions\n" + prompt + "\n\nCurrent input\n" + text
+					text = "Current owner settings (supersede earlier settings)\n" + prompt + "\n\nCurrent input\n" + text
 				}
 			}
 			if a.RecoveryOnly {

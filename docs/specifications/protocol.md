@@ -402,6 +402,7 @@ alongside the group.
 | `worker_discussion` | string | Logical discussion recorded at an authenticated ordinary worker launch. |
 | `worker_attempt` | string | Stable launch operation associated with that worker. |
 | `worker_instance` | string | Physical worker incarnation recorded before native execution. |
+| `worker_parent_input_hash` | string | SHA-256 of the running native dispatcher input observed by the supervisor when the worker launch began. Absent when the parent turn cannot be attributed, including for older launches. |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 | `backend_plan_error` | string     | the persisted reason this session launched with no backend although its adapter declared one (the agent's PTY runs; nothing serves the attach channel); absent on a healthy session and on rows from an older daemon (lifecycle R1) |
 | `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |

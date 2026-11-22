@@ -359,7 +359,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		MaxSessions:        cfg.MaxSessions,
 		ConnHandler:        d.handleConn,
 		PreLaunch:          preLaunchWorktree,
-		FinalizeLaunch:     d.prepareLoginLaunch,
+		FinalizeLaunch:     d.finalizeAgentLaunch,
 		PreDelete:          preDeleteWorktree,
 		WorkerInstance:     d.adoptOrMintSessionInstance,
 		OnSessionStart:     d.registerSession,
@@ -563,6 +563,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.managerInterruptTurn = d.interruptManagerTurn
 	d.api.managerRetire = d.retireManager
 	d.api.managerInputStatus = d.managerInputStatus
+	d.api.workerParentInstance = d.sessionInstance
 	d.api.managerRuntime = d.managerRuntime
 	d.api.managerCall = d.resolveManagerCall
 	d.api.nativeDecision = d.ApplyNativeDecision

@@ -27,7 +27,7 @@ func (d *Daemon) WorkerMail(endpoint, session string, req schema.WorkerMailReq, 
 	if !ok || m.WorkerDiscussion == "" || m.WorkerAttempt == "" || m.WorkerInstance == "" || m.Status.Process != status.ProcessRunning || !d.shimIdentityMatches(m) || !d.workerProof(session, req.Proof, "worker") {
 		return receipt, errors.New("worker mailbox unavailable for this incarnation")
 	}
-	b := workermail.Binding{Discussion: m.WorkerDiscussion, Parent: m.SpawnedFrom, Session: endpoint + "/" + session, Instance: m.WorkerInstance, Attempt: m.WorkerAttempt, Agent: m.AgentType, Project: m.Cwd}
+	b := workermail.Binding{ParentInputHash: m.WorkerParentInputHash, Discussion: m.WorkerDiscussion, Parent: m.SpawnedFrom, Session: endpoint + "/" + session, Instance: m.WorkerInstance, Attempt: m.WorkerAttempt, Agent: m.AgentType, Project: m.Cwd}
 	var n workermail.Note
 	var err error
 	switch req.Action {

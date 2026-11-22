@@ -33,7 +33,10 @@ func Proof(token, purpose string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-type Binding struct{ Discussion, Parent, Session, Instance, Attempt, Agent, Project string }
+type Binding struct {
+	Discussion, Parent, Session, Instance, Attempt, Agent, Project string
+	ParentInputHash                                                string `json:",omitempty"`
+}
 type Note struct {
 	Binding
 	ID, Kind, Text, State, Answer string

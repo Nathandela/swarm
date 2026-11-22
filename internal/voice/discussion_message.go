@@ -329,11 +329,17 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 	var accepted Wake
 	err = c.store.update(func(current *State) error {
 		k := key(c.binding.ConversationID, key(worker.Session, worker.SessionInstance))
+		if worker.Mailbox {
+			promoteVMWorkerAlias(current, worker)
+		}
 		if existing, ok := current.Workers[k]; worker.Mailbox {
 			if !ok {
 				putRecord(current, "workers", &current.Workers, k, worker)
 			} else if existing.AttemptID != worker.AttemptID || !existing.supervisorMailbox() || existing.Parent != worker.Parent || existing.RecoveryRequired {
 				return errSupersededWorkerMail
+			} else if existing.ParentInputHash == "" && worker.ParentInputHash != "" {
+				existing.ParentInputHash, existing.Admission = worker.ParentInputHash, worker.Admission
+				putRecord(current, "workers", &current.Workers, k, existing)
 			}
 		} else if existing != worker {
 			return ErrStale

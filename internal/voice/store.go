@@ -1099,11 +1099,20 @@ func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) err
 		}
 		cutoff := now.Add(-7 * 24 * time.Hour)
 		floor := st.Conversations[b.ConversationID].RetiredThrough
+		pending := map[uint64]bool{}
+		for _, a := range st.Admissions {
+			if a.ConversationID == b.ConversationID && a.ReplyCheckAfter != 0 {
+				pending[a.Sequence] = true
+				if a.ReplyRecovery != 0 {
+					pending[a.ReplyRecovery] = true
+				}
+			}
+		}
 		for k, a := range st.Actions {
 			if budget == 0 {
 				return nil
 			}
-			if a.ConversationID == b.ConversationID && a.Admission <= floor && a.State == "settled" && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
+			if a.ConversationID == b.ConversationID && a.Admission <= floor && !pending[a.Admission] && a.State == "settled" && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
 				deleteRecord(st, "actions", &st.Actions, k)
 				budget--
 			}
@@ -1113,7 +1122,7 @@ func (s *Store) compactReceipts(b ManagerBinding, now time.Time, budget int) err
 			if budget == 0 {
 				return nil
 			}
-			if a.ConversationID == b.ConversationID && a.Sequence <= floor && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
+			if a.ConversationID == b.ConversationID && a.Sequence <= floor && !pending[a.Sequence] && !a.SettledAt.IsZero() && !a.SettledAt.After(cutoff) {
 				deleteRecord(st, "admissions", &st.Admissions, k)
 				budget--
 			} else if a.ConversationID == b.ConversationID && a.ReusedFinal != nil {
@@ -1398,6 +1407,12 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 				}
 				result = prior
 				return nil
+			}
+			// An acknowledgement creates a reply obligation even when this shared-thread message had no mention.
+			if admission.Origin != nil && !p.Final && admission.ReplyCheckAfter == 0 {
+				admission.ReplyTracked = true
+				admission.ReplyCheckAfter = time.Now().Add(discussionReplyWait).Unix()
+				putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, admission.Sequence), admission)
 			}
 			p.DiscussionSource = discussionOutputSource(st, b.ConversationID, admission)
 			p.DiscussionProjects = addDiscussionScopeValue(admission.WorkerProjects, admission.Project)

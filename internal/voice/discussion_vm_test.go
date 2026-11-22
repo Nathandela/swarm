@@ -222,3 +222,89 @@ func TestStoredVMStatusUsesCurrentWorkerProvenance(t *testing.T) {
 		}
 	}
 }
+
+func TestMailboxRosterPromotesProvisionalVMWorkerAcrossRestart(t *testing.T) {
+	for _, route := range []string{"roster", "retained duplicate", "note before roster"} {
+		t.Run(route, func(t *testing.T) {
+			c, store, _, _ := provenControllerFixture(t)
+			ep, parent, _ := protocol.ParseID(c.binding.SessionID)
+			row := protocol.SessionView{ID: ep + "/child", EndpointID: ep, SpawnedFrom: parent, Cwd: "/fixture", Group: status.GroupWorking, Status: status.Status{Process: status.ProcessRunning}}
+			workers := &controllerWorkerFixture{rows: []protocol.SessionView{row}}
+			c.workers = workers
+			st, err := store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = c.observeVMWorkers(st); err != nil {
+				t.Fatal(err)
+			}
+			row.WorkerDiscussion, row.WorkerInstance, row.WorkerAttempt = c.binding.ConversationID, "physical", "attempt"
+			workers.rows[0] = row
+			alias := key(c.binding.ConversationID, key(row.ID, row.ID))
+			exact := key(c.binding.ConversationID, key(row.ID, row.WorkerInstance))
+			if route == "retained duplicate" {
+				err = store.update(func(st *State) error {
+					w := st.Workers[alias]
+					w.Mailbox, w.SessionInstance, w.AttemptID = true, row.WorkerInstance, row.WorkerAttempt
+					putRecord(st, "workers", &st.Workers, alias, w)
+					putRecord(st, "workers", &st.Workers, exact, w)
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, err = store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if route == "note before roster" {
+				w := st.Workers[alias]
+				w.SessionInstance, w.AttemptID, w.Mailbox = row.WorkerInstance, row.WorkerAttempt, true
+				input := workerMessageInput{ID: "explicit-note", Kind: "needs-input", Text: "Proceed?"}
+				_, err = c.queueWorkerNote(w, input, workerNoteMetadata{Session: w.Session, Instance: w.SessionInstance, Kind: input.Kind, NoteID: input.ID, Text: input.Text})
+			} else {
+				_, err = c.observeVMWorkers(st)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err = store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Workers) != 1 || !st.Workers[exact].supervisorMailbox() || st.Workers[exact].AttemptID != row.WorkerAttempt {
+				t.Fatalf("want one exact association, got %+v", st.Workers)
+			}
+		})
+	}
+}
+
+func TestMailboxRosterLeavesConflictingProvisionalAttemptUntouched(t *testing.T) {
+	c, store, _, _ := provenControllerFixture(t)
+	ep, parent, _ := protocol.ParseID(c.binding.SessionID)
+	row := protocol.SessionView{ID: ep + "/child", EndpointID: ep, SpawnedFrom: parent, Cwd: "/fixture", Group: status.GroupWorking,
+		WorkerDiscussion: c.binding.ConversationID, WorkerAttempt: "new-attempt", WorkerInstance: "same-physical", Status: status.Status{Process: status.ProcessRunning}}
+	c.workers = &controllerWorkerFixture{rows: []protocol.SessionView{row}}
+	old := WorkerAssociation{VMChild: true, Mailbox: true, ConversationID: c.binding.ConversationID, Session: row.ID, SessionInstance: row.WorkerInstance,
+		Parent: parent, Project: row.Cwd, AttemptID: "old-attempt", JobID: "vm-child-" + hashValue([]string{c.binding.ConversationID, row.ID}), RecoveryRequired: true}
+	alias := key(c.binding.ConversationID, key(row.ID, row.ID))
+	if err := store.update(func(st *State) error { putRecord(st, "workers", &st.Workers, alias, old); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.observeVMWorkers(st); err != nil {
+		t.Fatal(err)
+	}
+	st, err = store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := st.Workers[key(c.binding.ConversationID, key(row.ID, row.WorkerInstance))]
+	if st.Workers[alias] != old || !w.supervisorMailbox() || w.AttemptID != row.WorkerAttempt {
+		t.Fatalf("ambiguous old attempt changed or new mailbox absent: %+v", st.Workers)
+	}
+}

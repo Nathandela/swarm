@@ -63,47 +63,54 @@ func agyStatusLineArgsWithBinary(argv, env []string, binary string) []string {
 	if line == nil {
 		return argv
 	}
+	return agyInlineSetting(argv, "statusLine", line)
+}
+
+// Preserve an operator's explicit setting. Multiple --settings flags are not
+// merged by agy; merge the Swarm-injected fields into the same JSON object.
+func agyInlineSetting(argv []string, key string, value any) []string {
+	if len(argv) == 0 {
+		return argv
+	}
 	index := -1
-	for i := 1; i+1 < len(argv); i++ {
-		if argv[i] == "--settings" {
-			if index != -1 {
+	for i := 1; i < len(argv); i++ {
+		switch argv[i] {
+		case "--settings":
+			if index != -1 || i+1 >= len(argv) {
 				return argv
 			}
 			index = i + 1
 			i++
+		case "--prompt-interactive", "--prompt", "--conversation", "--model", "--mode", "--effort":
+			i++
 		}
 	}
+	settings := make(map[string]json.RawMessage)
 	if index != -1 {
-		var settings map[string]json.RawMessage
 		if json.Unmarshal([]byte(argv[index]), &settings) != nil || settings == nil {
 			return argv
 		}
-		if _, present := settings["statusLine"]; present {
+		if _, present := settings[key]; present {
 			return argv
 		}
-		rawLine, err := json.Marshal(line)
-		if err != nil {
-			return argv
-		}
-		settings["statusLine"] = rawLine
-		raw, err := json.Marshal(settings)
-		if err != nil {
-			return argv
-		}
+	}
+	field, err := json.Marshal(value)
+	if err != nil {
+		return argv
+	}
+	settings[key] = field
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		return argv
+	}
+	if index >= 0 {
 		out := append([]string(nil), argv...)
 		out[index] = string(raw)
 		return out
 	}
-	raw, err := json.Marshal(struct {
-		StatusLine map[string]any `json:"statusLine"`
-	}{StatusLine: line})
-	if err != nil {
-		return argv
-	}
 	out := make([]string, 0, len(argv)+2)
 	out = append(out, argv[0], "--settings", string(raw))
-	out = append(out, argv[1:]...)
-	return out
+	return append(out, argv[1:]...)
 }
 
 func agyStatusLineConfig(env []string, binary string) map[string]any {

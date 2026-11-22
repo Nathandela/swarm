@@ -2,6 +2,8 @@ package skeleton
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"strconv"
@@ -9,12 +11,45 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/claudeinput"
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
+
+// Attach only supervisor-observed provenance. The ordinary spawn still works
+// when the provider cannot prove the active input, but cannot settle a human's reply.
+func (a *coreAPI) captureWorkerParentInput(spec *daemon.LaunchSpec) {
+	if spec.DispatcherProof == "" || a.core == nil || a.workerParentInstance == nil {
+		return
+	}
+	parent, ok := a.core.Get(spec.SpawnedFrom)
+	if !ok || !parent.ManagerNativeCLI {
+		return
+	}
+	instance, ok := a.workerParentInstance(parent.ID)
+	if !ok || instance == "" {
+		return
+	}
+	r, err := a.ManagerRuntime(parent.ID, instance)
+	if err != nil {
+		return
+	}
+	spec.WorkerParentInputHash = runningParentInputHash(parent, instance, r)
+	spec.WorkerParentShimPID, spec.WorkerParentShimStart = parent.ShimPID, parent.ShimStartTime
+}
+
+func runningParentInputHash(parent persist.Meta, instance string, r protocol.ManagerRuntimeStatus) string {
+	if !r.NativeCLI || r.Binding.Session != parent.ID || r.Binding.SessionInstance != instance ||
+		r.Binding.ConversationID != parent.ManagerConversationID || r.Turn.State != "running" || r.Turn.ExternallySteered ||
+		r.Turn.NativeTurnID == "" || !managerproof.ValidHash(r.Turn.NativeInputID) {
+		return ""
+	}
+	h := sha256.Sum256([]byte(r.Turn.NativeInputID))
+	return hex.EncodeToString(h[:])
+}
 
 func (a *coreAPI) ManagerInputStatus(ctx context.Context, local string, req protocol.ManagerAdmission) (protocol.ManagerNativeTurn, error) {
 	if a.managerInputStatus == nil {

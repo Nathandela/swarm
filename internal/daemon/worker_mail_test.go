@@ -42,12 +42,14 @@ func TestOrdinaryDispatcherWorkerBindingPrecedesExecAndSurvivesLostReceipt(t *te
 		t.Fatal("unrelated caller claimed dispatcher parent")
 	}
 	child.DispatcherProof = workermail.Proof(token, "spawn")
+	child.WorkerParentInputHash = "observed-input-hash"
+	child.WorkerParentShimPID, child.WorkerParentShimStart = parent.ShimPID, parent.ShimStartTime
 	m, err := d.Launch(child)
 	if err != nil {
 		t.Fatal(err)
 	}
 	readPIDFile(t, childPID)
-	if m.WorkerInstance != "confirmed-instance" || m.WorkerDiscussion != parent.ManagerConversationID || m.WorkerAttempt == "" {
+	if m.WorkerInstance != "confirmed-instance" || m.WorkerDiscussion != parent.ManagerConversationID || m.WorkerAttempt == "" || m.WorkerParentInputHash != child.WorkerParentInputHash {
 		t.Fatalf("incomplete binding %+v", m)
 	}
 	again, known, err := d.OwnerLaunchReplay(child.OperationID, child.OwnerLaunchHash)
@@ -98,7 +100,7 @@ func TestOrdinaryDispatcherWorkerBindingPrecedesExecAndSurvivesLostReceipt(t *te
 		t.Fatalf("expired replay: %+v %v", receipt, err)
 	}
 	rows, err := workermail.Pending(cfg.StateDir, m.WorkerDiscussion)
-	if err != nil || len(rows) != 1 || rows[0].Instance != m.WorkerInstance {
+	if err != nil || len(rows) != 1 || rows[0].Instance != m.WorkerInstance || rows[0].ParentInputHash != child.WorkerParentInputHash {
 		t.Fatalf("pending %+v, %v", rows, err)
 	}
 }

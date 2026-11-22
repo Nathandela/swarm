@@ -83,6 +83,14 @@ type ReusedFinalReceipt struct {
 }
 
 type Admission struct {
+	ReplyStallSince      int64                   `json:"reply_stall_since,omitempty"`
+	ReplyReceiptChecks   int                     `json:"reply_receipt_checks,omitempty"`
+	ReplyDeliveryUnknown bool                    `json:"reply_delivery_unknown,omitempty"`
+	ReplyTracked         bool                    `json:"reply_tracked,omitempty"`
+	ReplyWaitingForHuman bool                    `json:"reply_waiting_for_human,omitempty"`
+	ReplyProgress        uint64                  `json:"reply_progress,omitempty"`
+	ReplyCheckAfter      int64                   `json:"reply_check_after,omitempty"`
+	ReplyRecovery        uint64                  `json:"reply_recovery,omitempty"`
 	WaitingOnInput       string                  `json:"waiting_on_input,omitempty"`
 	WaitingNotice        bool                    `json:"waiting_notice,omitempty"`
 	ReusedFinal          *ReusedFinalReceipt     `json:"reused_final,omitempty"`
@@ -157,6 +165,7 @@ type SpeechPermit struct {
 }
 
 type Publication struct {
+	ReplyMonitor       bool                   `json:"reply_monitor,omitempty"`
 	DiscussionAttempts string                 `json:"discussion_attempts,omitempty"`
 	DiscussionProjects string                 `json:"discussion_projects,omitempty"`
 	DiscussionSource   DiscussionOutputSource `json:"discussion_source,omitzero"`
@@ -219,6 +228,7 @@ type Wake struct {
 }
 
 type WorkerAssociation struct {
+	ParentInputHash  string `json:"parent_input_hash,omitempty"`
 	Mailbox          bool   `json:"mailbox,omitempty"`
 	VMChild          bool   `json:"vm_child,omitempty"`
 	EvidenceLimited  bool   `json:"evidence_limited,omitempty"`

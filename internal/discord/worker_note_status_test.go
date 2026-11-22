@@ -227,3 +227,74 @@ func TestAnchoredDeliveryRequiresExactPublicationAndEveryChunk(t *testing.T) {
 	d.Route.ChannelID = "other"
 	check(p, nil, nil)
 }
+
+func TestLateReplyReceiptUpdatesActiveAndParkedStatus(t *testing.T) {
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	d := TeammateDiscussion{InstallationID: "I", ID: "D", Route: Route{ChannelID: "201"}}
+	if err := s.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	p := TeammatePublication{ID: "result", AdmissionID: "ask", Sequence: 1, Body: "answer"}
+	proof := p.Proof()
+	p.Body = ""
+	k := teammateOutputKey(d.InstallationID, d.ID, p.ID)
+	out := teammateOutput{DiscussionID: d.ID, Route: d.Route, Publication: p, BodyHash: proof.BodyHash, SettledAt: time.Now(), Chunks: []Chunk{{State: StateSent, MessageID: "301"}}}
+	save := func() {
+		t.Helper()
+		if err := s.db.Update(func(tx *bolt.Tx) error { return putJSON(tx, teammateOutboxBucket, k, out) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save()
+	view := TeammateNativeStatus{State: "parked", UnconfirmedReplies: 2, ReplyReceipts: [][]PublicationProof{{proof}, {proof, {ID: "another"}}}}
+	check := func(want int, parked bool) {
+		t.Helper()
+		v, err := s.teammateStatus(d.InstallationID, func(TeammateDiscussion) (TeammateNativeStatus, error) {
+			if parked {
+				t.Fatal("parked dispatcher was reopened")
+			}
+			return view, nil
+		})
+		if err != nil || len(v.Discussions) != 1 || v.Discussions[0].Native == nil || v.Discussions[0].Native.UnconfirmedReplies != want {
+			t.Fatalf("want %d, status %+v err %v", want, v, err)
+		}
+	}
+	check(2, false) // A historical sent label with no acknowledgement bit is insufficient.
+	out.Chunks[0].GatewaySeen = true
+	save()
+	check(1, false)
+	out.Chunks[0].GatewaySeen = false
+	save()
+	if err = s.teammatePark(d, 0, &view); err != nil {
+		t.Fatal(err)
+	}
+	check(2, true)
+	out.Chunks[0].RESTAcknowledged = true
+	save()
+	check(1, true)
+	if err = s.db.Update(func(tx *bolt.Tx) error { return teammateCompactOutput(tx, k, d, out) }); err != nil {
+		t.Fatal(err)
+	}
+	check(1, true) // Legacy compacted receipts retain route, IDs and both immutable hashes.
+	out.Chunks[0].RESTAcknowledged = false
+	if err = s.db.Update(func(tx *bolt.Tx) error { return teammateCompactOutput(tx, k, d, out) }); err != nil {
+		t.Fatal(err)
+	}
+	check(2, true) // Compaction cannot promote a bare historical sent label into proof.
+	if err = s.db.View(func(tx *bolt.Tx) error {
+		var legacy struct{ DiscordMessageIDs []string }
+		if err := teammateGet(tx.Bucket([]byte(teammateReceiptBucket)), k, &legacy); err != nil {
+			return err
+		}
+		if len(legacy.DiscordMessageIDs) != 0 {
+			t.Fatalf("downgrade would promote partial evidence: %+v", legacy)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

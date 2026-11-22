@@ -152,7 +152,7 @@ func TestTeammateStartupBlockPostsOneNoticeWhileProvisional(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				t.Error(err)
 			}
-			if !strings.Contains(p.Content, "saved your message") || !strings.Contains(p.Content, "don’t need to resend or tag me") {
+			if p.Content != "The dispatcher is unavailable. Your message is saved." {
 				t.Fatal("missing queue and follow-up guidance")
 			}
 			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "303", ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})
@@ -237,8 +237,76 @@ func TestTeammateParkedStartupNoticeIsBoundToGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if posts != 2 || len(m.validated) != 0 {
+	for _, body := range []string{"Swarm is offline on this machine. Your message is saved.", "Swarm is offline on this machine. Your message is saved.", genericStartupMessage} {
+		if err := c.managerStartupError(ctx, d, &TeammateStartupNotice{Body: body}); !errors.Is(err, ErrTeammateManagerUnavailable) {
+			t.Fatal(err)
+		}
+	}
+	if posts != 3 || len(m.validated) != 0 {
 		t.Fatalf("posted %d connector notices, made %d native grant checks", posts, len(m.validated))
+	}
+}
+
+func TestChangedStartupNoticeRetiresUnconfirmedPost(t *testing.T) {
+	var bodies []string
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages":
+			var p struct{ Content string }
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				t.Error(err)
+			}
+			bodies = append(bodies, p.Content)
+			if len(bodies) == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "402", ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	c.manager = &teammatePublicationManager{generation: 3}
+	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	store := c.service.Store
+	if err := store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := c.sendStartupNotice(ctx, d, genericStartupMessage); !teammateAPIStatus(err, 500) {
+		t.Fatal(err)
+	}
+	const specific = "Sign in to the configured CLI. Your message is saved."
+	if err := c.sendStartupNotice(ctx, d, specific); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendStartupNotice(ctx, d, specific); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || bodies[1] != specific {
+		t.Fatalf("unexpected posts %q", bodies)
+	}
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		key := teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d, 3))
+		if tx.Bucket([]byte(teammateOutboxBucket)).Get(key) != nil {
+			t.Fatal("obsolete startup post is still pending")
+		}
+		var receipt teammateReceipt
+		if err := teammateGet(tx.Bucket([]byte(teammateReceiptBucket)), key, &receipt); err != nil {
+			return err
+		}
+		if receipt.BodyHash == "" || len(receipt.DiscordMessageIDs) != 0 {
+			t.Fatal("uncertain post has an invalid receipt")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -477,5 +545,116 @@ func TestTeammateStagesSecondHumanPingWhileFirstAwaitsCutover(t *testing.T) {
 	}
 	if len(m.admitted) != 3 || m.admitted[1].Route.MessageID != "203" || m.admitted[2].Route.MessageID != "204" {
 		t.Fatalf("expected one admission per original message, in order: %+v", m.admitted)
+	}
+}
+
+func TestDowngradedBindingRestoresOnlyItsExactStartupNotice(t *testing.T) {
+	posts := 0
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages":
+			posts++
+			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "401", ChannelID: "201", Content: "Open Swarm.", Author: &discordgo.User{ID: "99", Bot: true}})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	d := TeammateDiscussion{InstallationID: "install", ID: "d", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	s := c.service.Store
+	c.manager = &teammatePublicationManager{generation: 3}
+	if err := s.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	body := "Open Swarm."
+	id := teammateStartupNoticeID(d, 3) + "_" + digest(body)[:16]
+	if err := s.teammateQueue(d.InstallationID, d.ID, d.Route, TeammatePublication{ID: id, ActivationGeneration: 3, SystemCause: teammateStartupNotice, Body: body}, c.service.Now(), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.teammateChangeBinding(d, func(b *teammateBinding) { b.StartupNoticeID = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendStartupNotice(t.Context(), d, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendStartupNotice(t.Context(), d, ""); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 {
+		t.Fatalf("restored posts=%d", posts)
+	}
+	if err := s.db.View(func(tx *bolt.Tx) error {
+		var b teammateBinding
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &b); err != nil {
+			return err
+		}
+		if b.StartupNoticePending || b.StartupNoticeID != id {
+			t.Fatalf("stale binding %+v", b)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDowngradeRecoveryRefusesUncertainOrMisroutedStartupPost(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*teammateOutput)
+		want   error
+	}{
+		{"uncertain", func(out *teammateOutput) { out.Chunks[0].State = StateUncertain }, ErrDeliveryUncertain},
+		{"other channel", func(out *teammateOutput) { out.Route.ChannelID = "299" }, ErrConflict},
+		{"other generation", func(out *teammateOutput) { out.Publication.ActivationGeneration++ }, ErrConflict},
+		{"other body", func(out *teammateOutput) { out.BodyHash = digest("different") }, ErrConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/channels/201":
+					_, _ = fmt.Fprint(w, teammatePublic)
+				case "/channels/20":
+					_, _ = fmt.Fprint(w, teammateParent)
+				case "/channels/20/permissions/member/99":
+					teammateTestPermissions(w)
+				default:
+					t.Errorf("unexpected network request %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(403)
+				}
+			})
+			d := TeammateDiscussion{InstallationID: "install", ID: "d", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+			s := c.service.Store
+			c.manager = &teammatePublicationManager{generation: 3}
+			if err := s.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+				t.Fatal(err)
+			}
+			body := "Open Swarm."
+			id := teammateStartupNoticeID(d, 3) + "_" + digest(body)[:16]
+			if err := s.teammateQueue(d.InstallationID, d.ID, d.Route, TeammatePublication{ID: id, ActivationGeneration: 3, SystemCause: teammateStartupNotice, Body: body}, c.service.Now(), true); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.teammateChangeBinding(d, func(b *teammateBinding) { b.StartupNoticeID = "" }); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.db.Update(func(tx *bolt.Tx) error {
+				k := teammateOutputKey(d.InstallationID, d.ID, id)
+				var out teammateOutput
+				if err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), k, &out); err != nil {
+					return err
+				}
+				tc.change(&out)
+				return putJSON(tx, teammateOutboxBucket, k, out)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.sendStartupNotice(t.Context(), d, ""); !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+		})
 	}
 }

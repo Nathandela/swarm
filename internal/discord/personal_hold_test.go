@@ -214,8 +214,11 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 	notify(d, "one", false)
 	notify(d, "one", true)
 	notify(d, "two", true)
-	if len(bodies) != 1 || !strings.Contains(bodies[0], "Messages queued") {
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "Your message is saved") {
 		t.Fatalf("unexpected scope, cause or cooldown %q", bodies)
+	}
+	if err := c.sendStartupNotice(context.Background(), d, genericStartupMessage); err != nil || len(bodies) != 1 {
+		t.Fatalf("generic startup notice repeated a delivered hold: %q, %v", bodies, err)
 	}
 	now = now.Add(teammateInputNoticeInterval)
 	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "two", DirectInput: true, CustodyLost: true}); err != nil {
