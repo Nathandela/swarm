@@ -95,7 +95,7 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, consent setupt
 			"reloadUserConfig": true,
 		}, &result)
 		if err != nil || result.Status != "ok" {
-			return errors.New("Codex could not apply startup settings")
+			return errors.New("could not apply Codex startup settings")
 		}
 		return nil
 	}
@@ -116,7 +116,7 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, consent setupt
 			return nil, errors.New("could not check startup hooks")
 		}
 		if len(result.Data) != 1 || result.Data[0].Cwd != cwd || len(result.Data[0].Errors) != 0 || result.Data[0].Hooks == nil || len(result.Data[0].Hooks) > 256 {
-			return nil, errors.New("Codex hook inventory could not be verified")
+			return nil, errors.New("could not verify Codex hook inventory")
 		}
 		return result.Data[0].Hooks, nil
 	}

@@ -37,7 +37,7 @@ func Get(path string) (Consent, bool) {
 	if err != nil {
 		return consent, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || !owned(info) {
 		return consent, false
@@ -89,7 +89,7 @@ func Set(path string, enabled, profileHooks bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	scope := "workspace"
 	if profileHooks {
 		scope = "profile"

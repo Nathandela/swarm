@@ -142,7 +142,7 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 }
 
 func (e replyEvidence) equal(other replyEvidence) bool {
-	return e.output == other.output && e.final == other.final && e.answered == other.answered && e.progress == other.progress && e.workerRunning == other.workerRunning && e.unlinkedWorker == other.unlinkedWorker && e.expiredQuestion == other.expiredQuestion && e.expires == other.expires && slices.Equal(e.workerFinals, other.workerFinals)
+	return e.output == other.output && e.final == other.final && e.answered == other.answered && e.progress == other.progress && e.workerRunning == other.workerRunning && e.unlinkedWorker == other.unlinkedWorker && e.expiredQuestion == other.expiredQuestion && e.expires.Equal(other.expires) && slices.Equal(e.workerFinals, other.workerFinals)
 }
 
 func replyMatchesWorker(st State, a Admission, p Publication) bool {

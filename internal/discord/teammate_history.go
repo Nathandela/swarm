@@ -508,9 +508,6 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 	return nil
 }
 
-func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery) error {
-	return t.verifyAdmissionMessage(ctx, d, q, nil)
-}
 func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, expects *bool) error {
 	if q.Cursor != "" || q.Anchor != "" || q.AdmissionID == "" || q.Revision == "" || !snowflake(q.MessageID) || !snowflake(q.AuthorID) {
 		return ErrInvalid
