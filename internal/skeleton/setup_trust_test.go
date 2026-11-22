@@ -139,3 +139,16 @@ func TestSetupTrustUnknownHookStatusNeedsReview(t *testing.T) {
 		t.Fatalf("unrecognized status: err=%v writes=%d", err, len(p.writes))
 	}
 }
+
+func TestSetupTrustMatchesOnlyQualifiedCodexHandshake(t *testing.T) {
+	for agent, want := range map[string]bool{
+		"swarm/0.171.0 (Ubuntu 22.4.0; x86_64) xterm-256color (swarm; 1)": true,
+		"swarm/0.172.0": false,
+		"swarm/0.171.0-alpha (terminal/0.171.0 )": false,
+		"unknown 0.171.0":                         false,
+	} {
+		if qualifiedCodexSetup(agent) != want {
+			t.Errorf("qualifiedCodexSetup(%q) want %t", agent, want)
+		}
+	}
+}

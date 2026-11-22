@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/setuptrust"
 )
@@ -42,7 +41,7 @@ func (d *Daemon) prepareCodexLaunchTrust(id, instance, userAgent string, conn ba
 	if !ok {
 		return
 	}
-	if version, ok := codex.New().ParseVersion(userAgent); !ok || version != "0.171.0" {
+	if !qualifiedCodexSetup(userAgent) {
 		log.Printf("skeleton: Open session %s to finish Codex setup. Automatic setup is unavailable for this version.", id)
 		return
 	}
@@ -56,6 +55,13 @@ func (d *Daemon) prepareCodexLaunchTrust(id, instance, userAgent string, conn ba
 	if err := applyCodexLaunchTrust(ctx, conn, consent, valid); err != nil {
 		log.Printf("skeleton: Codex setup for %s: %v. Open the session to finish setup.", id, err)
 	}
+}
+
+// initialize names this client "swarm". Later user-agent fields describe the OS
+// and terminal and cannot qualify the running app-server.
+func qualifiedCodexSetup(userAgent string) bool {
+	product, _, _ := strings.Cut(userAgent, " ")
+	return product == "swarm/0.171.0"
 }
 
 type launchHook struct {
