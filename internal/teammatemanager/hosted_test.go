@@ -366,6 +366,25 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return len(held) == 2
 		})
+		before, err := r.Status(thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, note := range before.Notes {
+			if note.Kind == "complete" {
+				t.Fatalf("premature completion note %s", note.ID)
+			}
+		}
+		for label, marker := range expected {
+			if _, err := os.Stat(filepath.Join(project, "sent-"+label)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s completion receipt exists before release or cannot be checked: %v", label, err)
+			}
+			for _, output := range outputs {
+				if strings.Contains(output.Body, marker) {
+					t.Fatalf("premature %s result", label)
+				}
+			}
+		}
 		if err := r.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -436,6 +455,10 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			attemptByReceipt := map[string]string{}
 			for _, n := range view.Notes {
 				if n.Kind == "complete" && n.AdmissionPhase == "completed" {
+					original, ok := held[n.Session]
+					if !ok || original.WorkerAttempt != n.AttemptID || original.WorkerInstance != n.Instance {
+						t.Fatalf("completion %s came from a changed attempt or worker incarnation", n.ID)
+					}
 					if _, duplicate := attemptByReceipt[n.ID]; duplicate {
 						t.Fatalf("duplicate completion note %s", n.ID)
 					}

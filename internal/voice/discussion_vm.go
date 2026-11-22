@@ -51,12 +51,32 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 		if mailbox {
 			instance = row.WorkerInstance
 		}
-		k := known[row.ID]
-		if k == "" {
-			k = key(c.binding.ConversationID, key(row.ID, row.ID))
-			if mailbox {
-				k = key(c.binding.ConversationID, key(row.ID, instance))
+		if mailbox {
+			alias := key(c.binding.ConversationID, key(row.ID, row.ID))
+			if _, exists := st.Workers[alias]; exists {
+				identity := WorkerAssociation{ConversationID: c.binding.ConversationID, Session: row.ID, SessionInstance: instance,
+					AttemptID: row.WorkerAttempt, JobID: "vm-child-" + hashValue([]string{c.binding.ConversationID, row.ID}),
+					Parent: row.SpawnedFrom, Project: row.Cwd, ParentInputHash: row.WorkerParentInputHash}
+				var moved bool
+				err := c.store.update(func(current *State) error {
+					if err := checkBinding(current, c.binding); err != nil {
+						return err
+					}
+					moved = promoteVMWorkerAlias(current, identity)
+					return nil
+				})
+				if err != nil || moved {
+					return changed || moved, err
+				}
 			}
+		}
+		k := known[row.ID]
+		if mailbox {
+			// A conflicting provisional record belongs to an unproven incarnation.
+			// Never relabel its attempt with the current authenticated mailbox.
+			k = key(c.binding.ConversationID, key(row.ID, instance))
+		} else if k == "" {
+			k = key(c.binding.ConversationID, key(row.ID, row.ID))
 		}
 		old, found := st.Workers[k]
 		if found {
@@ -123,6 +143,40 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 		changed = true
 	}
 	return changed, nil
+}
+
+// The roster can observe a child before the daemon publishes its mailbox instance.
+// Move that provisional row under the exact key before roster or mail can create a second job.
+func promoteVMWorkerAlias(st *State, identity WorkerAssociation) bool {
+	alias := key(identity.ConversationID, key(identity.Session, identity.Session))
+	exact := key(identity.ConversationID, key(identity.Session, identity.SessionInstance))
+	old, ok := st.Workers[alias]
+	if !ok || alias == exact || !old.VMChild || old.Reserved || old.ActionID != "" ||
+		old.ConversationID != identity.ConversationID || old.Session != identity.Session ||
+		old.Parent != identity.Parent || old.Project != identity.Project || old.JobID != identity.JobID ||
+		(old.SessionInstance != identity.Session && old.SessionInstance != identity.SessionInstance) ||
+		(old.AttemptID != old.JobID && old.AttemptID != identity.AttemptID) {
+		return false
+	}
+	old.SessionInstance, old.AttemptID, old.Mailbox = identity.SessionInstance, identity.AttemptID, true
+	linkVMWorkerInput(*st, &old, identity.ParentInputHash)
+	if current, exists := st.Workers[exact]; exists {
+		if !current.supervisorMailbox() || current.Reserved || current.Session != old.Session || current.SessionInstance != old.SessionInstance ||
+			current.Parent != old.Parent || current.Project != old.Project || current.JobID != old.JobID || current.AttemptID != old.AttemptID ||
+			current.Admission != 0 && old.Admission != 0 && current.Admission != old.Admission ||
+			current.ParentInputHash != "" && old.ParentInputHash != "" && current.ParentInputHash != old.ParentInputHash {
+			return false
+		}
+		if current.ParentInputHash == "" && old.ParentInputHash != "" {
+			current.ParentInputHash, current.Admission = old.ParentInputHash, old.Admission
+		}
+		current.RecoveryRequired = current.RecoveryRequired || old.RecoveryRequired
+		current.EvidenceLimited = current.EvidenceLimited || old.EvidenceLimited
+		old = current
+	}
+	putRecord(st, "workers", &st.Workers, exact, old)
+	deleteRecord(st, "workers", &st.Workers, alias)
+	return true
 }
 
 func linkVMWorkerInput(st State, w *WorkerAssociation, inputHash string) {

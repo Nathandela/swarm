@@ -53,7 +53,7 @@ Use `SWARM_TEAMMATE_TEST_STARTUP=codex` or `claude` with the existing `TestHoste
 
 ### Two simultaneous worker completions during restart
 
-A private Linux rehearsal on c655d22a used an actual Codex manager and two ordinary Codex workers, one personal-DM source message, and a receipt-bearing simulated Discord sink. Both workers started in 19 seconds and signalled readiness through separate files. The test stopped the connector and restarted its dedicated supervisor. Both original worker incarnations retained their shim PID and process start time. While the connector was closed, each worker read its own random marker and issued an explicit completion, recording its queued CLI receipt.
+A private Linux rehearsal on c655d22a used an actual Codex manager and two ordinary Codex workers, one personal-DM source message, and a receipt-bearing simulated Discord sink. Both workers started in 19 seconds and signalled readiness through separate files. The test stopped the connector and restarted its dedicated supervisor. Both original worker incarnations retained their shim PID and process start time. After the supervisor restart and during the connector outage, each worker read its own random marker and issued an explicit completion, recording its queued CLI receipt.
 
 After reconnection, each marker returned through its own authenticated worker wake. The north and south attempts ended in `bd89df69cc92` and `197e9953ea31`. The two results and original reply settled in 2 minutes 9 seconds after reopening. The full test passed in 161.44 seconds. A separate run that withheld transport receipts observed both native publications and retained an unresolved delivery check.
 

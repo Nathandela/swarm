@@ -329,6 +329,9 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 	var accepted Wake
 	err = c.store.update(func(current *State) error {
 		k := key(c.binding.ConversationID, key(worker.Session, worker.SessionInstance))
+		if worker.Mailbox {
+			promoteVMWorkerAlias(current, worker)
+		}
 		if existing, ok := current.Workers[k]; worker.Mailbox {
 			if !ok {
 				putRecord(current, "workers", &current.Workers, k, worker)
