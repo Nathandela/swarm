@@ -69,6 +69,7 @@ type Meta struct {
 	ManagerConversationID  string `json:"manager_conversation_id,omitempty"`
 	ManagerReplayID        string `json:"manager_replay_id,omitempty"`
 	WorkerPromptHash       string `json:"worker_prompt_hash,omitempty"`
+	WorkerParentInputHash  string `json:"worker_parent_input_hash,omitempty"`
 	WorkerDiscussion       string `json:"worker_discussion,omitempty"`
 	WorkerAttempt          string `json:"worker_attempt,omitempty"`
 	WorkerInstance         string `json:"worker_instance,omitempty"`

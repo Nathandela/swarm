@@ -11,6 +11,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 func TestMissingDiscordReplySurvivesRestartAndConfirmsFinal(t *testing.T) {
@@ -357,5 +358,164 @@ func TestSharedYieldRequiresCurrentQuietHumanTurn(t *testing.T) {
 	}
 	if err = c.yieldSharedReply(a); !errors.Is(err, ErrConflict) {
 		t.Fatalf("an acknowledged turn yielded: %v", err)
+	}
+}
+
+func TestSyncKeepsDelegatedReplyOpenWhileWorkerRuns(t *testing.T) {
+	for _, vm := range []bool{false, true} {
+		c, s, r, b := newControllerFixture(t)
+		c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", VMProjectAccess: vm}
+		a, err := c.admitDiscussionInput(DiscussionInput{Origin: discussionFixtureOrigin("worker"), Text: "Run the report", ExpectReply: true}, "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = c.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		r.status.Turn = protocol.ManagerNativeTurn{State: "completed", NativeInputID: r.sent[0].ManagerAdmission.Nonce, NativeTurnID: "native"}
+		if err = c.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		w := WorkerAssociation{ConversationID: b.ConversationID, Session: "machine/worker", SessionInstance: "instance", Parent: "manager", AttemptID: "vm-child-attempt", JobID: "job", Admission: a.Sequence, VMChild: vm, Mailbox: vm}
+		if err = s.update(func(st *State) error {
+			putRecord(st, "workers", &st.Workers, key(b.ConversationID, key(w.Session, w.SessionInstance)), w)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Unix(a.ReplyCheckAfter, 0)
+		d := DiscussionController{cfg: Config{ConversationID: b.ConversationID}, store: s, scope: *c.discussion, now: func() time.Time { return now }}
+		emit := func(o DiscussionOutput) error { return nil }
+		if err = d.Sync(t.Context(), emit); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(15 * time.Minute)
+		if err = d.Sync(t.Context(), emit); err != nil {
+			t.Fatal(err)
+		}
+		st, _ := s.Snapshot()
+		if st.Publications[key(b.ConversationID, replyNoticeID(a, true))].Final || !hasReplyObligation(st) {
+			t.Fatalf("vm=%v: terminated a live worker", vm)
+		}
+	}
+}
+
+func TestSyncAcceptsAuthenticatedVMWorkerWakeFinal(t *testing.T) {
+	c, s, r, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", VMProjectAccess: true}
+	a, err := c.admitDiscussionInput(DiscussionInput{Origin: discussionFixtureOrigin("job"), Text: "Get report", ExpectReply: true}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.status.Turn = protocol.ManagerNativeTurn{State: "completed", NativeInputID: r.sent[0].ManagerAdmission.Nonce, NativeTurnID: "native"}
+	if err = c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.managerSettingsDir = t.TempDir()
+	ep, parent, _ := protocol.ParseID(b.SessionID)
+	mail := workermail.Binding{Discussion: b.ConversationID, Session: ep + "/worker", Instance: "instance", Parent: parent, Attempt: "vm-child-attempt", Agent: "codex", Project: t.TempDir(), ParentInputHash: hashBytes([]byte(r.sent[0].ManagerAdmission.Nonce))}
+	if _, err = workermail.Submit(c.managerSettingsDir, mail, "done", "complete", "report", true); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.ingestWorkerMail(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := st.Workers[key(b.ConversationID, key(mail.Session, mail.Instance))]
+	if w.Admission != a.Sequence || w.ParentInputHash != mail.ParentInputHash {
+		t.Fatal("ordinary native input not linked")
+	}
+	wakeID := "worker-message-" + hashValue([]string{mail.Session, mail.Instance, mail.Attempt, "done"})
+	wake := st.Wakes[key(b.ConversationID, wakeID)]
+	wakeInput := st.Admissions[admissionKey(b.ConversationID, wake.Admission)]
+	wakeInput.SettledAt = time.Now()
+	wakeInput.Phase = "completed"
+	wake.State = "completed"
+	source := discussionOutputSource(&st, b.ConversationID, wakeInput)
+	p := Publication{ConversationID: b.ConversationID, ID: "answer", Final: true, Exported: true, Admission: wake.Admission, OutputSequence: 3, Text: "report", DiscussionSource: source}
+	if err = s.update(func(st *State) error {
+		putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, wakeInput.Sequence), wakeInput)
+		putRecord(st, "wakes", &st.Wakes, key(b.ConversationID, wake.ID), wake)
+		putRecord(st, "publications", &st.Publications, key(b.ConversationID, p.ID), p)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(a.ReplyCheckAfter, 0)
+	d := DiscussionController{cfg: Config{ConversationID: b.ConversationID}, store: s, scope: *c.discussion, now: func() time.Time { return now }}
+	d.scope.ConfirmedDelivery = func(_ context.Context, o DiscussionOutput) ([]string, error) {
+		if o.ID == p.ID {
+			return []string{"123"}, nil
+		}
+		return nil, nil
+	}
+	if err = d.Sync(t.Context(), func(o DiscussionOutput) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = s.Snapshot()
+	if st.Publications[key(b.ConversationID, replyNoticeID(a, true))].Final || hasReplyObligation(st) {
+		t.Fatal("confirmed child result was ignored")
+	}
+	for _, alter := range []func(*State){
+		func(st *State) {
+			x := w
+			x.ParentInputHash = hashBytes([]byte("different human turn"))
+			st.Workers[key(b.ConversationID, key(w.Session, w.SessionInstance))] = x
+		},
+		func(st *State) {
+			e := st.Events[key(b.ConversationID, wake.EventID)]
+			e.WorkerMessage = false
+			st.Events[key(b.ConversationID, e.ID)] = e
+		},
+		func(st *State) {
+			x := p
+			x.DiscussionSource.AttemptID = "different-attempt"
+			st.Publications[key(b.ConversationID, p.ID)] = x
+		},
+	} {
+		snapshot, err := s.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		alter(&snapshot)
+		if discussionReplyEvidence(snapshot, a, now).final {
+			t.Fatal("crossed a native-input, note, or worker-attempt boundary")
+		}
+	}
+
+}
+
+func TestSyncWithdrawnSourceNeverAnnouncesMonitor(t *testing.T) {
+	c, s, r, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", VMProjectAccess: true}
+	a, err := c.admitDiscussionInput(DiscussionInput{Origin: discussionFixtureOrigin("deleted"), Text: "Inspect", ExpectReply: true}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.status.Turn = protocol.ManagerNativeTurn{State: "completed", NativeInputID: r.sent[0].ManagerAdmission.Nonce, NativeTurnID: "native"}
+	if err = c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	d := DiscussionController{cfg: Config{ConversationID: b.ConversationID}, store: s, scope: *c.discussion, now: func() time.Time { return time.Unix(a.ReplyCheckAfter, 0) }}
+	d.scope.VerifyGrant = func(context.Context, schema.MessageOrigin) error { return ErrDiscussionSourceChanged }
+	if err = d.Sync(t.Context(), func(DiscussionOutput) error { t.Fatal("posted about a withdrawn request"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.Snapshot()
+	if hasReplyObligation(st) {
+		t.Fatal("withdrawn request pinned the dispatcher")
 	}
 }

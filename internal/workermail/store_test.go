@@ -12,7 +12,7 @@ import (
 
 func TestDelayedOrderedNotesAndRetainedReply(t *testing.T) {
 	dir := t.TempDir()
-	b := Binding{"discussion", "parent", "ep/worker", "instance1", "attempt", "codex", "/project"}
+	b := Binding{"discussion", "parent", "ep/worker", "instance1", "attempt", "codex", "/project", ""}
 	id := fmt.Sprintf("semantic:%d:00112233445566778899aabbccddeeff", time.Now().Add(-2*time.Hour).UnixMilli())
 	q, err := Submit(dir, b, id, "needs-input", "early", true)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestDelayedOrderedNotesAndRetainedReply(t *testing.T) {
 
 func TestSettlementRetentionPreservesPendingAndUnreadQuestions(t *testing.T) {
 	dir := t.TempDir()
-	b := Binding{"discussion", "parent", "ep/worker", "i", "attempt", "codex", "/project"}
+	b := Binding{"discussion", "parent", "ep/worker", "i", "attempt", "codex", "/project", ""}
 	final, err := Submit(dir, b, "complete", "complete", "finished", true)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestSettlementRetentionPreservesPendingAndUnreadQuestions(t *testing.T) {
 
 func TestFullPendingMailboxPreservesAcceptedReceiptAndRefusesNewNote(t *testing.T) {
 	dir := t.TempDir()
-	b := Binding{"discussion", "parent", "ep/worker", "i", "attempt", "codex", "/project"}
+	b := Binding{"discussion", "parent", "ep/worker", "i", "attempt", "codex", "/project", ""}
 	first, err := Submit(dir, b, "first", "needs-input", "which file?", true)
 	if err != nil {
 		t.Fatal(err)

@@ -73,6 +73,7 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 			w = WorkerAssociation{ConversationID: c.binding.ConversationID, Session: row.ID, Parent: row.SpawnedFrom, Project: row.Cwd, JobID: job, AttemptID: job}
 		}
 		if mailbox {
+			linkVMWorkerInput(st, &w, row.WorkerParentInputHash)
 			w.Mailbox = true
 			w.AttemptID = row.WorkerAttempt
 		}
@@ -122,6 +123,18 @@ func (c *Controller) observeVMWorkers(st State) (bool, error) {
 		changed = true
 	}
 	return changed, nil
+}
+
+func linkVMWorkerInput(st State, w *WorkerAssociation, inputHash string) {
+	if inputHash == "" || w.ActionID != "" || w.ParentInputHash != "" && w.ParentInputHash != inputHash {
+		return
+	}
+	for _, a := range st.Admissions {
+		if a.ConversationID == w.ConversationID && a.Origin != nil && a.NativeInputID != "" && !a.RecoveryOnly && hashBytes([]byte(a.NativeInputID)) == inputHash {
+			w.Admission, w.ParentInputHash = a.Sequence, inputHash
+			return
+		}
+	}
 }
 
 // Old roster observers queued VM status prompts for enrolled children. A genuine

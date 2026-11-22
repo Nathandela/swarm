@@ -228,6 +228,7 @@ type Wake struct {
 }
 
 type WorkerAssociation struct {
+	ParentInputHash  string `json:"parent_input_hash,omitempty"`
 	Mailbox          bool   `json:"mailbox,omitempty"`
 	VMChild          bool   `json:"vm_child,omitempty"`
 	EvidenceLimited  bool   `json:"evidence_limited,omitempty"`

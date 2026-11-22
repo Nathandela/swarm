@@ -334,6 +334,9 @@ func (c *Controller) queueWorkerNote(worker WorkerAssociation, input workerMessa
 				putRecord(current, "workers", &current.Workers, k, worker)
 			} else if existing.AttemptID != worker.AttemptID || !existing.supervisorMailbox() || existing.Parent != worker.Parent || existing.RecoveryRequired {
 				return errSupersededWorkerMail
+			} else if existing.ParentInputHash == "" && worker.ParentInputHash != "" {
+				existing.ParentInputHash, existing.Admission = worker.ParentInputHash, worker.Admission
+				putRecord(current, "workers", &current.Workers, k, existing)
 			}
 		} else if existing != worker {
 			return ErrStale

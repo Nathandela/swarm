@@ -24,19 +24,26 @@ func hasReplyObligation(st State) bool {
 }
 
 type replyEvidence struct {
-	output        DiscussionOutput
-	workerFinals  []DiscussionOutput
-	final         bool
-	answered      bool
-	progress      uint64
-	workerRunning bool
-	expires       time.Time
+	output          DiscussionOutput
+	workerFinals    []DiscussionOutput
+	final           bool
+	answered        bool
+	progress        uint64
+	workerRunning   bool
+	unlinkedWorker  bool
+	expiredQuestion bool
+	expires         time.Time
 }
 
 func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence {
 	var evidence replyEvidence
 	attempts := map[string]DiscussionOutput{}
 	for _, w := range st.Workers {
+		if w.ConversationID == a.ConversationID && w.VMChild && w.Admission == 0 && !w.Ended && !w.RecoveryRequired {
+			// Older launches identify the discussion only. Never blame a missing
+			// answer while a potentially related worker is still alive.
+			evidence.unlinkedWorker = true
+		}
 		if w.ConversationID == a.ConversationID && w.Admission == a.Sequence && w.JobID != "" {
 			attempts[w.AttemptID] = DiscussionOutput{}
 			if !w.Ended && !w.RecoveryRequired {
@@ -44,6 +51,19 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 			}
 		}
 	}
+	for _, wake := range st.Wakes {
+		if wake.ConversationID != a.ConversationID {
+			continue
+		}
+		event := st.Events[key(a.ConversationID, wake.EventID)]
+		if _, known := attempts[event.AttemptID]; !known || !event.WorkerMessage || event.WakeID != wake.ID {
+			continue
+		}
+		if wake.State == "prepared" || wake.Admission != 0 && st.Admissions[admissionKey(a.ConversationID, wake.Admission)].SettledAt.IsZero() {
+			evidence.workerRunning = true
+		}
+	}
+	var monitor DiscussionOutput
 	for _, p := range st.Publications {
 		if p.ConversationID != a.ConversationID {
 			continue
@@ -62,6 +82,12 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		if !p.Final {
 			if !p.ReplyMonitor {
 				evidence.progress = max(evidence.progress, p.OutputSequence)
+			}
+			continue
+		}
+		if p.ReplyMonitor {
+			if p.OutputSequence > monitor.Sequence {
+				monitor = DiscussionOutput{DiscussionOutputSource: src, ID: p.ID, Text: p.Text, Sequence: p.OutputSequence}
 			}
 			continue
 		}
@@ -87,6 +113,10 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		return evidence
 	}
 	evidence.workerFinals = nil
+	if monitor.ID != "" && !evidence.workerRunning && !evidence.unlinkedWorker {
+		evidence.output, evidence.final = monitor, true
+		return evidence
+	}
 	for _, r := range st.Requests {
 		if r.ConversationID != a.ConversationID || r.Kind != "manager" || r.DiscussionSource.AdmissionID != a.Origin.RequestID || r.OutputSequence <= evidence.output.Sequence {
 			continue
@@ -95,7 +125,11 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 			evidence = replyEvidence{answered: true, output: DiscussionOutput{Sequence: r.OutputSequence}}
 			continue
 		}
-		if r.State != "pending" || !now.Before(r.ExpiresAt) {
+		if (r.State == "pending" || r.State == "expired") && !now.Before(r.ExpiresAt) {
+			evidence.expiredQuestion = true
+			continue
+		}
+		if r.State != "pending" {
 			continue
 		}
 		body, err := discussionQuestionText(r)
@@ -108,7 +142,7 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 }
 
 func (e replyEvidence) equal(other replyEvidence) bool {
-	return e.output == other.output && e.final == other.final && e.answered == other.answered && e.progress == other.progress && e.workerRunning == other.workerRunning && e.expires == other.expires && slices.Equal(e.workerFinals, other.workerFinals)
+	return e.output == other.output && e.final == other.final && e.answered == other.answered && e.progress == other.progress && e.workerRunning == other.workerRunning && e.unlinkedWorker == other.unlinkedWorker && e.expiredQuestion == other.expiredQuestion && e.expires == other.expires && slices.Equal(e.workerFinals, other.workerFinals)
 }
 
 func replyMatchesWorker(st State, a Admission, p Publication) bool {
@@ -250,6 +284,15 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			return ctx.Err()
 		}
 	}
+	var grantErr error
+	if evidence.output.ID == "" && !evidence.answered && d.scope.VerifyGrant != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		grantErr = d.scope.VerifyGrant(checkCtx, *a.Origin)
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
 	return d.store.update(func(current *State) error {
 		k := admissionKey(a.ConversationID, a.Sequence)
 		input := current.Admissions[k]
@@ -261,7 +304,18 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		if input.ReplyStallSince == 0 || evidence.output.ID != "" || evidence.progress > input.ReplyProgress {
 			input.ReplyStallSince = now.Unix()
 		}
+		if grantErr == nil && evidence.output.ID == "" {
+			input.ReplyReceiptChecks = 0
+		}
 		switch {
+		case errors.Is(grantErr, ErrDiscussionSourceChanged):
+			next = 0
+		case grantErr != nil:
+			input.ReplyReceiptChecks++
+			if input.ReplyReceiptChecks >= 3 {
+				next = 0
+				input.ReplyDeliveryUnknown = true
+			}
 		case evidence.answered, evidence.final && confirmed:
 			next = 0
 		case evidence.output.ID != "" && confirmed:
@@ -282,12 +336,20 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			}
 		case evidence.progress > input.ReplyProgress:
 			input.ReplyProgress = evidence.progress
-		case !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) && (input.SettledAt.IsZero() || evidence.workerRunning || input.ReplyRecovery != 0):
-			if err := recordReplyNotice(current, input, "I still can’t verify a result. The work may be running. Please check the dispatcher in Swarm before trying again.", true); err != nil {
-				return err
-			}
 		case evidence.workerRunning:
 			if err := recordReplyNotice(current, input, "The worker hasn’t reported a result yet. Your request is saved.", false); err != nil {
+				return err
+			}
+		case evidence.unlinkedWorker:
+			if err := recordReplyNotice(current, input, "A worker is still open in this thread. I can’t verify whether it owns your request. Please check the worker in Swarm.", false); err != nil {
+				return err
+			}
+			if !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) {
+				next = 0
+				input.ReplyDeliveryUnknown = true
+			}
+		case !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) && (input.SettledAt.IsZero() || input.ReplyRecovery != 0):
+			if err := recordReplyNotice(current, input, "I still can’t verify a result. The work may be running. Please check the dispatcher in Swarm before trying again.", true); err != nil {
 				return err
 			}
 		case input.Phase == "superseded" || input.Phase == "rejected" && !input.SourceCutover:
@@ -300,6 +362,10 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			}
 		case input.Phase != "completed":
 			if err := recordReplyNotice(current, input, "I couldn’t confirm what happened. Please check the result with the person running Swarm before trying again.", true); err != nil {
+				return err
+			}
+		case evidence.expiredQuestion:
+			if err := recordReplyNotice(current, input, "My question expired. Please reply here with the missing detail so I can continue.", true); err != nil {
 				return err
 			}
 		case evidence.progress != 0 || d.scope.VMProjectAccess || current.Conversations[input.ConversationID].Binding.NativeCLI:

@@ -563,6 +563,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.managerInterruptTurn = d.interruptManagerTurn
 	d.api.managerRetire = d.retireManager
 	d.api.managerInputStatus = d.managerInputStatus
+	d.api.workerParentInstance = d.sessionInstance
 	d.api.managerRuntime = d.managerRuntime
 	d.api.managerCall = d.resolveManagerCall
 	d.api.nativeDecision = d.ApplyNativeDecision

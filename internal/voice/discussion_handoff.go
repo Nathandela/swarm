@@ -173,6 +173,20 @@ func workerReportOrigin(st State, p Publication, project string, pending map[str
 	}
 	target := key(metadata.Session, metadata.Instance)
 	worker := st.Workers[key(p.ConversationID, target)]
+	if worker.supervisorMailbox() {
+		var note workerNoteMetadata
+		if worker.RecoveryRequired || pending[target] || worker.ParentInputHash == "" || worker.AttemptID != src.AttemptID ||
+			worker.JobID != src.JobID || !event.WorkerMessage || json.Unmarshal(event.Metadata, &note) != nil ||
+			note.Kind != "complete" || note.NoteID == "" || note.Sequence == 0 || event.ID != "worker-message-"+hashValue([]string{worker.Session, worker.SessionInstance, worker.AttemptID, note.NoteID}) ||
+			!singleReportScope(p.DiscussionAttempts, src.AttemptID) || !singleReportScope(p.DiscussionProjects, worker.Project) {
+			return ""
+		}
+		original := st.Admissions[admissionKey(p.ConversationID, worker.Admission)]
+		if original.Origin == nil || original.Project != project || original.NativeInputID == "" || hashBytes([]byte(original.NativeInputID)) != worker.ParentInputHash {
+			return ""
+		}
+		return original.Origin.RequestID
+	}
 	if worker.VMChild || worker.RecoveryRequired || worker.Project != project || worker.ActionID != src.AttemptID || worker.AttemptID != src.AttemptID || worker.JobID != src.JobID || pending[target] {
 		return ""
 	}

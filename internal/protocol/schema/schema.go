@@ -282,6 +282,7 @@ type AgentInstanceRef struct {
 type SessionView struct {
 	ScheduledCompleted    bool   `json:"scheduled_completed,omitempty"`
 	Role                  string `json:"role,omitempty"`
+	WorkerParentInputHash string `json:"worker_parent_input_hash,omitempty"`
 	WorkerDiscussion      string `json:"worker_discussion,omitempty"`
 	WorkerAttempt         string `json:"worker_attempt,omitempty"`
 	WorkerInstance        string `json:"worker_instance,omitempty"`

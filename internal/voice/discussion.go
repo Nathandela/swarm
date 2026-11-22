@@ -609,6 +609,28 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	if err != nil {
 		return err
 	}
+	if d.controller != nil && d.controller.discussion != nil && d.controller.discussion.VMProjectAccess && d.controller.workers != nil {
+		mailChanged, err := d.controller.ingestWorkerMail(ctx, st)
+		if err != nil {
+			return err
+		}
+		if mailChanged {
+			st, err = d.store.Snapshot()
+			if err != nil {
+				return err
+			}
+		}
+		changed, err := d.controller.observeVMWorkers(st)
+		if err != nil {
+			return err
+		}
+		if changed {
+			st, err = d.store.Snapshot()
+			if err != nil {
+				return err
+			}
+		}
+	}
 	if err := d.checkDiscussionReply(ctx, st); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -634,28 +656,6 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	}
 	if err = d.export(st, emit); err != nil {
 		return err
-	}
-	if d.controller.discussion != nil && d.controller.discussion.VMProjectAccess && d.controller.workers != nil {
-		mailChanged, err := d.controller.ingestWorkerMail(ctx, st)
-		if err != nil {
-			return err
-		}
-		if mailChanged {
-			st, err = d.store.Snapshot()
-			if err != nil {
-				return err
-			}
-		}
-		changed, err := d.controller.observeVMWorkers(st)
-		if err != nil {
-			return err
-		}
-		if changed {
-			st, err = d.store.Snapshot()
-			if err != nil {
-				return err
-			}
-		}
 	}
 	if len(st.Workers) > 0 {
 		if err := d.controller.reconcileDiscussionWorkerEvidence(ctx); err != nil {
@@ -767,7 +767,7 @@ func discussionPending(st State) bool {
 
 func discussionQuiescent(st State, now time.Time) bool {
 	for _, a := range st.Admissions {
-		if a.ConversationID == st.CurrentConversation && a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman && a.ReplyReceiptChecks == 0 {
+		if a.ConversationID == st.CurrentConversation && a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman && a.ReplyReceiptChecks == 0 && (a.Origin == nil || !discussionReplyEvidence(st, a, now).workerRunning) {
 			return false
 		}
 	}
