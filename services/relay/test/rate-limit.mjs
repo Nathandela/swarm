@@ -30,9 +30,12 @@ function pairLookup() {
 // Miniflare resets this counter at wall-clock minute boundaries. Reserve time
 // for the 61 local requests so the test measures one configured burst.
 const periodMs = 60_000;
-const remainingMs = periodMs - Date.now() % periodMs;
-if (remainingMs < 10_000) await delay(remainingMs);
-const window = Math.floor(Date.now() / periodMs);
+let start = Date.now();
+while (periodMs - start % periodMs < 10_000) {
+  await delay(periodMs - start % periodMs);
+  start = Date.now();
+}
+const window = Math.floor(start / periodMs);
 for (let i = 0; i < 60; i++) {
   assert.equal((await pairLookup()).status, 404, `native limiter rejected request ${i + 1} early`);
 }
