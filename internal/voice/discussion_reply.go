@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"time"
 )
 
@@ -23,6 +25,7 @@ func hasReplyObligation(st State) bool {
 
 type replyEvidence struct {
 	output        DiscussionOutput
+	workerFinals  []DiscussionOutput
 	final         bool
 	answered      bool
 	progress      uint64
@@ -32,10 +35,10 @@ type replyEvidence struct {
 
 func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence {
 	var evidence replyEvidence
-	workers := 0
+	attempts := map[string]DiscussionOutput{}
 	for _, w := range st.Workers {
 		if w.ConversationID == a.ConversationID && w.Admission == a.Sequence && w.JobID != "" {
-			workers++
+			attempts[w.AttemptID] = DiscussionOutput{}
 			if !w.Ended && !w.RecoveryRequired {
 				evidence.workerRunning = true
 			}
@@ -47,10 +50,11 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		}
 		src := p.DiscussionSource
 		if src.AdmissionID != a.Origin.RequestID {
-			// Only a single proven scoped worker can speak for the original admission.
-			if workers != 1 || !p.Final || src.JobID == "" || !replyMatchesWorker(st, a, p) {
-				continue
+			prior, belongs := attempts[src.AttemptID]
+			if belongs && p.Final && src.SystemCause == "" && p.OutputSequence > prior.Sequence && replyMatchesWorker(st, a, p) {
+				attempts[src.AttemptID] = DiscussionOutput{DiscussionOutputSource: src, ID: p.ID, Text: p.Text, Sequence: p.OutputSequence}
 			}
+			continue
 		}
 		if src.SystemCause != "" && src.SystemCause != replyMonitorCause {
 			continue
@@ -69,6 +73,20 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 	if evidence.final {
 		return evidence
 	}
+	for _, out := range attempts {
+		if out.ID != "" {
+			evidence.workerFinals = append(evidence.workerFinals, out)
+			evidence.progress = max(evidence.progress, out.Sequence)
+		}
+	}
+	if len(attempts) > 0 && len(evidence.workerFinals) == len(attempts) {
+		sort.Slice(evidence.workerFinals, func(i, j int) bool { return evidence.workerFinals[i].Sequence < evidence.workerFinals[j].Sequence })
+		evidence.output = evidence.workerFinals[len(evidence.workerFinals)-1]
+		evidence.workerFinals = evidence.workerFinals[:len(evidence.workerFinals)-1]
+		evidence.final = true
+		return evidence
+	}
+	evidence.workerFinals = nil
 	for _, r := range st.Requests {
 		if r.ConversationID != a.ConversationID || r.Kind != "manager" || r.DiscussionSource.AdmissionID != a.Origin.RequestID || r.OutputSequence <= evidence.output.Sequence {
 			continue
@@ -87,6 +105,10 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		evidence = replyEvidence{output: DiscussionOutput{DiscussionOutputSource: r.DiscussionSource, ID: r.ID, Text: body, QuestionID: r.ID, QuestionHash: r.Hash, Sequence: r.OutputSequence}, expires: r.ExpiresAt}
 	}
 	return evidence
+}
+
+func (e replyEvidence) equal(other replyEvidence) bool {
+	return e.output == other.output && e.final == other.final && e.answered == other.answered && e.progress == other.progress && e.workerRunning == other.workerRunning && e.expires == other.expires && slices.Equal(e.workerFinals, other.workerFinals)
 }
 
 func replyMatchesWorker(st State, a Admission, p Publication) bool {
@@ -134,6 +156,65 @@ func (c *Controller) checkReplyRecovery(ctx context.Context, st State, report Ad
 	return ErrExpired
 }
 
+// Only unfinished inputs existing at upgrade need classification. Closed historic
+// turns and messages between guild participants never acquire a new reply by age.
+func (d *DiscussionController) trackLegacyReplies(st State) error {
+	for _, a := range st.Admissions {
+		if a.ConversationID != d.cfg.ConversationID || a.Origin == nil || !a.SettledAt.IsZero() || a.ReplyTracked || a.ReplyCheckAfter != 0 {
+			continue
+		}
+		return d.store.update(func(current *State) error {
+			for k, a := range current.Admissions {
+				if a.ConversationID != d.cfg.ConversationID || a.Origin == nil || !a.SettledAt.IsZero() || a.ReplyTracked || a.ReplyCheckAfter != 0 {
+					continue
+				}
+				a.ReplyTracked = d.scope.DMOwnerID != "" && d.scope.validateOrigin(*a.Origin)
+				a.ReplyCheckAfter = d.now().Unix()
+				putRecord(current, "admissions", &current.Admissions, k, a)
+			}
+			return nil
+		})
+	}
+	return nil
+}
+func (d *DiscussionController) classifyLegacyReply(ctx context.Context, a Admission, now time.Time) error {
+	expected := false
+	err := ErrControllerUnsupported
+	if d.scope.ExpectsReply != nil {
+		check, cancel := context.WithTimeout(ctx, 3*time.Second)
+		expected, err = d.scope.ExpectsReply(check, *a.Origin)
+		cancel()
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return d.store.update(func(st *State) error {
+		k := admissionKey(a.ConversationID, a.Sequence)
+		current := st.Admissions[k]
+		if current.Origin == nil || *current.Origin != *a.Origin || current.ReplyTracked || current.ReplyCheckAfter != a.ReplyCheckAfter {
+			return nil
+		}
+		current.ReplyCheckAfter = 0
+		current.ReplyTracked = err == nil
+		if expected && err == nil {
+			current.ReplyCheckAfter = now.Unix()
+		}
+		if err != nil {
+			current.ReplyReceiptChecks++
+			if current.ReplyReceiptChecks >= 3 {
+				current.ReplyTracked = true
+				current.ReplyDeliveryUnknown = true
+			} else {
+				current.ReplyCheckAfter = now.Add(discussionReplyWait).Unix()
+			}
+		} else {
+			current.ReplyReceiptChecks = 0
+		}
+		putRecord(st, "admissions", &st.Admissions, k, current)
+		return nil
+	})
+}
+
 // Check at most one overdue request per sync. A missing Discord receipt can never replay its publication.
 func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st State) error {
 	now := d.now()
@@ -149,21 +230,30 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 	if a.Sequence == 0 {
 		return nil
 	}
+	if !a.ReplyTracked {
+		return d.classifyLegacyReply(ctx, a, now)
+	}
 	evidence := discussionReplyEvidence(st, a, now)
 	confirmed := false
 	if evidence.output.ID != "" && d.scope.ConfirmedDelivery != nil {
 		checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		ids, err := d.scope.ConfirmedDelivery(checkCtx, evidence.output)
+		confirmed = true
+		for _, out := range append(slices.Clone(evidence.workerFinals), evidence.output) {
+			ids, err := d.scope.ConfirmedDelivery(checkCtx, out)
+			if err != nil || len(ids) == 0 {
+				confirmed = false
+				break
+			}
+		}
 		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		confirmed = err == nil && len(ids) > 0
 	}
 	return d.store.update(func(current *State) error {
 		k := admissionKey(a.ConversationID, a.Sequence)
 		input := current.Admissions[k]
-		if input.Origin == nil || *input.Origin != *a.Origin || input.ReplyCheckAfter != a.ReplyCheckAfter || current.Generation != st.Generation || discussionReplyEvidence(*current, input, now) != evidence {
+		if input.Origin == nil || *input.Origin != *a.Origin || input.ReplyCheckAfter != a.ReplyCheckAfter || current.Generation != st.Generation || !discussionReplyEvidence(*current, input, now).equal(evidence) {
 			return nil
 		}
 		next := now.Add(discussionReplyWait).Unix()
@@ -205,10 +295,10 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			if err := recordReplyNotice(current, input, "I couldn’t confirm what happened. Please check the result with the person running Swarm before trying again.", true); err != nil {
 				return err
 			}
-		case d.scope.VMProjectAccess || current.Conversations[input.ConversationID].Binding.NativeCLI:
+		case evidence.progress != 0 || d.scope.VMProjectAccess || current.Conversations[input.ConversationID].Binding.NativeCLI:
 			// A normal VM CLI has unrestricted shell tools. A reporting prompt cannot
 			// fence another spawn or shell side effect. Publication stays explicit.
-			if err := recordReplyNotice(current, input, "The dispatcher finished without sending an answer. The work may have run. Please check its result in Swarm.", true); err != nil {
+			if err := recordReplyNotice(current, input, "I couldn’t verify a final answer. The work may have run. The person running Swarm can check its result.", true); err != nil {
 				return err
 			}
 		case input.ReplyRecovery == 0:
@@ -264,4 +354,31 @@ func recordReplyNotice(st *State, a Admission, body string, final bool) error {
 	p := Publication{ID: id, ConversationID: a.ConversationID, Admission: a.Sequence, OutputSequence: n, Text: body, TextHash: hashBytes([]byte(body)), Final: final, DiscussionSource: DiscussionOutputSource{AdmissionID: a.Origin.RequestID, SystemCause: replyMonitorCause}}
 	putRecord(st, "publications", &st.Publications, k, p)
 	return nil
+}
+
+// A quiet shared-thread turn must be an explicit decision by its authenticated manager.
+func (c *Controller) yieldSharedReply(a Admission) error {
+	return c.store.update(func(st *State) error {
+		if err := checkBinding(st, c.binding); err != nil {
+			return err
+		}
+		k := admissionKey(c.binding.ConversationID, a.Sequence)
+		input := st.Admissions[k]
+		if !c.humanDiscussionTurn(input) || input.Origin.GuildID == "" || input.NativeInputID != a.NativeInputID || input.NativeTurnID != a.NativeTurnID {
+			return ErrExpired
+		}
+		e := discussionReplyEvidence(*st, input, time.Now())
+		if e.output.ID != "" || e.progress != 0 || e.answered || e.workerRunning {
+			return ErrConflict
+		}
+		for _, act := range st.Actions {
+			if act.ConversationID == input.ConversationID && act.Admission == input.Sequence {
+				return ErrConflict
+			}
+		}
+		input.ReplyTracked = true
+		input.ReplyCheckAfter = 0
+		putRecord(st, "admissions", &st.Admissions, k, input)
+		return nil
+	})
 }

@@ -31,6 +31,7 @@ type DiscussionScope struct {
 	ProjectEnrolled    func(string) bool
 	VerifyOrigin       func(context.Context, schema.MessageOrigin) error
 	VerifyGrant        func(context.Context, schema.MessageOrigin) error
+	ExpectsReply       func(context.Context, schema.MessageOrigin) (bool, error)
 	journalReady       func() bool
 	ConfirmedDelivery  func(context.Context, DiscussionOutput) ([]string, error)
 	History            func(context.Context, DiscussionHistoryInput) (json.RawMessage, error)

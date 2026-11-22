@@ -177,6 +177,14 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (res
 			return nil, err
 		}
 		return json.RawMessage(`{"state":"available"}`), nil
+	case "swarm_discussion_yield":
+		if _, err := decodeControllerInput[struct{}](args); err != nil {
+			return nil, err
+		}
+		if err := c.yieldSharedReply(admission); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"state":"yielded"}`), nil
 	case "swarm_discussion_answer":
 		input, err := decodeControllerInput[DiscussionAnswerInput](args)
 		if err != nil {

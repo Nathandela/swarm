@@ -63,7 +63,7 @@ func TestVMManagerKeepsClaudePermissions(t *testing.T) {
 			t.Fatal(err)
 		}
 		idx := slices.Index(argv, "--mcp-config")
-		if !slices.Contains(argv, "--allowedTools=mcp__swarm_voice__publish,mcp__swarm_voice__ask,mcp__swarm_voice__swarm_discussion_history,mcp__swarm_voice__swarm_discussion_answer,mcp__swarm_voice__swarm_reply,mcp__swarm_voice__swarm_read_note") || slices.Contains(argv, "--dangerously-skip-permissions") || idx < 0 || !strings.Contains(argv[idx+1], `"env":{"SWARM_MANAGER_VM_CLI":"1"}`) {
+		if !slices.Contains(argv, "--allowedTools=mcp__swarm_voice__publish,mcp__swarm_voice__ask,mcp__swarm_voice__swarm_discussion_history,mcp__swarm_voice__swarm_discussion_answer,mcp__swarm_voice__swarm_reply,mcp__swarm_voice__swarm_read_note,mcp__swarm_voice__swarm_discussion_yield") || slices.Contains(argv, "--dangerously-skip-permissions") || idx < 0 || !strings.Contains(argv[idx+1], `"env":{"SWARM_MANAGER_VM_CLI":"1"}`) {
 			t.Fatalf("unexpected VM policy: %#v", argv)
 		}
 	}

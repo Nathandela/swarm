@@ -132,6 +132,10 @@ func openDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Co
 	}
 	d := &DiscussionController{ctx: ctx, dir: dir, endpoint: endpoint, cfg: cfg, scope: scope, runtime: runtime, store: store, bridge: bridge, handler: handler, now: time.Now}
 	if state.CurrentConversation != "" {
+		if err = d.trackLegacyReplies(state); err != nil {
+			_ = bridge.Close()
+			return nil, err
+		}
 		b := state.Conversations[cfg.ConversationID].Binding
 		b.Generation = state.Generation
 		if err = d.bind(b); err != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -284,6 +285,10 @@ func TestHandoffCorrelatesWorkerReportWithOriginalHuman(t *testing.T) {
 				t.Fatal(p)
 				return nil, nil
 			}}}
+			evidence := discussionReplyEvidence(st, original, time.Now())
+			if (evidence.final && evidence.output.ID == "report") != tc.want {
+				t.Fatalf("unverified worker final: %+v", evidence)
+			}
 			raw, err := c.discussionReplyReceipt(t.Context(), st, current, "101")
 			if err != nil || !strings.Contains(string(raw), `"reply":"progress scheduled"`) || !strings.Contains(string(raw), `["201"]`) || strings.Contains(string(raw), `["303"]`) != tc.want {
 				t.Fatalf("receipt %s err %v", raw, err)
