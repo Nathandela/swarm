@@ -132,7 +132,7 @@ func TestManagerLaunchUnqualifiedClaudeReturnsKnownPreEffectWireRefusal(t *testi
 		t.Fatal(err)
 	}
 	cli := filepath.Join(dir, "claude")
-	if err := os.WriteFile(cli, []byte("#!/bin/sh\nif test x$1 = x--version; then printf '2.1.320 (Claude Code)\\n'; fi\n"), 0700); err != nil {
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\nif test x$1 = x--version; then printf '2.1.318 (Claude Code)\\n'; fi\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	op, err := protocol.NewLaunchOperationID()

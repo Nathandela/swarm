@@ -62,7 +62,11 @@ func TestFreshManagerSuppressesOnlyOptionalStartupUpdate(t *testing.T) {
 }
 
 func TestQualifiedManagerVersions(t *testing.T) {
-	for version, want := range map[string]bool{"0.167.0": true, "0.170.0": true, "0.171.0": true, "0.171.1": false, "0.169.0": false, "0.170.1": false, "": false} {
+	for version, want := range map[string]bool{
+		"0.166.9": false, "0.167.0": true, "0.169.0": true, "0.171.0": true,
+		"0.171.1": true, "1.0.0": true, "0.172.0-beta.1": false,
+		"0.172": false, "0.0172.0": false, "unknown": false, "": false,
+	} {
 		if got := SupportsNativeTurns(version); got != want {
 			t.Errorf("version %q: got %v, want %v", version, got, want)
 		}

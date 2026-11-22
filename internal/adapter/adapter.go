@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/vt"
+	"golang.org/x/mod/semver"
 )
 
 // Adapter is the ONE interface every agent-CLI integration implements. Every
@@ -157,6 +158,12 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// StableVersionAtLeast checks an extracted CLI release version against a capability floor.
+func StableVersionAtLeast(version, minimum string) bool {
+	v := "v" + version
+	return semver.Canonical(v) == v && semver.Prerelease(v) == "" && semver.Compare(v, "v"+minimum) >= 0
 }
 
 // versionInRange reports whether version lies within the inclusive [Min, Max]

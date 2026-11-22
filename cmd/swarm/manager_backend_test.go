@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/Nathandela/swarm/internal/persist"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/persist"
 )
 
 func TestManagerRequiredBackendCannotDecodeAsStandalone(t *testing.T) {
@@ -17,14 +18,16 @@ func TestManagerRequiredBackendCannotDecodeAsStandalone(t *testing.T) {
 	}
 }
 
-func TestManagerShimCodexRequiresExactQualifiedRuntime(t *testing.T) {
-	for _, version := range []string{"nil", "", "0.166.0", "0.168.0", "0.167.0"} {
+func TestManagerShimCodexRequiresMinimumRuntime(t *testing.T) {
+	for version, want := range map[string]bool{
+		"nil": false, "": false, "0.166.0": false, "0.167.0": true, "0.171.1": true, "0.172.0-beta.1": false,
+	} {
 		t.Run(version, func(t *testing.T) {
 			lc := shimLaunchConfig{NativeProvider: "codex", BackendRequired: true, BackendProgram: "/trusted/codex", BackendSocketPath: "/private/backend.sock"}
 			if version != "nil" {
 				lc.CLIIdentity = &persist.CLIIdentity{Path: "/trusted/codex", Version: version}
 			}
-			if err := validateManagerShimRuntime(lc, true); (err == nil) != (version == "0.167.0") {
+			if err := validateManagerShimRuntime(lc, true); (err == nil) != want {
 				t.Fatalf("runtime %q admitted=%v", version, err == nil)
 			}
 		})
