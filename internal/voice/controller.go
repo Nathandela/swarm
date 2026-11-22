@@ -255,10 +255,14 @@ func (c *Controller) Tick(ctx context.Context) error {
 			}
 			if strings.HasPrefix(a.SourceID, "reply-check:") {
 				if err := c.checkReplyRecovery(ctx, st, a); err != nil {
-					if errors.Is(err, ErrDiscussionSourceChanged) || errors.Is(err, ErrExpired) {
-						return c.store.rejectQueuedControllerInput(c.binding, a, err.Error())
+					if ctx.Err() != nil {
+						return ctx.Err()
 					}
-					return err
+					if errors.Is(err, ErrDiscussionSourceChanged) {
+						return c.store.rejectQueuedControllerInput(c.binding, a, ErrDiscussionSourceChanged.Error())
+					}
+					// Retire the optional reporting turn even when the old grant cannot be verified.
+					return c.store.rejectQueuedControllerInput(c.binding, a, ErrExpired.Error())
 				}
 			}
 			if a.Origin != nil && !a.SourceCutover && c.discussion.VerifyOrigin != nil {

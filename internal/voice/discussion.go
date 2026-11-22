@@ -609,8 +609,12 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 	if err != nil {
 		return err
 	}
-	if err = d.checkDiscussionReply(ctx, st); err != nil {
-		return err
+	if err := d.checkDiscussionReply(ctx, st); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// One broken historical obligation must not suppress new input or a ready export.
+		defer func() { result = errors.Join(result, err) }()
 	}
 	st, err = d.store.readView()
 	if err != nil {

@@ -3,12 +3,14 @@ package voice
 import (
 	"context"
 	"encoding/json"
-	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 func TestMissingDiscordReplySurvivesRestartAndConfirmsFinal(t *testing.T) {
@@ -52,6 +54,17 @@ func TestMissingDiscordReplySurvivesRestartAndConfirmsFinal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Reopen the Bolt ledger as a reconnecting controller before the first deadline.
+	dir := filepath.Dir(s.db.Path())
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	c.store, d.store = s, s
 	if dormant, err := d.Dormant(); err != nil || dormant {
 		t.Fatalf("dormant=%v err=%v", dormant, err)
 	}
@@ -207,5 +220,75 @@ func TestDiscordClarificationOnlyPausesAfterReceipt(t *testing.T) {
 			t.Fatalf("receipt=%v out=%+v", receipt, out)
 		}
 		now = now.Add(discussionReplyWait)
+	}
+}
+
+func TestVMReplyCheckNeverStartsAnUnrestrictedRecovery(t *testing.T) {
+	c, s, r, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread", VMProjectAccess: true}
+	a, err := c.admitDiscussionInput(DiscussionInput{Origin: discussionFixtureOrigin("native"), Text: "Do the job", ExpectReply: true}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.status.Turn = protocol.ManagerNativeTurn{State: "completed", NativeInputID: r.sent[0].ManagerAdmission.Nonce, NativeTurnID: "native"}
+	if err = c.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(a.ReplyCheckAfter, 0)
+	d := DiscussionController{store: s, cfg: Config{ConversationID: b.ConversationID}, scope: *c.discussion, now: func() time.Time { return now }}
+	for range 5 {
+		st, _ := s.Snapshot()
+		if err = d.checkDiscussionReply(t.Context(), st); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(discussionReplyWait)
+	}
+	st, _ := s.Snapshot()
+	current := st.Admissions[admissionKey(b.ConversationID, a.Sequence)]
+	if current.ReplyCheckAfter != 0 || !current.ReplyDeliveryUnknown || len(st.Publications) != 1 || len(st.Admissions) != 1 || len(r.sent) != 1 {
+		t.Fatalf("unknown=%v next=%d pubs=%d sends=%d", current.ReplyDeliveryUnknown, current.ReplyCheckAfter, len(st.Publications), len(r.sent))
+	}
+	if dormant, err := d.Dormant(); err != nil || !dormant {
+		t.Fatalf("pending uncertainty pinned manager: %v %v", dormant, err)
+	}
+}
+
+func TestLegacyPendingReplyClassificationIsBounded(t *testing.T) {
+	c, s, _, b := newControllerFixture(t)
+	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread"}
+	a, err := c.submitDiscussion(discussionFixtureOrigin("legacy"), "hello", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := admissionKey(b.ConversationID, a.Sequence)
+	if err = s.update(func(st *State) error {
+		v := st.Admissions[k]
+		v.ReplyTracked = false
+		putRecord(st, "admissions", &st.Admissions, k, v)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	d := DiscussionController{store: s, cfg: Config{ConversationID: b.ConversationID}, scope: *c.discussion, now: func() time.Time { return now }}
+	d.scope.ExpectsReply = func(context.Context, schema.MessageOrigin) (bool, error) { return false, errors.New("offline") }
+	st, _ := s.Snapshot()
+	if err = d.trackLegacyReplies(st); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		st, _ = s.Snapshot()
+		if err = d.checkDiscussionReply(t.Context(), st); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(discussionReplyWait)
+	}
+	st, _ = s.Snapshot()
+	v := st.Admissions[k]
+	if !v.ReplyTracked || !v.ReplyDeliveryUnknown || v.ReplyCheckAfter != 0 || len(st.Publications) != 0 {
+		t.Fatalf("migration guessed old message intent: %+v", v)
 	}
 }

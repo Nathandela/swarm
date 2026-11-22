@@ -213,7 +213,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
 		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
 		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
-		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ProjectEnrolled: r.projectEnrolled,
+		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: r.projectEnrolled,
 	})
 	if err != nil {
 		return nil, err
@@ -254,6 +254,20 @@ func (d *discussion) verifyAudience(ctx context.Context) error {
 func (d *discussion) verifyOrigin(ctx context.Context, origin schema.MessageOrigin) error {
 	return d.checkOrigin(ctx, origin, "admission")
 }
+func (d *discussion) expectsReply(ctx context.Context, origin schema.MessageOrigin) (bool, error) {
+	d.mu.RLock()
+	reader := d.reader
+	d.mu.RUnlock()
+	if reader == nil {
+		return false, voice.ErrNotFound
+	}
+	page, err := reader(ctx, discord.TeammateHistoryQuery{Source: "expected_reply", AdmissionID: origin.RequestID, Revision: origin.Revision, MessageID: origin.MessageID, AuthorID: origin.ActorID})
+	if errors.Is(err, discord.ErrTeammateSourceChanged) {
+		return false, nil
+	}
+	return page.ExpectsReply, err
+}
+
 func (d *discussion) verifyGrant(ctx context.Context, origin schema.MessageOrigin) error {
 	return d.checkOrigin(ctx, origin, "grant")
 }

@@ -118,8 +118,9 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		out.ConfirmedMessageIDs, err = t.service.Store.confirmedPublication(d, *q.Publication)
 		return out, err
 	}
-	if q.Source == "admission" || q.Source == "grant" {
-		return out, t.verifyAdmission(ctx, d, q)
+	if q.Source == "admission" || q.Source == "grant" || q.Source == "expected_reply" {
+		err = t.verifyAdmissionMessage(ctx, d, q, &out.ExpectsReply)
+		return out, err
 	}
 	if q.Source == "audience" {
 		if q.Cursor != "" || q.Anchor != "" {
@@ -508,6 +509,9 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 }
 
 func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery) error {
+	return t.verifyAdmissionMessage(ctx, d, q, nil)
+}
+func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, expects *bool) error {
 	if q.Cursor != "" || q.Anchor != "" || q.AdmissionID == "" || q.Revision == "" || !snowflake(q.MessageID) || !snowflake(q.AuthorID) {
 		return ErrInvalid
 	}
@@ -521,7 +525,7 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 		}
 		key := teammateKey(d.InstallationID, q.MessageID)
 		err := teammateGet(tx.Bucket([]byte(teammateIngressBucket)), key, &record)
-		if !errors.Is(err, ErrNotFound) || q.Source != "grant" {
+		if !errors.Is(err, ErrNotFound) || q.Source == "admission" {
 			return err
 		}
 		return teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)), key, &guard)
@@ -551,7 +555,7 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 			return ErrTeammateSourceChanged
 		}
 	} else {
-		if q.Source != "grant" || guard.DiscussionID != d.ID || guard.Disposition != StateSent || guard.OperationID != q.AdmissionID ||
+		if q.Source == "admission" || guard.DiscussionID != d.ID || guard.Disposition != StateSent || guard.OperationID != q.AdmissionID ||
 			guard.Revision != q.Revision || guard.ActorID != q.AuthorID || guard.LastChange == "deleted" {
 			return ErrTeammateSourceChanged
 		}
@@ -571,6 +575,9 @@ func (t *teammateConnector) verifyAdmission(ctx context.Context, d TeammateDiscu
 	}
 	if teammateRevision(m) != q.Revision {
 		return ErrTeammateSourceChanged
+	}
+	if expects != nil {
+		*expects = t.expectsReply(m)
 	}
 	return nil
 }

@@ -130,6 +130,7 @@ type TeammateHistoryQuery struct {
 	AdmissionID, Revision, MessageID, AuthorID string
 }
 type TeammateHistoryPage struct {
+	ExpectsReply                        bool     `json:",omitempty"`
 	ConfirmedMessageIDs                 []string `json:",omitempty"`
 	EvidenceFragment                    string   `json:",omitempty"`
 	FragmentMessageID                   string   `json:",omitempty"`

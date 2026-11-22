@@ -1410,6 +1410,7 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 			}
 			// An acknowledgement creates a reply obligation even when this shared-thread message had no mention.
 			if admission.Origin != nil && !p.Final && admission.ReplyCheckAfter == 0 {
+				admission.ReplyTracked = true
 				admission.ReplyCheckAfter = time.Now().Add(discussionReplyWait).Unix()
 				putRecord(st, "admissions", &st.Admissions, admissionKey(b.ConversationID, admission.Sequence), admission)
 			}
