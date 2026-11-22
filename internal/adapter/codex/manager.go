@@ -8,9 +8,9 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 )
 
-// SupportsNativeTurns names the version qualified for manager input and MCP provenance.
+// SupportsNativeTurns admits stable releases with the manager input and MCP provenance baseline.
 func SupportsNativeTurns(version string) bool {
-	return version == "0.167.0" || version == "0.170.0" || version == "0.171.0"
+	return adapter.StableVersionAtLeast(version, "0.167.0")
 }
 
 func managerFlags(manager *adapter.ManagerSpec) []string {

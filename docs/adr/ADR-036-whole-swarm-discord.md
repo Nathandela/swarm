@@ -61,7 +61,7 @@ No hosted backend, inbound public listener, new provider credential or second in
 
 An unrestricted agent can disclose information if it follows a malicious external instruction. Discord access scope and trusted-team membership are meaningful security choices. Revocation cannot undo a native action or publication that already occurred.
 
-Provider capabilities and exact qualified versions differ. Existing workers may need deliberate refresh or native registration. Expired context is unavailable. Recent discussion context is bounded and process-local. Uncertain native or publication outcomes can require investigation rather than automatic retry. Logical ledger limits do not promise a physical filesystem quota.
+Provider capabilities and minimum supported versions differ. Existing workers may need deliberate refresh or native registration. Expired context is unavailable. Recent discussion context is bounded and process-local. Uncertain native or publication outcomes can require investigation rather than automatic retry. Logical ledger limits do not promise a physical filesystem quota.
 
 ## Alternatives considered
 
@@ -79,3 +79,17 @@ The operator may enroll a place in teammate mode. Every human participant in a v
 A durable conversation belongs to the installation, server and verified Discord thread. Accepted turns preserve the original speaker. Worker operations, wake receipts, pending questions and explicit publications remain correlated with the authorized discussion and exact worker attempt. Lost acknowledgements require reconciliation. A quiescent manager may retire under an instance fence and reopen its conversation on demand. The connector is supervised independently of its managers.
 
 See the [implementation contract](../specifications/discord-teammate-manager.md) and [operating instructions](../ops/discord.md#connect-a-teammate).
+
+## Amendment — forward-compatible native CLI version floors
+
+Use a minimum stable release (`>=`) for admission to a native CLI capability.
+New stable releases above the floor may attempt the native path. Record exact
+versions in qualification evidence and retain exact executable, session, and
+turn identity checks for each running process. Reject prerelease, malformed,
+and below-floor versions at admission. Existing runtime proof and capability
+checks govern incoming turns and manager effects. Record any demonstrated
+upstream incompatibility and scope its exclusion to the affected capability.
+
+The Codex manager floor is `0.167.0`, and verified workspace inheritance when
+resuming a Discord manager starts at `0.170.0`. Claude Code native worker input
+starts at `2.1.296`, and manager turns start at `2.1.319`.

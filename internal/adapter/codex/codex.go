@@ -108,7 +108,7 @@ func (codexAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 	argv := []string{binary}
 	argv = append(argv, optionFlags(spec.Options)...)
 	if spec.Manager != nil {
-		// Manager startup is pinned to a qualified version and cannot wait on an update menu.
+		// Unattended manager startup cannot wait on an update menu.
 		argv = append(argv, "-c", "check_for_update_on_startup=false")
 	}
 	argv = append(argv, managerFlags(spec.Manager)...)
