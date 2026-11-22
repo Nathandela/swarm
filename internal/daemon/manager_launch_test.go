@@ -49,7 +49,9 @@ func TestManagerClaudeEnrollsNativeBrokerWithDiscordDisabled(t *testing.T) {
 }
 
 func TestManagerCodexVersionQualificationPrecedesEveryLaunchEffect(t *testing.T) {
-	for _, version := range []string{"nil", "", "0.166.0", "0.168.0", "0.167.0"} {
+	for version, admitted := range map[string]bool{
+		"nil": false, "": false, "0.166.0": false, "0.167.0": true, "0.171.1": true, "0.172.0-beta.1": false,
+	} {
 		t.Run(version, func(t *testing.T) {
 			effects := 0
 			cfg := daemonConfig(t)
@@ -64,7 +66,7 @@ func TestManagerCodexVersionQualificationPrecedesEveryLaunchEffect(t *testing.T)
 			}
 			spec.Manager = &ManagerLaunchSpec{ConversationID: "manager", Command: cfg.ShimBinary}
 			_, err := d.Launch(spec)
-			if version == "0.167.0" {
+			if admitted {
 				if effects != 1 || !errors.Is(err, stop) {
 					t.Fatalf("qualified runtime never reached sentinel: count=%d err=%v", effects, err)
 				}

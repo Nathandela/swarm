@@ -17,7 +17,7 @@ func TestNativeClaudeManagerProvenance(t *testing.T) {
 		t.Skip("explicit isolated installed-Claude manager proof fixture only")
 	}
 	binary, version, dir := privateNativeClaude(t)
-	if version != "2.1.319" && version != "2.1.326" {
+	if !SupportsNativeTurns(version) {
 		t.Fatal("installed manager version is not qualified")
 	}
 	if err := testbin.RegisterExecutable(binary); err != nil {

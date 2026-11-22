@@ -19,19 +19,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/managerproof"
 )
 
 const DescriptorFile = "claude-input.json"
 const maxOperations = 128
 
-// SupportedVersion names actual native runtime qualification, not an optimistic range.
+// SupportedVersion admits stable releases with the native worker input baseline.
 func SupportedVersion(version string) bool {
-	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311" || SupportsNativeTurns(version)
+	return adapter.StableVersionAtLeast(version, "2.1.296")
 }
 
-// SupportsNativeTurns requires separately qualified exact turn lifecycle events.
-func SupportsNativeTurns(version string) bool { return version == "2.1.319" || version == "2.1.326" }
+// SupportsNativeTurns admits stable releases with the manager turn lifecycle baseline.
+func SupportsNativeTurns(version string) bool {
+	return adapter.StableVersionAtLeast(version, "2.1.319")
+}
 
 type Descriptor struct {
 	ReplayID              string `json:"replay_id,omitempty"`

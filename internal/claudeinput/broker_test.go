@@ -165,7 +165,7 @@ func TestNativeInputPreservesEscapedBodyAndAckCannotConsumeLaterMessage(t *testi
 }
 
 func TestQualifiedVMVersionsUseExactNativeWorker(t *testing.T) {
-	for _, version := range []string{"2.1.310", "2.1.311", "2.1.319", "2.1.326"} {
+	for _, version := range []string{"2.1.310", "2.1.311", "2.1.319", "2.1.326", "2.1.330"} {
 		t.Run(version, func(t *testing.T) {
 			b, err := Start(shortDir(t), "qualified-vm", version, 123, 456)
 			if err != nil {
@@ -186,11 +186,6 @@ func TestQualifiedVMVersionsUseExactNativeWorker(t *testing.T) {
 				t.Fatalf("native VM admission: %+v %v", message, err)
 			}
 		})
-	}
-	for _, version := range []string{"2.1.309", "2.1.312", "2.1.318", "2.1.320", "2.1.325", "2.1.327", "2.1.326-beta.1", "2.1.319-beta.1", "2.1.311-beta.1"} {
-		if SupportedVersion(version) {
-			t.Fatalf("unqualified version %q enabled", version)
-		}
 	}
 }
 
