@@ -161,7 +161,7 @@ func promoteVMWorkerAlias(st *State, identity WorkerAssociation) bool {
 	old.SessionInstance, old.AttemptID, old.Mailbox = identity.SessionInstance, identity.AttemptID, true
 	linkVMWorkerInput(*st, &old, identity.ParentInputHash)
 	if current, exists := st.Workers[exact]; exists {
-		if !current.supervisorMailbox() || current.Reserved || current.Session != old.Session || current.SessionInstance != old.SessionInstance ||
+		if !current.supervisorMailbox() || current.Reserved || current.ConversationID != old.ConversationID || current.Session != old.Session || current.SessionInstance != old.SessionInstance ||
 			current.Parent != old.Parent || current.Project != old.Project || current.JobID != old.JobID || current.AttemptID != old.AttemptID ||
 			current.Admission != 0 && old.Admission != 0 && current.Admission != old.Admission ||
 			current.ParentInputHash != "" && old.ParentInputHash != "" && current.ParentInputHash != old.ParentInputHash {

@@ -255,3 +255,7 @@ Codex 0.171.0 uses its native configuration API before opening the terminal. It 
 The native manager version floor and automatic setup have separate qualification. A newer stable Codex release can start a dispatcher and still ask you to review its hooks. When Swarm cannot verify that the dispatcher is ready, Discord tells you that your message is saved and directs you to the dispatcher window. Open it in the Swarm dashboard, review the prompt, and finish setup there. The connector retries the saved request.
 
 agy 1.5.13 receives an invocation-scoped `trustedWorkspaces` setting. Claude Code uses the existing recorded folder-trust dialog handler. First-time account sign-in, terms and data-sharing choices, and tool permissions remain in the native CLI. If setup needs your input, open the dispatcher in Swarm. OpenCode 1.19.3 displayed its ordinary composer in a fresh-profile test and offered `/connect` for provider setup.
+
+### Rolling back during a pending reply
+
+A v0.29.11 connector can deliver a prepared startup notice after a downgrade. The older supervisor can refuse to open an active discussion that already recorded a reply deadline with this patch. If it reports “corrupt or unsupported state”, keep the state directory and reinstall this patch or its compatible successor. Re-running the original command or asking the owner to resend can duplicate work. In the rollback rehearsal, restoring the patched binary recovered the same admission and deadline.

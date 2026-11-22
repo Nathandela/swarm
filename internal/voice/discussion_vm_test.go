@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -225,8 +224,8 @@ func TestStoredVMStatusUsesCurrentWorkerProvenance(t *testing.T) {
 }
 
 func TestMailboxRosterPromotesProvisionalVMWorkerAcrossRestart(t *testing.T) {
-	for _, retained := range []bool{false, true} {
-		t.Run(fmt.Sprint("existing-exact-", retained), func(t *testing.T) {
+	for _, route := range []string{"roster", "retained duplicate", "note before roster"} {
+		t.Run(route, func(t *testing.T) {
 			c, store, _, _ := provenControllerFixture(t)
 			ep, parent, _ := protocol.ParseID(c.binding.SessionID)
 			row := protocol.SessionView{ID: ep + "/child", EndpointID: ep, SpawnedFrom: parent, Cwd: "/fixture", Group: status.GroupWorking, Status: status.Status{Process: status.ProcessRunning}}
@@ -243,7 +242,7 @@ func TestMailboxRosterPromotesProvisionalVMWorkerAcrossRestart(t *testing.T) {
 			workers.rows[0] = row
 			alias := key(c.binding.ConversationID, key(row.ID, row.ID))
 			exact := key(c.binding.ConversationID, key(row.ID, row.WorkerInstance))
-			if retained {
+			if route == "retained duplicate" {
 				err = store.update(func(st *State) error {
 					w := st.Workers[alias]
 					w.Mailbox, w.SessionInstance, w.AttemptID = true, row.WorkerInstance, row.WorkerAttempt
@@ -259,7 +258,15 @@ func TestMailboxRosterPromotesProvisionalVMWorkerAcrossRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = c.observeVMWorkers(st); err != nil {
+			if route == "note before roster" {
+				w := st.Workers[alias]
+				w.SessionInstance, w.AttemptID, w.Mailbox = row.WorkerInstance, row.WorkerAttempt, true
+				input := workerMessageInput{ID: "explicit-note", Kind: "needs-input", Text: "Proceed?"}
+				_, err = c.queueWorkerNote(w, input, workerNoteMetadata{Session: w.Session, Instance: w.SessionInstance, Kind: input.Kind, NoteID: input.ID, Text: input.Text})
+			} else {
+				_, err = c.observeVMWorkers(st)
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 			st, err = store.Snapshot()
