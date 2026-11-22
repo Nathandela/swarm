@@ -553,14 +553,14 @@ func TestDowngradedBindingRestoresOnlyItsExactStartupNotice(t *testing.T) {
 	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/channels/201":
-			fmt.Fprint(w, teammatePublic)
+			_, _ = fmt.Fprint(w, teammatePublic)
 		case "/channels/20":
-			fmt.Fprint(w, teammateParent)
+			_, _ = fmt.Fprint(w, teammateParent)
 		case "/channels/20/permissions/member/99":
 			teammateTestPermissions(w)
 		case "/channels/201/messages":
 			posts++
-			json.NewEncoder(w).Encode(discordgo.Message{ID: "401", ChannelID: "201", Content: "Open Swarm.", Author: &discordgo.User{ID: "99", Bot: true}})
+			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "401", ChannelID: "201", Content: "Open Swarm.", Author: &discordgo.User{ID: "99", Bot: true}})
 		default:
 			w.WriteHeader(404)
 		}
@@ -617,9 +617,9 @@ func TestDowngradeRecoveryRefusesUncertainOrMisroutedStartupPost(t *testing.T) {
 			c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/channels/201":
-					fmt.Fprint(w, teammatePublic)
+					_, _ = fmt.Fprint(w, teammatePublic)
 				case "/channels/20":
-					fmt.Fprint(w, teammateParent)
+					_, _ = fmt.Fprint(w, teammateParent)
 				case "/channels/20/permissions/member/99":
 					teammateTestPermissions(w)
 				default:
