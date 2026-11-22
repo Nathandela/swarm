@@ -28,7 +28,7 @@ The VM reported Codex 0.171.0, Claude Code 2.1.330, agy 1.5.13 and OpenCode 1.19
 
 Claude Fable 5.2 and Claude Opus 5.5 independently reviewed the design. Both required late and unknown-prompt cases, a bounded recovery attempt, authenticated delivery receipts, preserved drafts, and protection against repeated work after takeover. An elapsed deadline is grounds for inspection. It is insufficient evidence that an earlier process has stopped or that a worker action should be run again.
 
-## Candidate evidence and open gates
+## Evidence from the initial candidate
 
 - The late-first-thread test failed on the release baseline. With the candidate the same app-server connection admitted the late thread in 5.5 seconds using a shortened test deadline. The ordinary timeout, old-instance and resumed-session controls passed. This uses the Swarm supervisor and a fixture backend.
 - An isolated Codex 0.171.0 app-server reported an untrusted test hook before the first thread. Writing the exact fingerprint changed its status to trusted. A later native config probe preserved an unrelated workspace and hook hash. The complete hook-review-to-real-TUI-to-Discord trial is pending.
@@ -51,10 +51,20 @@ The private rehearsals used installed CLI subscriptions, separate temporary prof
 
 Use `SWARM_TEAMMATE_TEST_STARTUP=codex` or `claude` with the existing `TestHostedTeammateLifecycle` private-account setup, `SWARM_TEAMMATE_TEST_PERSONAL=1`, a private trusted workspace and a dedicated candidate binary. Run each provider separately. Leave the startup option unset for the stock personal two-turn case.
 
-### Two simultaneous worker completions during restart
+### Two worker completions while the connector was offline
 
 A private Linux rehearsal on c655d22a used an actual Codex manager and two ordinary Codex workers, one personal-DM source message, and a receipt-bearing simulated Discord sink. Both workers started in 19 seconds and signalled readiness through separate files. The test stopped the connector and restarted its dedicated supervisor. Both original worker incarnations retained their shim PID and process start time. After the supervisor restart and during the connector outage, each worker read its own random marker and issued an explicit completion, recording its queued CLI receipt.
 
 After reconnection, each marker returned through its own authenticated worker wake. The north and south attempts ended in `bd89df69cc92` and `197e9953ea31`. The two results and original reply settled in 2 minutes 9 seconds after reopening. The full test passed in 161.44 seconds. A separate run that withheld transport receipts observed both native publications and retained an unresolved delivery check.
 
 To repeat, use the existing private hosted test setup with `SWARM_TEAMMATE_TEST_PERSONAL=1`, `SWARM_TEAMMATE_TEST_VM=1`, `SWARM_TEAMMATE_TEST_DURABLE=codex`, and `SWARM_TEAMMATE_TEST_MULTI_RESTART=1`. The private PATH must include the installed Codex Linux sandbox launcher when using a disposable profile. Without the launcher, the first shell call failed before launching workers and Codex requested an approval.
+
+## Integrated acceptance
+
+The stricter test exposed two provisional job records lingering beside the two real worker records. After the repair, the test on `cafc8178` passed in 170.34 seconds with real Codex processes and a simulated Discord transport. It verified zero completion notes and visible results before releasing the workers, the same two shim identities after the supervisor restarted, and one confirmed publication for each original attempt after the connector reopened. The original request settled with zero outstanding or uncertain replies.
+
+The real Codex launch through a symlink to a workspace containing quotes confirmed the physical workspace and exact hook fingerprint. An unrelated project and hook stayed intact. An independent loopback test lost a Discord POST acknowledgement, reopened the ledger and advanced the clock through 90 days. It recorded one POST and reconciled the original nonce with a late Gateway receipt.
+
+The installed v0.29.11 connector and the patched binary exercised both downgrade directions on retained state. A prepared specific notice posted once. Re-upgrading recovered a previously missing binding pointer and preserved the notice’s original nonce. The old binary refused to open an active discussion with a new reply deadline. Re-upgrading recovered the same admission and deadline.
+
+Claude Fable 5.2 and Opus 5.5 independently approved the integrated production code at `cafc8178`. A separate four-state regression confirmed that a generic startup notice preserves the original specific notice before send, after send, when uncertain and after compaction. The following lint-only change affected test response writes. Nathan deferred agy dispatcher takeover and cross-CLI diagnosis to `swarm-btd`. Ordinary Swarm model defaults continue to apply.
