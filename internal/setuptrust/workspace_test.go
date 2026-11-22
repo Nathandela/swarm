@@ -1,6 +1,7 @@
 package setuptrust
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,9 @@ func TestWorkspaceEnrollment(t *testing.T) {
 		t.Fatal("enabled before enrolling")
 	}
 	if _, err := Set(link, true, false); err != nil {
+		if errors.Is(err, ErrWorkspaceIdentity) {
+			t.Skipf("fixture filesystem: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, on := Get(cwd); !on {

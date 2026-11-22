@@ -11,6 +11,9 @@ import (
 	"syscall"
 )
 
+// ErrWorkspaceIdentity means the filesystem cannot distinguish a replaced workspace.
+var ErrWorkspaceIdentity = errors.New("setup trust: workspace must be a directory on a filesystem that records its creation time")
+
 type Consent struct {
 	Workspace    string
 	ProfileHooks bool

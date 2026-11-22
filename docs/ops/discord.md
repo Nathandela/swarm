@@ -248,7 +248,7 @@ A new human message retains its own identity even if two people ask the same que
 
 ### Automatic CLI setup in a workspace
 
-On the dispatcher VM, run `swarm setup-trust on /absolute/workspace` to let Swarm handle supported startup trust choices during new launches in that directory. Check the setting with `swarm setup-trust status /absolute/workspace`. Each checkout has its own setting. In a worktree, use its physical directory. The setting is local to the OS user.
+On the dispatcher VM, run `swarm setup-trust on /absolute/workspace` to let Swarm handle supported startup trust choices during new launches in that directory. Check the setting with `swarm setup-trust status /absolute/workspace`. Enrollment requires a filesystem that records directory creation time, so a replacement checkout cannot inherit an earlier checkout’s trust. Each checkout has its own setting. In a worktree, use its physical directory. The setting is local to the OS user.
 
 Codex 0.171.0 uses its native configuration API before opening the terminal. It records trust for the enrolled folder and the current fingerprints of new or changed project hooks whose files are inside that folder. Add the explicit `--profile-hooks` option after the path to also approve new or changed user and plugin hooks visible in that workspace. These are the same persistent provider decisions as accepting the native review. A profile-level hook trusted this way can run in other workspaces where Codex loads it. `swarm setup-trust off /absolute/workspace` stops future automatic approvals. Use the provider's trust controls to revoke decisions already recorded.
 

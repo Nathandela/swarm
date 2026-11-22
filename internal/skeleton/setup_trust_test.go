@@ -3,6 +3,7 @@ package skeleton
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/setuptrust"
@@ -85,6 +86,9 @@ func TestAgySetupTrustAtFinalWorkspace(t *testing.T) {
 	cwd := t.TempDir()
 	project, err := setuptrust.Set(cwd, true, false)
 	if err != nil {
+		if errors.Is(err, setuptrust.ErrWorkspaceIdentity) {
+			t.Skipf("fixture filesystem: %v", err)
+		}
 		t.Fatal(err)
 	}
 	d := &Daemon{}

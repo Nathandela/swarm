@@ -87,9 +87,16 @@ func teammateCancelPreparedNotice(tx *bolt.Tx, d TeammateDiscussion, id, cause s
 	if !out.Internal || out.Publication.SystemCause != cause {
 		return ErrConflict
 	}
-	for _, part := range out.Chunks {
-		if part.State != StatePrepared {
-			return nil
+	if !out.SettledAt.IsZero() {
+		return nil
+	}
+	// Superseded startup notices have no outstanding action. Keep their original
+	// receipt as unconfirmed when a post may already have reached Discord.
+	if cause != teammateStartupNotice {
+		for _, part := range out.Chunks {
+			if part.State != StatePrepared {
+				return nil
+			}
 		}
 	}
 	if err = teammateOutboxCount(tx, d.InstallationID, -1); err != nil {

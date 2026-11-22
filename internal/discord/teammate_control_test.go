@@ -247,6 +247,69 @@ func TestTeammateParkedStartupNoticeIsBoundToGeneration(t *testing.T) {
 	}
 }
 
+func TestChangedStartupNoticeRetiresUnconfirmedPost(t *testing.T) {
+	var bodies []string
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "/channels/201/messages":
+			var p struct{ Content string }
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				t.Error(err)
+			}
+			bodies = append(bodies, p.Content)
+			if len(bodies) == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "402", ChannelID: "201", Content: p.Content, Author: &discordgo.User{ID: "99", Bot: true}})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	c.manager = &teammatePublicationManager{generation: 3}
+	d := TeammateDiscussion{InstallationID: "install", ID: "discussion", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	store := c.service.Store
+	if err := store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := c.sendStartupNotice(ctx, d, genericStartupMessage); !teammateAPIStatus(err, 500) {
+		t.Fatal(err)
+	}
+	const specific = "Sign in to the configured CLI. Your message is saved."
+	if err := c.sendStartupNotice(ctx, d, specific); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendStartupNotice(ctx, d, specific); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || bodies[1] != specific {
+		t.Fatalf("unexpected posts %q", bodies)
+	}
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		key := teammateOutputKey(d.InstallationID, d.ID, teammateStartupNoticeID(d, 3))
+		if tx.Bucket([]byte(teammateOutboxBucket)).Get(key) != nil {
+			t.Fatal("obsolete startup post is still pending")
+		}
+		var receipt teammateReceipt
+		if err := teammateGet(tx.Bucket([]byte(teammateReceiptBucket)), key, &receipt); err != nil {
+			return err
+		}
+		if receipt.BodyHash == "" || len(receipt.DiscordMessageIDs) != 0 {
+			t.Fatal("uncertain post has an invalid receipt")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTeammateWorkerPublicationHoldsRevokedGrantAndNeverRepostsUncertainChunk(t *testing.T) {
 	posts := 0
 	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
