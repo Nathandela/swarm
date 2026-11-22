@@ -50,3 +50,11 @@ The private rehearsals used installed CLI subscriptions, separate temporary prof
 | Native Claude proof with a loopback model | Installed 2.1.330, SHA-256 `f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb`, passed `TestNativeClaudeManagerProvenance` in 13.12 seconds and `TestNativeClaudeModalAdmission` in 19.44 seconds. Tests used a copied executable, private PTY and isolated network. |
 
 Use `SWARM_TEAMMATE_TEST_STARTUP=codex` or `claude` with the existing `TestHostedTeammateLifecycle` private-account setup, `SWARM_TEAMMATE_TEST_PERSONAL=1`, a private trusted workspace and a dedicated candidate binary. Run each provider separately. Leave the startup option unset for the stock personal two-turn case.
+
+### Two simultaneous worker completions during restart
+
+A private Linux rehearsal on c655d22a used an actual Codex manager and two ordinary Codex workers, one personal-DM source message, and a receipt-bearing simulated Discord sink. Both workers started in 19 seconds and signalled readiness through separate files. The test stopped the connector and restarted its dedicated supervisor. Both original worker incarnations retained their shim PID and process start time. While the connector was closed, each worker read its own random marker and issued an explicit completion, recording its queued CLI receipt.
+
+After reconnection, each marker returned through its own authenticated worker wake. The north and south attempts ended in `bd89df69cc92` and `197e9953ea31`. The two results and original reply settled in 2 minutes 9 seconds after reopening. The full test passed in 161.44 seconds. A separate run that withheld transport receipts observed both native publications and retained an unresolved delivery check.
+
+To repeat, use the existing private hosted test setup with `SWARM_TEAMMATE_TEST_PERSONAL=1`, `SWARM_TEAMMATE_TEST_VM=1`, `SWARM_TEAMMATE_TEST_DURABLE=codex`, and `SWARM_TEAMMATE_TEST_MULTI_RESTART=1`. The private PATH must include the installed Codex Linux sandbox launcher when using a disposable profile. Without the launcher, the first shell call failed before launching workers and Codex requested an approval.

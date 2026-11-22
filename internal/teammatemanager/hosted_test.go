@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -188,7 +189,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	history := []discord.TeammateHistoryMessage{{ContextMessage: discord.ContextMessage{ID: "300", Author: discord.Actor{ID: "401", Name: "Alice"}, Text: "Our synthetic check is called violet orchard."}}}
 	var historyMu sync.Mutex
+	delivered := map[string]discord.TeammatePublication{}
 	durable := os.Getenv("SWARM_TEAMMATE_TEST_DURABLE")
+	multiRestart := os.Getenv("SWARM_TEAMMATE_TEST_MULTI_RESTART") == "1"
 	reader := func(_ context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
 		historyMu.Lock()
 		defer historyMu.Unlock()
@@ -198,8 +201,15 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		switch q.Source {
 		case "", "thread":
 			return discord.TeammateHistoryPage{Messages: slices.Clone(history)}, nil
-		case "audience", "publication":
-			// This private rehearsal has a fixed audience and no Discord transport receipts.
+		case "publication":
+			if multiRestart && q.Publication != nil {
+				if p, ok := delivered[q.Publication.ID]; ok && p.BodyHash == q.Publication.BodyHash && p.AdmissionID == q.Publication.AdmissionID {
+					return discord.TeammateHistoryPage{ConfirmedMessageIDs: []string{fmt.Sprint(10000 + p.Sequence)}}, nil
+				}
+			}
+			return discord.TeammateHistoryPage{}, nil
+		case "audience":
+			// This private rehearsal has a fixed audience.
 			return discord.TeammateHistoryPage{}, nil
 		case "admission", "grant":
 			for _, m := range history {
@@ -214,7 +224,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	admit := func(id, actor, body string) error {
 		t.Helper()
-		a := discord.TeammateAdmission{Discussion: thread, OperationID: "input-" + id, Revision: "rev-" + id, Text: body, Route: discord.Route{GuildID: "101", ChannelID: "202", MessageID: id}, Author: discord.Actor{ID: actor, Name: actor}, InvokerID: actor, Authority: discord.AuthorityExternal}
+		a := discord.TeammateAdmission{ExpectReply: multiRestart, Discussion: thread, OperationID: "input-" + id, Revision: "rev-" + id, Text: body, Route: discord.Route{GuildID: "101", ChannelID: "202", MessageID: id}, Author: discord.Actor{ID: actor, Name: actor}, InvokerID: actor, Authority: discord.AuthorityExternal}
 		if personal {
 			a.Authority = discord.AuthorityOwnerDirect
 			a.Route.GuildID = ""
@@ -244,6 +254,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					return fmt.Errorf("repeated publication %s", p.ID)
 				}
 				seen[p.ID] = true
+				historyMu.Lock()
+				delivered[p.ID] = p
+				historyMu.Unlock()
 				outputs = append(outputs, p)
 				return nil
 			})
@@ -308,6 +321,133 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 			}
 			t.Logf("input-301 produced publication %s", matches[0])
+			return true
+		})
+		return
+	}
+	if multiRestart {
+		if !personal || !vmMode || durable != "codex" {
+			t.Fatal("multi-worker restart requires a personal VM rehearsal with Codex workers")
+		}
+		expected := map[string]string{"north": proof, "south": steeringProof}
+		for label, result := range expected {
+			if err := os.WriteFile(filepath.Join(project, label+".txt"), []byte(result), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		instruction := "Dispatch exactly two ordinary Codex workers in " + project + " now. One is north and one is south. Give each worker this assignment, replacing LABEL with its own label: touch ready-LABEL, then wait until the local file release exists. Read only LABEL.txt, then run swarm teammate message --kind complete --text with exactly that file's contents, redirect the CLI receipt to sent-LABEL, and include the same contents in the native final answer. Only the workers may touch or read these files. For each incoming completion, publish its exact result as final=true in its own authenticated completion wake. Summarize both only once both have reported."
+		send("301", cfg.OwnerID, instruction)
+		held := map[string]protocol.SessionView{}
+		procs := map[string]persist.Meta{}
+		store, err := persist.NewStore(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wait("both ordinary workers are executing their distinct assignments", 180*time.Second, func() bool {
+			for label := range expected {
+				if _, err := os.Stat(filepath.Join(project, "ready-"+label)); err != nil {
+					return false
+				}
+			}
+			for _, row := range roster() {
+				if row.WorkerAttempt != "" && row.WorkerInstance != "" && row.Status.Process == status.ProcessRunning {
+					_, local, ok := protocol.ParseID(row.ID)
+					if !ok {
+						t.Fatal(row.ID)
+					}
+					meta, err := store.Load(local)
+					if err != nil || meta.ShimPID <= 0 || meta.ShimStartTime <= 0 {
+						return false
+					}
+					procs[row.ID] = meta
+					held[row.ID] = row
+				}
+			}
+			return len(held) == 2
+		})
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		_ = cmd.Wait()
+		cmd = startDaemon(bin)
+		owner = dialOwner()
+		for id, before := range held {
+			found := false
+			for _, after := range roster() {
+				if after.ID == id && after.WorkerInstance == before.WorkerInstance && after.WorkerAttempt == before.WorkerAttempt && after.Status.Process == status.ProcessRunning {
+					_, local, _ := protocol.ParseID(id)
+					meta, err := store.Load(local)
+					found = err == nil && meta.ShimPID == procs[id].ShimPID && meta.ShimStartTime == procs[id].ShimStartTime
+				}
+			}
+			if !found {
+				t.Fatalf("restart did not retain exact worker %s", id)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		receipts := make(map[string]string)
+		for label := range expected {
+			end := time.Now().Add(150 * time.Second)
+			for {
+				raw, err := os.ReadFile(filepath.Join(project, "sent-"+label))
+				var receipt struct{ ID, State string }
+				if err == nil && json.Unmarshal(raw, &receipt) == nil && receipt.State == "queued" && receipt.ID != "" {
+					receipts[label] = receipt.ID
+					break
+				}
+				if time.Now().After(end) {
+					t.Fatalf("no queued completion for %s during connector outage", label)
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+		r = open()
+		wait("both worker results returned from their original turns after the restart", 180*time.Second, func() bool {
+			results := make(map[string]string)
+			for _, output := range outputs {
+				if !strings.HasPrefix(output.AdmissionID, "worker-message-") || output.AttemptID == "" || output.JobID == "" {
+					continue
+				}
+				for label, marker := range expected {
+					if strings.Contains(output.Body, marker) {
+						if _, ok := results[label]; ok {
+							t.Fatalf("duplicate %s result publication", label)
+						}
+						results[label] = output.AttemptID
+					}
+				}
+			}
+			if len(results) != 2 || results["north"] == results["south"] {
+				return false
+			}
+			view, err := r.Status(thread)
+			if err != nil || len(view.Jobs) != 2 || view.PendingAdmissions != 0 || view.PendingReplies != 0 || view.UnconfirmedReplies != 0 {
+				return false
+			}
+			attemptByReceipt := map[string]string{}
+			for _, n := range view.Notes {
+				if n.Kind == "complete" && n.AdmissionPhase == "completed" {
+					if _, duplicate := attemptByReceipt[n.ID]; duplicate {
+						t.Fatalf("duplicate completion note %s", n.ID)
+					}
+					attemptByReceipt[n.ID] = n.AttemptID
+				}
+			}
+			for label, attempt := range results {
+				if attemptByReceipt[receipts[label]] != attempt || len(attemptByReceipt) != 2 {
+					return false
+				}
+				t.Logf("%s original completion attempt %s", label, attempt)
+			}
 			return true
 		})
 		return
