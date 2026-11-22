@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +22,8 @@ func (d *Daemon) finalizeAgentLaunch(id string, spec daemon.LaunchSpec) (daemon.
 	if err != nil || spec.AgentType != "agy" || spec.CLIIdentity == nil || spec.CLIIdentity.Version != "1.5.13" {
 		return spec, err
 	}
-	if cwd, enabled := setuptrust.Workspace(spec.Cwd); enabled {
-		spec.Argv = agyInlineSetting(spec.Argv, "trustedWorkspaces", []string{cwd})
+	if consent, enabled := setuptrust.Get(spec.Cwd); enabled {
+		spec.Argv = agyInlineSetting(spec.Argv, "trustedWorkspaces", []string{consent.Workspace})
 	}
 	return spec, nil
 }
@@ -29,38 +31,44 @@ func (d *Daemon) finalizeAgentLaunch(id string, spec daemon.LaunchSpec) (daemon.
 // The shim has not released its TUI yet. Native Codex owns config writes and
 // evaluates hashes again when loading a hook, including after a concurrent edit.
 func (d *Daemon) prepareCodexLaunchTrust(id, instance, userAgent string, conn backendConn) {
-	if version, ok := codex.New().ParseVersion(userAgent); d.core == nil || !ok || version != "0.171.0" || instance == "" {
+	if d.core == nil || instance == "" {
 		return
 	}
 	meta, ok := d.core.Get(id)
 	if !ok {
 		return
 	}
-	cwd, ok := setuptrust.Workspace(meta.ProviderCwd())
+	consent, ok := setuptrust.Get(meta.ProviderCwd())
 	if !ok {
+		return
+	}
+	if version, ok := codex.New().ParseVersion(userAgent); !ok || version != "0.171.0" {
+		log.Printf("skeleton: Open session %s to finish Codex setup. Automatic setup is unavailable for this version.", id)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	valid := func() bool {
 		current, live := d.sessionInstance(id)
-		_, enabled := setuptrust.Workspace(cwd)
-		return enabled && live && current == instance
+		now, enabled := setuptrust.Get(consent.Workspace)
+		return enabled && now == consent && live && current == instance
 	}
-	if err := applyCodexLaunchTrust(ctx, conn, cwd, valid); err != nil {
-		log.Printf("skeleton: Codex setup for %s needs attention. Open the session to finish setup.", id)
+	if err := applyCodexLaunchTrust(ctx, conn, consent, valid); err != nil {
+		log.Printf("skeleton: Codex setup for %s: %v. Open the session to finish setup.", id, err)
 	}
 }
 
 type launchHook struct {
 	Key         string
 	Source      string
+	SourcePath  string
 	CurrentHash string
 	TrustStatus string
 	Enabled     bool
 }
 
-func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, valid func() bool) error {
+func applyCodexLaunchTrust(ctx context.Context, conn backendConn, consent setuptrust.Consent, valid func() bool) error {
+	cwd := consent.Workspace
 	var config struct {
 		Config struct {
 			Projects map[string]struct {
@@ -69,7 +77,7 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, va
 		}
 	}
 	if err := conn.Call(ctx, "config/read", map[string]any{"cwd": cwd, "includeLayers": false}, &config); err != nil {
-		return err
+		return errors.New("could not read workspace settings")
 	}
 	write := func(key string, value any) error {
 		if !valid() {
@@ -80,13 +88,13 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, va
 			"edits":            []map[string]any{{"keyPath": key, "value": value, "mergeStrategy": "upsert"}},
 			"reloadUserConfig": true,
 		}, &result)
-		if err == nil && result.Status != "ok" {
+		if err != nil || result.Status != "ok" {
 			return errors.New("Codex could not apply startup settings")
 		}
-		return err
+		return nil
 	}
 	if config.Config.Projects[cwd].TrustLevel != "trusted" {
-		if err := write("projects", map[string]any{cwd: map[string]string{"trust_level": "trusted"}}); err != nil {
+		if err := write("projects."+strconv.Quote(cwd)+".trust_level", "trusted"); err != nil {
 			return err
 		}
 	}
@@ -99,7 +107,7 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, va
 			}
 		}
 		if err := conn.Call(ctx, "hooks/list", map[string]any{"cwds": []string{cwd}}, &result); err != nil {
-			return nil, err
+			return nil, errors.New("could not check startup hooks")
 		}
 		if len(result.Data) != 1 || result.Data[0].Cwd != cwd || len(result.Data[0].Errors) != 0 || result.Data[0].Hooks == nil || len(result.Data[0].Hooks) > 256 {
 			return nil, errors.New("Codex hook inventory could not be verified")
@@ -110,13 +118,28 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, va
 	if err != nil {
 		return err
 	}
+	var pending error
 	updates := make(map[string]map[string]string)
 	for _, h := range hooks {
 		if !h.Enabled || h.TrustStatus != "untrusted" && h.TrustStatus != "modified" {
 			continue
 		}
 		switch h.Source {
-		case "user", "project", "plugin":
+		case "user", "plugin":
+			if !consent.ProfileHooks {
+				pending = errors.New("profile hooks need your review")
+				continue
+			}
+		case "project":
+			sourcePath, err := filepath.EvalSymlinks(h.SourcePath)
+			if err != nil || !filepath.IsAbs(sourcePath) {
+				return errors.New("hook source could not be verified")
+			}
+			rel, err := filepath.Rel(cwd, sourcePath)
+			if err != nil || !filepath.IsLocal(rel) {
+				pending = errors.New("a hook outside this workspace needs your review")
+				continue
+			}
 		default:
 			return errors.New("unknown hook source")
 		}
@@ -127,7 +150,7 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, va
 		updates[h.Key] = map[string]string{"trusted_hash": h.CurrentHash}
 	}
 	if len(updates) == 0 {
-		return nil
+		return pending
 	}
 	if err := write("hooks.state", updates); err != nil {
 		return err
@@ -144,5 +167,5 @@ func applyCodexLaunchTrust(ctx context.Context, conn backendConn, cwd string, va
 	if len(updates) != 0 {
 		return errors.New("hook changed during startup")
 	}
-	return nil
+	return pending
 }

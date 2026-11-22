@@ -286,6 +286,7 @@ func (s *Store) answerQuestion(b ManagerBinding, id, expectedHash, answerID stri
 		a.Origin, a.Project, a.ProjectExplicit = origin, project, explicit
 		a.InputText = "Human answer to the exact pending clarification: " + string(text)
 		if origin != nil {
+			a.ReplyTracked = true
 			a.ReplyCheckAfter = now.Add(discussionFirstReplyWait).Unix()
 		}
 		if origin != nil {

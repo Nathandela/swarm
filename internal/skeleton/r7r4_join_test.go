@@ -71,6 +71,7 @@ type r7r4Server struct {
 	// `initialized`. Empty means the agent never created a thread.
 	announce             string
 	suppressAnnouncement bool
+	loadedFailures       int
 	// rolloutExists gates `thread/resume` on the RECORDED pre-first-turn failure. It is
 	// flipped by a `turn/start`, which is exactly when the real app-server creates the
 	// rollout file (r1-codex-gate.md:112-115).
@@ -129,6 +130,10 @@ func (s *r7r4Server) handle(ctx context.Context, ws *websocket.Conn, data []byte
 	s.mu.Lock()
 	s.calls = append(s.calls, fr.Method)
 	announce, rollout, hard, suppress := s.announce, s.rolloutExists, s.hardErr, s.suppressAnnouncement
+	failLoad := fr.Method == "thread/loaded/list" && s.loadedFailures > 0
+	if failLoad {
+		s.loadedFailures--
+	}
 	s.mu.Unlock()
 
 	switch fr.Method {
@@ -144,6 +149,10 @@ func (s *r7r4Server) handle(ctx context.Context, ws *websocket.Conn, data []byte
 				announce))
 		}
 	case "thread/loaded/list":
+		if failLoad {
+			s.replyErr(ctx, ws, fr.ID, -32000, "fixture: inventory is starting")
+			return
+		}
 		s.reply(ctx, ws, fr.ID, fmt.Sprintf(`{"data":[%q]}`, announce))
 	case "thread/resume":
 		switch {
@@ -539,6 +548,7 @@ func TestResumedBackendWithoutThreadAnnouncement(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.srv.suppressAnnouncement = true
+	r.srv.loadedFailures = 1
 	r.srv.setRollout(true)
 	r.join()
 	m, _ := r.sk.core.Get(r.local)

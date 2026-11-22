@@ -238,6 +238,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		case <-d.closing:
 			// An orderly observer shutdown is not evidence of a backend failure.
 		default:
+			log.Printf("skeleton: session %s could not establish its native conversation", id)
 			d.noteBackendUnavailableForInstance(id, expectedInstance)
 		}
 		return
@@ -408,7 +409,9 @@ func (d *Daemon) awaitLaunchThread(id, instance string, conn *appserver.Client, 
 			if err == nil {
 				return thread, true
 			}
-			if !errors.Is(err, errThreadNotLoaded) {
+			// While the native backend is starting, even an inventory RPC can
+			// fail transiently. Only a missing saved thread extends that wait.
+			if !errors.Is(err, errThreadNotLoaded) && (deadline.IsZero() || !time.Now().Before(deadline)) {
 				return "", false
 			}
 		} else if thread, ok := d.adoptedThread(id); ok {

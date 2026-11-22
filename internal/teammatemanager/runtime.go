@@ -317,7 +317,7 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 		answer += "\n" + note
 	}
 	err = entry.voice.Admit(ctx, voice.DiscussionInput{
-		ExpectReply: input.ExpectReply || input.Discussion.Route.GuildID == "", Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
+		ExpectReply: input.ExpectReply || input.RequireMention || input.Discussion.Route.GuildID == "", Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
 		Project: func(selected string) (string, bool) {
 			project := r.resolveProject(selected, input.Text, projectHistory(page, input.Route.MessageID))
 			wording := projectWords(input.Text)
@@ -360,7 +360,7 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 		return discord.TeammateNativeStatus{}, err
 	}
 	result := discord.TeammateNativeStatus{
-		PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
+		UnconfirmedReplies: status.UnconfirmedReplies, PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
 	}

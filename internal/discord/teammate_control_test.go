@@ -237,7 +237,12 @@ func TestTeammateParkedStartupNoticeIsBoundToGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if posts != 2 || len(m.validated) != 0 {
+	for _, body := range []string{"Swarm is offline on this machine. Your message is saved.", "Swarm is offline on this machine. Your message is saved.", genericStartupMessage} {
+		if err := c.managerStartupError(ctx, d, &TeammateStartupNotice{Body: body}); !errors.Is(err, ErrTeammateManagerUnavailable) {
+			t.Fatal(err)
+		}
+	}
+	if posts != 3 || len(m.validated) != 0 {
 		t.Fatalf("posted %d connector notices, made %d native grant checks", posts, len(m.validated))
 	}
 }

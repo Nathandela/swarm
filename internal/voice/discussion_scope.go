@@ -95,6 +95,7 @@ func (c *Controller) admitDiscussionInput(input DiscussionInput, project string,
 		a.Origin = &origin
 		a.InputText = text
 		a.HumanReply = answer
+		a.ReplyTracked = true
 		if input.ExpectReply || origin.Kind == "owner_direct" && origin.GuildID == "" {
 			a.ReplyCheckAfter = time.Now().Add(discussionFirstReplyWait).Unix()
 		}

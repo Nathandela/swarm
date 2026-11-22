@@ -759,7 +759,7 @@ func discussionPending(st State) bool {
 
 func discussionQuiescent(st State, now time.Time) bool {
 	for _, a := range st.Admissions {
-		if a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman {
+		if a.ConversationID == st.CurrentConversation && a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman && a.ReplyReceiptChecks == 0 {
 			return false
 		}
 	}

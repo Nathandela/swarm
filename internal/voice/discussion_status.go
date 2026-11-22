@@ -13,7 +13,7 @@ import (
 )
 
 type DiscussionNativeStatus struct {
-	PendingAdmissions, PendingReplies                           int
+	PendingAdmissions, PendingReplies, UnconfirmedReplies       int
 	State, ManagerSession, ManagerInstance, Project, Diagnostic string
 	Generation, ExternalInput                                   uint64
 	Jobs                                                        []DiscussionJobStatus
@@ -46,6 +46,9 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 		return result, nil
 	}
 	for _, admission := range st.Admissions {
+		if admission.ConversationID == d.cfg.ConversationID && admission.ReplyDeliveryUnknown {
+			result.UnconfirmedReplies++
+		}
 		if admission.ConversationID == d.cfg.ConversationID && admission.ReplyCheckAfter != 0 {
 			result.PendingReplies++
 		}

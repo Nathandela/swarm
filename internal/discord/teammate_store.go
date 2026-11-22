@@ -52,6 +52,7 @@ type teammateBinding struct {
 	InputNoticeID           string    `json:",omitempty"`
 	InputNoticeAt           time.Time `json:",omitempty"`
 	StartupNoticePending    bool
+	StartupNoticeID         string `json:",omitempty"`
 	StartupNoticeGeneration uint64
 	TeammateDiscussion
 	Opened                      bool
@@ -566,7 +567,7 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 				binding.ProvisionalCancelled = true
 			}
 			if binding.StartupNoticePending && binding.StartupNoticeGeneration == 0 && (binding.Opened || binding.ProvisionalCancelled) {
-				if err := teammateCancelUnsentStartupNotice(tx, d, 0); err != nil {
+				if err := teammateCancelPreparedNotice(tx, d, binding.startupNoticeID(), teammateStartupNotice); err != nil {
 					return err
 				}
 				binding.StartupNoticePending = false

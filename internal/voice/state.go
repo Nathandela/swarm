@@ -83,6 +83,9 @@ type ReusedFinalReceipt struct {
 }
 
 type Admission struct {
+	ReplyReceiptChecks   int                     `json:"reply_receipt_checks,omitempty"`
+	ReplyDeliveryUnknown bool                    `json:"reply_delivery_unknown,omitempty"`
+	ReplyTracked         bool                    `json:"reply_tracked,omitempty"`
 	ReplyWaitingForHuman bool                    `json:"reply_waiting_for_human,omitempty"`
 	ReplyProgress        uint64                  `json:"reply_progress,omitempty"`
 	ReplyCheckAfter      int64                   `json:"reply_check_after,omitempty"`

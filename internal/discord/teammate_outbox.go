@@ -70,8 +70,12 @@ func teammateStartupNoticeID(d TeammateDiscussion, generation uint64) string {
 	return teammateStartupNotice + "_" + digest([]any{d.ID, d.Route, generation})[:32]
 }
 
-func teammateCancelUnsentStartupNotice(tx *bolt.Tx, d TeammateDiscussion, generation uint64) error {
-	return teammateCancelPreparedNotice(tx, d, teammateStartupNoticeID(d, generation), teammateStartupNotice)
+func (b teammateBinding) startupNoticeID() string {
+	if b.StartupNoticeID != "" {
+		return b.StartupNoticeID
+	}
+	// Releases through v0.29.11 stored only the launch generation.
+	return teammateStartupNoticeID(b.TeammateDiscussion, b.StartupNoticeGeneration)
 }
 
 func teammateCancelPreparedNotice(tx *bolt.Tx, d TeammateDiscussion, id, cause string) error {
@@ -211,7 +215,15 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 		}
 		gen = status.Generation
 	}
-	if binding.StartupNoticePending && binding.StartupNoticeGeneration != gen {
+	id := teammateStartupNoticeID(d, gen)
+	if body == "" {
+		id = binding.startupNoticeID()
+	} else if body != genericStartupMessage {
+		id += "_" + digest(body)[:16]
+	} else if binding.StartupNoticeGeneration == gen && binding.StartupNoticeID != "" && binding.StartupNoticeID != id {
+		return nil // A more specific notice already describes this launch.
+	}
+	if binding.StartupNoticePending && (binding.StartupNoticeGeneration != gen || binding.startupNoticeID() != id) {
 		err = store.db.Update(func(tx *bolt.Tx) error {
 			key := teammateKey(d.InstallationID, d.Route.ChannelID)
 			var current teammateBinding
@@ -221,10 +233,10 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 			if current.ID != d.ID || current.Route != d.Route {
 				return ErrConflict
 			}
-			if !current.StartupNoticePending || current.StartupNoticeGeneration != binding.StartupNoticeGeneration {
+			if !current.StartupNoticePending || current.startupNoticeID() != binding.startupNoticeID() {
 				return nil
 			}
-			if err := teammateCancelUnsentStartupNotice(tx, d, current.StartupNoticeGeneration); err != nil {
+			if err := teammateCancelPreparedNotice(tx, d, current.startupNoticeID(), teammateStartupNotice); err != nil {
 				return err
 			}
 			current.StartupNoticePending = false
@@ -234,7 +246,6 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 			return err
 		}
 	}
-	id := teammateStartupNoticeID(d, gen)
 	if body != "" {
 		p := TeammatePublication{ID: id, Body: body,
 			SystemCause: teammateStartupNotice, ActivationGeneration: gen}
@@ -333,6 +344,7 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 			if internal && p.SystemCause == teammateStartupNotice {
 				binding.StartupNoticePending = true
 				binding.StartupNoticeGeneration = p.ActivationGeneration
+				binding.StartupNoticeID = p.ID
 				if err = putJSON(tx, teammateDiscussionBucket, teammateKey(install, route.ChannelID), binding); err != nil {
 					return err
 				}
@@ -417,7 +429,7 @@ func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateO
 				if binding.ID != out.DiscussionID || binding.Route != out.Route {
 					return ErrConflict
 				}
-				if binding.StartupNoticeGeneration == out.Publication.ActivationGeneration {
+				if binding.startupNoticeID() == out.Publication.ID {
 					binding.StartupNoticePending = false
 					if err := putJSON(tx, teammateDiscussionBucket, k, binding); err != nil {
 						return err

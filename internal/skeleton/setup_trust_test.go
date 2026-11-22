@@ -57,15 +57,15 @@ func TestSetupTrustUsesCurrentHookIdentityAndExactWorkspace(t *testing.T) {
 		writes                  int
 	}{
 		{"accept", "/work", "user", hash, true, false, false, 1},
-		{"revoked", "/work", "project", hash, false, false, true, 0},
+		{"revoked", "/work", "user", hash, false, false, true, 0},
 		{"unknown-source", "/work", "unknown", hash, true, false, true, 0},
 		{"unverified-hash", "/work", "user", "missing", true, false, true, 0},
-		{"concurrent-edit", "/work", "project", hash, true, true, true, 1},
+		{"concurrent-edit", "/work", "user", hash, true, true, true, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			h := launchHook{Key: "user-hook", Source: tt.source, CurrentHash: tt.hash, Enabled: true, TrustStatus: "modified"}
+			h := launchHook{Key: "user-hook", Source: tt.source, SourcePath: "/work/.codex/hooks.json", CurrentHash: tt.hash, Enabled: true, TrustStatus: "modified"}
 			p := &hookSetupProbe{workspace: "/work", hook: h, changed: tt.changed}
-			err := applyCodexLaunchTrust(context.Background(), p, tt.cwd, func() bool { return tt.valid })
+			err := applyCodexLaunchTrust(context.Background(), p, setuptrust.Consent{Workspace: tt.cwd, ProfileHooks: true}, func() bool { return tt.valid })
 			if (err != nil) != tt.wantErr || len(p.writes) != tt.writes {
 				t.Fatalf("err=%v writes=%v", err, p.writes)
 			}
@@ -83,7 +83,7 @@ func TestAgySetupTrustAtFinalWorkspace(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	}
 	cwd := t.TempDir()
-	project, err := setuptrust.Set(cwd, true)
+	project, err := setuptrust.Set(cwd, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,5 +115,14 @@ func TestAgySetupTrustAtFinalWorkspace(t *testing.T) {
 	result, err = d.finalizeAgentLaunch("session", spec)
 	if err != nil || !slices.Equal(result.Argv, args) {
 		t.Fatalf("unenrolled: %v err=%v", result.Argv, err)
+	}
+}
+
+func TestSetupTrustProfileHooksRequireSeparateConsent(t *testing.T) {
+	h := launchHook{Key: "k", CurrentHash: "sha256:" + strings.Repeat("a", 64), Source: "plugin", TrustStatus: "untrusted", Enabled: true}
+	p := &hookSetupProbe{workspace: "/work", hook: h}
+	err := applyCodexLaunchTrust(context.Background(), p, setuptrust.Consent{Workspace: "/work"}, func() bool { return true })
+	if err == nil || len(p.writes) != 0 {
+		t.Fatalf("profile hook received workspace approval: err=%v writes=%d", err, len(p.writes))
 	}
 }

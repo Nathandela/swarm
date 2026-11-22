@@ -22,20 +22,20 @@ func TestWorkspaceEnrollment(t *testing.T) {
 	if err := os.Symlink(cwd, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, on := Workspace(link); on {
+	if _, on := Get(link); on {
 		t.Fatal("enabled before enrolling")
 	}
-	if _, err := Set(link, true); err != nil {
+	if _, err := Set(link, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, on := Workspace(cwd); !on {
+	if _, on := Get(cwd); !on {
 		t.Fatal("missing exact physical workspace")
 	}
 	child := filepath.Join(cwd, "child")
 	if err := os.Mkdir(child, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, on := Workspace(child); on {
+	if _, on := Get(child); on {
 		t.Fatal("enrolled child implicitly")
 	}
 	if err := os.Rename(cwd, cwd+".previous"); err != nil {
@@ -44,7 +44,7 @@ func TestWorkspaceEnrollment(t *testing.T) {
 	if err := os.Mkdir(cwd, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, on := Workspace(cwd); on {
+	if _, on := Get(cwd); on {
 		t.Fatal("enrolled replacement directory")
 	}
 	if err := os.Remove(cwd); err != nil {
@@ -53,10 +53,13 @@ func TestWorkspaceEnrollment(t *testing.T) {
 	if err := os.Rename(cwd+".previous", cwd); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Set(cwd, false); err != nil {
+	if err := os.RemoveAll(cwd); err != nil {
 		t.Fatal(err)
 	}
-	if _, on := Workspace(cwd); on {
+	if _, err := Set(cwd, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, on := Get(cwd); on {
 		t.Fatal("still enabled after disabling")
 	}
 }

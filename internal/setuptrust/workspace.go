@@ -5,22 +5,56 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
 )
 
-// Workspace returns the physical directory authorized for new launches. Neither
-// descendants nor a replacement checkout at the same path inherit its marker.
-func Workspace(path string) (string, bool) {
-	cwd, marker, err := location(path)
-	if err != nil {
-		return "", false
-	}
-	return cwd, ownedPrivateDirectory(filepath.Dir(marker)) && ownedPrivateDirectory(marker)
+type Consent struct {
+	Workspace    string
+	ProfileHooks bool
 }
 
-func Set(path string, enabled bool) (string, error) {
+// Get matches both the original path and the identity of the enrolled directory.
+func Get(path string) (Consent, bool) {
+	cwd, marker, err := location(path)
+	if err != nil {
+		return Consent{}, false
+	}
+	identity, err := directoryIdentity(cwd)
+	if err != nil {
+		return Consent{}, false
+	}
+	consent := Consent{Workspace: cwd}
+	if !privateDirectory(filepath.Dir(marker)) {
+		return consent, false
+	}
+	f, err := os.OpenFile(marker, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return consent, false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || !owned(info) {
+		return consent, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 256))
+	if err != nil {
+		return consent, false
+	}
+	switch string(data) {
+	case identity + " workspace\n":
+		return consent, true
+	case identity + " profile\n":
+		consent.ProfileHooks = true
+		return consent, true
+	default:
+		return consent, false
+	}
+}
+
+func Set(path string, enabled, profileHooks bool) (string, error) {
 	cwd, marker, err := location(path)
 	if err != nil {
 		return "", err
@@ -30,33 +64,51 @@ func Set(path string, enabled bool) (string, error) {
 		if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 			return cwd, nil
 		}
-	}
-	if enabled {
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if !privateDirectory(dir) {
+			return "", errors.New("setup trust: config directory must be private and owned by you")
+		}
+		if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
+		return cwd, nil
 	}
-	if !ownedPrivateDirectory(dir) {
-		return "", errors.New("setup trust: configuration directory must be private and owned by you")
+	identity, err := directoryIdentity(cwd)
+	if err != nil {
+		return "", err
 	}
-	if enabled {
-		if err := os.Mkdir(marker, 0700); err != nil && !errors.Is(err, os.ErrExist) {
-			return "", err
-		}
-		if !ownedPrivateDirectory(marker) {
-			return "", errors.New("setup trust: invalid workspace record")
-		}
-	} else if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	if !privateDirectory(dir) {
+		return "", errors.New("setup trust: config directory must be private and owned by you")
+	}
+	f, err := os.CreateTemp(dir, ".enroll-")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	scope := "workspace"
+	if profileHooks {
+		scope = "profile"
+	}
+	if _, err := fmt.Fprintln(f, identity, scope); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(f.Name(), marker); err != nil {
 		return "", err
 	}
 	return cwd, nil
 }
 
-func ownedPrivateDirectory(path string) bool {
+func privateDirectory(path string) bool {
 	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return false
-	}
+	return err == nil && info.IsDir() && info.Mode().Perm()&0077 == 0 && owned(info)
+}
+func owned(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return ok && stat.Uid == uint32(os.Geteuid())
 }
@@ -66,18 +118,15 @@ func location(path string) (cwd, marker string, err error) {
 		return "", "", errors.New("setup trust: specify an absolute workspace path")
 	}
 	cwd, err = filepath.EvalSymlinks(path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		cwd = filepath.Clean(path)
+	} else if err != nil {
 		return "", "", err
-	}
-	info, err := os.Stat(cwd)
-	if err != nil || !info.IsDir() {
-		return "", "", errors.New("setup trust: workspace does not exist or is not a directory")
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", "", err
 	}
-	stat := info.Sys().(*syscall.Stat_t)
-	key := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d:%d", cwd, stat.Dev, stat.Ino)))
+	key := sha256.Sum256([]byte(cwd))
 	return cwd, filepath.Join(dir, "swarm", "setup-trust", fmt.Sprintf("%x", key)), nil
 }

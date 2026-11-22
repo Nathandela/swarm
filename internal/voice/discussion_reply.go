@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -13,7 +14,7 @@ const replyMonitorCause = "dispatcher_reply_status"
 
 func hasReplyObligation(st State) bool {
 	for _, a := range st.Admissions {
-		if a.ReplyCheckAfter != 0 {
+		if a.ConversationID == st.CurrentConversation && a.ReplyCheckAfter != 0 {
 			return true
 		}
 	}
@@ -115,7 +116,18 @@ func (c *Controller) checkReplyRecovery(ctx context.Context, st State, report Ad
 			return ErrExpired
 		}
 		if c.discussion.VerifyGrant != nil {
-			return c.discussion.VerifyGrant(ctx, *original.Origin)
+			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			if err := c.discussion.VerifyGrant(checkCtx, *original.Origin); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if errors.Is(err, ErrDiscussionSourceChanged) {
+					return err
+				}
+				// A report is optional; an unreadable grant cannot block later human requests.
+				return ErrExpired
+			}
 		}
 		return nil
 	}
@@ -140,7 +152,9 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 	evidence := discussionReplyEvidence(st, a, now)
 	confirmed := false
 	if evidence.output.ID != "" && d.scope.ConfirmedDelivery != nil {
-		ids, err := d.scope.ConfirmedDelivery(ctx, evidence.output)
+		checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ids, err := d.scope.ConfirmedDelivery(checkCtx, evidence.output)
+		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -162,12 +176,17 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			next = min(next, evidence.expires.Unix()+1)
 		case evidence.output.ID != "":
 			// The existing outbox owns retries and uncertain nonces. A status message must never replay its body.
-			if input.ReplyProgress == evidence.output.Sequence {
-				if err := recordReplyNotice(current, input, "I have a reply, but Discord hasn’t confirmed delivery. Your request is saved.", false); err != nil {
-					return err
-				}
+			if input.ReplyProgress != evidence.output.Sequence {
+				input.ReplyReceiptChecks = 0
 			}
+			input.ReplyReceiptChecks++
 			input.ReplyProgress = evidence.output.Sequence
+			// Discord can be gone permanently. Preserve the outbox nonce and an explicit
+			// local outcome without keeping the model running or sending a second post.
+			if input.ReplyReceiptChecks >= 3 {
+				next = 0
+				input.ReplyDeliveryUnknown = true
+			}
 		case evidence.progress > input.ReplyProgress:
 			input.ReplyProgress = evidence.progress
 		case evidence.workerRunning && current.Publications[key(input.ConversationID, replyNoticeID(input, false))].ID == "":
@@ -183,7 +202,13 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 				}
 			}
 		case input.Phase != "completed":
-			if err := recordReplyNotice(current, input, "I couldn’t confirm what happened. Open the dispatcher in Swarm to check your request before trying again.", true); err != nil {
+			if err := recordReplyNotice(current, input, "I couldn’t confirm what happened. Please check the result with the person running Swarm before trying again.", true); err != nil {
+				return err
+			}
+		case d.scope.VMProjectAccess || current.Conversations[input.ConversationID].Binding.NativeCLI:
+			// A normal VM CLI has unrestricted shell tools. A reporting prompt cannot
+			// fence another spawn or shell side effect. Publication stays explicit.
+			if err := recordReplyNotice(current, input, "The dispatcher finished without sending an answer. The work may have run. Please check its result in Swarm.", true); err != nil {
 				return err
 			}
 		case input.ReplyRecovery == 0:
@@ -208,7 +233,7 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		case current.Admissions[admissionKey(input.ConversationID, input.ReplyRecovery)].Reason == ErrDiscussionSourceChanged.Error():
 			next = 0
 		case !current.Admissions[admissionKey(input.ConversationID, input.ReplyRecovery)].SettledAt.IsZero():
-			if err := recordReplyNotice(current, input, "I couldn’t confirm an answer. Your request is saved. Open the dispatcher in Swarm to check what finished.", true); err != nil {
+			if err := recordReplyNotice(current, input, "I couldn’t confirm an answer. The person running Swarm can check what finished.", true); err != nil {
 				return err
 			}
 		}
