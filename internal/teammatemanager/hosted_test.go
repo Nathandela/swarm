@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -156,6 +157,13 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		t.Error("rehearsal processes did not finish before cleanup deadline")
 	})
 	cfg := discord.Config{Mode: "teammate", Name: "Teammate rehearsal", InstallationID: "synthetic-place", ManagerCLI: "codex", WorkDir: workdir, DaemonSocket: socket, Projects: map[string]string{"fixture": project}}
+	startup := os.Getenv("SWARM_TEAMMATE_TEST_STARTUP")
+	if startup != "" {
+		if startup != "codex" && startup != "claude" {
+			t.Fatal("private startup rehearsal requires codex or claude")
+		}
+		cfg.ManagerCLI = startup
+	}
 	vmMode := os.Getenv("SWARM_TEAMMATE_TEST_VM") == "1"
 	if vmMode {
 		cfg.ProjectAccess = discord.ProjectAccessVM
@@ -256,6 +264,53 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	if n := len(roster()); n != 0 {
 		t.Fatalf("native sessions before first contact: %d", n)
+	}
+	if startup != "" {
+		if !personal {
+			t.Fatal("private startup rehearsal requires personal mode")
+		}
+		want := "private-startup-" + hex.EncodeToString(marker[:])
+		// The connector retries a saved source message when the manager is still
+		// starting. Keep its operation ID and content identical on each attempt.
+		body := "Reply in this discussion with exactly " + want + "."
+		for attempt := 1; ; attempt++ {
+			err := admit("301", cfg.OwnerID, body)
+			if err == nil {
+				break
+			}
+			if attempt >= 3 || !errors.Is(err, voice.ErrDiscussionActivationUnavailable) || !errors.Is(err, voice.ErrControllerNativeUnavailable) {
+				t.Fatalf("startup admission %d: %v", attempt, err)
+			}
+			t.Logf("source input-301 retained while native manager starts: %v", err)
+			time.Sleep(time.Second)
+		}
+		wait("native manager published the requested reply and finished its turn", 135*time.Second, func() bool {
+			var matches []string
+			for _, publication := range outputs {
+				if publication.AdmissionID == "input-301" && strings.Contains(publication.Body, want) {
+					matches = append(matches, publication.ID)
+				}
+			}
+			if len(matches) > 1 {
+				t.Fatalf("input-301 produced duplicate replies: %v", matches)
+			}
+			if len(matches) == 0 {
+				return false
+			}
+			view, err := r.Status(thread)
+			if err != nil || view.PendingAdmissions != 0 {
+				return false
+			}
+			if view.State != "parked" {
+				native, err := owner.ManagerRuntime(view.ManagerSession, view.ManagerInstance)
+				if err != nil || !native.ReadyForInput || native.Turn.State != "completed" && native.Turn.State != "idle" {
+					return false
+				}
+			}
+			t.Logf("input-301 produced publication %s", matches[0])
+			return true
+		})
+		return
 	}
 	if fixture := os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_FIXTURE"); fixture != "" {
 		if !personal || !vmMode {

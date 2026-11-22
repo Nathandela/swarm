@@ -37,3 +37,16 @@ Claude Fable 5.2 and Claude Opus 5.5 independently reviewed the design. Both req
 - Focused tests reproduced and then covered silent native completion, one timeout notice, granted-source changes, and waiting for a delivered question. Full integration must still establish the correct terminal outcome after permanent Discord delivery failure, multiple workers, and interrupted report recovery.
 - Fable 5.2 and Opus 5.5 requested changes to the first candidate. The follow-up limits workspace trust, distinguishes profile-wide hooks, preserves unrelated native settings, tolerates transient resume probes and distinguishes changing startup notices. Release approval remains open until the exact final revision passes independent review and acceptance.
 - An intermediate build and vet completed. The full Go test attempt ran in a user namespace to preserve disk space. Permission and process-identity fixtures failed there. Native linking and test supervision also encountered ENOSPC on the VM root volume. The full suite, race, lint, real DM replay, and native cross-CLI fallback are pending; this evidence is insufficient to publish.
+
+### Hosted startup and native qualification on Linux, 2026-11-22
+
+The private rehearsals used installed CLI subscriptions, separate temporary profiles, and a dedicated supervisor. The real manager received one synthetic personal-DM admission. The connector harness required one publication containing that admission's random marker, no pending admissions, and a settled native turn. No live Discord channel was contacted.
+
+| Scenario | Observed result |
+| --- | --- |
+| Codex 0.171.0, fresh workspace and an initially untrusted harmless profile hook | After explicit workspace and profile-hook opt-in, Codex recorded the folder and hook fingerprint as trusted. On the branch merged with v0.29.12, the manager published for input-301 and settled in 11 seconds. The test passed including teardown in 17.38 seconds. |
+| Claude Code 2.1.330, fresh workspace | The manager published for input-301 and settled in 15 seconds. The test passed including teardown in 19.94 seconds. A separate run timed out during startup after 45 seconds and returned the saved-message notice. The successful run did not encounter that timeout. |
+| Changed personal manager instructions | Before the clarification, the model received the changed instruction but answered from earlier Discord history. On 4c3154a5 one Codex manager answered both the original and changed instructions in 6 seconds each. The stock two-turn rehearsal passed in 21.78 seconds. |
+| Native Claude proof with a loopback model | Installed 2.1.330, SHA-256 `f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb`, passed `TestNativeClaudeManagerProvenance` in 13.12 seconds and `TestNativeClaudeModalAdmission` in 19.44 seconds. Tests used a copied executable, private PTY and isolated network. |
+
+Use `SWARM_TEAMMATE_TEST_STARTUP=codex` or `claude` with the existing `TestHostedTeammateLifecycle` private-account setup, `SWARM_TEAMMATE_TEST_PERSONAL=1`, a private trusted workspace and a dedicated candidate binary. Run each provider separately. Leave the startup option unset for the stock personal two-turn case.
