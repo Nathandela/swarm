@@ -814,9 +814,17 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
+		var completionID string
 		for end := time.Now().Add(3 * time.Minute); ; time.Sleep(200 * time.Millisecond) {
 			raw, err := os.ReadFile(filepath.Join(project, "sent.txt"))
 			if err == nil && strings.Contains(string(raw), "queued") {
+				if deletedParked {
+					var receipt struct{ ID, State string }
+					if json.Unmarshal(raw, &receipt) != nil || receipt.State != "queued" || receipt.ID == "" {
+						t.Fatal("worker did not save its exact queued completion receipt")
+					}
+					completionID = receipt.ID
+				}
 				break
 			}
 			if time.Now().After(end) {
@@ -876,6 +884,10 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			if note.Kind == "needs-input" && !note.Answered {
 				t.Fatal("missing durable reply export")
+			}
+			if deletedParked && (note.Session != heldChild || note.Instance != heldInstance ||
+				note.Kind == "complete" && note.ID != completionID) {
+				t.Fatal("replacement did not admit the original worker's exact CLI receipt", note)
 			}
 			if kinds[note.Kind] {
 				t.Fatalf("duplicate admitted %s note", note.Kind)
