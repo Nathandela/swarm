@@ -13,14 +13,14 @@ import (
 )
 
 type DiscussionNativeStatus struct {
-	UnconfirmedOutputs                                          [][]DiscussionOutput
-	PendingAdmissions, PendingReplies, UnconfirmedReplies       int
-	State, ManagerSession, ManagerInstance, Project, Diagnostic string
-	Generation, ExternalInput                                   uint64
-	Jobs                                                        []DiscussionJobStatus
-	Notes                                                       []workermail.NoteStatus
-	RetirementOperation                                         string
-	OldestPendingNote                                           time.Time
+	UnconfirmedOutputs                                                    [][]DiscussionOutput
+	PendingAdmissions, PendingActions, PendingReplies, UnconfirmedReplies int
+	State, ManagerSession, ManagerInstance, Project, Diagnostic           string
+	Generation, ExternalInput                                             uint64
+	Jobs                                                                  []DiscussionJobStatus
+	Notes                                                                 []workermail.NoteStatus
+	RetirementOperation                                                   string
+	OldestPendingNote                                                     time.Time
 }
 
 type DiscussionJobStatus struct {
@@ -32,10 +32,23 @@ type DiscussionJobStatus struct {
 
 // Status reads the controller ledger without launching or contacting the model.
 func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
+	result, err := d.CheckoutStatus()
+	if len(result.Notes) > 16 {
+		result.Notes = result.Notes[:16]
+	}
+	return result, err
+}
+
+// CheckoutStatus preserves older notes that can still hold a checkout.
+func (d *DiscussionController) CheckoutStatus() (DiscussionNativeStatus, error) {
 	st, err := d.store.readView()
 	if err != nil {
 		return DiscussionNativeStatus{}, err
 	}
+	return d.statusFromState(st, true)
+}
+
+func (d *DiscussionController) statusFromState(st State, online bool) (DiscussionNativeStatus, error) {
 	c, exists := st.Conversations[d.cfg.ConversationID]
 	result := DiscussionNativeStatus{State: "parked"}
 	if !exists {
@@ -61,6 +74,11 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 		}
 		if admission.ConversationID == d.cfg.ConversationID && admission.SettledAt.IsZero() {
 			result.PendingAdmissions++
+		}
+	}
+	for _, a := range st.Actions {
+		if a.ConversationID == d.cfg.ConversationID && a.State != "settled" {
+			result.PendingActions++
 		}
 	}
 	result.Generation = max(c.ManagerGeneration, 1)
@@ -91,7 +109,7 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 		switch {
 		case c.SchedulerPaused:
 			result.Diagnostic = "manual intervention: direct terminal activity needs reconciliation"
-		case !d.journalReady.Load():
+		case online && !d.journalReady.Load():
 			result.Diagnostic = "daemon journal reconnecting"
 		}
 	}
@@ -253,9 +271,6 @@ func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStat
 		default:
 			result.Diagnostic = "worker note awaiting manager admission"
 		}
-	}
-	if len(result.Notes) > 16 {
-		result.Notes = result.Notes[:16]
 	}
 	return nil
 }

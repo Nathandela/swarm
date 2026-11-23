@@ -128,45 +128,12 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 
 // replay loads the log, last-write-wins per operation_id.
 func (s *Store) replay() error {
-	sc := bufio.NewScanner(s.f)
-	sc.Buffer(make([]byte, 64<<10), maxReplayRecordBytes+1)
-	// Keep the delimiter so a valid final row lacking its newline can be sealed.
-	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
-		if i := bytes.IndexByte(data, '\n'); i >= 0 {
-			return i + 1, data[:i+1], nil
-		}
-		if atEOF && len(data) > 0 {
-			return len(data), data, nil
-		}
-		return 0, nil, nil
-	})
-	var offset int64
-	var seal, truncate bool
-	for sc.Scan() {
-		line := sc.Bytes()
-		terminated := line[len(line)-1] == '\n'
-		if len(line) > maxReplayRecordBytes || !terminated && len(line) == maxReplayRecordBytes {
-			return fmt.Errorf("idempotency: record at offset %d exceeds %d bytes", offset, maxReplayRecordBytes)
-		}
-		var rec Record
-		if err := json.Unmarshal(line, &rec); err != nil {
-			// A missing suffix after a crash is repairable; arbitrary bad JSON is not.
-			if !terminated && errors.Is(json.NewDecoder(bytes.NewReader(line)).Decode(new(json.RawMessage)), io.ErrUnexpectedEOF) {
-				truncate = true
-				continue
-			}
-			return fmt.Errorf("idempotency: corrupt record at offset %d: %w", offset, err)
-		}
-		if rec.OperationID == "" {
-			return fmt.Errorf("idempotency: missing operation ID at offset %d", offset)
-		}
+	offset, seal, truncate, err := replayRecords(s.f, func(rec Record) {
 		s.logRecords++
 		s.records[rec.OperationID] = rec
-		offset += int64(len(line))
-		seal = !terminated
-	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("idempotency: read log at offset %d: %w", offset, err)
+	})
+	if err != nil {
+		return err
 	}
 	if truncate {
 		if err := s.f.Truncate(offset); err != nil {
@@ -179,6 +146,47 @@ func (s *Store) replay() error {
 	}
 	// Reopening after a failed file sync must re-establish the durability barrier.
 	return s.f.Sync()
+}
+
+func replayRecords(r io.Reader, consume func(Record)) (offset int64, seal, truncate bool, err error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), maxReplayRecordBytes+1)
+	// Keep the delimiter so a valid final row lacking its newline can be sealed.
+	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			return i + 1, data[:i+1], nil
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	for sc.Scan() {
+		line := sc.Bytes()
+		terminated := line[len(line)-1] == '\n'
+		if len(line) > maxReplayRecordBytes || !terminated && len(line) == maxReplayRecordBytes {
+			return offset, seal, truncate, fmt.Errorf("idempotency: record at offset %d exceeds %d bytes", offset, maxReplayRecordBytes)
+		}
+		var rec Record
+		if err := json.Unmarshal(line, &rec); err != nil {
+			// A missing suffix after a crash is repairable; arbitrary bad JSON is not.
+			if !terminated && errors.Is(json.NewDecoder(bytes.NewReader(line)).Decode(new(json.RawMessage)), io.ErrUnexpectedEOF) {
+				truncate = true
+				continue
+			}
+			return offset, seal, truncate, fmt.Errorf("idempotency: corrupt record at offset %d: %w", offset, err)
+		}
+		if rec.OperationID == "" {
+			return offset, seal, truncate, fmt.Errorf("idempotency: missing operation ID at offset %d", offset)
+		}
+		consume(rec)
+		offset += int64(len(line))
+		seal = !terminated
+	}
+	if err := sc.Err(); err != nil {
+		return offset, seal, truncate, fmt.Errorf("idempotency: read log at offset %d: %w", offset, err)
+	}
+	return offset, seal, truncate, nil
 }
 
 // Prepare durably records `prepared` (fsync) BEFORE any side effect. If a record

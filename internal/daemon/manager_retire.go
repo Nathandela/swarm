@@ -115,7 +115,7 @@ func (d *Daemon) ManagerRetirementStatus(m persist.Meta, target persist.ManagerR
 		return "unknown"
 	}
 	exit, reported := readExitSideFile(d.sessionDir(m.ID))
-	if managerRetirementProven(m, target, exit, reported, retirementShimMayLive(m)) {
+	if ManagerRetirementProven(m, target, exit, reported, retirementShimMayLive(m)) {
 		return "retired"
 	}
 	return "uncertain"
@@ -202,7 +202,7 @@ func (d *Daemon) ParkedManagerResumeAllowed(source persist.Meta, spec LaunchSpec
 	return ok && out.State == OpStateApplied && out.SessionID == source.ID && spec.ResumeSource.Instance != "" && d.FailedManagerStartupInstance(source) == spec.ResumeSource.Instance
 }
 
-func managerRetirementProven(m persist.Meta, target persist.ManagerRetirement, exit shim.ExitInfo, reported, shimAlive bool) bool {
+func ManagerRetirementProven(m persist.Meta, target persist.ManagerRetirement, exit shim.ExitInfo, reported, shimAlive bool) bool {
 	return m.Role == "manager" && m.Status.Process == status.ProcessExited && m.ShimPID == target.ShimPID &&
 		m.ShimStartTime == target.ShimStartTime && m.ConversationID == target.NativeSessionID &&
 		!target.ClaimedAt.IsZero() && reported && !exit.FinishedAt.Before(target.ClaimedAt) && !shimAlive

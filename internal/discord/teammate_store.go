@@ -654,14 +654,15 @@ type TeammateStatus struct {
 }
 
 type TeammateDiscussionStatus struct {
-	ID          string                 `json:"id"`
-	Thread      Route                  `json:"thread"`
-	Boundary    string                 `json:"boundary,omitempty"`
-	RepairEpoch uint64                 `json:"repair_epoch"`
-	Diagnostic  string                 `json:"diagnostic,omitempty"`
-	Pending     []TeammateInputStatus  `json:"pending,omitempty"`
-	Outbox      []TeammateOutputStatus `json:"outbox,omitempty"`
-	Native      *TeammateNativeStatus  `json:"native,omitempty"`
+	SupervisorSocket string                 `json:"supervisor_socket,omitempty"`
+	ID               string                 `json:"id"`
+	Thread           Route                  `json:"thread"`
+	Boundary         string                 `json:"boundary,omitempty"`
+	RepairEpoch      uint64                 `json:"repair_epoch"`
+	Diagnostic       string                 `json:"diagnostic,omitempty"`
+	Pending          []TeammateInputStatus  `json:"pending,omitempty"`
+	Outbox           []TeammateOutputStatus `json:"outbox,omitempty"`
+	Native           *TeammateNativeStatus  `json:"native,omitempty"`
 }
 
 type TeammateInputStatus struct {
@@ -839,7 +840,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 		if e != nil {
 			return status, e
 		}
-		d := TeammateDiscussionStatus{ID: b.ID, Thread: b.Route, Boundary: b.Boundary, RepairEpoch: b.RepairEpoch, Diagnostic: b.Error, Pending: byThread[b.Route.ChannelID]}
+		d := TeammateDiscussionStatus{ID: b.ID, SupervisorSocket: b.SupervisorSocket, Thread: b.Route, Boundary: b.Boundary, RepairEpoch: b.RepairEpoch, Diagnostic: b.Error, Pending: byThread[b.Route.ChannelID]}
 		if native != nil {
 			view, err := native(b.TeammateDiscussion)
 			if err != nil {
@@ -873,7 +874,7 @@ func (s *Store) teammateStatus(install string, native func(TeammateDiscussion) (
 		if err := s.workerPublicationStatus(row.Discussion, &row.Native); err != nil {
 			return status, err
 		}
-		status.Discussions = append(status.Discussions, TeammateDiscussionStatus{ID: row.Discussion.ID, Thread: row.Discussion.Route, Native: &row.Native})
+		status.Discussions = append(status.Discussions, TeammateDiscussionStatus{ID: row.Discussion.ID, SupervisorSocket: row.Discussion.SupervisorSocket, Thread: row.Discussion.Route, Native: &row.Native})
 	}
 	notices, err := s.teammateOutputs(install, "")
 	status.PendingNotices = len(notices)

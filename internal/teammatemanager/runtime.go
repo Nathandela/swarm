@@ -373,8 +373,12 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 	if err != nil {
 		return discord.TeammateNativeStatus{}, err
 	}
+	return CheckoutStatusProjection(status), nil
+}
+
+func CheckoutStatusProjection(status voice.DiscussionNativeStatus) discord.TeammateNativeStatus {
 	result := discord.TeammateNativeStatus{
-		UnconfirmedReplies: status.UnconfirmedReplies, PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
+		UnconfirmedReplies: status.UnconfirmedReplies, PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, PendingActions: status.PendingActions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
 	}
@@ -390,7 +394,7 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 			Instance: job.Instance, Project: job.Project, State: job.State, Diagnostic: job.Diagnostic,
 			NativeTurnID: job.NativeTurnID, RecoveryRequired: job.RecoveryRequired, NativeTurnPublication: job.NativeTurnPublication})
 	}
-	return result, nil
+	return result
 }
 
 func (r *Runtime) PublicationExported(bound discord.TeammateDiscussion, id string, question bool) (bool, error) {
@@ -670,7 +674,11 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 }
 
 func (r *Runtime) mailDiscussionID(b discord.TeammateDiscussion, endpoint string) string {
-	hash := sha256.Sum256([]byte(strings.Join([]string{r.dir, endpoint, b.InstallationID, b.Route.GuildID, b.Route.ChannelID, b.ID}, "\x00")))
+	return CheckoutDiscussionLedgerID(r.dir, endpoint, b.InstallationID, b.Route.GuildID, b.Route.ChannelID, b.ID)
+}
+
+func CheckoutDiscussionLedgerID(dir, endpoint, install, guild, channel, id string) string {
+	hash := sha256.Sum256([]byte(strings.Join([]string{dir, endpoint, install, guild, channel, id}, "\x00")))
 	return hex.EncodeToString(hash[:])
 }
 

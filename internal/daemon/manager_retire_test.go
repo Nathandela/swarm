@@ -22,23 +22,23 @@ func TestManagerRetirementRequiresOriginalExitReport(t *testing.T) {
 	target := persist.ManagerRetirement{OperationID: "operation", Instance: "instance", NativeSessionID: "native", ShimPID: 123, ShimStartTime: 456, ClaimedAt: claimed}
 	meta := persist.Meta{Role: "manager", ConversationID: "native", ShimPID: 123, ShimStartTime: 456, Status: status.Status{Process: status.ProcessExited}, ManagerRetirement: target}
 	exit := shim.ExitInfo{FinishedAt: claimed.Add(time.Second)}
-	if !managerRetirementProven(meta, target, exit, true, false) {
+	if !ManagerRetirementProven(meta, target, exit, true, false) {
 		t.Fatal("same physical incarnation with an exit after the claim did not prove retirement")
 	}
-	if managerRetirementProven(meta, target, exit, false, false) || managerRetirementProven(meta, target, exit, true, true) {
+	if ManagerRetirementProven(meta, target, exit, false, false) || ManagerRetirementProven(meta, target, exit, true, true) {
 		t.Fatal("missing report or live shim was accepted")
 	}
 	oldExit := shim.ExitInfo{FinishedAt: claimed.Add(-time.Second)}
-	if managerRetirementProven(meta, target, oldExit, true, false) {
+	if ManagerRetirementProven(meta, target, oldExit, true, false) {
 		t.Fatal("old exit report was accepted")
 	}
 	meta.ShimStartTime++
-	if managerRetirementProven(meta, target, exit, true, false) {
+	if ManagerRetirementProven(meta, target, exit, true, false) {
 		t.Fatal("replacement shim's exit was accepted")
 	}
 	meta.ShimStartTime--
 	meta.Status.Process = status.ProcessLost
-	if managerRetirementProven(meta, target, exit, true, false) {
+	if ManagerRetirementProven(meta, target, exit, true, false) {
 		t.Fatal("lost status was treated as a verified exit")
 	}
 }

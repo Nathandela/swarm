@@ -32,10 +32,12 @@ const (
 )
 
 type TeammateNativeStatus struct {
+	CheckoutEvidence    string                  `json:"checkout_evidence,omitempty"`
 	ReplyReceipts       [][]PublicationProof    `json:"-"`
 	UnconfirmedReplies  int                     `json:"unconfirmed_replies,omitempty"`
 	PendingReplies      int                     `json:"pending_replies,omitempty"`
 	PendingAdmissions   int                     `json:"pending_admissions,omitempty"`
+	PendingActions      int                     `json:"pending_actions,omitempty"`
 	Notes               []workermail.NoteStatus `json:"worker_notes,omitempty"`
 	RetirementOperation string                  `json:"retirement_operation,omitempty"`
 	OldestPendingNote   time.Time               `json:"oldest_pending_note,omitzero"`
