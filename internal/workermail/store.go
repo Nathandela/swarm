@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -56,7 +55,7 @@ func transact(dir string, write bool, fn func(*bolt.Tx) error) error {
 		return errors.New("worker mailbox needs a supervisor state directory")
 	}
 	path := filepath.Join(dir, "dispatcher-mail.db")
-	_, statErr := os.Lstat(path)
+	_, statErr := os.Stat(path)
 	fresh := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !fresh {
 		return statErr
@@ -64,11 +63,7 @@ func transact(dir string, write bool, fn func(*bolt.Tx) error) error {
 	if !write && fresh {
 		return nil
 	}
-	opts := &bolt.Options{Timeout: time.Second, ReadOnly: !write}
-	if !write {
-		opts.OpenFile = openMailboxForRead
-	}
-	db, err := bolt.Open(path, 0600, opts)
+	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second, ReadOnly: !write})
 	if err != nil {
 		return err
 	}
@@ -88,25 +83,6 @@ func transact(dir string, write bool, fn func(*bolt.Tx) error) error {
 		return db.View(fn)
 	}
 	return db.Update(fn)
-}
-
-func openMailboxForRead(path string, _ int, _ os.FileMode) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	info, err := f.Stat()
-	if err == nil {
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || !ok || stat.Nlink != 1 || int(stat.Uid) != os.Geteuid() {
-			err = errors.New("worker mailbox: expected a private regular file")
-		}
-	}
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	return f, nil
 }
 
 func noteKey(b Binding, id string) []byte {

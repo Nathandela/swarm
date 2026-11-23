@@ -32,7 +32,7 @@ type DiscussionJobStatus struct {
 
 // Status reads the controller ledger without launching or contacting the model.
 func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
-	result, err := d.CheckoutStatus()
+	result, err := d.readStatus(true)
 	if len(result.Notes) > 16 {
 		result.Notes = result.Notes[:16]
 	}
@@ -41,14 +41,18 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 
 // CheckoutStatus preserves older notes that can still hold a checkout.
 func (d *DiscussionController) CheckoutStatus() (DiscussionNativeStatus, error) {
+	return d.readStatus(false)
+}
+
+func (d *DiscussionController) readStatus(includeMailbox bool) (DiscussionNativeStatus, error) {
 	st, err := d.store.readView()
 	if err != nil {
 		return DiscussionNativeStatus{}, err
 	}
-	return d.statusFromState(st, true)
+	return d.statusFromState(st, includeMailbox)
 }
 
-func (d *DiscussionController) statusFromState(st State, online bool) (DiscussionNativeStatus, error) {
+func (d *DiscussionController) statusFromState(st State, includeMailbox bool) (DiscussionNativeStatus, error) {
 	c, exists := st.Conversations[d.cfg.ConversationID]
 	result := DiscussionNativeStatus{State: "parked"}
 	if !exists {
@@ -109,7 +113,7 @@ func (d *DiscussionController) statusFromState(st State, online bool) (Discussio
 		switch {
 		case c.SchedulerPaused:
 			result.Diagnostic = "manual intervention: direct terminal activity needs reconciliation"
-		case online && !d.journalReady.Load():
+		case includeMailbox && !d.journalReady.Load():
 			result.Diagnostic = "daemon journal reconnecting"
 		}
 	}
@@ -171,13 +175,13 @@ func (d *DiscussionController) statusFromState(st State, online bool) (Discussio
 		}
 		return a.AttemptID < b.AttemptID
 	})
-	if err := d.noteStatus(st, &result); err != nil {
+	if err := d.noteStatus(st, &result, includeMailbox); err != nil {
 		return result, err
 	}
 	return result, nil
 }
 
-func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStatus) error {
+func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStatus, includeMailbox bool) error {
 	publications := make(map[string][]workermail.PublicationStatus)
 	addOutput := func(source, id string) {
 		if source != "" {
@@ -225,7 +229,7 @@ func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStat
 		seen[noteKey{n.Session, n.Instance, n.AttemptID, n.ID}] = true
 		result.Notes = append(result.Notes, n)
 	}
-	if d.scope.VMProjectAccess && filepath.IsAbs(d.scope.ManagerSettingsDir) {
+	if includeMailbox && d.scope.VMProjectAccess && filepath.IsAbs(d.scope.ManagerSettingsDir) {
 		pending, err := workermail.Pending(d.scope.ManagerSettingsDir, d.cfg.ConversationID)
 		if err != nil {
 			return err

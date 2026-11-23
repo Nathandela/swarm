@@ -149,7 +149,7 @@ func TestDiscussionNoteStatusCorrelatesIngressAdmissionAndPublication(t *testing
 		Admissions:   map[string]Admission{admissionKey(b.Discussion, 2): {Phase: "accepted"}},
 		Publications: map[string]Publication{"pub": {ID: "pub", ConversationID: b.Discussion, DiscussionSource: DiscussionOutputSource{AdmissionID: "w"}}}}
 	result := DiscussionNativeStatus{State: "parked"}
-	if err := d.noteStatus(st, &result); err != nil {
+	if err := d.noteStatus(st, &result, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Notes) != 2 || result.Notes[0].ID != "new" || result.Notes[0].State != "queued" || result.OldestPendingNote != result.Notes[0].Created || result.Diagnostic == "" {
