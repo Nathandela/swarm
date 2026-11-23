@@ -74,7 +74,7 @@ const localRequestLimit = MaxPublicationBytes*6 + 4096
 
 func localMethod(operation string) string {
 	switch operation {
-	case "context", "status", "roster":
+	case "context", "status", "roster", "checkout-status":
 		return http.MethodGet
 	case "reply", "include", "exclude", "propose", "shutdown", "resume-manual":
 		return http.MethodPost
@@ -212,7 +212,7 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	var err error
-	if s.Config.TeammateMode() && operation != "status" && operation != "shutdown" && operation != "resume-manual" {
+	if s.Config.TeammateMode() && operation != "status" && operation != "checkout-status" && operation != "shutdown" && operation != "resume-manual" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "discord: this operation requires legacy mode"})
 		return
@@ -254,6 +254,12 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	case "status", "roster":
 		result, err = s.localStatus(r.Context())
+	case "checkout-status":
+		if !s.Config.TeammateMode() {
+			err = ErrInvalid
+		} else {
+			result, err = s.localCheckoutStatus()
+		}
 	case "context":
 		var offset int
 		offset, err = strconv.Atoi(r.URL.Query().Get("offset"))

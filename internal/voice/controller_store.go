@@ -437,7 +437,7 @@ func (s *Store) checkControllerBinding(b ManagerBinding) error {
 }
 
 // refreshPreparedInput can change transport identity only before the first executing boundary.
-func (s *Store) refreshPreparedInput(b ManagerBinding, expected Admission, operation string, external uint64) (Admission, error) {
+func (s *Store) refreshPreparedInput(b ManagerBinding, expected Admission, operation string, external uint64, replacementText string) (Admission, error) {
 	if !protocol.SemanticOperationReplayable(operation, time.Now()) {
 		return Admission{}, ErrInvalid
 	}
@@ -461,6 +461,12 @@ func (s *Store) refreshPreparedInput(b ManagerBinding, expected Admission, opera
 		var req protocol.ComposerSendReq
 		if json.Unmarshal(a.Request, &req) != nil || req.ManagerAdmission == nil {
 			return ErrCorrupt
+		}
+		if replacementText != "" {
+			if operation == a.OperationID || a.RecoveryOnly && !strings.HasPrefix(replacementText, recoveryInputNotice) {
+				return ErrInvalid
+			}
+			req.Text = replacementText
 		}
 		req.ManagerAdmission.ExpectedExternalInput = external
 		raw, err := json.Marshal(req)

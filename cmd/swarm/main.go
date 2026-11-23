@@ -97,6 +97,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|
                    --native-session-id id --request-hash hash --reply once|always|reject|answer
                    [--answers JSON], or read its receipt with --status --operation-id id
   swarm peek       print a session's current screen <session> [--lines N]
+  swarm checkout inventory  inspect local checkout ownership and retention [--json] [PATH ...]
   swarm clean      preview safe storage cleanup [--apply] [--json]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
@@ -185,6 +186,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runReattach, args[1:], []string{protocol.CapExternalResume}, stdout, stderr)
 	case "ls":
 		return dispatchAgentVerb(runLS, args[1:], []string{protocol.CapOpenCodeObservation}, stdout, stderr)
+	case "checkout":
+		return runCheckout(args[1:], stdout, stderr)
 	case "clean":
 		return runClean(args[1:], stdout, stderr)
 	case "doctor":

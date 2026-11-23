@@ -71,7 +71,11 @@ func ActiveState(daemonDir string) (string, error) {
 
 // SelectedState requires a persisted selection for a place migration.
 func SelectedState(daemonDir string) (string, error) {
-	f, err := openPrivateFile(filepath.Join(daemonDir, "discord-active.json"))
+	return readSelectedState(daemonDir, openPrivateFile)
+}
+
+func readSelectedState(daemonDir string, open func(string) (*os.File, error)) (string, error) {
+	f, err := open(filepath.Join(daemonDir, "discord-active.json"))
 	if err != nil {
 		return "", err
 	}
@@ -296,11 +300,15 @@ func savePrivate(dir, name string, data []byte) error {
 	return d.Sync()
 }
 func LoadConfig(dir string) (Config, error) {
-	var c Config
 	if err := privateDir(dir); err != nil {
-		return c, err
+		return Config{}, err
 	}
-	f, err := openPrivateFile(ConfigPath(dir))
+	return readConfig(dir, openPrivateFile)
+}
+
+func readConfig(dir string, open func(string) (*os.File, error)) (Config, error) {
+	var c Config
+	f, err := open(ConfigPath(dir))
 	if err != nil {
 		return c, err
 	}

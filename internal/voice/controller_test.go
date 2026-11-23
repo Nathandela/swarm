@@ -348,7 +348,7 @@ func TestControllerEightHourPreparedWakeRenewsOnlyBeforeExecuting(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.refreshPreparedInput(b, a, replacement, 0); !errors.Is(err, ErrConflict) {
+	if _, err = s.refreshPreparedInput(b, a, replacement, 0, ""); !errors.Is(err, ErrConflict) {
 		t.Fatal("submitted/native input was allowed to renew operation identity")
 	}
 }
@@ -382,7 +382,7 @@ func TestControllerPreparedRenewalCASRollsBackAndSurvivesCrashBeforeDispatch(t *
 		t.Fatal(err)
 	}
 	s.beforeCommit = func() error { return syscall.ENOSPC }
-	if _, err = s.refreshPreparedInput(b, original, current, 0); !errors.Is(err, syscall.ENOSPC) {
+	if _, err = s.refreshPreparedInput(b, original, current, 0, ""); !errors.Is(err, syscall.ENOSPC) {
 		t.Fatal(err)
 	}
 	s.beforeCommit = nil
@@ -390,7 +390,7 @@ func TestControllerPreparedRenewalCASRollsBackAndSurvivesCrashBeforeDispatch(t *
 	if st.Wakes[key(b.ConversationID, wake.ID)].OperationID != expired || st.Admissions[admissionKey(b.ConversationID, wake.Admission)].OperationID != expired {
 		t.Fatal("failed renewal split wake/admission identity")
 	}
-	renewed, err := s.refreshPreparedInput(b, original, current, 0)
+	renewed, err := s.refreshPreparedInput(b, original, current, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
