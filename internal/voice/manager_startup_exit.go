@@ -41,7 +41,9 @@ func DiscussionStartupMessage(err error) string {
 	case errors.Is(err, errControllerSupervisorOffline):
 		return "Swarm is offline on this machine. Your message is saved."
 	case errors.Is(err, errCompetingManagers):
-		return "Two dispatchers are open for this chat. Check them in Swarm. Your message is saved."
+		return "Swarm found another dispatcher for this chat. Check the dispatchers in Swarm. Your message is saved."
+	case errors.Is(err, errMissingDispatcherExit):
+		return "Your message is saved. Swarm needs help confirming the previous dispatcher stopped. Check its status on this machine."
 	case errors.Is(err, ErrControllerUnsupported), errors.Is(err, protocol.ErrManagerLaunchPrerequisite):
 		return "Swarm couldn’t start the configured CLI. Check the dispatcher setup on this machine. Your message is saved."
 	case errors.Is(err, ErrControllerNativeUnavailable):

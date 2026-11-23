@@ -11,6 +11,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -163,9 +164,20 @@ func (d *Daemon) Delete(id string) error {
 			}
 		}
 	}
+	deleted := journal.Record{SessionID: id, Type: journal.TypeDeleted, SessionInstance: d.recordedJournalInstance(meta), Role: meta.Role}
+	manager := present && schema.IsDiscordManager(meta.Role, meta.ManagerConversationID)
+	if manager {
+		deleted.Payload = managerDeletionJournalMarker
+	}
 	// WAL-first: a crash during directory removal must leave a durable deletion event.
-	if _, jerr := d.appendJournal(journal.Record{SessionID: id, Type: journal.TypeDeleted, SessionInstance: d.recordedJournalInstance(meta), Role: meta.Role}); jerr != nil {
+	if _, jerr := d.appendJournal(deleted); jerr != nil {
 		return jerr
+	}
+	if manager {
+		if err := d.recordManagerDeletion(meta, deleted.SessionInstance); err != nil {
+			_, stateErr := d.appendJournal(completeSessionRecord(meta, journal.TypeSessionState, nil))
+			return errors.Join(fmt.Errorf("daemon: retain manager deletion evidence: %w", err), stateErr)
+		}
 	}
 	if err := deleteSessionDirFn(d, id); err != nil {
 		if present {

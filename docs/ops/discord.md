@@ -244,6 +244,8 @@ Before downgrading, finish active mailbox jobs and their replies with the compat
 
 ### Following up after dispatcher replacement
 
+Deleting a dispatcher in the dashboard keeps its Discord discussion and workers. The next saved message or worker note can start a fresh dispatcher after the supervisor confirms the original stopped. The new dispatcher uses the same chat. When Swarm cannot verify the stop, inspect `swarm discord status` and the supervisor session history for the previous dispatcher.
+
 In the same DM or thread, ask about the original request or reply to its Discord message. The dispatcher can look up that human message’s verified revision, whether it scheduled a progress or final reply, and an available end reason from the former manager’s native turn. For an exported reply, the same lookup includes confirmed Discord message IDs once the connector has receipts for every part. These IDs establish historical delivery even if a participant later removes the reply. The lookup separately identifies the latest final worker report when its original human grant and unsteered attempt are unambiguous. A worker started from an ordinary VM shell may have only discussion-level attribution. A worker’s completion evidence identifies the result of the job. An uncertain action stays on hold while its original receipt is checked.
 
 A new human message retains its own identity even if two people ask the same question. Messages from Discord bots can provide context to the next human turn. They do not start independent dispatcher turns.

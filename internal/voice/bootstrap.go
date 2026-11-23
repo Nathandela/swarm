@@ -46,10 +46,10 @@ func managerIntentName(conversation string) string {
 // bootstrapManager never creates a replacement for a previously bound manager.
 // A pending launch reconciles its exact durable operation without dispatching it again.
 func bootstrapManager(ctx context.Context, dir string, cfg Config, refs ManagerBridgeRefs, endpoint string, existing *ManagerBinding, client managerBootstrapClient) (managerSelection, error) {
-	return bootstrapManagerRequest(ctx, dir, cfg, refs, endpoint, existing, client, managerLaunchRequest(cfg, refs), managerIntentName(cfg.ConversationID), "")
+	return bootstrapManagerRequest(ctx, dir, cfg, refs, endpoint, existing, client, managerLaunchRequest(cfg, refs), managerIntentName(cfg.ConversationID), "", nil)
 }
 
-func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs ManagerBridgeRefs, endpoint string, existing *ManagerBinding, client managerBootstrapClient, req protocol.LaunchReq, file, retiredSource string) (managerSelection, error) {
+func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs ManagerBridgeRefs, endpoint string, existing *ManagerBinding, client managerBootstrapClient, req protocol.LaunchReq, file, retiredSource string, checkMissingSource func() error) (managerSelection, error) {
 	var none managerSelection
 	if err := ctx.Err(); err != nil {
 		return none, err
@@ -67,6 +67,9 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 	var live []protocol.SessionView
 	hadManager := false
 	for _, row := range rows {
+		if row.ID == retiredSource {
+			checkMissingSource = nil
+		}
 		if row.Role != "manager" || row.ManagerConversationID != cfg.ConversationID {
 			continue
 		}
@@ -76,6 +79,9 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 		if row.Status.Process == status.ProcessRunning {
 			live = append(live, row)
 		}
+	}
+	if hadManager {
+		checkMissingSource = nil
 	}
 	if len(live) > 1 {
 		return none, errCompetingManagers
@@ -119,6 +125,13 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 			}
 			target, applied := protocol.AppliedOwnerLaunchSession(endpoint, outcome)
 			if !applied {
+				// A delayed resume can no longer reserve its exact source after deletion.
+				// An accepted or ambiguous launch still owns its original operation.
+				if outcome.State == schema.OutcomeUnknownOperation && intent.SessionID == "" && checkMissingSource != nil {
+					if err := checkMissingSource(); err != nil {
+						return none, err
+					}
+				}
 				return none, ErrControllerUncertain
 			}
 			if (intent.SessionID != "" && intent.SessionID != target) || (len(live) == 1 && live[0].ID != target) {
@@ -152,6 +165,11 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 	}
 	if err := ctx.Err(); err != nil {
 		return none, err
+	}
+	if checkMissingSource != nil {
+		if err := checkMissingSource(); err != nil {
+			return none, err
+		}
 	}
 	if !managerLaunchReplayable(intent.OperationID) {
 		// Only a prepared intent reaches dispatch. Executing intents reconcile above.

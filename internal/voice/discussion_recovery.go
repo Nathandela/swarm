@@ -42,6 +42,18 @@ func discussionManagerExited(rows []protocol.SessionView, binding protocol.Manag
 	return false
 }
 
+func requireDeletedManagerAbsent(rows []protocol.SessionView, binding protocol.ManagerRuntimeBinding) error {
+	for _, row := range rows {
+		if row.Role == "manager" && row.ManagerConversationID == binding.ConversationID && row.ID != binding.Session && row.Status.Process != status.ProcessExited {
+			return errCompetingManagers
+		}
+		if row.ID == binding.Session {
+			return ErrControllerUncertain
+		}
+	}
+	return nil
+}
+
 func (d *DiscussionController) recoverActive(ctx context.Context, original error) error {
 	previous := d.controller.binding
 	native, err := d.runtime.ManagerRuntime(previous.SessionID, previous.SessionInstance)
@@ -70,11 +82,14 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	if err != nil {
 		return err
 	}
-	if !discussionManagerExited(rows, runtimeBinding(previous)) {
-		if errors.Is(original, managerproof.ErrQuarantined) && errors.Is(errFromRuntime, managerproof.ErrQuarantined) {
-			return d.startReplacement(ctx, schema.ManagerReplaceCustody)
+	exited := discussionManagerExited(rows, runtimeBinding(previous))
+	if !exited {
+		if err := requireDeletedManagerAbsent(rows, runtimeBinding(previous)); err != nil {
+			if errors.Is(err, ErrControllerUncertain) && errors.Is(original, managerproof.ErrQuarantined) && errors.Is(errFromRuntime, managerproof.ErrQuarantined) {
+				return d.startReplacement(ctx, schema.ManagerReplaceCustody)
+			}
+			return err
 		}
-		return ErrControllerUncertain
 	}
 	st, err := d.store.Snapshot()
 	if err != nil {
@@ -83,12 +98,21 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	if !discussionPending(st) {
 		return original
 	}
-	reqExit := protocol.ManagerRetireReq{Binding: runtimeBinding(previous), Generation: max(st.Conversations[previous.ConversationID].ManagerGeneration, 1), Checkpoint: hashValue(identity(previous)), Replacement: schema.ManagerReplaceExited, ExpectedTurn: protocol.ManagerNativeTurn{State: "unknown"}}
+	reqExit := exitedDiscussionManager(previous, st.Conversations[previous.ConversationID].ManagerGeneration)
 	receipt, err := d.runtime.ManagerRetire(ctx, reqExit, true)
 	if err != nil {
+		if !exited && errors.Is(err, managerproof.ErrStale) {
+			return errors.Join(ErrDiscussionActivationUnavailable, ErrControllerUncertain, errMissingDispatcherExit)
+		}
 		return err
 	}
-	if receipt.OperationID != protocol.ManagerRetireOperationID(reqExit) || receipt.State != "retired" {
+	if receipt.OperationID != protocol.ManagerRetireOperationID(reqExit) {
+		return ErrControllerUncertain
+	}
+	if !exited && receipt.State == "deleted" {
+		return d.recordExitedManager(ctx, previous, reqExit, nil, nil)
+	}
+	if !exited || receipt.State != "retired" {
 		return ErrControllerUncertain
 	}
 	for _, action := range st.Actions {
@@ -98,19 +122,55 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 			}
 		}
 	}
+	return d.recordExitedManager(ctx, previous, reqExit, nil, nil)
+}
+
+func exitedDiscussionManager(binding ManagerBinding, generation uint64) protocol.ManagerRetireReq {
+	return protocol.ManagerRetireReq{Binding: runtimeBinding(binding), Generation: max(generation, 1), Checkpoint: hashValue(identity(binding)), Replacement: schema.ManagerReplaceExited, ExpectedTurn: protocol.ManagerNativeTurn{State: "unknown"}}
+}
+
+func (d *DiscussionController) recoverDeletedRetirement(ctx context.Context, req protocol.ManagerRetireReq) error {
+	rows, err := d.runtime.List()
+	if err != nil {
+		return err
+	}
+	if err := requireDeletedManagerAbsent(rows, req.Binding); err != nil {
+		return err
+	}
+	st, err := d.store.readView()
+	if err != nil {
+		return err
+	}
+	conv := st.Conversations[req.Binding.ConversationID]
+	binding := conv.Binding
+	binding.Generation = st.Generation
+	if runtimeBinding(binding) != req.Binding {
+		return ErrStale
+	}
+	return d.recordExitedManager(ctx, binding, exitedDiscussionManager(binding, conv.ManagerGeneration), &req, nil)
+}
+
+func (d *DiscussionController) recordExitedManager(ctx context.Context, previous ManagerBinding, reqExit protocol.ManagerRetireReq, prior *protocol.ManagerRetireReq, parked *Conversation) error {
 	if d.scope.VerifyAudience != nil {
 		if err := d.scope.VerifyAudience(ctx); err != nil {
 			return err
 		}
 	}
-	// Persist the proved natural exit just like a completed retirement, so a
+	// Persist verified writer exit like a completed retirement, so a
 	// service restart or unavailable login pool reuses the same replacement intent.
 	return d.store.update(func(current *State) error {
 		if err := checkBinding(current, previous); err != nil {
 			return err
 		}
 		c := current.Conversations[previous.ConversationID]
-		if c.Retirement != nil || c.Parked {
+		if reqExit.Generation != max(c.ManagerGeneration, 1) {
+			return ErrConflict
+		}
+		if parked != nil {
+			if !sameParkedManager(current, previous.Generation, c, *parked) {
+				return ErrStale
+			}
+		} else if c.Parked || (c.Retirement == nil) != (prior == nil) || prior != nil && *c.Retirement != *prior {
 			return ErrConflict
 		}
 		c.Retirement, c.Parked = &reqExit, true

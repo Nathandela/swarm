@@ -86,11 +86,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	upgradeFrom := os.Getenv("SWARM_TEAMMATE_TEST_UPGRADE_FROM")
 	interruption := os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION")
+	interruptionFrom := os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION_FROM")
 	initial := bin
-	if interruption == "upgrade" {
-		initial = os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION_FROM")
+	if interruption == "upgrade" || interruption == "delete-parked" && interruptionFrom != "" {
+		initial = interruptionFrom
 		if !filepath.IsAbs(initial) {
-			t.Fatal("set the installed release binary for the in-flight upgrade")
+			t.Fatal("set an absolute installed release binary path for the interruption")
 		}
 	}
 	if upgradeFrom != "" {
@@ -688,8 +689,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		deletedParked := interruption == "delete-parked"
 		switch interruption {
-		case "":
+		case "", "delete-parked":
+			if deletedParked && !personal {
+				t.Fatal("deleted dispatcher rehearsal requires personal mode")
+			}
 			// A native worker status transition can legitimately restart the idle grace.
 			wait("manager parked with the same worker running", 2*voice.DiscussionIdleGrace+90*time.Second, func() bool {
 				st, err := r.Status(thread)
@@ -703,6 +708,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				return false
 			})
+			if deletedParked {
+				beforeGap, err = r.Status(thread)
+				if err != nil || beforeGap.State != "parked" || beforeGap.RetirementOperation == "" {
+					t.Fatal("missing exact parked manager", beforeGap, err)
+				}
+			}
 		case "connector", "restart", "upgrade", "death", "quota", "replay-refusal":
 			if (!personal && interruption != "restart") || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
 				t.Fatal("interruption drill needs an active manager in the selected mode", beforeGap, err)
@@ -711,7 +722,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal("unknown interruption", interruption)
 		}
 		var heldChild, heldInstance string
-		if interruption == "restart" {
+		if interruption == "restart" || deletedParked {
 			for _, row := range roster() {
 				if row.WorkerAttempt == attempt && row.WorkerInstance != "" && row.Status.Process == status.ProcessRunning {
 					if heldChild != "" {
@@ -732,7 +743,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch interruption {
-		case "restart", "upgrade", "replay-refusal":
+		case "delete-parked", "restart", "upgrade", "replay-refusal":
+			if deletedParked {
+				if err := owner.Delete(beforeGap.ManagerSession); err != nil {
+					t.Fatal("delete the exact parked dispatcher", err)
+				}
+			}
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -760,6 +776,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			cmd = startDaemon(bin)
 			owner = dialOwner()
+			if deletedParked && slices.ContainsFunc(roster(), func(row protocol.SessionView) bool { return row.ID == beforeGap.ManagerSession }) {
+				t.Fatal("deleted dispatcher did not stay absent across daemon restart")
+			}
 		case "quota":
 			finishHostedManagerQuota(t, state, project, beforeGap, owner, quotaTurn)
 		case "death":
@@ -805,6 +824,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 		}
 		r = open()
+		if deletedParked {
+			send("302", "401", "Also reply with exactly "+challenge+". The original worker result is still needed. Do not spawn another worker.")
+		}
 		wait("same attempt completion published after reconnect", 150*time.Second, func() bool {
 			for _, p := range outputs {
 				if strings.HasPrefix(p.AdmissionID, "worker-message-") && p.JobID == job && p.AttemptID == attempt && strings.Contains(p.Body, proof) {
@@ -814,7 +836,14 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return false
 		})
-		if interruption == "restart" {
+		if deletedParked {
+			wait("concurrent owner message answered in the same discussion", 90*time.Second, func() bool {
+				return slices.ContainsFunc(outputs, func(p discord.TeammatePublication) bool {
+					return p.AdmissionID == "input-302" && strings.TrimSpace(p.Body) == challenge
+				})
+			})
+		}
+		if interruption == "restart" || deletedParked {
 			wait("restarted manager settled after publication", 90*time.Second, func() bool {
 				st, err := r.Status(thread)
 				if err != nil || st.PendingAdmissions != 0 {
@@ -867,7 +896,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					}
 				}
 			}
-			if (interruption == "quota" || interruption == "replay-refusal") && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
+			if (interruption == "quota" || interruption == "replay-refusal" || deletedParked) && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
 				t.Fatal(interruption, "did not replace the original dispatcher exactly once", beforeGap, got)
 			}
 			if interruption == "replay-refusal" {
@@ -887,12 +916,22 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					t.Fatalf("original manager exited=%v, correlated completion publications=%d", oldExited, reports)
 				}
 			}
+			if deletedParked {
+				for _, row := range roster() {
+					if row.ID == beforeGap.ManagerSession {
+						t.Fatal("deleted dispatcher unexpectedly reappeared")
+					}
+					if row.ID == heldChild && row.WorkerInstance != heldInstance {
+						t.Fatal("original worker instance changed")
+					}
+				}
+			}
 			if activeManagers > 1 || children != 1 {
 				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
 			}
 			t.Logf("%s recovered on same channel %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
 		}
-		if interruption == "restart" {
+		if interruption == "restart" || deletedParked {
 			replies := 0
 			for _, p := range outputs {
 				if p.AdmissionID == "input-302" && strings.Contains(p.Body, challenge) {

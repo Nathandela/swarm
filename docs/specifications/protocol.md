@@ -274,7 +274,12 @@ persists the checkpoint with the source incarnation before signalling its
 shim. `unknown` means there is no matching claim. `uncertain` means the claim
 is durable and the original exit is still unproven. `retired` requires both
 the original shim's exit report and confirmation that its physical incarnation
-is gone. Status reads never signal a process. A repeated effect request can
+is gone. For a Discord dispatcher, a status read can also return `deleted`
+when the supervisor verifies explicit removal of the exact session incarnation.
+The supervisor retains this evidence outside the session directory. For sessions
+deleted before v0.29.16, `deleted_parked` reports a matching exit and explicit
+deletion in the retained journal. Only a connector that had already confirmed
+a quiescent retirement can use this older evidence to recover its discussion. Status reads never signal a process. A repeated effect request can
 redrive the same unresolved claim after rechecking the durable input embargo,
 physical process, account, leases and fresh native readiness. The additional
 owner-only `manager-retire-cancel` capability exposes `manager_retire_cancel`

@@ -27,6 +27,12 @@ func (a *coreAPI) ManagerRetire(ctx context.Context, local, operation string, re
 		return receipt, managerproof.ErrStale
 	}
 	m, found := a.core.Get(local)
+	if !found && op == protocol.OpManagerRetireStatus {
+		if state := a.core.ManagerDeletionStatus(req.Binding, req.Replacement == ""); state != "" {
+			receipt.State = state
+			return receipt, nil
+		}
+	}
 	if !found || m.Role != "manager" || m.ManagerConversationID != req.Binding.ConversationID || m.AgentType != req.Binding.Provider {
 		return receipt, managerproof.ErrStale
 	}
@@ -150,9 +156,16 @@ func (d *Daemon) blockedRetirementInput(local, replacement string) bool {
 }
 
 func (a *coreAPI) managerWritersExited(m persist.Meta, b protocol.ManagerRuntimeBinding) bool {
-	if m.Status.Process != status.ProcessExited || m.ConversationID != b.NativeSessionID || verifyNativeWritersStopped(a.stateDir, m, false) != nil {
-		return false
+	return m.ConversationID == b.NativeSessionID && stoppedManagerGeneration(a.stateDir, m) == b.NativeGeneration
+}
+
+func stoppedManagerGeneration(stateDir string, m persist.Meta) string {
+	if m.Status.Process != status.ProcessExited || verifyNativeWritersStopped(stateDir, m, false) != nil {
+		return ""
 	}
 	var native shim.NativeProcessInfo
-	return readNativeProof(a.stateDir, m.ID, shim.NativeProcessFile, &native) == nil && native.Generation == b.NativeGeneration
+	if readNativeProof(stateDir, m.ID, shim.NativeProcessFile, &native) != nil {
+		return ""
+	}
+	return native.Generation
 }
