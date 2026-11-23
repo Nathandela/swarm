@@ -104,7 +104,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	dialOwner := func() *protocol.Client {
 		var owner *protocol.Client
 		for end := time.Now().Add(20 * time.Second); time.Now().Before(end); {
-			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance})
+			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance, protocol.CapManagerRetire})
 			if err == nil {
 				break
 			}
@@ -744,7 +744,21 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		switch interruption {
 		case "delete-parked", "restart", "upgrade", "replay-refusal":
+			var retirement *protocol.ManagerRetireReq
 			if deletedParked {
+				id := r.mailDiscussionID(thread, owner.EndpointID())
+				ledger, err := voice.OpenStore(filepath.Join(connector, "discussions", id))
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := ledger.Snapshot()
+				if err := errors.Join(err, ledger.Close()); err != nil {
+					t.Fatal(err)
+				}
+				retirement = snapshot.Conversations[voice.DiscussionConversationPrefix+id].Retirement
+				if retirement == nil || protocol.ManagerRetireOperationID(*retirement) != beforeGap.RetirementOperation {
+					t.Fatal("parked manager's retirement receipt changed")
+				}
 				if err := owner.Delete(beforeGap.ManagerSession); err != nil {
 					t.Fatal("delete the exact parked dispatcher", err)
 				}
@@ -776,8 +790,19 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			cmd = startDaemon(bin)
 			owner = dialOwner()
-			if deletedParked && slices.ContainsFunc(roster(), func(row protocol.SessionView) bool { return row.ID == beforeGap.ManagerSession }) {
-				t.Fatal("deleted dispatcher did not stay absent across daemon restart")
+			if deletedParked {
+				if slices.ContainsFunc(roster(), func(row protocol.SessionView) bool { return row.ID == beforeGap.ManagerSession }) {
+					t.Fatal("deleted dispatcher did not stay absent across daemon restart")
+				}
+				want := "deleted"
+				if interruptionFrom != "" {
+					want = "deleted_parked"
+				}
+				receipt, err := owner.ManagerRetire(ctx, *retirement, true)
+				if err != nil || receipt.State != want || receipt.OperationID != beforeGap.RetirementOperation {
+					t.Fatal("incorrect deletion evidence after daemon restart", receipt, err)
+				}
+				t.Logf("deletion receipt %s matched the exact parked retirement after restart", want)
 			}
 		case "quota":
 			finishHostedManagerQuota(t, state, project, beforeGap, owner, quotaTurn)
