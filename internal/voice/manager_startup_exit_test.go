@@ -38,7 +38,8 @@ func TestDiscussionStartupMessageHidesPrivateDetails(t *testing.T) {
 		{errManagerStillStarting, "setup or sign-in"},
 		{&bootstrapExit{}, "closed"},
 		{errControllerSupervisorOffline, "offline"},
-		{errCompetingManagers, "Two dispatchers"},
+		{errCompetingManagers, "another dispatcher"},
+		{errMissingDispatcherExit, "confirming the previous dispatcher stopped"},
 		{protocol.ErrManagerLaunchPrerequisite, "setup"},
 		{ErrDiscussionActivationUnavailable, "unavailable"},
 	} {

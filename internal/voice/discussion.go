@@ -364,7 +364,7 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 	} else {
 		req := managerLaunchRequest(d.cfg, d.refs())
 		var selected managerSelection
-		selected, err = bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, managerIntentName(d.cfg.ConversationID), "")
+		selected, err = bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, managerIntentName(d.cfg.ConversationID), "", nil)
 		if err == nil {
 			binding, err = d.store.BindManager(selected.Binding)
 		}
@@ -376,6 +376,10 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 	return d.bind(binding)
 }
 
+var errMissingDispatcherExit = errors.New("voice: the previous dispatcher is absent and its exit is unverified")
+
+var errResumeSourceDeleted = errors.New("voice: the supervisor confirmed the parked dispatcher was deleted")
+
 func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64, conv Conversation) (ManagerBinding, error) {
 	if conv.Retirement == nil {
 		return ManagerBinding{}, ErrCorrupt
@@ -383,9 +387,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 	if (conv.Retirement.Replacement != "" || conv.FailedResume != nil && conv.FailedResume.Attempt == 3) && conv.ReplacementAfter > d.now().Unix() {
 		return ManagerBinding{}, replacementRetryError(conv.ReplacementAfter)
 	}
-	retirement := protocol.ManagerRetireOperationID(*conv.Retirement)
-	suffix := hashBytes([]byte(retirement)) + ".json"
 	for {
+		retirement := protocol.ManagerRetireOperationID(*conv.Retirement)
+		suffix := hashBytes([]byte(retirement)) + ".json"
 		req := managerLaunchRequest(d.cfg, d.refs())
 		source := conv.Binding.SessionID
 		instance := conv.Binding.SessionInstance
@@ -431,7 +435,36 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 				file = "native-cli-" + suffix
 			}
 		}
-		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source)
+		var checkMissingSource func() error
+		if stage == 0 && req.ResumeSourceInstance != "" {
+			checkMissingSource = func() error {
+				receipt, err := d.runtime.ManagerRetire(ctx, *conv.Retirement, true)
+				if errors.Is(err, managerproof.ErrStale) {
+					return errors.Join(ErrDiscussionActivationUnavailable, errMissingDispatcherExit, err)
+				}
+				if err != nil {
+					return errors.Join(ErrDiscussionActivationUnavailable, err)
+				}
+				if receipt.OperationID != retirement {
+					return ErrStale
+				}
+				if confirmedParkedDeletion(receipt, conv) {
+					return errResumeSourceDeleted
+				}
+				return nil
+			}
+		}
+		selected, err := bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, file, source, checkMissingSource)
+		if errors.Is(err, errResumeSourceDeleted) {
+			old := conv.Binding
+			old.Generation = generation
+			replacement := exitedDiscussionManager(old, conv.ManagerGeneration)
+			if err := d.recordExitedManager(ctx, old, replacement, conv.Retirement, &conv); err != nil {
+				return ManagerBinding{}, err
+			}
+			conv.Retirement = &replacement
+			continue
+		}
 		if err != nil {
 			if errors.Is(err, errManagerStillStarting) {
 				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
@@ -522,10 +555,22 @@ func (d *DiscussionController) canMigrateParked(ctx context.Context, conv Conver
 	if err != nil {
 		return false, err
 	}
-	if receipt.State != "retired" || receipt.OperationID != protocol.ManagerRetireOperationID(*conv.Retirement) {
+	if (receipt.State != "retired" && !confirmedParkedDeletion(receipt, conv)) || receipt.OperationID != protocol.ManagerRetireOperationID(*conv.Retirement) {
 		return false, ErrControllerUncertain
 	}
 	return true, nil
+}
+
+func confirmedParkedDeletion(receipt protocol.ManagerRetireReceipt, conv Conversation) bool {
+	if receipt.State == schema.ManagerRetireDeleted {
+		return true
+	}
+	// Older supervisors recorded exit and deletion, but not native writer shutdown.
+	// Only a previously completed quiescent retirement can use that weaker evidence.
+	req := conv.Retirement
+	return receipt.State == schema.ManagerRetireDeletedParked && conv.Parked && conv.FailedResume == nil && req != nil &&
+		req.Replacement == "" && req.Binding == runtimeBinding(conv.Binding) && !req.ExpectedTurn.ExternallySteered &&
+		(req.ExpectedTurn.State == "idle" || req.ExpectedTurn.State == "completed")
 }
 
 func sameParkedManager(st *State, generation uint64, c, previous Conversation) bool {
@@ -702,6 +747,9 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 		}
 		if discussionRecoverableBindingError(err) {
 			recoveryErr := d.recoverActive(ctx, err)
+			if errors.Is(recoveryErr, errMissingDispatcherExit) {
+				return recoveryErr
+			}
 			if recoveryErr != nil && (errors.Is(err, managerproof.ErrUnavailable) || errors.Is(err, ErrControllerNativeUnavailable)) {
 				return d.inputHold(ErrDiscussionNativeProofHeld, recoveryErr)
 			}
@@ -976,6 +1024,12 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		}
 		if discussionManagerExited(rows, req.Binding) {
 			return d.recordRetirement(req, true)
+		}
+	case schema.ManagerRetireDeletedParked:
+		return errors.Join(ErrDiscussionActivationUnavailable, ErrControllerUncertain, errMissingDispatcherExit)
+	case schema.ManagerRetireDeleted:
+		if statusOnly {
+			return d.recoverDeletedRetirement(ctx, req)
 		}
 	}
 	return ErrControllerUncertain

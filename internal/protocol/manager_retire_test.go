@@ -9,13 +9,17 @@ import (
 
 type managerRetireStub struct {
 	*managerRuntimeStub
-	writes int
+	writes        int
+	deletionState string
 }
 
 func (*managerRetireStub) ManagerRetireSupported() bool { return true }
 func (s *managerRetireStub) ManagerRetire(_ context.Context, local, id string, req ManagerRetireReq, op string) (ManagerRetireReceipt, error) {
 	if op == OpManagerRetireCancel {
 		return ManagerRetireReceipt{OperationID: id, State: "cancelled"}, nil
+	}
+	if op == OpManagerRetireStatus && s.deletionState != "" {
+		return ManagerRetireReceipt{OperationID: id, State: s.deletionState}, nil
 	}
 	if req.Binding.Session == local && op == OpManagerRetire {
 		s.writes++
@@ -42,6 +46,12 @@ func TestManagerRetireBindsOwnerStopAndStatus(t *testing.T) {
 	if got, err := c.ManagerRetire(t.Context(), req, true); err != nil || got != first || stub.writes != 1 {
 		t.Fatalf("status changed exact effect: %+v %v (%d writes)", got, err, stub.writes)
 	}
+	for _, state := range []string{"deleted", "deleted_parked"} {
+		stub.deletionState = state
+		if got, err := c.ManagerRetire(t.Context(), req, true); err != nil || got.State != state || got.OperationID != first.OperationID || stub.writes != 1 {
+			t.Fatalf("owner read did not return the exact deletion receipt: %+v %v (%d writes)", got, err, stub.writes)
+		}
+	}
 	if got, err := c.CancelManagerRetire(t.Context(), req); err != nil || got.OperationID != first.OperationID || got.State != "cancelled" || stub.writes != 1 {
 		t.Fatalf("cancellation affected native process: %+v %v", got, err)
 	}
@@ -56,9 +66,11 @@ func TestManagerRetireBindsOwnerStopAndStatus(t *testing.T) {
 		t.Fatal("manager retirement advertised to a remote client")
 	}
 	req.Binding.Session = NamespacedID(hello.EndpointID, "sess1")
-	remote.writeControl(Control{Op: OpManagerRetire, EndpointID: hello.EndpointID, SessionID: req.Binding.Session,
-		OperationID: ManagerRetireOperationID(req), BodyVersion: 1, ManagerRetireRequest: &req})
-	if reply := remote.readControl(); reply.Op != OpError || reply.ErrorCode != CodeNotAuthorized {
-		t.Fatalf("remote stop reached owner path: %+v", reply)
+	for _, op := range []string{OpManagerRetire, OpManagerRetireStatus} {
+		remote.writeControl(Control{Op: op, EndpointID: hello.EndpointID, SessionID: req.Binding.Session,
+			OperationID: ManagerRetireOperationID(req), BodyVersion: 1, ManagerRetireRequest: &req})
+		if reply := remote.readControl(); reply.Op != OpError || reply.ErrorCode != CodeNotAuthorized {
+			t.Fatalf("remote operation %s reached owner path: %+v", op, reply)
+		}
 	}
 }

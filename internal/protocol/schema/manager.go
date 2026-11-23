@@ -58,6 +58,11 @@ func (r ManagerRetireReq) Validate() error {
 	return nil
 }
 
+const (
+	ManagerRetireDeleted       = "deleted"
+	ManagerRetireDeletedParked = "deleted_parked"
+)
+
 type ManagerRetireReceipt struct {
 	OperationID string `json:"operation_id"`
 	State       string `json:"state"`
@@ -65,7 +70,7 @@ type ManagerRetireReceipt struct {
 
 func (r ManagerRetireReceipt) ValidState() bool {
 	switch r.State {
-	case "unknown", "prepared", "uncertain", "retired", "cancelled":
+	case "unknown", "prepared", "uncertain", "retired", "cancelled", ManagerRetireDeleted, ManagerRetireDeletedParked:
 		return true
 	default:
 		return false

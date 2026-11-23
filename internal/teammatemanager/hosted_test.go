@@ -86,11 +86,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	}
 	upgradeFrom := os.Getenv("SWARM_TEAMMATE_TEST_UPGRADE_FROM")
 	interruption := os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION")
+	interruptionFrom := os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION_FROM")
 	initial := bin
-	if interruption == "upgrade" {
-		initial = os.Getenv("SWARM_TEAMMATE_TEST_INTERRUPTION_FROM")
+	if interruption == "upgrade" || interruption == "delete-parked" && interruptionFrom != "" {
+		initial = interruptionFrom
 		if !filepath.IsAbs(initial) {
-			t.Fatal("set the installed release binary for the in-flight upgrade")
+			t.Fatal("set an absolute installed release binary path for the interruption")
 		}
 	}
 	if upgradeFrom != "" {
@@ -103,7 +104,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	dialOwner := func() *protocol.Client {
 		var owner *protocol.Client
 		for end := time.Now().Add(20 * time.Second); time.Now().Before(end); {
-			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance})
+			owner, err = protocol.DialContext(ctx, socket, []string{protocol.CapManagerProvenance, protocol.CapManagerRetire})
 			if err == nil {
 				break
 			}
@@ -688,8 +689,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		deletedParked := interruption == "delete-parked"
 		switch interruption {
-		case "":
+		case "", "delete-parked":
+			if deletedParked && !personal {
+				t.Fatal("deleted dispatcher rehearsal requires personal mode")
+			}
 			// A native worker status transition can legitimately restart the idle grace.
 			wait("manager parked with the same worker running", 2*voice.DiscussionIdleGrace+90*time.Second, func() bool {
 				st, err := r.Status(thread)
@@ -703,6 +708,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 				}
 				return false
 			})
+			if deletedParked {
+				beforeGap, err = r.Status(thread)
+				if err != nil || beforeGap.State != "parked" || beforeGap.RetirementOperation == "" {
+					t.Fatal("missing exact parked manager", beforeGap, err)
+				}
+			}
 		case "connector", "restart", "upgrade", "death", "quota", "replay-refusal":
 			if (!personal && interruption != "restart") || beforeGap.State != "active" || beforeGap.ManagerSession == "" {
 				t.Fatal("interruption drill needs an active manager in the selected mode", beforeGap, err)
@@ -711,7 +722,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal("unknown interruption", interruption)
 		}
 		var heldChild, heldInstance string
-		if interruption == "restart" {
+		if interruption == "restart" || deletedParked {
 			for _, row := range roster() {
 				if row.WorkerAttempt == attempt && row.WorkerInstance != "" && row.Status.Process == status.ProcessRunning {
 					if heldChild != "" {
@@ -732,7 +743,26 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch interruption {
-		case "restart", "upgrade", "replay-refusal":
+		case "delete-parked", "restart", "upgrade", "replay-refusal":
+			var retirement *protocol.ManagerRetireReq
+			if deletedParked {
+				id := r.mailDiscussionID(thread, owner.EndpointID())
+				ledger, err := voice.OpenStore(filepath.Join(connector, "discussions", id))
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := ledger.Snapshot()
+				if err := errors.Join(err, ledger.Close()); err != nil {
+					t.Fatal(err)
+				}
+				retirement = snapshot.Conversations[voice.DiscussionConversationPrefix+id].Retirement
+				if retirement == nil || protocol.ManagerRetireOperationID(*retirement) != beforeGap.RetirementOperation {
+					t.Fatal("parked manager's retirement receipt changed")
+				}
+				if err := owner.Delete(beforeGap.ManagerSession); err != nil {
+					t.Fatal("delete the exact parked dispatcher", err)
+				}
+			}
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -760,6 +790,20 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			cmd = startDaemon(bin)
 			owner = dialOwner()
+			if deletedParked {
+				if slices.ContainsFunc(roster(), func(row protocol.SessionView) bool { return row.ID == beforeGap.ManagerSession }) {
+					t.Fatal("deleted dispatcher did not stay absent across daemon restart")
+				}
+				want := "deleted"
+				if interruptionFrom != "" {
+					want = "deleted_parked"
+				}
+				receipt, err := owner.ManagerRetire(ctx, *retirement, true)
+				if err != nil || receipt.State != want || receipt.OperationID != beforeGap.RetirementOperation {
+					t.Fatal("incorrect deletion evidence after daemon restart", receipt, err)
+				}
+				t.Logf("deletion receipt %s matched the exact parked retirement after restart", want)
+			}
 		case "quota":
 			finishHostedManagerQuota(t, state, project, beforeGap, owner, quotaTurn)
 		case "death":
@@ -795,9 +839,17 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(project, "release"), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
+		var completionID string
 		for end := time.Now().Add(3 * time.Minute); ; time.Sleep(200 * time.Millisecond) {
 			raw, err := os.ReadFile(filepath.Join(project, "sent.txt"))
 			if err == nil && strings.Contains(string(raw), "queued") {
+				if deletedParked {
+					var receipt struct{ ID, State string }
+					if json.Unmarshal(raw, &receipt) != nil || receipt.State != "queued" || receipt.ID == "" {
+						t.Fatal("worker did not save its exact queued completion receipt")
+					}
+					completionID = receipt.ID
+				}
 				break
 			}
 			if time.Now().After(end) {
@@ -805,6 +857,9 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 		}
 		r = open()
+		if deletedParked {
+			send("302", "401", "For this separate DM, publish a final answer containing only "+challenge+". Leave the original worker result for its own completion note: publish it only on that separate worker wake. Do not spawn another worker.")
+		}
 		wait("same attempt completion published after reconnect", 150*time.Second, func() bool {
 			for _, p := range outputs {
 				if strings.HasPrefix(p.AdmissionID, "worker-message-") && p.JobID == job && p.AttemptID == attempt && strings.Contains(p.Body, proof) {
@@ -814,7 +869,14 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return false
 		})
-		if interruption == "restart" {
+		if deletedParked {
+			wait("concurrent owner message answered in the same discussion", 90*time.Second, func() bool {
+				return slices.ContainsFunc(outputs, func(p discord.TeammatePublication) bool {
+					return p.AdmissionID == "input-302" && strings.TrimSpace(p.Body) == challenge
+				})
+			})
+		}
+		if interruption == "restart" || deletedParked {
 			wait("restarted manager settled after publication", 90*time.Second, func() bool {
 				st, err := r.Status(thread)
 				if err != nil || st.PendingAdmissions != 0 {
@@ -848,6 +910,10 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			if note.Kind == "needs-input" && !note.Answered {
 				t.Fatal("missing durable reply export")
 			}
+			if deletedParked && (note.Session != heldChild || note.Instance != heldInstance ||
+				note.Kind == "complete" && note.ID != completionID) {
+				t.Fatal("replacement did not admit the original worker's exact CLI receipt", note)
+			}
 			if kinds[note.Kind] {
 				t.Fatalf("duplicate admitted %s note", note.Kind)
 			}
@@ -867,7 +933,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					}
 				}
 			}
-			if (interruption == "quota" || interruption == "replay-refusal") && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
+			if (interruption == "quota" || interruption == "replay-refusal" || deletedParked) && (got.ManagerSession == beforeGap.ManagerSession || got.Generation <= beforeGap.Generation || activeManagers != 1) {
 				t.Fatal(interruption, "did not replace the original dispatcher exactly once", beforeGap, got)
 			}
 			if interruption == "replay-refusal" {
@@ -887,12 +953,22 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 					t.Fatalf("original manager exited=%v, correlated completion publications=%d", oldExited, reports)
 				}
 			}
+			if deletedParked {
+				for _, row := range roster() {
+					if row.ID == beforeGap.ManagerSession {
+						t.Fatal("deleted dispatcher unexpectedly reappeared")
+					}
+					if row.ID == heldChild && row.WorkerInstance != heldInstance {
+						t.Fatal("original worker instance changed")
+					}
+				}
+			}
 			if activeManagers > 1 || children != 1 {
 				t.Fatalf("after %s: %d active managers, %d worker launches", interruption, activeManagers, children)
 			}
 			t.Logf("%s recovered on same channel %s; old manager %s, current %s; one child, %d active managers", interruption, thread.Route.ChannelID, beforeGap.ManagerSession, got.ManagerSession, activeManagers)
 		}
-		if interruption == "restart" {
+		if interruption == "restart" || deletedParked {
 			replies := 0
 			for _, p := range outputs {
 				if p.AdmissionID == "input-302" && strings.Contains(p.Body, challenge) {

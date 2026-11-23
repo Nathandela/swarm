@@ -15,10 +15,12 @@ import (
 
 type parkedRecoveryRuntime struct {
 	discussionTestRuntime
-	failures  int
-	uncertain bool
-	requests  []protocol.LaunchReq
-	receipts  map[string]schema.OperationOutcomeView
+	failures      int
+	uncertain     bool
+	dropAck       bool
+	deletedSource string
+	requests      []protocol.LaunchReq
+	receipts      map[string]schema.OperationOutcomeView
 }
 
 func (r *parkedRecoveryRuntime) record(request protocol.LaunchReq, op string) string {
@@ -48,7 +50,15 @@ func (r *parkedRecoveryRuntime) record(request protocol.LaunchReq, op string) st
 }
 
 func (r *parkedRecoveryRuntime) LaunchOperation(op string, request protocol.LaunchReq) (string, string, error) {
-	return r.record(request, op), "manager", nil
+	if r.deletedSource != "" && request.Options[protocol.OptionResumeFrom] == r.deletedSource {
+		return "", "", errors.New("resume source no longer exists")
+	}
+	id := r.record(request, op)
+	if r.dropAck {
+		r.dropAck = false
+		return "", "", errors.New("lost launch acknowledgement")
+	}
+	return id, "manager", nil
 }
 func (r *parkedRecoveryRuntime) LaunchOperationStatus(op string) (schema.OperationOutcomeView, error) {
 	return r.receipts[op], nil
@@ -200,5 +210,121 @@ func TestParkedLegacyManagerMigratesOnceAfterRetirementProof(t *testing.T) {
 	st, err := store.Snapshot()
 	if err != nil || st.Conversations[cfg.ConversationID].Parked || !st.Conversations[cfg.ConversationID].NeedsHandoff || len(st.Publications) != 1 {
 		t.Fatalf("migration lost context handoff: %v", err)
+	}
+}
+
+func TestParkedDeletedDispatcherRecoversWithoutReplayingResume(t *testing.T) {
+	for _, tc := range []struct {
+		name, receipt, outcome              string
+		competing, replace, legacy, restart bool
+	}{
+		{name: "legacy manager deleted before native CLI migration", receipt: "deleted_parked", replace: true, legacy: true},
+		{name: "restart after replacement launch loses its acknowledgement", receipt: "deleted", replace: true, restart: true},
+		{name: "first DM after deletion", receipt: "deleted", replace: true},
+		{name: "pre-upgrade executing resume", receipt: "deleted_parked", outcome: schema.OutcomeUnknownOperation, replace: true},
+		{name: "missing roster alone", receipt: "unknown", outcome: schema.OutcomeUnknownOperation},
+		{name: "unresolved owner launch", receipt: "deleted", outcome: schema.OutcomeUnknown},
+		{name: "unattributed live successor", receipt: "deleted", outcome: schema.OutcomeUnknownOperation, competing: true},
+		{name: "applied successor with lost acknowledgement", receipt: "deleted", outcome: schema.OutcomeApplied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store, base, binding := newControllerFixture(t)
+			cfg := testConfig()
+			cfg.ConversationID = DiscussionConversationPrefix + "deleted"
+			cfg.VMProjectAccess = tc.legacy
+			binding.ConversationID = cfg.ConversationID
+			binding, err := store.BindManager(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &parkedRecoveryRuntime{discussionTestRuntime: discussionTestRuntime{controllerRuntimeFixture: base}, receipts: make(map[string]schema.OperationOutcomeView)}
+			r.status.Binding = runtimeBinding(binding)
+			r.retirement.State = tc.receipt
+			dir := privateConfigDir(t)
+			d := &DiscussionController{cfg: cfg, store: store, runtime: r, dir: dir, endpoint: "machine", bridge: &privateHTTP{socket: dir + "/bridge.sock"}, now: time.Now}
+			r.status.BridgeSocket, r.status.AuthFile = d.refs().Socket, d.refs().AuthFile
+			ret := protocol.ManagerRetireReq{Binding: runtimeBinding(binding), Generation: 1, Checkpoint: hashBytes([]byte("retirement")), ExpectedTurn: protocol.ManagerNativeTurn{State: "idle"}}
+			var sequence uint64
+			if err := store.update(func(st *State) error {
+				c := st.Conversations[cfg.ConversationID]
+				c.Parked, c.Retirement = true, &ret
+				putRecord(st, "conversations", &st.Conversations, cfg.ConversationID, c)
+				a, err := allocateAdmission(st, binding, "wake:saved-message")
+				if err != nil {
+					return err
+				}
+				sequence = a.Sequence
+				putRecord(st, "admissions", &st.Admissions, admissionKey(cfg.ConversationID, a.Sequence), a)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.outcome != "" {
+				req := managerLaunchRequest(cfg, d.refs())
+				req.Options[protocol.OptionResumeFrom] = binding.SessionID
+				req.ResumeSourceInstance = binding.SessionInstance
+				req.Manager.RetireOperationID = protocol.ManagerRetireOperationID(ret)
+				op, err := protocol.NewLaunchOperationID()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.competing || tc.outcome == schema.OutcomeApplied {
+					r.record(req, op)
+				}
+				if tc.outcome != schema.OutcomeApplied {
+					r.receipts[op] = schema.OperationOutcomeView{State: tc.outcome}
+				}
+				intent := managerLaunchIntent{Version: 1, ConversationID: cfg.ConversationID, OperationID: op, Request: req, Phase: "executing"}
+				if err := saveManagerIntent(dir, "resume-"+hashBytes([]byte(req.Manager.RetireOperationID))+".json", intent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.dropAck = tc.restart
+			r.deletedSource = binding.SessionID
+			before := len(r.requests)
+			st, err := store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			next, err := d.wakeParked(t.Context(), st.Generation, st.Conversations[cfg.ConversationID])
+			if tc.restart {
+				if !errors.Is(err, ErrDiscussionActivationUnavailable) || len(r.requests) != 1 {
+					t.Fatalf("lost acknowledgement: %v, launches %d", err, len(r.requests))
+				}
+				st, err = store.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !st.Conversations[cfg.ConversationID].Parked || st.Conversations[cfg.ConversationID].Retirement.Replacement != schema.ManagerReplaceExited {
+					t.Fatal("lost replacement checkpoint")
+				}
+				reopened := &DiscussionController{cfg: cfg, store: store, runtime: r, dir: dir, endpoint: "machine", bridge: d.bridge, now: func() time.Time { return time.Now().Add(discussionReplacementInterval + time.Second) }}
+				next, err = reopened.wakeParked(t.Context(), st.Generation, st.Conversations[cfg.ConversationID])
+			}
+			if !tc.replace && tc.outcome != schema.OutcomeApplied {
+				if err == nil || len(r.requests) != before {
+					t.Fatalf("unproven replacement: %v, requests %d", err, len(r.requests))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err = store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := st.Conversations[cfg.ConversationID]
+			if c.Parked || c.Binding.SessionID != next.SessionID || c.NeedsHandoff != tc.replace || st.Admissions[admissionKey(cfg.ConversationID, sequence)].Sequence != sequence {
+				t.Fatalf("lost binding or saved work: %+v", c)
+			}
+			if tc.replace {
+				if len(r.requests) != before+1 || r.requests[before].ResumeSourceInstance != "" || next.NativeSessionID == binding.NativeSessionID {
+					t.Fatalf("expected one fresh dispatcher; requests %+v", r.requests)
+				}
+			} else if len(r.requests) != before || next.NativeSessionID != binding.NativeSessionID {
+				t.Fatal("did not reuse the existing successor")
+			}
+		})
 	}
 }

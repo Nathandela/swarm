@@ -361,10 +361,13 @@ func Serve(cfg Config) (*Daemon, error) {
 		PreLaunch:          preLaunchWorktree,
 		FinalizeLaunch:     d.finalizeAgentLaunch,
 		PreDelete:          preDeleteWorktree,
-		WorkerInstance:     d.adoptOrMintSessionInstance,
-		OnSessionStart:     d.registerSession,
-		OnSessionEnd:       d.endSession,
-		OpenCodeReady:      d.openCodeReady,
+		ManagerDeletionGeneration: func(meta persist.Meta) string {
+			return stoppedManagerGeneration(cfg.StateDir, meta)
+		},
+		WorkerInstance: d.adoptOrMintSessionInstance,
+		OnSessionStart: d.registerSession,
+		OnSessionEnd:   d.endSession,
+		OpenCodeReady:  d.openCodeReady,
 		// Wave R7 (backendconnect.go): the core asks the ASSEMBLY whether a session needs a
 		// side process, because only the assembly may touch an adapter and only the core
 		// knows the session dir the plan is contained against.

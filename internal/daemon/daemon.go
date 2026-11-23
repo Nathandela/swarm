@@ -121,6 +121,9 @@ type Config struct {
 	// PreDelete runs in Delete, before the session's directory is torn down. An
 	// error preserves the session metadata so cleanup can be retried.
 	PreDelete func(m persist.Meta) error
+	// ManagerDeletionGeneration returns the stopped native generation, if proved.
+	// Delete calls it under the metadata writer fence, before removing the session.
+	ManagerDeletionGeneration func(persist.Meta) string
 
 	// OnSessionStart and OnSessionEnd are optional status-engine wiring hooks (Epic
 	// 11). Both are nil by default (opt-in; pre-Epic-11 configs are unchanged).
