@@ -109,7 +109,7 @@ func (d *DiscussionController) recoverActive(ctx context.Context, original error
 	if receipt.OperationID != protocol.ManagerRetireOperationID(reqExit) {
 		return ErrControllerUncertain
 	}
-	if !exited && receipt.State == "deleted" {
+	if !exited && receipt.State == schema.ManagerRetireDeleted {
 		return d.recordExitedManager(ctx, previous, reqExit, nil, nil)
 	}
 	if !exited || receipt.State != "retired" {

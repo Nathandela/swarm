@@ -562,13 +562,13 @@ func (d *DiscussionController) canMigrateParked(ctx context.Context, conv Conver
 }
 
 func confirmedParkedDeletion(receipt protocol.ManagerRetireReceipt, conv Conversation) bool {
-	if receipt.State == "deleted" {
+	if receipt.State == schema.ManagerRetireDeleted {
 		return true
 	}
 	// Older supervisors recorded exit and deletion, but not native writer shutdown.
 	// Only a previously completed quiescent retirement can use that weaker evidence.
 	req := conv.Retirement
-	return receipt.State == "deleted_parked" && conv.Parked && conv.FailedResume == nil && req != nil &&
+	return receipt.State == schema.ManagerRetireDeletedParked && conv.Parked && conv.FailedResume == nil && req != nil &&
 		req.Replacement == "" && req.Binding == runtimeBinding(conv.Binding) && !req.ExpectedTurn.ExternallySteered &&
 		(req.ExpectedTurn.State == "idle" || req.ExpectedTurn.State == "completed")
 }
@@ -1025,9 +1025,9 @@ func (d *DiscussionController) finishRetirement(ctx context.Context, req protoco
 		if discussionManagerExited(rows, req.Binding) {
 			return d.recordRetirement(req, true)
 		}
-	case "deleted_parked":
+	case schema.ManagerRetireDeletedParked:
 		return errors.Join(ErrDiscussionActivationUnavailable, ErrControllerUncertain, errMissingDispatcherExit)
-	case "deleted":
+	case schema.ManagerRetireDeleted:
 		if statusOnly {
 			return d.recoverDeletedRetirement(ctx, req)
 		}
