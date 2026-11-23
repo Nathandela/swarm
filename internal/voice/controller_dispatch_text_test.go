@@ -33,7 +33,7 @@ func TestWorkerNoteDispatchFitsCompleteNativeEnvelope(t *testing.T) {
 			worker := WorkerAssociation{Mailbox: true, VMChild: true, ConversationID: b.ConversationID,
 				Session: "machine/worker", SessionInstance: "worker-instance", Parent: b.SessionID, JobID: "job", AttemptID: "attempt"}
 			note := workerNoteMetadata{Session: worker.Session, Instance: worker.SessionInstance, Agent: "claude",
-				NoteID: "worker-note", Kind: tc.kind, Text: tc.note, Sequence: 1}
+				NoteID: "field-id", Kind: tc.kind, Text: tc.note, Sequence: 1}
 			input := workerMessageInput{ID: note.NoteID, Kind: note.Kind, Text: note.Text}
 			queued, err := c.queueWorkerNote(worker, input, note)
 			if err != nil {
@@ -69,7 +69,7 @@ func TestWorkerNoteDispatchFitsCompleteNativeEnvelope(t *testing.T) {
 					t.Fatal(err)
 				}
 				legacy := "Current owner settings (supersede earlier settings)\n" + tc.instructions + "\n\nCurrent input\n" + queuedText
-				if tc.name != "retained-marker" && (len(queuedText) > 4006 || len(legacy) <= 4006 || claudeinput.MaxManagerTextBytes != 4006) {
+				if tc.name != "retained-marker" && (len(queuedText) != 3792 || len(legacy) != 4076 || claudeinput.MaxManagerTextBytes != 4006) {
 					t.Fatalf("fixture must isolate overflow after the 216-byte owner prompt: base=%d wrapped=%d", len(queuedText), len(legacy))
 				}
 				if tc.oldPrepared {
