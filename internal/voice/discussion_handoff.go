@@ -11,6 +11,8 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
+const discussionHandoffGuidance = "Manager handoff. Handle the current instruction. Read current Discord evidence with swarm_discussion_history. Use source receipt and a human message ID as anchor to verify its original revision. A scheduled final covers the original revision only. Address new requests and edits once. Never replay uncertain actions. A manager turn ending or reply being queued does not prove worker success or delivery. Inspect retained worker and action receipts for outstanding work."
+
 // The connector supplies fresh, attributed thread history. Only add receipt references
 // here: old private tool output and deleted Discord messages must not reappear.
 func discussionHandoff(st State, current Admission, input, provider, nonce string, vmAccess bool) string {
@@ -68,10 +70,9 @@ func discussionHandoff(st State, current Admission, input, provider, nonce strin
 		raw, _ := json.Marshal(replies)
 		replyText = "\nPrior human messages: " + string(raw)
 	}
-	const guidance = "Manager handoff. Handle the current instruction. Read current Discord evidence with swarm_discussion_history. Use source receipt and a human message ID as anchor to verify its original revision. A scheduled final covers the original revision only. Address new requests and edits once. Never replay uncertain actions. A manager turn ending or reply being queued does not prove worker success or delivery. Inspect retained worker and action receipts for outstanding work."
 	// Preserve the full current input. Prefer human reply dispositions when space is short.
 	for _, suffix := range []string{replyText + workerText + "\nRecent action references: " + string(refs), replyText + workerText, replyText, ""} {
-		text := input + "\n\n" + guidance + suffix
+		text := input + "\n\n" + discussionHandoffGuidance + suffix
 		if len(text) > protocol.MaxSendInputText {
 			continue
 		}

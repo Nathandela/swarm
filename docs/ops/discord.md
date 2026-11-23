@@ -36,6 +36,8 @@ On upgrade, a running VM dispatcher can authenticate a new worker with its exist
 
 `swarm discord status` includes up to 16 recently parked VM discussions and their worker notes for seven days after parking. Their recorded publication IDs and confirmed Discord message IDs remain available after the manager parks, without reopening its native session.
 
+Explicit worker questions and completion notes are sized when the dispatcher wakes, using the native CLI input limit after accounting for the current owner instructions and applicable recovery guidance. A large note appears as a preview with the worker’s session and instance. The dispatcher can use `swarm_read_note` on that turn to read the original note and attached evidence. A retry using the same note ID keeps the original receipt and evidence.
+
 Run `swarm dispatcher-guide` for the worker notification and reply workflow. To expose the same guidance through native skill discovery, install the bundled skill in the dispatcher account. For Codex use `$HOME/.agents/skills`. For Claude use `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills`.
 
 ```sh

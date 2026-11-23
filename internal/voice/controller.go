@@ -302,28 +302,6 @@ func (c *Controller) Tick(ctx context.Context) error {
 					return err
 				}
 			}
-			text, err := c.admissionText(st, a)
-			if errors.Is(err, ErrExpired) {
-				if err = c.store.rejectQueuedControllerInput(c.binding, a, "task cancelled before dispatch"); err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			if c.managerSettingsDir != "" {
-				prompt, err := LoadManagerStartingPrompt(c.managerSettingsDir)
-				if err != nil {
-					return err
-				}
-				if prompt != "" {
-					text = "Current owner settings (supersede earlier settings)\n" + prompt + "\n\nCurrent input\n" + text
-				}
-			}
-			if a.RecoveryOnly {
-				text = recoveryInputNotice + text
-			}
 			operation, err := protocol.NewSemanticOperationID()
 			if err != nil {
 				return err
@@ -333,11 +311,15 @@ func (c *Controller) Tick(ctx context.Context) error {
 				return err
 			}
 			nonce := hex.EncodeToString(nonceBytes[:])
-			if c.discussion != nil && strings.HasPrefix(a.SourceID, "wake:") {
-				text = discussionPriorFinalNotice(st, a, text, c.binding.Provider, nonce)
+			text, err := c.managerDispatchText(st, a, nonce)
+			if errors.Is(err, ErrExpired) {
+				if err = c.store.rejectQueuedControllerInput(c.binding, a, "task cancelled before dispatch"); err != nil {
+					return err
+				}
+				continue
 			}
-			if c.discussion != nil && st.Conversations[c.binding.ConversationID].NeedsHandoff {
-				text = discussionHandoff(st, a, text, c.binding.Provider, nonce, c.discussion.VMProjectAccess)
+			if err != nil {
+				return err
 			}
 			for _, w := range st.Wakes {
 				if w.ConversationID == c.binding.ConversationID && w.Admission == a.Sequence {
@@ -352,22 +334,37 @@ func (c *Controller) Tick(ctx context.Context) error {
 				return err
 			}
 		}
-		if !protocol.SemanticOperationReplayable(a.OperationID, time.Now()) || a.ExternalInput != status.Turn.ExternalInput {
+		var req protocol.ComposerSendReq
+		if json.Unmarshal(a.Request, &req) != nil {
+			return ErrCorrupt
+		}
+		// Older prepared notes can exceed the native limit after wrapping.
+		// Only prepared requests may be rebuilt. A started operation keeps its original bytes.
+		var replacementText string
+		if !managerDispatchFits(c.binding.Provider, a.NativeInputID, req.Text) && c.discussion != nil {
+			if note, _ := discussionDispatchNote(st, a); note.NoteID != "" {
+				replacementText, err = c.managerDispatchText(st, a, a.NativeInputID)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		replayable := protocol.SemanticOperationReplayable(a.OperationID, time.Now())
+		if replacementText != "" || !replayable || a.ExternalInput != status.Turn.ExternalInput {
 			operation := a.OperationID
-			if !protocol.SemanticOperationReplayable(operation, time.Now()) {
+			if replacementText != "" || !replayable {
 				operation, err = protocol.NewSemanticOperationID()
 				if err != nil {
 					return err
 				}
 			}
-			a, err = c.store.refreshPreparedInput(c.binding, a, operation, status.Turn.ExternalInput)
+			a, err = c.store.refreshPreparedInput(c.binding, a, operation, status.Turn.ExternalInput, replacementText)
 			if err != nil {
 				return err
 			}
-		}
-		var req protocol.ComposerSendReq
-		if json.Unmarshal(a.Request, &req) != nil {
-			return ErrCorrupt
+			if json.Unmarshal(a.Request, &req) != nil {
+				return ErrCorrupt
+			}
 		}
 		if c.binding.Provider == "claude" {
 			if _, err := claudeinput.ManagerEnvelope(a.NativeInputID, req.Text); err != nil {
