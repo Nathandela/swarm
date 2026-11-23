@@ -858,7 +858,7 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		}
 		r = open()
 		if deletedParked {
-			send("302", "401", "Also reply with exactly "+challenge+". The original worker result is still needed. Do not spawn another worker.")
+			send("302", "401", "For this separate DM, publish a final answer containing only "+challenge+". Leave the original worker result for its own completion note: publish it only on that separate worker wake. Do not spawn another worker.")
 		}
 		wait("same attempt completion published after reconnect", 150*time.Second, func() bool {
 			for _, p := range outputs {
