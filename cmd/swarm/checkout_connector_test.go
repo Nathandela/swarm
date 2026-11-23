@@ -29,7 +29,7 @@ func TestCheckoutInventoryReconcilesCachedParkedRowAcrossLocalSocket(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	manager := voice.ManagerBinding{
 		ConversationID: voice.DiscussionConversationPrefix + ledgerID,
 		Provider:       "codex", SessionID: endpoint + "/manager", SessionInstance: "native-instance",
