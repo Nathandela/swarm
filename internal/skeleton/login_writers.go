@@ -66,6 +66,10 @@ func verifyLoginWritersStopped(stateRoot string, meta persist.Meta) error {
 }
 
 func verifyNativeWritersStopped(stateRoot string, meta persist.Meta, allowLegacy bool) error {
+	return verifyNativeWriterExit(stateRoot, meta, allowLegacy, false)
+}
+
+func verifyNativeWriterExit(stateRoot string, meta persist.Meta, allowLegacy, requireUnstarted bool) error {
 	if meta.Status.Process == status.ProcessRunning || loginProcessAlive(meta.ShimPID, meta.ShimStartTime) {
 		return logins.ErrInUse
 	}
@@ -93,7 +97,10 @@ func verifyNativeWritersStopped(stateRoot string, meta persist.Meta, allowLegacy
 	if err != nil || len(generation) != 16 {
 		return logins.ErrInUse
 	}
-	if current, err := procstart.BootID(); err == nil && current != "" && native.BootID != "" && native.BootID != current {
+	if requireUnstarted && (native.PID != 0 || native.PGID != 0 || native.StartTime != 0 || native.BackendPID != 0 || native.BackendStartTime != 0) {
+		return logins.ErrInUse
+	}
+	if current, err := procstart.BootID(); !requireUnstarted && err == nil && current != "" && native.BootID != "" && native.BootID != current {
 		// A reboot ended every recorded writer before the shim could publish the
 		// stop proof; the recorded pids and groups now name unrelated processes.
 		return nil
@@ -102,7 +109,7 @@ func verifyNativeWritersStopped(stateRoot string, meta persist.Meta, allowLegacy
 	if readNativeProof(stateRoot, meta.ID, shim.NativeStoppedFile, &stopped) != nil || stopped.SchemaVersion != shim.NativeWriterSchemaVersion || !stopped.WritersStopped || stopped.Native != native {
 		return logins.ErrInUse
 	}
-	if runtime.GOOS == "linux" && !stopped.DescendantsContained {
+	if (runtime.GOOS == "linux" || requireUnstarted) && !stopped.DescendantsContained {
 		return logins.ErrInUse
 	}
 	if loginProcessAlive(native.ShimPID, native.ShimStartTime) || loginProcessAlive(native.PID, native.StartTime) || loginProcessAlive(native.BackendPID, native.BackendStartTime) {

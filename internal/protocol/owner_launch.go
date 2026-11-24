@@ -118,7 +118,8 @@ func (c *Client) LaunchOperation(operationID string, req LaunchReq) (id, name st
 			resp.OperationID == operationID && resp.EndpointID == c.endpointID {
 			return "", "", ErrManagerLaunchPrerequisite
 		}
-		if req.ResumeSourceInstance != "" && resp.ErrorCode == CodeStaleInstance {
+		if req.ResumeSourceInstance != "" && resp.ErrorCode == CodeStaleInstance &&
+			resp.OperationID == operationID && resp.EndpointID == c.endpointID {
 			return "", "", ErrOwnerResumeStaleSource
 		}
 		return "", "", fmt.Errorf("protocol: owner launch: %s (%s)", resp.Error, resp.ErrorCode)

@@ -73,7 +73,7 @@ func bootstrapManagerRequest(ctx context.Context, dir string, cfg Config, refs M
 		if row.Role != "manager" || row.ManagerConversationID != cfg.ConversationID {
 			continue
 		}
-		if retiredSource == "" || row.Status.Process != status.ProcessExited {
+		if retiredSource == "" || !discussionManagerEnded(row) {
 			hadManager = true
 		}
 		if row.Status.Process == status.ProcessRunning {
@@ -210,7 +210,12 @@ type bootstrapExit struct {
 	row protocol.SessionView
 }
 
-func (e *bootstrapExit) Error() string { return managerStartupExit(e.row).Error() }
+func (e *bootstrapExit) Error() string {
+	if e.row.Status.Process == status.ProcessLost {
+		return "manager process was lost before its native backend became ready"
+	}
+	return managerStartupExit(e.row).Error()
+}
 func (e *bootstrapExit) Unwrap() error { return ErrDiscussionActivationUnavailable }
 
 type failedResume struct {
@@ -236,13 +241,16 @@ func observeLaunchedManager(ctx context.Context, cfg Config, refs ManagerBridgeR
 	target, applied := protocol.AppliedOwnerLaunchSession(endpoint, outcome)
 	if readErr != nil || !applied || target != intent.SessionID || outcome.FailedManagerInstance == "" ||
 		(exited.row.Capabilities != nil && exited.row.Capabilities.SessionInstance != outcome.FailedManagerInstance) {
+		if exited.row.Status.Process == status.ProcessLost {
+			return selected, errors.Join(ErrStale, readErr)
+		}
 		return selected, errors.Join(err, ErrControllerUncertain, readErr)
 	}
 	return selected, &failedResume{Session: target, Instance: outcome.FailedManagerInstance, Diagnostic: err.Error()}
 }
 
 func knownUnsentManagerLaunch(err error) bool {
-	return errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrStale)
+	return errors.Is(err, protocol.ErrManagerLaunchPrerequisite) || errors.Is(err, protocol.ErrOwnerResumeStaleSource) || errors.Is(err, ErrControllerUnsupported) || errors.Is(err, ErrStale)
 }
 
 func managerLaunchReplayable(id string) bool {
@@ -343,7 +351,7 @@ func selectBootstrapManager(ctx context.Context, cfg Config, refs ManagerBridgeR
 	if !ok || prefix != endpoint || local == "" || strings.Contains(local, "/") || row.EndpointID != endpoint || row.Role != "manager" || row.ManagerConversationID != cfg.ConversationID || row.Agent != cfg.Provider || row.Cwd != cfg.WorkDir {
 		return result, ErrStale
 	}
-	if row.Status.Process == status.ProcessExited {
+	if row.Status.Process == status.ProcessExited || row.Status.Process == status.ProcessLost && existing == nil && schema.IsDiscordManager(row.Role, row.ManagerConversationID) {
 		return result, &bootstrapExit{row}
 	}
 	if row.Status.Process != status.ProcessRunning {

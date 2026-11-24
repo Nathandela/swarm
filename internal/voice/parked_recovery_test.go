@@ -16,6 +16,7 @@ import (
 type parkedRecoveryRuntime struct {
 	discussionTestRuntime
 	failures      int
+	failureStatus status.Process
 	uncertain     bool
 	dropAck       bool
 	deletedSource string
@@ -32,8 +33,14 @@ func (r *parkedRecoveryRuntime) record(request protocol.LaunchReq, op string) st
 	receipt := schema.OperationOutcomeView{State: schema.OutcomeApplied, SessionID: id}
 	if n <= r.failures {
 		row.Status.Process = status.ProcessExited
+		if r.failureStatus != "" {
+			row.Status.Process = r.failureStatus
+		}
 		if !r.uncertain {
 			receipt.FailedManagerInstance = instance
+			if row.Status.Process == status.ProcessLost {
+				row.FailedManagerInstance = instance
+			}
 		}
 	} else {
 		row.Status.Process = status.ProcessRunning
@@ -73,13 +80,23 @@ func TestParkedResumeRecoversOldAppliedIntentWithoutReplayingItsLaunch(t *testin
 		failures  int
 		uncertain bool
 		pruned    bool
+		lost      bool
 	}{
-		{"native history on second attempt", 1, false, false}, {"fresh manager after two failed resumes", 2, false, false},
-		{"fresh manager also exits", 3, false, false}, {"physical exit without proof holds", 1, true, false}, {"executing launch with compacted receipt holds", 1, true, true},
+		{name: "native history on second attempt", failures: 1},
+		{name: "fresh manager after two failed resumes", failures: 2},
+		{name: "fresh manager also exits", failures: 3},
+		{name: "physical exit without proof holds", failures: 1, uncertain: true},
+		{name: "executing launch with compacted receipt holds", failures: 1, uncertain: true, pruned: true},
+		{name: "lost before native start", failures: 1, lost: true},
+		{name: "fresh manager after two lost startup attempts", failures: 2, lost: true},
+		{name: "lost without proof holds", failures: 1, uncertain: true, lost: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, store, controllerRuntime, binding := newControllerFixture(t)
 			r := &parkedRecoveryRuntime{discussionTestRuntime: discussionTestRuntime{controllerRuntimeFixture: controllerRuntime}, failures: tc.failures, uncertain: tc.uncertain, receipts: make(map[string]schema.OperationOutcomeView)}
+			if tc.lost {
+				r.failureStatus = status.ProcessLost
+			}
 			cfg := testConfig()
 			binding.ConversationID = DiscussionConversationPrefix + "retry"
 			binding, err := store.BindManager(binding)
@@ -215,13 +232,15 @@ func TestParkedLegacyManagerMigratesOnceAfterRetirementProof(t *testing.T) {
 
 func TestParkedDeletedDispatcherRecoversWithoutReplayingResume(t *testing.T) {
 	for _, tc := range []struct {
-		name, receipt, outcome              string
-		competing, replace, legacy, restart bool
+		name, receipt, outcome                          string
+		competing, replace, legacy, restart, historical bool
 	}{
 		{name: "legacy manager deleted before native CLI migration", receipt: "deleted_parked", replace: true, legacy: true},
 		{name: "restart after replacement launch loses its acknowledgement", receipt: "deleted", replace: true, restart: true},
 		{name: "first DM after deletion", receipt: "deleted", replace: true},
 		{name: "pre-upgrade executing resume", receipt: "deleted_parked", outcome: schema.OutcomeUnknownOperation, replace: true},
+		{name: "later deletion with a proved lost historical attempt", receipt: "deleted", outcome: schema.OutcomeUnknownOperation, replace: true, historical: true},
+		{name: "later deletion holds with an unproved lost attempt", receipt: "deleted", outcome: schema.OutcomeUnknownOperation, historical: true, competing: true},
 		{name: "missing roster alone", receipt: "unknown", outcome: schema.OutcomeUnknownOperation},
 		{name: "unresolved owner launch", receipt: "deleted", outcome: schema.OutcomeUnknown},
 		{name: "unattributed live successor", receipt: "deleted", outcome: schema.OutcomeUnknownOperation, competing: true},
@@ -268,7 +287,7 @@ func TestParkedDeletedDispatcherRecoversWithoutReplayingResume(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if tc.competing || tc.outcome == schema.OutcomeApplied {
+				if tc.competing && !tc.historical || tc.outcome == schema.OutcomeApplied {
 					r.record(req, op)
 				}
 				if tc.outcome != schema.OutcomeApplied {
@@ -278,6 +297,13 @@ func TestParkedDeletedDispatcherRecoversWithoutReplayingResume(t *testing.T) {
 				if err := saveManagerIntent(dir, "resume-"+hashBytes([]byte(req.Manager.RetireOperationID))+".json", intent); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if tc.historical {
+				row := protocol.SessionView{ID: "machine/old-attempt", Role: "manager", ManagerConversationID: cfg.ConversationID, Status: status.Status{Process: status.ProcessLost}}
+				if !tc.competing {
+					row.FailedManagerInstance = "old-instance"
+				}
+				r.rows = append(r.rows, row)
 			}
 			r.dropAck = tc.restart
 			r.deletedSource = binding.SessionID

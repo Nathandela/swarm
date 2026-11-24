@@ -124,6 +124,9 @@ type Config struct {
 	// ManagerDeletionGeneration returns the stopped native generation, if proved.
 	// Delete calls it under the metadata writer fence, before removing the session.
 	ManagerDeletionGeneration func(persist.Meta) string
+	// ManagerLostStartup proves that the exact lost Codex dispatcher never gained native input.
+	// It reads only on-disk and process evidence, including when the launch registry is locked.
+	ManagerLostStartup func(persist.Meta, string) bool
 
 	// OnSessionStart and OnSessionEnd are optional status-engine wiring hooks (Epic
 	// 11). Both are nil by default (opt-in; pre-Epic-11 configs are unchanged).

@@ -50,7 +50,8 @@ func (a *coreAPI) OwnerBoundResumeSupported() bool { return a.matchResumeInstanc
 
 func (a *coreAPI) validateBoundResume(spec daemon.LaunchSpec, local string, source persist.Meta) error {
 	if spec.OwnerLaunchHash == "" || spec.OperationID == "" || spec.ResumeSource.Instance == "" || local != source.ID ||
-		source.AgentType != spec.AgentType || source.RosterHidden || source.Status.Process != status.ProcessExited ||
+		source.AgentType != spec.AgentType || source.RosterHidden ||
+		source.Status.Process != status.ProcessExited && (spec.Manager == nil || source.Status.Process != status.ProcessLost) ||
 		a.matchResumeInstance == nil || !a.matchResumeInstance(source, spec.ResumeSource.Instance) {
 		return daemon.ErrResumeSourceChanged
 	}

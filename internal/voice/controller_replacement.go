@@ -71,7 +71,7 @@ func (c *Controller) ReplaceManager(ctx context.Context, next ManagerBinding, re
 				return nil, ErrStale
 			}
 			newFound = true
-		} else if row.ID != c.binding.SessionID && row.Role == "manager" && row.ManagerConversationID == next.ConversationID && row.Status.Process != status.ProcessExited {
+		} else if row.ID != c.binding.SessionID && row.Role == "manager" && row.ManagerConversationID == next.ConversationID && !discussionManagerEnded(row) {
 			return nil, ErrConflict
 		}
 	}
