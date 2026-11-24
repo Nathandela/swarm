@@ -222,7 +222,7 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `native_generation` | string | Actual owning native process generation; reconnect does not fabricate preserved evidence |
 | `observation_generation` | string | Exact authenticated observer epoch: current Codex feed ID or retained Claude broker/guard scope; changed observation requires explicit reconciliation even when the physical process survives |
 | `login_epoch` | string | Server-derived managed runtime epoch or selected native account digest; caller text cannot create an identity |
-| `worker_mail` | `*WorkerMailReq` | Owner-only request on the bound supervisor. The worker sends its scoped proof, original ID and action (message, reply or receipt). The supervisor verifies the current shim and derives the destination and attempt. |
+| `worker_mail` | `*WorkerMailReq` | Owner-only request on the bound supervisor. The worker sends its scoped proof, original ID and action (message, reply or receipt). The supervisor verifies the current shim and derives the destination and attempt. File-bearing completion notes also negotiate `dispatcher-worker-mail-files` and carry at most ten local paths inside the worker checkout. The supervisor stages up to 8 MiB total. The receipt returns ordered file IDs, names, types, sizes and digests. |
 | `worker_mail_receipt` | `*WorkerMailReceipt` | Exact note ID, state and optional answer. Accepted IDs remain queryable after the native submission window. |
 | `dispatcher_proof` | string | Owner launch only. Proof of the live native dispatcher that issued an ordinary spawn, used to bind a child before execution. |
 | `worker_discussion` | string | Supervisor-bound logical worker discussion on the owner roster. |

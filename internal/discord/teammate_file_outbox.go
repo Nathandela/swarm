@@ -18,9 +18,9 @@ import (
 const teammateFilePayloadBucket = "teammate_file_payloads"
 const maxBufferedPublicationFiles = 64 << 20
 
-var errPublicationFilesRequired = errors.New("Discord publication requires its staged file bytes")
-var errDiscordAttachFiles = errors.New("Discord is missing Attach Files permission in this discussion")
-var errPublicationFilesChanged = errors.New("Discord publication files are missing or changed")
+var errPublicationFilesRequired = errors.New("discord: publication requires its staged file bytes")
+var errDiscordAttachFiles = errors.New("discord: Attach Files permission is missing in this discussion")
+var errPublicationFilesChanged = errors.New("discord: publication files are missing or changed")
 
 // PublicationContentHash keeps the existing text-only receipt hash. Extended
 // rows bind their complete content and cannot be sent as captions by old code.

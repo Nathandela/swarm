@@ -560,3 +560,57 @@ func TestGuildAttachmentRetentionThroughActiveDiscussion(t *testing.T) {
 		t.Fatal("settled discussion's expired files were not reclaimed", err)
 	}
 }
+
+func TestGuildAttachmentOutageNotifiesItsProvisionalThreadOnce(t *testing.T) {
+	var posts, fetches int
+	bridge, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "GET /channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "GET /channels/20/permissions/member/99":
+			teammateTestPermissions(w)
+		case "POST /channels/201/messages":
+			posts++
+			var p struct{ Content string }
+			if json.NewDecoder(r.Body).Decode(&p) != nil || !strings.Contains(p.Content, "kept your request") {
+				t.Error("missing scoped retry notice")
+			}
+			_ = json.NewEncoder(w).Encode(discordgo.Message{ID: "500", ChannelID: "201", Author: &discordgo.User{ID: "99", Bot: true}, Content: p.Content})
+		default:
+			t.Error("unexpected REST request", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	bridge.service.Config.ProjectAccess = ProjectAccessVM
+	bridge.client.http.Transport = attachmentTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "cdn.discordapp.com" {
+			return http.DefaultTransport.RoundTrip(r)
+		}
+		fetches++
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	d := TeammateDiscussion{ID: "provisional", InstallationID: "install", Route: Route{ChannelID: "201", GuildID: "10", ParentID: "20"}}
+	if err := bridge.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d}); err != nil {
+		t.Fatal(err)
+	}
+	m := teammateTestMessage("210", "201", "77", "<@99> Check this file", true)
+	m.Attachments = []*discordgo.MessageAttachment{{ID: "310", Filename: "failed.csv", URL: "https://cdn.discordapp.com/attachments/201/310/failed.csv", Size: 10}}
+	a := TeammateAdmission{Discussion: d, Route: Route{ChannelID: "201", GuildID: "10", MessageID: m.ID}, Author: Actor{ID: "77"}, Revision: teammateRevision(m)}
+	bridge.client.attachmentMu.Lock()
+	err := bridge.captureAttachments(t.Context(), &a, m)
+	bridge.client.attachmentMu.Unlock()
+	if !errors.Is(err, errAttachmentBusy) || posts != 0 || fetches != 0 {
+		t.Fatalf("busy staging made a network request: %v posts=%d downloads=%d", err, posts, fetches)
+	}
+	for range 2 {
+		if err := bridge.captureAttachments(t.Context(), &a, m); !errors.Is(err, errAttachmentRetry) {
+			t.Fatal(err)
+		}
+	}
+	unbound, err := bridge.service.Store.teammateOutputs(d.InstallationID, "")
+	if err != nil || len(unbound) != 0 || posts != 1 || fetches != 2 {
+		t.Fatalf("retry must post once in the exact thread: posts=%d downloads=%d unbound=%d error=%v", posts, fetches, len(unbound), err)
+	}
+}

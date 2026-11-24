@@ -22,6 +22,7 @@ import (
 var errAttachmentURLExpired = errors.New("attachment URL expired")
 
 var errAttachmentRetry = errors.New("attachment download is temporarily unavailable. The original message is queued for retry")
+var errAttachmentBusy = errors.New("another Discord file is being prepared; retrying")
 
 const (
 	attachmentMaxFile     = 16 << 20
@@ -112,9 +113,19 @@ func (t *teammateConnector) captureAttachments(ctx context.Context, a *TeammateA
 	var err error
 	a.AttachmentManifest, err = t.snapshotAttachments(ctx, *a, sources)
 	if errors.Is(err, errAttachmentRetry) {
-		// The unbound connector notice lane also operates before the first manager starts.
 		notice := TeammatePublication{ID: "attachment_retry_" + digest([]string{a.Discussion.ID, a.Route.MessageID})[:32], Body: "Discord could not supply an attachment for message " + a.Route.MessageID + ". I kept your request and will retry for up to two minutes. If the download still fails, reattach the file in a new message."}
-		err = errors.Join(err, t.service.Store.teammateQueue(a.Discussion.InstallationID, "", a.Route, notice, t.service.Now(), true))
+		d := a.Discussion
+		if cfg.Mode == "personal" || a.Route.ChannelID != d.Route.ChannelID {
+			return errors.Join(err, t.service.Store.teammateQueue(d.InstallationID, "", a.Route, notice, t.service.Now(), true))
+		}
+		if queueErr := t.service.Store.teammateQueue(d.InstallationID, d.ID, d.Route, notice, t.service.Now(), true); queueErr != nil {
+			return errors.Join(err, queueErr)
+		}
+		// A provisional binding does not run the normal pending-output pass.
+		// Its thread has already been verified and can receive this bound notice.
+		noticeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		err = errors.Join(err, t.sendPending(noticeCtx, d))
 	}
 	return err
 }
@@ -134,7 +145,7 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 		return "Too many attachments; files unavailable (maximum 10).", nil
 	}
 	if !t.client.attachmentMu.TryLock() {
-		return "", errAttachmentRetry
+		return "", errAttachmentBusy
 	}
 	defer t.client.attachmentMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)

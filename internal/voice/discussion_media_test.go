@@ -118,6 +118,10 @@ func TestDiscussionPublicationMediaFenceSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	check(reopened, mediaStoreSchemaVersion)
 }
