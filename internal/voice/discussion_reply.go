@@ -72,7 +72,7 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		if src.AdmissionID != a.Origin.RequestID {
 			prior, belongs := attempts[src.AttemptID]
 			if belongs && p.Final && src.SystemCause == "" && p.OutputSequence > prior.Sequence && replyMatchesWorker(st, a, p) {
-				attempts[src.AttemptID] = DiscussionOutput{DiscussionOutputSource: src, ID: p.ID, Text: p.Text, Sequence: p.OutputSequence}
+				attempts[src.AttemptID] = publicationOutput(p)
 			}
 			continue
 		}
@@ -87,13 +87,13 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		}
 		if p.ReplyMonitor {
 			if p.OutputSequence > monitor.Sequence {
-				monitor = DiscussionOutput{DiscussionOutputSource: src, ID: p.ID, Text: p.Text, Sequence: p.OutputSequence}
+				monitor = publicationOutput(p)
 			}
 			continue
 		}
 		if p.OutputSequence > evidence.output.Sequence {
 			evidence.final = true
-			evidence.output = DiscussionOutput{DiscussionOutputSource: src, ID: p.ID, Text: p.Text, Sequence: p.OutputSequence}
+			evidence.output = publicationOutput(p)
 		}
 	}
 	if evidence.final {
@@ -136,7 +136,7 @@ func discussionReplyEvidence(st State, a Admission, now time.Time) replyEvidence
 		if err != nil {
 			continue
 		}
-		evidence = replyEvidence{output: DiscussionOutput{DiscussionOutputSource: r.DiscussionSource, ID: r.ID, Text: body, QuestionID: r.ID, QuestionHash: r.Hash, Sequence: r.OutputSequence}, expires: r.ExpiresAt}
+		evidence = replyEvidence{output: questionOutput(r, body), expires: r.ExpiresAt}
 	}
 	return evidence
 }

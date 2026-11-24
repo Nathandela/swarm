@@ -545,6 +545,7 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 		if admission != nil {
 			persisted := *admission
 			persisted.Text = ""
+			persisted.ForwardedContext = nil
 			record.Admission = &persisted
 		}
 		if (state == StateSent || state == StateFailed) && record.Admission != nil {
@@ -722,11 +723,11 @@ func (s *Store) workerPublicationStatus(d TeammateDiscussion, native *TeammateNa
 // Parked status can reconcile a late acknowledgement without retaining message bodies.
 type PublicationProof struct {
 	ID, BodyHash, PublicationHash string
-	Chunks                        int
+	Chunks, Files                 int
 }
 
 func (p TeammatePublication) Proof() PublicationProof {
-	proof := PublicationProof{ID: p.ID, BodyHash: PublicationBodyHash(p.Body), Chunks: len(splitUTF16(p.Body, 1900))}
+	proof := PublicationProof{ID: p.ID, BodyHash: PublicationContentHash(p.Body, p.Files, p.RecipientID), Chunks: len(p.chunks()), Files: len(p.Files)}
 	p.Body = ""
 	proof.PublicationHash = digest(p)
 	return proof
@@ -778,10 +779,10 @@ func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.Pu
 		if receipt.Route != d.Route || len(ids) == 0 {
 			return nil
 		}
-		if expected != nil && (receipt.BodyHash != expected.BodyHash || receipt.PublicationHash != expected.PublicationHash) {
+		if expected != nil && (receipt.BodyHash != expected.BodyHash || receipt.PublicationHash != expected.PublicationHash || len(receipt.DiscordAttachmentIDs) != expected.Files) {
 			return ErrConflict
 		}
-		pub.State, pub.MessageIDs = StateSent, ids
+		pub.State, pub.MessageIDs, pub.AttachmentIDs = StateSent, ids, receipt.DiscordAttachmentIDs
 		return nil
 	}
 	if err != nil {
@@ -794,9 +795,10 @@ func readPublicationStatus(tx *bolt.Tx, d TeammateDiscussion, pub *workermail.Pu
 		return ErrConflict
 	}
 	pub.State = StateSent
-	for _, part := range out.Chunks {
-		if part.State == StateSent && snowflake(part.MessageID) && (expected == nil || part.GatewaySeen || part.RESTAcknowledged) {
+	for n, part := range out.Chunks {
+		if len(part.AttachmentIDs) == len(expectedChunkFiles(out, n)) && part.State == StateSent && snowflake(part.MessageID) && (expected == nil || part.GatewaySeen || part.RESTAcknowledged) {
 			pub.MessageIDs = append(pub.MessageIDs, part.MessageID)
+			pub.AttachmentIDs = append(pub.AttachmentIDs, part.AttachmentIDs...)
 		} else if pub.State == StateSent {
 			pub.State = part.State
 			if pub.State == StateSent {

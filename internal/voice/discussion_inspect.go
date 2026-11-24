@@ -37,7 +37,7 @@ func InspectDiscussion(dir string) (DiscussionNativeStatus, error) {
 		if err != nil {
 			return err
 		}
-		if header.Version != storeSchemaVersion {
+		if !currentStoreSchema(header.Version) {
 			return ErrStale
 		}
 		st, err := readState(tx)

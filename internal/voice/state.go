@@ -135,6 +135,7 @@ type Action struct {
 }
 
 type Request struct {
+	RecipientID        string                 `json:"recipient_id,omitempty"`
 	DiscussionAttempts string                 `json:"discussion_attempts,omitempty"`
 	DiscussionProjects string                 `json:"discussion_projects,omitempty"`
 	DiscussionSource   DiscussionOutputSource `json:"discussion_source,omitzero"`
@@ -165,6 +166,8 @@ type SpeechPermit struct {
 }
 
 type Publication struct {
+	RecipientID        string                 `json:"recipient_id,omitempty"`
+	DiscussionFiles    string                 `json:"discussion_files,omitempty"`
 	ReplyMonitor       bool                   `json:"reply_monitor,omitempty"`
 	DiscussionAttempts string                 `json:"discussion_attempts,omitempty"`
 	DiscussionProjects string                 `json:"discussion_projects,omitempty"`
@@ -213,6 +216,7 @@ type Event struct {
 }
 
 type Wake struct {
+	MailboxFilesSettled bool            `json:"mailbox_files_settled,omitempty"`
 	WorkerReplyExported bool            `json:"worker_reply_exported,omitempty"`
 	WorkerReply         string          `json:"worker_reply,omitempty"`
 	RecoveryOnly        bool            `json:"recovery_only,omitempty"`

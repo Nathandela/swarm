@@ -76,16 +76,21 @@ type DecisionInput struct {
 	Request  schema.NativeDecisionReq `json:"request"`
 }
 type PublishInput struct {
-	OutputID string `json:"output_id"`
-	Sequence uint64 `json:"sequence"`
-	Text     string `json:"text"`
-	Final    bool   `json:"final"`
+	FileIDs            []string `json:"file_ids,omitempty"`
+	RecipientID        string   `json:"recipient_id,omitempty"`
+	RecipientMessageID string   `json:"recipient_message_id,omitempty"`
+	OutputID           string   `json:"output_id"`
+	Sequence           uint64   `json:"sequence"`
+	Text               string   `json:"text,omitempty"`
+	Final              bool     `json:"final"`
 }
 type AskInput struct {
-	RequestID string   `json:"request_id"`
-	TaskID    string   `json:"task_id"`
-	Question  string   `json:"question"`
-	Choices   []string `json:"choices,omitempty"`
+	RecipientID        string   `json:"recipient_id,omitempty"`
+	RecipientMessageID string   `json:"recipient_message_id,omitempty"`
+	RequestID          string   `json:"request_id"`
+	TaskID             string   `json:"task_id"`
+	Question           string   `json:"question"`
+	Choices            []string `json:"choices,omitempty"`
 }
 
 // NewManagerMCP exposes typed tools; native authority and durable effects stay in the controller.
@@ -94,7 +99,7 @@ func NewManagerMCP(call ManagerToolCaller) *mcp.Server {
 }
 
 // DiscussionReplyInstructions applies to human messages in both Discord manager modes.
-const DiscussionReplyInstructions = "Answer simple questions directly. Before longer work, acknowledge a new request once with final=false. Keep replies brief. Use swarm_discussion_yield when shared-thread participants are talking to each other. Address a participant by name when you need their input. Use a distinct output_id and increasing sequence per post, with final=true on the last reply."
+const DiscussionReplyInstructions = "Answer simple questions directly. Before longer work, acknowledge a new request once with final=false. Keep replies brief. Use swarm_discussion_yield when shared-thread participants are talking to each other. For a direct reply or clarification in a shared thread, specify recipient_id from the verified Discord actor. Use their message ID as recipient_message_id if needed. Use a distinct output_id and increasing sequence per post, with final=true on the last reply."
 
 func NewDiscussionManagerMCP(call ManagerToolCaller) *mcp.Server {
 	return newManagerMCP(call, true)
@@ -109,8 +114,8 @@ func NewVMDiscussionMCP(call ManagerToolCaller) *mcp.Server {
 	addManagerTool[DiscussionHistoryInput](s, "swarm_discussion_history", "Read attributed Discord history. To verify a prior human reply disposition, use source receipt and its message ID as anchor.", call)
 	addManagerTool[struct{}](s, "swarm_discussion_yield", "Leave shared chatter unanswered when it asks nothing of you.", call)
 	addManagerTool[DiscussionAnswerInput](s, "swarm_discussion_answer", "Settle an earlier clarification using the human reply.", call)
-	addManagerTool[PublishInput](s, "publish", "Send a manager-authored reply to this discussion.", call)
-	addManagerTool[AskInput](s, "ask", "Ask a clarification in this thread.", call)
+	addManagerTool[PublishInput](s, "publish", "Publish to this Discord discussion. Pass file_ids from the current worker completion note. For a direct reply in a shared thread pass the verified Discord recipient_id and optionally their recipient_message_id.", call)
+	addManagerTool[AskInput](s, "ask", "Ask a clarification in this thread. To address a participant directly, use their verified recipient_id and optionally their recipient_message_id.", call)
 	return s
 }
 
@@ -145,7 +150,11 @@ func newManagerMCP(call ManagerToolCaller, discussion bool) *mcp.Server {
 		addManagerTool[SessionInput](s, "swarm_current_request", "Read the exact current native permission or question and its reply coordinates.", call)
 		addManagerTool[DecisionInput](s, "swarm_decision", "Answer an exact native request using its observed identity, hash, generation and expiry.", call)
 	}
-	addManagerTool[PublishInput](s, "publish", "Publish one complete short phrase. Reuse output_id and sequence on an exact retry; native runtime evidence controls speech eligibility.", call)
+	publishDescription := "Publish one complete short phrase. Reuse output_id and sequence on an exact retry."
+	if discussion {
+		publishDescription += " In shared Discord, pass recipient_id and optionally recipient_message_id for a direct reply. Use file_ids from the current worker completion note when file delivery is available."
+	}
+	addManagerTool[PublishInput](s, "publish", publishDescription, call)
 	addManagerTool[AskInput](s, "ask", "Ask the human a task-scoped clarification and return pending immediately. This does not manufacture native permission approval.", call)
 	return s
 }
@@ -214,7 +223,10 @@ func validateManagerToolInput(input any) error {
 	case DecisionInput:
 		valid = id(v.ActionID) // Exact native decision validation belongs to the existing daemon contract.
 	case PublishInput:
-		valid = id(v.OutputID) && v.Sequence > 0 && text(v.Text, 4096)
+		valid = id(v.OutputID) && v.Sequence > 0 && (text(v.Text, 4096) || v.Text == "" && len(v.FileIDs) > 0) && len(v.FileIDs) <= schema.MaxPublicationFiles
+		for _, fileID := range v.FileIDs {
+			valid = valid && id(fileID)
+		}
 	case AskInput:
 		valid = id(v.RequestID) && id(v.TaskID) && text(v.Question, 4096) && len(v.Choices) <= 16
 		for _, choice := range v.Choices {

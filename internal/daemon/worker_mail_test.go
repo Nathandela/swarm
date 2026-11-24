@@ -103,6 +103,34 @@ func TestOrdinaryDispatcherWorkerBindingPrecedesExecAndSurvivesLostReceipt(t *te
 	if err != nil || len(rows) != 1 || rows[0].Instance != m.WorkerInstance || rows[0].ParentInputHash != child.WorkerParentInputHash {
 		t.Fatalf("pending %+v, %v", rows, err)
 	}
+
+	const fixture = "name,value\nscope,worker\n"
+	file := filepath.Join(m.ProviderCwd(), "handoff.csv")
+	if err = os.WriteFile(file, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	files := schema.WorkerMailReq{ID: "file-note", Kind: "complete", Action: "message", Paths: []string{file}, Proof: workermail.Proof(token, "worker")}
+	if _, err = d.WorkerMail("ep", m.ID, files, true); err == nil {
+		t.Fatal("parent proof allowed worker file handoff")
+	}
+	files.Proof = req.Proof
+	staged, err := d.WorkerMail("ep", m.ID, files, true)
+	if err != nil || staged.State != "queued" || len(staged.Files) != 1 || staged.Files[0].Name != "handoff.csv" {
+		t.Fatalf("file handoff %+v, %v", staged, err)
+	}
+	if err = os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	files.Action, files.Paths = "receipt", nil
+	readback, err := d.WorkerMail("ep", m.ID, files, false)
+	if err != nil || len(readback.Files) != 1 || readback.Files[0] != staged.Files[0] {
+		t.Fatalf("retained file receipt %+v, %v", readback, err)
+	}
+	binding := rows[0].Binding
+	contents, err := workermail.ReadFile(cfg.StateDir, binding, files.ID, staged.Files[0].ID)
+	if err != nil || string(contents) != fixture {
+		t.Fatalf("retained file bytes %q, %v", contents, err)
+	}
 }
 
 func TestWorkerLaunchRepairsUnexecutedReservationAcrossDaemonRestart(t *testing.T) {

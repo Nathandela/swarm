@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/hookclient"
@@ -19,7 +20,7 @@ import (
 
 func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "swarm teammate message --text TEXT [--kind needs-input|complete] [--id MESSAGE_ID]\nswarm teammate receipt --id MESSAGE_ID\nswarm teammate reply --id MESSAGE_ID [--wait 90s]\nswarm dispatcher-guide    read the dispatcher workflow")
+		_, _ = fmt.Fprintln(stdout, "swarm teammate message --text TEXT [--kind needs-input|complete] [--id MESSAGE_ID]\nswarm teammate message --kind complete --file PATH [--file PATH ...] [--text CAPTION] [--id MESSAGE_ID]\nswarm teammate receipt --id MESSAGE_ID\nswarm teammate reply --id MESSAGE_ID [--wait 90s]\nswarm dispatcher-guide    read the dispatcher workflow")
 		return 0
 	}
 	if args[0] == "receipt" {
@@ -55,15 +56,35 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	kind := fs.String("kind", "", "needs-input or complete")
 	text := fs.String("text", "", "message to your own manager")
 	id := fs.String("id", "", "message ID from the original attempt when retrying")
+	var files []string
+	fs.Func("file", "attach a PNG, JPEG, PDF or CSV from this worker's checkout (repeatable, up to 8 MiB total)", func(path string) error {
+		if path == "" || len(files) >= schema.MaxPublicationFiles {
+			return errors.New("provide 1 to 10 file paths")
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil || len(absolute) > 4096 {
+			return errors.New("unable to resolve the file path")
+		}
+		files = append(files, absolute)
+		return nil
+	})
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return misuseExit
 	}
-	if fs.NArg() != 0 || *text == "" || !workermail.ValidKind(*kind) {
-		_, _ = fmt.Fprintln(stderr, "teammate: expected message --text TEXT")
+	if fs.NArg() != 0 || *text == "" && len(files) == 0 || !workermail.ValidKind(*kind) {
+		_, _ = fmt.Fprintln(stderr, "teammate: provide --text TEXT or attach a file with --kind complete --file PATH")
 		return misuseExit
+	}
+	if len(files) > 0 && *kind != "complete" {
+		_, _ = fmt.Fprintln(stderr, "teammate: files require --kind complete")
+		return misuseExit
+	}
+	if len(files) > 0 && os.Getenv(workermail.SocketEnv) == "" {
+		_, _ = fmt.Fprintln(stderr, "teammate: files require a mailbox-enabled Swarm worker")
+		return 1
 	}
 	if *id == "" {
 		generated, err := protocol.NewSemanticOperationID()
@@ -76,7 +97,7 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	var err error
 	receipt := schema.WorkerMailReceipt{ID: *id, State: "queued"}
 	if os.Getenv(workermail.SocketEnv) != "" {
-		receipt, err = ordinaryWorkerMail(context.Background(), schema.WorkerMailReq{Action: "message", ID: *id, Kind: *kind, Text: *text})
+		receipt, err = ordinaryWorkerMail(context.Background(), schema.WorkerMailReq{Action: "message", ID: *id, Kind: *kind, Text: *text, Paths: files})
 	} else {
 		err = voice.SendDiscussionWorkerMessage(context.Background(), os.Getenv(schema.WorkerBridgeEnv), os.Getenv(hookclient.EnvSessionID), *id, *text, *kind)
 		if errors.Is(err, voice.ErrWorkerReplySuperseded) {
@@ -169,7 +190,7 @@ func ordinaryWorkerMail(ctx context.Context, req schema.WorkerMailReq) (schema.W
 	if socket == "" || session == "" || req.Proof == "" {
 		return schema.WorkerMailReceipt{}, errors.New("run this command inside a mailbox-enabled worker")
 	}
-	c, err := protocol.DialContext(ctx, socket, []string{protocol.CapWorkerMail})
+	c, err := protocol.DialContext(ctx, socket, []string{protocol.CapWorkerMail, protocol.CapWorkerMailFiles})
 	if err != nil {
 		return schema.WorkerMailReceipt{}, err
 	}

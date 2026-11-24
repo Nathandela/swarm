@@ -249,7 +249,7 @@ func (c *Controller) discussionReplyReceipt(ctx context.Context, st State, curre
 		if !ok || !p.Exported || c.discussion.ConfirmedDelivery == nil {
 			return nil, nil
 		}
-		return c.discussion.ConfirmedDelivery(ctx, DiscussionOutput{DiscussionOutputSource: p.DiscussionSource, ID: p.ID, Sequence: p.OutputSequence, Text: p.Text})
+		return c.discussion.ConfirmedDelivery(ctx, publicationOutput(p))
 	}
 	var err error
 	if ref.ConfirmedMessageIDs, err = delivery(ref.publicationID); err != nil {

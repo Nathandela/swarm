@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -168,7 +169,7 @@ func (t *teammateConnector) repairPersonalHistory(ctx context.Context, b teammat
 			}
 			if m.Author.ID == t.service.botUserID() && m.WebhookID == "" {
 				if nonce := m.Nonce; nonce != "" {
-					receipts = append(receipts, personalHistoryReceipt{m.ID, nonce, m.Content})
+					receipts = append(receipts, personalHistoryReceipt{m.ID, nonce, m.Content, m.Attachments})
 				}
 			}
 			if snowflakeLess(b.RepairLower, m.ID) && t.admissibleHuman(&m.Message) {
@@ -190,7 +191,10 @@ func (t *teammateConnector) repairPersonalHistory(ctx context.Context, b teammat
 	return errPersonalHistoryRepair
 }
 
-type personalHistoryReceipt struct{ id, nonce, content string }
+type personalHistoryReceipt struct {
+	id, nonce, content string
+	attachments        []*discordgo.MessageAttachment
+}
 
 func (s *Store) recordPersonalRepairPage(b teammateBinding, epoch uint64, upper, low string, done bool, records []teammateCandidate, receipts []personalHistoryReceipt, now time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -209,7 +213,7 @@ func (s *Store) recordPersonalRepairPage(b teammateBinding, epoch uint64, upper,
 			return err
 		}
 		for _, receipt := range receipts {
-			if err := teammateObserveReceipt(tx, b.InstallationID, b.Route, receipt.id, receipt.nonce, receipt.content, now); err != nil {
+			if err := teammateObserveReceipt(tx, b.InstallationID, b.Route, receipt.id, receipt.nonce, receipt.content, now, receipt.attachments...); err != nil {
 				return err
 			}
 		}

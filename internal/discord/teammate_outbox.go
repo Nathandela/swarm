@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ const teammateInputNoticeInterval = 15 * time.Minute
 const genericStartupMessage = "The dispatcher is unavailable. Your message is saved."
 const teammateStartupNotice = "manager_startup_unavailable"
 
-func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time) error {
+func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication, now time.Time, contents ...[]byte) error {
 	if d.ID == "" || d.Route.MessageID != "" || p.BodyHash != "" || p.ActivationGeneration != 0 ||
 		(strings.HasPrefix(p.ID, teammateStartupNotice+"_") || strings.HasPrefix(p.ID, teammateInputNotice+"_") || strings.HasPrefix(p.ID, personalHistoryNotice+"_")) {
 		return ErrInvalid
@@ -43,7 +44,7 @@ func (s *Store) teammateQueueOutput(d TeammateDiscussion, p TeammatePublication,
 	default:
 		return ErrInvalid
 	}
-	return s.teammateQueue(d.InstallationID, d.ID, d.Route, p, now, false)
+	return s.teammateQueue(d.InstallationID, d.ID, d.Route, p, now, false, contents...)
 }
 
 func (s *Store) teammateQueueNotice(route Route, install, text string, now time.Time) error {
@@ -357,10 +358,26 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 	return t.sendOutput(ctx, d.InstallationID, pending)
 }
 
-func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublication, now time.Time, internal bool) error {
+func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublication, now time.Time, internal bool, contents ...[]byte) error {
 	if p.ID == "" || len(p.ID) > 128 || strings.IndexFunc(p.ID, func(r rune) bool { return r < 33 || r > 126 }) >= 0 ||
-		strings.TrimSpace(p.Body) == "" || len(p.Body) > MaxPublicationBytes || (p.QuestionID == "") != (p.QuestionHash == "") {
+		(strings.TrimSpace(p.Body) == "" && len(p.Files) == 0) || len(p.Body) > MaxPublicationBytes || (p.QuestionID == "") != (p.QuestionHash == "") {
 		return ErrInvalid
+	}
+	if p.RecipientID != "" && !snowflake(p.RecipientID) ||
+		(internal || p.SystemCause != "") && (len(p.Files) > 0 || p.RecipientID != "") ||
+		p.QuestionID != "" && len(p.Files) > 0 {
+		return ErrInvalid
+	}
+	size, err := publicationFileBytes(p.Files)
+	if err != nil {
+		return err
+	}
+	var payload []byte
+	if len(contents) > 0 {
+		payload, err = makeFilePayload(p.Files, contents, size)
+		if err != nil {
+			return err
+		}
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(teammateOutboxBucket))
@@ -373,12 +390,12 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		}
 		var old teammateOutput
 		err := teammateGet(b, k, &old)
-		bodyHash := PublicationBodyHash(p.Body)
+		bodyHash := PublicationContentHash(p.Body, p.Files, p.RecipientID)
 		if err == nil {
 			p.Body = ""
 			prior := old.Publication
 			prior.Body = ""
-			if prior != p || old.BodyHash != bodyHash || old.Route != route {
+			if digest(prior) != digest(p) || old.BodyHash != bodyHash || old.Route != route {
 				return ErrConflict
 			}
 			return nil
@@ -397,6 +414,9 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
+		}
+		if size > 0 && payload == nil {
+			return errPublicationFilesRequired
 		}
 		if id != "" {
 			var binding teammateBinding
@@ -447,13 +467,18 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		out := teammateOutput{Publication: p, Route: route, DiscussionID: id, BodyHash: bodyHash, Created: now, Internal: internal}
 		out.Publication.Body = ""
 		index := tx.Bucket([]byte(teammateMetaBucket))
-		for n, part := range splitUTF16(p.Body, 1900) {
+		for n, part := range p.chunks() {
 			nonce := digest([]any{install, id, p.ID, n})[:24]
 			if err = index.Put(teammateKey(install, "nonce:"+nonce), k); err != nil {
 				return err
 			}
 			out.ChunkHashes = append(out.ChunkHashes, digest(part))
 			out.Chunks = append(out.Chunks, Chunk{ID: nonce, Body: part, State: StatePrepared})
+		}
+		if len(payload) > 0 {
+			if err := storeFilePayload(tx, k, payload); err != nil {
+				return err
+			}
 		}
 		return putJSON(tx, teammateOutboxBucket, k, out)
 	})
@@ -483,12 +508,14 @@ func (s *Store) teammateQuestion(d TeammateDiscussion, reply string) (id, hash s
 	return
 }
 
-func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateOutput, n int, id string, observed bool, now time.Time) error {
+func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateOutput, n int, id string, observed bool, now time.Time, attachmentIDs ...string) error {
 	c := &out.Chunks[n]
-	if !snowflake(id) || c.MessageID != "" && c.MessageID != id {
+	if !snowflake(id) || len(attachmentIDs) != len(expectedChunkFiles(*out, n)) ||
+		c.MessageID != "" && (c.MessageID != id || !slices.Equal(c.AttachmentIDs, attachmentIDs)) {
 		return ErrConflict
 	}
 	c.MessageID, c.State, c.Body = id, StateSent, ""
+	c.AttachmentIDs = attachmentIDs
 	c.GatewaySeen = c.GatewaySeen || observed
 	c.RESTAcknowledged = c.RESTAcknowledged || !observed
 	if out.Publication.QuestionID != "" {
@@ -510,7 +537,13 @@ func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateO
 			}
 		}
 		if settled {
+			out.Error = ""
 			out.SettledAt = now
+			if len(out.Publication.Files) > 0 {
+				if err := tx.Bucket([]byte(teammateFilePayloadBucket)).Delete(key); err != nil {
+					return err
+				}
+			}
 			if out.Internal && out.Publication.SystemCause == teammateStartupNotice {
 				k := teammateKey(install, out.Route.ChannelID)
 				var binding teammateBinding
@@ -533,13 +566,13 @@ func teammateFinishChunk(tx *bolt.Tx, key []byte, install string, out *teammateO
 	return nil
 }
 
-func (s *Store) teammateObserve(install string, route Route, id, nonce, body string, now time.Time) error {
+func (s *Store) teammateObserve(install string, route Route, id, nonce, body string, now time.Time, attachments ...*discordgo.MessageAttachment) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return teammateObserveReceipt(tx, install, route, id, nonce, body, now)
+		return teammateObserveReceipt(tx, install, route, id, nonce, body, now, attachments...)
 	})
 }
 
-func teammateObserveReceipt(tx *bolt.Tx, install string, route Route, id, nonce, body string, now time.Time) error {
+func teammateObserveReceipt(tx *bolt.Tx, install string, route Route, id, nonce, body string, now time.Time, attachments ...*discordgo.MessageAttachment) error {
 	key := tx.Bucket([]byte(teammateMetaBucket)).Get(teammateKey(install, "nonce:"+nonce))
 	if key == nil {
 		return nil
@@ -552,10 +585,14 @@ func teammateObserveReceipt(tx *bolt.Tx, install string, route Route, id, nonce,
 		return nil
 	}
 	for n, c := range out.Chunks {
-		if c.ID != nonce || out.ChunkHashes[n] != digest(body) || c.State == StatePrepared {
+		if c.ID != nonce || n >= len(out.ChunkHashes) || out.ChunkHashes[n] != digest(body) || c.State == StatePrepared {
 			continue
 		}
-		if err := teammateFinishChunk(tx, key, install, &out, n, id, true, now); err != nil {
+		attachmentIDs, valid := publicationAttachmentIDs(expectedChunkFiles(out, n), attachments)
+		if !valid {
+			return nil
+		}
+		if err := teammateFinishChunk(tx, key, install, &out, n, id, true, now, attachmentIDs...); err != nil {
 			return err
 		}
 		return putJSON(tx, teammateOutboxBucket, key, out)
@@ -628,12 +665,18 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 func (t *teammateConnector) sendOutput(ctx context.Context, install string, out teammateOutput) error {
 	store := t.service.Store
 	for n, chunk := range out.Chunks {
+		files := expectedChunkFiles(out, n)
+		authenticatedOnly := len(out.Publication.Files) > 0 || out.Publication.RecipientID != "" || out.Publication.JobID != "" || out.Internal && out.Publication.SystemCause == teammateStartupNotice
 		if chunk.State == StateSent {
 			continue
 		}
-		if (out.Publication.JobID != "" || out.Internal && out.Publication.SystemCause == teammateStartupNotice) && (chunk.State == StateSending || chunk.State == StateUncertain) {
+		if authenticatedOnly && (chunk.State == StateSending || chunk.State == StateUncertain) {
 			awaitingReceipt := "Worker publication awaiting an authenticated Discord receipt"
-			if out.Internal {
+			if len(out.Publication.Files) > 0 {
+				awaitingReceipt = "Discord hasn’t confirmed this file reply. Check the discussion before trying again."
+			} else if out.Publication.RecipientID != "" {
+				awaitingReceipt = "Discord hasn’t confirmed this reply. Check the discussion before trying again."
+			} else if out.Internal {
 				awaitingReceipt = "Discord hasn’t confirmed this startup notice."
 			}
 			if out.Error == awaitingReceipt {
@@ -664,19 +707,37 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 				return nil
 			})
 		}
-		if err := t.checkPublication(ctx, install, out); err != nil {
+		if err := t.checkPublication(ctx, install, out, len(files) > 0); err != nil {
 			if e := store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error { p.Error = err.Error(); return nil }); e != nil {
 				return e
 			}
 			return err
 		}
+		var fileData [][]byte
+		var fileErr error
+		if len(files) > 0 {
+			fileData, fileErr = store.readFilePayload(install, out)
+			if fileErr == nil && len(fileData) != len(files) {
+				fileErr = errPublicationFilesChanged
+			}
+		}
 		var attempt Chunk
 		var alreadyUncertain bool
 		var deadline time.Time
+		var held bool
 		err := store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error {
 			now := t.service.Now()
 			c := &p.Chunks[n]
 			if c.State == StateSent {
+				fileErr = nil
+				return nil
+			}
+			if authenticatedOnly && c.State != StatePrepared {
+				held = true
+				return nil
+			}
+			if fileErr != nil {
+				p.Error = fileErr.Error()
 				return nil
 			}
 			if (c.State == StateSending || c.State == StateUncertain) && now.Sub(p.Attempted) >= teammateNonceWindow {
@@ -697,20 +758,34 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 		if err != nil {
 			return err
 		}
+		if held {
+			return ErrDeliveryUncertain
+		}
 		if attempt.ID == "" {
+			if fileErr != nil {
+				return fileErr
+			}
 			continue
 		}
 		postCtx, cancel := context.WithTimeout(ctx, deadline.Sub(t.service.Now()))
-		message, err := t.client.postMessage(postCtx, Outbound{Route: out.Route, Text: attempt.Body, Nonce: attempt.ID, ReplyTo: out.Route.MessageID})
+		recipient := ""
+		if n == 0 {
+			recipient = out.Publication.RecipientID
+		}
+		message, err := t.client.postMessageWithFiles(postCtx, Outbound{Route: out.Route, Text: attempt.Body, Nonce: attempt.ID, ReplyTo: out.Route.MessageID}, recipient, files, fileData)
 		cancel()
 		if err == nil && (message.ChannelID != out.Route.ChannelID || message.GuildID != "" && message.GuildID != out.Route.GuildID ||
 			message.Author == nil || message.Author.ID != t.service.botUserID() || message.WebhookID != "" || message.Content != attempt.Body || !snowflake(message.ID)) {
 			err = ErrConflict
 		}
+		attachmentIDs, validAttachments := publicationAttachmentIDs(files, message.Attachments)
+		if err == nil && !validAttachments {
+			err = ErrConflict
+		}
 		finishErr := store.teammateChangeOutput(install, out, func(tx *bolt.Tx, key []byte, p *teammateOutput) error {
 			c := &p.Chunks[n]
 			if err == nil {
-				return teammateFinishChunk(tx, key, install, p, n, message.ID, false, t.service.Now())
+				return teammateFinishChunk(tx, key, install, p, n, message.ID, false, t.service.Now(), attachmentIDs...)
 			}
 			if c.State == StateSent {
 				err = nil
@@ -733,8 +808,8 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 	return nil
 }
 
-func (t *teammateConnector) checkPublication(ctx context.Context, install string, out teammateOutput) error {
-	if err := t.checkAudience(ctx, out); err != nil {
+func (t *teammateConnector) checkPublication(ctx context.Context, install string, out teammateOutput, attaching bool) error {
+	if err := t.checkAudience(ctx, out, attaching); err != nil {
 		return err
 	}
 	if out.Internal {
@@ -762,11 +837,14 @@ func (t *teammateConnector) checkPublication(ctx context.Context, install string
 	return validator.ValidatePublication(ctx, bound, p)
 }
 
-func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutput) error {
+func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutput, attaching bool) error {
 	route := out.Route
 	checked, _, bits, err := teammateChannelScope(ctx, t.client, t.service.Config, route, t.service.botUserID())
 	if err != nil {
 		return err
+	}
+	if attaching && route.GuildID != "" && bits&discordgo.PermissionAttachFiles == 0 {
+		return errDiscordAttachFiles
 	}
 	if out.DiscussionID == "" || t.service.Config.Mode == "personal" {
 		if checked.IsThread() || bits&discordgo.PermissionSendMessages == 0 {
@@ -787,6 +865,7 @@ type teammateReceipt struct {
 	PublicationHash, BodyHash string
 	Route                     Route
 	DiscordMessageIDs         []string
+	DiscordAttachmentIDs      []string `json:",omitempty"`
 }
 
 func teammateOutboxCount(tx *bolt.Tx, install string, delta int64) error {
@@ -882,12 +961,13 @@ func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out te
 	meta := tx.Bucket([]byte(teammateMetaBucket))
 	receipt := teammateReceipt{PublicationHash: digest(out.Publication), BodyHash: out.BodyHash, Route: out.Route}
 	completeProof := true
-	for _, part := range out.Chunks {
-		if part.State != StateSent || !snowflake(part.MessageID) || !part.GatewaySeen && !part.RESTAcknowledged {
+	for n, part := range out.Chunks {
+		if len(part.AttachmentIDs) != len(expectedChunkFiles(out, n)) || part.State != StateSent || !snowflake(part.MessageID) || !part.GatewaySeen && !part.RESTAcknowledged {
 			completeProof = false
 		}
 		if part.MessageID != "" {
 			receipt.DiscordMessageIDs = append(receipt.DiscordMessageIDs, part.MessageID)
+			receipt.DiscordAttachmentIDs = append(receipt.DiscordAttachmentIDs, part.AttachmentIDs...)
 		}
 		if err := meta.Delete(teammateKey(d.InstallationID, "nonce:"+part.ID)); err != nil {
 			return err
@@ -901,6 +981,7 @@ func teammateCompactOutput(tx *bolt.Tx, key []byte, d TeammateDiscussion, out te
 	// Older connectors only consult DiscordMessageIDs for a confirmed publication.
 	if !completeProof {
 		receipt.UnverifiedMessageIDs, receipt.DiscordMessageIDs = receipt.DiscordMessageIDs, nil
+		receipt.DiscordAttachmentIDs = nil
 	}
 	if err := putJSON(tx, teammateReceiptBucket, key, receipt); err != nil {
 		return err

@@ -22,6 +22,7 @@ import (
 const (
 	legacyStoreSchemaVersion = 2
 	storeSchemaVersion       = 3
+	mediaStoreSchemaVersion  = 4
 )
 
 type Store struct {
@@ -225,8 +226,9 @@ type storeHeader struct {
 	RecordHash          [sha256.Size]byte `json:"record_hash"`
 }
 type stateChanges struct {
-	tables map[string]map[string]any
-	counts map[string]int
+	requiresMedia bool
+	tables        map[string]map[string]any
+	counts        map[string]int
 }
 
 // Copy only a table being changed; failed commits leave the verified cache intact.
@@ -257,6 +259,10 @@ func xorRecord(sum *[sha256.Size]byte, k, raw []byte) {
 		sum[i] ^= v
 	}
 }
+func currentStoreSchema(version int) bool {
+	return version == storeSchemaVersion || version == mediaStoreSchemaVersion
+}
+
 func readHeader(tx *bolt.Tx) (storeHeader, error) {
 	var header storeHeader
 	b := tx.Bucket([]byte("controller"))
@@ -264,7 +270,7 @@ func readHeader(tx *bolt.Tx) (storeHeader, error) {
 		return header, ErrCorrupt
 	}
 	raw := b.Get([]byte("state"))
-	if string(b.Get([]byte("digest"))) != hashBytes(raw) || json.Unmarshal(raw, &header) != nil || (header.Version != storeSchemaVersion && header.Version != legacyStoreSchemaVersion) || header.Generation == 0 || header.LogicalBytes > MaxStoreBytes || header.Records > MaxRecords {
+	if string(b.Get([]byte("digest"))) != hashBytes(raw) || json.Unmarshal(raw, &header) != nil || (!currentStoreSchema(header.Version) && header.Version != legacyStoreSchemaVersion) || header.Generation == 0 || header.LogicalBytes > MaxStoreBytes || header.Records > MaxRecords {
 		return header, ErrCorrupt
 	}
 	return header, nil
@@ -414,6 +420,10 @@ func writeStateRecord(tx *bolt.Tx, raw []byte) error {
 		return err
 	}
 	header := storeHeader{Version: storeSchemaVersion, Generation: st.Generation, CurrentConversation: st.CurrentConversation, LogicalBytes: len(raw), Records: countRecords(st)}
+	// Older connectors must refuse this discussion before remarshal can strip file or recipient identity.
+	if previous, err := readHeader(tx); err == nil && previous.Version == mediaStoreSchemaVersion {
+		header.Version = mediaStoreSchemaVersion
+	}
 	if err = writeRecords(records, "workers", st.Workers, &header.RecordHash); err != nil {
 		return err
 	}
@@ -487,7 +497,7 @@ func (s *Store) load(tx *bolt.Tx) error {
 	if err != nil {
 		return err
 	}
-	if header.Version != storeSchemaVersion {
+	if !currentStoreSchema(header.Version) {
 		return ErrCorrupt
 	}
 	s.cached, s.header, s.transaction = st, header, tx.ID()
@@ -530,6 +540,9 @@ func (s *Store) update(fn func(*State) error) error {
 		return nil
 	}
 	header := s.header
+	if st.changes.requiresMedia {
+		header.Version = mediaStoreSchemaVersion
+	}
 	header.Generation, header.CurrentConversation = st.Generation, st.CurrentConversation
 	header.LogicalBytes += stateBaseBytes(st) - stateBaseBytes(s.cached)
 	header.Records = countRecords(st)
@@ -1205,6 +1218,9 @@ func (s *Store) PutRequest(b ManagerBinding, r Request) (Request, error) {
 				return err
 			}
 		}
+		if r.RecipientID != "" {
+			st.changes.requiresMedia = true
+		}
 		putRecord(st, "requests", &st.Requests, k, r)
 		result = r
 		return nil
@@ -1366,7 +1382,7 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 		if stored != permit || permit.ConversationID != b.ConversationID || p.NativeTurnID != permit.NativeTurnID {
 			return ErrStale
 		}
-		if p.ID == "" || p.Sequence == 0 || p.Text == "" || !utf8.ValidString(p.Text) || len(p.Text) > MaxUtteranceBytes || (p.ConversationID != "" && p.ConversationID != b.ConversationID) {
+		if p.ID == "" || p.Sequence == 0 || p.Text == "" && p.DiscussionFiles == "" || !utf8.ValidString(p.Text) || len(p.Text) > MaxUtteranceBytes || (p.ConversationID != "" && p.ConversationID != b.ConversationID) {
 			return ErrInvalid
 		}
 		p.ConversationID = b.ConversationID
@@ -1389,6 +1405,11 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 			result = old
 			return nil
 		}
+		if p.DiscussionFiles != "" {
+			if _, err := activeAdmission(st, b, p.Admission); err != nil {
+				return err
+			}
+		}
 		for _, old := range st.Publications {
 			if old.ConversationID == b.ConversationID && old.NativeTurnID == p.NativeTurnID && (old.Sequence == p.Sequence || old.Final || old.Sequence > p.Sequence) {
 				return ErrConflict
@@ -1402,7 +1423,7 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 				if !ok || !prior.Final {
 					return ErrCorrupt
 				}
-				if !p.Final || p.NativeTurnID != receipt.NativeTurnID || p.ID != receipt.OutputID || p.Sequence != receipt.Sequence || p.Text != prior.Text {
+				if !p.Final || p.NativeTurnID != receipt.NativeTurnID || p.ID != receipt.OutputID || p.Sequence != receipt.Sequence || !samePublicationContent(p, prior) {
 					return ErrConflict
 				}
 				result = prior
@@ -1427,6 +1448,9 @@ func (s *Store) PublishSpeech(b ManagerBinding, permit SpeechPermit, p Publicati
 			if err != nil {
 				return err
 			}
+		}
+		if p.DiscussionFiles != "" || p.RecipientID != "" {
+			st.changes.requiresMedia = true
 		}
 		putRecord(st, "publications", &st.Publications, k, p)
 		result = p

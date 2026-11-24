@@ -31,7 +31,7 @@ func (c *Controller) ingestWorkerMail(ctx context.Context, st State) (bool, erro
 		}
 		worker := WorkerAssociation{VMChild: true, Mailbox: true, ConversationID: n.Discussion, Parent: n.Parent, Session: n.Session, SessionInstance: n.Instance, Project: n.Project, AttemptID: n.Attempt, JobID: "vm-child-" + hashValue([]string{n.Discussion, n.Session})}
 		linkVMWorkerInput(st, &worker, n.ParentInputHash)
-		meta := workerNoteMetadata{Session: n.Session, Instance: n.Instance, Agent: n.Agent, Text: n.Text, NoteID: n.ID, Sequence: n.Sequence, Created: &n.Created, Kind: n.Kind}
+		meta := workerNoteMetadata{Files: n.Files, Session: n.Session, Instance: n.Instance, Agent: n.Agent, Text: n.Text, NoteID: n.ID, Sequence: n.Sequence, Created: &n.Created, Kind: n.Kind}
 		if _, err = c.queueWorkerNote(worker, workerMessageInput{ID: n.ID, Text: n.Text, Kind: n.Kind}, meta); err != nil {
 			if errors.Is(err, errSupersededWorkerMail) {
 				if err = workermail.Reject(c.managerSettingsDir, n); err != nil {
@@ -46,7 +46,9 @@ func (c *Controller) ingestWorkerMail(ctx context.Context, st State) (bool, erro
 		}
 	}
 	for _, wake := range st.Wakes {
-		if wake.WorkerReply == "" || wake.WorkerReplyExported {
+		settleFiles := wake.State == "settled" && !wake.MailboxFilesSettled
+		exportReply := wake.WorkerReply != "" && !wake.WorkerReplyExported
+		if !settleFiles && !exportReply {
 			continue
 		}
 		event := st.Events[key(c.binding.ConversationID, wake.EventID)]
@@ -55,8 +57,37 @@ func (c *Controller) ingestWorkerMail(ctx context.Context, st State) (bool, erro
 			continue
 		}
 		worker := st.Workers[key(c.binding.ConversationID, key(meta.Session, meta.Instance))]
-		if worker.supervisorMailbox() {
+		if !worker.supervisorMailbox() {
+			continue
+		}
+		if exportReply {
 			if err = c.exportWorkerAnswer(worker, meta, wake, wake.WorkerReply); err != nil {
+				return false, err
+			}
+		}
+		if settleFiles && len(meta.Files) > 0 {
+			binding := workermail.Binding{Discussion: worker.ConversationID, Parent: worker.Parent, Session: worker.Session, Instance: worker.SessionInstance, Attempt: worker.AttemptID}
+			var unpublished []string
+			for _, p := range st.Publications {
+				if p.ConversationID == worker.ConversationID && p.Admission == wake.Admission && p.DiscussionFiles != "" && !p.Exported {
+					unpublished = append(unpublished, p.ID)
+				}
+			}
+			if err = workermail.SettleFiles(c.managerSettingsDir, binding, meta.NoteID, unpublished); err != nil && !errors.Is(err, workermail.ErrAbsent) {
+				return false, err
+			}
+			if err = c.store.update(func(current *State) error {
+				if err := checkBinding(current, c.binding); err != nil {
+					return err
+				}
+				k := key(c.binding.ConversationID, wake.ID)
+				cur := current.Wakes[k]
+				if cur.ID == wake.ID && cur.State == "settled" && !cur.MailboxFilesSettled {
+					cur.MailboxFilesSettled = true
+					putRecord(current, "wakes", &current.Wakes, k, cur)
+				}
+				return nil
+			}); err != nil {
 				return false, err
 			}
 		}

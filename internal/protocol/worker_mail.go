@@ -9,6 +9,7 @@ import (
 )
 
 const CapWorkerMail = "dispatcher-worker-mail"
+const CapWorkerMailFiles = "dispatcher-worker-mail-files"
 const OpWorkerMail = "worker_mail"
 
 type workerMailSource interface {
@@ -19,6 +20,9 @@ func (c *Client) WorkerMail(local string, r schema.WorkerMailReq) (schema.Worker
 	var receipt schema.WorkerMailReceipt
 	if !slices.Contains(c.caps, CapWorkerMail) {
 		return receipt, errors.New("worker mailbox requires a compatible supervisor")
+	}
+	if len(r.Paths) > 0 && !slices.Contains(c.caps, CapWorkerMailFiles) {
+		return receipt, errors.New("worker files require an updated supervisor")
 	}
 	session := NamespacedID(c.endpointID, local)
 	resp, err := c.request(Control{Op: OpWorkerMail, SessionID: session, EndpointID: c.endpointID, WorkerMail: &r})
@@ -39,6 +43,16 @@ func (cc *clientConn) handleWorkerMail(c Control) {
 	if !ok || cc.srv.remoteTier || cc.srv.completionTier || !cc.hasCap(CapWorkerMail) || !valid || !validLocalID(local) || endpoint != cc.endpointID || c.EndpointID != endpoint || c.WorkerMail == nil || len(c.WorkerMail.Proof) != 64 || len(c.WorkerMail.ID) > 128 || c.WorkerMail.ID == "" {
 		cc.replyErrorCode("invalid worker mailbox request", CodeInvalidField)
 		return
+	}
+	if len(c.WorkerMail.Paths) != 0 {
+		if !cc.hasCap(CapWorkerMailFiles) {
+			cc.replyErrorCode("worker file handoff capability was not negotiated", CodeCapabilityRefused)
+			return
+		}
+		if c.WorkerMail.Action != "message" || c.WorkerMail.Kind != "complete" || len(c.WorkerMail.Paths) > schema.MaxPublicationFiles {
+			cc.replyErrorCode("invalid worker file handoff", CodeInvalidField)
+			return
+		}
 	}
 	receipt, err := source.WorkerMail(endpoint, local, *c.WorkerMail, SemanticOperationReplayable(c.WorkerMail.ID, cc.srv.now()))
 	if err != nil {

@@ -149,7 +149,18 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (res
 		if err != nil {
 			return nil, err
 		}
-		publication, err := c.store.PublishSpeech(c.binding, permit, Publication{Admission: admission.Sequence, ID: publicationID, NativeTurnID: proof.NativeTurnID, Sequence: input.Sequence, Text: input.Text, Final: input.Final})
+		if err := c.verifyPublicationRecipient(ctx, st, input.RecipientID, input.RecipientMessageID); err != nil {
+			return nil, err
+		}
+		p := Publication{Admission: admission.Sequence, ID: publicationID, NativeTurnID: proof.NativeTurnID, Sequence: input.Sequence, Text: input.Text, Final: input.Final, RecipientID: input.RecipientID}
+		if len(input.FileIDs) != 0 {
+			published, err := c.publishWorkerFiles(permit, p, input.FileIDs)
+			if err != nil {
+				return nil, err
+			}
+			return controllerResult(published)
+		}
+		publication, err := c.store.PublishSpeech(c.binding, permit, p)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +170,7 @@ func (c *Controller) ManagerCall(ctx context.Context, call ManagerToolCall) (res
 		if err != nil {
 			return nil, err
 		}
-		return c.managerQuestion(input, args, proof, admission)
+		return c.managerQuestion(ctx, input, proof, admission)
 
 	case "swarm_read_note":
 		input, err := decodeControllerInput[SessionInput](args)
@@ -664,11 +675,14 @@ func (c *Controller) reconcileAction(ctx context.Context, action Action) (json.R
 	return c.storedControllerActionResult(action)
 }
 
-func (c *Controller) managerQuestion(input AskInput, _ json.RawMessage, proof protocol.ManagerCallProof, admission Admission) (json.RawMessage, error) {
+func (c *Controller) managerQuestion(ctx context.Context, input AskInput, proof protocol.ManagerCallProof, admission Admission) (json.RawMessage, error) {
 	c.metadata.Lock()
 	defer c.metadata.Unlock()
 	st, err := c.store.Snapshot()
 	if err != nil {
+		return nil, err
+	}
+	if err := c.verifyPublicationRecipient(ctx, st, input.RecipientID, input.RecipientMessageID); err != nil {
 		return nil, err
 	}
 	id := c.businessReference("request", admission.Sequence, "", input.RequestID)
@@ -717,7 +731,7 @@ func (c *Controller) managerQuestion(input AskInput, _ json.RawMessage, proof pr
 		expires = prior.ExpiresAt
 	}
 
-	request, err := c.store.PutRequest(c.binding, Request{RecoveryContext: recoveryContext, ID: id, Kind: "manager", NativeInputID: proof.NativeInputID, NativeTurnID: proof.NativeTurnID, TaskID: task, Payload: payload, ExpiresAt: expires})
+	request, err := c.store.PutRequest(c.binding, Request{RecoveryContext: recoveryContext, RecipientID: input.RecipientID, ID: id, Kind: "manager", NativeInputID: proof.NativeInputID, NativeTurnID: proof.NativeTurnID, TaskID: task, Payload: payload, ExpiresAt: expires})
 	if err != nil {
 		return nil, err
 	}

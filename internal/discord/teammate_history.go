@@ -72,7 +72,28 @@ func teammateEvidence(m *discordgo.Message) TeammateHistoryMessage {
 	if m.Author != nil {
 		entry.Author = Actor{ID: m.Author.ID, Name: m.Author.Username}
 	}
-	for _, attachment := range m.Attachments {
+	entry.Attachments = teammateAttachmentEvidence(m.Attachments)
+	for _, snapshot := range teammateSnapshots(m) {
+		entry.Forwarded = append(entry.Forwarded, TeammateForwardedMessage{Text: snapshot.Content, Attachments: teammateAttachmentEvidence(snapshot.Attachments)})
+	}
+	return entry
+}
+
+func teammateSnapshots(m *discordgo.Message) []*discordgo.Message {
+	if m.MessageReference == nil || m.MessageReference.Type != discordgo.MessageReferenceTypeForward {
+		return nil
+	}
+	var out []*discordgo.Message
+	for _, snapshot := range m.MessageSnapshots {
+		if snapshot.Message != nil {
+			out = append(out, snapshot.Message)
+		}
+	}
+	return out
+}
+
+func teammateAttachmentEvidence(attachments []*discordgo.MessageAttachment) (out []TeammateAttachment) {
+	for _, attachment := range attachments {
 		if attachment == nil {
 			continue
 		}
@@ -80,9 +101,9 @@ func teammateEvidence(m *discordgo.Message) TeammateHistoryMessage {
 		if attachment.URL == "" {
 			available = "unavailable"
 		}
-		entry.Attachments = append(entry.Attachments, TeammateAttachment{ID: attachment.ID, Name: attachment.Filename, ContentType: attachment.ContentType, Size: attachment.Size, Availability: available})
+		out = append(out, TeammateAttachment{ID: attachment.ID, Name: attachment.Filename, ContentType: attachment.ContentType, Size: attachment.Size, Availability: available})
 	}
-	return entry
+	return out
 }
 
 func teammateHistoryRows(messages []*discordgo.Message) []TeammateHistoryMessage {
@@ -108,6 +129,9 @@ func (t *teammateConnector) history(d TeammateDiscussion, threadAnchor ...string
 }
 
 func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, threadAnchor string) (out TeammateHistoryPage, err error) {
+	if q.Source == "recipient" {
+		return out, t.verifyTeammateRecipient(ctx, d, q)
+	}
 	if q.Source == "publication" {
 		if q.Publication == nil || q.Publication.ID == "" || q.Publication.AdmissionID == "" || q.Publication.SystemCause != "" {
 			return out, ErrInvalid
