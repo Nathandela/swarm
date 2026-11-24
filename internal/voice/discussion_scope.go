@@ -28,6 +28,7 @@ type DiscussionScope struct {
 	GuildID            string
 	ThreadID           string
 	VerifyAudience     func(context.Context) error
+	VerifyRecipient    func(context.Context, string, string) error
 	ProjectEnrolled    func(string) bool
 	VerifyOrigin       func(context.Context, schema.MessageOrigin) error
 	VerifyGrant        func(context.Context, schema.MessageOrigin) error

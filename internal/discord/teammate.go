@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 
 	"github.com/bwmarrin/discordgo"
@@ -73,8 +74,10 @@ type TeammateDiscussion struct {
 }
 
 type TeammateAdmission struct {
-	ExpectReply                          bool   `json:",omitempty"`
-	AttachmentManifest                   string `json:",omitempty"`
+	ExpectReply                          bool                       `json:",omitempty"`
+	AttachmentManifest                   string                     `json:",omitempty"`
+	AttachmentNotice                     string                     `json:",omitempty"`
+	ForwardedContext                     []TeammateForwardedContext `json:",omitempty"`
 	RequireMention                       bool
 	Supersedes                           string
 	Discussion                           TeammateDiscussion
@@ -88,8 +91,10 @@ type TeammateAdmission struct {
 }
 
 type TeammatePublication struct {
-	BodyHash                                                          string `json:",omitempty"`
-	ActivationGeneration                                              uint64 `json:",omitempty"`
+	Files                                                             []schema.PublicationFile `json:",omitempty"`
+	RecipientID                                                       string                   `json:",omitempty"`
+	BodyHash                                                          string                   `json:",omitempty"`
+	ActivationGeneration                                              uint64                   `json:",omitempty"`
 	SystemCause                                                       string
 	ID, Body, AdmissionID, JobID, AttemptID, QuestionID, QuestionHash string
 	Sequence                                                          uint64
@@ -147,6 +152,14 @@ type TeammateHistoryMessage struct {
 	ContextMessage
 	ReplyTo     string
 	Attachments []TeammateAttachment
+	Forwarded   []TeammateForwardedMessage `json:",omitempty"`
+}
+type TeammateForwardedMessage struct {
+	Text        string
+	Attachments []TeammateAttachment `json:",omitempty"`
+}
+type TeammateForwardedContext struct {
+	MessageID, QuotedText string
 }
 type TeammateAttachment struct {
 	ID, Name, ContentType, Availability string

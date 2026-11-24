@@ -29,16 +29,18 @@ import (
 
 // WorkerMailReq is authenticated against the exact ordinary child that owns this note.
 type WorkerMailReq struct {
-	Action string `json:"action"`
-	ID     string `json:"id"`
-	Proof  string `json:"proof"`
-	Kind   string `json:"kind,omitempty"`
-	Text   string `json:"text,omitempty"`
+	Action string   `json:"action"`
+	ID     string   `json:"id"`
+	Proof  string   `json:"proof"`
+	Kind   string   `json:"kind,omitempty"`
+	Text   string   `json:"text,omitempty"`
+	Paths  []string `json:"paths,omitempty"`
 }
 type WorkerMailReceipt struct {
-	ID    string `json:"id"`
-	State string `json:"state"`
-	Text  string `json:"text,omitempty"`
+	ID    string            `json:"id"`
+	State string            `json:"state"`
+	Text  string            `json:"text,omitempty"`
+	Files []PublicationFile `json:"files,omitempty"`
 }
 
 // Control is the single JSON envelope for every control message (F-1: every

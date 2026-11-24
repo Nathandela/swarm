@@ -293,7 +293,7 @@ var serverCaps = []string{
 	CapContextGuardSettings,
 	CapLoginsManage,
 	CapSchedule, CapScheduleRunID, CapScheduleWorkspace, CapScheduleHostTime, CapScheduleRoute,
-	CapSemanticSend, CapSemanticTarget, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapWorkerMail, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire, CapManagerRetireCancel, CapManagerReplace,
+	CapSemanticSend, CapSemanticTarget, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests, CapOwnerLaunch, CapOwnerBoundResume, CapTeammateWorkerBridge, CapWorkerMail, CapWorkerMailFiles, CapManagerLaunch, CapManagerNativeCLI, CapManagerProvenance, CapManagerInterrupt, CapManagerRetire, CapManagerRetireCancel, CapManagerReplace,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1572,7 +1572,7 @@ func (s *Server) supportedCaps() []string {
 		if (cap == CapSchedule || cap == CapScheduleRunID || cap == CapScheduleHostTime) && (s.remoteTier || !scheduled) {
 			continue
 		}
-		if cap == CapWorkerMail {
+		if cap == CapWorkerMail || cap == CapWorkerMailFiles {
 			if _, ok := s.d.(workerMailSource); !ok || s.remoteTier || s.completionTier {
 				continue
 			}

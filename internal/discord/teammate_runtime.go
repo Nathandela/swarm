@@ -74,7 +74,7 @@ func (t *teammateConnector) gateway(f gatewayFrame, session string) error {
 		}
 		if m.Author != nil && m.Author.ID == t.service.botUserID() && m.WebhookID == "" {
 			if nonce := messageNonce(f.Data); nonce != "" && snowflake(m.ID) {
-				return t.service.Store.teammateObserve(cfg.InstallationID, route, m.ID, nonce, m.Content, t.service.Now())
+				return t.service.Store.teammateObserve(cfg.InstallationID, route, m.ID, nonce, m.Content, t.service.Now(), m.Attachments...)
 			}
 		}
 		if !t.admissibleHuman(&m) || !snowflake(m.ID) {
@@ -244,11 +244,16 @@ func (t *teammateConnector) addressed(m *discordgo.Message) bool {
 }
 
 func (t *teammateConnector) expectsReply(m *discordgo.Message) bool {
-	return t.addressed(m) || m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil && m.ReferencedMessage.Author.ID == t.service.botUserID()
+	return t.addressed(m) || teammateReply(m) != "" && m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil && m.ReferencedMessage.Author.ID == t.service.botUserID()
 }
 
 func teammateRevision(m *discordgo.Message) string {
-	return digest([]any{m.Author.ID, m.Content, m.ChannelID, m.GuildID, m.ID, m.EditedTimestamp, teammateReply(m), teammateEvidence(m).Attachments})
+	entry := teammateEvidence(m)
+	evidence := []any{m.Author.ID, m.Content, m.ChannelID, m.GuildID, m.ID, m.EditedTimestamp, entry.ReplyTo, entry.Attachments}
+	if len(entry.Forwarded) > 0 {
+		evidence = append(evidence, entry.Forwarded)
+	}
+	return digest(evidence)
 }
 
 func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) error {
@@ -288,8 +293,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 			}
 			a.Text = current.Content
 			previousManifest := a.AttachmentManifest
-			a.AttachmentManifest, err = t.captureAttachments(ctx, a, current)
-			if err != nil {
+			if err = t.captureAttachments(ctx, &a, current); err != nil {
 				return err
 			}
 			if previousManifest != a.AttachmentManifest {
@@ -361,10 +365,8 @@ func (t *teammateConnector) submitRevision(ctx context.Context, c teammateCandid
 	}
 	a.ExpectReply = t.expectsReply(m)
 	a.Revision, a.Text, a.ReplyTo = teammateRevision(m), m.Content, teammateReply(m)
-	var captureErr error
-	a.AttachmentManifest, captureErr = t.captureAttachments(ctx, a, m)
-	if captureErr != nil {
-		return captureErr
+	if err := t.captureAttachments(ctx, &a, m); err != nil {
+		return err
 	}
 	a.QuestionID, a.QuestionHash = "", ""
 	if a.ReplyTo != "" {
@@ -665,7 +667,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 			}
 			var emitted []string
 			managerErr := t.manager.Sync(ctx, b.TeammateDiscussion, t.history(b.TeammateDiscussion), func(p TeammatePublication) error {
-				if err := store.teammateQueueOutput(b.TeammateDiscussion, p, t.service.Now()); err != nil {
+				if err := t.queuePublication(ctx, b.TeammateDiscussion, p); err != nil {
 					return err
 				}
 				emitted = append(emitted, p.ID)

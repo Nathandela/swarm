@@ -74,6 +74,9 @@ func OpenStore(dir string) (*Store, error) {
 				return err
 			}
 		}
+		if _, err := tx.CreateBucketIfNotExists([]byte(teammateFilePayloadBucket)); err != nil {
+			return err
+		}
 		if initializeBindingIndices {
 			if err := initializeTeammateBindingIndices(tx); err != nil {
 				return err

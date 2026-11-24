@@ -159,6 +159,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		t.Error("rehearsal processes did not finish before cleanup deadline")
 	})
 	cfg := discord.Config{Mode: "teammate", Name: "Teammate rehearsal", InstallationID: "synthetic-place", ManagerCLI: "codex", WorkDir: workdir, DaemonSocket: socket, Projects: map[string]string{"fixture": project}}
+	if cli := os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_CLI"); cli != "" {
+		if (cli != "codex" && cli != "claude") || os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_FIXTURE") == "" {
+			t.Fatal("set the attachment fixture and use codex or claude")
+		}
+		cfg.ManagerCLI = cli
+	}
 	startup := os.Getenv("SWARM_TEAMMATE_TEST_STARTUP")
 	if startup != "" {
 		if startup != "codex" && startup != "claude" {
@@ -196,6 +202,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	reader := func(_ context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
 		historyMu.Lock()
 		defer historyMu.Unlock()
+		if os.Getenv("SWARM_TEAMMATE_TEST_TWO_WAY") == "1" && q.Source == "recipient" {
+			if !personal && q.MessageID == "301" && q.AuthorID == "401" {
+				return discord.TeammateHistoryPage{}, nil
+			}
+			return discord.TeammateHistoryPage{}, discord.ErrNotAuthorized
+		}
 		if durable == "" {
 			return discord.TeammateHistoryPage{Messages: slices.Clone(history)}, nil
 		}
@@ -477,10 +489,10 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 		return
 	}
 	if fixture := os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_FIXTURE"); fixture != "" {
-		if !personal || !vmMode {
-			t.Fatal("attachment rehearsal requires personal VM mode")
+		if !vmMode {
+			t.Fatal("attachment rehearsal requires VM project access")
 		}
-		runHostedAttachment(t, ctx, r, thread, reader, project, state, fixture, wait, &outputs, roster)
+		runHostedAttachment(t, ctx, r, thread, reader, project, state, fixture, cfg.ManagerCLI, wait, &outputs, roster)
 		return
 	}
 	if !vmMode && durable == "codex" && interruption == "restart" {

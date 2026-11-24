@@ -175,12 +175,12 @@ jobs:
           go-version: '1.26'
       - name: Engine + hookclient unit tests (incl. darwin CPU parser)
         run: go test -race ./internal/engine/... ./internal/hookclient/...
-      - name: Personal DM delivery, attachments and dispatcher recovery
+      - name: Discord delivery, files and dispatcher recovery
         env:
           TMPDIR: /tmp
         run: >-
-          go test -race -run '^Test(Personal(Input|Reconnect|Attachment)|Discussion(PersistsHumanIngress|LateDraft|UnconfirmedEffect|ReplacesFailedOwner|RecoversOnlyProvenDeleted)|ParkedDeletedDispatcher|QueuedExplicitMailboxNote|DiscordDraft|ManagerQuotaRequires)'
-          ./internal/discord ./internal/voice ./internal/skeleton
+          go test -race -run '^Test(Personal(Input|Reconnect|Attachment|FilePublication)|GuildAttachment|Teammate(FilePublication|MentionQuestion)|Discussion(Recipient|PublicationBinds|PersistsHumanIngress|LateDraft|UnconfirmedEffect|ReplacesFailedOwner|RecoversOnlyProvenDeleted)|ParkedDeletedDispatcher|ColdParkedDiscussion|QueuedExplicitMailboxNote|DiscordDraft|ManagerQuotaRequires|WorkerFile|CaptureWorkerFiles)'
+          ./internal/discord ./internal/voice ./internal/skeleton ./internal/workermail
       - name: CPU sampler integration (E10.6, darwin proc_pidinfo)
         run: go test -tags integration -race ./internal/engine/
       # E14.4 (N-3, scenario 15): the real daemon + shims idle-CPU soak on darwin

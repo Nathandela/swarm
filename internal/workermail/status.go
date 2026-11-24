@@ -21,7 +21,8 @@ type NoteStatus struct {
 }
 
 type PublicationStatus struct {
-	ID         string   `json:"id"`
-	State      string   `json:"state"`
-	MessageIDs []string `json:"discord_message_ids,omitempty"`
+	ID            string   `json:"id"`
+	State         string   `json:"state"`
+	MessageIDs    []string `json:"discord_message_ids,omitempty"`
+	AttachmentIDs []string `json:"discord_attachment_ids,omitempty"`
 }

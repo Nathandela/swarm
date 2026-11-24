@@ -64,7 +64,7 @@ func (d *DiscussionController) ValidatePublication(ctx context.Context, output D
 	if output.QuestionID != "" {
 		r, ok := st.Requests[k]
 		if !ok || !r.Exported || r.Kind != "manager" || r.ID != output.QuestionID || r.Hash != output.QuestionHash ||
-			r.DiscussionSource != output.DiscussionOutputSource || r.OutputSequence != output.Sequence {
+			r.DiscussionSource != output.DiscussionOutputSource || r.OutputSequence != output.Sequence || r.RecipientID != output.RecipientID || output.FileManifest != "" {
 			return ErrStale
 		}
 		projects, readAttempts = r.DiscussionProjects, r.DiscussionAttempts
@@ -72,13 +72,14 @@ func (d *DiscussionController) ValidatePublication(ctx context.Context, output D
 		if err != nil {
 			return err
 		}
-		if hashValue(body) != bodyHash {
+		if schema.PublicationContentHash(body, nil, output.RecipientID) != bodyHash {
 			return ErrStale
 		}
 	} else {
 		p, ok := st.Publications[k]
 		if !ok || !p.Exported || output.QuestionHash != "" || p.DiscussionSource != output.DiscussionOutputSource ||
-			p.OutputSequence != output.Sequence || hashValue(p.Text) != bodyHash {
+			p.OutputSequence != output.Sequence || schema.PublicationContentHash(p.Text, output.FileMetadata(), output.RecipientID) != bodyHash ||
+			p.RecipientID != output.RecipientID || p.DiscussionFiles != output.FileManifest {
 			return ErrStale
 		}
 		projects, readAttempts = p.DiscussionProjects, p.DiscussionAttempts
@@ -139,11 +140,15 @@ func (d *DiscussionController) validatePublicationAttempt(st State, id string) e
 
 // A worker's completion note and its full native result can wake two manager turns.
 func priorWorkerCompletion(st *State, p Publication) (Publication, bool) {
-	if !p.Final {
+	if !p.Final || p.DiscussionFiles != "" {
 		return Publication{}, false
 	}
 	prior, ok := relatedWorkerFinal(st, p)
-	return prior, ok && prior.Text == p.Text
+	return prior, ok && samePublicationContent(prior, p)
+}
+
+func samePublicationContent(a, b Publication) bool {
+	return a.Text == b.Text && a.RecipientID == b.RecipientID && a.DiscussionFiles == b.DiscussionFiles
 }
 
 func relatedWorkerFinal(st *State, p Publication) (Publication, bool) {
@@ -178,7 +183,7 @@ func relatedWorkerFinal(st *State, p Publication) (Publication, bool) {
 // Attach the disposition at dispatch, after an earlier queued wake has had a chance to publish.
 func discussionPriorFinalNotice(st State, a Admission, input, provider, nonce string) string {
 	p := Publication{ConversationID: a.ConversationID, Admission: a.Sequence, DiscussionSource: discussionOutputSource(&st, a.ConversationID, a)}
-	if _, ok := relatedWorkerFinal(&st, p); !ok {
+	if prior, ok := relatedWorkerFinal(&st, p); !ok || prior.DiscussionFiles != "" {
 		return input
 	}
 	text := input + "\nA final report for this worker attempt is already scheduled. Check Discord history for its delivery. Publish again only if this evidence changes or corrects the reported result."

@@ -61,12 +61,13 @@ type ContextPage struct {
 	NextOffset int              `json:"next_offset"`
 }
 type Chunk struct {
-	ID               string `json:"id"`
-	Body             string `json:"body"`
-	State            string `json:"state"`
-	MessageID        string `json:"message_id,omitempty"`
-	GatewaySeen      bool   `json:"gateway_seen,omitempty"`
-	RESTAcknowledged bool   `json:"rest_acknowledged,omitempty"`
+	AttachmentIDs    []string `json:"discord_attachment_ids,omitempty"`
+	ID               string   `json:"id"`
+	Body             string   `json:"body"`
+	State            string   `json:"state"`
+	MessageID        string   `json:"message_id,omitempty"`
+	GatewaySeen      bool     `json:"gateway_seen,omitempty"`
+	RESTAcknowledged bool     `json:"rest_acknowledged,omitempty"`
 }
 type Publication struct {
 	RequestRef        string    `json:"request_ref"`

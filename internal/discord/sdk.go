@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/version"
 	"github.com/bwmarrin/discordgo"
 	"github.com/coder/websocket"
@@ -73,9 +74,6 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 }
 
 func (c *DiscordClient) rest(ctx context.Context, method, path string, query url.Values, payload, out any) error {
-	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "?#\r\n") {
-		return errors.New("discord: invalid API path")
-	}
 	var body []byte
 	var err error
 	if payload != nil {
@@ -83,6 +81,13 @@ func (c *DiscordClient) rest(ctx context.Context, method, path string, query url
 		if err != nil {
 			return errors.New("discord: invalid request")
 		}
+	}
+	return c.restBody(ctx, method, path, query, "application/json", body, out)
+}
+
+func (c *DiscordClient) restBody(ctx context.Context, method, path string, query url.Values, contentType string, body []byte, out any) error {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "?#\r\n") {
+		return errors.New("discord: invalid API path")
 	}
 	gate, reset := c.gate, &c.reset
 	if c.onDispatch != nil && strings.HasPrefix(path, "/channels/") {
@@ -139,7 +144,7 @@ func (c *DiscordClient) rest(ctx context.Context, method, path string, query url
 			return errors.New("discord: invalid request")
 		}
 		req.Header.Set("Authorization", "Bot "+c.token)
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 		req.Header.Set("User-Agent", discordUserAgent())
 		resp, err := c.http.Do(req)
 		if err != nil {
@@ -554,6 +559,10 @@ func (c *DiscordClient) Post(ctx context.Context, out Outbound) (string, error) 
 	return message.ID, nil
 }
 func (c *DiscordClient) postMessage(ctx context.Context, out Outbound) (discordgo.Message, error) {
+	return c.postMessageWithFiles(ctx, out, "", nil, nil)
+}
+
+func (c *DiscordClient) postMessageWithFiles(ctx context.Context, out Outbound, recipient string, files []schema.PublicationFile, data [][]byte) (discordgo.Message, error) {
 	var msg discordgo.Message
 	rows, err := components(out.Actions)
 	if err != nil {
@@ -566,6 +575,10 @@ func (c *DiscordClient) postMessage(ctx context.Context, out Outbound) (discordg
 		}
 		reply = &discordgo.MessageReference{MessageID: out.ReplyTo}
 	}
+	type attachment struct {
+		ID       int    `json:"id"`
+		Filename string `json:"filename"`
+	}
 	payload := struct {
 		Content         string                            `json:"content"`
 		Components      []discordgo.MessageComponent      `json:"components"`
@@ -573,8 +586,36 @@ func (c *DiscordClient) postMessage(ctx context.Context, out Outbound) (discordg
 		Nonce           string                            `json:"nonce,omitempty"`
 		EnforceNonce    bool                              `json:"enforce_nonce,omitempty"`
 		Reference       *discordgo.MessageReference       `json:"message_reference,omitempty"`
-	}{out.Text, rows, &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}}, out.Nonce, out.Nonce != "", reply}
-	if err := c.REST(ctx, http.MethodPost, "/channels/"+url.PathEscape(out.Route.ChannelID)+"/messages", payload, &msg); err != nil {
+		Attachments     []attachment                      `json:"attachments,omitempty"`
+	}{
+		Content: out.Text, Components: rows, Nonce: out.Nonce, EnforceNonce: out.Nonce != "", Reference: reply,
+		AllowedMentions: &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}},
+	}
+	if recipient != "" {
+		if !snowflake(recipient) {
+			return msg, ErrInvalid
+		}
+		payload.AllowedMentions.Users = []string{recipient}
+	}
+	path := "/channels/" + url.PathEscape(out.Route.ChannelID) + "/messages"
+	if len(files) == 0 {
+		err = c.REST(ctx, http.MethodPost, path, payload, &msg)
+	} else {
+		if out.Nonce == "" || len(files) != len(data) {
+			return msg, ErrInvalid
+		}
+		parts := make([]*discordgo.File, 0, len(files))
+		for i, f := range files {
+			payload.Attachments = append(payload.Attachments, attachment{ID: i, Filename: f.Name})
+			parts = append(parts, &discordgo.File{Name: f.Name, ContentType: f.ContentType, Reader: bytes.NewReader(data[i])})
+		}
+		contentType, body, multipartErr := discordgo.MultipartBodyWithJSON(payload, parts)
+		if multipartErr != nil {
+			return msg, errors.New("discord: could not encode file upload")
+		}
+		err = c.restBody(ctx, http.MethodPost, path, nil, contentType, body, &msg)
+	}
+	if err != nil {
 		return msg, err
 	}
 	if msg.ID == "" {

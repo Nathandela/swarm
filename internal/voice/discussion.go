@@ -61,6 +61,8 @@ type DiscussionOutputSource struct {
 }
 
 type DiscussionOutput struct {
+	FileManifest string
+	RecipientID  string
 	DiscussionOutputSource
 	ID, Text, QuestionID, QuestionHash string
 	Sequence                           uint64
@@ -616,12 +618,6 @@ func (d *DiscussionController) Dormant() (bool, error) {
 	if hasReplyObligation(st) {
 		return false, nil
 	}
-	if d.controller == nil {
-		return !discussionPending(st) && !discussionAwaitingExport(st, d.now()), nil
-	}
-	if !st.Conversations[d.cfg.ConversationID].Parked || !discussionQuiescent(st, d.now()) {
-		return false, nil
-	}
 	for _, action := range st.Actions {
 		if action.ConversationID == d.cfg.ConversationID && action.State == discussionQueuedSend {
 			return false, nil
@@ -635,7 +631,10 @@ func (d *DiscussionController) Dormant() (bool, error) {
 			return false, nil
 		}
 	}
-	return true, nil
+	if d.controller == nil {
+		return !discussionPending(st) && !discussionAwaitingExport(st, d.now()), nil
+	}
+	return st.Conversations[d.cfg.ConversationID].Parked && discussionQuiescent(st, d.now()), nil
 }
 
 func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOutput) error) (result error) {
@@ -1099,9 +1098,7 @@ func (d *DiscussionController) export(st State, emit func(DiscussionOutput) erro
 		if p.Exported {
 			continue
 		}
-		output := DiscussionOutput{DiscussionOutputSource: p.DiscussionSource}
-		output.ID, output.Text, output.Sequence = p.ID, p.Text, p.OutputSequence
-		outputs = append(outputs, output)
+		outputs = append(outputs, publicationOutput(p))
 	}
 	for _, r := range st.Requests {
 		if r.Exported || r.Kind != "manager" || r.State != "pending" || !d.now().Before(r.ExpiresAt) {
@@ -1111,10 +1108,7 @@ func (d *DiscussionController) export(st State, emit func(DiscussionOutput) erro
 		if err != nil {
 			return err
 		}
-		output := DiscussionOutput{DiscussionOutputSource: r.DiscussionSource}
-		output.ID, output.QuestionID, output.QuestionHash, output.Text = r.ID, r.ID, r.Hash, question
-		output.Sequence = r.OutputSequence
-		outputs = append(outputs, output)
+		outputs = append(outputs, questionOutput(r, question))
 	}
 	sort.Slice(outputs, func(i, j int) bool {
 		if outputs[i].Sequence != outputs[j].Sequence {
