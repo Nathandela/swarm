@@ -179,7 +179,7 @@ jobs:
         env:
           TMPDIR: /tmp
         run: >-
-          go test -race -run '^Test(Personal(Input|Reconnect|Attachment|FilePublication)|GuildAttachment|Teammate(FilePublication|MentionQuestion)|Discussion(Recipient|PublicationBinds|PersistsHumanIngress|LateDraft|UnconfirmedEffect|ReplacesFailedOwner|RecoversOnlyProvenDeleted)|ParkedDeletedDispatcher|ColdParkedDiscussion|QueuedExplicitMailboxNote|DiscordDraft|ManagerQuotaRequires|WorkerFile)'
+          go test -race -run '^Test(Personal(Input|Reconnect|Attachment|FilePublication)|GuildAttachment|Teammate(FilePublication|MentionQuestion)|Discussion(Recipient|PublicationBinds|PersistsHumanIngress|LateDraft|UnconfirmedEffect|ReplacesFailedOwner|RecoversOnlyProvenDeleted)|ParkedDeletedDispatcher|ColdParkedDiscussion|QueuedExplicitMailboxNote|DiscordDraft|ManagerQuotaRequires|WorkerFile|CaptureWorkerFiles)'
           ./internal/discord ./internal/voice ./internal/skeleton ./internal/workermail
       - name: CPU sampler integration (E10.6, darwin proc_pidinfo)
         run: go test -tags integration -race ./internal/engine/

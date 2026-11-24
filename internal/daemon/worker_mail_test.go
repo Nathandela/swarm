@@ -32,6 +32,10 @@ func TestOrdinaryDispatcherWorkerBindingPrecedesExecAndSurvivesLostReceipt(t *te
 		t.Fatal(err)
 	}
 	child := announceSpec(t, childPID)
+	child.Cwd, err = filepath.EvalSymlinks(child.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
 	child.SpawnedFrom = parent.ID
 	child.SpawnIntent = "delegate"
 	child.OwnerLaunchHash = "exact-request"
