@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
@@ -390,7 +391,7 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 		}
 		var old teammateOutput
 		err := teammateGet(b, k, &old)
-		bodyHash := PublicationContentHash(p.Body, p.Files, p.RecipientID)
+		bodyHash := schema.PublicationContentHash(p.Body, p.Files, p.RecipientID)
 		if err == nil {
 			p.Body = ""
 			prior := old.Publication

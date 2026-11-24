@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 	bolt "go.etcd.io/bbolt"
 )
@@ -727,7 +728,7 @@ type PublicationProof struct {
 }
 
 func (p TeammatePublication) Proof() PublicationProof {
-	proof := PublicationProof{ID: p.ID, BodyHash: PublicationContentHash(p.Body, p.Files, p.RecipientID), Chunks: len(p.chunks()), Files: len(p.Files)}
+	proof := PublicationProof{ID: p.ID, BodyHash: schema.PublicationContentHash(p.Body, p.Files, p.RecipientID), Chunks: len(p.chunks()), Files: len(p.Files)}
 	p.Body = ""
 	proof.PublicationHash = digest(p)
 	return proof

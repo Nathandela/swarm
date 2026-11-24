@@ -192,7 +192,7 @@ func TestAnchoredDeliveryRequiresExactPublicationAndEveryChunk(t *testing.T) {
 	key := teammateOutputKey(d.InstallationID, d.ID, p.ID)
 	metadata := p
 	metadata.Body = ""
-	out := teammateOutput{DiscussionID: d.ID, Route: d.Route, BodyHash: PublicationBodyHash(p.Body), Publication: metadata, Chunks: []Chunk{{State: StateSent, MessageID: "301", GatewaySeen: true}, {State: StateUncertain}}}
+	out := teammateOutput{DiscussionID: d.ID, Route: d.Route, BodyHash: digest(p.Body), Publication: metadata, Chunks: []Chunk{{State: StateSent, MessageID: "301", GatewaySeen: true}, {State: StateUncertain}}}
 	put := func() {
 		t.Helper()
 		if err := s.db.Update(func(tx *bolt.Tx) error { return putJSON(tx, teammateOutboxBucket, key, out) }); err != nil {
