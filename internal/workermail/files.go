@@ -43,9 +43,9 @@ func CaptureFiles(checkout string, paths []string) ([]FileSubmission, error) {
 	if len(paths) == 0 || len(paths) > schema.MaxPublicationFiles || !filepath.IsAbs(checkout) {
 		return nil, errors.New("worker files: select 1 to 10 files from your checkout")
 	}
-	root, err := os.OpenRoot(checkout)
+	root, err := openWorkerCheckout(checkout)
 	if err != nil {
-		return nil, errors.New("worker files: the worker checkout is unavailable")
+		return nil, errors.New("worker files: use a worker checkout with a real directory path")
 	}
 	defer func() { _ = root.Close() }()
 	total := 0
@@ -80,6 +80,38 @@ func CaptureFiles(checkout string, paths []string) ([]FileSubmission, error) {
 		}, data: data})
 	}
 	return files, nil
+}
+
+// Keep each directory anchored while opening the next component so a renamed
+// checkout or symlink cannot redirect a file read to another workspace.
+func openWorkerCheckout(checkout string) (*os.Root, error) {
+	absolute := filepath.Clean(checkout)
+	if absolute == "/" {
+		return nil, os.ErrInvalid
+	}
+	current, err := os.OpenRoot("/")
+	if err != nil {
+		return nil, err
+	}
+	for component := range strings.SplitSeq(strings.TrimPrefix(absolute, "/"), "/") {
+		before, err := current.Lstat(component)
+		if err != nil || !before.IsDir() {
+			_ = current.Close()
+			return nil, os.ErrInvalid
+		}
+		next, err := current.OpenRoot(component)
+		_ = current.Close()
+		if err != nil {
+			return nil, err
+		}
+		after, err := next.Stat(".")
+		if err != nil || !os.SameFile(before, after) {
+			_ = next.Close()
+			return nil, os.ErrInvalid
+		}
+		current = next
+	}
+	return current, nil
 }
 
 func readWorkerFile(root *os.Root, path string, remaining int) ([]byte, error) {

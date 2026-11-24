@@ -16,7 +16,7 @@ import (
 
 func TestWorkerFilesRetainExactBytesAndScopeAfterAcknowledgement(t *testing.T) {
 	dir := t.TempDir()
-	checkout := t.TempDir()
+	checkout := canonicalTestCheckout(t)
 	png := filepath.Join(checkout, "screenshot.png")
 	csv := filepath.Join(checkout, "report.csv")
 	pngBytes, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cy7sAAAAASUVORK5CYII=")
@@ -118,7 +118,7 @@ func TestWorkerFilesRetainExactBytesAndScopeAfterAcknowledgement(t *testing.T) {
 }
 
 func TestCaptureWorkerFilesRejectsUnsafeFilesystemInputs(t *testing.T) {
-	checkout := t.TempDir()
+	checkout := canonicalTestCheckout(t)
 	outside := filepath.Join(t.TempDir(), "outside.csv")
 	if err := os.WriteFile(outside, []byte("private,data\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestCaptureWorkerFilesRejectsUnsafeFilesystemInputs(t *testing.T) {
 }
 
 func TestCaptureWorkerFilesRejectsClashingDiscordNames(t *testing.T) {
-	checkout := t.TempDir()
+	checkout := canonicalTestCheckout(t)
 	nested := filepath.Join(checkout, "nested")
 	if err := os.Mkdir(nested, 0700); err != nil {
 		t.Fatal(err)
@@ -176,5 +176,28 @@ func TestCaptureWorkerFilesRejectsClashingDiscordNames(t *testing.T) {
 	}
 	if _, err := CaptureFiles(checkout, paths[2:]); err == nil {
 		t.Fatal("filename with surrounding whitespace accepted")
+	}
+}
+
+func canonicalTestCheckout(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestCaptureWorkerFilesRejectsRedirectedCheckout(t *testing.T) {
+	target := canonicalTestCheckout(t)
+	if err := os.WriteFile(filepath.Join(target, "result.csv"), []byte("result,value\nmarker,42\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(canonicalTestCheckout(t), "checkout")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CaptureFiles(alias, []string{filepath.Join(alias, "result.csv")}); err == nil {
+		t.Fatal("followed a substituted checkout symlink")
 	}
 }
