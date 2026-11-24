@@ -424,7 +424,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// must compete here under the same lock that reserves the eventual session.
 	if spec.Manager != nil && schema.IsDiscordManager("manager", spec.Manager.ConversationID) {
 		for _, candidate := range d.sessions {
-			if candidate.meta.Role == "manager" && candidate.meta.ManagerConversationID == spec.Manager.ConversationID && candidate.meta.Status.Process != status.ProcessExited {
+			if candidate.meta.Role == "manager" && candidate.meta.ManagerConversationID == spec.Manager.ConversationID &&
+				candidate.meta.Status.Process != status.ProcessExited && d.FailedManagerStartupInstance(candidate.meta) == "" {
 				d.mu.Unlock()
 				return persist.Meta{}, ErrDiscussionManagerOwned
 			}
@@ -435,7 +436,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		if !ok || source.meta.ShimPID != expected.ShimPID || source.meta.ShimStartTime != expected.ShimStartTime ||
 			source.meta.AgentType != spec.AgentType || source.meta.ConversationID != spec.ConversationID ||
 			!matchesBoundResumeRole(source.meta, spec) ||
-			spec.Manager != nil && (source.meta.ManagerResumeOperationID != spec.OperationID || source.meta.ManagerResumeRequestHash != spec.OwnerLaunchHash) || source.meta.RosterHidden || source.meta.Status.Process != status.ProcessExited {
+			spec.Manager != nil && (source.meta.ManagerResumeOperationID != spec.OperationID || source.meta.ManagerResumeRequestHash != spec.OwnerLaunchHash) || source.meta.RosterHidden ||
+			source.meta.Status.Process != status.ProcessExited && (spec.Manager == nil || expected.Instance == "" || d.FailedManagerStartupInstance(source.meta) != expected.Instance) {
 			d.mu.Unlock()
 			return persist.Meta{}, ErrResumeSourceChanged
 		}

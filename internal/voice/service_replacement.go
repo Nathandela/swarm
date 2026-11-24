@@ -137,7 +137,7 @@ func (r *managerReplacement) checkRoster(previous ManagerBinding, candidate stri
 			}
 			oldExited = true
 		} else if row.Role == "manager" && row.ManagerConversationID == previous.ConversationID &&
-			row.Status.Process != status.ProcessExited && row.ID != candidate {
+			!discussionManagerEnded(row) && row.ID != candidate {
 			return ErrConflict
 		}
 	}

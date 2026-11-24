@@ -9,6 +9,10 @@ func (a *coreAPI) OwnerLaunchReplay(operationID, requestHash string) (persist.Me
 	return a.core.OwnerLaunchReplay(operationID, requestHash)
 }
 
+func (a *coreAPI) FailedManagerStartupInstance(meta persist.Meta) string {
+	return a.core.FailedManagerStartupInstance(meta)
+}
+
 func (a *coreAPI) OwnerLaunchOutcome(operationID string) (schema.OperationOutcomeView, bool) {
 	out, known := a.core.OwnerLaunchOutcome(operationID)
 	view := schema.OperationOutcomeView{State: out.State}

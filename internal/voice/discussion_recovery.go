@@ -42,9 +42,15 @@ func discussionManagerExited(rows []protocol.SessionView, binding protocol.Manag
 	return false
 }
 
+func discussionManagerEnded(row protocol.SessionView) bool {
+	return row.Status.Process == status.ProcessExited ||
+		row.Status.Process == status.ProcessLost && schema.IsDiscordManager(row.Role, row.ManagerConversationID) && row.FailedManagerInstance != "" &&
+			(row.Capabilities == nil || row.Capabilities.SessionInstance == row.FailedManagerInstance)
+}
+
 func requireDeletedManagerAbsent(rows []protocol.SessionView, binding protocol.ManagerRuntimeBinding) error {
 	for _, row := range rows {
-		if row.Role == "manager" && row.ManagerConversationID == binding.ConversationID && row.ID != binding.Session && row.Status.Process != status.ProcessExited {
+		if row.Role == "manager" && row.ManagerConversationID == binding.ConversationID && row.ID != binding.Session && !discussionManagerEnded(row) {
 			return errCompetingManagers
 		}
 		if row.ID == binding.Session {
@@ -314,7 +320,7 @@ func (d *DiscussionController) startReplacement(ctx context.Context, reason stri
 		return err
 	}
 	for _, row := range rows {
-		if row.Role == "manager" && row.ManagerConversationID == b.ConversationID && row.ID != b.SessionID && row.Status.Process != status.ProcessExited {
+		if row.Role == "manager" && row.ManagerConversationID == b.ConversationID && row.ID != b.SessionID && !discussionManagerEnded(row) {
 			return errCompetingManagers
 		}
 	}

@@ -364,6 +364,9 @@ func Serve(cfg Config) (*Daemon, error) {
 		ManagerDeletionGeneration: func(meta persist.Meta) string {
 			return stoppedManagerGeneration(cfg.StateDir, meta)
 		},
+		ManagerLostStartup: func(meta persist.Meta, instance string) bool {
+			return provedLostManagerStartup(cfg.StateDir, meta, instance)
+		},
 		WorkerInstance: d.adoptOrMintSessionInstance,
 		OnSessionStart: d.registerSession,
 		OnSessionEnd:   d.endSession,

@@ -28,6 +28,19 @@ func (r *deletedActiveManagerRuntime) ManagerRetire(ctx context.Context, req pro
 	return receipt, err
 }
 
+func TestDeletedManagerChecksHistoricalLostIncarnation(t *testing.T) {
+	binding := protocol.ManagerRuntimeBinding{Session: "machine/active", ConversationID: DiscussionConversationPrefix + "historical"}
+	row := protocol.SessionView{ID: "machine/old-attempt", Role: "manager", ManagerConversationID: binding.ConversationID,
+		Status: status.Status{Process: status.ProcessLost}, Capabilities: &protocol.SessionCapabilities{SessionInstance: "exact"}}
+	for _, proof := range []string{"", "wrong", "exact"} {
+		row.FailedManagerInstance = proof
+		err := requireDeletedManagerAbsent([]protocol.SessionView{row}, binding)
+		if proof == "exact" && err != nil || proof != "exact" && !errors.Is(err, errCompetingManagers) {
+			t.Fatalf("proof %q: unexpected result %v", proof, err)
+		}
+	}
+}
+
 func TestDiscussionRecoversOnlyProvenDeletedActiveOrRetiringOwner(t *testing.T) {
 	audienceLost := errors.New("discussion audience unavailable")
 	for _, tc := range []struct {

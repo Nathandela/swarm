@@ -155,18 +155,28 @@ func (d *Daemon) BindParkedManagerResume(spec LaunchSpec) error {
 	return syncLaunchDirectories(d.sessionDir(m.ID))
 }
 
-// FailedManagerStartupInstance corroborates a failed startup with the physical exit and
-// the incarnation's verified empty proof ledger. A missing record is inconclusive.
+// FailedManagerStartupInstance corroborates a failed startup with physical shutdown
+// and the incarnation's verified empty proof ledger. A missing record is inconclusive.
 func (d *Daemon) FailedManagerStartupInstance(m persist.Meta) string {
 	if m.Role != "manager" || m.ResumedFrom == "" && !schema.IsDiscordManager(m.Role, m.ManagerConversationID) || m.ManagerRetirement.OperationID != "" ||
-		m.Status.Process != status.ProcessExited || m.ExitCode == nil || *m.ExitCode == 0 ||
+		m.Status.Process != status.ProcessExited && m.Status.Process != status.ProcessLost ||
 		m.ShimPID <= 0 || m.ShimStartTime <= 0 || retirementShimMayLive(m) {
 		return ""
 	}
-	dir := d.sessionDir(m.ID)
-	exit, ok := readExitSideFile(dir)
-	if !ok || m.CreatedAt.IsZero() || exit.FinishedAt.IsZero() || exit.ExitCode != *m.ExitCode || exit.FinishedAt.Before(m.CreatedAt) {
+	instance := d.recordedJournalInstance(m)
+	if instance == "" {
 		return ""
+	}
+	dir := d.sessionDir(m.ID)
+	if m.Status.Process == status.ProcessLost {
+		if !schema.IsDiscordManager(m.Role, m.ManagerConversationID) || d.cfg.ManagerLostStartup == nil || !d.cfg.ManagerLostStartup(m, instance) {
+			return ""
+		}
+	} else {
+		exit, ok := readExitSideFile(dir)
+		if !ok || m.ExitCode == nil || *m.ExitCode == 0 || m.CreatedAt.IsZero() || exit.FinishedAt.IsZero() || exit.ExitCode != *m.ExitCode || exit.FinishedAt.Before(m.CreatedAt) {
+			return ""
+		}
 	}
 	replay, err := managerproof.OpenReplay(dir, m.ID, m.ManagerConversationID, m.ManagerReplayID)
 	if err != nil {
@@ -177,7 +187,7 @@ func (d *Daemon) FailedManagerStartupInstance(m persist.Meta) string {
 	if err != nil || closeErr != nil || stats.Records != 0 || stats.GuardKeys != 0 {
 		return ""
 	}
-	return d.recordedJournalInstance(m)
+	return instance
 }
 
 // ParkedManagerResumeAllowed permits one continuation from the retired source

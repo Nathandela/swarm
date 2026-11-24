@@ -9,6 +9,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -79,6 +80,72 @@ func TestUnregisteredManagerConnectionReleasesStartupLedger(t *testing.T) {
 			}
 			if err := replay.Close(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProvedLostManagerStartupRequiresExactUnstartedCustody(t *testing.T) {
+	const instance = "0123456789abcdef0123456789abcdef"
+	for _, test := range []struct {
+		name   string
+		change func(map[string]any)
+	}{
+		{name: "exact contained startup"},
+		{name: "no joined stop proof", change: func(files map[string]any) { delete(files, shim.NativeStoppedFile) }},
+		{name: "mismatched writer generation", change: func(files map[string]any) {
+			stopped := files[shim.NativeStoppedFile].(shim.NativeStoppedInfo)
+			stopped.Native.Generation = "ffffffffffffffffffffffffffffffff"
+			files[shim.NativeStoppedFile] = stopped
+		}},
+		{name: "no scope containment", change: func(files map[string]any) {
+			stopped := files[shim.NativeStoppedFile].(shim.NativeStoppedInfo)
+			stopped.DescendantsContained = false
+			files[shim.NativeStoppedFile] = stopped
+		}},
+		{name: "backend identity was recorded", change: func(files map[string]any) {
+			stopped := files[shim.NativeStoppedFile].(shim.NativeStoppedInfo)
+			stopped.Native.BackendPID = 1 << 29
+			files[shim.NativeProcessFile], files[shim.NativeStoppedFile] = stopped.Native, stopped
+		}},
+		{name: "backend was not required", change: func(files map[string]any) {
+			files["shim-launch.json"].(map[string]any)["backend_required"] = false
+		}},
+		{name: "different backend failure", change: func(files map[string]any) {
+			files[sessionDegradedFile] = historyTornMarker{Version: 1, SessionInstance: instance, Generation: backendGapGeneration(gapBackendLost)}
+		}},
+		{name: "different instance marker", change: func(files map[string]any) {
+			files[sessionDegradedFile] = historyTornMarker{Version: 1, SessionInstance: "another", Generation: backendGapGeneration(gapBackendNeverServed)}
+		}},
+		{name: "conflicting backend record", change: func(files map[string]any) {
+			files[shim.BackendFile] = shim.BackendInfo{}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := shortSocketTestDir(t)
+			meta := persist.Meta{ID: "testmanageraaaaa", AgentType: "codex", Status: status.Status{Process: status.ProcessLost}, ShimPID: 1 << 30, ShimStartTime: 1}
+			dir := filepath.Join(root, meta.ID)
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			native := shim.NativeProcessInfo{SchemaVersion: shim.NativeWriterSchemaVersion, ShimPID: meta.ShimPID, ShimStartTime: meta.ShimStartTime, Generation: instance, Provider: meta.AgentType, BootID: "old-boot"}
+			files := map[string]any{
+				"shim-launch.json": map[string]any{"session_id": meta.ID, "session_dir": dir, "native_provider": meta.AgentType,
+					"backend_required": true, "backend_program": "/test/codex", "backend_socket_path": filepath.Join(dir, "codex.sock")},
+				sessionDegradedFile:    historyTornMarker{Version: 1, SessionInstance: instance, Generation: backendGapGeneration(gapBackendNeverServed)},
+				shim.NativeProcessFile: native,
+				shim.NativeStoppedFile: shim.NativeStoppedInfo{SchemaVersion: shim.NativeWriterSchemaVersion, Native: native, WritersStopped: true, DescendantsContained: true},
+			}
+			if test.change != nil {
+				test.change(files)
+			}
+			for name, value := range files {
+				if err := writeJSONStateFile(filepath.Join(dir, name), value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if proved := provedLostManagerStartup(root, meta, instance); proved != (test.change == nil) {
+				t.Fatalf("proved = %t", proved)
 			}
 		})
 	}

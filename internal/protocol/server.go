@@ -20,6 +20,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/version"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -1607,9 +1608,13 @@ func (cc *clientConn) handleList() {
 	_, hidden := persist.ProjectDiscussions(metas)
 	successors := discussionSuccessors(hidden)
 	views := make([]SessionView, 0, len(metas))
+	proof, canProve := cc.srv.d.(interface{ FailedManagerStartupInstance(persist.Meta) string })
 	for _, m := range metas {
 		m.RosterHidden = m.RosterHidden && m.Status.Process != status.ProcessRunning
 		view := cc.stampView(m, status.Derive(m.Status))
+		if canProve && !cc.srv.remoteTier && !cc.srv.completionTier && m.Status.Process == status.ProcessLost && schema.IsDiscordManager(m.Role, m.ManagerConversationID) {
+			view.FailedManagerInstance = proof.FailedManagerStartupInstance(m)
+		}
 		stampSuperseded(view, hidden[m.ID], successors[m.ID])
 		views = append(views, *view)
 	}
