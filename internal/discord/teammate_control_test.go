@@ -341,7 +341,7 @@ func TestTeammateWorkerPublicationHoldsRevokedGrantAndNeverRepostsUncertainChunk
 	if err := c.sendPending(ctx, d); !errors.Is(err, ErrNotAuthorized) || posts != 0 {
 		t.Fatalf("revoked effect posts=%d err=%v", posts, err)
 	}
-	if restarted.last.JobID != p.JobID || restarted.last.AttemptID != p.AttemptID || restarted.last.BodyHash != PublicationBodyHash(p.Body) {
+	if restarted.last.JobID != p.JobID || restarted.last.AttemptID != p.AttemptID || restarted.last.BodyHash != digest(p.Body) {
 		t.Fatalf("wrong native authority %v", restarted.last)
 	}
 	restarted.grantErr = nil
@@ -402,7 +402,7 @@ func TestTeammateNonJobPublicationsStillRevalidateNativeAuthority(t *testing.T) 
 		t.Fatalf("proof checks = %+v", restarted.validated)
 	}
 	for i, p := range restarted.validated {
-		if p.ID != responses[i].ID || p.BodyHash != PublicationBodyHash(responses[i].Body) || p.JobID != "" {
+		if p.ID != responses[i].ID || p.BodyHash != digest(responses[i].Body) || p.JobID != "" {
 			t.Fatalf("proof check %+v expected publication %s", p, responses[i].ID)
 		}
 	}

@@ -100,8 +100,6 @@ type TeammatePublication struct {
 	Sequence                                                          uint64
 }
 
-func PublicationBodyHash(body string) string { return digest(body) }
-
 type TeammateHistoryReader func(context.Context, TeammateHistoryQuery) (TeammateHistoryPage, error)
 
 var ErrTeammateSourceChanged = errors.New("discord: source message changed before native submission")
