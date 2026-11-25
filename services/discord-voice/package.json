@@ -1,0 +1,18 @@
+{
+  "name": "swarm-discord-voice",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.17.0 <25"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@discordjs/voice": "1.0.0-dev.1795176133-cd7400323",
+    "@noble/ciphers": "2.0.1",
+    "@snazzah/davey": "0.2.0",
+    "opusscript": "0.1.1"
+  }
+}
