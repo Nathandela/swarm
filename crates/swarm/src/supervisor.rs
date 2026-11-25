@@ -28,6 +28,13 @@ use std::time::Duration;
 const SESSION_LIMIT: usize = 64;
 
 pub(crate) fn run(args: &[String]) -> u8 {
+    if args == ["restart", "--unattended"] {
+        return crate::bootstrap::unattended();
+    }
+    if args.first().is_some_and(|arg| arg == "restart") && args.len() > 1 {
+        eprintln!("usage: swarm daemon restart [--unattended]");
+        return 2;
+    }
     if args == ["restart"] {
         return match crate::bootstrap::restart() {
             Ok(()) => 0,
@@ -37,7 +44,21 @@ pub(crate) fn run(args: &[String]) -> u8 {
             }
         };
     }
-    if !args.is_empty() {
+    if let [role, pid, birth] = args
+        && role == "--replace-idle"
+    {
+        let (Ok(pid), Ok(birth)) = (pid.parse::<u32>(), birth.parse::<u64>()) else {
+            return 2;
+        };
+        match crate::bootstrap::replace_idle(pid, birth) {
+            Ok(true) => {}
+            Ok(false) => return 2,
+            Err(error) => {
+                eprintln!("daemon replacement: {error}");
+                return 1;
+            }
+        }
+    } else if !args.is_empty() {
         eprintln!("usage: swarm daemon");
         return 2;
     }
@@ -51,6 +72,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
 }
 
 struct State {
+    lock_identity: [u64; 2],
     root: PathBuf,
     endpoint: String,
     socket: PathBuf,
@@ -66,6 +88,38 @@ struct State {
 }
 
 impl State {
+    fn verify_idle(&self) -> io::Result<()> {
+        let sessions = self.sessions.read().unwrap();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if let Some(id) = entry
+                .file_name()
+                .to_str()
+                .filter(|id| runtime::valid_id(id))
+                && (!entry.file_type()?.is_dir() || !sessions.contains_key(id))
+            {
+                return Err(io::Error::other(format!(
+                    "cannot establish custody of session {id}"
+                )));
+            }
+        }
+        for session in sessions.values() {
+            session.reconcile();
+            let view = session.view(&self.endpoint);
+            let group = field(&view, "group");
+            if !matches!(group, "completed" | "ready_for_review")
+                || group == "completed" && session.workspace_unconfirmed()
+                || group == "ready_for_review" && !session.confirm_idle_observation()?
+            {
+                return Err(io::Error::other(format!(
+                    "session {} is {group} or has unconfirmed custody",
+                    session.id
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn rows(&self) -> Vec<Value> {
         let sessions = self.sessions.read().unwrap();
         let mut rows: Vec<_> = sessions.values().map(|s| s.view(&self.endpoint)).collect();
@@ -347,6 +401,17 @@ impl State {
     }
 }
 
+pub(crate) fn endpoint(root: &std::path::Path) -> String {
+    let digest = Sha256::digest(root.as_os_str().as_bytes());
+    format!(
+        "ep-{}",
+        digest[..4]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+}
+
 fn serve() -> io::Result<()> {
     let configured = ipc::env_path("SWARM_DAEMON_STATE").ok_or_else(|| {
         io::Error::other("SWARM_DAEMON_STATE is required for the isolated Rust runtime")
@@ -356,6 +421,8 @@ fn serve() -> io::Result<()> {
     let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
     // Alternate sockets and lock overrides cannot create two writers for one state root.
     let _lock = runtime::lock(&lock)?;
+    use std::os::unix::fs::MetadataExt;
+    let lock_meta = _lock.metadata()?;
     let ownership = root.join(".rust-state-writer.lock");
     let _state_lock = if lock == ownership {
         None
@@ -370,14 +437,7 @@ fn serve() -> io::Result<()> {
             ));
         }
     }
-    let digest = Sha256::digest(root.as_os_str().as_bytes());
-    let endpoint = format!(
-        "ep-{}",
-        digest[..4]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
+    let endpoint = endpoint(&root);
     let runtime_root = root.join("rust-v1");
     runtime::private_dir(&runtime_root)?;
     runtime::private_dir(&runtime_root.join("operations"))?;
@@ -417,6 +477,7 @@ fn serve() -> io::Result<()> {
         })
         .ok();
     let state = Arc::new(State {
+        lock_identity: [lock_meta.dev(), lock_meta.ino()],
         handoff_wake,
         root: runtime_root,
         endpoint,
@@ -517,6 +578,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "semantic-target"
                         | "opencode-history-v1"
                         | "native-requests-v1"
+                        | crate::bootstrap::UNATTENDED
                         | crate::bootstrap::RESTART
                 )
                 || (state.schedule_socket.is_some() && scheduling::CAPS.contains(cap))
@@ -547,6 +609,45 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             continue;
         }
         let op = field(&request, "op");
+        if op == "owner_idle_restart" && caps.contains(&crate::bootstrap::UNATTENDED) {
+            let requested = std::path::Path::new(field(&request, "state_dir"));
+            if Some(requested) != state.root.parent() || !request["commit"].is_boolean() {
+                reply(
+                    &writer,
+                    state,
+                    json!({"op":"error","error":"idle restart requires the bound supervisor state directory and commit flag"}),
+                )?;
+                continue;
+            }
+            if request["lock_identity"] != json!(state.lock_identity) {
+                reply(
+                    &writer,
+                    state,
+                    json!({"op":op,"result":"deferred","reason":"configured lock is not the running supervisor lock"}),
+                )?;
+                continue;
+            }
+            let _drained = state.transactions.write().unwrap();
+            let _reserve = state.launch_gate.lock().unwrap();
+            if let Err(reason) = state.verify_idle() {
+                reply(
+                    &writer,
+                    state,
+                    json!({"op":op,"result":"deferred","reason":reason.to_string()}),
+                )?;
+                continue;
+            }
+            let commit = request["commit"] == true;
+            reply(
+                &writer,
+                state,
+                json!({"op":op,"result":if commit {"stopping"} else {"ready"}}),
+            )?;
+            if commit {
+                std::process::exit(0);
+            }
+            continue;
+        }
         if op == "owner_daemon_restart" {
             let requested = std::path::Path::new(field(&request, "state_dir"));
             if !caps.contains(&crate::bootstrap::RESTART) || Some(requested) != state.root.parent()
@@ -924,6 +1025,7 @@ mod manager_reservation_tests {
 
     fn fixture(root: &std::path::Path, rows: BTreeMap<String, Arc<Session>>) -> State {
         State {
+            lock_identity: [0, 0],
             handoff_wake: mpsc::sync_channel(1).0,
             schedule_socket: None,
             root: root.to_owned(),
