@@ -1,5 +1,6 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod codex_receipt;
 
 use serde_json::{Value, json};
 use std::fs;
@@ -24,13 +25,23 @@ pub(crate) fn prepare(
     cwd: &Path,
     label: &str,
     request: &Value,
-    environment: Vec<(String, String)>,
+    mut environment: Vec<(String, String)>,
 ) -> io::Result<LaunchPlan> {
     let agent = match agent {
         "claude" | "claude-code" => "claude",
         "codex" => "codex",
         _ => return Err(io::Error::other("unsupported provider")),
     };
+    if agent == "codex" {
+        codex::refuse_unqualified_origin(&request["env"])?;
+    }
+    environment.retain(|(name, _)| {
+        name != if agent == "codex" {
+            "ANTHROPIC_API_KEY"
+        } else {
+            "OPENAI_API_KEY"
+        }
+    });
     let path = environment
         .iter()
         .rev()

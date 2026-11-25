@@ -1,5 +1,6 @@
 use super::pty;
 use crate::ipc::field;
+use crate::providers::codex_receipt;
 use crate::supervisor::runtime;
 use serde_json::{Value, json};
 use std::io;
@@ -7,6 +8,7 @@ use std::net::Shutdown;
 use std::os::unix::{net::UnixStream, process::CommandExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 use tungstenite::{
@@ -138,8 +140,10 @@ fn read(ws: &mut WebSocket<UnixStream>) -> io::Result<Option<Value>> {
 struct Observation {
     thread: String,
     turn: Option<String>,
-    requests: std::collections::BTreeSet<String>,
+    requests: std::collections::BTreeMap<String, &'static str>,
+    joined: bool,
     idle: bool,
+    ambiguous: bool,
 }
 
 impl Observation {
@@ -149,6 +153,11 @@ impl Observation {
         if method == "thread/started" {
             let thread = &payload["thread"];
             let id = field(thread, "id");
+            if !self.thread.is_empty() && canonical_id(id) && self.thread != id {
+                self.ambiguous = true;
+                self.idle = false;
+                return true;
+            }
             let root = field(thread, "cwd");
             if self.thread.is_empty()
                 && canonical_id(id)
@@ -194,7 +203,12 @@ impl Observation {
                 {
                     return false;
                 }
-                self.requests.insert(message["id"].to_string());
+                let kind = match method {
+                    "item/commandExecution/requestApproval" => "command",
+                    "item/fileChange/requestApproval" => "file_change",
+                    _ => "user_input",
+                };
+                self.requests.insert(message["id"].to_string(), kind);
             }
             "serverRequest/resolved" => {
                 self.requests.remove(&payload["requestId"].to_string());
@@ -240,18 +254,192 @@ fn canonical_id(id: &str) -> bool {
         })
 }
 
-pub(super) fn observe(mut channel: Channel, cwd: PathBuf, dir: PathBuf, token: String) {
+pub(super) struct SemanticAction {
+    pub operation: String,
+    pub session: String,
+    pub text: String,
+    pub not_after: Instant,
+    pub answer: SyncSender<io::Result<Value>>,
+}
+
+struct SemanticTarget<'a> {
+    dir: &'a Path,
+    token: &'a str,
+    cwd: &'a Path,
+}
+
+fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
+    let requests: Vec<_> = observation.requests.iter().map(|(id, kind)| {
+        let public_id = serde_json::from_str::<String>(id).unwrap_or_else(|_| id.clone());
+        let (category, summary) = match *kind {
+            "command" => ("permission","Command execution approval"),
+            "file_change" => ("permission","File change approval"),
+            _ => ("question","User input request"),
+        };
+        json!({"kind":category,"request_id":public_id,"native_session_id":observation.thread,"summary":summary})
+    }).collect();
+    let _ = runtime::write_json(
+        &target.dir.join("observation.json"),
+        &json!({
+            "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
+            "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous,
+            "requests":requests,
+        }),
+    );
+}
+
+fn observe_frame(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
+    if observation.apply(message, target.cwd) {
+        persist_observation(observation, target);
+    }
+}
+
+fn submit(
+    ws: &mut WebSocket<UnixStream>,
+    observation: &mut Observation,
+    rpc: u64,
+    action: &SemanticAction,
+    target: &SemanticTarget<'_>,
+) -> io::Result<Value> {
+    let hash = codex_receipt::hash(&action.text);
+    if let Some(record) = codex_receipt::load(target.dir, &action.operation)? {
+        if record["intent"] != hash {
+            return Err(io::Error::other(
+                "semantic operation is already bound to different text",
+            ));
+        }
+        return Ok(record["receipt"].clone());
+    }
+    if observation.thread.is_empty()
+        || observation.ambiguous
+        || !observation.idle
+        || observation.turn.is_some()
+        || !observation.requests.is_empty()
+    {
+        return Err(io::Error::other(
+            "Codex has no confirmed idle native thread",
+        ));
+    }
+    if Instant::now() >= action.not_after {
+        return Err(io::Error::other(
+            "semantic authority expired before dispatch",
+        ));
+    }
+    let mut receipt = json!({
+        "session":action.session,"session_instance":codex_receipt::instance(target.token),
+        "operation_id":action.operation,"native_session_id":observation.thread,
+        "agent":"codex","state":"outcome_unknown",
+    });
+    codex_receipt::save(target.dir, &action.operation, &hash, &receipt)?;
+    if Instant::now() >= action.not_after {
+        return Ok(receipt);
+    }
+    observation.idle = false;
+    if send(
+        ws,
+        json!({
+            "id":rpc,"method":"turn/start","params":{"threadId":observation.thread,
+                "input":[{"type":"text","text":action.text,"text_elements":[]}]}
+        }),
+    )
+    .is_err()
+    {
+        // Prevent a prepared frame from flushing on a later read after the caller's authority ends.
+        let _ = ws.get_ref().shutdown(Shutdown::Both);
+        return Ok(receipt);
+    }
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        let Ok(message) = read(ws) else { break };
+        let Some(message) = message else { continue };
+        if message["id"] != rpc || !message["method"].is_null() {
+            observe_frame(observation, &message, target);
+            continue;
+        }
+        if !message["error"].is_null() {
+            receipt["state"] = json!("rejected");
+            observation.idle = false;
+        } else {
+            let turn = field(&message["result"]["turn"], "id");
+            if !turn.is_empty() && turn.len() <= 128 {
+                receipt["state"] = json!("native_accepted");
+                receipt["native_turn_id"] = json!(turn);
+                observation.turn = Some(turn.into());
+            }
+        }
+        codex_receipt::save(target.dir, &action.operation, &hash, &receipt)?;
+        return Ok(receipt);
+    }
+    Ok(receipt)
+}
+
+pub(super) fn observe(
+    mut channel: Channel,
+    cwd: PathBuf,
+    dir: PathBuf,
+    token: String,
+    actions: Receiver<SemanticAction>,
+) {
     let mut observation = Observation::default();
-    while let Ok(message) = read(&mut channel.connection) {
-        if let Some(message) = message
-            && observation.apply(&message, &cwd)
+    let target = SemanticTarget {
+        cwd: &cwd,
+        dir: &dir,
+        token: &token,
+    };
+    let mut serial = 10;
+    let mut join = None;
+    let mut next_join = Some(Instant::now());
+    loop {
+        if !observation.thread.is_empty()
+            && !observation.ambiguous
+            && !observation.joined
+            && join.is_none()
+            && next_join.is_some_and(|at| Instant::now() >= at)
         {
-            let _ = runtime::write_json(
-                &dir.join("observation.json"),
-                &json!({
-                    "token":token, "conversation_id":observation.thread, "status":observation.status()
-                }),
+            serial += 1;
+            if send(&mut channel.connection,json!({
+                "id":serial,"method":"thread/resume","params":{"threadId":observation.thread,"excludeTurns":true}
+            })).is_err() { break; }
+            join = Some((serial, Instant::now() + Duration::from_secs(3)));
+        }
+        if join.is_some_and(|(_, deadline)| Instant::now() >= deadline) {
+            join = None;
+            next_join = None;
+        }
+        if let Ok(action) = actions.try_recv() {
+            if join.take().is_some() {
+                next_join = Some(Instant::now() + Duration::from_secs(1));
+            }
+            serial += 1;
+            let result = submit(
+                &mut channel.connection,
+                &mut observation,
+                serial,
+                &action,
+                &target,
             );
+            let _ = action.answer.send(result);
+        }
+        match read(&mut channel.connection) {
+            Ok(Some(message)) => {
+                if join.is_some_and(|(id, _)| message["id"] == id) && message["method"].is_null() {
+                    join = None;
+                    if field(&message["result"]["thread"], "id") == observation.thread {
+                        observation.joined = true;
+                        persist_observation(&observation, &target);
+                    } else if field(&message["error"], "message")
+                        .contains("no rollout found for thread id")
+                    {
+                        next_join = Some(Instant::now() + Duration::from_secs(1));
+                    } else {
+                        next_join = None;
+                    }
+                } else {
+                    observe_frame(&mut observation, &message, &target);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => break,
         }
     }
     let _ = runtime::write_json(

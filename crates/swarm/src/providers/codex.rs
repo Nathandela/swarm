@@ -26,6 +26,40 @@ pub(crate) fn version(output: &str) -> io::Result<&str> {
     Ok(reported.0)
 }
 
+pub(crate) fn refuse_unqualified_origin(environment: &Value) -> io::Result<()> {
+    const UNQUALIFIED: &[&str] = &[
+        "CODEX_HOME",
+        "CODEX_PROFILE",
+        "CODEX_AUTH_JSON",
+        "OPENAI_BASE_URL",
+        "CODEX_API_ENDPOINT",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_API_KEY",
+    ];
+    let origin = if let Some(entries) = environment.as_array() {
+        entries
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|entry| entry.split_once('='))
+            .find_map(|(key, value)| {
+                (!value.is_empty() && UNQUALIFIED.contains(&key)).then_some(key)
+            })
+    } else if environment.is_null() {
+        UNQUALIFIED
+            .iter()
+            .copied()
+            .find(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+    } else {
+        None
+    };
+    if let Some(origin) = origin {
+        return Err(io::Error::other(format!(
+            "Codex launch refuses unqualified native origin {origin}"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn argv(request: &Value) -> io::Result<Vec<String>> {
     let options = &request["options"];
     let model = field(options, "model");
@@ -109,6 +143,9 @@ mod tests {
         assert_eq!(version("codex-cli 0.100.0").unwrap(), "0.100.0");
         assert!(argv(&json!({"options":{"sandbox":"unknown"}})).is_err());
         assert!(argv(&json!({"options":{"model":"--full-auto"}})).is_err());
+        let origin =
+            refuse_unqualified_origin(&json!(["OPENAI_BASE_URL=private-fixture-url"])).unwrap_err();
+        assert!(!origin.to_string().contains("private-fixture-url"));
         assert_eq!(argv(&json!({"options":{"model":"gpt","sandbox":"read-only"},"initial_prompt":"--東京\nnext"})).unwrap(),
             ["--model","gpt","--sandbox","read-only","-c","sandbox_workspace_write.network_access=true","--","--東京\nnext"]);
     }

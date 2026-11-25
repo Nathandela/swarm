@@ -385,6 +385,9 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
     let env: Vec<_> = env::vars_os()
         .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
         .collect();
+    if agent == "codex" {
+        crate::providers::codex::refuse_unqualified_origin(&json!(env)).map_err(report)?;
+    }
     let env = if id.is_empty() {
         env
     } else {
