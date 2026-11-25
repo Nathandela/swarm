@@ -72,8 +72,9 @@ type TeammateDiscussion struct {
 	SupervisorSocket   string `json:"supervisor_socket,omitempty"`
 	Route, Starter     Route
 	ParentAnchor       string
-	TicketEventID      string `json:"ticket_event_id,omitempty"`
-	TicketProject      string `json:"ticket_project,omitempty"`
+	TicketEventID      string           `json:"ticket_event_id,omitempty"`
+	TicketProject      string           `json:"ticket_project,omitempty"`
+	TicketSupervisor   TicketSupervisor `json:"ticket_supervisor,omitzero"`
 	Gap                uint64
 }
 

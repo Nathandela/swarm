@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -73,7 +76,7 @@ func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
 
 func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	enrollment, event := ticketFixture()
-	opener := teammateTestMessage("201", "20", "87", "Ticket "+event.AnnouncementMarker, false)
+	opener := teammateTestMessage("201", "20", "87", "Ticket\n"+event.AnnouncementMarker, false)
 	opener.Author.Bot, opener.WebhookID = true, enrollment.WebhookID
 	early := teammateTestMessage("202", "201", "77", "<@99> runs first", true)
 	follow := teammateTestMessage("203", "201", "88", "Please check the regression", false)
@@ -108,7 +111,7 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	bridge.service.Config.TicketIntake = &enrollment
+	grantStatus := configureTicketGrantFixture(t, bridge, &enrollment, event, http.StatusNoContent)
 	store := bridge.service.Store
 	install := bridge.service.Config.InstallationID
 	teammateTestEvent(t, bridge, 1, "MESSAGE_CREATE", opener)
@@ -138,7 +141,9 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 		t.Fatalf("thread acknowledgement: %+v creates=%d admissions=%d", record, threadCreates, len(manager.admitted))
 	}
 	original := manager.admitted[0]
-	if original.Authority != AuthorityTicketAssignment || original.Discussion.TicketEventID != event.EventID || original.Discussion.TicketProject != enrollment.Project {
+	if original.Authority != AuthorityTicketAssignment || original.Discussion.TicketEventID != event.EventID ||
+		original.Discussion.TicketProject != enrollment.Project || original.Discussion.TicketSupervisor != enrollment.Supervisor ||
+		original.Discussion.SupervisorSocket != enrollment.Supervisor.Socket {
 		t.Fatalf("machine provenance missing: %+v", original)
 	}
 	if _, _, err := bridge.resolve(ctx, teammateCandidate{
@@ -149,6 +154,19 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	q := TeammateHistoryQuery{Source: "admission", AdmissionID: original.OperationID, Revision: original.Revision, MessageID: original.Route.MessageID, AuthorID: original.Author.ID}
 	if _, err := bridge.history(original.Discussion)(ctx, q); err != nil {
 		t.Fatalf("legitimate provenance: %v", err)
+	}
+	q.Source = "grant"
+	grantStatus.Store(http.StatusConflict)
+	if _, err := bridge.history(original.Discussion)(ctx, q); !errors.Is(err, ErrTeammateSourceChanged) {
+		t.Fatalf("revoked grant accepted: %v", err)
+	}
+	grantStatus.Store(http.StatusServiceUnavailable)
+	if _, err := bridge.history(original.Discussion)(ctx, q); err == nil || errors.Is(err, ErrTeammateSourceChanged) {
+		t.Fatalf("unavailable grant did not fail closed and retryably: %v", err)
+	}
+	grantStatus.Store(http.StatusNoContent)
+	if _, err := bridge.history(original.Discussion)(ctx, q); err != nil {
+		t.Fatalf("eligible grant did not recover: %v", err)
 	}
 	q.Revision = "forged"
 	if _, err := bridge.history(original.Discussion)(ctx, q); !errors.Is(err, ErrTeammateSourceChanged) {
@@ -192,7 +210,9 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 }
 
 func ticketFixture() (TicketIntake, ticketEvent) {
-	intake := TicketIntake{GuildID: "10", ChannelID: "20", WebhookID: "89", Repo: "Quanthome/fii", Project: "fii"}
+	intake := TicketIntake{GuildID: "10", ChannelID: "20", WebhookID: "89", Repo: "Quanthome/fii", Project: "fii", GrantSocket: "/tmp/relay.sock",
+		Supervisor: TicketSupervisor{StateDir: "/tmp/tickets", Socket: "/tmp/tickets/daemon.sock", Endpoint: "tickets"},
+	}
 	event := ticketEvent{EventID: "event-1", AssignmentID: "assignment-1", TicketID: "ticket-1",
 		GuildID: "10", ChannelID: "20", AnnouncementMessageID: "201", AnnouncementMarker: "delivery-marker-example", Repo: "Quanthome/fii", Summary: "Synthetic staging ticket."}
 	return intake, event
@@ -200,46 +220,58 @@ func ticketFixture() (TicketIntake, ticketEvent) {
 
 func TestTicketRejectsUnverifiedAnnouncementBeforeAnyEffect(t *testing.T) {
 	enrollment, event := ticketFixture()
-	bridge, manager := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/channels/20":
-			_, _ = fmt.Fprint(w, teammateParent)
-		case "/channels/20/permissions/member/99":
-			teammateTestPermissions(w)
-		case "/channels/20/messages/201":
-			forged := teammateTestMessage(event.AnnouncementMessageID, event.ChannelID, "88", event.AnnouncementMarker, false)
-			forged.Author.Bot, forged.WebhookID = true, "88"
-			_ = json.NewEncoder(w).Encode(forged)
-		default:
-			t.Errorf("unverified ticket caused unexpected %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	})
-	bridge.service.Config.TicketIntake = &enrollment
-	install := bridge.service.Config.InstallationID
-	store := bridge.service.Store
-	if _, err := store.queueTicket(install, event); err != nil {
-		t.Fatal(err)
-	}
-	duplicateAssignment := event
-	duplicateAssignment.EventID, duplicateAssignment.AnnouncementMessageID = "new-event", "210"
-	if _, err := store.queueTicket(install, duplicateAssignment); !errors.Is(err, ErrConflict) {
-		t.Fatalf("one assignment got another event or thread: %v", err)
-	}
-	pending, err := store.teammatePending(install)
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("pending: %+v %v", pending, err)
-	}
-	if err = bridge.process(context.Background(), pending[0]); err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.getTicket(install, event.EventID)
-	if err != nil || record.Receipt.State != ticketBlocked || record.Receipt.DiscussionID != "" || len(manager.admitted) != 0 {
-		t.Fatalf("unverified webhook acquired authority: %+v, %v", record, err)
+	for _, test := range []struct {
+		name, webhookID, marker string
+		grantStatus             int32
+	}{
+		{"wrong webhook", "88", event.AnnouncementMarker, http.StatusNoContent},
+		{"partial marker", enrollment.WebhookID, "copied " + event.AnnouncementMarker, http.StatusNoContent},
+		{"revoked assignment", enrollment.WebhookID, event.AnnouncementMarker, http.StatusConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			webhookID, marker := test.webhookID, test.marker
+			bridge, manager := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/channels/20":
+					_, _ = fmt.Fprint(w, teammateParent)
+				case "/channels/20/permissions/member/99":
+					teammateTestPermissions(w)
+				case "/channels/20/messages/201":
+					forged := teammateTestMessage(event.AnnouncementMessageID, event.ChannelID, "88", marker, false)
+					forged.Author.Bot, forged.WebhookID = true, webhookID
+					_ = json.NewEncoder(w).Encode(forged)
+				default:
+					t.Errorf("unverified ticket caused unexpected %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			configureTicketGrantFixture(t, bridge, &enrollment, event, test.grantStatus)
+			install := bridge.service.Config.InstallationID
+			store := bridge.service.Store
+			if _, err := store.queueTicket(install, event); err != nil {
+				t.Fatal(err)
+			}
+			duplicateAssignment := event
+			duplicateAssignment.EventID, duplicateAssignment.AnnouncementMessageID = "new-event", "210"
+			if _, err := store.queueTicket(install, duplicateAssignment); !errors.Is(err, ErrConflict) {
+				t.Fatalf("one assignment got another event or thread: %v", err)
+			}
+			pending, err := store.teammatePending(install)
+			if err != nil || len(pending) != 1 {
+				t.Fatalf("pending: %+v %v", pending, err)
+			}
+			if err = bridge.process(context.Background(), pending[0]); err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.getTicket(install, event.EventID)
+			if err != nil || record.Receipt.State != ticketBlocked || record.Receipt.DiscussionID != "" || len(manager.admitted) != 0 {
+				t.Fatalf("unverified webhook acquired authority: %+v, %v", record, err)
+			}
+		})
 	}
 }
 
-func TestTicketIntakeFailsClosedInVMMode(t *testing.T) {
+func TestTicketIntakeRequiresDedicatedSupervisor(t *testing.T) {
 	enrollment, _ := ticketFixture()
 	enrollment.TokenFile = "/tmp/relay"
 	cfg := Config{
@@ -251,11 +283,58 @@ func TestTicketIntakeFailsClosedInVMMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.ProjectAccess = ProjectAccessVM
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("dedicated tickets changed regular VM discussions: %v", err)
+	}
+	enrollment.Supervisor.Socket = cfg.DaemonSocket
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("ticket intake accepted unrestricted VM mode")
+		t.Fatal("ticket intake accepted the shared supervisor socket")
 	}
 	cfg.TicketIntake = nil
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("ordinary VM mode was changed: %v", err)
 	}
+}
+
+func configureTicketGrantFixture(t *testing.T, bridge *teammateConnector, enrollment *TicketIntake, event ticketEvent, code int32) *atomic.Int32 {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ticket-grant-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	specified := *enrollment
+	specified.GrantSocket = filepath.Join(dir, "g.sock")
+	listener, err := net.Listen("unix", specified.GrantSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	if err := os.Chmod(specified.GrantSocket, 0600); err != nil {
+		t.Fatal(err)
+	}
+	const token = "Bearer fixture-relay-secret"
+	bridge.service.ticketBearer = token
+	bridge.service.Config.TicketIntake = &specified
+	var status atomic.Int32
+	status.Store(code)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var data map[string]string
+		if r.Method != http.MethodPost || r.URL.Path != "/ticket-grant" || r.Header.Get("Authorization") != token ||
+			json.NewDecoder(r.Body).Decode(&data) != nil || data["event_id"] != event.EventID ||
+			data["assignment_id"] != event.AssignmentID || data["ticket_id"] != event.TicketID ||
+			data["stage"] != ticketStageNativeAdmission && data["stage"] != ticketStageWorkerGrant {
+			t.Error("incorrect grant verification request")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(int(status.Load()))
+	})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() { _ = server.Close(); <-done })
+	return &status
 }

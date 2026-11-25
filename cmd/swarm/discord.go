@@ -63,6 +63,9 @@ var discordServiceRun = func(ctx context.Context, dir string, unattended bool) e
 			_, _ = fmt.Fprintln(os.Stderr, "discord: existing discussions are waiting for their previous supervisor:", err)
 		}
 	}
+	if ticket := cfg.TicketIntake; ticket != nil && skeleton.EndpointIDForStateDir(ticket.Supervisor.StateDir) != ticket.Supervisor.Endpoint {
+		return errors.New("discord: ticket supervisor identity changed")
+	}
 	manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(cc.StateDir), cc.StateDir, cfg)
 	if err != nil {
 		return err

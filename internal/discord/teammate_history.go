@@ -149,8 +149,17 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		return out, t.verifyTicketAdmission(ctx, d, q)
 	}
 	if q.Source == "admission" || q.Source == "grant" || q.Source == "expected_reply" {
-		err = t.verifyAdmissionMessage(ctx, d, q, &out.ExpectsReply, nil)
-		return out, err
+		if err := t.verifyAdmissionMessage(ctx, d, q, &out.ExpectsReply, nil); err != nil {
+			return out, err
+		}
+		if d.TicketEventID != "" && q.Source == "grant" {
+			record, err := t.service.Store.getTicket(d.InstallationID, d.TicketEventID)
+			if err != nil {
+				return out, err
+			}
+			return out, t.service.verifyTicketGrant(ctx, record.Event, ticketStageWorkerGrant)
+		}
+		return out, nil
 	}
 	if q.Source == "audience" {
 		if q.Cursor != "" || q.Anchor != "" {

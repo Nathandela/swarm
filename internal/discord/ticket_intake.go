@@ -1,11 +1,17 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"os"
 	"strings"
+	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
@@ -14,12 +20,20 @@ import (
 
 // TicketIntake enrolls one machine inbox and its fixed local project.
 type TicketIntake struct {
-	GuildID   string `json:"guild_id"`
-	ChannelID string `json:"channel_id"`
-	WebhookID string `json:"webhook_id"`
-	Repo      string `json:"repo"`
-	Project   string `json:"project"`
-	TokenFile string `json:"token_file"`
+	GuildID     string           `json:"guild_id"`
+	ChannelID   string           `json:"channel_id"`
+	WebhookID   string           `json:"webhook_id"`
+	Repo        string           `json:"repo"`
+	Project     string           `json:"project"`
+	TokenFile   string           `json:"token_file"`
+	GrantSocket string           `json:"grant_socket"`
+	Supervisor  TicketSupervisor `json:"supervisor"`
+}
+
+type TicketSupervisor struct {
+	StateDir string `json:"state_dir"`
+	Socket   string `json:"socket"`
+	Endpoint string `json:"endpoint"`
 }
 
 type ticketEvent struct {
@@ -48,11 +62,13 @@ type ticketRecord struct {
 }
 
 const (
-	ticketQueued         = "queued"
-	ticketAwaitingNative = "awaiting_native"
-	ticketNativeCutover  = "native_cutover"
-	ticketBlocked        = "blocked"
-	ticketMachineActor   = "cerbere"
+	ticketQueued               = "queued"
+	ticketAwaitingNative       = "awaiting_native"
+	ticketNativeCutover        = "native_cutover"
+	ticketBlocked              = "blocked"
+	ticketMachineActor         = "cerbere"
+	ticketStageNativeAdmission = "native_admission"
+	ticketStageWorkerGrant     = "worker_grant"
 )
 
 // TicketAdmissionOperation identifies a controller operation across claims and restarts.
@@ -209,10 +225,14 @@ func (t *teammateConnector) ticketAnchor(ctx context.Context, event ticketEvent)
 	if err != nil {
 		return false, err
 	}
-	if m.WebhookID != enrollment.WebhookID || !strings.Contains(m.Content, event.AnnouncementMarker) {
-		return false, ErrTeammateSourceChanged
+	if m.WebhookID == enrollment.WebhookID {
+		for line := range strings.SplitSeq(m.Content, "\n") {
+			if line == event.AnnouncementMarker {
+				return bits&discordgo.PermissionCreatePublicThreads != 0, nil
+			}
+		}
 	}
-	return bits&discordgo.PermissionCreatePublicThreads != 0, nil
+	return false, ErrTeammateSourceChanged
 }
 
 func (t *teammateConnector) processTicket(ctx context.Context, candidate teammateCandidate) error {
@@ -239,6 +259,12 @@ func (t *teammateConnector) processTicket(ctx context.Context, candidate teammat
 		}
 		return err
 	}
+	if err := t.service.ticketGrant(ctx, record.Event, ticketStageNativeAdmission); err != nil {
+		if errors.Is(err, ErrNotAuthorized) {
+			return store.teammateCandidateChange(cfg.InstallationID, candidate, StateFailed, "ticket assignment is no longer authorized", nil)
+		}
+		return err
+	}
 	a := candidate.Admission
 	if a == nil {
 		route, err := t.client.teammateThread(ctx, candidate.Route, "Cerbere ticket "+record.Event.TicketID[:min(len(record.Event.TicketID), 64)], canCreate)
@@ -250,7 +276,8 @@ func (t *teammateConnector) processTicket(ctx context.Context, candidate teammat
 		}
 		d := TeammateDiscussion{
 			ID: "dt_" + digest([]string{cfg.InstallationID, route.GuildID, route.ChannelID})[:32], InstallationID: cfg.InstallationID,
-			SupervisorSocket: cfg.DaemonSocket, Route: route, Starter: candidate.Route, TicketEventID: record.Event.EventID, TicketProject: cfg.TicketIntake.Project,
+			SupervisorSocket: cfg.TicketIntake.Supervisor.Socket, Route: route, Starter: candidate.Route,
+			TicketEventID: record.Event.EventID, TicketProject: cfg.TicketIntake.Project, TicketSupervisor: cfg.TicketIntake.Supervisor,
 		}
 		if err = t.checkDiscussion(ctx, d); err != nil {
 			if errors.Is(err, ErrNotAuthorized) || teammateAPIStatus(err, http.StatusForbidden) || teammateAPIStatus(err, http.StatusNotFound) {
@@ -299,6 +326,78 @@ func (t *teammateConnector) verifyTicketAdmission(ctx context.Context, d Teammat
 	if err := t.checkDiscussion(ctx, d); err != nil {
 		return err
 	}
-	_, err = t.ticketAnchor(ctx, record.Event)
+	if _, err = t.ticketAnchor(ctx, record.Event); err != nil {
+		return err
+	}
+	switch q.Source {
+	case "admission":
+		return t.service.verifyTicketGrant(ctx, record.Event, ticketStageNativeAdmission)
+	case "grant":
+		return t.service.verifyTicketGrant(ctx, record.Event, ticketStageWorkerGrant)
+	}
+	return nil
+}
+
+// Both the connector and the relay live outside the model's execution
+// boundary. The relay checks the currently fenced grant before responding.
+func (s *Service) ticketGrant(ctx context.Context, event ticketEvent, stage string) error {
+	unavailable := errors.New("discord: ticket grant verifier unavailable")
+	cfg := s.Config.TicketIntake
+	if cfg == nil || s.ticketBearer == "" {
+		return unavailable
+	}
+	info, err := os.Lstat(cfg.GrantSocket)
+	if err != nil {
+		return unavailable
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != uint32(os.Getuid()) || owner.Nlink != 1 ||
+		info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0600 {
+		return unavailable
+	}
+	body, err := json.Marshal(struct {
+		EventID      string `json:"event_id"`
+		AssignmentID string `json:"assignment_id"`
+		TicketID     string `json:"ticket_id"`
+		Stage        string `json:"stage"`
+	}{event.EventID, event.AssignmentID, event.TicketID, stage})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://local/ticket-grant", bytes.NewReader(body))
+	if err != nil {
+		return unavailable
+	}
+	request.Header.Set("Authorization", s.ticketBearer)
+	request.Header.Set("Content-Type", "application/json")
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", cfg.GrantSocket)
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	response, err := client.Do(request)
+	if err != nil {
+		return unavailable
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusForbidden, http.StatusConflict:
+		return ErrNotAuthorized
+	default:
+		return unavailable
+	}
+}
+
+func (s *Service) verifyTicketGrant(ctx context.Context, event ticketEvent, stage string) error {
+	err := s.ticketGrant(ctx, event, stage)
+	if errors.Is(err, ErrNotAuthorized) {
+		return ErrTeammateSourceChanged
+	}
 	return err
 }

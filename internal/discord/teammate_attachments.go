@@ -139,7 +139,7 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 	if count == 0 {
 		return "", nil
 	}
-	if t.service.Config.EffectiveProjectAccess() != ProjectAccessVM {
+	if a.Discussion.TicketEventID != "" || t.service.Config.EffectiveProjectAccess() != ProjectAccessVM {
 		return "File access unavailable in enrolled-project mode.", nil
 	}
 	if count > 10 {

@@ -157,11 +157,19 @@ func (c Config) Validate() error {
 	if c.ProjectAccess != "" && (!c.TeammateMode() || (c.ProjectAccess != ProjectAccessVM && c.ProjectAccess != ProjectAccessEnrolled)) {
 		return errors.New("discord: project access must be enrolled or vm for a teammate or personal manager")
 	}
-	if t := c.TicketIntake; t != nil && (c.Mode != "teammate" || c.EffectiveProjectAccess() != ProjectAccessEnrolled ||
-		!containsID(c.GuildIDs, t.GuildID) || !containsID(c.ChannelIDs, t.ChannelID) || !snowflake(t.WebhookID) ||
-		!validText(t.Repo, 256) || strings.Count(t.Repo, "/") != 1 || c.Projects[t.Project] == "" ||
-		!validStatePath(t.TokenFile) || t.TokenFile == c.TokenFile) {
-		return errors.New("discord: ticket intake requires enrolled project access, an explicit guild/channel/project and a distinct private credential")
+	if t := c.TicketIntake; t != nil {
+		if c.Mode != "teammate" || !containsID(c.GuildIDs, t.GuildID) || !containsID(c.ChannelIDs, t.ChannelID) || !snowflake(t.WebhookID) ||
+			!validText(t.Repo, 256) || strings.Count(t.Repo, "/") != 1 || c.Projects[t.Project] == "" ||
+			!validStatePath(t.TokenFile) || t.TokenFile == c.TokenFile || !validStatePath(t.GrantSocket) ||
+			t.GrantSocket == c.DaemonSocket || t.GrantSocket == t.Supervisor.Socket || t.GrantSocket == t.TokenFile {
+			return errors.New("discord: ticket intake requires an explicit guild/channel/project and distinct private credential")
+		}
+		p := t.Supervisor
+		if !validStatePath(p.StateDir) || !validStatePath(p.Socket) || !validText(p.Endpoint, 128) || p.Socket == c.DaemonSocket ||
+			c.Supervisor != nil && p.StateDir == c.Supervisor.StateDir ||
+			c.PreviousSupervisor != nil && (p.Socket == c.PreviousSupervisor.Socket || p.StateDir == c.PreviousSupervisor.StateDir || p.Endpoint == c.PreviousSupervisor.Endpoint) {
+			return errors.New("discord: ticket intake requires a distinct dedicated supervisor")
+		}
 	}
 	if c.Mode != "personal" && c.DMChannelID != "" {
 		return errors.New("discord: DM channel requires personal mode")

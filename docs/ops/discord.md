@@ -122,11 +122,16 @@ Use `swarm discord disconnect` to stop the connector. To go back to the legacy d
 ### Enrolled machine ticket admission
 
 The experimental `ticket_intake` config accepts one explicit `guild_id`,
-`channel_id`, `webhook_id`, `repo`, `project`, and `token_file`. The channel must
-already be enrolled and the project must name an enrolled project. Ticket
-intake requires teammate mode with enrolled project access. The token is a
-private file distinct from the Discord token. Keep the connector credential,
-the relay, and authority-bearing sockets outside the ticket process's access.
+`channel_id`, `webhook_id`, `repo`, `project`, `token_file`, `grant_socket`, and
+`supervisor`.
+The channel must already be enrolled and the project must name an enrolled
+project. The token is a private file distinct from the Discord token. The
+supervisor's `state_dir`, `socket`, and `endpoint` identify the dedicated
+prestarted runtime. Swarm pins each ticket to this supervisor, including
+after restart. Keep the connector credential, relay, and authority-bearing
+sockets outside the ticket process's access. The connector asks the trusted
+relay to verify the current grant over `grant_socket` before the initial
+native admission and before worker effects.
 
 The relay posts an immutable assignment to `/ticket-admission` over the
 connector's private Unix socket, using its dedicated bearer. It can recover

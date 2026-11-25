@@ -360,7 +360,8 @@ func (s *Store) teammateBind(binding teammateBinding) error {
 		var old teammateBinding
 		err := teammateGet(b, key, &old)
 		if err == nil {
-			if old.ID != binding.ID || old.Route != binding.Route || old.TicketEventID != binding.TicketEventID || old.TicketProject != binding.TicketProject {
+			if old.ID != binding.ID || old.Route != binding.Route || old.TicketEventID != binding.TicketEventID || old.TicketProject != binding.TicketProject || old.TicketSupervisor != binding.TicketSupervisor ||
+				binding.TicketEventID != "" && old.SupervisorSocket != binding.SupervisorSocket {
 				return ErrConflict
 			}
 			return teammateActivate(tx, &old)

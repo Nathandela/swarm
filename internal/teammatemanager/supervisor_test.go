@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/discord"
@@ -82,5 +83,56 @@ func TestMailboxDiscoveryKeepsHealthySupervisorWhenHistoricalIndexUnavailable(t 
 	match, err := r.PendingWorkerDiscussions()
 	if err == nil || match == nil || !match(b) {
 		t.Fatalf("healthy discussion lost when old supervisor unavailable: %v", err)
+	}
+}
+
+func TestTicketSupervisorStaysPinnedAcrossRestartAndNeverFallsBack(t *testing.T) {
+	ticket := discord.TicketSupervisor{StateDir: "/ticket/state", Socket: "/ticket.sock", Endpoint: "ticket"}
+	b := discord.TeammateDiscussion{
+		SupervisorSocket: ticket.Socket, TicketEventID: "event", TicketProject: "fii", TicketSupervisor: ticket,
+		ID: "thread", InstallationID: "place", Route: discord.Route{GuildID: "guild", ChannelID: "thread"},
+	}
+	r := func(shared string) *Runtime {
+		return &Runtime{vmProjectAccess: true, endpoint: shared, cfg: voice.Config{DaemonSocket: "/" + shared + ".sock"},
+			ticketSupervisor: ticket, previous: &discord.PreviousSupervisor{Endpoint: "old", Socket: "/old.sock"}}
+	}
+	for _, shared := range []string{"shared", "new-shared"} {
+		runtime := r(shared)
+		endpoint, socket, dir, err := runtime.supervisorForDiscussion(b)
+		if err != nil || endpoint != ticket.Endpoint || socket != ticket.Socket || dir != ticket.StateDir {
+			t.Fatalf("ticket followed the shared supervisor after startup or restart: %s %s %s %v", endpoint, socket, dir, err)
+		}
+		generic := discord.TeammateDiscussion{SupervisorSocket: "/" + shared + ".sock"}
+		if endpoint, _, _, err = runtime.supervisorForDiscussion(generic); err != nil || endpoint != shared {
+			t.Fatalf("existing human discussion moved: %s %v", endpoint, err)
+		}
+		fallback := b
+		for _, invalidSocket := range []string{"", "/" + shared + ".sock", "/old.sock", "/other.sock"} {
+			fallback.SupervisorSocket = invalidSocket
+			if _, _, _, err = runtime.supervisorForDiscussion(fallback); !errors.Is(err, voice.ErrStale) {
+				t.Fatalf("ticket substituted supervisor %q: %v", invalidSocket, err)
+			}
+		}
+	}
+	runtime := r("shared")
+	runtime.ticketSupervisor.Endpoint = "replacement"
+	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
+		t.Fatalf("configuration change moved an existing ticket: %v", err)
+	}
+	runtime.ticketSupervisor = discord.TicketSupervisor{}
+	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
+		t.Fatalf("unenrolled ticket fell back: %v", err)
+	}
+}
+
+func TestTicketManagerPromptRetainsScopedToolsAlongsideVMMode(t *testing.T) {
+	r := Runtime{vmProjectAccess: true, projects: map[string]string{"fii": "/ticket/fii", "other": "/shared/other"}}
+	ticket := discord.TeammateAdmission{Discussion: discord.TeammateDiscussion{TicketEventID: "event"}}
+	if prompt := r.prompt(ticket, discord.TeammateHistoryPage{}, "thread", nil); strings.Contains(prompt, "ordinary VM commands") ||
+		strings.Contains(prompt, "project choices") || !strings.Contains(prompt, "scoped manager tools") {
+		t.Fatalf("ticket manager got generic VM-mode tools: %s", prompt)
+	}
+	if prompt := r.prompt(discord.TeammateAdmission{}, discord.TeammateHistoryPage{}, "thread", nil); !strings.Contains(prompt, "ordinary VM commands") {
+		t.Fatalf("ordinary manager lost VM mode: %s", prompt)
 	}
 }

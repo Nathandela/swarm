@@ -30,6 +30,7 @@ type Runtime struct {
 	dir, socketRoot, endpoint string
 	managerSettingsDir        string
 	previous                  *discord.PreviousSupervisor
+	ticketSupervisor          discord.TicketSupervisor
 	vmProjectAccess           bool
 	cfg                       voice.Config
 	dmChannel, dmOwner        string
@@ -100,7 +101,18 @@ func New(ctx context.Context, dir, endpoint, managerSettingsDir string, config d
 			return nil, voice.ErrInvalid
 		}
 	}
-	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir, previous: config.PreviousSupervisor, vmProjectAccess: config.ProjectAccess == discord.ProjectAccessVM, cfg: cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
+	var ticketSupervisor discord.TicketSupervisor
+	if config.TicketIntake != nil {
+		ticketSupervisor = config.TicketIntake.Supervisor
+		if ticketSupervisor.Endpoint == "" || ticketSupervisor.Endpoint == endpoint ||
+			ticketSupervisor.Socket == config.DaemonSocket || ticketSupervisor.StateDir == managerSettingsDir {
+			cancel()
+			return nil, errors.New("discord teammate: ticket supervisor must be distinct from the shared supervisor")
+		}
+	}
+	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir,
+		previous: config.PreviousSupervisor, ticketSupervisor: ticketSupervisor, vmProjectAccess: config.ProjectAccess == discord.ProjectAccessVM,
+		cfg: cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
 }
 
 func canonicalDirectory(path string) (string, error) {
@@ -148,8 +160,16 @@ func (r *Runtime) Close() error {
 	return err
 }
 
-// Unmarked records predate migration and always belong to their original supervisor.
+// Unmarked human records predate migration and retain their original supervisor.
 func (r *Runtime) supervisorForDiscussion(b discord.TeammateDiscussion) (endpoint, socket, settings string, err error) {
+	if b.TicketEventID != "" || b.TicketSupervisor != (discord.TicketSupervisor{}) {
+		p := r.ticketSupervisor
+		if b.TicketEventID == "" || b.TicketProject == "" || p.Endpoint == "" ||
+			b.TicketSupervisor != p || b.SupervisorSocket != p.Socket {
+			return "", "", "", voice.ErrStale
+		}
+		return p.Endpoint, p.Socket, p.StateDir, nil
+	}
 	if p := r.previous; p != nil && (b.SupervisorSocket == "" || b.SupervisorSocket == p.Socket) {
 		return p.Endpoint, p.Socket, p.StateDir, nil
 	}
@@ -189,8 +209,9 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 		}
 		return opened, nil
 	}
+	vmProjectAccess := r.vmProjectAccess && bound.TicketEventID == ""
 	if skipDormant && r.dormant[id] {
-		if !r.vmProjectAccess || settings == "" {
+		if !vmProjectAccess || settings == "" {
 			return nil, nil
 		}
 		notes, err := workermail.Pending(settings, voice.DiscussionConversationPrefix+id)
@@ -205,7 +226,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	cfg := r.cfg
 	cfg.DaemonSocket = socket
 	cfg.ConversationID += id
-	if r.vmProjectAccess {
+	if vmProjectAccess {
 		if _, err := r.attachmentDirectory(id); err != nil {
 			return nil, err
 		}
@@ -218,7 +239,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	ticketRequestID := ""
 	if bound.TicketEventID != "" {
 		project := r.projects[strings.ToLower(bound.TicketProject)]
-		if r.vmProjectAccess || project == "" {
+		if project == "" {
 			return nil, voice.ErrInvalid
 		}
 		cfg.WorkDir = project
@@ -227,7 +248,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
-		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
+		ManagerSettingsDir: settings, VMProjectAccess: vmProjectAccess,
 		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID, TicketRequestID: ticketRequestID,
 		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyRecipient: entry.verifyRecipient, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: projectEnrolled,
 	})
@@ -243,7 +264,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 
 // AttachmentDirectory uses the same verified discussion identity as the manager bridge.
 func (r *Runtime) AttachmentDirectory(b discord.TeammateDiscussion) (string, error) {
-	if !r.vmProjectAccess || b.InstallationID != r.cfg.PlaceID || b.ID == "" || b.Route.ChannelID == "" {
+	if !r.vmProjectAccess || b.TicketEventID != "" || b.InstallationID != r.cfg.PlaceID || b.ID == "" || b.Route.ChannelID == "" {
 		return "", voice.ErrInvalid
 	}
 	endpoint, _, _, err := r.supervisorForDiscussion(b)
@@ -705,12 +726,13 @@ func attachmentInstruction(manifest string) string {
 
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
-	if r.vmProjectAccess {
+	vmProjectAccess := r.vmProjectAccess && input.Discussion.TicketEventID == ""
+	if vmProjectAccess {
 		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask workers for explicit needs-input and completion notes, then return after dispatch.\n")
 	} else {
 		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
 	}
-	if len(r.projects) > 1 && !r.vmProjectAccess {
+	if len(r.projects) > 1 && !vmProjectAccess && input.Discussion.TicketEventID == "" {
 		names := make([]string, 0, len(r.projects))
 		for name := range r.projects {
 			names = append(names, name)
