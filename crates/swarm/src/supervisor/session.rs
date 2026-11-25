@@ -25,6 +25,7 @@ enum Phase {
 }
 
 pub(super) struct Prepared {
+    isolated: bool,
     cwd: PathBuf,
     label: String,
     tag: String,
@@ -48,6 +49,7 @@ pub(super) struct Session {
     token: String,
     agent: String,
     cwd: String,
+    effective: PathBuf,
     labels: Mutex<Labels>,
     created: String,
     state: Mutex<(Phase, String)>,
@@ -86,6 +88,7 @@ impl Session {
             }
             .into(),
             cwd: cwd.into(),
+            effective: PathBuf::from(data["checkout"]["path"].as_str().unwrap_or(cwd)),
             labels: Mutex::new(Labels {
                 name: name.into(),
                 tag: field(&data, "tag").into(),
@@ -128,7 +131,6 @@ impl Session {
             return Err(io::Error::other("cols/rows out of range"));
         }
         if !field(request, "operation_id").is_empty()
-            || req["worktree"] == true
             || req.as_object().unwrap().iter().any(|(key, value)| {
                 !matches!(
                     key.as_str(),
@@ -174,8 +176,13 @@ impl Session {
             runtime::launch_env(&req["env"]),
         )?;
         let (cols, rows) = runtime::dims(req);
+        let isolated = req["worktree"] == true;
+        if isolated && !crate::workspace::is_repo(&cwd) {
+            return Err(io::Error::other("worktree: cwd is not a git repository"));
+        }
         let tag = sanitize_name(field(req, "tag")).trim().to_owned();
         Ok(Prepared {
+            isolated,
             tag,
             cwd,
             label,
@@ -187,6 +194,7 @@ impl Session {
 
     pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
         let Prepared {
+            isolated,
             tag,
             cwd,
             label,
@@ -194,6 +202,12 @@ impl Session {
             rows,
             provider,
         } = prepared;
+        let id = runtime::random_id()?;
+        let checkout = if isolated {
+            Some(crate::workspace::plan(&cwd, &id, &label)?)
+        } else {
+            None
+        };
         let label = if label.is_empty() {
             if provider.agent == "codex" {
                 "Codex"
@@ -203,13 +217,12 @@ impl Session {
         } else {
             &label
         };
-        let id = runtime::random_id()?;
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
+                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label, "checkout":checkout,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
                 "provider": {"name": provider.agent, "version": provider.version,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
@@ -232,6 +245,16 @@ impl Session {
             .unwrap()
             .take()
             .ok_or_else(|| io::Error::other("no unconsumed provider launch plan"))?;
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        if !meta["checkout"].is_null() {
+            crate::workspace::create(Path::new(&self.cwd), &self.id, &meta["checkout"])
+                .inspect_err(|e| {
+                    let _ = runtime::write_json(
+                        &self.dir.join("exit.json"),
+                        &json!({"token":self.token,"error":e.to_string()}),
+                    );
+                })?;
+        }
         let mut shim = Command::new(env::current_exe()?);
         shim.env_clear().envs(provider.env);
         shim.arg("shim")
@@ -584,6 +607,27 @@ impl Session {
             self.state.lock().unwrap().0,
             Phase::Starting | Phase::Running
         )
+    }
+
+    pub(super) fn uses_directory(&self, root: &Path) -> bool {
+        [Path::new(&self.cwd), self.effective.as_path()]
+            .into_iter()
+            .any(|p| {
+                p.starts_with(root) || p.canonicalize().is_ok_and(|path| path.starts_with(root))
+            })
+    }
+    pub(super) fn checkout_record(&self) -> io::Result<Option<(PathBuf, Value)>> {
+        let data = runtime::read_json(&self.dir.join("session.json"))?;
+        if data["token"] != self.token || data["id"] != self.id || data["cwd"] != self.cwd {
+            return Err(io::Error::other("session reservation identity changed"));
+        }
+        if data["checkout"].is_null() {
+            return Ok(None);
+        }
+        if data["checkout"]["path"].as_str().map(Path::new) != Some(&self.effective) {
+            return Err(io::Error::other("session checkout identity changed"));
+        }
+        Ok(Some((PathBuf::from(&self.cwd), data["checkout"].clone())))
     }
 
     pub(super) fn set_label(&self, key: &str, input: &str) -> io::Result<bool> {

@@ -106,6 +106,27 @@ pub(super) fn delete(state: &State, request: &Value) -> io::Result<()> {
         return Ok(());
     }
     stopped?;
+    // Freeze new session reservations while checking which ones still reference this checkout.
+    let _reservation = state.launch_gate.lock().unwrap();
+    if let Some((repo, record)) = session.checkout_record()? {
+        let target = Path::new(
+            record["path"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("missing checkout path"))?,
+        );
+        if state
+            .sessions
+            .read()
+            .unwrap()
+            .values()
+            .any(|other| other.id != id && other.uses_directory(target))
+        {
+            return Err(io::Error::other(
+                "another retained session refers to this checkout",
+            ));
+        }
+        crate::workspace::remove(&repo, id, &record)?;
+    }
     let mut sessions = state.sessions.write().unwrap();
     if !sessions.get(id).is_some_and(|s| Arc::ptr_eq(s, &session)) {
         return Err(io::Error::other("session changed during deletion"));

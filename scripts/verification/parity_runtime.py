@@ -322,6 +322,34 @@ def drive(root, guard):
                 state.rmdir()
             print("confirmed deletion was repeatable; consumed operation could not recreate worker")
 
+            repo = root / "work/repo"
+            repo.mkdir()
+            def git(cwd,*args):
+                return subprocess.run([*guard,"git","-C",str(cwd),*args],env=env,
+                                      stdin=subprocess.DEVNULL,capture_output=True,check=True,timeout=15).stdout.strip()
+            git(repo,"init","-q")
+            git(repo,"-c","user.name=fixture","-c","user.email=fixture@localhost",
+                "commit","--allow-empty","-qm","fixture")
+            head = git(repo,"rev-parse","HEAD")
+            (repo / "uncommitted").write_text("primary only")
+            launch = ["spawn","--cli","claude","--worktree","--name","Amber One",
+                      "--dir",str(repo),"--prompt","isolated fixture"]
+            first = invoke(*launch).decode().strip()
+            second = invoke(*launch).decode().strip()
+            expected = [repo/".swarm/worktrees/amber-one", repo/".swarm/worktrees"/("amber-one-"+second.split("/")[1])]
+            for child,checkout in zip((first,second),expected):
+                assert git(checkout,"rev-parse","HEAD")==head
+                assert git(checkout,"symbolic-ref","--short","HEAD").decode()=="swarm/amber-one-"+child.split("/")[1]
+                assert not (checkout/"uncommitted").exists()
+            protected = invoke("spawn","--cli","claude","--dir",str(expected[0]),"--prompt","hold checkout").decode().strip()
+            assert delete(first)["op"]=="error" and expected[0].is_dir()
+            assert delete(protected)["op"]=="ok"
+            assert delete(first)["op"]=="ok"
+            assert not expected[0].exists() and expected[1].is_dir()
+            assert delete(second)["op"]=="ok"
+            assert (repo/"uncommitted").read_text()=="primary only" and git(repo,"rev-parse","HEAD")==head
+            print("two real git worktrees kept independent HEADs; shared checkout was retained until released")
+
     finally:
         if daemon and daemon.poll() is None:
             daemon.terminate()

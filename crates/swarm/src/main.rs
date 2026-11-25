@@ -11,6 +11,7 @@ mod setup_trust;
 mod shim;
 mod socket;
 mod supervisor;
+mod workspace;
 
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;

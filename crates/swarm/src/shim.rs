@@ -95,7 +95,19 @@ fn serve(dir: &Path) -> io::Result<()> {
         .as_array()
         .and_then(|args| args.iter().map(Value::as_str).collect::<Option<_>>())
         .ok_or_else(|| io::Error::other("malformed transient launch arguments"))?;
-    let working_dir = field(&config, "cwd");
+    let working_dir = if config["checkout"].is_null() {
+        field(&config, "cwd")
+    } else {
+        let path = config["checkout"]["path"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("missing reserved checkout path"))?;
+        crate::workspace::verify(
+            Path::new(field(&config, "cwd")),
+            field(&config, "id"),
+            &config["checkout"],
+        )?;
+        path
+    };
     let mut command = Command::new(executable);
     let environment = runtime::launch_env(&Value::Null);
     command
