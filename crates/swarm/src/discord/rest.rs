@@ -47,6 +47,7 @@ impl Discord {
             ureq::Error::StatusCode(429) => {
                 io::Error::other("Discord API rate limited the request, try again later")
             }
+            ureq::Error::StatusCode(404) => io::ErrorKind::NotFound.into(),
             ureq::Error::StatusCode(401 | 403) => {
                 io::Error::other("Discord API rejected the bot credential or permissions")
             }
@@ -117,6 +118,57 @@ impl Discord {
             })
             .map(str::to_owned)
             .ok_or_else(|| invalid("invalid Discord bot username"))
+    }
+
+    pub(super) fn owner_history(
+        &self,
+        cfg: &Config,
+        before: &str,
+        limit: usize,
+    ) -> io::Result<Vec<Value>> {
+        if !before.is_empty() && !snowflake(before) {
+            return Err(invalid("invalid Discord history cursor"));
+        }
+        self.verify_dm(cfg, None)?;
+        let channel = cfg.text("dm_channel_id");
+        let mut path = format!("/channels/{channel}/messages?limit={limit}");
+        if !before.is_empty() {
+            path.push_str(&format!("&before={before}"));
+        }
+        let value = self.request(&path, None)?;
+        let rows = value
+            .as_array()
+            .filter(|rows| rows.len() <= limit)
+            .ok_or_else(|| invalid("invalid Discord history page"))?;
+        if rows.iter().any(|message| {
+            message["channel_id"] != channel
+                || !message["guild_id"].is_null()
+                || !message["id"].as_str().is_some_and(snowflake)
+        }) {
+            return Err(invalid(
+                "Discord history page contains a different audience or invalid identity",
+            ));
+        }
+        Ok(rows.clone())
+    }
+
+    pub(super) fn owner_message(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
+        if !snowflake(id) {
+            return Err(invalid("invalid Discord message ID"));
+        }
+        self.verify_dm(cfg, None)?;
+        let channel = cfg.text("dm_channel_id");
+        let message = match self.request(&format!("/channels/{channel}/messages/{id}"), None) {
+            Ok(message) => message,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        if message["id"] != id || message["channel_id"] != channel {
+            return Err(invalid(
+                "Discord source message does not match the requested route",
+            ));
+        }
+        Ok(Some(message))
     }
 
     pub(super) fn verify_dm(

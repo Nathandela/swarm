@@ -13,6 +13,14 @@ const MAX_FRAME: usize = 1 << 20;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn probe(config: &Config) -> io::Result<&'static str> {
+    let (mut socket, _) = open(config)?;
+    let _ = socket.close(None);
+    Ok("message intents accepted")
+}
+
+type Connection = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+
+pub(super) fn open(config: &Config) -> io::Result<(Connection, Cursor)> {
     let token = load_token(Path::new(config.text("token_file")))?;
     let timeout = Instant::now() + TIMEOUT;
     let mut stream = None;
@@ -27,23 +35,82 @@ pub(super) fn probe(config: &Config) -> io::Result<&'static str> {
         }
     }
     let stream = stream.ok_or_else(|| io::Error::other("Discord Gateway TCP connect failed"))?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
     let limits = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME))
         .max_frame_size(Some(MAX_FRAME));
     let (mut socket, _) = client_tls_with_config(URL, stream, Some(limits), None)
         .map_err(|_| io::Error::other("Discord Gateway TLS or WebSocket handshake failed"))?;
-    ready(&mut socket, config, &token)?;
-    let _ = socket.close(None);
-    Ok("message intents accepted")
+    let cursor = ready(&mut socket, config, &token)?;
+    Ok((socket, cursor))
+}
+
+pub(super) struct Cursor {
+    sequence: Value,
+    interval: Duration,
+    next: Instant,
+    awaiting: bool,
+}
+
+impl Cursor {
+    pub(super) fn sequence(&self) -> u64 {
+        self.sequence.as_u64().unwrap_or(0)
+    }
+
+    pub(super) fn event(
+        &mut self,
+        socket: &mut WebSocket<impl Read + Write>,
+    ) -> io::Result<Option<Value>> {
+        if Instant::now() >= self.next {
+            if self.awaiting {
+                return Err(io::Error::other(
+                    "Discord Gateway did not acknowledge heartbeat",
+                ));
+            }
+            send(socket, json!({"op": 1, "d": self.sequence}))?;
+            self.awaiting = true;
+            self.next = Instant::now() + self.interval;
+        }
+        let Some(event) = read(socket)? else {
+            return Ok(None);
+        };
+        if event["op"] == 11 {
+            self.awaiting = false;
+        } else if event["op"] == 1 {
+            send(socket, json!({"op": 1, "d": self.sequence}))?;
+        } else if event["op"] == 7 || event["op"] == 9 {
+            return Err(io::Error::other(
+                "Discord Gateway session interrupted; history repair is required",
+            ));
+        } else if event["op"] == 0 {
+            let current = event["s"]
+                .as_u64()
+                .ok_or_else(|| invalid("Discord dispatch lacks sequence"))?;
+            let previous = self
+                .sequence
+                .as_u64()
+                .ok_or_else(|| invalid("Discord READY lacks sequence"))?;
+            if current <= previous {
+                return Ok(None);
+            }
+            if previous.checked_add(1) != Some(current) {
+                return Err(invalid(
+                    "Discord Gateway sequence gap; history repair is required",
+                ));
+            }
+            self.sequence = event["s"].clone();
+            return Ok(Some(event));
+        }
+        Ok(None)
+    }
 }
 
 fn ready(
     socket: &mut WebSocket<impl Read + Write>,
     config: &Config,
     token: &str,
-) -> io::Result<()> {
+) -> io::Result<Cursor> {
     let timeout = Instant::now() + TIMEOUT;
     let hello = next(socket, timeout)?;
     let interval = hello["d"]["heartbeat_interval"]
@@ -75,12 +142,21 @@ fn ready(
             sequence = event["s"].clone();
         }
         if event["op"] == 0 && event["t"] == "READY" {
-            if event["d"]["user"]["id"] != config.text("application_id")
+            if event["d"]["application"]["id"] != config.text("application_id")
+                || event["d"]["user"]["id"] != config.text("application_id")
                 || event["d"]["user"]["bot"] != true
             {
                 return Err(invalid("Discord Gateway returned a different bot identity"));
             }
-            return Ok(());
+            if !event["s"].is_u64() {
+                return Err(invalid("Discord READY lacks sequence"));
+            }
+            return Ok(Cursor {
+                sequence,
+                interval: Duration::from_millis(interval),
+                next: last_heartbeat + Duration::from_millis(interval),
+                awaiting: false,
+            });
         }
         if event["op"] == 7 || event["op"] == 9 {
             return Err(io::Error::other("Discord Gateway requested a new session"));
@@ -94,28 +170,44 @@ fn ready(
 
 fn next(socket: &mut WebSocket<impl Read + Write>, timeout: Instant) -> io::Result<Value> {
     while Instant::now() < timeout {
-        match socket.read() {
-            Ok(Message::Text(body)) => {
-                return serde_json::from_str(&body)
-                    .map_err(|_| invalid("invalid Discord Gateway event"));
-            }
-            Ok(Message::Ping(_)) => socket
-                .flush()
-                .map_err(|_| io::Error::other("Discord Gateway pong failed"))?,
-            Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(frame)) => {
-                let code = frame.map(|close| u16::from(close.code)).unwrap_or(1005);
-                return Err(io::Error::other(format!(
-                    "Discord Gateway closed with code {code}"
-                )));
-            }
-            _ => return Err(io::Error::other("Discord Gateway event read failed")),
+        if let Some(event) = read(socket)? {
+            return Ok(event);
         }
     }
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
         "Discord Gateway startup timed out",
     ))
+}
+
+fn read(socket: &mut WebSocket<impl Read + Write>) -> io::Result<Option<Value>> {
+    match socket.read() {
+        Ok(Message::Text(body)) => serde_json::from_str(&body)
+            .map(Some)
+            .map_err(|_| invalid("invalid Discord Gateway event")),
+        Ok(Message::Ping(_)) => {
+            socket
+                .flush()
+                .map_err(|_| io::Error::other("Discord Gateway pong failed"))?;
+            Ok(None)
+        }
+        Ok(Message::Pong(_)) => Ok(None),
+        Ok(Message::Close(frame)) => {
+            let code = frame.map(|close| u16::from(close.code)).unwrap_or(1005);
+            Err(io::Error::other(format!(
+                "Discord Gateway closed with code {code}"
+            )))
+        }
+        Err(tungstenite::Error::Io(err))
+            if matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(None)
+        }
+        _ => Err(io::Error::other("Discord Gateway event read failed")),
+    }
 }
 
 fn send(socket: &mut WebSocket<impl Read + Write>, event: Value) -> io::Result<()> {
@@ -146,7 +238,7 @@ mod tests {
                 send(&mut ws, json!({"op":11})).unwrap();
                 send(
                     &mut ws,
-                    json!({"op":0, "s":1, "t":"READY", "d":{"user":{"id":ready_id,"bot":true}}}),
+                    json!({"op":0, "s":1, "t":"READY", "d":{"application":{"id":ready_id},"user":{"id":ready_id,"bot":true}}}),
                 )
                 .unwrap();
             });
