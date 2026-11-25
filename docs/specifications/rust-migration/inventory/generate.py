@@ -155,6 +155,16 @@ def check_ledgers():
                                 body = subprocess.check_output(["git", "show", f"{PIN}:{source}"], cwd=ROOT, text=True)
                                 if not re.search(r"\b" + re.escape(symbol) + r"\b", body):
                                     raise SystemExit(f"missing Go symbol in {ledger.name}: {source}#{symbol}")
+            if ledger.name == "captures.tsv" and row[0] not in ("LOG_M0", "LOG_P2", "RUN_01"):
+                for ref in row[4].split("; "):
+                    path, test_name = ref.split("#", 1)
+                    pinned = subprocess.check_output(["git", "show", f"{PIN}:{path}"], cwd=ROOT, text=True)
+                    working = (ROOT / path).read_text()
+                    declaration = r"\bfunc\s+" + re.escape(test_name) + r"\s*\("
+                    if not re.search(declaration, pinned):
+                        raise SystemExit(f"test missing at pinned Go ref: {ref}")
+                    if not re.search(declaration, working):
+                        raise SystemExit(f"test missing in working source: {ref}")
 
 
 def main():

@@ -253,7 +253,7 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
             .find(|f| *f == name)
             .expect("validated flag");
         if ["worktree", NEW_ID].contains(&canonical) {
-            super::actions::parse_bool(name, value)?;
+            crate::flags::parse_bool(name, value)?;
         }
         fields.insert(canonical, value);
         Ok(())
@@ -263,7 +263,7 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
         return Err((2, "unexpected positional arguments".into()));
     }
     let get = |k: &str| fields.get(k).copied().unwrap_or("");
-    let enabled = |k: &str| super::actions::parse_bool(k, get(k)).unwrap_or(false);
+    let enabled = |k: &str| crate::flags::parse_bool(k, get(k)).unwrap_or(false);
     if enabled(NEW_ID) {
         if fields.len() != 1 {
             return Err((2, "--new-operation-id takes no other arguments".into()));
@@ -385,6 +385,9 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
     let env: Vec<_> = env::vars_os()
         .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
         .collect();
+    if agent == "codex" {
+        crate::providers::codex::refuse_unqualified_origin(&json!(env)).map_err(report)?;
+    }
     let env = if id.is_empty() {
         env
     } else {

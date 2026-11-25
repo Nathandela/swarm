@@ -9,9 +9,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 libc = "0.2"
 vt100 = "0.18.1"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 hmac = "0.12"
 unicode-width = "0.2"
 ureq = { version = "3", features = ["json"] }
 tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 subtle = "2.6"
+rustix = { version = "1", features = ["fs"] }

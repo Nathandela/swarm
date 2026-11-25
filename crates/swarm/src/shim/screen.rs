@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::io;
-use vt100::{Cell, Color, Screen};
+use vt100::{Cell, Color, MouseProtocolEncoding, MouseProtocolMode, Screen};
 
 pub(super) fn terminal(screen: &Screen) -> Value {
     let (rows, cols) = screen.size();
@@ -50,7 +50,26 @@ pub(super) fn snapshot(screen: &Screen) -> io::Result<Vec<u8>> {
         "version": 1, "cols": cols.get(), "rows": rows.get(),
         "altScreen": screen.alternate_screen(), "cursorX": cursor_x,
         "cursorY": cursor_y, "cursorVisible": !screen.hide_cursor(), "lines": lines,
+        "inputModes": input_modes(screen),
     }))?)
+}
+
+fn input_modes(screen: &Screen) -> Value {
+    let tracking = match screen.mouse_protocol_mode() {
+        MouseProtocolMode::None => 0,
+        MouseProtocolMode::Press => 9,
+        MouseProtocolMode::PressRelease => 1000,
+        MouseProtocolMode::ButtonMotion => 1002,
+        MouseProtocolMode::AnyMotion => 1003,
+    };
+    let encoding = match screen.mouse_protocol_encoding() {
+        MouseProtocolEncoding::Default => 0,
+        MouseProtocolEncoding::Utf8 => 1005,
+        MouseProtocolEncoding::Sgr => 1006,
+    };
+    // shortcut: vt100 exposes these DEC states but has no focus or alternate-scroll state.
+    json!({"known":true, "tracking":tracking, "encoding":encoding,
+           "paste":screen.bracketed_paste(), "cursorKeys":screen.application_cursor()})
 }
 
 fn cells(screen: &Screen, row: u16, cols: u16) -> impl Iterator<Item = (u16, &Cell)> {

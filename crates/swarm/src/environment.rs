@@ -1,4 +1,6 @@
 //! Idempotent launch keys include the sorted, admitted environment.
+mod saved;
+pub(crate) use saved::{load_saved, private_text, restore, save};
 pub(crate) fn child_key(key: &str) -> bool {
     matches!(
         key,

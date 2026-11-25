@@ -3,9 +3,11 @@
 
 import argparse
 import base64
+import copy
 import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,6 +15,7 @@ import sys
 import tempfile
 import termios
 import time
+import unicodedata
 
 HERE = Path(__file__).resolve().parent
 DRIVER = HERE / "swarm-parity"
@@ -106,6 +109,112 @@ TMUX_MODES = ("cursor_x", "cursor_y", "cursor_flag", "alternate_on", "insert_fla
               "mouse_button_flag", "mouse_all_flag", "mouse_utf8_flag", "mouse_sgr_flag")
 
 
+PALETTE = ("000000", "800000", "008000", "808000", "000080", "800080", "008080", "c0c0c0",
+           "808080", "ff0000", "00ff00", "ffff00", "0000ff", "ff00ff", "00ffff", "ffffff")
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def indexed_rgb(index):
+    if index < 16:
+        return PALETTE[index]
+    if index >= 232:
+        gray = 8 + (index - 232) * 10
+        return f"{gray:02x}" * 3
+    color = index - 16
+    def channel(channel_index):
+        return 0 if channel_index == 0 else 55 + 40 * channel_index
+    return "".join(f"{channel(value):02x}" for value in (color // 36, color // 6 % 6, color % 6))
+
+
+def resolve_cells(raw, width, height):
+    """Expand tmux's ANSI cell serialization including uninitialized default cells."""
+    blank = [" ", 1, [], None, None]
+    scope = set()
+    colors = [None, None]
+    lines = raw.decode().split("\n")[:-1]
+    assert len(lines) == height
+    grid = []
+    for line in lines:
+        cells = []
+        tokens = SGR.split(line)
+        for i, token in enumerate(tokens):
+            if i % 2 == 0:
+                if "\x1b" in token:
+                    raise ValueError("unexpected control in tmux cell capture")
+                for ch in token:
+                    if unicodedata.combining(ch):
+                        base = cells[-2] if cells[-1][1] == 0 else cells[-1]
+                        base[0] += ch
+                        continue
+                    columns = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+                    cells.append([ch, columns, sorted(scope), *colors])
+                    if columns == 2:
+                        cells.append(["", 0, sorted(scope), *colors])
+                continue
+            operations = list(map(int, token.split(";"))) if token else [0]
+            while operations:
+                op = operations.pop(0)
+                if op == 0:
+                    scope.clear()
+                    colors[:] = [None, None]
+                elif op in (1, 2, 3, 4, 5, 7, 8, 9):
+                    scope.add(op)
+                elif op == 22:
+                    scope.difference_update({1, 2})
+                elif op in (23, 24, 25, 27, 28, 29):
+                    scope.discard(op - 20)
+                elif op in (38, 48):
+                    mode = operations.pop(0)
+                    channel = int(op == 48)
+                    if mode == 5:
+                        colors[channel] = indexed_rgb(operations.pop(0))
+                    elif mode == 2:
+                        colors[channel] = "".join(f"{operations.pop(0):02x}" for _ in range(3))
+                    else:
+                        raise ValueError("unexpected color mode in tmux cell capture")
+                elif op in (39, 49):
+                    colors[int(op == 49)] = None
+                elif 30 <= op <= 37 or 40 <= op <= 47 or 90 <= op <= 97 or 100 <= op <= 107:
+                    offset = op % 10 + (8 if op >= 90 else 0)
+                    colors[int(op // 10 in (4, 10))] = indexed_rgb(offset)
+                else:
+                    raise ValueError(f"unsupported SGR {op} in tmux cell capture")
+        assert len(cells) <= width
+        grid.append(cells + [blank] * (width - len(cells)))
+    return grid
+
+
+def compare_projection(before, after):
+    if before["terminal_modes"] != after["terminal_modes"]:
+        return {"before_modes": before["terminal_modes"], "after_modes": after["terminal_modes"]}
+    for y, (left, right) in enumerate(zip(before["cells"], after["cells"], strict=True)):
+        for x, (a, b) in enumerate(zip(left, right, strict=True)):
+            if a != b:
+                return {"first_cell": [x, y], "before_cell": a, "after_cell": b}
+    return None
+
+
+def compare_grid_receipts(reference_path, candidate_path):
+    go = json.loads(Path(reference_path).read_bytes())
+    rust = json.loads(Path(candidate_path).read_bytes())
+    expected = go["before"]
+    for capture in (expected, go["after"], rust["before"], rust["after"]):
+        if capture["width"] != 80 or capture["rows"] != 23 or len(capture["cells"]) != 23 or any(len(row) != 80 for row in capture["cells"]):
+            raise ValueError("fixture geometry changed")
+    if expected["cells"][1][4][0] != "e\u0301":
+        raise ValueError("the reference live grid must contain the combining sequence")
+    old_snapshot = copy.deepcopy(expected)
+    old_snapshot["cells"][1][4][0] = "e"
+    for label, left, right in (("pinned Go snapshot", old_snapshot, go["after"]),
+                               ("Rust live", expected, rust["before"]),
+                               ("Rust reattach", expected, rust["after"])):
+        difference = compare_projection(left, right)
+        if difference:
+            raise ValueError(f"{label}: {difference!r}")
+    print("All 1,840 Rust live and reattached cells and observed modes matched the Go live grid. "
+          "The pinned Go reattach lost only U+0301 at (4,1), as recorded.")
+
+
 def grid_witness(root, cli, roster, start, tmux):
     env = p.environment(root)
     command = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
@@ -118,18 +227,21 @@ def grid_witness(root, cli, roster, start, tmux):
         return result.stdout
 
     def grid():
-        # -e retains cell attributes. -N preserves trailing cells. Exclude the Swarm chrome row.
-        return send_tmux("capture-pane", "-peN", "-S", "0", "-E", "22", "-t", "board:0.0")
+        # -e retains cell attributes. Resolution fills trailing cells. Exclude Swarm's chrome row.
+        return send_tmux("capture-pane", "-pe", "-S", "0", "-E", "22", "-t", "board:0.0")
 
     def observed(fragment):
         return p.wait_for(lambda: screen if fragment in (screen := grid()) else None,
                           repr(fragment))
 
     def capture():
-        cells = observed(b"grid end")
+        raw = observed(b"grid end")
         fmt = "|".join(f"#{{{name}}}" for name in TMUX_MODES)
         modes = send_tmux("display-message", "-p", "-t", "board:0.0", fmt).decode().strip().split("|")
-        return {"cells_ansi_base64": base64.b64encode(cells).decode(), "width": 80, "rows": 23,
+        cells = resolve_cells(raw, 80, 23)
+        assert cells[1][2][:2] == ["年", 2] and cells[1][3][1] == 0
+        return {"cells_ansi_base64": base64.b64encode(raw).decode(), "cells": cells,
+                "width": 80, "rows": 23,
                 "terminal_modes": dict(zip(TMUX_MODES, modes, strict=True))}
 
     def open_board():
@@ -152,6 +264,9 @@ def grid_witness(root, cli, roster, start, tmux):
     send_tmux("send-keys", "-t", "board:0.0", "-l", "before")
     send_tmux("send-keys", "-t", "board:0.0", "Enter")
     before = capture()
+    snapshot = cli("peek", identity)
+    assert snapshot.returncode == 0
+    before_snapshot = snapshot.stdout.decode()
     daemon.kill()
     daemon.wait(timeout=5)
     assert p.generation(worker) == birth
@@ -161,16 +276,24 @@ def grid_witness(root, cli, roster, start, tmux):
     assert [row["id"] for row in rows] == [identity]
     open_board()
     after = capture()
-    send_tmux("send-keys", "-t", "board:0.0", "-l", "after")
+    receipt = {"before": before, "after": after, "snapshot_before_daemon_death": before_snapshot,
+               "first_divergence": compare_projection(before, after)}
+    p.write_json(root / "grid.json", receipt)
+    # tmux wraps paste only while its resolved pane has DEC bracketed-paste mode enabled.
+    send_tmux("set-buffer", "after")
+    send_tmux("paste-buffer", "-p", "-t", "board:0.0")
     send_tmux("send-keys", "-t", "board:0.0", "Enter")
     observed(b"fixture received after")
     assert p.generation(worker) == birth
-    assert (root / "effects/input").read_bytes() == b"before\rafter\r"
+    worker_input = (root / "effects/input").read_bytes()
+    assert worker_input == b"before\r\x1b[200~after\x1b[201~\r"
+    receipt["worker_input_hex"] = worker_input.hex()
+    receipt["worker_identity_unchanged"] = True
+    p.write_json(root / "grid.json", receipt)
     send_tmux("kill-session", "-t", "board")
     assert cli("kill", identity).returncode == 0
     daemon.terminate()
     daemon.wait(timeout=5)
-    p.write_json(root / "grid.json", {"before": before, "after": after})
 
 
 def run(supervisor, client, tmux=None, evidence=None):
@@ -199,16 +322,17 @@ def run(supervisor, client, tmux=None, evidence=None):
             if time.monotonic() >= until:
                 raise RuntimeError("board qualification timed out")
             time.sleep(0.05)
-        if child.returncode != 0:
-            raise RuntimeError(f"board qualification exited {child.returncode}")
-        if evidence is not None:
-            receipt = json.loads((root / "grid.json").read_bytes())
+        captured = root / "grid.json"
+        if evidence is not None and captured.exists():
+            receipt = json.loads(captured.read_bytes())
             receipt["tmux"] = subprocess.check_output([tmux, "-V"], text=True).strip()
             receipt["board_sha256"] = p.hash_file(client)
             receipt["supervisor_sha256"] = p.hash_file(supervisor)
             p.write_json(evidence, receipt, replace=False)
-            if receipt["before"] != receipt["after"]:
+            if receipt["first_divergence"] is not None:
                 raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
+        if child.returncode != 0:
+            raise RuntimeError(f"board qualification exited {child.returncode}")
     finally:
         cleanup = p.reap(root, driver, previous)
         if cleanup["remaining"]:
@@ -220,7 +344,9 @@ def run(supervisor, client, tmux=None, evidence=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) in (3, 4) and sys.argv[1] == "_inside":
+    if sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
+        compare_grid_receipts(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) in (3, 4) and sys.argv[1] == "_inside":
         witness(Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) == 4 else None)
     else:
         parser = argparse.ArgumentParser(description=__doc__)

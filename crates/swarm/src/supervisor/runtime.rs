@@ -105,6 +105,16 @@ pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
 }
 
 pub(crate) fn write_json(path: &Path, data: &Value) -> io::Result<()> {
+    write_atomic(path, |file| {
+        serde_json::to_writer(&mut *file, data)?;
+        file.write_all(b"\n")
+    })
+}
+
+pub(crate) fn write_atomic(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("state path missing parent"))?;
@@ -115,8 +125,7 @@ pub(crate) fn write_json(path: &Path, data: &Value) -> io::Result<()> {
             .write(true)
             .mode(0o600)
             .open(&temp)?;
-        serde_json::to_writer(&mut file, data)?;
-        file.write_all(b"\n")?;
+        write(&mut file)?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
         File::open(parent)?.sync_all()

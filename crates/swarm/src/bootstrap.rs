@@ -10,6 +10,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub(crate) fn ensure_daemon() -> io::Result<()> {
+    ensure(false)
+}
+
+pub(crate) fn ensure(unattended: bool) -> io::Result<()> {
     let socket = ipc::socket_path()?;
     let dial = || ipc::Client::dial(&socket, &[]);
     match dial() {
@@ -22,6 +26,11 @@ pub(crate) fn ensure_daemon() -> io::Result<()> {
         Err(e) => return Err(e),
     }
     let root = ipc::state_path()?;
+    let saved = if unattended {
+        Some(crate::environment::restore(&root)?)
+    } else {
+        None
+    };
     runtime::private_dir(&root)?;
     let log_path = ipc::env_path("SWARM_DAEMON_LOG").unwrap_or_else(|| root.join("daemon.log"));
     let log = OpenOptions::new()
@@ -42,6 +51,19 @@ pub(crate) fn ensure_daemon() -> io::Result<()> {
         ));
     }
     let mut cmd = Command::new(env::current_exe()?);
+    if let Some(entries) = saved {
+        cmd.env_clear();
+        for kv in &entries {
+            let (key, value) = kv.split_once('=').expect("validated restart entry");
+            cmd.env(key, value);
+        }
+        cmd.env("SWARM_DAEMON_SOCK", &socket);
+        for key in ["SWARM_DAEMON_LOCK", "SWARM_DAEMON_LOG"] {
+            if let Some(path) = ipc::env_path(key) {
+                cmd.env(key, path);
+            }
+        }
+    }
     cmd.arg("daemon")
         .env("SWARM_DAEMON_STATE", &root)
         .stdin(Stdio::null())
