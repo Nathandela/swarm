@@ -245,6 +245,14 @@ impl Session {
         } else {
             &label
         };
+        let hermes_installation = if !provider.hermes.is_null() {
+            root.parent().and_then(|supervisor| {
+                let socket = crate::ipc::socket_path().ok()?;
+                crate::discord::worker_input_installation(supervisor, socket.to_str()?)
+            })
+        } else {
+            None
+        };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -258,7 +266,7 @@ impl Session {
                     } else if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
                     } else { "classic" },
-                    "executable": provider.executable, "identity": provider.identity, "hermes_profile":provider.hermes_profile},
+                    "executable": provider.executable, "identity": provider.identity, "hermes_profile":provider.hermes_profile,"hermes_installation":hermes_installation},
 
             }),
         )?;

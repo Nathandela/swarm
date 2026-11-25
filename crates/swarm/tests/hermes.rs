@@ -1,6 +1,7 @@
 mod support;
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs::{self, DirBuilder};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -61,7 +62,7 @@ impl Sandbox {
             stream,
             endpoint: String::new(),
         };
-        let reply = peer.query(json!({"op":"hello","protocol_version":1,"capabilities":["semantic-send","semantic-target","native-requests-v1"]}));
+        let reply = peer.query(json!({"op":"hello","protocol_version":1,"capabilities":["semantic-send","semantic-target","native-requests-v1","worker-discord-origin-v1"]}));
         assert_eq!(reply["op"], "hello", "{reply}");
         peer.endpoint = reply["endpoint_id"].as_str().unwrap().into();
         peer
@@ -337,6 +338,7 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     fs::write(
         &config,
         json!({"version":1,"enabled":true,"installation_id":"test","name":"test",
+        "mode":"personal","manager_cli":"codex","dm_channel_id":"125",
         "application_id":"123","owner_id":"124","token_file":fixture.path.join("unused"),
         "daemon_socket":fixture.path.join("d"),"work_dir":fixture.path})
         .to_string(),
@@ -344,6 +346,9 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     .unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
 
+    let owner = discord.join(".rust-offline-owner.json");
+    fs::write(&owner, json!("test").to_string()).unwrap();
+    fs::set_permissions(owner, fs::Permissions::from_mode(0o600)).unwrap();
     let mut peer = fixture.start();
     let launched = fixture.launch(&mut peer, json!({}));
     assert_eq!(launched["op"], "launch", "{launched}");
@@ -363,9 +368,33 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
         .as_millis();
     let operation = format!("semantic:{millis}:0123456789abcdef0123456789abcdef");
     let text = "/approve remains literal prompt text";
-    let message = json!({"op":"semantic_send","session_id":id,"operation_id":operation,"body_version":1,
-        "composer_send":{"session":id,"session_instance":target["semantic_target_instance"],"text":text,
-            "origin":{"kind":"external","installation_id":"fixture","request_id":"first","actor_id":"sender"}}});
+    let hash = |value: Value| format!("{:x}", Sha256::digest(serde_json::to_vec(&value).unwrap()));
+    let source = "126";
+    let revision = hash(json!(["124", text, "125", "", source, null, "", null]));
+    let request_id = format!("da_{}", &hash(json!(["test", source]))[..32]);
+    let composer = json!({"session":id,"session_instance":target["semantic_target_instance"],"text":text,
+        "origin":{"kind":"owner_direct","installation_id":"test","request_id":request_id,
+            "actor_id":"124","channel_id":"125","message_id":source,"revision":revision}});
+    let daemon = fixture.path.join("d");
+    let ledger = discord.join("rust-text-v1.json");
+    fs::write(&ledger,json!({
+        "version":2,"identity":["test","123","124","125",daemon],"consent_floor":"120","history_cursor":"126",
+        "messages":{(source):{"text":text,"state":"sending","worker_operation":operation,
+            "route":{"guild_id":"","channel_id":"125","message_id":source},
+            "author":{"id":"124"},"authority":"owner_direct","supervisor_socket":daemon,
+            "revision":revision,"operation_id":request_id}},
+        "worker_inputs":{(&operation):{"source_id":source,"provider":"hermes","composer":composer}},
+    }).to_string()).unwrap();
+    fs::set_permissions(ledger, fs::Permissions::from_mode(0o600)).unwrap();
+    let message = json!({"op":"semantic_send","session_id":id,"operation_id":operation,
+        "body_version":1,"composer_send":composer});
+    let mut wrong = message.clone();
+    wrong["operation_id"] = json!(format!(
+        "semantic:{millis}:00000000000000000000000000000000"
+    ));
+    wrong["composer_send"]["origin"]["installation_id"] = json!("different");
+    assert_eq!(peer.query(wrong)["op"], "error");
+    assert!(admissions.lock().unwrap().is_empty());
     assert_eq!(peer.query(message.clone())["op"], "ok");
     peer = fixture.restart();
     assert_eq!(peer.query(message.clone())["op"], "ok");
@@ -374,6 +403,7 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     assert_eq!(peer.query(changed)["op"], "error");
     let observed =
         peer.query(json!({"op":"semantic_status","session_id":id,"operation_id":operation}));
+    assert_eq!(observed["semantic_receipt"]["origin"], composer["origin"]);
     assert_eq!(
         observed["semantic_receipt"]["state"], "submitted",
         "{observed}"
@@ -391,6 +421,27 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     let message = json!({"op":"semantic_send","session_id":id,"operation_id":ambiguous,"body_version":1,
         "composer_send":{"session":id,"session_instance":target["semantic_target_instance"],"text":"fixture lost reply"}});
     assert_eq!(peer.query(message.clone())["error_code"], "outcome_unknown");
+    let local = id.split_once('/').unwrap().1;
+    let held = fixture
+        .path
+        .join("rust-v1")
+        .join(local)
+        .join("hermes-semantic")
+        .join(format!("{:x}.json", Sha256::digest(&ambiguous)));
+    let exact = fs::read(&held).unwrap();
+    let mut altered: Value = serde_json::from_slice(&exact).unwrap();
+    altered["receipt"]["state"] = json!("submitted");
+    fs::write(&held, altered.to_string()).unwrap();
+    let forged_status =
+        peer.query(json!({"op":"semantic_status","session_id":id,"operation_id":ambiguous}));
+    assert_eq!(forged_status["op"], "error", "{forged_status}");
+    let mut next = message.clone();
+    next["operation_id"] = json!(format!(
+        "semantic:{millis}:ff000000000000000000000000000000"
+    ));
+    assert_eq!(peer.query(next)["op"], "error");
+    assert_eq!(admissions.lock().unwrap().len(), 2);
+    fs::write(held, exact).unwrap();
     assert_eq!(
         peer.query(json!({"op":"semantic_status","session_id":id,"operation_id":ambiguous}))["semantic_receipt"]
             ["state"],

@@ -350,19 +350,31 @@ impl Binding {
         self.activity(&mut client, &snapshot)
     }
 
-    pub(crate) fn submit(&self, operation: &str, text: &str) -> io::Result<Value> {
+    pub(crate) fn submit(&self, operation: &str, text: &str) -> io::Result<Admission> {
         let mut client = self.connect(Instant::now() + Duration::from_secs(5))?;
         self.snapshot(&mut client)?;
-        let receipt = client.rpc(
+        let mut receipt = match client.rpc(
             "prompt.submit",
             json!({"session_id":self.id(),"input_id":operation,"text":text}),
-        )?;
+        ) {
+            Ok(receipt) => receipt,
+            Err(err) => {
+                if let Some(refusal) = err.get_ref().and_then(|err| err.downcast_ref::<Refusal>()) {
+                    return Ok(Admission::Rejected(refusal.0));
+                }
+                return Err(err);
+            }
+        };
+        if receipt.is_object() && receipt["input_id"].is_null() {
+            // The response is correlated to the current RPC ID.
+            receipt["input_id"] = json!(operation);
+        }
         if !self.admission(&receipt, operation) {
             return Err(io::Error::other(
                 "Hermes native admission acknowledgement is unconfirmed",
             ));
         }
-        Ok(receipt)
+        Ok(Admission::Accepted(receipt))
     }
 
     pub(crate) fn pending(&self, operation: &str) -> io::Result<Option<Value>> {
@@ -378,14 +390,14 @@ impl Binding {
             .cloned())
     }
 
-    fn admission(&self, receipt: &Value, operation: &str) -> bool {
+    pub(crate) fn admission(&self, receipt: &Value, operation: &str) -> bool {
         receipt["ref"]["profile_id"] == self.0["home"]
             && receipt["ref"]["session_id"] == self.id()
             && receipt["authority_epoch"] == self.0["authority_epoch"]
             && !field(receipt, "admission_id").is_empty()
             && receipt["execution_generation"].is_u64()
             && matches!(field(receipt, "status"), "queued" | "started" | "terminal")
-            && (receipt["input_id"].is_null() || receipt["input_id"] == operation)
+            && receipt["input_id"] == operation
     }
 
     pub(crate) fn stop(&self) -> io::Result<()> {
@@ -398,7 +410,14 @@ impl Binding {
         if let Some(pending) = snapshot["pending"].as_array() {
             for receipt in pending {
                 match field(receipt, "status") {
-                    "queued" if self.admission(receipt, field(receipt, "input_id")) => {
+                    "queued"
+                        if self.admission(receipt, field(receipt, "input_id"))
+                            || receipt["input_id"].is_null()
+                                && receipt["ref"]["session_id"] == self.id()
+                                && receipt["ref"]["profile_id"] == self.0["home"]
+                                && receipt["authority_epoch"] == self.0["authority_epoch"]
+                                && !field(receipt, "admission_id").is_empty() =>
+                    {
                         uncertain |= client.rpc("prompt.cancel", json!({"session_id":self.id(),"admission_id":receipt["admission_id"]})).is_err();
                     }
                     "started" | "terminal" => {}
@@ -515,6 +534,22 @@ pub(crate) fn prepare(
     Ok(binding)
 }
 
+pub(crate) enum Admission {
+    Accepted(Value),
+    Rejected(i64),
+}
+
+#[derive(Debug)]
+struct Refusal(i64);
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Hermes native request refused ({})", self.0)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
 struct Client {
     socket: WebSocket<TcpStream>,
     deadline: Instant,
@@ -550,7 +585,7 @@ impl Client {
                 if let Some(code) = reply["error"]["code"].as_i64() {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        format!("Hermes native request refused ({code})"),
+                        Refusal(code),
                     ));
                 }
                 return reply

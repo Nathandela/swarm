@@ -110,7 +110,17 @@ impl Place {
         })
     }
 
-    fn verify_selection(&self) -> io::Result<()> {
+    pub(super) fn for_supervisor(path: &Path) -> io::Result<Self> {
+        let supervisor = path.canonicalize()?;
+        let dir = Self::selected(&supervisor)?;
+        Ok(Self {
+            dir,
+            supervisor,
+            explicit: false,
+        })
+    }
+
+    pub(super) fn verify_selection(&self) -> io::Result<()> {
         if !self.explicit && self.dir != Self::selected(&self.supervisor)? {
             return Err(io::Error::other(
                 "active connector selection changed, retry",
@@ -180,7 +190,7 @@ impl Place {
         Ok((supervisor, connector))
     }
 
-    fn ensure_owned(&self, cfg: &Config) -> io::Result<()> {
+    pub(super) fn ensure_owned(&self, cfg: &Config) -> io::Result<()> {
         if existing(&self.dir.join("discord.db"))?
             || runtime::read_json(&self.dir.join(OWNER)).ok().as_ref()
                 != Some(&json!(cfg.text("installation_id")))

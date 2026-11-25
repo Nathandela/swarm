@@ -290,6 +290,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     | "owner-launch"
                     | "semantic-send"
                     | "semantic-target"
+                    | "worker-discord-origin-v1"
                     | "native-requests-v1"
                     | crate::bootstrap::RESTART
             )
@@ -447,6 +448,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
+                if !request["composer_send"]["origin"].is_null() && session.is_shared_hermes() && !caps.contains(&"worker-discord-origin-v1") {
+                    return Err(io::Error::other("connector worker input capability was not negotiated"));
+                }
                 let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
                     "native_accepted" | "submitted" => json!({"op":"ok","operation_id":operation}),

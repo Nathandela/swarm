@@ -198,14 +198,9 @@ impl Session {
         {
             return Err(io::Error::other("invalid or stale Hermes semantic request"));
         }
-        let intent = if body["origin"].is_null() {
-            text.to_owned()
-        } else {
-            validate_origin(&body["origin"])?;
-            let mut intent = json!({"text":text,"origin":body["origin"]});
-            intent.sort_all_objects();
-            intent.to_string()
-        };
+        let origin = &body["origin"];
+        let text_hash = codex_receipt::hash(text);
+        let intent = semantic_intent(&text_hash, origin);
         let _authority = self.hermes_authority.lock().unwrap();
         {
             let digest = Sha256::digest(operation);
@@ -244,18 +239,48 @@ impl Session {
             return Err(io::Error::other("Hermes native viewer is stopping"));
         }
         descriptor.binding.validate()?;
+        let _connector = if origin.is_null() {
+            None
+        } else {
+            let supervisor = state
+                .root
+                .parent()
+                .ok_or_else(|| io::Error::other("missing supervisor directory"))?;
+            let socket = crate::ipc::socket_path()?;
+            let socket = socket
+                .to_str()
+                .ok_or_else(|| io::Error::other("invalid owner socket path"))?;
+            let meta = runtime::read_json(&self.dir.join("session.json"))?;
+            if meta["token"] != self.token {
+                return Err(io::Error::other("Hermes launch reservation changed"));
+            }
+            Some(crate::discord::lock_connector_worker_input(
+                supervisor,
+                socket,
+                field(&meta["provider"], "hermes_installation"),
+                "hermes",
+                operation,
+                body,
+            )?)
+        };
         let path = semantic_path(&dir, operation);
-        let mut record = json!({"descriptor":descriptor.raw,"intent":codex_receipt::hash(&intent),"receipt":
+        let mut record = json!({"version":2,"descriptor":descriptor.raw,"text_hash":text_hash,"intent":codex_receipt::hash(&intent),"receipt":
             descriptor.receipt(session, operation, "uncertain", None)});
+        record["receipt"]["origin"] = origin.clone();
         runtime::write_json(&path, &record)?;
         runtime::write_json(&dir.join("pending.json"), &json!(operation))?;
-        let result = match descriptor.binding.submit(operation, text) {
-            Ok(admission) => descriptor.receipt(session, operation, "submitted", Some(admission)),
-            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-                descriptor.receipt(session, operation, "rejected", None)
+        let mut result = match descriptor.binding.submit(operation, text) {
+            Ok(native::Admission::Accepted(admission)) => {
+                descriptor.receipt(session, operation, "submitted", Some(admission))
+            }
+            Ok(native::Admission::Rejected(code)) => {
+                let mut receipt = descriptor.receipt(session, operation, "rejected", None);
+                receipt["native_refusal_code"] = json!(code);
+                receipt
             }
             Err(_) => return Ok(record["receipt"].clone()),
         };
+        result["origin"] = origin.clone();
         record["receipt"] = result.clone();
         runtime::write_json(&path, &record)?;
         Ok(result)
@@ -274,11 +299,38 @@ impl Session {
             Err(err) => return Err(err),
         };
         let descriptor = self.hermes_descriptor()?;
-        if record["descriptor"] != descriptor.raw
-            || record["receipt"]["session_instance"] != descriptor.instance()
-            || record["receipt"]["session"] != session
-            || record["receipt"]["operation_id"] != operation
-            || record["receipt"]["native_session_id"] != descriptor.binding.id()
+        let receipt = &record["receipt"];
+        let text_hash = field(&record, "text_hash");
+        if record["version"] != 2
+            || text_hash.len() != 64
+            || !text_hash
+                .bytes()
+                .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+            || record["intent"]
+                != codex_receipt::hash(&semantic_intent(text_hash, &receipt["origin"]))
+            || record["descriptor"] != descriptor.raw
+            || receipt["session_instance"] != descriptor.instance()
+            || receipt["native_generation"] != descriptor.instance()
+            || receipt["agent"] != "hermes"
+            || receipt["session"] != session
+            || receipt["operation_id"] != operation
+            || receipt["native_session_id"] != descriptor.binding.id()
+            || !match field(receipt, "state") {
+                "submitted" => {
+                    receipt["native_refusal_code"].is_null()
+                        && descriptor
+                            .binding
+                            .admission(&receipt["native_admission"], operation)
+                }
+                "rejected" => {
+                    receipt["native_admission"].is_null() && receipt["native_refusal_code"].is_i64()
+                }
+                "uncertain" => {
+                    receipt["native_admission"].is_null()
+                        && receipt["native_refusal_code"].is_null()
+                }
+                _ => false,
+            }
         {
             return Err(io::Error::other("unproven Hermes admission record"));
         }
@@ -293,62 +345,20 @@ impl Session {
             && self.dial().is_ok()
             && let Ok(Some(admission)) = descriptor.binding.pending(operation)
         {
+            let origin = record["receipt"]["origin"].clone();
             record["receipt"] =
                 descriptor.receipt(session, operation, "submitted", Some(admission));
+            record["receipt"]["origin"] = origin;
             runtime::write_json(&path, &record)?;
         }
         Ok(Some(record["receipt"].clone()))
     }
 }
 
-fn validate_origin(origin: &Value) -> io::Result<()> {
-    let get = |key| field(origin, key);
-    let kind = get("kind");
-    let fields = [
-        "kind",
-        "installation_id",
-        "request_id",
-        "actor_id",
-        "actor_name",
-        "guild_id",
-        "channel_id",
-        "message_id",
-        "endorser_id",
-        "requester_id",
-        "discussion_id",
-        "revision",
-    ];
-    let discussion = !get("discussion_id").is_empty() || !get("revision").is_empty();
-    let personal = kind == "owner_direct" && get("requester_id") == get("actor_id");
-    if !matches!(kind, "external" | "owner_direct" | "owner_endorsed")
-        || ["installation_id", "request_id", "actor_id"]
-            .iter()
-            .any(|key| get(key).is_empty())
-        || (kind == "owner_endorsed") == get("endorser_id").is_empty()
-        || discussion
-            && ([
-                "discussion_id",
-                "revision",
-                "requester_id",
-                "message_id",
-                "channel_id",
-            ]
-            .iter()
-            .any(|key| get(key).is_empty())
-                || (!personal && get("guild_id").is_empty())
-                || kind == "owner_endorsed")
-        || origin.as_object().is_none_or(|object| {
-            object.iter().any(|(key, val)| {
-                !fields.contains(&key.as_str())
-                    || val
-                        .as_str()
-                        .is_none_or(|str| str.len() > 512 || str.chars().any(char::is_control))
-            })
-        })
-    {
-        return Err(io::Error::other("invalid Hermes semantic origin"));
-    }
-    Ok(())
+fn semantic_intent(text_hash: &str, origin: &Value) -> String {
+    let mut intent = json!({"text_hash":text_hash,"origin":origin});
+    intent.sort_all_objects();
+    intent.to_string()
 }
 
 fn semantic_path(dir: &Path, operation: &str) -> PathBuf {
