@@ -218,6 +218,7 @@ func emptyState() State {
 // The root checksum covers the keyed record set, including deletion or substitution.
 // LogicalBytes retains the exact full-State JSON limit, independent of bbolt pages.
 type storeHeader struct {
+	ReplyWaitConsumed   bool              `json:"reply_wait_consumed,omitempty"`
 	Version             int               `json:"version"`
 	Generation          uint64            `json:"generation"`
 	CurrentConversation string            `json:"current_conversation"`
@@ -282,6 +283,7 @@ func readState(tx *bolt.Tx) (State, error) {
 	}
 	st := emptyState()
 	st.Generation, st.CurrentConversation = header.Generation, header.CurrentConversation
+	st.replyWaitConsumed = header.ReplyWaitConsumed
 	records := tx.Bucket([]byte("controller")).Bucket([]byte("records"))
 	if records == nil {
 		return State{}, ErrCorrupt
@@ -420,9 +422,13 @@ func writeStateRecord(tx *bolt.Tx, raw []byte) error {
 		return err
 	}
 	header := storeHeader{Version: storeSchemaVersion, Generation: st.Generation, CurrentConversation: st.CurrentConversation, LogicalBytes: len(raw), Records: countRecords(st)}
-	// Older connectors must refuse this discussion before remarshal can strip file or recipient identity.
-	if previous, err := readHeader(tx); err == nil && previous.Version == mediaStoreSchemaVersion {
-		header.Version = mediaStoreSchemaVersion
+	if previous, err := readHeader(tx); err == nil {
+		// The notice budget lives only in the header; JSON state cannot carry it.
+		header.ReplyWaitConsumed = previous.ReplyWaitConsumed
+		// Older connectors must refuse this discussion before remarshal can strip file or recipient identity.
+		if previous.Version == mediaStoreSchemaVersion {
+			header.Version = mediaStoreSchemaVersion
+		}
 	}
 	if err = writeRecords(records, "workers", st.Workers, &header.RecordHash); err != nil {
 		return err
@@ -536,7 +542,11 @@ func (s *Store) update(fn func(*State) error) error {
 	if countRecords(st) > MaxRecords {
 		return ErrCapacity
 	}
-	if len(st.changes.tables) == 0 && st.Generation == s.cached.Generation && st.CurrentConversation == s.cached.CurrentConversation {
+	if st.replyWaitConsumed && (st.CurrentConversation != s.cached.CurrentConversation || st.changes.tables["admissions"] != nil && !hasReplyObligation(st)) {
+		st.replyWaitConsumed = false
+	}
+	changed := st.Generation != s.cached.Generation || st.CurrentConversation != s.cached.CurrentConversation || st.replyWaitConsumed != s.cached.replyWaitConsumed
+	if len(st.changes.tables) == 0 && !changed {
 		return nil
 	}
 	header := s.header
@@ -544,9 +554,9 @@ func (s *Store) update(fn func(*State) error) error {
 		header.Version = mediaStoreSchemaVersion
 	}
 	header.Generation, header.CurrentConversation = st.Generation, st.CurrentConversation
+	header.ReplyWaitConsumed = st.replyWaitConsumed
 	header.LogicalBytes += stateBaseBytes(st) - stateBaseBytes(s.cached)
 	header.Records = countRecords(st)
-	changed := st.Generation != s.cached.Generation || st.CurrentConversation != s.cached.CurrentConversation
 	err = s.db.Update(func(tx *bolt.Tx) error {
 		if tx.ID() != s.transaction+1 {
 			return ErrStale

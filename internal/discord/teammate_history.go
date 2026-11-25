@@ -143,7 +143,7 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		return out, err
 	}
 	if q.Source == "admission" || q.Source == "grant" || q.Source == "expected_reply" {
-		err = t.verifyAdmissionMessage(ctx, d, q, &out.ExpectsReply)
+		err = t.verifyAdmissionMessage(ctx, d, q, &out.ExpectsReply, nil)
 		return out, err
 	}
 	if q.Source == "audience" {
@@ -532,7 +532,7 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 	return nil
 }
 
-func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, expects *bool) error {
+func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d TeammateDiscussion, q TeammateHistoryQuery, expects *bool, authenticatedRoute *Route) error {
 	if q.Cursor != "" || q.Anchor != "" || q.AdmissionID == "" || q.Revision == "" || !snowflake(q.MessageID) || !snowflake(q.AuthorID) {
 		return ErrInvalid
 	}
@@ -599,6 +599,9 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 	}
 	if expects != nil {
 		*expects = t.expectsReply(m)
+	}
+	if authenticatedRoute != nil {
+		*authenticatedRoute = route
 	}
 	return nil
 }

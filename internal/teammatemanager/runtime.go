@@ -456,6 +456,24 @@ func (r *Runtime) ValidatePublication(ctx context.Context, bound discord.Teammat
 	return err
 }
 
+// ValidatePublicationForSend also checks that a routine wait notice is still current.
+func (r *Runtime) ValidatePublicationForSend(ctx context.Context, bound discord.TeammateDiscussion, p discord.TeammatePublication) (schema.MessageOrigin, error) {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return schema.MessageOrigin{}, err
+	}
+	defer r.release(entry)
+	origin, err := entry.voice.ValidatePublicationForSend(ctx, publicationForVoice(p), p.BodyHash)
+	switch {
+	case errors.Is(err, voice.ErrExpired):
+		return schema.MessageOrigin{}, discord.ErrNotAuthorized
+	case errors.Is(err, voice.ErrReplyWaitObsolete):
+		return schema.MessageOrigin{}, discord.ErrReplyWaitObsolete
+	default:
+		return origin, err
+	}
+}
+
 func publicationForVoice(p discord.TeammatePublication) voice.DiscussionOutput {
 	source := voice.DiscussionOutputSource{AdmissionID: p.AdmissionID, JobID: p.JobID, AttemptID: p.AttemptID, SystemCause: p.SystemCause}
 	output := voice.DiscussionOutput{DiscussionOutputSource: source, ID: p.ID, Text: p.Body, QuestionID: p.QuestionID, QuestionHash: p.QuestionHash, Sequence: p.Sequence, RecipientID: p.RecipientID}

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 const discussionEvidenceLimitNotice = "I couldn't verify the worker's final result within the configured evidence limit. The job and its native session are available in Swarm."
@@ -51,12 +53,104 @@ func (d *DiscussionController) ValidatePublication(ctx context.Context, output D
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if (output.JobID == "") != (output.AttemptID == "") || bodyHash == "" {
-		return ErrInvalid
-	}
 	st, err := d.store.readView()
 	if err != nil {
 		return err
+	}
+	return d.validatePublication(st, output, bodyHash)
+}
+
+// ValidatePublicationForSend checks current relevance only for authenticated
+// routine notices. Historic receipt reads still validate the immutable export.
+func (d *DiscussionController) ValidatePublicationForSend(ctx context.Context, output DiscussionOutput, bodyHash string) (schema.MessageOrigin, error) {
+	var none schema.MessageOrigin
+	if err := ctx.Err(); err != nil {
+		return none, err
+	}
+	st, err := d.store.readView()
+	if err != nil {
+		return none, err
+	}
+	if err := d.validatePublication(st, output, bodyHash); err != nil {
+		return none, err
+	}
+	p := st.Publications[key(d.cfg.ConversationID, output.ID)]
+	if output.QuestionID != "" || !p.ReplyMonitor || p.Final {
+		return none, nil
+	}
+	if len(d.currentReplyWait(st, p)) == 0 {
+		return none, ErrReplyWaitObsolete
+	}
+	if d.runtime == nil {
+		return none, ErrControllerUnsupported
+	}
+	rosterCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var rows []protocol.SessionView
+	if roster, ok := d.runtime.(interface {
+		ListContext(context.Context) ([]protocol.SessionView, error)
+	}); ok {
+		rows, err = roster.ListContext(rosterCtx)
+	} else {
+		rows, err = d.runtime.List()
+	}
+	if err != nil {
+		return none, err
+	}
+	if err := rosterCtx.Err(); err != nil {
+		return none, err
+	}
+	st, err = d.store.readView()
+	if err != nil {
+		return none, err
+	}
+	workers := d.currentReplyWait(st, p)
+	for _, row := range rows {
+		w, ok := workers[row.ID]
+		if !ok || row.Status.NativeWorkUnknown || row.Status.Process != status.ProcessRunning || row.Status.Turn != status.TurnActive ||
+			row.Status.Attention || row.Status.Interaction != status.InteractionNone || row.RosterHidden || row.SupersededBy != "" {
+			continue
+		}
+		if w.supervisorMailbox() {
+			if row.WorkerDiscussion != w.ConversationID || row.WorkerInstance != w.SessionInstance || row.WorkerAttempt != w.AttemptID {
+				continue
+			}
+		} else if row.Capabilities == nil || row.Capabilities.SessionInstance != w.SessionInstance {
+			continue
+		}
+		return *st.Admissions[admissionKey(p.ConversationID, p.Admission)].Origin, nil
+	}
+	return none, ErrReplyWaitObsolete
+}
+
+func (d *DiscussionController) currentReplyWait(st State, p Publication) map[string]WorkerAssociation {
+	a := st.Admissions[admissionKey(p.ConversationID, p.Admission)]
+	if p.Text != discussionWorkerWaitNotice || !replyWaitOpen(a) || !d.scope.validateOrigin(*a.Origin) ||
+		p.DiscussionSource.AdmissionID != a.Origin.RequestID || p.ID != replyNoticeID(a, false) {
+		return nil
+	}
+	if c := st.Conversations[a.ConversationID]; c.CustodyLost || c.SchedulerPaused {
+		return nil
+	}
+	e := discussionReplyEvidence(st, a, d.now())
+	if e.output.ID != "" || e.answered || e.progress > p.OutputSequence || e.expiredQuestion {
+		return nil
+	}
+	var matches map[string]WorkerAssociation
+	for _, w := range replyWaitWorkers(st, a) {
+		if d.scope.projectPath(w.Project, w.Project) {
+			if matches == nil {
+				matches = make(map[string]WorkerAssociation)
+			}
+			matches[w.Session] = w
+		}
+	}
+	return matches
+}
+
+func (d *DiscussionController) validatePublication(st State, output DiscussionOutput, bodyHash string) error {
+	if (output.JobID == "") != (output.AttemptID == "") || bodyHash == "" {
+		return ErrInvalid
 	}
 	conversation := d.cfg.ConversationID
 	k := key(conversation, output.ID)
