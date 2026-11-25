@@ -74,8 +74,23 @@ pub(crate) fn lock_connector_worker_input(
     Ok((supervisor_lock, connector_lock, ledger_lock))
 }
 
+const LEDGER_LOCK: &str = ".rust-text-worker.lock";
+
 pub(super) fn lock_ledger(place: &Path) -> io::Result<File> {
-    runtime::lock(&place.join(".rust-text-worker.lock"))
+    runtime::lock(&place.join(LEDGER_LOCK))
+}
+
+pub(super) fn lock_ledger_writer(place: &Path) -> io::Result<File> {
+    runtime::lock_for(&place.join(LEDGER_LOCK), runtime::IO_TIMEOUT).map_err(|error| {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            io::Error::new(
+                error.kind(),
+                "Discord receipt ledger is held by an active worker effect",
+            )
+        } else {
+            error
+        }
+    })
 }
 
 fn verify(

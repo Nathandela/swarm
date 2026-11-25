@@ -347,6 +347,33 @@ mod tests {
     }
 
     #[test]
+    fn history_checkpoint_waits_for_an_inflight_native_effect() {
+        let dir = fixture_dir();
+        let mut inbox = Inbox::open(&dir, &config()).unwrap();
+        let held = crate::discord::worker_input::lock_ledger(&dir).unwrap();
+        let (started, start) = std::sync::mpsc::channel();
+        let (complete, result) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            let saved = inbox.checkpoint("1000");
+            complete.send(saved).unwrap();
+        });
+        start.recv().unwrap();
+        assert!(matches!(
+            result.recv_timeout(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(held);
+        result
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+        assert_eq!(Inbox::open(&dir, &config()).unwrap().cursor(), Some("1000"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn dm_admission_repair_dedup_deletion_and_late_exact_receipt_survive_restart() {
         let dir = fixture_dir();
         let cfg = config();
