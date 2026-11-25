@@ -35,11 +35,17 @@ pub(super) fn target_text(text: &str) -> Option<(&str, &str)> {
     Some((target, tail.trim()))
 }
 
+pub(super) fn source_text(row: &Value) -> &str {
+    row["addressed_text"]
+        .as_str()
+        .unwrap_or_else(|| field(row, "text"))
+}
+
 pub(super) fn target_id(target: &str) -> bool {
     target_text(target) == Some((target, ""))
 }
 
-fn fresh(message: &str, now: u64) -> bool {
+pub(super) fn fresh(message: &str, now: u64) -> bool {
     let Some(id) = message.parse::<u64>().ok() else {
         return false;
     };
@@ -131,14 +137,28 @@ pub(super) fn tick(cfg: &Config, inbox: &mut Inbox, api: &Discord) -> io::Result
     if !inbox.has_worker_work() {
         return Ok(());
     }
-    let Ok(mut transport) = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS) else {
+    let mut caps = CAPS.to_vec();
+    if cfg.text("mode") != "personal" {
+        caps.push("worker-discord-guild-origin-v1");
+    }
+    let Ok(mut transport) = Client::dial(Path::new(cfg.text("daemon_socket")), &caps) else {
         return Ok(());
     };
-    if cfg.check_supervisor(&transport, CAPS).is_err() {
+    if cfg.check_supervisor(&transport, &caps).is_err() {
         return Ok(());
     }
-    dispatch(cfg, inbox, &mut transport, spawn::now_ms(), |id| {
-        api.owner_message(cfg, id)
+    dispatch(cfg, inbox, &mut transport, spawn::now_ms(), |route, id| {
+        if cfg.text("mode") == "personal" {
+            api.owner_message(cfg, id)
+        } else {
+            super::guild::current(
+                api,
+                cfg,
+                field(route, "guild_id"),
+                field(route, "channel_id"),
+                id,
+            )
+        }
     })
 }
 
@@ -147,7 +167,7 @@ fn dispatch(
     inbox: &mut Inbox,
     transport: &mut impl Transport,
     now: u64,
-    current: impl FnOnce(&str) -> io::Result<Option<Value>>,
+    current: impl FnOnce(&Value, &str) -> io::Result<Option<Value>>,
 ) -> io::Result<()> {
     for (operation, composer) in inbox.unsettled_workers() {
         if let Ok(receipt) = transport.status(&operation, &composer) {
@@ -166,13 +186,27 @@ fn dispatch(
     if !fresh(source_id, now) {
         return inbox.withdraw(source_id);
     }
-    let Some(source) = current(source_id)?.filter(|source| source["id"] == source_id) else {
+    let Some(source) =
+        current(&prepared["route"], source_id)?.filter(|source| source["id"] == source_id)
+    else {
         return inbox.withdraw(source_id);
     };
-    let Some(prepared) = inbox.admit(&source)? else {
+    if cfg.text("mode") != "personal"
+        && (source["guild_id"] != prepared["route"]["guild_id"]
+            || source["channel_id"] != prepared["route"]["channel_id"]
+            || field(&source, "verified_parent_id") != field(&prepared["route"], "parent_id"))
+    {
+        return inbox.withdraw(source_id);
+    }
+    let seen = if cfg.text("mode") == "personal" {
+        inbox.admit(&source)?
+    } else {
+        inbox.admit_guild(cfg, &source)?
+    };
+    let Some(prepared) = seen else {
         return inbox.withdraw(source_id);
     };
-    let Some((target, text)) = target_text(field(&prepared, "text")) else {
+    let Some((target, text)) = target_text(source_text(&prepared)) else {
         return Ok(());
     };
     if text.is_empty() || text.len() > 4096 || inbox.worker_excluded(target) {
@@ -181,15 +215,18 @@ fn dispatch(
     let Ok((provider, instance)) = transport.target(target) else {
         return Ok(());
     };
-    let composer = json!({
+    let mut composer = json!({
         "session":target, "session_instance":instance, "text":text,
         "origin":{
             "kind":"owner_direct","installation_id":cfg.text("installation_id"),
             "actor_id":cfg.text("owner_id"),"requester_id":cfg.text("owner_id"),
-            "channel_id":cfg.text("dm_channel_id"),"message_id":source_id,
+            "channel_id":prepared["route"]["channel_id"],"message_id":source_id,
             "request_id":prepared["operation_id"],"revision":prepared["revision"]
         }
     });
+    if cfg.text("mode") != "personal" {
+        composer["origin"]["guild_id"] = prepared["route"]["guild_id"].clone();
+    }
     let operation = operation()?;
     inbox.cutover_worker(&operation, source_id, &provider, &composer)?;
     // The durable cutover has one writer. An uncorrelated/lost acknowledgement
@@ -277,7 +314,7 @@ mod tests {
             sends: 0,
             answer: false,
         };
-        dispatch(&cfg, &mut inbox, &mut client, now, |id| {
+        dispatch(&cfg, &mut inbox, &mut client, now, |_, id| {
             assert_eq!(owner["id"], id);
             Ok(Some(owner.clone()))
         })
@@ -287,7 +324,7 @@ mod tests {
         let op = inbox.worker_status()[0]["operation_id"].clone();
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_| {
+        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| {
             panic!("lost write replayed")
         })
         .unwrap();
@@ -297,7 +334,7 @@ mod tests {
         edit["edited_timestamp"] = json!("2026-11-25T01:01:01Z");
         assert!(inbox.admit(&edit).unwrap().is_none());
         client.answer = true;
-        dispatch(&cfg, &mut inbox, &mut client, now, |_| {
+        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| {
             panic!("edit re-authorized the old operation")
         })
         .unwrap();
@@ -321,18 +358,18 @@ mod tests {
         };
         let stale = message(now - WORKER_EVENT_MAX_AGE_MS - 1, "expired source");
         inbox.admit(&stale).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_| {
+        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| {
             panic!("expired source reached REST")
         })
         .unwrap();
         let exclude = message(now, "excluded source");
         inbox.admit(&exclude).unwrap();
         inbox.set_worker_excluded(TARGET, true).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_| Ok(Some(exclude))).unwrap();
+        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| Ok(Some(exclude))).unwrap();
         inbox.set_worker_excluded(TARGET, false).unwrap();
         let deleting = message(now + 1, "deleted source");
         inbox.admit(&deleting).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_| Ok(None)).unwrap();
+        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| Ok(None)).unwrap();
         assert_eq!(client.sends, 0);
         assert!(inbox.worker_status().as_array().unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();

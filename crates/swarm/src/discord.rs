@@ -1,6 +1,7 @@
 mod config;
 mod dispatcher;
 mod gateway;
+mod guild;
 mod local;
 mod manager;
 pub(crate) mod provenance;

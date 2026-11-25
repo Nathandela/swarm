@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 const STOP_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
-    if cfg.text("mode") != "personal" {
+    let personal = cfg.text("mode") == "personal";
+    if !personal && !super::guild::enabled(cfg) {
         return Err(io::Error::other(
-            "the Rust foreground connector currently supports personal owner DMs",
+            "the Rust foreground connector requires an owner DM or enrolled guild with a configured owner",
         ));
     }
     let (_lease, listener) = place.claim(cfg)?;
@@ -28,8 +29,10 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
     let mut inbox = Inbox::open(&place.dir, cfg)?;
     let api = Discord::connect(cfg)?;
     api.verify_app(cfg)?;
-    api.verify_dm(cfg, None)?;
-    if inbox.cursor().is_none() {
+    if personal {
+        api.verify_dm(cfg, None)?;
+    }
+    if inbox.cursor().is_none() && personal {
         let baseline = api.owner_history(cfg, "", 1)?;
         let baseline = baseline
             .first()
@@ -37,10 +40,21 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
             .unwrap_or("");
         inbox.checkpoint(baseline)?;
     }
-    let dispatcher = super::dispatcher::Dispatcher::open(cfg, &place.dir)?;
+    if inbox.cursor().is_none() {
+        // Guild history never creates new worker admissions. Before READY use
+        // the current Discord creation boundary for fresh Gateway events only.
+        inbox.checkpoint("")?;
+    }
+    let dispatcher = if personal {
+        super::dispatcher::Dispatcher::open(cfg, &place.dir)?
+    } else {
+        None
+    };
     let (mut gateway_socket, mut cursor) = gateway::open(cfg)?;
-    repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
-    if dispatcher.is_none() {
+    if personal {
+        repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
+    }
+    if personal && dispatcher.is_none() {
         eprintln!(
             "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
         );
@@ -57,7 +71,17 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
         let Some(event) = cursor.event(&mut gateway_socket)? else {
             continue;
         };
-        ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+        if personal {
+            ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+        } else {
+            super::guild::ingest(
+                cfg,
+                &mut inbox,
+                &event,
+                crate::ipc::spawn::now_ms(),
+                |guild, channel, id| super::guild::current(&api, cfg, guild, channel, id),
+            )?;
+        }
     }
 }
 

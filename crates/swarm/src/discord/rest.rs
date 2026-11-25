@@ -35,7 +35,7 @@ impl Discord {
         })
     }
 
-    fn request(&self, path: &str, body: Option<&Value>) -> io::Result<Value> {
+    pub(super) fn request(&self, path: &str, body: Option<&Value>) -> io::Result<Value> {
         let endpoint = format!("{API}{path}");
         let response = match body {
             Some(body) => self
@@ -54,9 +54,10 @@ impl Discord {
                 io::Error::other("Discord API rate limited the request, try again later")
             }
             ureq::Error::StatusCode(404) => io::ErrorKind::NotFound.into(),
-            ureq::Error::StatusCode(401 | 403) => {
-                io::Error::other("Discord API rejected the bot credential or permissions")
-            }
+            ureq::Error::StatusCode(401 | 403) => io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Discord API rejected the bot credential or permissions",
+            ),
             ureq::Error::StatusCode(status) => {
                 io::Error::other(format!("Discord API returned HTTP {status}"))
             }

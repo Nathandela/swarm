@@ -81,7 +81,48 @@ impl Inbox {
     }
 
     pub(super) fn admit(&mut self, source: &Value) -> io::Result<Option<Value>> {
-        let [installation, _, owner, channel, supervisor] = self.identity();
+        let channel = self.identity()[3].to_owned();
+        self.admit_scoped(source, "", &channel, "", None)
+    }
+
+    pub(super) fn admit_guild(
+        &mut self,
+        cfg: &Config,
+        source: &Value,
+    ) -> io::Result<Option<Value>> {
+        let field = |key| source[key].as_str().unwrap_or_default();
+        let (guild, channel, parent) = (
+            field("guild_id"),
+            field("channel_id"),
+            field("verified_parent_id"),
+        );
+        if !super::guild::enabled(cfg)
+            || !snowflake(guild)
+            || !snowflake(channel)
+            || (!parent.is_empty() && (!snowflake(parent) || parent == channel))
+        {
+            return Ok(None);
+        }
+        let Some(address) = super::guild::address(cfg, source) else {
+            return Ok(None);
+        };
+        self.admit_scoped(source, guild, channel, parent, Some(&address))
+    }
+
+    pub(super) fn has_guild_source(&self, guild: &str, channel: &str, id: &str) -> bool {
+        let route = &self.data["messages"][id]["route"];
+        route["guild_id"] == guild && route["channel_id"] == channel
+    }
+
+    fn admit_scoped(
+        &mut self,
+        source: &Value,
+        guild: &str,
+        channel: &str,
+        parent: &str,
+        address: Option<&str>,
+    ) -> io::Result<Option<Value>> {
+        let [installation, _, owner, _, supervisor] = self.identity();
         let Some(id) = source["id"].as_str().filter(|id| snowflake(id)) else {
             return Ok(None);
         };
@@ -96,7 +137,11 @@ impl Inbox {
         };
         if source["channel_id"] != channel
             || source["author"]["id"] != owner
-            || !source["guild_id"].is_null()
+            || if guild.is_empty() {
+                !source["guild_id"].is_null()
+            } else {
+                source["guild_id"] != guild
+            }
             || !source["webhook_id"].is_null()
             || !source["message_reference"].is_null()
             || source["author"]
@@ -117,14 +162,20 @@ impl Inbox {
         if !edited.is_null() && !edited.as_str().is_some_and(|stamp| stamp.len() <= 64) {
             return Ok(None);
         }
-        let revision = hash(&json!([owner, body, channel, "", id, edited, "", null]))?;
+        let revision = hash(&json!([owner, body, channel, guild, id, edited, "", null]))?;
         let operation = format!("da_{}", &hash(&json!([installation, id]))?[..32]);
-        let receipt = json!({
+        let mut receipt = json!({
             "operation_id": operation, "revision": revision, "text": body,
-            "route": {"guild_id": "", "channel_id": channel, "message_id": id},
+            "route": {"guild_id": guild, "channel_id": channel, "message_id": id},
             "author": {"id": owner}, "authority": "owner_direct",
             "supervisor_socket": supervisor, "state": "prepared", "edited_at": edited
         });
+        if let Some(address) = address {
+            receipt["addressed_text"] = json!(address);
+        }
+        if !parent.is_empty() {
+            receipt["route"]["parent_id"] = json!(parent);
+        }
         let old = &self.data["messages"][id];
         if old["state"] == "withdrawn" || old == &receipt {
             return Ok((old == &receipt).then(|| old.clone()));
@@ -135,6 +186,7 @@ impl Inbox {
         }
         if matches!(old["state"].as_str(), Some("sending" | "accepted"))
             && old["revision"] == receipt["revision"]
+            && old["route"] == receipt["route"]
         {
             return Ok(Some(old.clone()));
         }
@@ -163,6 +215,7 @@ impl Inbox {
             let record = &mut next["messages"][id];
             if let Some(fields) = record.as_object_mut() {
                 fields.shift_remove("text");
+                fields.shift_remove("addressed_text");
             }
             record["state"] = json!("withdrawn");
             self.save(next)?;
@@ -340,8 +393,7 @@ impl Inbox {
             .into_iter()
             .map(|id| (id, &self.data["messages"][id.to_string()]))
             .filter(|(_, row)| {
-                super::worker::target_text(row["text"].as_str().unwrap_or_default()).is_some()
-                    == worker
+                super::worker::target_text(super::worker::source_text(row)).is_some() == worker
             })
             .min_by_key(|(id, _)| *id)
             .map(|(_, row)| row.clone())
@@ -405,7 +457,9 @@ impl Inbox {
             || origin["actor_id"] != row["author"]["id"]
             || origin["message_id"] != source
             || origin["channel_id"] != row["route"]["channel_id"]
-            || super::worker::target_text(row["text"].as_str().unwrap_or_default())
+            || origin["guild_id"].as_str().unwrap_or_default()
+                != row["route"]["guild_id"].as_str().unwrap_or_default()
+            || super::worker::target_text(super::worker::source_text(row))
                 .is_none_or(|(id, text)| id != target || composer["text"] != text)
         {
             return Err(invalid(
