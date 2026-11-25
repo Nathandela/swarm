@@ -102,8 +102,10 @@ pub(crate) fn read_binding(config: &Value) -> io::Result<Option<Binding>> {
     let agent = config["provider"]["name"].as_str();
     let mode = config["provider"]["mode"].as_str();
     let qualified = matches!((agent, mode), (Some("codex"), Some("managed")))
-        || (matches!((agent, mode), (Some("agy"), Some("acp")))
-            && binding.authority == "agent-default");
+        || (matches!(
+            (agent, mode),
+            (Some("agy"), Some("acp")) | (Some("claude"), Some("classic"))
+        ) && binding.authority == "agent-default");
     if !binding.valid() || !qualified {
         return Err(io::Error::other("invalid scheduled worker reservation"));
     }

@@ -49,6 +49,7 @@ struct State {
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
     agy_broker: Option<agy_input::Broker>,
     schedule: Option<worker::Binding>,
+    claude_schedule: Option<String>,
     manager: bool,
     terminal_input: AtomicBool,
     opencode: Option<Arc<opencode_backend::Backend>>,
@@ -72,6 +73,9 @@ struct ProviderObservation {
     agy_hook_at: Option<Instant>,
     agy_title: Option<Value>,
     agy_latest: u64,
+    claude_paste_attempted: bool,
+    claude_dispatch: Option<(String, String)>,
+    claude_prompt: Option<String>,
 }
 
 struct ScreenState {
@@ -182,6 +186,18 @@ fn serve(dir: &Path) -> io::Result<()> {
                 .map_err(|e| io::Error::other(e.to_string()))?;
         }
     }
+    let claude_schedule = if schedule.is_some() && provider["name"] == "claude" {
+        let id = field(&config, "schedule_claude_conversation");
+        if !providers::claude::canonical_id(id)
+            || !providers::claude::scheduled(field(provider, "version"))
+        {
+            return Err(io::Error::other("invalid scheduled Claude conversation"));
+        }
+        argv.extend(["--session-id".into(), id.to_owned()]);
+        Some(id.to_owned())
+    } else {
+        None
+    };
     let agy_broker = if schedule.is_none() && provider["agy_native_installation"].is_string() {
         let broker = agy_input::Broker::prepare(
             dir,
@@ -433,6 +449,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         semantic: channel.is_some().then_some(action_sink),
         agy_broker,
         schedule: schedule.clone(),
+        claude_schedule,
         manager: !scope.is_null(),
         terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
@@ -798,6 +815,27 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 ),
             )
         }
+        "schedule_claude_prompt" => {
+            let result = queue_claude_prompt(state, &request);
+            runtime::write_control(
+                &mut stream,
+                &result.map_or_else(
+                    |err| json!({"type":"error","error":err.to_string()}),
+                    |()| json!({"type":"ok"}),
+                ),
+            )
+        }
+        "schedule_claude_attention"
+            if state.claude_schedule.is_some()
+                && state
+                    .schedule
+                    .as_ref()
+                    .is_some_and(|b| b.attempt_id == request["attempt"]) =>
+        {
+            let attention =
+                providers::claude::startup_attention(state.screen.lock().unwrap().parser.screen());
+            runtime::write_control(&mut stream, &json!({"type":"ok","attention":attention}))
+        }
         "schedule_ready" => {
             let authority = state.control.lock().unwrap();
             let ready = state
@@ -805,10 +843,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 .as_ref()
                 .is_some_and(|binding| request["attempt"] == binding.attempt_id)
                 && *authority == 0
-                && !state.terminal_input.load(Ordering::Acquire);
+                && !state.terminal_input.load(Ordering::Acquire)
+                && (state.claude_schedule.is_none() || claude_composer(state));
             runtime::write_control(
                 &mut stream,
-                &json!({"type": if ready {"ok"} else {"error"}}),
+                &json!({"type": if ready {"ok"} else {"error"}, "conversation_id":state.claude_schedule}),
             )
         }
         "opencode_requests" | "opencode_operation" | "opencode_history" => {
@@ -1090,6 +1129,137 @@ fn agy_send(state: &State, request: &Value) -> io::Result<Value> {
     broker.send(source, &state.token, request, || agy_worker_live(state))
 }
 
+fn claude_composer(state: &State) -> bool {
+    let observed = state.observations.lock().unwrap();
+    !observed.claude_paste_attempted
+        && observed.state.status()["Interaction"] == "none"
+        && providers::claude::empty_composer(state.screen.lock().unwrap().parser.screen())
+}
+
+fn queue_claude_prompt(state: &State, request: &Value) -> io::Result<()> {
+    let guard = state.control.lock().unwrap();
+    let attempt = field(request, "attempt");
+    let operation = field(request, "operation");
+    let text = field(request, "text");
+    let Some(conversation) = state.claude_schedule.as_deref() else {
+        return Err(io::Error::other("Claude schedule binding is unavailable"));
+    };
+    let path = state.dir.join("schedule-prompt.json");
+    let record = runtime::read_json(&path)?;
+    let hash = providers::claude::text_hash(text);
+    if *guard != 0
+        || state.terminal_input.load(Ordering::Acquire)
+        || !state
+            .schedule
+            .as_ref()
+            .is_some_and(|b| b.attempt_id == attempt)
+        || record["token"] != state.token
+        || record["attempt"] != attempt
+        || record["operation"] != operation
+        || operation.is_empty()
+        || record["conversation_id"] != conversation
+        || record["text_hash"] != hash
+        || !worker::prompt_fits(text, true)
+        || !providers::claude::scheduled_text(text)
+    {
+        return Err(io::Error::other("Claude opening prompt custody changed"));
+    }
+    let mut paste = Vec::with_capacity(text.len() + 12);
+    paste.extend_from_slice(b"\x1b[200~");
+    paste.extend_from_slice(text.as_bytes());
+    paste.extend_from_slice(b"\x1b[201~");
+    {
+        let mut observed = state.observations.lock().unwrap();
+        let screen = state.screen.lock().unwrap();
+        if observed.claude_paste_attempted
+            || observed.state.status()["Interaction"] != "none"
+            || !providers::claude::empty_composer(screen.parser.screen())
+        {
+            return Err(io::Error::other("Claude opening prompt custody changed"));
+        }
+        observed.claude_paste_attempted = true;
+        pty::input(&state.master, &paste)?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if runtime::read_json(&path)? != record {
+            return Err(io::Error::other(
+                "Claude opening prompt reservation changed after paste",
+            ));
+        }
+        {
+            let mut observed = state.observations.lock().unwrap();
+            let screen = state.screen.lock().unwrap();
+            let screen = screen.parser.screen();
+            if observed.state.status()["Interaction"] != "none"
+                || providers::claude::startup_attention(screen)
+                || !screen.bracketed_paste()
+            {
+                break;
+            }
+            if providers::claude::rendered_paste(screen, text) {
+                pty::input(&state.master, b"\r")?;
+                observed.claude_dispatch = Some((operation.into(), hash));
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
+    Err(io::Error::other(
+        "Claude opening prompt draft could not be verified after paste",
+    ))
+}
+
+fn observe_claude_schedule(
+    state: &State,
+    observed: &mut ProviderObservation,
+    event: &str,
+    payload: &Value,
+) -> io::Result<()> {
+    let Some(conversation) = state.claude_schedule.as_deref() else {
+        return Ok(());
+    };
+    if providers::claude::conversation_id(payload) != Some(conversation)
+        || field(payload, "cwd").is_empty()
+        || !field(payload, "agent_id").is_empty()
+        || payload["hook_event_name"] != event
+    {
+        return Ok(());
+    }
+    let Some((operation, hash)) = observed.claude_dispatch.as_ref() else {
+        return Ok(());
+    };
+    let prompt = field(payload, "prompt_id");
+    if !providers::claude::canonical_id(prompt) {
+        return Ok(());
+    }
+    if event == "UserPromptSubmit" {
+        if observed.claude_prompt.is_none() && payload["scheduled_paste_hash"] == *hash {
+            observed.claude_prompt = Some(prompt.to_owned());
+        }
+    } else if event == "Stop" && observed.claude_prompt.as_deref() == Some(prompt) {
+        let text = field(payload, "last_assistant_message");
+        let attempt = &state
+            .schedule
+            .as_ref()
+            .expect("bound Claude schedule")
+            .attempt_id;
+        if !text.trim().is_empty() {
+            runtime::write_json(
+                &state.dir.join("schedule-finish.json"),
+                &json!({
+                    "token":state.token,"attempt":attempt,"operation":operation,
+                    "conversation_id":conversation,"outcome":"completed","item":prompt,"text":text,
+                }),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
     let event = field(request, "event");
     let payload = &request["payload"];
@@ -1125,6 +1295,7 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
             capture_pilot_reply(state, reply)?;
         }
     }
+    observe_claude_schedule(state, &mut observed, event, payload)?;
     observed.state.apply(event, payload);
     runtime::write_json(
         &state.dir.join("observation.json"),

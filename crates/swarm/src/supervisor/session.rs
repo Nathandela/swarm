@@ -322,6 +322,10 @@ impl Session {
         match provider.agent {
             "codex" if providers::codex::managed(&provider.version) => Ok(()),
             "codex" => Err("scheduled Codex requires its managed App Server".into()),
+            "claude" if providers::claude::scheduled(&provider.version) => Ok(()),
+            "claude" => {
+                Err("scheduled Claude requires a qualified terminal and hook version".into())
+            }
             "agy" if provider.agy_acp => Ok(()),
             "agy" => Err(
                 "scheduled agy runs require Antigravity CLI 1.5.12 or newer on the executor".into(),
@@ -335,6 +339,9 @@ impl Session {
         socket: &Path,
     ) -> ScheduleResult<Prepared> {
         let binding = worker::Binding::new(launch)?;
+        if launch.agent == "claude" && !providers::claude::scheduled_text(launch.prompt) {
+            return Err("scheduled Claude cannot preserve tabs, carriage returns, or other terminal control characters".into());
+        }
         let mut plan = Self::prepare(&json!({"launch":{
             "agent":launch.agent,"cwd":launch.workspace,"name":launch.name,"cols":100,"rows":32,
         }}))?;
@@ -342,12 +349,18 @@ impl Session {
         if plan.cwd != Path::new(launch.workspace) {
             return Err("scheduled provider must launch in the exact occurrence workspace".into());
         }
-        if launch.agent == "agy" && binding.authority != "agent-default" {
-            return Err("agy requires configured agent permissions for scheduled runs".into());
+        if matches!(launch.agent, "agy" | "claude") && binding.authority != "agent-default" {
+            return Err(format!(
+                "{} requires configured agent permissions for scheduled runs",
+                launch.agent
+            )
+            .into());
         }
         let binary = env::current_exe()?;
         // The remote TUI inherits App Server authority and rejects local overrides.
-        plan.provider.argv.clear();
+        if launch.agent != "claude" {
+            plan.provider.argv.clear();
+        }
         plan.scheduled = Some((
             binding,
             json!({"proof":launch.token,"socket":socket,"binary":binary}),
@@ -517,6 +530,9 @@ impl Session {
         } else {
             None
         };
+        let claude_conversation = (provider.agent == "claude" && scheduled.is_some())
+            .then(providers::claude::new_conversation)
+            .transpose()?;
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -525,6 +541,7 @@ impl Session {
                 "schema": if provider.hermes.is_null() { 1 } else { 2 }, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
+                "schedule_claude_conversation":claude_conversation,
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
                     "agy_native_installation":agy_native_installation,
                     "mode": if !provider.hermes.is_null() {
@@ -1092,6 +1109,17 @@ impl Session {
             return WorkerState::Stopped;
         }
         if self.is_live() {
+            if self.agent == "claude"
+                && !self.dir.join("schedule-prompt.json").exists()
+                && self.schedule.as_ref().is_some_and(|b| {
+                    self.status_exchange(&json!({
+                        "type":"schedule_claude_attention","attempt":b.attempt_id,
+                    }))
+                    .is_ok_and(|reply| reply["type"] == "ok" && reply["attention"] == true)
+                })
+            {
+                return WorkerState::NeedsInput;
+            }
             if self.agent == "agy"
                 && self
                     .schedule
@@ -1121,6 +1149,9 @@ impl Session {
     ) -> ScheduleResult<()> {
         if !worker::prompt_fits(text, true) {
             return Err("scheduled opening prompt exceeds the native frame limit".into());
+        }
+        if self.agent == "claude" {
+            return self.send_scheduled_claude(session, attempt, text, begin);
         }
         let observation = match runtime::read_json(&self.dir.join("observation.json")) {
             Ok(value) => value,
@@ -1165,6 +1196,44 @@ impl Session {
         Ok(())
     }
 
+    fn send_scheduled_claude(
+        &self,
+        session: &str,
+        attempt: &str,
+        text: &str,
+        begin: &mut dyn FnMut() -> ScheduleResult<()>,
+    ) -> ScheduleResult<()> {
+        if !providers::claude::scheduled_text(text) {
+            return Err(
+                "scheduled Claude opening prompt contains terminal control characters".into(),
+            );
+        }
+        let ready = self.status_exchange(&json!({"type":"schedule_ready","attempt":attempt}))?;
+        if ready["type"] != "ok" {
+            return Ok(());
+        }
+        let operation = codex_receipt::operation()?;
+        let conversation = field(&ready, "conversation_id");
+        if !providers::claude::canonical_id(conversation) {
+            return Err("scheduled Claude conversation was not reserved".into());
+        }
+        begin()?;
+        runtime::write_json(
+            &self.dir.join("schedule-prompt.json"),
+            &json!({
+                "token":self.token,"operation":operation,"session":session,"attempt":attempt,
+                "conversation_id":conversation,"text_hash":providers::claude::text_hash(text),
+            }),
+        )?;
+        let reply = self.status_exchange(&json!({
+            "type":"schedule_claude_prompt","attempt":attempt,"operation":operation,"text":text,
+        }))?;
+        if reply["type"] != "ok" {
+            return Err("Claude opening prompt outcome is uncertain".into());
+        }
+        Ok(())
+    }
+
     fn agy_schedule_observation(&self, attempt: &str) -> Option<Value> {
         let record = runtime::read_json(&self.dir.join("observation.json")).ok()?;
         (record["token"] == self.token && record["attempt"] == attempt).then_some(record)
@@ -1198,6 +1267,18 @@ impl Session {
             || proof["operation"] != prompt["operation"]
         {
             return None;
+        }
+        if self.agent == "claude" {
+            let meta = runtime::read_json(&self.dir.join("session.json")).ok()?;
+            if field(&prompt, "operation").is_empty()
+                || prompt["token"] != self.token
+                || proof["conversation_id"] != prompt["conversation_id"]
+                || proof["conversation_id"] != meta["schedule_claude_conversation"]
+                || !providers::claude::canonical_id(field(&proof, "item"))
+            {
+                return None;
+            }
+            return Some(proof);
         }
         let operation = field(&prompt, "operation");
         let receipt = self

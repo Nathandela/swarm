@@ -1,5 +1,6 @@
 use serde_json::{Map, Value, json};
-use std::io;
+use sha2::{Digest, Sha256};
+use std::io::{self, Read};
 
 pub(crate) const EVENTS: &[&str] = &[
     "Notification",
@@ -188,16 +189,18 @@ impl Observation {
 }
 
 pub(crate) fn conversation_id(payload: &Value) -> Option<&str> {
-    let id = payload["session_id"].as_str()?;
-    let canonical = id.len() == 36
+    payload["session_id"].as_str().filter(|id| canonical_id(id))
+}
+
+pub(crate) fn canonical_id(id: &str) -> bool {
+    id.len() == 36
         && id.bytes().enumerate().all(|(i, c)| {
             if matches!(i, 8 | 13 | 18 | 23) {
                 c == b'-'
             } else {
                 c.is_ascii_digit() || (b'a'..=b'f').contains(&c)
             }
-        });
-    canonical.then_some(id)
+        })
 }
 
 #[cfg(test)]
@@ -219,5 +222,132 @@ mod observation_tests {
         observation.apply("Stop", &json!({}));
         assert_eq!(observation.status()["Turn"], "idle");
         assert!(conversation_id(&json!({"session_id":"not-a-real-id"})).is_none());
+    }
+}
+
+pub(crate) fn scheduled(version: &str) -> bool {
+    version == "2.1.329"
+}
+
+pub(crate) fn new_conversation() -> io::Result<String> {
+    let mut bytes = [0; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+pub(crate) fn scheduled_text(text: &str) -> bool {
+    !text.is_empty() && !text.chars().any(|c| c.is_control() && c != '\n')
+}
+
+pub(crate) fn text_hash(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+pub(crate) fn scheduled_paste(prompt: &str) -> Option<&str> {
+    // Interactive 2.1.329 wraps a bracketed multiline paste in an identified native block.
+    let (id, body) = prompt
+        .strip_prefix("\n\n<pasted_content id=\"")?
+        .split_once("\">\n")?;
+    if id.len() != 4
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return None;
+    }
+    body.strip_suffix(&format!("\n</pasted_content id=\"{id}\">\n"))
+}
+
+pub(crate) fn empty_composer(screen: &vt100::Screen) -> bool {
+    composer(screen, "", "")
+}
+
+pub(crate) fn rendered_paste(screen: &vt100::Screen, text: &str) -> bool {
+    let newlines = text.bytes().filter(|&byte| byte == b'\n').count();
+    composer(
+        screen,
+        &format!("[Pasted text #1 +{newlines} lines]"),
+        "paste again to expand",
+    )
+}
+
+fn composer(screen: &vt100::Screen, draft: &str, footer: &str) -> bool {
+    if !screen.bracketed_paste() || !screen.alternate_screen() {
+        return false;
+    }
+    let (rows, cols) = screen.size();
+    let (rows, cols) = (rows.get(), cols.get());
+    let (row, col) = screen.cursor_position();
+    if usize::from(col) != draft.len() + 2 || row < 1 || row.checked_add(3) != Some(rows) {
+        return false;
+    }
+    let mut lines = screen.rows(0, cols).skip(usize::from(row - 1));
+    let separator =
+        |s: String| s.chars().count() == usize::from(cols) && s.chars().all(|c| c == '─');
+    // The upper divider may include Claude's session name on the right.
+    lines.next().is_some_and(|line| {
+        line.ends_with('─') && line.chars().take_while(|c| *c == '─').count() >= 8
+    }) && lines.next().is_some_and(|line| {
+        line.strip_prefix('❯')
+            .is_some_and(|body| body.trim() == draft)
+    }) && lines.next().is_some_and(separator)
+        && (footer.is_empty()
+            || lines
+                .next()
+                .is_some_and(|line| line.trim_start().starts_with(footer)))
+}
+
+pub(crate) fn startup_attention(screen: &vt100::Screen) -> bool {
+    let grid = screen.contents();
+    [
+        ("Yes, I trust this folder", "No, exit"),
+        (
+            "Do you want to use this API key?",
+            "Detected a custom API key",
+        ),
+        ("Make auto mode your default permission mode?", "No, keep"),
+    ]
+    .iter()
+    .any(|(heading, choice)| grid.contains(heading) && grid.contains(choice))
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_composer_refuses_modal_or_owner_draft() {
+        let mut parser = vt100::Parser::new(8.try_into().unwrap(), 20.try_into().unwrap(), 0);
+        parser.process("\x1b[?1049h\x1b[?2004h\x1b[5;1H───────────── Test ─\x1b[6;1H❯  \x1b[7;1H────────────────────\x1b[6;3H".as_bytes());
+        assert!(empty_composer(parser.screen()));
+        parser.process(b"typed\x1b[6;3H");
+        assert!(!empty_composer(parser.screen()));
+        parser.process("\x1b[2J\x1b[6;1H❯ No, exit\x1b[6;3H".as_bytes());
+        assert!(!empty_composer(parser.screen()));
+        assert!(!scheduled_text("bad\x1b[201~"));
+        assert!(scheduled_text("exact\nline"));
+        assert_eq!(
+            scheduled_paste(
+                "\n\n<pasted_content id=\"abcd\">\nexact\nline\n</pasted_content id=\"abcd\">\n"
+            ),
+            Some("exact\nline")
+        );
+        assert_eq!(
+            scheduled_paste(
+                "\n\n<pasted_content id=\"abcd\">\nexact\nline\n</pasted_content id=\"acbd\">\n"
+            ),
+            None
+        );
+        assert!(canonical_id(&new_conversation().unwrap()));
     }
 }

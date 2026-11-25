@@ -51,12 +51,25 @@ fn post(args: &[String]) -> io::Result<()> {
         if let Some((key, value)) = argument.split_once('=')
             && !matches!(
                 key,
-                "turn" | "interaction" | "cwd" | "session_id" | "last_assistant_message"
+                "turn"
+                    | "interaction"
+                    | "cwd"
+                    | "session_id"
+                    | "last_assistant_message"
+                    | "scheduled_paste_hash"
             )
             && value.len() <= 4096
         {
             fields.insert(key.to_owned(), json!(value));
         }
+    }
+    if event == "UserPromptSubmit"
+        && let Some(prompt) = raw["prompt"].as_str().and_then(claude::scheduled_paste)
+    {
+        fields.insert(
+            "scheduled_paste_hash".into(),
+            json!(claude::text_hash(prompt)),
+        );
     }
     let mut stream = UnixStream::connect(socket)?;
     stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
