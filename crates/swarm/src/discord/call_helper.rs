@@ -80,7 +80,12 @@ impl Helper {
 
     pub(super) fn bundled() -> io::Result<Self> {
         let exe = fs::canonicalize(std::env::current_exe()?)?;
-        let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        let os = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            std::env::consts::OS
+        };
+        let platform = format!("{os}-{}", std::env::consts::ARCH);
         let pins: BTreeMap<String, BTreeMap<String, String>> =
             serde_json::from_slice(crate::release::MEDIA)?;
         let expected = pins
