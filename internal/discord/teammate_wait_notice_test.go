@@ -143,3 +143,19 @@ func TestObsoleteAttemptedWaitNoticeNeverRepostsAndKeepsLateReceipt(t *testing.T
 		t.Fatalf("late receipt not accepted: %+v %v", pending, err)
 	}
 }
+
+func TestUnconfirmedWaitNoticePastNonceWindowGoesPassive(t *testing.T) {
+	c, _, d, posts, now := waitNoticeConnector(t, http.StatusInternalServerError)
+	queueWaitNotice(t, c, d, *now)
+	if err := c.sendPending(t.Context(), d); !teammateAPIStatus(err, http.StatusInternalServerError) {
+		t.Fatalf("first attempt: %v", err)
+	}
+	*now = now.Add(teammateNonceWindow + time.Second)
+	if err := c.sendPending(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := c.service.Store.teammateOutputs("install", d.ID)
+	if err != nil || len(*posts) != 1 || len(pending) != 1 || pending[0].SettledAt.IsZero() || pending[0].Error != teammateReplyWaitPassive {
+		t.Fatalf("stale wait notice still holds the discussion: posts=%d %+v %v", len(*posts), pending, err)
+	}
+}

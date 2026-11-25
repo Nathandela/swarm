@@ -10,7 +10,7 @@ import (
 
 // waitNoticeFixture admits reply-tracked requests whose manager turns completed
 // and links a live worker to each, as delegated requests look while they run.
-func waitNoticeFixture(t *testing.T, mod func(*WorkerAssociation), ids ...string) (*Store, DiscussionController, *time.Time) {
+func waitNoticeFixture(t *testing.T, mod func(*WorkerAssociation), ids ...string) (*Store, *DiscussionController, *time.Time) {
 	t.Helper()
 	if len(ids) == 0 {
 		ids = []string{"wait"}
@@ -45,7 +45,7 @@ func waitNoticeFixture(t *testing.T, mod func(*WorkerAssociation), ids ...string
 	st, _ := s.Snapshot()
 	last = st.Admissions[admissionKey(b.ConversationID, last.Sequence)]
 	now := time.Unix(last.ReplyCheckAfter, 0)
-	d := DiscussionController{cfg: Config{ConversationID: b.ConversationID}, store: s, scope: *c.discussion, now: func() time.Time { return now }}
+	d := &DiscussionController{cfg: Config{ConversationID: b.ConversationID}, store: s, scope: *c.discussion, now: func() time.Time { return now }}
 	return s, d, &now
 }
 
@@ -61,7 +61,7 @@ func waitNotices(t *testing.T, s *Store) int {
 	return n
 }
 
-func check(t *testing.T, s *Store, d DiscussionController) {
+func check(t *testing.T, s *Store, d *DiscussionController) {
 	t.Helper()
 	st, _ := s.Snapshot()
 	if err := d.checkDiscussionReply(t.Context(), st); err != nil {
@@ -115,7 +115,7 @@ func TestWaitNoticeBudgetSurvivesStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { reopened.Close() })
+	t.Cleanup(func() { _ = reopened.Close() })
 	d.store = reopened
 	for range 6 {
 		check(t, reopened, d)

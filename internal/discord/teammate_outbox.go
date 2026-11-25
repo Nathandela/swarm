@@ -718,6 +718,10 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 			continue
 		}
 		if (chunk.State == StateSending || chunk.State == StateUncertain) && t.service.Now().Sub(out.Attempted) >= teammateNonceWindow {
+			if strings.HasPrefix(out.Publication.ID, teammateReplyWaitPrefix) {
+				// A routine notice is never retried; release the discussion and keep its receipt guard.
+				return store.teammateSettleReplyWait(install, out, t.service.Now())
+			}
 			return store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error {
 				if p.Chunks[n].State != StateSent {
 					p.Chunks[n].State = StateUncertain
