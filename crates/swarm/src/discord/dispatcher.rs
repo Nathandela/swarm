@@ -345,7 +345,7 @@ impl Dispatcher {
             return Err(invalid("a final publication is already selected"));
         }
         let publication = json!({
-            "binding":state["binding"], "turn_id":input["turn_id"], "source_id":input["source_id"], "output_id":output, "body":body
+            "binding":state["binding"], "turn_id":input["turn_id"], "source_id":input["source_id"], "output_id":output, "body":body, "native_call_id":proof["native_call_id"]
         });
         state["input"]["final_nonce"] = json!(nonce);
         inbox.prepare_publication(&nonce, publication, state)?;
@@ -714,7 +714,11 @@ mod tests {
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
             "session_id":"local", "call":{"name":"publish","arguments":{
                 "output_id":"final","sequence":1,"text":"deliberate reply","final":true
-            },"meta":{"turn_id":"authorized-turn"}}});
+            },"meta":{"callId":"provider-call","threadId":"provider-thread","sessionId":"provider-thread",
+                "x-codex-turn-metadata":{"turn_id":"authorized-turn","thread_id":"provider-thread","session_id":"provider-thread"}}}});
+        let mut alien = publish.clone();
+        alien["call"]["meta"]["threadId"] = json!("unbound-thread");
+        assert!(dispatcher.tool(&mut inbox, &alien).is_err());
         let mut wrong_recipient = publish.clone();
         wrong_recipient["call"]["arguments"]["recipient_id"] = json!("401");
         assert!(dispatcher.tool(&mut inbox, &wrong_recipient).is_err());
@@ -761,6 +765,13 @@ mod tests {
         let inbox = Inbox::open(&dir, &cfg).unwrap();
         assert_eq!(inbox.publication(&nonce)["state"], "sent");
         assert_eq!(inbox.publication(&nonce)["history_seen"], true);
+        let mut inbox = inbox;
+        let reused = inbox.publication(&nonce)["proof"].clone();
+        assert!(
+            inbox
+                .prepare_publication("different-operation", reused, Value::Null)
+                .is_err()
+        );
         assert_eq!(
             api.posted.borrow().as_slice(),
             &[

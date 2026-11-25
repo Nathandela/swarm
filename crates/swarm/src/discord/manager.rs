@@ -274,6 +274,7 @@ impl Manager {
     ) -> io::Result<Value> {
         let mut client = self.dial()?;
         let admission = &composer["manager_admission"];
+        let coordinates = super::provenance::coordinates(&admission["binding"], meta)?;
         let reply = client.request_body(
             json!({
                 "op":"manager_resolve_call", "session_id":composer["session"], "body_version":1,
@@ -288,7 +289,10 @@ impl Manager {
             || proof["main"] != true
             || proof["native_input_id"] != admission["nonce"]
             || !valid(field(proof, "native_turn_id"))
-            || !valid(field(proof, "native_call_id"))
+            || proof["native_call_id"] != coordinates.call
+            || coordinates
+                .turn
+                .is_some_and(|turn| proof["native_turn_id"] != turn)
         {
             return Err(invalid(
                 "publication is not from the admitted native manager turn",
@@ -451,10 +455,10 @@ mod tests {
         assert_eq!(receipt["session_id"], session["id"]);
         let id = field(&session, "id");
         let deadline = Instant::now() + Duration::from_secs(7);
-        loop {
+        let row = loop {
             if let Ok(row) = manager.session(id) {
                 assert!(valid(field(&row["capabilities"], "session_instance")));
-                break;
+                break row;
             }
             assert!(
                 Instant::now() < deadline,
@@ -463,6 +467,87 @@ mod tests {
                 fs::read_to_string(root.join("daemon.log")).unwrap_or_default()
             );
             std::thread::sleep(Duration::from_millis(100));
+        };
+        if std::env::var_os("SWARM_FAKE_CODEX_MANAGER_PROOF").is_some() {
+            let instance = field(&row["capabilities"], "session_instance");
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let native = loop {
+                let status = manager.runtime(id, instance, &request);
+                if let Ok(status) = &status
+                    && status["ready_for_input"] == true
+                {
+                    break status.clone();
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture did not produce native manager custody: {status:?}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            let composer = manager
+                .composer(
+                    &json!({
+                        "authority":"owner_direct","supervisor_socket":socket,"author":{"id":"300"},
+                        "route":{"channel_id":"400","message_id":"401"},"text":"go fixture input",
+                        "operation_id":"fixture-dm-401","revision":"fixture-revision"
+                    }),
+                    &native,
+                )
+                .unwrap();
+            let operation = format!(
+                "semantic:{}:{:032x}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis(),
+                2
+            );
+            manager.send(&operation, &composer).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let turn = loop {
+                let evidence = manager.input_status(&composer);
+                if let Ok(evidence) = &evidence
+                    && evidence["state"] == "running"
+                {
+                    break evidence.clone();
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture did not produce observed native input: {evidence:?}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            let session = &native["binding"]["native_session_id"];
+            let host = json!({"callId":"fixture-native-call","threadId":session,"sessionId":session,
+                "x-codex-turn-metadata":{"turn_id":turn["native_turn_id"],"thread_id":session,"session_id":session}});
+            let mut args =
+                json!({"output_id":"final","sequence":1,"text":"go-fixture text","final":true});
+            args.sort_all_objects();
+            let proof = manager
+                .prove_publication(
+                    &composer,
+                    "publish",
+                    &super::super::receipt::hash(&args).unwrap(),
+                    &host,
+                )
+                .unwrap();
+            assert_eq!(
+                proof["native_input_id"],
+                composer["manager_admission"]["nonce"]
+            );
+            assert_eq!(proof["native_call_id"], "fixture-native-call");
+            let mut stale = host;
+            stale["x-codex-turn-metadata"]["turn_id"] = json!("old-turn");
+            assert!(
+                manager
+                    .prove_publication(
+                        &composer,
+                        "publish",
+                        &super::super::receipt::hash(&args).unwrap(),
+                        &stale
+                    )
+                    .is_err()
+            );
         }
         let mut different = request.clone();
         different["manager"]["conversation_id"] = json!("discord-teammate-different");

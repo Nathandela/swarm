@@ -3,6 +3,7 @@ mod dispatcher;
 mod gateway;
 mod local;
 mod manager;
+mod provenance;
 mod receipt;
 mod rest;
 mod service;

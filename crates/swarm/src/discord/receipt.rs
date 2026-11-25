@@ -146,7 +146,11 @@ impl Inbox {
         if !self.data["messages"][id].is_null() && self.data["messages"][id]["state"] != "withdrawn"
         {
             let mut next = self.data.clone();
-            next["messages"][id] = json!({"state": "withdrawn"});
+            let record = &mut next["messages"][id];
+            if let Some(fields) = record.as_object_mut() {
+                fields.shift_remove("text");
+            }
+            record["state"] = json!("withdrawn");
             self.save(next)?;
         }
         Ok(())
@@ -309,6 +313,21 @@ impl Inbox {
                 "publication key conflicts with the original native publication",
             ));
         }
+        if let Some(call) = proof["native_call_id"].as_str()
+            && self.data["outbox"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|prior| {
+                    prior["proof"]["native_call_id"] == call
+                        && prior["proof"]["binding"]["native_session_id"]
+                            == proof["binding"]["native_session_id"]
+                })
+        {
+            return Err(invalid(
+                "native manager publication call already belongs to another effect",
+            ));
+        }
         if self.data["outbox"].as_object().unwrap().len() >= MAX_RECORDS {
             return Err(invalid("publication ledger reached its capacity"));
         }
@@ -349,8 +368,30 @@ impl Inbox {
                 "manager source is no longer prepared at the verified revision",
             ));
         }
+        let nonce = manager["input"]["composer"]["manager_admission"]["nonce"]
+            .as_str()
+            .filter(|id| {
+                id.len() == 64
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+            .ok_or_else(|| invalid("manager input lacks a valid native admission nonce"))?;
+        if self.data["messages"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|prior| prior["native_input_id"] == nonce)
+        {
+            return Err(invalid(
+                "native manager admission nonce already belongs to a source",
+            ));
+        }
         let mut next = self.data.clone();
         next["messages"][source_id]["state"] = json!("sending");
+        next["messages"][source_id]["native_input_id"] =
+            manager["input"]["composer"]["manager_admission"]["nonce"].clone();
+        next["messages"][source_id]["native_binding"] = manager["binding"].clone();
         next["manager"] = manager;
         self.save(next)
     }
@@ -359,8 +400,31 @@ impl Inbox {
         if self.data["messages"][source_id]["state"] != "sending" {
             return Err(invalid("manager input has no recorded cutover"));
         }
+        let turn = manager["input"]["turn_id"]
+            .as_str()
+            .filter(|turn| !turn.is_empty())
+            .ok_or_else(|| invalid("manager input lacks a native turn receipt"))?;
+        let input = &self.data["messages"][source_id];
+        if input["native_input_id"] != manager["input"]["composer"]["manager_admission"]["nonce"]
+            || input["native_binding"] != manager["binding"]
+            || self.data["messages"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .any(|(id, previous)| {
+                    id != source_id
+                        && previous["native_turn_id"] == turn
+                        && previous["native_binding"]["native_session_id"]
+                            == input["native_binding"]["native_session_id"]
+                })
+        {
+            return Err(invalid(
+                "native turn evidence conflicts with another dispatcher input",
+            ));
+        }
         let mut next = self.data.clone();
         next["messages"][source_id]["state"] = json!("accepted");
+        next["messages"][source_id]["native_turn_id"] = json!(turn);
         next["manager"] = manager;
         self.save(next)
     }
