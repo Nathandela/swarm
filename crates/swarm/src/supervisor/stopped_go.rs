@@ -1,14 +1,12 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
 use super::runtime;
 use crate::ipc::field;
-use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, de};
-use serde_json::value::{RawValue, to_raw_value};
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
@@ -75,35 +73,67 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
     "resume_error",
 ];
 
-#[derive(Clone, Serialize)]
-#[serde(transparent)]
-struct RawFields(BTreeMap<String, Box<RawValue>>);
+#[derive(Clone, PartialEq, Eq)]
+struct RawFields(BTreeMap<String, String>);
 
-impl<'de> Deserialize<'de> for RawFields {
-    fn deserialize<D: Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
-        struct Object;
-        impl<'de> Visitor<'de> for Object {
-            type Value = RawFields;
+fn json_space(text: &str) -> &str {
+    text.trim_start_matches([' ', '\n', '\r', '\t'])
+}
 
-            fn expecting(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                out.write_str("a Go metadata object with unique fields")
-            }
-
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                let mut fields = BTreeMap::new();
-                while let Some((key, value)) = map.next_entry()? {
-                    if fields.insert(key, value).is_some() {
-                        return Err(de::Error::custom("duplicate Go metadata field"));
-                    }
-                }
-                Ok(RawFields(fields))
-            }
-        }
-        input.deserialize_map(Object)
-    }
+fn next_json<T: DeserializeOwned>(input: &str) -> io::Result<(T, &str, &str)> {
+    let mut stream = serde_json::Deserializer::from_str(input).into_iter::<T>();
+    let value = stream
+        .next()
+        .ok_or_else(|| io::Error::other("missing Go JSON value"))??;
+    let (raw, rest) = input.split_at(stream.byte_offset());
+    Ok((value, raw, json_space(rest)))
 }
 
 impl RawFields {
+    fn parse(text: &str) -> io::Result<Self> {
+        let mut rest = json_space(text)
+            .strip_prefix('{')
+            .map(json_space)
+            .ok_or_else(|| io::Error::other("Go metadata must be a JSON object"))?;
+        let mut fields = BTreeMap::new();
+        if !rest.starts_with('}') {
+            loop {
+                let (key, _, after_key) = next_json::<String>(rest)?;
+                let after_colon = after_key
+                    .strip_prefix(':')
+                    .map(json_space)
+                    .ok_or_else(|| io::Error::other("missing Go metadata field separator"))?;
+                let (_, raw, after_value) = next_json::<IgnoredAny>(after_colon)?;
+                if fields.insert(key, raw.into()).is_some() {
+                    return Err(io::Error::other("duplicate Go metadata field"));
+                }
+                if let Some(after_comma) = after_value.strip_prefix(',') {
+                    rest = json_space(after_comma);
+                } else {
+                    rest = after_value;
+                    break;
+                }
+            }
+        }
+        if rest.strip_prefix('}').map(json_space) != Some("") {
+            return Err(io::Error::other("invalid Go metadata object boundary"));
+        }
+        Ok(Self(fields))
+    }
+
+    fn write(&self, mut output: impl Write) -> io::Result<()> {
+        output.write_all(b"{")?;
+        for (index, (key, value)) in self.0.iter().enumerate() {
+            if index > 0 {
+                output.write_all(b",")?;
+            }
+            serde_json::to_writer(&mut output, key)?;
+            output.write_all(b":")?;
+            output.write_all(value.as_bytes())?;
+        }
+        output.write_all(b"}\n")
+    }
+
     fn parsed(&self) -> io::Result<Value> {
         let mut fields = serde_json::Map::new();
         for key in ROSTER_CUSTODY_FIELDS
@@ -125,26 +155,15 @@ impl RawFields {
             }
             if let Some(raw) = self.0.get(*key) {
                 if *key == "status" {
-                    serde_json::from_str::<RawFields>(raw.get())?;
+                    Self::parse(raw)?;
                 }
-                let parsed = serde_json::from_str(raw.get()).map_err(|error| {
+                let parsed = serde_json::from_str(raw).map_err(|error| {
                     io::Error::other(format!("invalid Go metadata field {key}: {error}"))
                 })?;
                 fields.insert((*key).to_owned(), parsed);
             }
         }
         Ok(Value::Object(fields))
-    }
-
-    fn same_as(&self, other: &Self) -> bool {
-        self.0.len() == other.0.len()
-            && self
-                .0
-                .iter()
-                .zip(&other.0)
-                .all(|((a_key, a_value), (b_key, b_value))| {
-                    a_key == b_key && a_value.get() == b_value.get()
-                })
     }
 }
 
@@ -164,12 +183,16 @@ impl Entry {
     ) -> io::Result<bool> {
         if self.meta[key] != value {
             let mut revised = self.raw.clone();
-            revised.0.insert(key.to_owned(), to_raw_value(&value)?);
+            revised
+                .0
+                .insert(key.to_owned(), serde_json::to_string(&value)?);
             if key == "name" {
                 let now = OffsetDateTime::now_utc()
                     .format(&Rfc3339)
                     .expect("UTC timestamp");
-                revised.0.insert("name_set_at".into(), to_raw_value(&now)?);
+                revised
+                    .0
+                    .insert("name_set_at".into(), serde_json::to_string(&now)?);
             }
             replace_meta(&self.dir, &revised, || {})?;
             // renameat committed the new name. Keep the cache aligned even if
@@ -209,10 +232,8 @@ fn read_at(dir: &File, name: &CStr) -> io::Result<Value> {
 
 fn read_meta(dir: &File) -> io::Result<RawFields> {
     let file = open_at(dir, c"meta.json", libc::O_RDONLY)?;
-    Ok(serde_json::from_slice(&runtime::read_private_file(
-        file,
-        1 << 20,
-    )?)?)
+    let bytes = runtime::read_private_file(file, 1 << 20)?;
+    RawFields::parse(std::str::from_utf8(&bytes).map_err(io::Error::other)?)
 }
 
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
@@ -518,7 +539,7 @@ impl Store {
         if current.mode() & 0o077 != 0
             || current.uid() != entry.dir.metadata()?.uid()
             || !same_file(&entry.dir.metadata()?, &current)
-            || !read_meta(&entry.dir)?.same_as(&entry.raw)
+            || read_meta(&entry.dir)? != entry.raw
         {
             return Err(io::Error::other(
                 "stopped Go session changed outside the supervisor",
@@ -537,12 +558,7 @@ impl Store {
     }
 }
 
-fn replace_meta(
-    dir: &File,
-    meta: &impl Serialize,
-    before_replace: impl FnOnce(),
-) -> io::Result<()> {
-    use std::io::Write;
+fn replace_meta(dir: &File, meta: &RawFields, before_replace: impl FnOnce()) -> io::Result<()> {
     let temporary =
         std::ffi::CString::new(format!("meta.json.tmp{}", runtime::random_id()?)).unwrap();
     let result = (|| {
@@ -551,8 +567,7 @@ fn replace_meta(
             &temporary,
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
         )?;
-        serde_json::to_writer(&mut file, meta)?;
-        file.write_all(b"\n")?;
+        meta.write(&mut file)?;
         file.sync_all()?;
         before_replace();
         // Both names resolve inside the same verified directory; a swapped path cannot redirect the write.
@@ -640,8 +655,9 @@ mod tests {
         const OPAQUE: &str = "12345678901234567890.98765432101234567890123";
         let dir = std::env::temp_dir().join(runtime::random_id().unwrap());
         runtime::private_dir(&dir).unwrap();
-        const RESERVED: &str = r#"{"$serde_json::private::Number":"47"}"#;
-        let raw: RawFields = serde_json::from_str(&format!(
+        const RESERVED: &str =
+            r#"[{"$serde_json::private::Number":"47"}, {"$serde_json::private::RawValue":"null"}]"#;
+        let raw = RawFields::parse(&format!(
             r#"{{"tag":"old","extra":[{OPAQUE}, {RESERVED}, 1e10000]}}"#
         ))
         .unwrap();
@@ -655,7 +671,7 @@ mod tests {
         let error = entry.set_label("tag", "new".into(), |_| {
             Err(io::Error::other("sync failed"))
         });
-        let invalid: RawFields = serde_json::from_str(r#"{"shim_pid":1e10000}"#).unwrap();
+        let invalid = RawFields::parse(r#"{"shim_pid":1e10000}"#).unwrap();
         assert!(
             invalid
                 .parsed()
@@ -663,17 +679,27 @@ mod tests {
                 .to_string()
                 .contains("shim_pid")
         );
-        let alias: RawFields = serde_json::from_str(r#"{"Role":"manager"}"#).unwrap();
+        let alias = RawFields::parse(r#"{"Role":"manager"}"#).unwrap();
         assert!(alias.parsed().unwrap_err().to_string().contains("role"));
         assert_eq!(error.unwrap_err().to_string(), "sync failed");
         assert_eq!(entry.meta["tag"], "new");
-        assert!(read_meta(&entry.dir).unwrap().same_as(&entry.raw));
+        assert_eq!(read_meta(&entry.dir).unwrap().0, entry.raw.0);
         let raw = fs::read_to_string(dir.join("meta.json")).unwrap();
         assert!(
             raw.contains(&format!("[{OPAQUE}, {RESERVED}, 1e10000]")),
             "{raw}"
         );
-        assert!(serde_json::from_str::<RawFields>(r#"{"tag":"one","tag":"two"}"#).is_err());
+        for malformed in [
+            r#"{"tag":"one","tag":"two"}"#,
+            r#"{"tag":"one",}"#,
+            r#"{"tag" "one"}"#,
+            r#"{"tag": "one" "cwd": "/tmp"}"#,
+            r#"{"tag": "one"} {}"#,
+            r#"{"tag": "one", "broken": [1,]}"#,
+            r#"{"tag": "one", "broken": 01}"#,
+        ] {
+            assert!(RawFields::parse(malformed).is_err(), "{malformed}");
+        }
         assert!(
             entry
                 .set_label("tag", "new".into(), File::sync_all)
@@ -692,13 +718,23 @@ mod tests {
         const CHILD: &str = "SWARM_TEST_STOPPED_GO_PRE_REPLACE";
         if let Some(path) = std::env::var_os(CHILD) {
             let file = File::open(path).unwrap();
-            replace_meta(&file, &json!({"name":"new"}), || std::process::exit(97)).unwrap();
+            replace_meta(
+                &file,
+                &RawFields::parse(r#"{"name":"new"}"#).unwrap(),
+                || std::process::exit(97),
+            )
+            .unwrap();
             panic!("crash injection did not fire");
         }
         let dir = std::env::temp_dir().join(runtime::random_id().unwrap());
         runtime::private_dir(&dir).unwrap();
         let file = File::open(&dir).unwrap();
-        replace_meta(&file, &json!({"name":"old"}), || {}).unwrap();
+        replace_meta(
+            &file,
+            &RawFields::parse(r#"{"name":"old"}"#).unwrap(),
+            || {},
+        )
+        .unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -710,7 +746,12 @@ mod tests {
         assert_eq!(child.code(), Some(97));
         assert_eq!(read_at(&file, c"meta.json").unwrap()["name"], "old");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
-        replace_meta(&file, &json!({"name":"new"}), || {}).unwrap();
+        replace_meta(
+            &file,
+            &RawFields::parse(r#"{"name":"new"}"#).unwrap(),
+            || {},
+        )
+        .unwrap();
         assert_eq!(read_at(&file, c"meta.json").unwrap()["name"], "new");
         fs::remove_dir_all(dir).unwrap();
     }

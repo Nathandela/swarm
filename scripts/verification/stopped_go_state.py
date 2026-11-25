@@ -18,6 +18,7 @@ import time
 COMPAT = "SWARM_DAEMON_STOPPED_GO_COMPAT"
 NATIVE_ID = "00000000-1111-4222-8333-444444444444"
 SENTINEL = "fictional-stopped-state-key"
+RAW_MARKER = "$serde_json::private::RawValue"
 
 
 def owner(env, request=None, read_reply=True):
@@ -168,7 +169,10 @@ def rehearse(go, rust, base):
     qualified = copied / local
     meta = qualified / "meta.json"
     fixture_record = disk(meta)
-    fixture_record["future_inert_fixture"] = {"opaque": ["label migration treats this as data", 2, {"$serde_json::private::Number": "47"}]}
+    fixture_record["future_inert_fixture"] = {
+        "opaque": ["label migration treats this as data", 2,
+                   {"$serde_json::private::Number": "47"}, {RAW_MARKER: "null"}],
+    }
     private(meta, fixture_record)
     protected = {p.name: p.read_bytes() for p in qualified.iterdir() if p.is_file() and p != meta}
     assert SENTINEL.encode() in protected["shim-launch.json"]
@@ -190,6 +194,8 @@ def rehearse(go, rust, base):
         ({"schema_version": 5}, "requires offline qualification"),
         ({"schema_version": 900}, "requires offline qualification"),
         ({"role": "manager"}, "unqualified Go role"),
+        ({"role": {RAW_MARKER: "null"}}, "unqualified Go role"),
+        ({"shim_pid": {RAW_MARKER: str(fixture_record["shim_pid"])}}, "missing Go shim birth identity"),
         ({"hermes_native": True}, "unqualified Go role"),
         ({"status": {"Process": "running"}}, "live or has uncertain custody"),
         ({"status": {"Process": "lost"}}, "live or has uncertain custody"),
@@ -199,6 +205,17 @@ def rehearse(go, rust, base):
         refused(rust, rust_env, reason)
         assert disk(meta) == altered
     private(meta, fixture_record)
+    for filename, key, encoded, reason in [
+        ("exit.json", "exit_code", str(fixture_record["exit_code"]), "exit evidence disagrees"),
+        ("shim-launch.json", "input_embargo", '""', "launch binding or native writer is unqualified"),
+    ]:
+        sidefile = qualified / filename
+        original_sidefile = sidefile.read_bytes()
+        altered_sidefile = disk(sidefile) | {key: {RAW_MARKER: encoded}}
+        private(sidefile, altered_sidefile)
+        refused(rust, rust_env, reason)
+        assert disk(sidefile) == altered_sidefile
+        sidefile.write_bytes(original_sidefile)
     stopped = qualified / "native-writers-stopped.json"
     stopped.chmod(0o644)
     refused(rust, rust_env, "not a private regular owner file")
@@ -212,6 +229,9 @@ def rehearse(go, rust, base):
         refused(go, go_env, "another instance is already running")
         assert owner(rust_env, {"op": "launch"})["error_code"] == "op_not_implemented"
         session = baseline["id"]
+        spoofed = owner(rust_env, {"op": "rename", "session_id": session, "name": {RAW_MARKER: '"spoofed"'}})
+        assert spoofed["op"] == "error" and "invalid session label type" in spoofed["error"]
+        assert disk(meta) == fixture_record
         assert owner(rust_env, {"op": "rename", "session_id": session, "name": "Renamed by Rust"})["op"] == "ok"
         owner(rust_env, {"op": "set_tag", "session_id": session, "tag": "kept"}, read_reply=False)
         await_value(lambda: disk(meta)["tag"] == "kept")
