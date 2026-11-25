@@ -1,11 +1,13 @@
 mod attach;
 mod keys;
+mod launch;
 mod navigation;
 mod preferences;
 mod term;
 
 use crate::ipc::{self, Client, field};
 use keys::{Key, Keys, Mouse, MouseAction};
+use launch::Launch;
 use navigation::{Focus, GROUPS, ORDERS, Row, capacity, truncation, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
@@ -14,7 +16,7 @@ use std::env;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
@@ -55,6 +57,9 @@ fn board(path: &Path) -> io::Result<()> {
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
+        if let Some(Modal::Launch(form)) = &mut board.modal {
+            needs_paint |= form.update_detection();
+        }
         if dimensions != geometry || needs_paint {
             if dimensions != geometry {
                 geometry = dimensions;
@@ -210,7 +215,7 @@ struct Press {
 }
 
 enum Modal {
-    Launch(Launch),
+    Launch(Box<Launch>),
     ResumeAgy {
         id: String,
         cwd: Editor,
@@ -392,7 +397,7 @@ impl Board {
         match key {
             Key::Text('q') => return Action::Quit,
             Key::Text('n') if online => {
-                self.modal = Some(Modal::Launch(Launch::new()));
+                self.modal = Some(Modal::Launch(Box::new(Launch::new())));
                 self.notice.clear();
             }
             Key::Text('o') => {
@@ -1177,26 +1182,6 @@ fn clip(text: &str, columns: u16) -> String {
     clipped
 }
 
-fn edit(value: &mut String, key: Key) {
-    const LIMIT: usize = 16384;
-    match key {
-        Key::Text(ch) if !ch.is_control() && value.len() + ch.len_utf8() <= LIMIT => value.push(ch),
-        Key::Paste(text) => {
-            for ch in text.chars().filter(|ch| !ch.is_control()) {
-                if value.len() + ch.len_utf8() > LIMIT {
-                    break;
-                }
-                value.push(ch);
-            }
-        }
-        Key::Backspace => {
-            value.pop();
-        }
-        Key::CtrlU => value.clear(),
-        _ => {}
-    }
-}
-
 fn caller_launch_environment(agent: &str) -> Vec<String> {
     let entries = env::vars_os()
         .filter_map(|(key, value)| Some(format!("{}={}", key.to_str()?, value.to_str()?)))
@@ -1216,172 +1201,6 @@ fn resume(agent: &str, id: &str, cwd: &Path, (cols, rows): (u16, u16), relocate:
         }}),
         "launch",
     )
-}
-
-struct Launch {
-    agents: Vec<&'static str>,
-    agent: usize,
-    focus: usize,
-    cwd: String,
-    name: String,
-    tag: String,
-    prompt: String,
-    agy_model: String,
-    agy_mode: usize,
-    agy_skip: bool,
-}
-
-impl Launch {
-    fn new() -> Self {
-        let agents = ["agy", "claude", "codex", "hermes", "opencode"]
-            .into_iter()
-            .filter(|program| {
-                env::var_os("PATH").is_some_and(|path| {
-                    env::split_paths(&path).any(|dir| {
-                        use std::os::unix::fs::PermissionsExt;
-                        dir.join(program).metadata().is_ok_and(|meta| {
-                            meta.is_file() && meta.permissions().mode() & 0o111 != 0
-                        })
-                    })
-                })
-            })
-            .collect();
-        Self {
-            agents,
-            agent: 0,
-            focus: 0,
-            cwd: env::current_dir()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            name: String::new(),
-            tag: String::new(),
-            prompt: String::new(),
-            agy_model: String::new(),
-            agy_mode: 0,
-            agy_skip: false,
-        }
-    }
-
-    fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> io::Result<Action> {
-        let agy = self.agents.get(self.agent) == Some(&"agy");
-        let count = if agy { 8 } else { 5 };
-        match key {
-            Key::Up => self.focus = (self.focus + count - 1) % count,
-            Key::Down | Key::Tab => self.focus = (self.focus + 1) % count,
-            Key::Left | Key::Right if agy && self.focus == 6 => {
-                let offset = if matches!(key, Key::Left) { 3 } else { 1 };
-                self.agy_mode = (self.agy_mode + offset) % 4;
-            }
-            Key::Left | Key::Right | Key::Text(' ') if agy && self.focus == 7 => {
-                self.agy_skip = !self.agy_skip;
-            }
-            Key::Left | Key::Right if self.focus == 0 && !self.agents.is_empty() => {
-                let delta = if matches!(key, Key::Left) {
-                    self.agents.len() - 1
-                } else {
-                    1
-                };
-                self.agent = (self.agent + delta) % self.agents.len();
-            }
-            Key::Enter => {
-                let agent = self
-                    .agents
-                    .get(self.agent)
-                    .ok_or_else(|| io::Error::other("no supported agent executable on PATH"))?;
-                let cwd = PathBuf::from(&self.cwd);
-                if !cwd.is_absolute() || !cwd.is_dir() {
-                    return Err(io::Error::other(
-                        "choose an existing absolute workspace directory",
-                    ));
-                }
-                if *agent == "codex" {
-                    crate::providers::codex::refuse_unqualified_origin(&Value::Null)?;
-                }
-                let caller_env = caller_launch_environment(agent);
-                let mut launch = json!({
-                    "agent":agent, "cwd":cwd, "options":{}, "env":caller_env,
-                    "cols":cols, "rows":rows, "initial_prompt":self.prompt,
-                });
-                if agy {
-                    launch["options"] = json!({
-                        "model": self.agy_model,
-                        "mode": (["", "accept-edits", "auto", "plan"][self.agy_mode]),
-                        "dangerously-skip-permissions": self.agy_skip.to_string(),
-                    });
-                }
-                for (key, text) in [("name", &self.name), ("tag", &self.tag)] {
-                    if !text.is_empty() {
-                        launch[key] = json!(text);
-                    }
-                }
-                return Ok(Action::Request(
-                    json!({"op":"launch","launch":launch}),
-                    "launch",
-                ));
-            }
-            key => match self.focus {
-                1 => edit(&mut self.cwd, key),
-                2 => edit(&mut self.name, key),
-                3 => edit(&mut self.tag, key),
-                4 => edit(&mut self.prompt, key),
-                5 => edit(&mut self.agy_model, key),
-                _ => {}
-            },
-        }
-        Ok(Action::None)
-    }
-
-    fn view(&self, output: &mut String, cols: u16, rows: u16) {
-        line(output, 1, cols, "\x1b[38;2;142;180;230;1m", "New session");
-        let agent = self
-            .agents
-            .get(self.agent)
-            .copied()
-            .unwrap_or("No agent found");
-        let mut fields = vec![
-            ("Agent", agent),
-            ("Directory", self.cwd.as_str()),
-            ("Name", &self.name),
-            ("Tag", &self.tag),
-            ("Prompt", &self.prompt),
-        ];
-        if agent == "agy" {
-            fields.extend([
-                ("Model", self.agy_model.as_str()),
-                (
-                    "Execution mode",
-                    ["Default", "accept-edits", "auto", "plan"][self.agy_mode],
-                ),
-                (
-                    "Skip permission prompts",
-                    if self.agy_skip { "Yes" } else { "No" },
-                ),
-            ]);
-        }
-        let capacity = usize::from(rows.saturating_sub(2));
-        let start = (self.focus + 1).saturating_sub(capacity);
-        for (index, (label, value)) in fields.iter().enumerate().skip(start).take(capacity) {
-            let active = index == self.focus;
-            let mark = if active { "▌" } else { " " };
-            line(
-                output,
-                (index - start) as u16 + 2,
-                cols,
-                if active { "\x1b[1m" } else { "" },
-                &format!("{mark} {label}  {value}"),
-            );
-        }
-        if rows >= 2 {
-            line(
-                output,
-                rows,
-                cols,
-                "\x1b[2m",
-                "↑↓ field · ←→ change · enter launch · esc cancel",
-            );
-        }
-    }
 }
 
 #[cfg(test)]

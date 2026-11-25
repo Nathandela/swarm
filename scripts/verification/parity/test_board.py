@@ -7,6 +7,7 @@ import copy
 import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -51,7 +52,10 @@ def witness(root, tmux=None, cycle=False):
                 board.wait_bytes(b"swarm")
                 board.send(b"n")
                 board.wait_bytes(b"New session")
-                board.send(b"\x1b[B\x1b[Bamber\r")
+                board.wait_bytes(b"2.1.100")
+                board.send(b"\x15" + os.fsencode(cwd / "qual") + b"\t")
+                board.wait_bytes(b"/qualified/")
+                board.send(b"\x1b[Bamber\r")
                 board.wait_bytes(b"fixture ready")
             else:
                 board.wait_bytes(b"amber")
@@ -146,10 +150,12 @@ def witness(root, tmux=None, cycle=False):
         grid_witness(root, cli, roster, start, tmux)
         return
 
+    (cwd / "qualified").mkdir()
     daemon = start()
     before = terminal(b"before", True)
     rows, = roster()
     assert len(rows) == 1 and rows[0]["name"] == "amber"
+    assert Path(rows[0]["cwd"]) == cwd / "qualified"
     identity = rows[0]["id"]
     daemon.kill()
     daemon.wait(timeout=5)

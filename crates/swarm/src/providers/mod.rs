@@ -63,13 +63,7 @@ pub(crate) fn prepare(
     let executable = resolve(agent, cwd, path)?;
     let before = identity(&executable)?;
     let output = probe_output(&executable, cwd, &environment, &["--version"])?;
-    let version = match agent {
-        "agy" => agy::version(&output)?,
-        "codex" => codex::version(&output)?,
-        "opencode" => opencode::version(&output)?,
-        _ => claude::version(&output)?,
-    }
-    .to_owned();
+    let version = admitted_version(agent, &output)?.to_owned();
     let agy_status_line = agent == "agy"
         && agy::status_line(&version)
         && probe_output(&executable, cwd, &environment, &["--help"])
@@ -100,6 +94,38 @@ pub(crate) fn prepare(
         native,
         agy_acp,
     })
+}
+
+fn admitted_version<'a>(agent: &str, output: &'a str) -> io::Result<&'a str> {
+    match agent {
+        "agy" => agy::version(output),
+        "claude" => claude::version(output),
+        "codex" => codex::version(output),
+        "opencode" => opencode::version(output),
+        _ => Err(io::Error::other(
+            "Native launch is unavailable on this supervisor",
+        )),
+    }
+}
+
+pub(crate) fn detect_for_board(agent: &str, cwd: &Path) -> io::Result<String> {
+    if agent == "hermes" {
+        return Err(io::Error::other(
+            "Native Hermes launch is unavailable on this supervisor",
+        ));
+    }
+    if agent == "codex" {
+        codex::refuse_unqualified_origin(&Value::Null)?;
+    }
+    let entries = crate::supervisor::runtime::launch_env(&Value::Null);
+    let path = entries
+        .iter()
+        .find(|(key, _)| key == "PATH")
+        .map(|(_, value)| value)
+        .ok_or_else(|| io::Error::other("provider detection requires PATH"))?;
+    let executable = resolve(agent, cwd, path)?;
+    let output = probe_output(&executable, cwd, &entries, &["--version"])?;
+    Ok(admitted_version(agent, &output)?.to_owned())
 }
 
 fn resolve(binary: &str, cwd: &Path, path: &str) -> io::Result<PathBuf> {
