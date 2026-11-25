@@ -72,6 +72,7 @@ type Service struct {
 	publicationMu   sync.RWMutex
 	botID           string
 	teammateManager TeammateManager
+	ticketBearer    string
 }
 
 func NewService(c Config, store *Store, workers Workers, messenger Messenger) *Service {

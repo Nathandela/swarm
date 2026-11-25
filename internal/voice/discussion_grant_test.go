@@ -278,3 +278,70 @@ func TestDiscussionNeutralClarificationPublishesBeforeProjectSelection(t *testin
 		t.Fatal(err)
 	}
 }
+
+func TestTicketDiscussionGrantsOneWorkerToTheVerifiedMachineOrigin(t *testing.T) {
+	c, _, runtime, _ := newControllerFixture(t)
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := discussionFixtureOrigin("ta_fixed")
+	origin.Kind, origin.ActorID, origin.RequesterID, origin.DiscussionID, origin.Revision = "ticket_assignment", "cerbere", "cerbere", "discussion", "revision"
+	scope := &DiscussionScope{InstallationID: origin.InstallationID, GuildID: origin.GuildID, ThreadID: origin.ChannelID, DiscussionID: origin.DiscussionID}
+	if scope.validateOrigin(origin) {
+		t.Fatal("unenrolled scope accepted a machine grant")
+	}
+	scope.TicketRequestID = origin.RequestID
+	if !scope.validateOrigin(origin) {
+		t.Fatal("enrolled scope refused the machine grant")
+	}
+	c.discussion = scope
+	scope.ProjectEnrolled = func(path string) bool { return path == project }
+	scope.VerifyGrant = func(ctx context.Context, grant schema.MessageOrigin) error {
+		if grant != origin {
+			return ErrDiscussionSourceChanged
+		}
+		return nil
+	}
+	worker := &controllerWorkerFixture{
+		rows: []protocol.SessionView{{
+			ID: "machine/created", Agent: "codex", Cwd: project, SpawnedFrom: "session", SpawnIntent: schema.SpawnIntentDelegate,
+			Capabilities: &schema.SessionCapabilities{SessionInstance: "created-instance"},
+		}},
+	}
+	c.workers = worker
+	if _, err := c.submitDiscussionInProject(origin, "check the regression", "", "", "", project, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.sent) != 1 || runtime.sent[0].Origin == nil || *runtime.sent[0].Origin != origin {
+		t.Fatalf("native submission lost machine origin: %+v", runtime.sent)
+	}
+	nonce := runtime.sent[0].ManagerAdmission.Nonce
+	runtime.status.ReadyForInput = false
+	runtime.status.Turn = protocol.ManagerNativeTurn{State: "running", NativeInputID: nonce, NativeTurnID: "ticket-turn"}
+	runtime.proof = protocol.ManagerCallProof{Main: true, NativeInputID: nonce, NativeTurnID: "ticket-turn", NativeCallID: "native-call"}
+	launch := func(actionID string) (json.RawMessage, error) {
+		args := fmt.Appendf(nil, `{"action_id":%q,"agent":"codex","cwd":%q,"prompt":"check the regression"}`, actionID, project)
+		return c.ManagerCall(context.Background(), ManagerToolCall{Name: "swarm_create", Arguments: args})
+	}
+	if _, err := launch("first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := launch("second"); !errors.Is(err, ErrConflict) || worker.launches != 1 {
+		t.Fatalf("a second action launched a worker: launches=%d %v", worker.launches, err)
+	}
+	if _, err := launch("first"); err != nil || worker.launches != 1 {
+		t.Fatalf("same operation repeated its launch: launches=%d %v", worker.launches, err)
+	}
+	human := discussionFixtureOrigin("human")
+	human.DiscussionID, human.Revision = origin.DiscussionID, "human-revision"
+	if err := c.discussionEffect(Admission{Origin: &human}, "swarm_create"); !errors.Is(err, ErrControllerUnsupported) {
+		t.Fatalf("human follow-up could independently create a worker: %v", err)
+	}
+	if err := c.discussionEffect(Admission{Origin: &human}, "swarm_send"); err != nil {
+		t.Fatalf("human follow-up could not steer the existing worker: %v", err)
+	}
+}

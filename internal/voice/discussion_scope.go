@@ -27,6 +27,7 @@ type DiscussionScope struct {
 	InstallationID     string
 	GuildID            string
 	ThreadID           string
+	TicketRequestID    string
 	VerifyAudience     func(context.Context) error
 	VerifyRecipient    func(context.Context, string, string) error
 	ProjectEnrolled    func(string) bool
@@ -48,7 +49,9 @@ func (s *DiscussionScope) validateOrigin(origin schema.MessageOrigin) bool {
 	if s.DMOwnerID != "" && (origin.Kind != "owner_direct" || origin.ActorID != s.DMOwnerID || origin.RequesterID != s.DMOwnerID) {
 		return false
 	}
-	return (origin.Kind == "external" || origin.Kind == "owner_direct") && origin.Validate() == nil &&
+	kindAllowed := origin.Kind == "external" || origin.Kind == "owner_direct" ||
+		origin.Kind == "ticket_assignment" && s.TicketRequestID != "" && origin.RequestID == s.TicketRequestID
+	return kindAllowed && origin.Validate() == nil &&
 		origin.DiscussionID == s.DiscussionID && origin.InstallationID == s.InstallationID && origin.GuildID == s.GuildID && origin.ChannelID == s.ThreadID && origin.MessageID != ""
 }
 
@@ -133,6 +136,10 @@ func (c *Controller) discussionEffect(admission Admission, name string) error {
 		}
 		fallthrough
 	case "swarm_create", "swarm_resume":
+		if c.discussion.TicketRequestID != "" &&
+			(name == "swarm_resume" || name == "swarm_create" && (admission.Origin == nil || admission.Origin.RequestID != c.discussion.TicketRequestID)) {
+			return ErrControllerUnsupported
+		}
 		if admission.Origin == nil || !c.discussion.validateOrigin(*admission.Origin) {
 			return ErrExpired
 		}

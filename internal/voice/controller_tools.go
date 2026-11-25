@@ -755,6 +755,13 @@ func (c *Controller) prepareManagerAction(ctx context.Context, name, id, target 
 		return Action{}, err
 	}
 	prior, exists := st.Actions[key(c.binding.ConversationID, id)]
+	if c.discussion != nil && c.discussion.TicketRequestID != "" && name == "swarm_create" && !exists {
+		for _, action := range st.Actions {
+			if action.ConversationID == c.binding.ConversationID && strings.HasPrefix(action.Target, "new-worker:") {
+				return Action{}, ErrConflict
+			}
+		}
+	}
 	if c.discussion != nil && request.Launch != nil && exists && prior.State != "prepared" {
 		var old controllerActionRequest
 		if json.Unmarshal(prior.Request, &old) != nil {

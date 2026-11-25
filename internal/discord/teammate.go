@@ -21,6 +21,8 @@ type TeammateManager interface {
 	Sync(context.Context, TeammateDiscussion, TeammateHistoryReader, func(TeammatePublication) error) error
 }
 
+const AuthorityTicketAssignment Authority = "ticket_assignment"
+
 const (
 	TeammateAdmissionMissing            = "missing"
 	TeammateAdmissionAccepted           = "accepted"
@@ -70,6 +72,8 @@ type TeammateDiscussion struct {
 	SupervisorSocket   string `json:"supervisor_socket,omitempty"`
 	Route, Starter     Route
 	ParentAnchor       string
+	TicketEventID      string `json:"ticket_event_id,omitempty"`
+	TicketProject      string `json:"ticket_project,omitempty"`
 	Gap                uint64
 }
 

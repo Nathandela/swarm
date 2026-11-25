@@ -125,6 +125,10 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 	if err != nil {
 		return teammateBinding{}, nil, err
 	}
+	ticketLane := cfg.TicketIntake != nil && (channel.ID == cfg.TicketIntake.ChannelID || parent.ID == cfg.TicketIntake.ChannelID)
+	if ticketLane && !channel.IsThread() {
+		return teammateBinding{}, nil, ErrNotAuthorized
+	}
 	if channel.Type == discordgo.ChannelTypeGuildText {
 		// An untagged parent-channel message can race classification of an earlier opener.
 		err = t.service.Store.db.Update(func(tx *bolt.Tx) error {
@@ -161,6 +165,9 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 			return teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(cfg.InstallationID, channel.ID), &binding)
 		})
 		if err == nil {
+			if ticketLane && (binding.TicketEventID == "" || !binding.Opened) {
+				return binding, nil, ErrNotAuthorized
+			}
 			if binding.Route != route {
 				return binding, nil, ErrConflict
 			}
@@ -174,6 +181,9 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return binding, nil, err
+		}
+		if ticketLane {
+			return binding, nil, ErrNotAuthorized
 		}
 	}
 	if !c.Opening || !t.addressed(m) {
@@ -257,6 +267,9 @@ func teammateRevision(m *discordgo.Message) string {
 }
 
 func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) error {
+	if c.TicketEventID != "" {
+		return t.processTicket(ctx, c)
+	}
 	cfg := t.service.Config
 	store := t.service.Store
 	var a TeammateAdmission
@@ -313,7 +326,7 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		b, m, err := t.resolve(ctx, c)
 		if err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrNotAuthorized) || errors.Is(err, errTeammateUnsupported) || teammateAPIStatus(err, http.StatusForbidden) || teammateAPIStatus(err, http.StatusNotFound) {
-				if c.Opening && !errors.Is(err, ErrConflict) && !teammateAPIStatus(err, http.StatusNotFound) {
+				if c.Opening && (cfg.TicketIntake == nil || cfg.TicketIntake.ChannelID != c.Route.ChannelID) && !errors.Is(err, ErrConflict) && !teammateAPIStatus(err, http.StatusNotFound) {
 					if e := t.explainOpening(ctx, c.Route); e != nil {
 						return e
 					}
@@ -415,6 +428,9 @@ func (t *teammateConnector) saveAdmissionPhase(c teammateCandidate, phase string
 }
 
 func (t *teammateConnector) reconcileAccepted(ctx context.Context, c teammateCandidate) error {
+	if c.TicketEventID != "" {
+		return t.processTicket(ctx, c)
+	}
 	if c.Admission == nil || c.State != teammateStateAccepted {
 		return ErrInvalid
 	}
@@ -594,7 +610,7 @@ func (t *teammateConnector) schedule(ctx context.Context, parallel int, active, 
 	accepted := make(map[string]teammateCandidate)
 	for _, c := range pending {
 		id := c.Route.ChannelID
-		if c.ParentChannel && c.Opening {
+		if (c.ParentChannel && c.Opening) || c.TicketEventID != "" {
 			id = c.Route.MessageID
 		}
 		if c.Admission != nil {
@@ -762,6 +778,13 @@ func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, 
 	defer cancel()
 	s.Stop = cancel
 	s.teammateManager = m
+	if enrollment := s.Config.TicketIntake; enrollment != nil {
+		token, err := LoadToken(enrollment.TokenFile)
+		if err != nil || len(token) < 32 || strings.ContainsAny(token, " \t") {
+			return errors.New("discord: ticket intake requires a dedicated private token of at least 32 characters")
+		}
+		s.ticketBearer = "Bearer " + token
+	}
 	key, err := s.Store.teammateCursorKey()
 	if err != nil {
 		return err

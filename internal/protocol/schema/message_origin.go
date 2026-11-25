@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// MessageOrigin records human provenance independently of the transport's source.
+// MessageOrigin records verified provenance independently of the transport's source.
 // External context grants no owner authority; endorsement names the owner who accepted it.
 type MessageOrigin struct {
 	Kind           string `json:"kind"`
@@ -32,7 +32,7 @@ func (o MessageOrigin) fields() []string {
 }
 
 func (o MessageOrigin) Validate() error {
-	if o.Kind != "external" && o.Kind != "owner_direct" && o.Kind != "owner_endorsed" {
+	if o.Kind != "external" && o.Kind != "owner_direct" && o.Kind != "owner_endorsed" && o.Kind != "ticket_assignment" {
 		return errors.New("message origin has an unknown kind")
 	}
 	if o.InstallationID == "" || o.RequestID == "" || o.ActorID == "" {
@@ -40,6 +40,9 @@ func (o MessageOrigin) Validate() error {
 	}
 	if (o.Kind == "owner_endorsed") != (o.EndorserID != "") {
 		return errors.New("message origin requires an endorser only for owner_endorsed")
+	}
+	if o.Kind == "ticket_assignment" && (o.DiscussionID == "" || o.Revision == "" || o.RequesterID != o.ActorID) {
+		return errors.New("message origin requires verified ticket discussion provenance")
 	}
 	if o.DiscussionID != "" || o.Revision != "" {
 		personal := o.Kind == "owner_direct" && o.RequesterID == o.ActorID

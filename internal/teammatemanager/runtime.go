@@ -214,11 +214,22 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	if err := privateRoot(socketDir); err != nil {
 		return nil, err
 	}
+	projectEnrolled := r.projectEnrolled
+	ticketRequestID := ""
+	if bound.TicketEventID != "" {
+		project := r.projects[strings.ToLower(bound.TicketProject)]
+		if r.vmProjectAccess || project == "" {
+			return nil, voice.ErrInvalid
+		}
+		cfg.WorkDir = project
+		ticketRequestID = discord.TicketAdmissionOperation(bound.InstallationID, bound.TicketEventID)
+		projectEnrolled = func(candidate string) bool { return candidate == project && r.projectEnrolled(candidate) }
+	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
 		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
-		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
-		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyRecipient: entry.verifyRecipient, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: r.projectEnrolled,
+		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID, TicketRequestID: ticketRequestID,
+		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyRecipient: entry.verifyRecipient, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: projectEnrolled,
 	})
 	if err != nil {
 		return nil, err
@@ -370,6 +381,9 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 	err = entry.voice.Admit(ctx, voice.DiscussionInput{
 		ExpectReply: input.ExpectReply || input.RequireMention || input.Discussion.Route.GuildID == "", Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
 		Project: func(selected string) (string, bool) {
+			if input.Discussion.TicketEventID != "" {
+				return r.projects[strings.ToLower(input.Discussion.TicketProject)], true
+			}
 			project := r.resolveProject(selected, input.Text, projectHistory(page, input.Route.MessageID))
 			wording := projectWords(input.Text)
 			explicit, count := r.namedProject(wording)

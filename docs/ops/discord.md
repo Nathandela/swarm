@@ -119,6 +119,30 @@ Only deliberately published manager replies and clarifications appear in the thr
 
 Use `swarm discord disconnect` to stop the connector. To go back to the legacy directory, run `swarm discord connect --mode legacy --owner-id OWNER_USER_ID --install`. Check the saved channel/user scope before bringing the legacy behavior back online. The old commands below describe that mode.
 
+### Enrolled machine ticket admission
+
+The experimental `ticket_intake` config accepts one explicit `guild_id`,
+`channel_id`, `webhook_id`, `repo`, `project`, and `token_file`. The channel must
+already be enrolled and the project must name an enrolled project. Ticket
+intake requires teammate mode with enrolled project access. The token is a
+private file distinct from the Discord token. Keep the connector credential,
+the relay, and authority-bearing sockets outside the ticket process's access.
+
+The relay posts an immutable assignment to `/ticket-admission` over the
+connector's private Unix socket, using its dedicated bearer. It can recover
+the receipt with `GET /ticket-admission?event_id=...`. A `native_cutover`
+receipt confirms native input admission. Worker completion and Discord
+publication continue to have their own receipts. Ticket threads open from
+the verified webhook announcement. Human follow-ups use that existing
+discussion and its pinned project. Other enrolled channels retain their
+usual routing.
+
+Place this behind a qualified execution boundary before admitting real
+tickets. Enrolled project selection scopes Swarm tool calls. Process
+isolation remains necessary for protection of the host's credentials and
+other sessions. A compatible connector and supervisor are required when
+these assignments are enabled.
+
 ## Set up a place
 
 Create a bot application in the [Discord Developer Portal](https://discord.com/developers/applications). Choose its public bot name there and your local integration label below. Enable **Message Content Intent** on the Bot page: joined-thread context needs ordinary message text. Discord requires this setting for privileged message content; larger verified applications may also need Discord approval. See [Gateway intents](https://docs.discord.com/developers/events/gateway#message-content-intent).

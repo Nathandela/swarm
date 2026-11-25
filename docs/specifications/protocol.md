@@ -211,7 +211,7 @@ The additive `manager-provenance` capability is owner-only and requires a qualif
 | `turn` | `ManagerNativeTurn` | Current native turn projection, independent of historical input outcomes |
 | `text` | string | Human message text; manager admission identity remains separate |
 | `expected_turn` | string | Advisory send or required interrupt subject. The manager retirement request carries the exact last observed native turn in this field. |
-| `origin` | `*MessageOrigin` | Optional native routing lineage; never substitutes for manager admission or native proof |
+| `origin` | `*MessageOrigin` | Optional native routing lineage, including `ticket_assignment` for enrolled machine ticket discussions; never substitutes for manager admission or native proof |
 | `native_message_id` | string | Exact native stored user-message identity when observed |
 | `native_created_at_ms` | int64 | Qualified native admission creation timestamp, otherwise absent |
 | `agent` | string | Observed provider agent selection |

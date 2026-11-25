@@ -78,10 +78,11 @@ func TestTeammateIngressExceedsLegacyBurstAndKeepsDeletes(t *testing.T) {
 }
 
 type teammateTestManager struct {
-	known    bool
-	phase    string
-	canceled bool
-	admitted []TeammateAdmission
+	known      bool
+	phase      string
+	transition string
+	canceled   bool
+	admitted   []TeammateAdmission
 }
 
 func (m *teammateTestManager) AdmissionState(context.Context, TeammateAdmission) (string, error) {
@@ -101,7 +102,9 @@ func (m *teammateTestManager) CancelAdmission(context.Context, TeammateAdmission
 
 func (m *teammateTestManager) Admit(_ context.Context, a TeammateAdmission, _ TeammateHistoryReader) error {
 	m.admitted = append(m.admitted, a)
-	if m.phase == TeammateAdmissionSuperseded {
+	if m.transition != "" {
+		m.phase, m.transition = m.transition, ""
+	} else if m.phase == TeammateAdmissionSuperseded {
 		m.phase = TeammateAdmissionAccepted
 	}
 	return nil

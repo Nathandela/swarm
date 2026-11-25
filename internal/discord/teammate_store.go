@@ -29,7 +29,8 @@ const (
 
 type teammateCandidate struct {
 	Mutation      uint64
-	ParentChannel bool `json:"-"`
+	TicketEventID string `json:"ticket_event_id,omitempty"`
+	ParentChannel bool   `json:"-"`
 	Route         Route
 	Author        Actor
 	Opening       bool
@@ -150,6 +151,9 @@ func teammateRecordCandidates(tx *bolt.Tx, installation string, records []teamma
 				prior.Mutation++
 				prior.Deleted = prior.Deleted || deleted
 				if deleted && prior.State == StatePrepared {
+					if prior.TicketEventID != "" {
+						prior.Error = "ticket announcement deleted"
+					}
 					if err := teammateSettleCandidate(tx, installation, key, prior, StateFailed); err != nil {
 						return err
 					}
@@ -356,7 +360,7 @@ func (s *Store) teammateBind(binding teammateBinding) error {
 		var old teammateBinding
 		err := teammateGet(b, key, &old)
 		if err == nil {
-			if old.ID != binding.ID || old.Route != binding.Route {
+			if old.ID != binding.ID || old.Route != binding.Route || old.TicketEventID != binding.TicketEventID || old.TicketProject != binding.TicketProject {
 				return ErrConflict
 			}
 			return teammateActivate(tx, &old)
@@ -582,6 +586,9 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 		if state == StateSent || state == StateFailed {
 			return teammateSettleCandidate(tx, installation, key, record, state)
 		}
+		if err := updateTicketReceipt(tx, installation, record); err != nil {
+			return err
+		}
 		return putJSON(tx, teammateIngressBucket, key, record)
 	})
 }
@@ -607,6 +614,10 @@ func teammateIngressCount(tx *bolt.Tx, delta int) error {
 }
 
 func teammateSettleCandidate(tx *bolt.Tx, install string, key []byte, record teammateCandidate, state string) error {
+	record.State = state
+	if err := updateTicketReceipt(tx, install, record); err != nil {
+		return err
+	}
 	guard := teammateIngressGuard{Route: record.Route, ActorID: record.Author.ID, Disposition: state}
 	if record.Admission != nil {
 		guard.OperationID, guard.Revision, guard.DiscussionID = record.Admission.OperationID, record.Admission.Revision, record.Admission.Discussion.ID

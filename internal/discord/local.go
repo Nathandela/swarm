@@ -203,9 +203,33 @@ func decodeLocal(w http.ResponseWriter, r *http.Request, out any) error {
 	return nil
 }
 func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/ticket-admission" {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		result, err := s.handleTicket(w, r)
+		switch {
+		case errors.Is(err, ErrNotAuthorized):
+			w.WriteHeader(http.StatusForbidden)
+		case errors.Is(err, ErrInvalid):
+			w.WriteHeader(http.StatusBadRequest)
+		case errors.Is(err, ErrNotFound):
+			w.WriteHeader(http.StatusNotFound)
+		case errors.Is(err, ErrConflict):
+			w.WriteHeader(http.StatusConflict)
+		case err != nil:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		if err != nil {
+			result = map[string]string{"error": err.Error()}
+		}
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
 	operation := r.URL.Path[1:]
 	method := localMethod(operation)
-	w.Header().Set("Content-Type", "application/json")
 	if method == "" || r.Method != method {
 		http.Error(w, `{"error":"discord: unknown operation or method"}`, http.StatusMethodNotAllowed)
 		return

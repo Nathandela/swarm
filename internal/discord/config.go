@@ -20,6 +20,7 @@ const (
 )
 
 type Config struct {
+	TicketIntake       *TicketIntake       `json:"ticket_intake,omitempty"`
 	ProjectAccess      string              `json:"project_access,omitempty"`
 	PreviousSupervisor *PreviousSupervisor `json:"previous_supervisor,omitempty"`
 	Supervisor         *SupervisorPaths    `json:"supervisor,omitempty"`
@@ -155,6 +156,12 @@ func (c Config) Validate() error {
 	}
 	if c.ProjectAccess != "" && (!c.TeammateMode() || (c.ProjectAccess != ProjectAccessVM && c.ProjectAccess != ProjectAccessEnrolled)) {
 		return errors.New("discord: project access must be enrolled or vm for a teammate or personal manager")
+	}
+	if t := c.TicketIntake; t != nil && (c.Mode != "teammate" || c.EffectiveProjectAccess() != ProjectAccessEnrolled ||
+		!containsID(c.GuildIDs, t.GuildID) || !containsID(c.ChannelIDs, t.ChannelID) || !snowflake(t.WebhookID) ||
+		!validText(t.Repo, 256) || strings.Count(t.Repo, "/") != 1 || c.Projects[t.Project] == "" ||
+		!validStatePath(t.TokenFile) || t.TokenFile == c.TokenFile) {
+		return errors.New("discord: ticket intake requires enrolled project access, an explicit guild/channel/project and a distinct private credential")
 	}
 	if c.Mode != "personal" && c.DMChannelID != "" {
 		return errors.New("discord: DM channel requires personal mode")

@@ -142,6 +142,12 @@ func (t *teammateConnector) historyPage(ctx context.Context, d TeammateDiscussio
 		out.ConfirmedMessageIDs, err = t.service.Store.confirmedPublication(d, *q.Publication)
 		return out, err
 	}
+	if d.TicketEventID != "" && q.Source == "parent" {
+		return out, ErrNotAuthorized
+	}
+	if (q.Source == "admission" || q.Source == "grant" || q.Source == "expected_reply") && q.AuthorID == ticketMachineActor {
+		return out, t.verifyTicketAdmission(ctx, d, q)
+	}
 	if q.Source == "admission" || q.Source == "grant" || q.Source == "expected_reply" {
 		err = t.verifyAdmissionMessage(ctx, d, q, &out.ExpectsReply, nil)
 		return out, err
