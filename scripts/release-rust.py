@@ -71,7 +71,9 @@ def file_hash(path):
 
 
 def host_platform():
-    return f"{os.uname().sysname.lower()}-{os.uname().machine}"
+    host = os.uname()
+    arch = "aarch64" if host.machine == "arm64" else host.machine
+    return f"{host.sysname.lower()}-{arch}"
 
 
 def node_components(node_archives, platform, includes_npm=False):
