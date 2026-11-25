@@ -215,7 +215,7 @@ impl Client {
     pub(crate) fn request_body(&mut self, message: Value, expected: &str) -> io::Result<Value> {
         self.exchange(message, expected, REQUEST_TIMEOUT)
     }
-    fn exchange(
+    pub(crate) fn exchange(
         &mut self,
         mut message: Value,
         expected: &str,
