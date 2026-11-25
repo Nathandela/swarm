@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,6 +14,9 @@ import (
 const discussionFirstReplyWait = 30 * time.Second
 const discussionReplyWait = 2 * time.Minute
 const discussionReplyStall = 10 * time.Minute
+const discussionWorkerWaitNotice = "I’m waiting for the worker’s result."
+
+var ErrReplyWaitObsolete = errors.New("voice: routine wait notice superseded")
 
 func hasReplyObligation(st State) bool {
 	for _, a := range st.Admissions {
@@ -337,13 +341,14 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		case evidence.progress > input.ReplyProgress:
 			input.ReplyProgress = evidence.progress
 		case evidence.workerRunning:
-			if err := recordReplyNotice(current, input, "The worker hasn’t reported a result yet. Your request is saved.", false); err != nil {
-				return err
+			if !current.replyWaitConsumed && !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyWait)) &&
+				replyWaitOpen(input) && len(replyWaitWorkers(*current, input)) > 0 {
+				if err := recordReplyNotice(current, input, discussionWorkerWaitNotice, false); err != nil {
+					return err
+				}
+				current.replyWaitConsumed = true
 			}
 		case evidence.unlinkedWorker:
-			if err := recordReplyNotice(current, input, "A worker is still open in this thread. I can’t verify whether it owns your request. Please check the worker in Swarm.", false); err != nil {
-				return err
-			}
 			if !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) {
 				next = 0
 				input.ReplyDeliveryUnknown = true
@@ -355,11 +360,6 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		case input.Phase == "superseded" || input.Phase == "rejected" && !input.SourceCutover:
 			next = 0
 		case input.SettledAt.IsZero():
-			if input.Phase == "running" || input.Phase == "submitted" || input.Phase == "admitted" {
-				if err := recordReplyNotice(current, input, "I’m still waiting for the answer. Your message is saved.", false); err != nil {
-					return err
-				}
-			}
 		case input.Phase != "completed":
 			if err := recordReplyNotice(current, input, "I couldn’t confirm what happened. Please check the result with the person running Swarm before trying again.", true); err != nil {
 				return err
@@ -404,6 +404,62 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		putRecord(current, "admissions", &current.Admissions, k, input)
 		return nil
 	})
+}
+
+func replyWaitOpen(a Admission) bool {
+	return a.Origin != nil && a.ReplyTracked && a.ReplyCheckAfter != 0 && !a.ReplyWaitingForHuman &&
+		a.Phase != "superseded" && a.Phase != "rejected"
+}
+
+// The recovery monitor also counts pending wakes as work. Public wait copy
+// needs a linked live attempt with no result or input request already in hand.
+func replyWaitWorkers(st State, a Admission) map[string]WorkerAssociation {
+	var workers map[string]WorkerAssociation
+	for _, w := range st.Workers {
+		if w.ConversationID != a.ConversationID || w.Admission != a.Sequence || w.Reserved || w.Ended ||
+			w.RecoveryRequired || w.EvidenceLimited || w.Session == "" || w.SessionInstance == "" ||
+			w.Session == w.SessionInstance || w.JobID == "" || w.AttemptID == "" {
+			continue
+		}
+		if workers == nil {
+			workers = make(map[string]WorkerAssociation)
+		}
+		workers[w.AttemptID] = w
+	}
+	if len(workers) == 0 {
+		return nil
+	}
+	for _, event := range st.Events {
+		worker, ok := workers[event.AttemptID]
+		if !ok || event.ConversationID != a.ConversationID || event.JobID != worker.JobID {
+			continue
+		}
+		if event.WorkerProof && event.NativeTurnID != "" {
+			delete(workers, event.AttemptID)
+			continue
+		}
+		if !event.WorkerMessage {
+			continue
+		}
+		var note workerNoteMetadata
+		if json.Unmarshal(event.Metadata, &note) != nil || note.Session != worker.Session || note.Instance != worker.SessionInstance {
+			continue
+		}
+		switch note.Kind {
+		case "complete":
+			delete(workers, event.AttemptID)
+		case "needs-input":
+			if st.Wakes[key(a.ConversationID, event.WakeID)].WorkerReply == "" {
+				return nil
+			}
+		}
+	}
+	for _, p := range st.Publications {
+		if p.ConversationID == a.ConversationID && p.Final && p.DiscussionSource.SystemCause == "" {
+			delete(workers, p.DiscussionSource.AttemptID)
+		}
+	}
+	return workers
 }
 
 func replyNoticeID(a Admission, final bool) string {

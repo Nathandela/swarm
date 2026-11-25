@@ -118,7 +118,7 @@ func TestMissingDiscordReplySurvivesRestartAndConfirmsFinal(t *testing.T) {
 	}
 }
 
-func TestDiscordOverdueTurnPostsOneNoticeWithoutNewInput(t *testing.T) {
+func TestDiscordOverdueTurnWithoutLinkedWorkerStaysQuietUntilStall(t *testing.T) {
 	c, s, r, b := newControllerFixture(t)
 	c.discussion = &DiscussionScope{InstallationID: "install", GuildID: "guild", ThreadID: "thread"}
 	a, err := c.admitDiscussionInput(DiscussionInput{Origin: discussionFixtureOrigin("slow"), Text: "Inspect", ExpectReply: true}, "", false)
@@ -138,7 +138,7 @@ func TestDiscordOverdueTurnPostsOneNoticeWithoutNewInput(t *testing.T) {
 		now = now.Add(discussionReplyWait)
 	}
 	st, _ := s.Snapshot()
-	if len(st.Publications) != 1 || len(r.sent) != 1 || len(st.Admissions) != 1 {
+	if len(st.Publications) != 0 || len(r.sent) != 1 || len(st.Admissions) != 1 {
 		t.Fatalf("pubs=%d sends=%d admissions=%d phase=%s", len(st.Publications), len(r.sent), len(st.Admissions), st.Admissions[admissionKey(b.ConversationID, a.Sequence)].Phase)
 	}
 	now = now.Add(discussionReplyStall)

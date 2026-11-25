@@ -19,6 +19,12 @@ import (
 )
 
 const teammateNonceWindow = time.Minute
+const teammateReplyWaitTimeout = 5 * time.Second
+const teammateReplyWaitPrefix = "reply-wait-"
+const teammateReplyWaitPassive = "Superseded wait notice awaiting Discord receipt"
+
+var ErrReplyWaitObsolete = errors.New("discord: routine wait notice superseded")
+
 const teammateInputNotice = "manager_input_held"
 const teammateInputNoticeInterval = 15 * time.Minute
 const genericStartupMessage = "The dispatcher is unavailable. Your message is saved."
@@ -648,6 +654,10 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 	if err != nil {
 		return err
 	}
+	sort.SliceStable(outputs, func(i, j int) bool {
+		return !strings.HasPrefix(outputs[i].Publication.ID, teammateReplyWaitPrefix) &&
+			strings.HasPrefix(outputs[j].Publication.ID, teammateReplyWaitPrefix)
+	})
 	var sendErr error
 	for _, out := range outputs {
 		if err := ctx.Err(); err != nil {
@@ -665,6 +675,14 @@ func (t *teammateConnector) sendPending(ctx context.Context, d TeammateDiscussio
 
 func (t *teammateConnector) sendOutput(ctx context.Context, install string, out teammateOutput) error {
 	store := t.service.Store
+	if !out.SettledAt.IsZero() {
+		return nil // a passive wait notice only awaits a late receipt
+	}
+	if strings.HasPrefix(out.Publication.ID, teammateReplyWaitPrefix) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, teammateReplyWaitTimeout)
+		defer cancel()
+	}
 	for n, chunk := range out.Chunks {
 		files := expectedChunkFiles(out, n)
 		authenticatedOnly := len(out.Publication.Files) > 0 || out.Publication.RecipientID != "" || out.Publication.JobID != "" || out.Internal && out.Publication.SystemCause == teammateStartupNotice
@@ -708,7 +726,11 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 				return nil
 			})
 		}
-		if err := t.checkPublication(ctx, install, out, len(files) > 0); err != nil {
+		replyTo, err := t.checkPublication(ctx, install, out, len(files) > 0)
+		if errors.Is(err, ErrReplyWaitObsolete) {
+			return store.teammateSettleReplyWait(install, out, t.service.Now())
+		}
+		if err != nil {
 			if e := store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error { p.Error = err.Error(); return nil }); e != nil {
 				return e
 			}
@@ -726,10 +748,10 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 		var alreadyUncertain bool
 		var deadline time.Time
 		var held bool
-		err := store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error {
+		err = store.teammateChangeOutput(install, out, func(_ *bolt.Tx, _ []byte, p *teammateOutput) error {
 			now := t.service.Now()
 			c := &p.Chunks[n]
-			if c.State == StateSent {
+			if c.State == StateSent || !p.SettledAt.IsZero() {
 				fileErr = nil
 				return nil
 			}
@@ -773,7 +795,10 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 		if n == 0 {
 			recipient = out.Publication.RecipientID
 		}
-		message, err := t.client.postMessageWithFiles(postCtx, Outbound{Route: out.Route, Text: attempt.Body, Nonce: attempt.ID, ReplyTo: out.Route.MessageID}, recipient, files, fileData)
+		if replyTo == "" {
+			replyTo = out.Route.MessageID
+		}
+		message, err := t.client.postMessageWithFiles(postCtx, Outbound{Route: out.Route, Text: attempt.Body, Nonce: attempt.ID, ReplyTo: replyTo}, recipient, files, fileData)
 		cancel()
 		if err == nil && (message.ChannelID != out.Route.ChannelID || message.GuildID != "" && message.GuildID != out.Route.GuildID ||
 			message.Author == nil || message.Author.ID != t.service.botUserID() || message.WebhookID != "" || message.Content != attempt.Body || !snowflake(message.ID)) {
@@ -790,6 +815,9 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 			}
 			if c.State == StateSent {
 				err = nil
+				return nil
+			}
+			if !p.SettledAt.IsZero() {
 				return nil
 			}
 			c.State = StateUncertain
@@ -809,33 +837,92 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 	return nil
 }
 
-func (t *teammateConnector) checkPublication(ctx context.Context, install string, out teammateOutput, attaching bool) error {
+// An obsolete wait notice never posts again. An unattempted row compacts to its
+// receipt; an attempted one stays passive with its nonces so a late Discord
+// receipt can still confirm it.
+func (s *Store) teammateSettleReplyWait(install string, out teammateOutput, now time.Time) error {
+	d := TeammateDiscussion{ID: out.DiscussionID, InstallationID: install, Route: out.Route}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		key := teammateOutputKey(install, out.DiscussionID, out.Publication.ID)
+		if err := teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), key, &out); errors.Is(err, ErrNotFound) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if !out.SettledAt.IsZero() || out.Internal || !strings.HasPrefix(out.Publication.ID, teammateReplyWaitPrefix) {
+			return nil
+		}
+		if err := teammateOutboxCount(tx, install, -1); err != nil {
+			return err
+		}
+		prepared := out.Attempted.IsZero()
+		for n := range out.Chunks {
+			prepared = prepared && out.Chunks[n].State == StatePrepared
+			if out.Chunks[n].State != StateSent {
+				out.Chunks[n].State = StateUncertain
+			}
+		}
+		if prepared {
+			return teammateCompactOutput(tx, key, d, out)
+		}
+		out.SettledAt, out.Error = now, teammateReplyWaitPassive
+		return putJSON(tx, teammateOutboxBucket, key, out)
+	})
+}
+
+func (t *teammateConnector) checkPublication(ctx context.Context, install string, out teammateOutput, attaching bool) (string, error) {
 	if err := t.checkAudience(ctx, out, attaching); err != nil {
-		return err
+		return "", err
 	}
 	if out.Internal {
-		return nil
+		return "", nil
 	}
 	validator, ok := t.manager.(interface {
 		ValidatePublication(context.Context, TeammateDiscussion, TeammatePublication) error
 	})
 	if !ok || out.Publication.JobID != "" && out.Publication.AttemptID == "" {
-		return ErrNotAuthorized
+		return "", ErrNotAuthorized
 	}
 	p := out.Publication
 	p.BodyHash = out.BodyHash
 	bound := TeammateDiscussion{ID: out.DiscussionID, InstallationID: install, Route: out.Route}
-	if t.service.Config.PreviousSupervisor != nil {
+	sender, routine := t.manager.(interface {
+		ValidatePublicationForSend(context.Context, TeammateDiscussion, TeammatePublication) (schema.MessageOrigin, error)
+	})
+	routine = routine && strings.HasPrefix(p.ID, teammateReplyWaitPrefix)
+	if t.service.Config.PreviousSupervisor != nil || routine {
 		binding, err := t.service.Store.teammateBindingByID(install, out.DiscussionID)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if binding.Route.ChannelID != out.Route.ChannelID || binding.Route.GuildID != out.Route.GuildID {
-			return ErrConflict
+		if binding.Route != out.Route {
+			return "", ErrConflict
 		}
 		bound = binding.TeammateDiscussion
 	}
-	return validator.ValidatePublication(ctx, bound, p)
+	if !routine {
+		return "", validator.ValidatePublication(ctx, bound, p)
+	}
+	origin, err := sender.ValidatePublicationForSend(ctx, bound, p)
+	if err != nil || origin.RequestID == "" {
+		return "", err
+	}
+	if origin.InstallationID != install || origin.DiscussionID != out.DiscussionID || origin.RequestID != p.AdmissionID {
+		return "", ErrConflict
+	}
+	q := TeammateHistoryQuery{Source: "grant", AdmissionID: origin.RequestID,
+		Revision: origin.Revision, MessageID: origin.MessageID, AuthorID: origin.ActorID}
+	var source Route
+	if err := t.verifyAdmissionMessage(ctx, bound, q, nil, &source); err != nil {
+		if errors.Is(err, ErrTeammateSourceChanged) {
+			return "", ErrReplyWaitObsolete
+		}
+		return "", err
+	}
+	if source.ChannelID == out.Route.ChannelID && out.Route.GuildID != "" {
+		return source.MessageID, nil
+	}
+	return "", nil
 }
 
 func (t *teammateConnector) checkAudience(ctx context.Context, out teammateOutput, attaching bool) error {

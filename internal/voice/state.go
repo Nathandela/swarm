@@ -258,6 +258,7 @@ func (w WorkerAssociation) supervisorMailbox() bool {
 }
 
 type State struct {
+	replyWaitConsumed   bool
 	changes             *stateChanges
 	Version             int                          `json:"version"`
 	Generation          uint64                       `json:"generation"`
