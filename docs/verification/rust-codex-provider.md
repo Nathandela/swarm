@@ -16,3 +16,13 @@ The synthetic macOS arm exercised real daemon, shim, app-server WebSocket, viewe
 The managed `message` route binds the submission to the proven shim incarnation and exact native thread. It persists uncertainty before writing `turn/start`, records native admission separately from completion, and refuses changed input under the same operation ID. The synthetic arm verifies an exact Unicode multiline payload, one native turn across replay and daemon restart, and a lost native reply that stays uncertain without retransmission. Structured `requests` reads require exact thread subscription and exclude wrong-thread requests. A confirmed request-stream join is required before any native send. A fresh thread without a rollout can accept ordinary terminal input while semantic input remains unavailable. An unresolved receipt fences later semantic operations even if the provider reports idle again. A supervisor-wide receipt binding prevents an operation ID from dispatching on a second session. Direct PTY input blocks semantic submission until a verified empty composer is available.
 
 Full native request details and decisions, provider-level turn cancellation, backend replacement, and exact historical resume still need qualification. The unverified native cell remains open.
+
+### Installed Linux process with an isolated model service
+
+On Linux x86_64, the installed Codex CLI 0.172.0 started its actual App Server and viewer, joined the exact native thread and rendered an answer supplied by a loopback Responses fixture. The answer string differed from the prompt. The HTTP fixture received one request. Replacing the Rust supervisor preserved the same worker and thread; the reaper found zero survivors. The clean-home arm without fixture authentication instead showed the native sign-in screen. Neither run used a provider account.
+
+Use the actual native executable, not a Node launcher copied without its package. The driver starts the complete scenario inside one PID and network namespace, with a private `/tmp` for the native program’s own sandbox. The release binary used on this host had SHA-256 `d1a2a2dcada0d35b3c2b34a8caa7598a8c60d72bd7adb274f93045bb5cb17748`.
+
+```sh
+python3 scripts/verification/parity_codex.py --candidate "$CANDIDATE" --provider "$NATIVE_CODEX" --native --loopback-model --scratch /dev/shm
+```

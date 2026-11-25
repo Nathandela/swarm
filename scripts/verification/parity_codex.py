@@ -2,6 +2,8 @@
 """Drive the Codex adapter with a disposable CLI, state root and PTY."""
 
 import argparse
+import http.server
+import threading
 import json
 from pathlib import Path
 import shutil
@@ -15,22 +17,73 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control
 
 
-def verify(candidate, provider, native):
-    root = Path(tempfile.mkdtemp(prefix="sc-", dir=Path("/tmp").resolve()))
+def model_fixture(root):
+    replies = []
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data":[]}')
+
+        def do_POST(self):
+            size = int(self.headers.get("Content-Length", "0"))
+            if size <= 0 or size > 2 << 20:
+                self.send_error(400)
+                return
+            body = json.loads(self.rfile.read(size))
+            if body.get("model") != "fixture":
+                self.send_error(400, "fixture model required")
+                return
+            index = len(replies) + 1
+            replies.append(index)
+            ident = f"fixture-response-{index}"
+            text = "Native loopback reply."
+            item = {"type":"message","id":f"fixture-item-{index}","role":"assistant","status":"completed",
+                    "content":[{"type":"output_text","text":text,"annotations":[]}]}
+            response = {"id":ident,"object":"response","created_at":int(time.time()),"model":"fixture","status":"in_progress","output":[]}
+            events = [
+                ("response.created", {"response":response.copy()}),
+                ("response.output_item.added", {"output_index":0,"item":item}),
+                ("response.output_text.delta", {"item_id":item["id"],"output_index":0,"content_index":0,"delta":text}),
+                ("response.output_item.done", {"output_index":0,"item":item}),
+                ("response.completed", {"response":dict(response,status="completed",output=[item],
+                    usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
+                           "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
+            ]
+            self.send_response(200)
+            self.send_header("Content-Type","text/event-stream")
+            self.end_headers()
+            try:
+                for name, fields in events:
+                    payload=json.dumps(dict(fields,type=name))
+                    self.wfile.write(f"event: {name}\ndata: {payload}\n\n".encode())
+                    self.wfile.flush()
+            except (BrokenPipeError,ConnectionResetError):
+                pass
+
+    server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler)
+    server.daemon_threads=True
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    home=root/"home/.codex"
+    (home/"config.toml").write_text(
+        'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+        'cli_auth_credentials_store="file"\n[model_providers.fixture]\nname="fixture"\nwire_api="responses"\n'
+        f'base_url="http://127.0.0.1:{server.server_port}/v1"\nrequires_openai_auth=false\nsupports_websockets=false\n'
+        f'[projects."{root}/work"]\ntrust_level="trusted"\n')
+    (home/"auth.json").write_text(json.dumps({"auth_mode":"apikey","OPENAI_API_KEY":"offline-fixture-only"}))
+    (home/"auth.json").chmod(0o600)
+    return server,replies
+
+
+def drive(root, native, guard, loopback):
+    model, replies = model_fixture(root) if loopback else (None, [])
     daemon = None
     previous = {}
     try:
-        for name in ("bin", "home", "runtime", "tmp", "work", "state", "effects"):
-            (root / name).mkdir(mode=0o700)
-        for source, name in ((candidate, "swarm"), (provider, "codex")):
-            dest = root / "bin" / name
-            shutil.copyfile(source, dest)
-            dest.chmod(0o700)
-        if native:
-            home = root / "home/.codex"
-            home.mkdir(mode=0o700)
-            (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
-        guard = fixtures.guard(root)
         env = fixtures.environment(root)
         if not native:
             env["OPENAI_API_KEY"] = "synthetic-provider-canary"
@@ -103,11 +156,22 @@ def verify(candidate, provider, native):
                     return json.loads(observation.read_text()).get("conversation_id")
                 return None
 
-            thread = fixtures.wait_for(observed, "exact app-server thread", timeout=10)
+            if loopback:
+                invoke("send",identity,"--text","Return the fixed local fixture response.")
+            try:
+                thread = fixtures.wait_for(observed, "exact app-server thread", timeout=10)
+            except RuntimeError:
+                if native:
+                    (root/"effects/native-screen.txt").write_bytes(invoke("peek",identity))
+                raise
             if not native:
                 assert thread == "01997f00-face-7000-8000-00000000cde0"
                 observed_row = json.loads(invoke("watch", identity, "--until", "ready_for_review", "--timeout", "4s"))
                 assert observed_row["status"]["Turn"] == "idle"
+            if loopback:
+                fixtures.wait_for(lambda: replies and b"Native loopback reply." in invoke("peek",identity),"native local provider response",timeout=20)
+                assert replies == [1], f"expected one model request, saw {len(replies)}"
+                print("installed native CLI rendered the unique loopback Responses answer in one request")
             print("managed Codex", session["provider"]["version"], "joined one exact app-server thread")
 
             def fake_http(method, path):
@@ -212,17 +276,69 @@ def verify(candidate, provider, native):
         if daemon and daemon.poll() is None:
             daemon.terminate()
             daemon.wait(timeout=4)
+        if model:
+            model.shutdown()
+            model.server_close()
         cleanup = fixtures.reap(root, None, previous)
         print("cleanup", cleanup)
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
-        shutil.rmtree(root)
+
+def verify(candidate, provider, native, scratch, loopback):
+    root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
+    success = False
+    try:
+        for name in ("bin", "home", "runtime", "tmp", "work", "state", "effects", "bin/parity"):
+            (root / name).mkdir(mode=0o700)
+        source = Path(__file__).resolve().parent
+        for original, target in ((candidate, "swarm"), (provider, "codex"),
+                                 (source / "parity_runtime.py", "parity_runtime.py"),
+                                 (source / "parity_ipc.py", "parity_ipc.py"),
+                                 (source / "parity/swarm-parity", "parity/swarm-parity"),
+                                 (source / "parity/claude", "parity/claude"),
+                                 (Path(__file__), "parity_codex.py")):
+            dest = root / "bin" / target
+            shutil.copyfile(original, dest)
+            dest.chmod(0o700)
+        if native:
+            home = root / "home/.codex"
+            home.mkdir(mode=0o700)
+            (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
+        guard = fixtures.guard(root)
+        if sys.platform == "darwin":
+            drive(root, native, guard, loopback)
+        else:
+            command = [*guard, sys.executable, root / "bin/parity_codex.py", "--isolated-root", root]
+            if native:
+                command.append("--native")
+            if loopback:
+                command.append("--loopback-model")
+            subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
+        success = True
+    finally:
+        cleanup = fixtures.reap(root, None, {})
+        if success and not cleanup["remaining"]:
+            shutil.rmtree(root)
+        else:
+            print(f"retained fixture root {root}; cleanup {cleanup}", file=sys.stderr)
+        if cleanup["remaining"]:
+            raise RuntimeError("fixture processes survived cleanup")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--candidate", required=True, type=fixtures.binary_path)
-    parser.add_argument("--provider", required=True, type=fixtures.binary_path)
+    parser.add_argument("--candidate", type=fixtures.binary_path)
+    parser.add_argument("--provider", type=fixtures.binary_path)
     parser.add_argument("--native", action="store_true")
+    parser.add_argument("--loopback-model",action="store_true",help="use the installed native CLI with a fixed local Responses fixture in a private Linux network namespace")
+    parser.add_argument("--scratch", type=Path, default=Path("/tmp").resolve())
+    parser.add_argument("--isolated-root", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    verify(args.candidate, args.provider, args.native)
+    if args.loopback_model and (not args.native or not sys.platform.startswith("linux")):
+        parser.error("--loopback-model requires Linux and --native")
+    if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
+        drive(args.isolated_root, args.native, [], args.loopback_model)
+    elif args.candidate and args.provider and not args.isolated_root:
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model)
+    else:
+        parser.error("--candidate and --provider are required")
