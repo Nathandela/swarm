@@ -111,7 +111,8 @@ def stage_media(scratch, node_archives):
             shutil.copyfile(ROOT / "services/discord-voice" / name, bundle / name)
         os_name, arch = suffix.split("-")
         run(node, npm, "ci", "--omit=dev", "--ignore-scripts", "--no-bin-links", "--no-audit",
-            "--no-fund", "--userconfig=/dev/null", "--globalconfig=/dev/null", f"--os={os_name}",
+            "--no-fund", f"--userconfig={scratch / 'npm-user-config'}",
+            f"--globalconfig={scratch / 'npm-global-config'}", f"--os={os_name}",
             f"--cpu={arch}", "--libc=glibc", "--registry=https://registry.npmjs.org",
             f"--cache={scratch / 'npm-cache'}", cwd=bundle, env={"PATH": "/usr/bin:/bin"})
         modules = bundle / "node_modules"
