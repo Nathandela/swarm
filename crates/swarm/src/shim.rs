@@ -358,16 +358,6 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }
-                if let Some(record) = codex_receipt::load(&state.dir, operation)? {
-                    if record["intent"] != codex_receipt::hash(text)
-                        || record["receipt"]["session"] != session
-                    {
-                        return Err(io::Error::other(
-                            "semantic operation is already bound to another request",
-                        ));
-                    }
-                    return Ok(record["receipt"].clone());
-                }
                 let _authority = state.control.lock().unwrap();
                 // shortcut: terminal edits make draft state uncertain until the native TUI exposes a verified empty composer.
                 if *_authority != 0 || state.terminal_input.load(Ordering::Acquire) {

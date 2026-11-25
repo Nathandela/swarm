@@ -378,14 +378,14 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "semantic_status" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
-                let receipt = session.semantic_status(operation)?.unwrap_or_else(|| json!({
+                let receipt = session.semantic_status(operation,field(&request,"session_id"),&state.root)?.unwrap_or_else(|| json!({
                     "state":"unknown_operation", "session":request["session_id"],"operation_id":operation,
                 }));
                 reply(&writer,state,json!({"op":"semantic_status","operation_id":operation,"semantic_receipt":receipt}))
             }),
             "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
-                let receipt = session.semantic_send(&request,field(&request,"session_id"))?;
+                let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
                     "native_accepted" => json!({"op":"ok","operation_id":operation}),
                     "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Codex app-server rejected semantic input"}),

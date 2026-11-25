@@ -35,6 +35,13 @@ pub(crate) fn refuse_unqualified_origin(environment: &Value) -> io::Result<()> {
         "CODEX_API_ENDPOINT",
         "CODEX_ACCESS_TOKEN",
         "CODEX_API_KEY",
+        "OPENAI_ORG_ID",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_PROJECT",
+        "CODEX_CLI_AUTH_CREDENTIALS_STORE",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
     ];
     let origin = if let Some(entries) = environment.as_array() {
         entries

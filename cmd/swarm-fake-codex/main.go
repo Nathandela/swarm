@@ -93,10 +93,18 @@ func runAppServer(args []string) int {
 		fmt.Fprintln(os.Stderr, "swarm-fake-codex app-server: listen:", err)
 		return 1
 	}
-	s := &fakeAppServer{conns: map[*websocket.Conn]*sync.Mutex{}}
+	_, seedErr := os.Stat(".fixture-seeded-rollout")
+	s := &fakeAppServer{conns: map[*websocket.Conn]*sync.Mutex{}, rollout: seedErr == nil}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rpc", s.serveRPC)
 	mux.HandleFunc("/probe", s.probe)
+	mux.HandleFunc("POST /fixture/idle", func(w http.ResponseWriter, _ *http.Request) {
+		s.broadcast(map[string]any{
+			"jsonrpc": "2.0", "method": "thread/status/changed",
+			"params": map[string]any{"threadId": fakeThreadID, "status": map[string]string{"type": "idle"}},
+		})
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("POST /fixture/request", func(w http.ResponseWriter, r *http.Request) {
 		thread := fakeThreadID
 		if r.URL.Query().Get("scope") == "other" {
@@ -169,7 +177,7 @@ func (s *fakeAppServer) serveRPC(w http.ResponseWriter, r *http.Request) {
 				s.mu.Unlock()
 			}
 			if _, err := os.Stat(".fixture-drop-turn-reply"); err == nil {
-				return
+				continue
 			}
 		}
 		if err != nil {
@@ -203,7 +211,7 @@ func (s *fakeAppServer) answer(id json.RawMessage, method string) map[string]any
 			}
 			return out
 		}
-		out["result"] = map[string]any{"thread": map[string]any{"id": fakeThreadID}}
+		out["result"] = map[string]any{"thread": map[string]any{"id": fakeThreadID, "status": map[string]string{"type": "idle"}}}
 	case "turn/start":
 		s.rollout = true
 		s.turnStarts++

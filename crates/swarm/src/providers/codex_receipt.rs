@@ -1,5 +1,7 @@
+use crate::supervisor::runtime;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,28 +67,173 @@ fn path(dir: &Path, operation: &str) -> io::Result<PathBuf> {
         .join(format!("{:x}.json", Sha256::digest(operation))))
 }
 
-pub(crate) fn save(dir: &Path, operation: &str, hash: &str, receipt: &Value) -> io::Result<()> {
-    let path = path(dir, operation)?;
-    crate::supervisor::runtime::private_dir(path.parent().expect("receipt directory"))?;
-    crate::supervisor::runtime::write_json(&path, &json!({"intent":hash,"receipt":receipt}))
+pub(crate) fn canonical_thread(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(index, ch)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                ch == b'-'
+            } else {
+                hex(ch)
+            }
+        })
 }
 
-pub(crate) fn load(dir: &Path, operation: &str) -> io::Result<Option<Value>> {
-    match crate::supervisor::runtime::read_json(&path(dir, operation)?) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Ok(record)
-            if record["receipt"]["operation_id"] == operation
-                && record["intent"]
-                    .as_str()
-                    .is_some_and(|hash| hash.len() == 64)
-                && matches!(
+fn hex(ch: u8) -> bool {
+    ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch)
+}
+
+fn durable_dir(dir: &Path) -> io::Result<()> {
+    runtime::private_dir(dir)?;
+    File::open(
+        dir.parent()
+            .ok_or_else(|| io::Error::other("missing semantic parent directory"))?,
+    )?
+    .sync_all()
+}
+
+pub(crate) fn bind(
+    root: &Path,
+    operation: &str,
+    target: &str,
+    incarnation: &str,
+    text: &str,
+) -> io::Result<()> {
+    if !timely(operation) {
+        return Err(io::Error::other("invalid semantic operation ID"));
+    }
+    let dir = root.join("operations");
+    durable_dir(root)?;
+    durable_dir(&dir)?;
+    let path = dir.join(format!("semantic-{:x}.json", Sha256::digest(operation)));
+    let binding =
+        json!({"operation":operation,"session":target,"instance":incarnation,"intent":hash(text)});
+    match runtime::read_json(&path) {
+        Ok(saved) if saved == binding => Ok(()),
+        Ok(_) => Err(io::Error::other(
+            "semantic operation is already bound to another request",
+        )),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => runtime::write_json(&path, &binding),
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) fn verify_binding(
+    root: &Path,
+    operation: &str,
+    target: &str,
+    incarnation: &str,
+    intent: &str,
+) -> io::Result<()> {
+    if issued(operation).is_none() {
+        return Err(io::Error::other("invalid semantic operation ID"));
+    }
+    let path = root
+        .join("operations")
+        .join(format!("semantic-{:x}.json", Sha256::digest(operation)));
+    let stored = runtime::read_json(&path)?;
+    let expected =
+        json!({"operation":operation,"session":target,"instance":incarnation,"intent":intent});
+    if stored != expected {
+        return Err(io::Error::other(
+            "semantic receipt has no exact operation binding",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn fence(
+    dir: &Path,
+    operation: &str,
+    session: &str,
+    token: &str,
+    thread: &str,
+) -> io::Result<()> {
+    let semantic = dir.join("semantic");
+    durable_dir(&semantic)?;
+    let pending = semantic.join("pending.json");
+    match runtime::read_json(&pending) {
+        Ok(value) => {
+            let prior = value
+                .as_str()
+                .ok_or_else(|| io::Error::other("damaged pending semantic record"))?;
+            let receipt = load(dir, prior, session, token, thread)?;
+            if !receipt.is_some_and(|record| {
+                matches!(
                     record["receipt"]["state"].as_str(),
-                    Some("native_accepted" | "outcome_unknown" | "rejected")
-                ) =>
-        {
-            Ok(Some(record))
+                    Some("native_accepted" | "rejected")
+                )
+            }) {
+                return Err(io::Error::other(
+                    "an earlier semantic operation remains unresolved",
+                ));
+            }
         }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    runtime::write_json(&pending, &json!(operation))
+}
+
+pub(crate) fn save(dir: &Path, operation: &str, hash: &str, receipt: &Value) -> io::Result<()> {
+    let path = path(dir, operation)?;
+    durable_dir(path.parent().expect("receipt directory"))?;
+    runtime::write_json(&path, &json!({"intent":hash,"receipt":receipt}))
+}
+
+fn valid(record: &Value, operation: &str, session: &str, token: &str, thread: &str) -> bool {
+    let receipt = &record["receipt"];
+    receipt["operation_id"] == operation
+        && receipt["session"] == session
+        && receipt["session_instance"] == instance(token)
+        && receipt["agent"] == "codex"
+        && canonical_thread(thread)
+        && receipt["native_session_id"] == thread
+        && record["intent"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(hex))
+        && match receipt["state"].as_str() {
+            Some("native_accepted") => receipt["native_turn_id"].as_str().is_some_and(|id| {
+                !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+            }),
+            Some("outcome_unknown" | "rejected") => receipt["native_turn_id"].is_null(),
+            _ => false,
+        }
+}
+
+pub(crate) fn load(
+    dir: &Path,
+    operation: &str,
+    session: &str,
+    token: &str,
+    thread: &str,
+) -> io::Result<Option<Value>> {
+    match runtime::read_json(&path(dir, operation)?) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Ok(record) if valid(&record, operation, session, token, thread) => Ok(Some(record)),
         Ok(_) => Err(io::Error::other("damaged semantic receipt")),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepted_receipt_requires_all_authority_fields_and_native_turn() {
+        let thread = "01997f00-face-7000-8000-00000000cde0";
+        let mut record = json!({"intent":hash("message"),"receipt":{
+            "operation_id":"fixture","session":"ep/s","session_instance":instance("token"),
+            "native_session_id":thread,"agent":"codex","state":"native_accepted","native_turn_id":"turn",
+        }});
+        assert!(valid(&record, "fixture", "ep/s", "token", thread));
+        assert!(!valid(&record, "fixture", "ep/other", "token", thread));
+        assert!(!valid(&record, "fixture", "ep/s", "other-token", thread));
+        record["receipt"]["native_turn_id"] = Value::Null;
+        assert!(!valid(&record, "fixture", "ep/s", "token", thread));
+        record["receipt"]["state"] = json!("outcome_unknown");
+        assert!(valid(&record, "fixture", "ep/s", "token", thread));
+        record["intent"] = json!("z".repeat(64));
+        assert!(!valid(&record, "fixture", "ep/s", "token", thread));
     }
 }

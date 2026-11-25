@@ -342,6 +342,7 @@ impl Session {
         }
         let observed = runtime::read_json(&self.dir.join("observation.json"))?;
         if observed["backend_available"] != true
+            || observed["requests_available"] != true
             || observed["token"] != self.token
             || field(&observed, "conversation_id").is_empty()
         {
@@ -373,11 +374,47 @@ impl Session {
         })
     }
 
-    pub(super) fn semantic_status(&self, operation: &str) -> io::Result<Option<Value>> {
-        Ok(codex_receipt::load(&self.dir, operation)?.map(|record| record["receipt"].clone()))
+    fn semantic_thread(&self) -> io::Result<String> {
+        match runtime::read_json(&self.dir.join("observation.json")) {
+            Ok(record)
+                if record["token"] == self.token
+                    && codex_receipt::canonical_thread(field(&record, "conversation_id")) =>
+            {
+                Ok(field(&record, "conversation_id").to_owned())
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+            Err(err) => Err(err),
+            Ok(_) => Err(io::Error::other("unverified Codex thread identity")),
+        }
     }
 
-    pub(super) fn semantic_send(&self, request: &Value, session: &str) -> io::Result<Value> {
+    pub(super) fn semantic_status(
+        &self,
+        operation: &str,
+        session: &str,
+        root: &Path,
+    ) -> io::Result<Option<Value>> {
+        let thread = self.semantic_thread()?;
+        let record = codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?;
+        if let Some(record) = record {
+            codex_receipt::verify_binding(
+                root,
+                operation,
+                session,
+                &codex_receipt::instance(&self.token),
+                field(&record, "intent"),
+            )?;
+            return Ok(Some(record["receipt"].clone()));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn semantic_send(
+        &self,
+        request: &Value,
+        session: &str,
+        state: &super::State,
+    ) -> io::Result<Value> {
         let body = &request["composer_send"];
         let operation = field(request, "operation_id");
         let text = field(body, "text");
@@ -401,7 +438,19 @@ impl Session {
         {
             return Err(io::Error::other("invalid or stale Codex semantic request"));
         }
-        if let Some(record) = codex_receipt::load(&self.dir, operation)? {
+        let thread = self.semantic_thread()?;
+        {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(operation);
+            let _operation = state.operation_locks
+                [usize::from(digest[0]) % state.operation_locks.len()]
+            .lock()
+            .unwrap();
+            codex_receipt::bind(&state.root, operation, session, instance, text)?;
+        }
+        if let Some(record) =
+            codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?
+        {
             if record["intent"] != codex_receipt::hash(text)
                 || record["receipt"]["session"] != session
             {
@@ -430,7 +479,8 @@ impl Session {
                 "uncorrelated Codex semantic receipt; outcome unknown",
             ));
         }
-        Ok(reply["receipt"].clone())
+        self.semantic_status(operation, session, &state.root)?
+            .ok_or_else(|| io::Error::other("semantic receipt is unavailable"))
     }
 
     pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {

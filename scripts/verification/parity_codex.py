@@ -68,14 +68,18 @@ def verify(candidate, provider, native):
                 assert launched["op"] == "launch", launched
                 return launched["session"]["id"]
 
+        if not native:
+            (root / "work/.fixture-seeded-rollout").touch()
         with (root / "daemon.log").open("wb") as log:
             daemon = start(log)
             if not native:
                 operation = invoke("spawn", "--new-operation-id").decode().strip()
-                wrong_origin = {"OPENAI_BASE_URL": "https://discarded-origin.invalid/"}
                 base = ("spawn", "--cli", "codex", "--dir", str(root / "work"), "--prompt", "none")
-                invoke(*base, expected=1, overrides=wrong_origin)
-                invoke(*base, "--operation-id", operation, expected=1, overrides=wrong_origin)
+                for selector in ("OPENAI_BASE_URL", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID",
+                                 "CODEX_CLI_AUTH_CREDENTIALS_STORE", "CODEX_REFRESH_TOKEN_URL_OVERRIDE"):
+                    wrong_origin = {selector: "unqualified-test-origin"}
+                    invoke(*base, expected=1, overrides=wrong_origin)
+                    invoke(*base, "--operation-id", operation, expected=1, overrides=wrong_origin)
                 assert json.loads(invoke("ls", "--json")) == []
             identity = launch()
             row, = json.loads(invoke("ls", "--json"))
@@ -121,6 +125,8 @@ def verify(candidate, provider, native):
 
             if not native:
                 assert turns()["openai"] and not turns()["anthropic"]
+                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
+                                  "joined native request stream before dispatch")
                 message = "isolated fixture message\n東京"
                 accepted = json.loads(invoke("message", identity, "--text", message))
                 operation = accepted["operation_id"]
@@ -152,7 +158,19 @@ def verify(candidate, provider, native):
                 assert json.loads(invoke("message", identity, "--text", message,
                                          "--operation-id", operation)) == accepted
                 assert turns()["turnStarts"] == 1 and turns()["lastText"] == message
-                print("one native turn accepted across exact retries and supervisor replacement")
+                conflict = launch()
+                conflict_state = root / "state/rust-v1" / conflict.split("/")[1]
+                conflict_observation = conflict_state / "observation.json"
+                fixtures.wait_for(lambda: conflict_observation.exists() and json.loads(conflict_observation.read_text()).get("requests_available"),
+                                  "second joined thread for operation collision")
+                invoke("message", conflict, "--text", message, "--operation-id", operation, expected=1)
+                original = state
+                state = conflict_state
+                assert turns()["turnStarts"] == 0
+                state = original
+                invoke("kill", conflict)
+                invoke("watch", conflict, "--until", "completed", "--timeout", "4s")
+                print("one native turn accepted across exact retries and supervisor replacement; cross-session reuse refused")
             invoke("kill", identity)
             assert json.loads(invoke("watch", identity, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
             print("managed Codex worker and exact native thread survived owner restart")
@@ -161,16 +179,34 @@ def verify(candidate, provider, native):
                 identity = launch()
                 state = root / "state/rust-v1" / identity.split("/")[1]
                 observation = state / "observation.json"
-                fixtures.wait_for(observed, "independent thread before deliberately lost response")
+                fixtures.wait_for(lambda: observation.exists() and json.loads(observation.read_text()).get("requests_available"),
+                                  "joined thread before deliberately lost response")
                 lost = f"semantic:{int(time.time() * 1000)}:{'a' * 32}"
                 invoke("message", identity, "--text", "lost reply", "--operation-id", lost, expected=1)
                 unknown = json.loads(invoke("message", identity, "--status", "--operation-id", lost))
                 assert unknown["state"] == "outcome_unknown", unknown
+                fake_http("POST", "/fixture/idle")
+                daemon.kill()
+                daemon.wait(timeout=5)
+                daemon = start(log)
+                assert json.loads(invoke("message", identity, "--status", "--operation-id", lost)) == unknown
                 invoke("message", identity, "--text", "lost reply", "--operation-id", lost, expected=1)
+                invoke("message", identity, "--text", "new operation behind uncertainty", expected=1)
                 assert turns()["turnStarts"] == 1
                 invoke("kill", identity)
                 invoke("watch", identity, "--until", "completed", "--timeout", "4s")
                 print("lost native reply stays visibly uncertain and never reissues the turn")
+                (root / "work/.fixture-drop-turn-reply").unlink()
+                (root / "work/.fixture-seeded-rollout").unlink()
+                identity = launch()
+                state = root / "state/rust-v1" / identity.split("/")[1]
+                observation = state / "observation.json"
+                fixtures.wait_for(observed, "unjoined native thread")
+                invoke("message", identity, "--text", "unjoined", expected=1)
+                assert turns()["turnStarts"] == 0
+                invoke("kill", identity)
+                invoke("watch", identity, "--until", "completed", "--timeout", "4s")
+                print("native send refused without proven request-stream join")
 
     finally:
         if daemon and daemon.poll() is None:

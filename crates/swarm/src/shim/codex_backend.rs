@@ -142,6 +142,7 @@ struct Observation {
     turn: Option<String>,
     requests: std::collections::BTreeMap<String, &'static str>,
     joined: bool,
+    requests_unverified: bool,
     idle: bool,
     ambiguous: bool,
 }
@@ -153,14 +154,14 @@ impl Observation {
         if method == "thread/started" {
             let thread = &payload["thread"];
             let id = field(thread, "id");
-            if !self.thread.is_empty() && canonical_id(id) && self.thread != id {
+            if !self.thread.is_empty() && codex_receipt::canonical_thread(id) && self.thread != id {
                 self.ambiguous = true;
                 self.idle = false;
                 return true;
             }
             let root = field(thread, "cwd");
             if self.thread.is_empty()
-                && canonical_id(id)
+                && codex_receipt::canonical_thread(id)
                 && !root.is_empty()
                 && std::fs::canonicalize(root).ok().as_deref() == Some(cwd)
             {
@@ -189,11 +190,8 @@ impl Observation {
                 self.turn = None;
                 self.idle = true;
             }
-            "thread/status/changed" if field(&payload["status"], "type") == "idle" => {
-                if self.turn.is_some() {
-                    return false;
-                }
-                self.idle = true;
+            "thread/status/changed" => {
+                self.idle = self.turn.is_none() && field(&payload["status"], "type") == "idle";
             }
             "item/commandExecution/requestApproval"
             | "item/fileChange/requestApproval"
@@ -201,7 +199,8 @@ impl Observation {
                 if self.requests.len() >= 128
                     || !(message["id"].is_number() || message["id"].is_string())
                 {
-                    return false;
+                    self.requests_unverified = true;
+                    return true;
                 }
                 let kind = match method {
                     "item/commandExecution/requestApproval" => "command",
@@ -212,6 +211,9 @@ impl Observation {
             }
             "serverRequest/resolved" => {
                 self.requests.remove(&payload["requestId"].to_string());
+            }
+            _ if !method.is_empty() && !message["id"].is_null() => {
+                self.requests_unverified = true;
             }
             _ => return false,
         }
@@ -243,17 +245,6 @@ impl Observation {
     }
 }
 
-fn canonical_id(id: &str) -> bool {
-    id.len() == 36
-        && id.bytes().enumerate().all(|(i, b)| {
-            if matches!(i, 8 | 13 | 18 | 23) {
-                b == b'-'
-            } else {
-                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
-            }
-        })
-}
-
 pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
@@ -282,7 +273,7 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
         &target.dir.join("observation.json"),
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
-            "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous,
+            "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
             "requests":requests,
         }),
     );
@@ -302,7 +293,24 @@ fn submit(
     target: &SemanticTarget<'_>,
 ) -> io::Result<Value> {
     let hash = codex_receipt::hash(&action.text);
-    if let Some(record) = codex_receipt::load(target.dir, &action.operation)? {
+    let root = target
+        .dir
+        .parent()
+        .ok_or_else(|| io::Error::other("missing runtime root"))?;
+    codex_receipt::verify_binding(
+        root,
+        &action.operation,
+        &action.session,
+        &codex_receipt::instance(target.token),
+        &hash,
+    )?;
+    if let Some(record) = codex_receipt::load(
+        target.dir,
+        &action.operation,
+        &action.session,
+        target.token,
+        &observation.thread,
+    )? {
         if record["intent"] != hash {
             return Err(io::Error::other(
                 "semantic operation is already bound to different text",
@@ -312,6 +320,8 @@ fn submit(
     }
     if observation.thread.is_empty()
         || observation.ambiguous
+        || !observation.joined
+        || observation.requests_unverified
         || !observation.idle
         || observation.turn.is_some()
         || !observation.requests.is_empty()
@@ -330,6 +340,13 @@ fn submit(
         "operation_id":action.operation,"native_session_id":observation.thread,
         "agent":"codex","state":"outcome_unknown",
     });
+    codex_receipt::fence(
+        target.dir,
+        &action.operation,
+        &action.session,
+        target.token,
+        &observation.thread,
+    )?;
     codex_receipt::save(target.dir, &action.operation, &hash, &receipt)?;
     if Instant::now() >= action.not_after {
         return Ok(receipt);
@@ -356,12 +373,12 @@ fn submit(
             observe_frame(observation, &message, target);
             continue;
         }
-        if !message["error"].is_null() {
+        if message["result"].is_null() && message["error"]["code"].is_i64() {
             receipt["state"] = json!("rejected");
             observation.idle = false;
-        } else {
+        } else if message["error"].is_null() {
             let turn = field(&message["result"]["turn"], "id");
-            if !turn.is_empty() && turn.len() <= 128 {
+            if !turn.is_empty() && turn.len() <= 128 && !turn.chars().any(char::is_control) {
                 receipt["state"] = json!("native_accepted");
                 receipt["native_turn_id"] = json!(turn);
                 observation.turn = Some(turn.into());
@@ -389,6 +406,7 @@ pub(super) fn observe(
     let mut serial = 10;
     let mut join = None;
     let mut next_join = Some(Instant::now());
+    let mut quiet = false;
     loop {
         if !observation.thread.is_empty()
             && !observation.ambiguous
@@ -406,10 +424,7 @@ pub(super) fn observe(
             join = None;
             next_join = None;
         }
-        if let Ok(action) = actions.try_recv() {
-            if join.take().is_some() {
-                next_join = Some(Instant::now() + Duration::from_secs(1));
-            }
+        if quiet && let Ok(action) = actions.try_recv() {
             serial += 1;
             let result = submit(
                 &mut channel.connection,
@@ -420,12 +435,16 @@ pub(super) fn observe(
             );
             let _ = action.answer.send(result);
         }
+        let reading = Instant::now();
         match read(&mut channel.connection) {
             Ok(Some(message)) => {
+                quiet = false;
                 if join.is_some_and(|(id, _)| message["id"] == id) && message["method"].is_null() {
                     join = None;
                     if field(&message["result"]["thread"], "id") == observation.thread {
                         observation.joined = true;
+                        observation.idle = observation.turn.is_none()
+                            && field(&message["result"]["thread"]["status"], "type") == "idle";
                         persist_observation(&observation, &target);
                     } else if field(&message["error"], "message")
                         .contains("no rollout found for thread id")
@@ -438,7 +457,9 @@ pub(super) fn observe(
                     observe_frame(&mut observation, &message, &target);
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                quiet = reading.elapsed() >= Duration::from_millis(350);
+            }
             Err(_) => break,
         }
     }
@@ -490,5 +511,7 @@ mod tests {
             &cwd
         ));
         assert_eq!(native.status()["Turn"], "idle");
+        assert!(native.apply(&json!({"method":"thread/status/changed","params":{"threadId":id,"status":{"type":"active"}}}), &cwd));
+        assert!(!native.idle);
     }
 }
