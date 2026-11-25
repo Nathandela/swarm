@@ -22,3 +22,37 @@ python3 scripts/verification/parity_agy.py /path/to/pinned-go-swarm target/debug
 ```
 
 A repeated run against the independent arm64 Go rebuild exposed callback reordering in the Rust arm. The shim accepted two status-line connections concurrently and processed a later conflicting UUID before the initial UUID. Rust now processes callbacks in accept order on a private agy status socket. The wrapper waits for a validated acknowledgment with bounded I/O. A fixture opens overlapping connections, holds the first frame for 150 ms, and requires acknowledgment of that frame and refusal of the conflicting second frame. Ten consecutive Go/Rust runs of the advertised-settings scenario passed.
+
+## Native agentapi registration and delivery
+
+The Rust shim opens a registration route for agy 1.4.0, 1.4.5, and 1.4.7 when an enabled local connector was selected at launch. The registration must carry the worker's own tool metadata, exact bootstrap command, workspace, executable identity and loopback agentapi endpoint. Native conversation metadata must confirm the conversation and project. The shim holds the credentials in memory. Registration does not change the agent's tool permission mode.
+
+The pinned Go path requires a message origin for this broker. The Rust daemon likewise requires negotiation and validates the origin against the installed connector and the installation bound to the worker. `swarm message` without an origin continues to refuse. A submitted receipt confirms the provider echoed the exact recipient and text. The operation records the exact origin, session and provider conversation. A wrong native echo leaves an unresolved operation and fences any later sends. The terminal receives no fallback input.
+
+The local fixture exercised the shipped Rust `spawn` launch, native registration role, owner-daemon semantic request, and `swarm message --status`. It refused forged project, tool metadata, endpoint, workspace, origin, installation switch and replay with altered intent. It confirmed exact Unicode and newline delivery once, retained the receipt and live source over a daemon restart, and preserved ambiguity without replay. The fixture implements the measured agentapi shape. Positive delivery with installed agy and the public Discord publication path remain separate from this fixture.
+
+```sh
+python3 scripts/verification/rust_agy_native_input.py target/debug/swarm
+```
+
+The separate retained Go `TestNativeAgyModalAdmission` passed with the installed 1.4.7 binary and the pinned arm64 helper under the no-egress scratch guard. The installed provider registered via its real tool context, acknowledged the native message, and supplied its marker to the synthetic model. The pending permission-probe command did not execute. This confirms the retained native interface independently of the Rust fixture.
+
+## Scheduled ACP
+
+For agy 1.5.12 and newer, an agent-default scheduled job opens one native ACP v1 conversation through the shim's private PTY relay. The opening prompt is durably claimed for its exact attempt and native conversation before the relay submits it. The provider inherits its ordinary environment and authority. The only Swarm receipt credential forwarded to ACP is the scoped MCP bridge configuration. The relay cancels permission requests during startup and from unrelated conversations. A request for the active conversation waits for the operator's numbered choice.
+
+The paired fixture ran against both Rust and the pinned arm64 Go binary. It verified that the prompt entered the exact native conversation once, an explicit terminal denial cancelled the matching permission request, and the real MCP bridge recorded the scoped receipt. A valid bounded final assistant response completed the occurrence. The same receipt with only earlier or wrong-conversation assistant text left it incomplete. Both binaries refused the 1.5.11 fixture and unsupported observe authority without launching a worker.
+
+The installed 1.4.7 binary was also refused before any worker existed by both Go and Rust. The standalone probe used disposable directories and the scratch-only, no-egress OS guard. The supported ACP path was measured with the paired fixture because the installed binary is below its floor.
+
+```sh
+python3 scripts/verification/parity_agy_acp.py target/debug/swarm /path/to/pinned-go-swarm
+```
+
+The Rust ACP relay flushes pending terminal input before it renders an active permission request and requires that request's fresh code with an approving option. A bare number or an earlier request's code cannot approve. A real attached-client fixture queued a bare approval before rendering, approved the first request with its newly displayed code, and showed that the same code cancelled a second request. The Go comparison continues to exercise explicit cancellation.
+
+Native delivery requires a durable worker cutover in the active, owned personal connector's private `rust-text-v1.json`. The connector stores the exact normalized composer under `worker_inputs[operation]`, with the provider, source message, and session incarnation. The source must match the selected installation, owner and DM channel, remain at the original content revision above the consent floor, and remain marked sending for that operation. An excluded session cannot receive a new effect. Manager cutovers cannot authorize an ordinary worker. The shim rereads the ledger under the same lock the connector uses to commit edits, then holds that lock across the provider call.
+
+The private connector fixture refused missing cutover, manager cutover, forged audience, mismatched text and incarnation, out-of-bound source, exclusion, expiry and changed installation. It withdrew one message during the provider metadata probe and verified the shim recorded a rejection with zero provider message effects. The exact worker cutover delivered once and the receipt survived daemon restart. The fixture writes the private ledger directly. The separate ordinary-worker connector producer owns live ingress.
+
+The worker effect takes the same supervisor and connector directory locks as configuration changes, followed by the ledger lock. The guard spans the provider call and its receipt. In the fixture, a real `discord disconnect` returned busy during a held native write and succeeded after release. A previously negotiated client then tried a late cutover and the daemon refused it after that acknowledgment. The first effect in an empty DM enrollment succeeded with its empty consent baseline. Worker delivery negotiates `worker-discord-origin-v1` independently from manager origin support.

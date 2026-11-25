@@ -93,13 +93,14 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> Result<Va
         "schedule_route_check" if caps.contains(&"schedule-route-check") => {
             let agent = field(request, "schedule_agent");
             let unavailable = match agent {
-                "codex" => Session::scheduled_codex_available(
+                "codex" | "agy" => Session::scheduled_provider_available(
+                    agent,
                     state.root.parent().ok_or("missing scheduler state path")?,
                 )
                 .err()
                 .map(|e| e.to_string())
                 .unwrap_or_default(),
-                "claude" | "agy" => {
+                "claude" => {
                     format!("{agent} has no qualified native scheduling route in this build")
                 }
                 _ => return Err("unknown scheduled agent".into()),
@@ -158,7 +159,7 @@ impl Backend for Scheduled<'_> {
         let Some(socket) = self.state.schedule_socket.as_ref() else {
             return LaunchOutcome::Refused("scheduled worker receipt socket is unavailable".into());
         };
-        if launch.agent != "codex" {
+        if !matches!(launch.agent, "codex" | "agy") {
             return LaunchOutcome::Refused(format!(
                 "{} has no qualified native scheduling route in this build",
                 launch.agent
