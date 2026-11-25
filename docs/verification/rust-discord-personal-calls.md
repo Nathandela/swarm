@@ -8,7 +8,7 @@ The media package is byte-identical to `services/discord-voice/` at Go call orac
 
 | Input | Observation |
 |---|---|
-| Pinned Node 24.17.0 on macOS arm64 | Helper `--check` and 14 tests pass. Cases include authenticated native MLS membership, rekey, downgrade, both RTP AEAD modes, both Gateway halves, 20 ms Opus/PCM, RTP loss, replay, overflow and long contiguous silence. |
+| Pinned Node 24.17.0 on macOS arm64 and Ubuntu x86_64 | Helper `--check` and 14 tests pass. Cases include authenticated native MLS membership, rekey, downgrade, both RTP AEAD modes, both Gateway halves, 20 ms Opus/PCM, RTP loss, replay, overflow and long contiguous silence. |
 | Local WebSocket and real child process | Opt-in personal Identify adds guild and voice-state intents while keeping personal DM intent. The helper gets a scoped join and only the selected session material. An unexpected participant causes the Gateway owner to kill the child and leave while the native consumer is stalled. A separate text event remains queued. |
 | Wrong speaker, oversized child output or child death | The Rust pipe runner rejects the output and reaps the helper. |
 | Fresh roster, mute, role change, missing bot leave or expired generation | The room refuses authority or clears the current epoch. A prior epoch cannot forward. A new epoch requires the observed bot leave and new owner entry. |
@@ -23,10 +23,12 @@ The media package is byte-identical to `services/discord-voice/` at Go call orac
 - A normal disconnect ends media through the independent call-control socket before waiting for the text bridge. The loopback fixture holds the text shutdown open until it observes the outgoing Gateway leave.
 - Native live authorization sends only the call ID, generation, turn ID and body digest to the call-control socket. The durable native verifier still checks the complete scoped origin before requesting that live decision.
 
+On both hosts, the Rust suite passed 52 tests with two ignored by default. The ignored pinned-helper process test passed when run explicitly with Node 24.17. Linux used isolated RAM-backed scratch for all call fixtures and large files. The existing workspace trust fixture used a small disk-backed temporary directory for creation timestamps.
+
 ## Open gates
 
 - Real call and hosted requests have not run from Rust. Validate with a designated private guild, isolated application, throwaway marker, personal room and authorized test window.
 - Tested speech traffic uses bounded isolated finalized transcriptions and isolated verified readouts. The Go oracle's parallel GPT-Live delegation conversation has not been ported.
 - Team consent controls require the admitted team discussion implementation. Reverse worker result playback, real device timings, historical supervisor migration and rollback across Rust-only effects remain open.
 - An ambiguous native send is held by its original nonce. A definitive pre-effect live-authority refusal withdraws that cutover. Recovery from a crash after durable cutover and before any native acknowledgement still needs a proven negative native receipt before returning to input.
-- Linux and macOS Intel helper/installer qualification remain open. The package has platform-specific native bindings.
+- Linux and macOS installed-release qualification remain open. The macOS Intel helper has not run, and the package has platform-specific native bindings.
