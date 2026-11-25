@@ -78,7 +78,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             self.wfile.write(f"event: {event}\ndata: {json.dumps(dict(type=event, **fields))}\n\n".encode())
 
 
-def verify(swarm, installed, root, model):
+def verify(swarm, installed, root, model, producer_test):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     place = state / "discord"
     for path in (home, work, state, tools, place, home / ".claude"):
@@ -173,15 +173,32 @@ def verify(swarm, installed, root, model):
             send = dict(op="semantic_send", session_id=sid, operation_id=operation,
                         body_version=1, composer_send=composer)
             assert wire(send)["op"] == "error"  # Caller-provided origin alone has no authority.
-            ledger["messages"][message_id] = dict(operation_id=request_id, revision=revision, text=source_text,
-                 route=dict(guild_id="", channel_id="456", message_id=message_id), author=dict(id="123"),
-                 authority="owner_direct", supervisor_socket=daemon_socket, state="sending",
-                 worker_operation=operation)
-            ledger["worker_inputs"][operation] = dict(source_id=message_id, provider="claude", composer=composer)
-            save(ledger_path, ledger)
-            assert wire(send | {"composer_send": composer | {"text": "fabricated"}})["op"] == "error"
-            assert wire(send)["op"] == "ok"
-            assert wire(send)["op"] == "ok"
+            if producer_test is None:
+                ledger["messages"][message_id] = dict(operation_id=request_id, revision=revision, text=source_text,
+                     route=dict(guild_id="", channel_id="456", message_id=message_id), author=dict(id="123"),
+                     authority="owner_direct", supervisor_socket=daemon_socket, state="sending",
+                     worker_operation=operation)
+                ledger["worker_inputs"][operation] = dict(source_id=message_id, provider="claude", composer=composer)
+                save(ledger_path, ledger)
+                assert wire(send | {"composer_send": composer | {"text": "fabricated"}})["op"] == "error"
+                assert wire(send)["op"] == "ok"
+                assert wire(send)["op"] == "ok"
+            else:
+                witness = subprocess.run(
+                    guarded([producer_test, "--ignored", "--exact",
+                             "discord::worker::tests::installed_claude_producer", "--nocapture"],
+                            root, [model.server_port]),
+                    env=env | dict(SWARM_CLAUDE_WORKER_STATE=str(state), SWARM_CLAUDE_WORKER_TARGET=sid,
+                                   SWARM_CLAUDE_WORKER_MESSAGE=MESSAGE),
+                    text=True, capture_output=True, timeout=15)
+                assert witness.returncode == 0, (witness.stdout, witness.stderr)
+                operation = next(row.split()[1] for row in witness.stdout.splitlines()
+                                 if row.startswith("CLAUDE_WORKER_OPERATION "))
+                persisted = json.loads(ledger_path.read_text())
+                cutover = persisted["worker_inputs"][operation]
+                assert cutover["provider"] == "claude"
+                origin = cutover["composer"]["origin"]
+                assert origin["actor_id"] == "123" and origin["requester_id"] == "123"
             time.sleep(0.4)
             assert "Do you want to proceed?" in run("peek", sid)
             assert not model.sentinel.exists()
@@ -196,10 +213,11 @@ def verify(swarm, installed, root, model):
             run("send", sid, "--text", "/clear")
             until(lambda: not target(), "native readiness revoked on /clear")
             assert json.loads(run("message", sid, "--status", "--operation-id", operation)) == receipt
+            assert sum(MESSAGE in request for request in model.observed) == 1
             print(json.dumps(dict(version=version, isolated_synthetic_inference=True,
                                   permission_dialog_preserved=True, native_delivery=True,
                                   exact_replay=True, missing_cutover_refused=True,
-                                  revoked_on_clear=True)))
+                                  revoked_on_clear=True, production_worker_producer=producer_test is not None)))
         except Exception:
             output.flush()
             output.seek(0)
@@ -208,15 +226,22 @@ def verify(swarm, installed, root, model):
                 print(run("peek", sid, ok=False), file=sys.stderr)
             raise
         finally:
-            if sid:
-                run("kill", sid, ok=False)
-            daemon.terminate()
-            daemon.wait(timeout=5)
+            try:
+                if sid and daemon.poll() is None:
+                    run("kill", sid, ok=False)
+                    until(lambda: any(row["id"] == sid and row["status"]["Process"] == "exited"
+                                      for row in json.loads(run("ls", "--json").strip())),
+                          "owned shim exit", seconds=8)
+            finally:
+                if daemon.poll() is None:
+                    daemon.terminate()
+                    daemon.wait(timeout=5)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit("usage: rust_claude_worker_input.py /path/to/rust/swarm /path/to/installed/claude")
+    if len(sys.argv) not in (3, 4):
+        sys.exit("usage: rust_claude_worker_input.py /path/to/rust/swarm /path/to/installed/claude [rust-test-executable]")
+    producer_test = str(Path(sys.argv[3]).resolve()) if len(sys.argv) == 4 else None
     with tempfile.TemporaryDirectory(prefix="clwi-", dir="/tmp") as tmp, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider) as server:
         root = Path(tmp).resolve()
@@ -226,6 +251,6 @@ if __name__ == "__main__":
         thread.start()
         try:
             check_guards(root, [server.server_port])
-            verify(str(Path(sys.argv[1]).resolve()), Path(sys.argv[2]).resolve(), root, server)
+            verify(str(Path(sys.argv[1]).resolve()), Path(sys.argv[2]).resolve(), root, server, producer_test)
         finally:
             server.shutdown()

@@ -77,7 +77,7 @@ impl Transport for Client {
             .find(|row| row["id"] == id && row["endpoint_id"] == self.endpoint())
             .ok_or_else(|| invalid("worker session is unavailable"))?;
         let provider = field(&row, "agent");
-        if !matches!(provider, "agy" | "hermes")
+        if !matches!(provider, "agy" | "claude" | "hermes")
             || !matches!(row["role"].as_str(), None | Some("" | "worker"))
             || row["status"]["Process"] != "running"
         {
@@ -158,9 +158,16 @@ fn matching_provider_receipt(
     };
     let admission = &receipt["native_admission"];
     match provider {
-        "agy" => {
+        "agy" | "claude" => {
             crate::providers::codex_receipt::canonical_thread(native)
-                && crate::supervisor::runtime::valid_id(generation)
+                && if provider == "agy" {
+                    crate::supervisor::runtime::valid_id(generation)
+                } else {
+                    generation.len() == 32
+                        && generation
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                }
                 && matches!(state, "submitted" | "rejected")
                 && admission.is_null()
                 && receipt["native_turn_id"].is_null()
@@ -429,6 +436,66 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the guarded installed-Claude worker fixture"]
+    fn installed_claude_producer() {
+        let root = PathBuf::from(std::env::var_os("SWARM_CLAUDE_WORKER_STATE").unwrap());
+        let target = std::env::var("SWARM_CLAUDE_WORKER_TARGET").unwrap();
+        let text = std::env::var("SWARM_CLAUDE_WORKER_MESSAGE").unwrap();
+        let place = super::super::config::Place::for_supervisor(&root).unwrap();
+        let cfg = place.load().unwrap();
+        let mut inbox = Inbox::open(&place.dir, &cfg).unwrap();
+        let now = spawn::now_ms();
+        let source_id = format!("{}", ((now - DISCORD_EPOCH_MS) << 22) + 1);
+        let source = json!({
+            "id":source_id, "channel_id": cfg.text("dm_channel_id"),
+            "author":{"id":cfg.text("owner_id")}, "content":format!("{target} {text}"),
+            "type":0,"attachments":[],
+        });
+        inbox.admit(&source).unwrap();
+        assert!(
+            inbox.next_prepared().is_none(),
+            "explicit worker input crossed into the manager"
+        );
+        let mut client = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS).unwrap();
+        let mut read_after = None;
+        dispatch(
+            &cfg,
+            &mut inbox,
+            &mut client,
+            now,
+            &mut read_after,
+            |_, id| {
+                assert_eq!(id, source_id);
+                Ok(Some(source))
+            },
+        )
+        .unwrap();
+        for _ in 0..20 {
+            dispatch(
+                &cfg,
+                &mut inbox,
+                &mut client,
+                now,
+                &mut read_after,
+                |_, _| panic!("a durable worker cutover was redriven"),
+            )
+            .unwrap();
+            if inbox.worker_status()[0]["state"] == "submitted" {
+                let status = inbox.worker_status();
+                assert_eq!(status.as_array().unwrap().len(), 1);
+                println!(
+                    "CLAUDE_WORKER_OPERATION {}",
+                    field(&status[0], "operation_id")
+                );
+                return;
+            }
+            read_after = None;
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("the native Claude receipt was not settled to an exact worker operation");
+    }
+
+    #[test]
     fn provider_receipt_requires_the_native_identity_and_kind_of_evidence() {
         let composer =
             json!({"session":TARGET,"session_instance":"act","origin":{"request_id":"source"}});
@@ -440,6 +507,20 @@ mod tests {
         agy["native_generation"] = json!("a".repeat(24));
         assert!(matching_provider_receipt("agy", "op", &composer, &agy));
         assert!(!matching_provider_receipt("hermes", "op", &composer, &agy));
+        let mut claude = agy.clone();
+        claude["agent"] = json!("claude");
+        assert!(!matching_provider_receipt(
+            "claude", "op", &composer, &claude
+        ));
+        claude["native_generation"] = json!("b".repeat(32));
+        assert!(matching_provider_receipt(
+            "claude", "op", &composer, &claude
+        ));
+        assert!(!matching_provider_receipt("agy", "op", &composer, &claude));
+        claude["native_turn_id"] = json!("foreign-proof");
+        assert!(!matching_provider_receipt(
+            "claude", "op", &composer, &claude
+        ));
         agy["native_turn_id"] = json!("foreign-proof");
         assert!(!matching_provider_receipt("agy", "op", &composer, &agy));
         let mut hermes: Value = serde_json::from_str(include_str!(
