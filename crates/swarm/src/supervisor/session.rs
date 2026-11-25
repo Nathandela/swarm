@@ -1,3 +1,5 @@
+mod manager_runtime;
+
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
 use crate::providers::{self, LaunchPlan, codex_receipt};
@@ -36,6 +38,40 @@ pub(super) struct Prepared {
     provider: LaunchPlan,
     agy_launch: Value,
     scheduled: Option<(worker::Binding, Value)>,
+    manager: Value,
+}
+
+impl Prepared {
+    pub(super) fn bind_manager(&mut self, mut scope: Value) -> io::Result<()> {
+        let version: Vec<_> = self
+            .provider
+            .version
+            .split('.')
+            .map(str::parse::<u32>)
+            .collect::<Result<_, _>>()
+            .map_err(|_| io::Error::other("unqualified manager provider version"))?;
+        let release = (
+            version[0],
+            version.get(1).copied().unwrap_or(0),
+            version.get(2).copied().unwrap_or(0),
+        );
+        if self.provider.agent != "codex" || release < (0, 167, 0) {
+            return Err(io::Error::other(
+                "manager requires a qualified Codex native-turn runtime",
+            ));
+        }
+        let home = self
+            .provider
+            .env
+            .iter()
+            .find(|(name, _)| name == "HOME")
+            .map(|(_, home)| PathBuf::from(home))
+            .ok_or_else(|| io::Error::other("manager requires native account HOME"))?;
+        scope["account"] = json!(super::manager::account(&home)?);
+        scope["account_home"] = json!(home);
+        self.manager = scope;
+        Ok(())
+    }
 }
 
 struct Labels {
@@ -55,6 +91,7 @@ pub(super) struct Session {
     pub(super) notification_gate: Mutex<()>,
     pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
+    manager: Value,
     agent: String,
     resumed_from: Option<String>,
     cwd: String,
@@ -97,6 +134,7 @@ impl Session {
             supervision_pending: std::sync::atomic::AtomicBool::new(false),
             id: id.into(),
             token: token.into(),
+            manager: data["manager"].clone(),
             agent: match field(&data["provider"], "name") {
                 "codex" => "codex",
                 "agy" => "agy",
@@ -231,6 +269,7 @@ impl Session {
             },
             provider,
             scheduled: None,
+            manager: Value::Null,
         })
     }
 
@@ -281,6 +320,7 @@ impl Session {
             provider,
             agy_launch,
             scheduled,
+            manager,
         } = prepared;
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
@@ -304,7 +344,7 @@ impl Session {
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"lineage":lineage,
+                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
@@ -585,7 +625,12 @@ impl Session {
                 fields.iter().any(|(key, value)| {
                     !matches!(
                         key.as_str(),
-                        "session" | "session_instance" | "text" | "expected_turn"
+                        "session"
+                            | "session_instance"
+                            | "text"
+                            | "expected_turn"
+                            | "manager_admission"
+                            | "origin"
                     ) && !value.is_null()
                 })
             })
@@ -595,6 +640,7 @@ impl Session {
         {
             return Err(io::Error::other("invalid or stale Codex semantic request"));
         }
+        self.check_manager_input(session, operation, body)?;
         let thread = self.semantic_thread()?;
         {
             use sha2::{Digest, Sha256};
@@ -617,7 +663,7 @@ impl Session {
             }
             return Ok(record["receipt"].clone());
         }
-        if scheduled.is_none() {
+        if scheduled.is_none() && self.manager.is_null() {
             self.semantic_target()?;
         }
         let mut shim = self.dial()?;
@@ -627,6 +673,7 @@ impl Session {
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
                 "session_instance":instance,"text":text,"schedule_attempt":scheduled,
+                    "manager_admission":body["manager_admission"],"composer_send":body
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -1044,6 +1091,36 @@ impl Session {
         Ok(true)
     }
 
+    pub(super) fn resume_manager_reservation(&self, prepared: Prepared) -> io::Result<()> {
+        match fs::symlink_metadata(self.dir.join("claimed")) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "manager launch might already have started",
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+        let saved = runtime::read_json(&self.dir.join("session.json"))?;
+        if self.manager != prepared.manager
+            || saved["provider"]["identity"] != prepared.provider.identity
+            || saved["provider"]["executable"] != json!(prepared.provider.executable)
+            || saved["provider"]["version"] != prepared.provider.version
+            || saved["cwd"] != json!(prepared.cwd)
+        {
+            return Err(io::Error::other(
+                "manager reservation no longer matches its original provider and scope",
+            ));
+        }
+        *self.launch_plan.lock().unwrap() = Some((prepared.provider, Value::Null));
+        self.transition(Phase::Starting);
+        Ok(())
+    }
+
+    pub(super) fn owns_manager(&self, conversation: &str) -> bool {
+        self.manager["launch"]["manager"]["conversation_id"] == conversation
+    }
+
     pub(super) fn view(&self, endpoint: &str) -> Value {
         let state = self.state.lock().unwrap();
         let process = match state.0 {
@@ -1097,6 +1174,12 @@ impl Session {
         }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
+        }
+        if !self.manager.is_null() {
+            view["role"] = json!("manager");
+            view["manager_conversation_id"] =
+                self.manager["launch"]["manager"]["conversation_id"].clone();
+            view["capabilities"] = json!({"session_instance":codex_receipt::instance(&self.token)});
         }
         view
     }

@@ -1,0 +1,87 @@
+//! Owner-only admission of the active private personal dispatcher binding.
+use super::{State, runtime};
+use crate::ipc::field;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::io;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::path::Path;
+
+pub(super) fn launch_scope(state: &State, launch: &Value) -> io::Result<Value> {
+    let mut scope = crate::discord::native_manager_enrollment()?;
+    if scope["launch"] != *launch
+        || scope["supervisor_socket"] != state.socket.to_string_lossy().as_ref()
+    {
+        return Err(refusal(
+            "manager launch differs from active personal enrollment",
+        ));
+    }
+    let manager = &launch["manager"];
+    let socket = Path::new(field(manager, "bridge_socket"));
+    let auth = Path::new(field(manager, "auth_file"));
+    let bridge = socket
+        .parent()
+        .ok_or_else(|| refusal("missing manager bridge directory"))?;
+    let meta = fs::symlink_metadata(bridge)?;
+    // SAFETY: geteuid takes no arguments.
+    let uid = unsafe { libc::geteuid() };
+    if !meta.is_dir()
+        || meta.uid() != uid
+        || meta.mode() & 0o777 != 0o700
+        || fs::canonicalize(bridge)? != bridge
+        || auth.parent() != Some(bridge)
+    {
+        return Err(refusal(
+            "manager bridge directory lacks exact private ownership",
+        ));
+    }
+    let endpoint = fs::symlink_metadata(socket)?;
+    if !endpoint.file_type().is_socket()
+        || endpoint.uid() != uid
+        || endpoint.nlink() != 1
+        || endpoint.mode() & 0o777 != 0o600
+    {
+        return Err(refusal(
+            "manager bridge endpoint lacks exact private ownership",
+        ));
+    }
+    let credential = crate::manager_mcp::read_credential(auth)?;
+    scope["credential_hash"] = json!(format!("{:x}", Sha256::digest(credential.as_bytes())));
+    scope["endpoint_id"] = json!(state.endpoint);
+    Ok(scope)
+}
+
+pub(crate) fn account(home: &Path) -> io::Result<String> {
+    let credentials = home.join(".codex").join("auth.json");
+    let auth = runtime::read_json(&credentials)?;
+    let identity = auth["tokens"]["account_id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+        .ok_or_else(|| refusal("manager requires a qualified native Codex account"))?;
+    if auth["auth_mode"] != "chatgpt" {
+        return Err(refusal("manager requires native Codex account custody"));
+    }
+    Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
+}
+
+pub(crate) fn mcp_args(scope: &Value, session: &str) -> io::Result<Vec<String>> {
+    let manager = &scope["launch"]["manager"];
+    let args = json!([
+        "manager-mcp",
+        manager["bridge_socket"],
+        manager["auth_file"],
+        manager["conversation_id"],
+        session
+    ]);
+    let binary = std::env::current_exe()?;
+    let command = serde_json::to_string(&binary)?;
+    Ok(vec![
+        "-c".into(),
+        format!("mcp_servers.swarm_voice={{command={command},args={args},required=true}}"),
+    ])
+}
+
+fn refusal(reason: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, reason)
+}

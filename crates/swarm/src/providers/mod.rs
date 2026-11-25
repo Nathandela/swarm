@@ -1,6 +1,7 @@
 pub(crate) mod agy;
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;
 
 use serde_json::{Value, json};

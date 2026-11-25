@@ -180,7 +180,7 @@ impl Place {
         Ok((supervisor, connector))
     }
 
-    fn ensure_owned(&self, cfg: &Config) -> io::Result<()> {
+    pub(super) fn ensure_owned(&self, cfg: &Config) -> io::Result<()> {
         if existing(&self.dir.join("discord.db"))?
             || runtime::read_json(&self.dir.join(OWNER)).ok().as_ref()
                 != Some(&json!(cfg.text("installation_id")))

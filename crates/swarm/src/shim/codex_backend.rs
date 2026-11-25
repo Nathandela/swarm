@@ -1,6 +1,6 @@
 use super::pty;
 use crate::ipc::field;
-use crate::providers::codex_receipt;
+use crate::providers::{codex_proof, codex_receipt};
 use crate::schedule::worker;
 use crate::supervisor::runtime;
 use serde_json::{Value, json};
@@ -54,6 +54,8 @@ impl Drop for Backend {
 pub(super) struct Channel {
     pub endpoint: String,
     connection: WebSocket<UnixStream>,
+    pid: u32,
+    birth: u64,
 }
 
 pub(super) fn start(
@@ -140,9 +142,13 @@ fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel
         }
     }
     send(&mut connection, json!({"method":"initialized","params":{}}))?;
+    let pid = child.id();
+    let birth = runtime::birth(pid)?;
     Ok(Channel {
         endpoint,
         connection,
+        pid,
+        birth,
     })
 }
 
@@ -170,12 +176,14 @@ fn read(ws: &mut WebSocket<UnixStream>) -> io::Result<Option<Value>> {
 
 #[derive(Default)]
 struct Observation {
+    proof: Option<codex_proof::Ledger>,
     thread: String,
     turn: Option<String>,
     requests: std::collections::BTreeMap<String, &'static str>,
     joined: bool,
     missing_rollout: bool,
     scheduled_turn: Option<ScheduledTurn>,
+    fresh_no_rollout: bool,
     requests_unverified: bool,
     idle: bool,
     ambiguous: bool,
@@ -190,6 +198,16 @@ impl Observation {
             && self.turn.is_none()
             && self.requests.is_empty()
             && self.scheduled_turn.is_none()
+    }
+
+    fn can_enter_joined_thread(&self, managed: bool) -> bool {
+        self.joined
+            || managed
+                && self.fresh_no_rollout
+                && self
+                    .proof
+                    .as_ref()
+                    .is_some_and(codex_proof::Ledger::is_virgin)
     }
 
     fn apply(&mut self, message: &Value, cwd: &Path) -> bool {
@@ -218,6 +236,12 @@ impl Observation {
         if self.thread.is_empty() || field(payload, "threadId") != self.thread {
             return false;
         }
+        let turn = field(&payload["turn"], "id");
+        let parent = field(&payload["turn"], "rootTurnId");
+        let revoked = matches!(method, "turn/started" | "turn/completed")
+            && !turn.is_empty()
+            && (parent.is_empty() || parent == turn)
+            && std::mem::take(&mut self.fresh_no_rollout);
         match method {
             "turn/started" => {
                 let id = field(&payload["turn"], "id");
@@ -228,8 +252,8 @@ impl Observation {
                 self.idle = false;
             }
             "turn/completed" => {
-                if self.turn.as_deref() != Some(field(&payload["turn"], "id")) {
-                    return false;
+                if self.turn.as_deref() != Some(turn) {
+                    return revoked;
                 }
                 self.turn = None;
                 self.idle = true;
@@ -294,6 +318,7 @@ pub(super) struct SemanticAction {
     pub session: String,
     pub text: String,
     pub schedule_attempt: Option<String>,
+    pub composer: Value,
     pub not_after: Instant,
     pub answer: SyncSender<io::Result<Value>>,
 }
@@ -302,6 +327,7 @@ struct SemanticTarget<'a> {
     dir: &'a Path,
     schedule: Option<&'a worker::Binding>,
     token: &'a str,
+    manager: &'a Value,
     cwd: &'a Path,
 }
 
@@ -321,6 +347,8 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
             "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
             "requests":requests,"schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
+            "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
+                && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
         }),
     );
 }
@@ -350,6 +378,8 @@ fn submit(
         &codex_receipt::instance(target.token),
         &hash,
     )?;
+    let admission = &action.composer["manager_admission"];
+    let manager_nonce = (!admission.is_null()).then(|| field(admission, "nonce"));
     if let Some(record) = codex_receipt::load(
         target.dir,
         &action.operation,
@@ -374,7 +404,8 @@ fn submit(
     }
     if observation.thread.is_empty()
         || observation.ambiguous
-        || !(observation.joined || launch.is_some() && observation.missing_rollout)
+        || !(observation.can_enter_joined_thread(manager_nonce.is_some())
+            || launch.is_some() && observation.missing_rollout && manager_nonce.is_none())
         || observation.requests_unverified
         || !observation.idle
         || observation.turn.is_some()
@@ -388,6 +419,26 @@ fn submit(
         return Err(io::Error::other(
             "semantic authority expired before dispatch",
         ));
+    }
+    if let Some(nonce) = manager_nonce {
+        let proof = observation
+            .proof
+            .as_mut()
+            .ok_or_else(|| io::Error::other("manager observer custody is unavailable"))?;
+        if admission["binding"] != *proof.binding() {
+            return Err(io::Error::other(
+                "manager admission has the wrong observation generation",
+            ));
+        }
+        let external = admission["expected_external_input"]
+            .as_u64()
+            .ok_or_else(|| io::Error::other("manager admission lacks external input evidence"))?;
+        crate::discord::verify_connector_input(
+            target.manager,
+            &action.operation,
+            &action.composer,
+        )?;
+        proof.prepare(&action.operation, nonce, &action.text, external)?;
     }
     let mut receipt = json!({
         "session":action.session,"session_instance":codex_receipt::instance(target.token),
@@ -405,11 +456,27 @@ fn submit(
     if Instant::now() >= action.not_after {
         return Ok(receipt);
     }
+    if manager_nonce.is_some() {
+        crate::discord::verify_connector_input(
+            target.manager,
+            &action.operation,
+            &action.composer,
+        )?;
+        if action.composer["text"] != action.text || action.composer["session"] != action.session {
+            return Err(io::Error::other(
+                "manager shim input differs from the authorized composer",
+            ));
+        }
+    }
+    observation.fresh_no_rollout = false;
     observation.idle = false;
     let mut params = json!({"threadId":observation.thread,
         "input":[{"type":"text","text":action.text,"text_elements":[]}]});
     if let Some(binding) = launch {
         worker::codex_turn(&binding.authority, target.cwd, &mut params);
+    }
+    if let Some(nonce) = manager_nonce {
+        params["clientUserMessageId"] = json!(nonce);
     }
     if send(ws, json!({"id":rpc,"method":"turn/start","params":params})).is_err() {
         // Prevent a prepared frame from flushing on a later read after the caller's authority ends.
@@ -421,6 +488,9 @@ fn submit(
         let Ok(message) = read(ws) else { break };
         let Some(message) = message else { continue };
         if message["id"] != rpc || !message["method"].is_null() {
+            if let Some(proof) = observation.proof.as_mut() {
+                proof.observe(&message)?;
+            }
             observe_frame(observation, &message, target);
             continue;
         }
@@ -509,6 +579,7 @@ pub(super) fn observe(
     token: String,
     schedule: Option<worker::Binding>,
     actions: Receiver<SemanticAction>,
+    manager: Value,
 ) {
     let mut observation = Observation::default();
     let target = SemanticTarget {
@@ -516,6 +587,7 @@ pub(super) fn observe(
         dir: &dir,
         token: &token,
         schedule: schedule.as_ref(),
+        manager: &manager,
     };
     let mut serial = 10;
     let mut join = None;
@@ -527,6 +599,7 @@ pub(super) fn observe(
         if !observation.thread.is_empty()
             && !observation.ambiguous
             && !observation.joined
+            && !observation.fresh_no_rollout
             && join.is_none()
             && next_join.is_some_and(|at| Instant::now() >= at)
         {
@@ -534,6 +607,7 @@ pub(super) fn observe(
             if send(&mut channel.connection,json!({
                 "id":serial,"method":"thread/resume","params":{"threadId":observation.thread,"excludeTurns":true}
             })).is_err() { break; }
+            observation.fresh_no_rollout = false;
             join = Some((serial, Instant::now() + Duration::from_secs(3)));
         }
         if join.is_some_and(|(_, deadline)| Instant::now() >= deadline) {
@@ -590,16 +664,25 @@ pub(super) fn observe(
                     && message["method"].is_null()
                 {
                     join = None;
-                    if field(&message["result"]["thread"], "id") == observation.thread {
+                    if message["error"].is_null()
+                        && field(&message["result"]["thread"], "id") == observation.thread
+                    {
                         observation.joined = true;
                         observation.missing_rollout = false;
                         observation.idle = observation.turn.is_none()
                             && field(&message["result"]["thread"]["status"], "type") == "idle";
                         persist_observation(&observation, &target);
-                    } else if field(&message["error"], "message")
-                        .contains("no rollout found for thread id")
+                    } else if message["result"].is_null()
+                        && message["error"]["code"] == -32600
+                        && field(&message["error"], "message")
+                            == format!("no rollout found for thread id {}", observation.thread)
                     {
                         observation.missing_rollout = true;
+                        observation.fresh_no_rollout = observation
+                            .proof
+                            .as_ref()
+                            .is_some_and(|proof| proof.is_virgin());
+                        persist_observation(&observation, &target);
                         next_join = Some(Instant::now() + Duration::from_secs(1));
                         persist_observation(&observation, &target);
                     } else {
@@ -607,6 +690,31 @@ pub(super) fn observe(
                     }
                 } else {
                     observe_frame(&mut observation, &message, &target);
+                    if !manager.is_null() && !observation.thread.is_empty() {
+                        if observation.proof.is_none() {
+                            let binding = json!({
+                                "session":format!("{}/{}", field(&manager,"endpoint_id"),field(&manager,"session_id")),
+                                "session_instance":codex_receipt::instance(&token),
+                                "conversation_id":manager["launch"]["manager"]["conversation_id"],
+                                "provider":"codex","native_session_id":observation.thread,
+                                "native_generation":format!("{}:{}",channel.pid,channel.birth),
+                                "observation_generation":codex_receipt::hash(&format!("{}:{}:{}",token,channel.pid,channel.birth)),
+                                "login_epoch":manager["account"]
+                            });
+                            let Ok(proof) = codex_proof::Ledger::open(&dir, &binding) else {
+                                break;
+                            };
+                            if runtime::write_json(&dir.join("manager-binding.json"),&json!({
+                                "binding":binding,"pid":channel.pid,"birth":channel.birth,"token":token
+                            })).is_err() { break; }
+                            observation.proof = Some(proof);
+                        }
+                        if let Some(proof) = observation.proof.as_mut()
+                            && proof.observe(&message).is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
             }
             Ok(None) => {
@@ -639,6 +747,7 @@ mod tests {
             dir: &cwd,
             token: "fixture",
             schedule: None,
+            manager: &Value::Null,
         };
         let turn = ScheduledTurn {
             attempt: "attempt".into(),
@@ -676,6 +785,69 @@ mod tests {
         );
         thread["id"] = json!("019dc0a0-6bd5-71e1-9bd7-629de956bfe5");
         assert!(turn.proof(&thread, id, &target).is_none());
+    }
+
+    #[test]
+    fn manager_nonce_does_not_bypass_failed_or_unknown_join() {
+        let mut observation = Observation::default();
+        assert!(!observation.can_enter_joined_thread(true));
+        observation.fresh_no_rollout = true;
+        assert!(
+            !observation.can_enter_joined_thread(true),
+            "volatile exception requires authoritative proof"
+        );
+    }
+
+    #[test]
+    fn observed_turn_permanently_revokes_unjoined_manager_exception() {
+        let root = Path::new("/tmp").join(format!("virgin-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let binding = json!({"native_session_id":"native-thread"});
+        let frame = |method, thread| {
+            json!({"method":method,"params":{"threadId":thread,
+            "turn":{"id":"exact-turn","rootTurnId":"exact-turn","status":"completed"}}})
+        };
+        for methods in [
+            &["turn/started", "turn/completed"][..],
+            &["turn/completed"][..],
+        ] {
+            let mut observation = Observation {
+                thread: "native-thread".into(),
+                idle: true,
+                fresh_no_rollout: true,
+                proof: Some(codex_proof::Ledger::open(&root, &binding).unwrap()),
+                ..Observation::default()
+            };
+            assert!(observation.can_enter_joined_thread(true));
+            let foreign = frame("turn/completed", "other-thread");
+            assert!(!observation.apply(&foreign, &root));
+            observation
+                .proof
+                .as_mut()
+                .unwrap()
+                .observe(&foreign)
+                .unwrap();
+            assert!(observation.can_enter_joined_thread(true));
+
+            for method in methods {
+                let event = frame(*method, "native-thread");
+                assert!(observation.apply(&event, &root));
+                observation.proof.as_mut().unwrap().observe(&event).unwrap();
+                assert!(!observation.fresh_no_rollout);
+                assert!(!observation.can_enter_joined_thread(true));
+            }
+            assert!(observation.idle);
+            observation.proof = Some(codex_proof::Ledger::open(&root, &binding).unwrap());
+            observation.fresh_no_rollout = true;
+            assert!(
+                !observation.can_enter_joined_thread(true),
+                "reopened ledger must veto a stale exception"
+            );
+            observation.joined = true;
+            assert!(observation.can_enter_joined_thread(true));
+            std::fs::remove_file(root.join("manager-proof.json")).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

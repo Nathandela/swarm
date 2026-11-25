@@ -177,7 +177,7 @@ impl Backend for Scheduled<'_> {
             Ok(plan) => plan,
             Err(e) => return LaunchOutcome::Refused(e.to_string()),
         };
-        let session = match self.state.reserve_prepared(prepared, true, None) {
+        let session = match self.state.reserve_prepared(prepared, true, None, None) {
             Ok(session) => session,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 return LaunchOutcome::Busy(e.to_string());
