@@ -23,6 +23,58 @@ pub(super) struct Store {
     rows: Mutex<BTreeMap<String, Entry>>,
 }
 
+const ROLE_TEXT_FIELDS: &[&str] = &[
+    "role",
+    "manager_conversation_id",
+    "manager_replay_id",
+    "manager_resume_request_hash",
+    "manager_resume_operation_id",
+    "manager_auth_file",
+    "manager_bridge_socket",
+    "manager_claude_config_dir",
+    "scheduled_codex_sandbox",
+    "schedule_attempt",
+    "worker_discussion",
+    "worker_attempt",
+    "worker_instance",
+    "worker_prompt_hash",
+    "worker_parent_input_hash",
+    "spawned_from",
+    "spawn_intent",
+    "supervision",
+    "required_runtime",
+    "input_embargo",
+    "resumed_from",
+];
+const ROLE_OBJECT_FIELDS: &[&str] = &["manager_retirement", "login_runtime", "opencode_binding"];
+const ROLE_BOOL_FIELDS: &[&str] = &[
+    "hermes_native",
+    "manager_native_cli",
+    "scheduled_completed",
+    "schedule_projected",
+    "schedule_exhausted",
+    "roster_hidden",
+];
+const ROSTER_CUSTODY_FIELDS: &[&str] = &[
+    "schema_version",
+    "id",
+    "agent_type",
+    "name",
+    "tag",
+    "cwd",
+    "agent_cwd",
+    "created_at",
+    "last_activity",
+    "group_entered_at",
+    "status",
+    "exit_code",
+    "shim_pid",
+    "shim_start_time",
+    "launch_options",
+    "backend_plan_error",
+    "resume_error",
+];
+
 #[derive(Clone, Serialize)]
 #[serde(transparent)]
 struct RawFields(BTreeMap<String, Box<RawValue>>);
@@ -52,18 +104,36 @@ impl<'de> Deserialize<'de> for RawFields {
 }
 
 impl RawFields {
-    fn parsed(&self) -> Value {
-        Value::Object(
-            self.0
-                .iter()
-                .map(|(key, value)| {
-                    // Untouched values are written from the raw map, even if they are
-                    // unknown to this release or exceed the ordinary Value numeric range.
-                    let parsed = serde_json::from_str(value.get()).unwrap_or(Value::Bool(true));
-                    (key.clone(), parsed)
-                })
-                .collect(),
-        )
+    fn parsed(&self) -> io::Result<Value> {
+        let mut fields = serde_json::Map::new();
+        for key in ROSTER_CUSTODY_FIELDS
+            .iter()
+            .chain(ROLE_TEXT_FIELDS)
+            .chain(ROLE_OBJECT_FIELDS)
+            .chain(ROLE_BOOL_FIELDS)
+        {
+            // encoding/json accepts case-insensitive field names. Do not let
+            // an alternate spelling silently change Go's interpretation.
+            if self
+                .0
+                .keys()
+                .any(|raw| raw != *key && raw.eq_ignore_ascii_case(key))
+            {
+                return Err(io::Error::other(format!(
+                    "ambiguous Go metadata field {key}"
+                )));
+            }
+            if let Some(raw) = self.0.get(*key) {
+                if *key == "status" {
+                    serde_json::from_str::<RawFields>(raw.get())?;
+                }
+                let parsed = serde_json::from_str(raw.get()).map_err(|error| {
+                    io::Error::other(format!("invalid Go metadata field {key}: {error}"))
+                })?;
+                fields.insert((*key).to_owned(), parsed);
+            }
+        }
+        Ok(Value::Object(fields))
     }
 
     fn same_as(&self, other: &Self) -> bool {
@@ -104,7 +174,7 @@ impl Entry {
             replace_meta(&self.dir, &revised, || {})?;
             // renameat committed the new name. Keep the cache aligned even if
             // directory sync fails, and require a successful sync to acknowledge a retry.
-            self.meta = revised.parsed();
+            self.meta[key] = json!(value);
             self.raw = revised;
             self.needs_sync = true;
         }
@@ -185,44 +255,13 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
     }
     // Scope one fixture-backed role first. A schema-1 stamp alone does not prove ordinary custody.
     if meta["agent_type"] != "claude"
-        || [
-            "role",
-            "manager_conversation_id",
-            "manager_replay_id",
-            "manager_resume_request_hash",
-            "manager_resume_operation_id",
-            "manager_auth_file",
-            "manager_bridge_socket",
-            "manager_claude_config_dir",
-            "scheduled_codex_sandbox",
-            "schedule_attempt",
-            "worker_discussion",
-            "worker_attempt",
-            "worker_instance",
-            "worker_prompt_hash",
-            "worker_parent_input_hash",
-            "spawned_from",
-            "spawn_intent",
-            "supervision",
-            "required_runtime",
-            "input_embargo",
-            "resumed_from",
-        ]
-        .iter()
-        .any(|key| !meta[*key].is_null() && meta[*key] != "")
-        || ["manager_retirement", "login_runtime", "opencode_binding"]
+        || ROLE_TEXT_FIELDS
             .iter()
-            .any(|key| !meta[*key].is_null())
-        || [
-            "hermes_native",
-            "manager_native_cli",
-            "scheduled_completed",
-            "schedule_projected",
-            "schedule_exhausted",
-            "roster_hidden",
-        ]
-        .iter()
-        .any(|key| !meta[*key].is_null() && meta[*key] != false)
+            .any(|key| !meta[*key].is_null() && meta[*key] != "")
+        || ROLE_OBJECT_FIELDS.iter().any(|key| !meta[*key].is_null())
+        || ROLE_BOOL_FIELDS
+            .iter()
+            .any(|key| !meta[*key].is_null() && meta[*key] != false)
         || meta["agent_cwd"]
             .as_str()
             .is_some_and(|p| !p.is_empty() && meta["cwd"] != p)
@@ -343,10 +382,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
 }
 
 fn valid_meta(meta: &Value, id: &str) -> bool {
-    meta.as_object().is_some_and(|m| {
-        m.keys()
-            .all(|key| !key.bytes().any(|b| b.is_ascii_uppercase()))
-    }) && meta["id"] == id
+    meta["id"] == id
         && ["name", "tag", "cwd", "agent_type"]
             .iter()
             .all(|key| meta[*key].is_string())
@@ -407,7 +443,7 @@ impl Store {
                     ));
                 }
                 let raw = read_meta(&file)?;
-                let meta = raw.parsed();
+                let meta = raw.parsed()?;
                 if meta["schema_version"] != 1 && meta["schema_version"].is_u64() {
                     return Ok((file, meta, raw));
                 }
@@ -611,7 +647,7 @@ mod tests {
         .unwrap();
         let mut entry = Entry {
             dir: File::open(&dir).unwrap(),
-            meta: raw.parsed(),
+            meta: raw.parsed().unwrap(),
             raw,
             needs_sync: false,
         };
@@ -619,6 +655,16 @@ mod tests {
         let error = entry.set_label("tag", "new".into(), |_| {
             Err(io::Error::other("sync failed"))
         });
+        let invalid: RawFields = serde_json::from_str(r#"{"shim_pid":1e10000}"#).unwrap();
+        assert!(
+            invalid
+                .parsed()
+                .unwrap_err()
+                .to_string()
+                .contains("shim_pid")
+        );
+        let alias: RawFields = serde_json::from_str(r#"{"Role":"manager"}"#).unwrap();
+        assert!(alias.parsed().unwrap_err().to_string().contains("role"));
         assert_eq!(error.unwrap_err().to_string(), "sync failed");
         assert_eq!(entry.meta["tag"], "new");
         assert!(read_meta(&entry.dir).unwrap().same_as(&entry.raw));
