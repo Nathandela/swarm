@@ -14,6 +14,7 @@ import (
 const discussionFirstReplyWait = 30 * time.Second
 const discussionReplyWait = 2 * time.Minute
 const discussionReplyStall = 10 * time.Minute
+const discussionStallNotice = "I still can’t verify a result. The work may be running. Please check the dispatcher in Swarm before trying again."
 const discussionWorkerWaitNotice = "I’m waiting for the worker’s result."
 
 var ErrReplyWaitObsolete = errors.New("voice: routine wait notice superseded")
@@ -341,8 +342,16 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 		case evidence.progress > input.ReplyProgress:
 			input.ReplyProgress = evidence.progress
 		case evidence.workerRunning:
-			if !current.replyWaitConsumed && !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyWait)) &&
-				replyWaitOpen(input) && len(replyWaitWorkers(*current, input)) > 0 {
+			stalled := !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall))
+			switch {
+			case !replyWaitOpen(input) || len(replyWaitWorkers(*current, input)) == 0:
+				// No verifiable worker to report on: stay quiet until the stall deadline.
+				if stalled {
+					if err := recordReplyNotice(current, input, discussionStallNotice, true); err != nil {
+						return err
+					}
+				}
+			case !current.replyWaitConsumed && !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyWait)):
 				if err := recordReplyNotice(current, input, discussionWorkerWaitNotice, false); err != nil {
 					return err
 				}
@@ -350,11 +359,14 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			}
 		case evidence.unlinkedWorker:
 			if !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) {
+				if err := recordReplyNotice(current, input, discussionStallNotice, true); err != nil {
+					return err
+				}
 				next = 0
 				input.ReplyDeliveryUnknown = true
 			}
 		case !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyStall)) && (input.SettledAt.IsZero() || input.ReplyRecovery != 0):
-			if err := recordReplyNotice(current, input, "I still can’t verify a result. The work may be running. Please check the dispatcher in Swarm before trying again.", true); err != nil {
+			if err := recordReplyNotice(current, input, discussionStallNotice, true); err != nil {
 				return err
 			}
 		case input.Phase == "superseded" || input.Phase == "rejected" && !input.SourceCutover:

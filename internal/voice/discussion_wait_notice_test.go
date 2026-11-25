@@ -10,7 +10,7 @@ import (
 
 // waitNoticeFixture admits reply-tracked requests whose manager turns completed
 // and links a live worker to each, as delegated requests look while they run.
-func waitNoticeFixture(t *testing.T, ended bool, ids ...string) (*Store, DiscussionController, *time.Time) {
+func waitNoticeFixture(t *testing.T, mod func(*WorkerAssociation), ids ...string) (*Store, DiscussionController, *time.Time) {
 	t.Helper()
 	if len(ids) == 0 {
 		ids = []string{"wait"}
@@ -30,7 +30,10 @@ func waitNoticeFixture(t *testing.T, ended bool, ids ...string) (*Store, Discuss
 		if err = c.Tick(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		w := WorkerAssociation{ConversationID: b.ConversationID, Session: "machine/worker-" + id, SessionInstance: "instance-" + id, Parent: "manager", JobID: "job-" + id, AttemptID: "attempt-" + id, Admission: a.Sequence, Ended: ended}
+		w := WorkerAssociation{ConversationID: b.ConversationID, Session: "machine/worker-" + id, SessionInstance: "instance-" + id, Parent: "manager", JobID: "job-" + id, AttemptID: "attempt-" + id, Admission: a.Sequence}
+		if mod != nil {
+			mod(&w)
+		}
 		if err = s.update(func(st *State) error {
 			putRecord(st, "workers", &st.Workers, key(b.ConversationID, key(w.Session, w.SessionInstance)), w)
 			return nil
@@ -67,7 +70,7 @@ func check(t *testing.T, s *Store, d DiscussionController) {
 }
 
 func TestWaitNoticeWaitsTwoQuietMinutesForLinkedWorker(t *testing.T) {
-	s, d, now := waitNoticeFixture(t, false)
+	s, d, now := waitNoticeFixture(t, nil)
 	check(t, s, d) // first observation starts the quiet clock
 	if n := waitNotices(t, s); n != 0 {
 		t.Fatalf("notice at first check: %d", n)
@@ -85,7 +88,7 @@ func TestWaitNoticeWaitsTwoQuietMinutesForLinkedWorker(t *testing.T) {
 }
 
 func TestWaitNoticeSentAtMostOncePerOpenStretch(t *testing.T) {
-	s, d, now := waitNoticeFixture(t, false)
+	s, d, now := waitNoticeFixture(t, nil)
 	for range 6 {
 		check(t, s, d)
 		*now = now.Add(discussionReplyWait)
@@ -96,7 +99,7 @@ func TestWaitNoticeSentAtMostOncePerOpenStretch(t *testing.T) {
 }
 
 func TestWaitNoticeBudgetSurvivesStoreReopen(t *testing.T) {
-	s, d, now := waitNoticeFixture(t, false, "first", "second")
+	s, d, now := waitNoticeFixture(t, nil, "first", "second")
 	for range 3 {
 		check(t, s, d)
 		*now = now.Add(time.Minute)
@@ -124,7 +127,7 @@ func TestWaitNoticeBudgetSurvivesStoreReopen(t *testing.T) {
 }
 
 func TestWaitNoticeSkippedWhenWorkerEnded(t *testing.T) {
-	s, d, now := waitNoticeFixture(t, true)
+	s, d, now := waitNoticeFixture(t, func(w *WorkerAssociation) { w.Ended = true })
 	for range 3 {
 		check(t, s, d)
 		*now = now.Add(discussionReplyWait)
@@ -135,12 +138,43 @@ func TestWaitNoticeSkippedWhenWorkerEnded(t *testing.T) {
 }
 
 func TestWaitNoticeOverlappingRequestsShareOneBudget(t *testing.T) {
-	s, d, now := waitNoticeFixture(t, false, "first", "second")
+	s, d, now := waitNoticeFixture(t, nil, "first", "second")
 	for range 8 {
 		check(t, s, d)
 		*now = now.Add(time.Minute)
 	}
 	if n := waitNotices(t, s); n != 1 {
 		t.Fatalf("overlapping requests in one discussion sent %d routine notices", n)
+	}
+}
+
+func stallNotice(t *testing.T, s *Store) bool {
+	t.Helper()
+	st, _ := s.Snapshot()
+	for _, p := range st.Publications {
+		if p.ReplyMonitor && p.Final && p.Text == discussionStallNotice {
+			return true
+		}
+	}
+	return false
+}
+
+func TestStalledWorkerWithoutNoticeEvidenceGetsFinalNotice(t *testing.T) {
+	for name, mod := range map[string]func(*WorkerAssociation){
+		"unlinked VM child": func(w *WorkerAssociation) { w.VMChild, w.Admission = true, 0 },
+		"provisional":       func(w *WorkerAssociation) { w.SessionInstance = w.Session },
+	} {
+		s, d, now := waitNoticeFixture(t, mod)
+		check(t, s, d)
+		*now = now.Add(discussionReplyStall - time.Second)
+		check(t, s, d)
+		if stallNotice(t, s) || waitNotices(t, s) != 0 {
+			t.Fatalf("%s: spoke before the stall deadline", name)
+		}
+		*now = now.Add(discussionReplyWait) // next scheduled check
+		check(t, s, d)
+		if !stallNotice(t, s) {
+			t.Fatalf("%s: stalled request ended in silence", name)
+		}
 	}
 }
