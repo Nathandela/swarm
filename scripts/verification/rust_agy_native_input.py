@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise native registration and delivery through Rust spawn, shim and message."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ from parity_agy import wait_for
 
 CONVERSATION = "11111111-1111-4111-8111-111111111111"
 FIXTURE = r'''
-import json, os, re, subprocess, sys, time
+import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -29,6 +30,26 @@ if args[:1] == ["agentapi"]:
     assert args[2] == os.environ["ANTIGRAVITY_CONVERSATION_ID"] == conversation
     assert os.environ["ANTIGRAVITY_CSRF_TOKEN"] == "fixture-private-csrf"
     if args[1] == "get-conversation-metadata":
+        revocation = Path("revoke-before-effect")
+        if revocation.exists():
+            trial = json.loads(revocation.read_text())
+            operation = trial["operation"]
+            operation_hash = hashlib.sha256(operation.encode()).hexdigest()
+            root = Path.cwd().parent / "s"
+            if (root / "rust-v1/operations" / f"semantic-{operation_hash}.json").exists():
+                trial["remaining"] -= 1
+                if trial["remaining"] == 0:
+                    ledger = root / "discord/rust-text-v1.json"
+                    state = json.loads(ledger.read_text())
+                    id = state["worker_inputs"][operation]["source_id"]
+                    state["messages"][id]["state"] = "withdrawn"
+                    replacement = ledger.with_suffix(".next")
+                    replacement.write_text(json.dumps(state))
+                    replacement.chmod(0o600)
+                    replacement.replace(ledger)
+                    revocation.unlink()
+                else:
+                    revocation.write_text(json.dumps(trial))
         result = {"conversationMetadata": {"metadata": {
             "rootConversationId": conversation, "projectId": "fixture-project",
         }}}
@@ -96,6 +117,18 @@ def run(binary):
             "work_dir": str(work), "manager_cli": "codex",
         }))
         config.chmod(0o600)
+        ownership = connector / ".rust-offline-owner.json"
+        ownership.write_text(json.dumps("fixture-only"))
+        ownership.chmod(0o600)
+        ledger_file = connector / "rust-text-v1.json"
+        ledger = {"version":2, "identity":["fixture-only","234","123","456",str(daemon_socket)],
+                  "consent_floor":"400","history_cursor":"420","messages":{},"outbox":{},"worker_inputs":{}}
+        def save():
+            updated = ledger_file.with_suffix(".update")
+            updated.write_text(json.dumps(ledger))
+            updated.chmod(0o600)
+            updated.replace(ledger_file)
+        save()
         provider = tools / "agy"
         provider.write_text(f"#!{sys.executable}\n" + FIXTURE.replace("$CONVERSATION", CONVERSATION))
         provider.chmod(0o700)
@@ -143,24 +176,40 @@ def run(binary):
                     hello = exchange(peer, {"op":"hello","protocol_version":1,"capabilities":caps})
                     return exchange(peer, body | {"endpoint_id":hello["endpoint_id"]})
 
-        def send(text, operation=None, *, origin=None, allow_origin=True, ok=True):
-            origin = ({
-                "kind":"external", "installation_id":"fixture-only",
-                "request_id":"fixture-request", "actor_id":"456",
-            } if origin is None else origin)
+        def prepare(text, source_id, mint=None):
+            operation = mint or f"semantic:{time.time_ns() // 1_000_000}:{secrets.token_hex(16)}"
             instance = request({"op":"semantic_target","session_id":sid},
                                ["semantic-target"])["semantic_target_instance"]
-            operation = operation or f"semantic:{time.time_ns() // 1_000_000}:{secrets.token_hex(16)}"
+            source = f"owner original for message {source_id}"
+            def digest(value):
+                return hashlib.sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()
+            revision = digest(["123",source,"456","",source_id,None,"",None])
+            request_id = "da_" + digest(["fixture-only",source_id])[:32]
+            origin = {"kind":"owner_direct","installation_id":"fixture-only","request_id":request_id,
+                      "actor_id":"123","channel_id":"456","message_id":source_id,"revision":revision}
+            composer = {"session":sid,"session_instance":instance,"text":text,"origin":origin}
+            return operation, composer, {
+                "operation_id":request_id,"revision":revision,"text":source,
+                "route":{"guild_id":"","channel_id":"456","message_id":source_id},
+                "author":{"id":"123"},"authority":"owner_direct","supervisor_socket":str(daemon_socket),
+                "state":"sending","worker_operation":operation,
+            }
+
+        def persist(operation, composer, source):
+            source_id = composer["origin"]["message_id"]
+            ledger["messages"][source_id] = source
+            ledger["worker_inputs"][operation] = {"source_id":source_id,"provider":"agy","composer":composer}
+            save()
+
+        def send(operation, composer, *, allow_origin=True, ok=True):
             capabilities = ["semantic-send"] + (["message-origin"] if allow_origin else [])
             response = request({"op":"semantic_send","session_id":sid,"operation_id":operation,
-                                "body_version":1,"composer_send":{
-                                    "session":sid,"session_instance":instance,"text":text,"origin":origin,
-                                }}, capabilities)
+                                "body_version":1,"composer_send":composer}, capabilities)
             if ok:
                 assert response["op"] == "ok", response
             else:
                 assert response["op"] == "error", response
-            return operation
+            return response
 
         daemon = start()
         sid = None
@@ -174,25 +223,52 @@ def run(binary):
             assert b"Fixture permission request" in cli("peek", sid).stdout
             text = "Native exact input.\n第二行 <angle>"
             assert cli("message", sid, "--text", "no origin", ok=False).returncode == 1
-            send(text, origin={"kind":"external","installation_id":"other",
-                               "request_id":"fixture-request","actor_id":"456"}, ok=False)
-            send(text, allow_origin=False, ok=False)
+            operation, composer, source = prepare(text, "401")
+            # A fully formed origin without a persisted worker-specific cutover grants nothing.
+            send(operation, composer, ok=False)
+            ledger["manager"] = {"input":{"operation":operation,"composer":composer,"source_id":"401"}}
+            ledger["messages"]["401"] = source.copy()
+            save()
+            send(operation, composer, ok=False)
+            persist(operation, composer, source)
+            for override in [
+                {"kind":"external","actor_id":"999"},
+                {"kind":"owner_direct","actor_id":"999"},
+                {"channel_id":"999"}, {"message_id":"499"}, {"revision":"stale"},
+                {"installation_id":"other"},
+            ]:
+                send(operation, composer | {"origin": composer["origin"] | override}, ok=False)
+            send(operation, composer | {"text":"forged rendered body"}, ok=False)
+            send(operation, composer | {"session_instance":"stale-instance"}, ok=False)
+            send(operation, composer | {"session":sid + "-different"}, ok=False)
+            expired_id = f"semantic:{time.time_ns() // 1_000_000 - 3_601_000}:{secrets.token_hex(16)}"
+            expired, expired_composer, expired_source = prepare(text, "407", expired_id)
+            persist(expired, expired_composer, expired_source)
+            send(expired, expired_composer, ok=False)
+            outside, outside_composer, outside_source = prepare(text, "400")
+            persist(outside, outside_composer, outside_source)
+            send(outside, outside_composer, ok=False)
+            send(operation, composer, allow_origin=False, ok=False)
+            ledger["worker_excluded"] = {sid:True}
+            save()
+            send(operation, composer, ok=False)
             assert deliveries() == []
-            operation = send(text)
+            ledger["worker_excluded"].pop(sid)
+            save()
+            send(operation, composer)
+
             def status(op):
                 return json.loads(cli("message", sid, "--status", "--operation-id", op).stdout)
 
             first = status(operation)
             assert first["state"] == "submitted" and first["native_session_id"] == CONVERSATION
             assert first["agent"] == "agy" and first["native_generation"]
-            assert first["origin"]["request_id"] == "fixture-request"
-            send(text, operation)
-            send("conflicting text", operation, ok=False)
-            send(text, operation, origin=first["origin"] | {"request_id":"different"}, ok=False)
+            assert first["origin"] == composer["origin"]
+            send(operation, composer)
             saved_config = config.read_text()
             config.write_text(json.dumps(json.loads(saved_config) | {"installation_id":"replacement"}))
             try:
-                send(text, origin=first["origin"] | {"installation_id":"replacement"}, ok=False)
+                send(operation, composer, ok=False)
                 assert status(operation) == first
             finally:
                 config.write_text(saved_config)
@@ -202,11 +278,31 @@ def run(binary):
             daemon.wait(timeout=5)
             daemon = start()
             assert status(operation) == first
-            send(text, operation)
-            ambiguous = send("uncertain native reply", ok=False)
+            send(operation, composer)
+
+            stale, stale_composer, stale_source = prepare("edited source", "402")
+            persist(stale, stale_composer, stale_source)
+            ledger["messages"]["402"] = stale_source | {"text":"new source revision"}
+            save()
+            send(stale, stale_composer, ok=False)
+
+            revoked, revoked_composer, revoked_source = prepare("withdrew before effect", "403")
+            persist(revoked, revoked_composer, revoked_source)
+            (work / "revoke-before-effect").write_text(json.dumps({"operation":revoked,"remaining":2}))
+            send(revoked, revoked_composer, ok=False)
+            assert status(revoked)["state"] == "rejected"
+            assert not (work / "revoke-before-effect").exists()
+            ledger["messages"]["403"] = revoked_source | {"state":"withdrawn"}
+            save()
+
+            ambiguous, ambiguous_composer, ambiguous_source = prepare("uncertain native reply", "404")
+            persist(ambiguous, ambiguous_composer, ambiguous_source)
+            send(ambiguous, ambiguous_composer, ok=False)
             assert status(ambiguous)["state"] == "outcome_unknown"
-            send("uncertain native reply", ambiguous, ok=False)
-            send("blocked by earlier operation", ok=False)
+            send(ambiguous, ambiguous_composer, ok=False)
+            blocked, blocked_composer, blocked_source = prepare("blocked by earlier operation", "405")
+            persist(blocked, blocked_composer, blocked_source)
+            send(blocked, blocked_composer, ok=False)
             assert deliveries() == [text, "uncertain native reply"]
             assert not (work / "unexpected-terminal-input").exists()
         finally:

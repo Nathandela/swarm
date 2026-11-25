@@ -136,31 +136,7 @@ impl Dispatcher {
             return Err(invalid("native manager requires owner reconciliation"));
         }
         if !state["input"].is_null() {
-            let input = &state["input"];
-            let observation = self.owner.input_status(&input["composer"])?;
-            if observation["external_input"]
-                != input["composer"]["manager_admission"]["expected_external_input"]
-            {
-                return Err(invalid("native manager received external input"));
-            }
-            let phase = field(&observation, "state");
-            if matches!(phase, "running" | "completed") {
-                let native_turn = field(&observation, "native_turn_id");
-                if native_turn.is_empty()
-                    || input["turn_id"]
-                        .as_str()
-                        .is_some_and(|id| id != native_turn)
-                {
-                    return Err(invalid(
-                        "native input observation changed its turn identity",
-                    ));
-                }
-                if input["turn_id"].is_null() {
-                    let id = field(input, "source_id").to_owned();
-                    state["input"]["turn_id"] = json!(native_turn);
-                    inbox.settled_input(&id, state.clone())?;
-                }
-            }
+            let phase = self.reconcile_input(inbox, &mut state)?;
             self.deliver(cfg, inbox, api, &state, millis()?)?;
             if phase == "completed" {
                 let nonce = field(&state["input"], "final_nonce");
@@ -192,6 +168,35 @@ impl Dispatcher {
         inbox.cutover(id, field(&current, "revision"), state)?;
         // An error here may have crossed the native boundary. Reconcile by nonce, never resend.
         self.owner.send(&semantic, &composer)
+    }
+
+    fn reconcile_input(&self, inbox: &mut Inbox, state: &mut Value) -> io::Result<String> {
+        let input = &state["input"];
+        let observation = self.owner.input_status(&input["composer"])?;
+        if observation["external_input"]
+            != input["composer"]["manager_admission"]["expected_external_input"]
+        {
+            return Err(invalid("native manager received external input"));
+        }
+        let phase = field(&observation, "state");
+        if matches!(phase, "running" | "completed") {
+            let native_turn = field(&observation, "native_turn_id");
+            if native_turn.is_empty()
+                || input["turn_id"]
+                    .as_str()
+                    .is_some_and(|id| id != native_turn)
+            {
+                return Err(invalid(
+                    "native input observation changed its turn identity",
+                ));
+            }
+            if input["turn_id"].is_null() {
+                let id = field(input, "source_id").to_owned();
+                state["input"]["turn_id"] = json!(native_turn);
+                inbox.settled_input(&id, state.clone())?;
+            }
+        }
+        Ok(phase.to_owned())
     }
 
     fn deliver(
@@ -298,7 +303,6 @@ impl Dispatcher {
 
     fn tool(&self, inbox: &mut Inbox, request: &Value) -> io::Result<Value> {
         let mut state = inbox.manager().clone();
-        let input = &state["input"];
         if request.as_object().is_none_or(|object| object.len() != 4)
             || request["call"]
                 .as_object()
@@ -306,10 +310,17 @@ impl Dispatcher {
             || request["version"] != 1
             || request["conversation_id"] != state["binding"]["conversation_id"]
             || request["session_id"] != field(&state, "session").rsplit('/').next().unwrap_or("")
-            || input["turn_id"].is_null()
+            || state["input"].is_null()
             || request["call"]["name"] != "publish"
         {
             return Err(invalid("unbound manager publication"));
+        }
+        if state["input"]["turn_id"].is_null() {
+            let _ = self.reconcile_input(inbox, &mut state)?;
+        }
+        let input = &state["input"];
+        if input["turn_id"].is_null() {
+            return Err(invalid("native manager input is not yet observed"));
         }
         let call = &request["call"];
         let mut args = call["arguments"].clone();
@@ -718,7 +729,6 @@ mod tests {
         dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         assert_eq!(state.lock().unwrap().sends, 1);
         assert!(api.posted.borrow().is_empty());
-        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
             "session_id":"local", "call":{"name":"publish","arguments":{
                 "output_id":"final","sequence":1,"text":"deliberate reply","final":true

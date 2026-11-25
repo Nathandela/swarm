@@ -69,6 +69,11 @@ impl Inbox {
         if serde_json::to_vec(&next)?.len() >= MAX_STORE_BYTES {
             return Err(io::Error::other("Discord inbox reached its storage limit"));
         }
+        let _effect = super::worker_input::lock_ledger(
+            self.file
+                .parent()
+                .ok_or_else(|| invalid("missing connector ledger directory"))?,
+        )?;
         if let Err(err) = runtime::write_json(&self.file, &next) {
             // A directory fsync failure can follow a successful rename. Stop this
             // writer before it can update a stale in-memory snapshot.
@@ -246,7 +251,7 @@ impl Inbox {
             .as_object()
             .unwrap()
             .values()
-            .filter(|row| row["state"] == "prepared")
+            .filter(|row| matches!(row["state"].as_str(), Some("prepared" | "sending")))
             .count()
     }
 }

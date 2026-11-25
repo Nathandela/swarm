@@ -15,3 +15,15 @@ cargo test --locked -p swarm discord::manager -- --ignored
 ```
 
 The test starts the Go daemon with a separate socket, synthetic account metadata and a cleared environment. It verifies an installed, scoped launch receipt, an exact provider turn, the published tool's Go-authorized call proof and stale-turn refusal. No Discord credential or provider network connection is involved.
+
+Use the same fake provider against the native Rust supervisor by building the Rust binary and selecting it with `SWARM_RUST_MANAGER_ORACLE` in place of `SWARM_GO_ORACLE`. This arm also invokes the real Rust MCP bridge, confirms a single scoped publication through synthetic Discord acknowledgements, and rejects unmanaged input and a second manager reservation.
+
+```sh
+cargo build --locked -p swarm
+SWARM_RUST_MANAGER_ORACLE="$(pwd)/target/debug/swarm" \
+SWARM_FAKE_CODEX="$oracle/codex-manager-fixture" \
+SWARM_FAKE_CODEX_MANAGER_PROOF=1 \
+cargo test --locked -p swarm discord::manager -- --ignored
+```
+
+The Rust arm retains the installed Codex workspace policy. The Go enrolled manager arm applies its explicit full-access manager policy. This fixture qualifies manager custody and the publication path. Native permission-policy parity remains open.

@@ -14,7 +14,7 @@ fn read(path: &Path, id: &str) -> io::Result<Option<Value>> {
                 && record["schema"] == 1
                 && matches!(
                     record["state"].as_str(),
-                    Some("outcome_unknown" | "applied")
+                    Some("prepared" | "outcome_unknown" | "applied")
                 )
                 && record["session_id"].as_str().is_some_and(runtime::valid_id)
                 && record["request_hash"]
@@ -33,7 +33,8 @@ fn outcome(state: &State, record: Option<&Value>) -> Value {
         Some(record) if record["state"] == "applied" => {
             json!({"state":"applied","session_id":format!("{}/{}",state.endpoint,field(record,"session_id"))})
         }
-        Some(_) => json!({"state":"outcome_unknown"}),
+        Some(record) if record["state"] != "prepared" => json!({"state":"outcome_unknown"}),
+        Some(_) => json!({"state":"unknown_operation"}),
         None => json!({"state":"unknown_operation"}),
     }
 }
@@ -80,6 +81,24 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
     let _gate = state.operation_locks[usize::from(key[0]) % state.operation_locks.len()]
         .lock()
         .unwrap();
+    let mut launch = request["launch"].clone();
+    let mut managed = if launch["manager"].is_null() {
+        None
+    } else {
+        if !caps.contains(&"manager-launch") {
+            return Ok(refusal(
+                id,
+                "op_not_implemented",
+                "manager-launch capability was not negotiated",
+            ));
+        }
+        let scope = match super::manager::launch_scope(state, &launch) {
+            Ok(scope) => scope,
+            Err(err) => return Ok(refusal(id, "manager_launch_prerequisite", &err.to_string())),
+        };
+        launch.as_object_mut().unwrap().shift_remove("manager");
+        Some(scope)
+    };
     let mut normalized = request["launch"].clone();
     let Some(object) = normalized.as_object_mut() else {
         return Ok(refusal(id, "invalid_field", "missing launch request"));
@@ -100,7 +119,8 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
     }
     normalized.sort_all_objects();
     let hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&normalized)?));
-    if let Some(record) = read(&path, id)? {
+    let prior = read(&path, id)?;
+    if let Some(record) = &prior {
         if record["request_hash"] != hash {
             return Ok(refusal(
                 id,
@@ -110,23 +130,52 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
         }
         if record["state"] == "applied" {
             let sessions = state.sessions.read().unwrap();
-            if let Some(s) = sessions.get(field(&record, "session_id")) {
+            if let Some(s) = sessions.get(field(record, "session_id")) {
                 return Ok(
                     json!({"op":"launch","operation_id":id,"session":s.view(&state.endpoint)}),
                 );
             }
         }
-        return Ok(refusal(
-            id,
-            "outcome_unknown",
-            "owner launch outcome is uncertain; inspect its status",
-        ));
+        if record["state"] != "prepared" || managed.is_none() {
+            return Ok(refusal(
+                id,
+                "outcome_unknown",
+                "owner launch outcome is uncertain; inspect its status",
+            ));
+        }
     }
-    let session = match state.reserve(&json!({"launch":request["launch"]}), caps) {
+    if let Some(scope) = managed.as_mut() {
+        if crate::discord::connector_intent(scope)?["manager"]["launch_operation"] != id {
+            return Ok(refusal(
+                id,
+                "manager_launch_prerequisite",
+                "manager launch is not the connector's persisted operation",
+            ));
+        }
+        scope["launch_operation"] = json!(id);
+        scope["request_hash"] = json!(hash);
+    }
+    let is_manager = managed.is_some();
+    let session = match state.reserve(&json!({"launch":launch}), caps, managed) {
         Ok(s) => s,
         Err(e) => return Ok(refusal(id, "invalid_field", &format!("launch: {e}"))),
     };
     let mut record = json!({"schema":1,"operation_id":id,"request_hash":hash,"state":"outcome_unknown","session_id":session.id});
+    if prior
+        .as_ref()
+        .is_some_and(|prior| prior["session_id"] != session.id)
+    {
+        return Ok(refusal(
+            id,
+            "outcome_unknown",
+            "manager reservation does not match prepared operation",
+        ));
+    }
+    if is_manager {
+        record["state"] = json!("prepared");
+        runtime::write_json(&path, &record)?;
+        record["state"] = json!("outcome_unknown");
+    }
     runtime::write_json(&path, &record)?;
     let view = match state.start(&session) {
         Ok(v) => v,

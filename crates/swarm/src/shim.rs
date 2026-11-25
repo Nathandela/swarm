@@ -45,6 +45,7 @@ struct State {
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
     agy_broker: Option<agy_input::Broker>,
     schedule: Option<worker::Binding>,
+    manager: bool,
     terminal_input: AtomicBool,
     dir: PathBuf,
     working_dir: PathBuf,
@@ -99,6 +100,23 @@ fn serve(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()?;
     let socket = dir.join("p");
     let listener = runtime::bind(&socket)?;
+    let scope = &config["manager"];
+    let manager_args = if scope.is_null() {
+        Vec::new()
+    } else {
+        let auth = Path::new(field(&scope["launch"]["manager"], "auth_file"));
+        let credential = crate::manager_mcp::read_credential(auth)?;
+        use sha2::{Digest, Sha256};
+        if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes()))
+            || scope["account"]
+                != crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
+        {
+            return Err(io::Error::other(
+                "manager launch custody changed before exec",
+            ));
+        }
+        crate::supervisor::manager::mcp_args(scope, field(&config, "id"))?
+    };
     let provider = &config["provider"];
     let executable = Path::new(field(provider, "executable"));
     let mut argv: Vec<_> = bootstrap["argv"]
@@ -155,8 +173,13 @@ fn serve(dir: &Path) -> io::Result<()> {
         }
     }
     let agy_broker = if schedule.is_none() && provider["agy_native_installation"].is_string() {
-        let broker =
-            agy_input::Broker::prepare(dir, &config, Path::new(working_dir), &environment)?;
+        let broker = agy_input::Broker::prepare(
+            dir,
+            &config,
+            Path::new(working_dir),
+            &environment,
+            field(&bootstrap, "owner_socket"),
+        )?;
         broker.launch_args(&mut argv);
         Some(broker)
     } else {
@@ -210,6 +233,12 @@ fn serve(dir: &Path) -> io::Result<()> {
             .env("SWARM_DAEMON_STATE", root);
     }
     pty::arm_shutdown()?;
+    if !scope.is_null() && schedule.is_some() {
+        return Err(io::Error::other("conflicting manager and scheduled roles"));
+    }
+    if !scope.is_null() {
+        app_args.extend(manager_args.iter().cloned());
+    }
     let mut backend = None;
     let mut channel = None;
     let (mut child, master) = (|| {
@@ -240,7 +269,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                 ));
             }
         }
-        command.args(agy_args).args(argv);
+        command.args(agy_args).args(&manager_args).args(argv);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
@@ -281,6 +310,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         semantic: channel.is_some().then_some(action_sink),
         agy_broker,
         schedule: schedule.clone(),
+        manager: !scope.is_null(),
         terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
@@ -314,8 +344,12 @@ fn serve(dir: &Path) -> io::Result<()> {
             state.dir.clone(),
             state.token.clone(),
         );
+        let mut manager = scope.clone();
+        if !manager.is_null() {
+            manager["session_id"] = config["id"].clone();
+        }
         thread::spawn(move || {
-            codex_backend::observe(channel, cwd, dir, token, schedule, action_receiver)
+            codex_backend::observe(channel, cwd, dir, token, schedule, action_receiver, manager)
         });
     }
     let (drained, drain_done) = mpsc::sync_channel(1);
@@ -600,6 +634,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     || session.is_empty()
                     || text.is_empty()
                     || !worker::prompt_fits(text, scheduled.is_some())
+                    || state.manager != !request["manager_admission"].is_null()
                 {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }
@@ -619,6 +654,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         session: session.into(),
                         text: text.into(),
                         schedule_attempt: scheduled.map(str::to_owned),
+                        composer: request["composer_send"].clone(),
                         answer,
                         not_after: Instant::now() + Duration::from_secs(2),
                     })
@@ -639,6 +675,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             runtime::write_control(&mut stream, &response)
         }
         "input" => {
+            if state.manager {
+                return Err(io::Error::other(
+                    "terminal input requires an explicit manager custody transition",
+                ));
+            }
             let text = field(&request, "data");
             if text.is_empty() || text.len() > 4096 {
                 return Err(io::Error::other("invalid shim input payload"));
@@ -945,6 +986,11 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }
             match tag {
                 DATA_IN => {
+                    if state.manager {
+                        return Err(io::Error::other(
+                            "manager terminal input requires a custody transition",
+                        ));
+                    }
                     if !bytes.is_empty() {
                         state.terminal_input.store(true, Ordering::Release);
                     }

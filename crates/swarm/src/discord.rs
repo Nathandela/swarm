@@ -1,9 +1,13 @@
+mod worker_input;
+pub(crate) use worker_input::{
+    lock_connector_worker_input, verify_connector_worker_input, worker_input_installation,
+};
 mod config;
 mod dispatcher;
 mod gateway;
 mod local;
 mod manager;
-mod provenance;
+pub(crate) mod provenance;
 mod receipt;
 mod rest;
 mod service;
@@ -17,22 +21,101 @@ use std::path::Path;
 
 const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
 
-pub(crate) fn native_input_installation() -> Option<String> {
-    let config = Place::resolve(None).and_then(|place| place.load()).ok()?;
-    config
-        .enabled()
-        .then(|| config.text("installation_id").to_owned())
+pub(crate) fn manager_nonce(
+    discussion: &str,
+    request: &Value,
+    revision: &Value,
+    binding: &Value,
+    external: &Value,
+) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&json!([
+            discussion, request, revision, binding, external
+        ]))?)
+    ))
 }
 
-pub(crate) fn require_agy_origin(origin: &Value) -> io::Result<()> {
-    let config = Place::resolve(None)?.load()?;
-    if !config.enabled()
-        || origin["installation_id"] != config.text("installation_id")
-        || origin["kind"] == "owner_direct" && origin["actor_id"] != config.text("owner_id")
-        || origin["kind"] == "owner_endorsed" && origin["endorser_id"] != config.text("owner_id")
+/// Re-read the active, owned personal enrollment at the supervisor admission boundary.
+pub(crate) fn native_manager_enrollment() -> io::Result<Value> {
+    let place = Place::resolve(None)?;
+    let cfg = place.load()?;
+    place.ensure_owned(&cfg)?;
+    if !cfg.enabled()
+        || cfg.text("mode") != "personal"
+        || cfg.text("project_access") == "vm"
+        || cfg.text("manager_cli") != "codex"
     {
         return Err(invalid(
-            "Antigravity message origin is outside the enabled installation",
+            "qualified Rust manager requires the active enrolled personal Codex place",
+        ));
+    }
+    let owner = manager::Manager::new(&cfg)?;
+    let bridge = std::fs::canonicalize(&place.dir)?.join("manager-v1");
+    Ok(
+        json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
+        "installation_id":cfg.text("installation_id"), "application_id":cfg.text("application_id"), "owner_id":cfg.text("owner_id"),
+        "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")}),
+    )
+}
+
+pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
+    let dir = Path::new(
+        scope["launch"]["manager"]["auth_file"]
+            .as_str()
+            .unwrap_or_default(),
+    )
+    .to_owned();
+    let place = dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("invalid connector custody directory"))?;
+    let data = crate::supervisor::runtime::read_json(&place.join("rust-text-v1.json"))?;
+    let identity = &data["identity"];
+    if data["version"] != 2
+        || identity[0] != scope["installation_id"]
+        || identity[1] != scope["application_id"]
+        || identity[2] != scope["owner_id"]
+        || identity[3] != scope["channel_id"]
+        || identity[4] != scope["supervisor_socket"]
+        || data["manager"]["generation"] != 1
+        || data["manager"]["launch"] != scope["launch"]
+    {
+        return Err(invalid(
+            "connector intent does not match the enrolled manager",
+        ));
+    }
+    Ok(data)
+}
+
+pub(crate) fn verify_connector_input(
+    scope: &Value,
+    operation: &str,
+    composer: &Value,
+) -> io::Result<()> {
+    let data = connector_intent(scope)?;
+    let manager = &data["manager"];
+    let input = &manager["input"];
+    let id = input["source_id"]
+        .as_str()
+        .filter(|id| config::snowflake(id))
+        .ok_or_else(|| invalid("connector has no persisted manager cutover"))?;
+    let source = &data["messages"][id];
+    if input["operation"] != operation
+        || input["composer"] != *composer
+        || manager["session"] != composer["session"]
+        || source["state"] != "sending"
+        || source["text"] != composer["text"]
+        || source["revision"] != composer["origin"]["revision"]
+        || source["operation_id"] != composer["origin"]["request_id"]
+        || source["route"]["message_id"] != id
+        || composer["origin"]["message_id"] != id
+        || source["native_input_id"] != composer["manager_admission"]["nonce"]
+        || source["native_binding"] != composer["manager_admission"]["binding"]
+    {
+        return Err(invalid(
+            "semantic request does not match the exact connector cutover",
         ));
     }
     Ok(())

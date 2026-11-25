@@ -64,7 +64,7 @@ pub(crate) fn origin(input: &Value) -> io::Result<Value> {
     {
         return Err(refusal());
     }
-    if !value("discussion_id").is_empty() || !value("revision").is_empty() {
+    if !value("discussion_id").is_empty() {
         let personal = kind == "owner_direct" && value("requester_id") == value("actor_id");
         if [
             "discussion_id",
@@ -168,6 +168,8 @@ pub(crate) struct Broker {
     environment: Vec<(String, String)>,
     registration_token: String,
     generation: String,
+    installation: String,
+    owner_socket: String,
     pub joined: Mutex<Option<Source>>,
 }
 
@@ -177,6 +179,7 @@ impl Broker {
         config: &Value,
         cwd: &Path,
         environment: &[(String, String)],
+        owner_socket: &str,
     ) -> io::Result<Self> {
         let provider = &config["provider"];
         let version = field(provider, "version");
@@ -210,6 +213,8 @@ impl Broker {
             environment: environment.to_vec(),
             registration_token,
             generation: runtime::random_id()?,
+            installation: field(provider, "agy_native_installation").into(),
+            owner_socket: owner_socket.into(),
             joined: Mutex::new(None),
         })
     }
@@ -353,6 +358,28 @@ impl Broker {
             "native_generation":self.generation, "origin":origin,
         });
         receipt::save(&self.dir, operation, &hash, &result)?;
+        let supervisor = self
+            .dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| io::Error::other("missing supervisor root"))?;
+        let composer =
+            json!({"session":session,"session_instance":instance,"text":text,"origin":origin});
+        let _connector = match crate::discord::lock_connector_worker_input(
+            supervisor,
+            &self.owner_socket,
+            &self.installation,
+            "agy",
+            operation,
+            &composer,
+        ) {
+            Ok(guard) => guard,
+            Err(_) => {
+                result["state"] = json!("rejected");
+                receipt::save(&self.dir, operation, &hash, &result)?;
+                return Ok(result);
+            }
+        };
         if let Ok(raw) = self.run(source, &["agentapi", "send-message", conversation, text])
             && let Ok(reply) = serde_json::from_str::<Value>(&raw)
             && reply.get("error").is_none()

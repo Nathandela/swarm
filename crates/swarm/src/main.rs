@@ -6,6 +6,7 @@ mod environment;
 mod flags;
 mod hook;
 mod ipc;
+mod manager_mcp;
 mod providers;
 mod schedule;
 mod setup_trust;
@@ -64,6 +65,7 @@ fn main() -> ExitCode {
         Some("schedule") => schedule::run(&args[1..]),
         Some("schedule-receipt-bridge") => schedule::worker::bridge(),
         Some("schedule-agy-worker") => schedule::agy::worker(&args[1..]),
+        Some("manager-mcp") => manager_mcp::run(&args[1..]),
         Some("dispatcher-guide") => guide(&args[1..]),
         Some(
             "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "send"
