@@ -2,14 +2,27 @@
 # Run a native Claude witness on a VM with only the installed executable and
 # the synthetic loopback model available to the worker.
 set -eu
-if [ "$#" -ne 3 ]; then
-  echo 'usage: claude_native_linux.sh STAGED_FIXTURE CLAUDE_EXECUTABLE WITNESS.py' >&2
+if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
+  echo 'usage: claude_native_linux.sh STAGED_FIXTURE CLAUDE_EXECUTABLE WITNESS.py [personal|accepted|revoked]' >&2
   exit 2
 fi
 fixture_dir=$(realpath "$1")
 claude_exe=$(realpath "$2")
-case "$3" in rust_claude_schedule.py|rust_claude_worker_input.py) ;; *) exit 2 ;; esac
-test -f "$fixture_dir/$3"
+witness=$3
+case "$witness" in
+  rust_claude_schedule.py)
+    test "$#" -eq 3
+    set -- ;;
+  rust_claude_worker_input.py)
+    test -x "$fixture_dir/producer"
+    case "${4:-personal}" in
+      personal) set -- /fixture/producer ;;
+      accepted|revoked) set -- /fixture/producer --guild "$4" ;;
+      *) exit 2 ;;
+    esac ;;
+  *) exit 2 ;;
+esac
+test -f "$fixture_dir/$witness"
 test -x "$fixture_dir/swarm"
 test -x "$claude_exe"
 netns=$(stat -Lc %i /proc/self/ns/net)
@@ -24,4 +37,4 @@ exec bwrap --unshare-user --uid 0 --gid 0 --unshare-net --unshare-pid --unshare-
   --setenv SWARM_NATIVE_FIXTURE_OS_ISOLATED 1 --setenv SWARM_NATIVE_FIXTURE_WRITABLE_ROOT /tmp \
   --setenv SWARM_NATIVE_FIXTURE_HOST_NETNS "$netns" --setenv PYTHONDONTWRITEBYTECODE 1 \
   /bin/sh -ec 'ip link set lo up; exec setpriv --bounding-set=-all -- "$@"' sh \
-  /usr/bin/python3 -B "/fixture/$3" /fixture/swarm /native/claude
+  /usr/bin/python3 -B "/fixture/$witness" /fixture/swarm /native/claude "$@"
