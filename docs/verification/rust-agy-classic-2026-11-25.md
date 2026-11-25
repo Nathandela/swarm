@@ -48,3 +48,5 @@ The installed 1.4.7 binary was also refused before any worker existed by both Go
 ```sh
 python3 scripts/verification/parity_agy_acp.py target/debug/swarm /path/to/pinned-go-swarm
 ```
+
+The Rust ACP relay flushes pending terminal input before it renders an active permission request and requires that request's fresh code with an approving option. A bare number or an earlier request's code cannot approve. A real attached-client fixture queued a bare approval before rendering, approved the first request with its newly displayed code, and showed that the same code cancelled a second request. The Go comparison continues to exercise explicit cancellation.

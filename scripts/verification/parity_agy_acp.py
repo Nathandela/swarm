@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Compare scheduled Antigravity ACP admission, permission and completion on Go and Rust."""
 import json
+import re
+import socket
+import struct
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -58,9 +62,24 @@ with Path("prompts").open("a") as out:
 
 permission(13, other)
 assert read()["result"]["outcome"]["outcome"] == "cancelled"
-permission(14, ours)
-owner = read()
-assert owner["id"] == 14 and owner["result"]["outcome"]["outcome"] == "cancelled"
+if Path("challenge-fixture").exists():
+    deadline = time.monotonic() + 8
+    while not Path("show-permission").exists():
+        assert time.monotonic() < deadline
+        time.sleep(.05)
+    permission(14, ours)
+    answer = read()
+    assert answer["id"] == 14 and answer["result"]["outcome"] == {
+        "outcome":"selected", "optionId":"allow",
+    }
+    Path("first-permission-approved").touch()
+    permission(15, ours)
+    stale = read()
+    assert stale["id"] == 15 and stale["result"]["outcome"]["outcome"] == "cancelled"
+else:
+    permission(14, ours)
+    owner = read()
+    assert owner["id"] == 14 and owner["result"]["outcome"]["outcome"] == "cancelled"
 
 complete = {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
     "name":"complete","arguments":{"summary":"Fixture assistant result","links":[]},
@@ -85,7 +104,7 @@ result(prompt, {"stopReason":"end_turn"})
 '''
 
 
-def verify(binary, *, allow=True, version="1.5.12", authority="agent-default"):
+def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", challenge=False):
     with tempfile.TemporaryDirectory(prefix="aca-", dir=Path("/tmp").resolve()) as tmp:
         root = Path(tmp)
         home, tools, work, state = (root / key for key in ("home", "bin", "work", "s"))
@@ -114,6 +133,31 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default"):
         def rows():
             return json.loads(cli("ls", "--json").stdout) or []
 
+        def attached_response(text):
+            with socket.socket(socket.AF_UNIX) as owner:
+                owner.settimeout(4)
+                owner.connect(str(sock))
+                with owner.makefile("rwb") as stream:
+                    def frame(tag, body):
+                        stream.write(struct.pack(">I", len(body) + 1) + bytes([tag]) + body)
+                        stream.flush()
+                    def read_frame():
+                        size = struct.unpack(">I", stream.read(4))[0]
+                        return stream.read(size)
+                    frame(1, json.dumps({"op":"hello","protocol_version":1,"capabilities":["attach"]}).encode())
+                    hello = json.loads(read_frame()[1:])
+                    frame(1, json.dumps({"op":"attach","endpoint_id":hello["endpoint_id"],"session_id":sid}).encode())
+                    lease = json.loads(read_frame()[1:])
+                    assert lease["op"] == "lease" and lease["session_id"] == sid
+                    remaining = lease["snapshot_len"]
+                    while remaining:
+                        part = read_frame()
+                        assert part[0] == 4
+                        remaining -= len(part) - 1
+                    frame(3, (text + "\r").encode())
+                    wait_for(lambda: (work / "first-permission-approved").exists() or not challenge,
+                             "attached response consumed", timeout=3)
+
         with (root / "daemon-log").open("wb") as log:
             daemon = subprocess.Popen([binary, "daemon"], cwd=work, env=env, stderr=log)
         sid = None
@@ -129,6 +173,8 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default"):
                 assert not rows() and not (work / "prompts").exists()
                 return
             job = json.loads(created.stdout)
+            if challenge:
+                (work / "challenge-fixture").touch()
             schedule("run", job["id"])
             def history():
                 return (json.loads(schedule("history", job["id"]).stdout) or [None])[0]
@@ -156,8 +202,29 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default"):
                 pending = rows()[0]["status"]["Interaction"] == "permission" or state["state"] == "needs-input"
                 return pending and peek.returncode == 0 and "fixture permission" in peek.stdout
 
+            if challenge:
+                def prompted():
+                    tick()
+                    return (work / "prompts").exists()
+                wait_for(prompted, "ACP prompt before first permission")
+                cli("send", sid, "--text", "1")
+                (work / "show-permission").touch()
             wait_for(has_permission, "pending human permission")
-            cli("send", sid, "--text", "0")
+            if challenge:
+                def current_code():
+                    screen = cli("peek", sid, ok=False).stdout
+                    matches = re.findall(r"followed by ([0-9a-f]{12})", screen)
+                    return matches[-1] if matches else None
+                first_code = wait_for(current_code, "first visible permission code")
+                time.sleep(.15)
+                assert not (work / "first-permission-approved").exists()
+                attached_response(f"1 {first_code}")
+                wait_for(lambda: (code if (code := current_code()) and code != first_code else None),
+                         "distinct second permission code")
+                # The previous displayed code can never approve this active request.
+                attached_response(f"1 {first_code}")
+            else:
+                cli("send", sid, "--text", "0")
             wait_for(lambda: (work / "mcp-receipt-confirmed").exists(), "real scoped MCP bridge receipt")
             assert tick()["state"] != "ready", "transport receipt projected before final assistant proof"
             (work / "permit-final").write_text("valid" if allow else "invalid")
@@ -184,6 +251,8 @@ if __name__ == "__main__":
     for binary in (Path(path).resolve(strict=True) for path in sys.argv[1:]):
         print(binary, flush=True)
         verify(binary)
+        if subprocess.check_output([binary, "version"], text=True).strip().endswith("(Rust)"):
+            verify(binary, challenge=True)
         verify(binary, allow=False)
         verify(binary, version="1.5.11")
         verify(binary, authority="observe")

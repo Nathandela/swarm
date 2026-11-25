@@ -363,7 +363,11 @@ fn session(
             let options = event["options"]
                 .as_array()
                 .filter(|opts| (1..=12).contains(&opts.len()));
-            if let Some(options) = options {
+            if let Some(options) = options
+                && unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) } == 0
+            {
+                let challenge = runtime::random_id()?;
+                let code = &challenge[..12];
                 evidence.save("permission", "")?;
                 println!(
                     "\r\nAntigravity requests permission for {}",
@@ -372,21 +376,16 @@ fn session(
                 for (index, option) in options.iter().enumerate() {
                     println!("{}. {}", index + 1, display(field(option, "name")));
                 }
-                println!("Enter an option number, or 0 to cancel.");
+                println!("Enter the option number followed by {code}, or 0 to cancel.");
+                io::stdout().flush()?;
                 let mut line = String::new();
-                let _ = io::stdin().lock().take(1025).read_line(&mut line);
-                let option = line
-                    .trim()
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|n| n.checked_sub(1))
-                    .and_then(|n| options.get(n))
-                    .and_then(|option| option["optionId"].as_str())
-                    .filter(|option| {
-                        !option.is_empty()
-                            && option.len() <= 128
-                            && !option.chars().any(char::is_control)
-                    });
+                let option = if io::stdin().lock().take(1025).read_line(&mut line).is_ok()
+                    && line.ends_with('\n')
+                {
+                    permission_option(&line, code, options)
+                } else {
+                    None
+                };
                 rpc.permission(&frame["id"], option)?;
                 evidence.save("working", "")?;
             } else {
@@ -420,6 +419,17 @@ fn session(
     evidence.save("finished", &closing)?;
     println!("{}", display(&closing));
     Ok(())
+}
+
+fn permission_option<'a>(line: &str, challenge: &str, options: &'a [Value]) -> Option<&'a str> {
+    let mut fields = line.split_whitespace();
+    let index = fields.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+    if fields.next() != Some(challenge) || fields.next().is_some() {
+        return None;
+    }
+    options.get(index)?["optionId"].as_str().filter(|option| {
+        !option.is_empty() && option.len() <= 128 && !option.chars().any(char::is_control)
+    })
 }
 
 fn display(text: &str) -> String {
