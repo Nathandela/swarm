@@ -287,6 +287,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     | "external-resume"
                     | "resume-relocate"
                     | "semantic-send"
+                    | "message-origin"
                     | "semantic-target"
                     | "native-requests-v1"
                     | crate::bootstrap::RESTART
@@ -439,11 +440,14 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
+                if !request["composer_send"]["origin"].is_null() && !caps.contains(&"message-origin") {
+                    return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"message origin was not negotiated"}));
+                }
                 let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
-                    "native_accepted" => json!({"op":"ok","operation_id":operation}),
+                    "native_accepted" | "submitted" => json!({"op":"ok","operation_id":operation}),
                     "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Codex app-server rejected semantic input"}),
-                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Codex semantic submission outcome is unknown; inspect --status"}),
+                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Provider semantic submission outcome is unknown; inspect --status"}),
                 };
                 reply(&writer,state,response)
             }),

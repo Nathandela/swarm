@@ -49,6 +49,7 @@ pub(super) struct Session {
     token: String,
     agent: String,
     resumed_from: Option<String>,
+    agy_native_installation: Option<String>,
     cwd: String,
     labels: Mutex<Labels>,
     created: String,
@@ -89,6 +90,9 @@ impl Session {
             }
             .into(),
             resumed_from: data["agy_launch"]["resumed_from"]
+                .as_str()
+                .map(str::to_owned),
+            agy_native_installation: data["provider"]["agy_native_installation"]
                 .as_str()
                 .map(str::to_owned),
             cwd: cwd.into(),
@@ -217,6 +221,12 @@ impl Session {
         } else {
             &label
         };
+        let agy_native_installation =
+            if provider.agent == "agy" && providers::agy_input::qualified(&provider.version) {
+                crate::discord::native_input_installation()
+            } else {
+                None
+            };
         let id = runtime::random_id()?;
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
@@ -226,6 +236,7 @@ impl Session {
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "provider": {"name": provider.agent, "version": provider.version, "agy_status_line":provider.agy_status_line,
+                    "agy_native_installation":agy_native_installation,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
                     } else { "classic" },
@@ -383,9 +394,19 @@ impl Session {
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
         if self.agent == "agy" {
-            return Err(io::Error::other(
-                "Antigravity has no qualified native input registration",
-            ));
+            if !self.is_live() {
+                return Err(io::Error::other("Antigravity session is no longer live"));
+            }
+            let mut peer = self.dial()?;
+            peer.set_read_timeout(Some(Duration::from_secs(7)))?;
+            runtime::write_control(&mut peer, &json!({"type":"agy_ready"}))?;
+            let ready = runtime::read_control(&mut peer)?;
+            if ready["type"] != "ok" || ready["conversation_id"] != self.semantic_thread()? {
+                return Err(io::Error::other(
+                    "Antigravity has no qualified native input registration",
+                ));
+            }
+            return Ok(codex_receipt::provider_instance("agy", &self.token));
         }
         if self.agent != "codex" || !self.is_live() {
             return Err(io::Error::other("session has no live Codex app-server"));
@@ -445,13 +466,20 @@ impl Session {
         root: &Path,
     ) -> io::Result<Option<Value>> {
         let thread = self.semantic_thread()?;
-        let record = codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?;
+        let record = codex_receipt::load_for(
+            &self.dir,
+            operation,
+            session,
+            &self.token,
+            &thread,
+            &self.agent,
+        )?;
         if let Some(record) = record {
             codex_receipt::verify_binding(
                 root,
                 operation,
                 session,
-                &codex_receipt::instance(&self.token),
+                &codex_receipt::provider_instance(&self.agent, &self.token),
                 field(&record, "intent"),
             )?;
             return Ok(Some(record["receipt"].clone()));
@@ -479,16 +507,37 @@ impl Session {
                     !matches!(
                         key.as_str(),
                         "session" | "session_instance" | "text" | "expected_turn"
-                    ) && !value.is_null()
+                    ) && !(self.agent == "agy" && key == "origin")
+                        && !value.is_null()
                 })
             })
             || !(body["expected_turn"].is_null() || body["expected_turn"] == "")
-            || instance != codex_receipt::instance(&self.token)
-            || self.agent != "codex"
+            || instance != codex_receipt::provider_instance(&self.agent, &self.token)
+            || !matches!(self.agent.as_str(), "codex" | "agy")
+            || text.contains('\0')
         {
-            return Err(io::Error::other("invalid or stale Codex semantic request"));
+            return Err(io::Error::other(
+                "invalid or stale provider semantic request",
+            ));
         }
         let thread = self.semantic_thread()?;
+        let origin = if self.agent == "agy" {
+            let origin = providers::agy_input::origin(&body["origin"])?;
+            if self.agy_native_installation.as_deref() != origin["installation_id"].as_str() {
+                return Err(io::Error::other(
+                    "Antigravity worker was not launched for this installation",
+                ));
+            }
+            crate::discord::require_agy_origin(&origin)?;
+            origin
+        } else {
+            Value::Null
+        };
+        let intent = if self.agent == "agy" {
+            providers::agy_input::intent(text, &origin)?
+        } else {
+            codex_receipt::hash(text)
+        };
         {
             use sha2::{Digest, Sha256};
             let digest = Sha256::digest(operation);
@@ -496,14 +545,21 @@ impl Session {
                 [usize::from(digest[0]) % state.operation_locks.len()]
             .lock()
             .unwrap();
-            codex_receipt::bind(&state.root, operation, session, instance, text)?;
+            if self.agent == "agy" {
+                codex_receipt::bind_intent(&state.root, operation, session, instance, &intent)?;
+            } else {
+                codex_receipt::bind(&state.root, operation, session, instance, text)?;
+            }
         }
-        if let Some(record) =
-            codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?
-        {
-            if record["intent"] != codex_receipt::hash(text)
-                || record["receipt"]["session"] != session
-            {
+        if let Some(record) = codex_receipt::load_for(
+            &self.dir,
+            operation,
+            session,
+            &self.token,
+            &thread,
+            &self.agent,
+        )? {
+            if record["intent"] != intent || record["receipt"]["session"] != session {
                 return Err(io::Error::other(
                     "semantic operation is already bound to another request",
                 ));
@@ -512,12 +568,16 @@ impl Session {
         }
         self.semantic_target()?;
         let mut shim = self.dial()?;
-        shim.set_read_timeout(Some(Duration::from_secs(7)))?;
+        shim.set_read_timeout(Some(Duration::from_secs(if self.agent == "agy" {
+            12
+        } else {
+            7
+        })))?;
         runtime::write_control(
             &mut shim,
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
-                "session_instance":instance,"text":text,
+                "session_instance":instance,"text":text,"origin":origin,
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -526,7 +586,7 @@ impl Session {
         }
         if reply["receipt"]["operation_id"] != operation || reply["receipt"]["session"] != session {
             return Err(io::Error::other(
-                "uncorrelated Codex semantic receipt; outcome unknown",
+                "uncorrelated provider semantic receipt; outcome unknown",
             ));
         }
         self.semantic_status(operation, session, &state.root)?

@@ -12,6 +12,27 @@ use std::path::Path;
 
 const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
 
+pub(crate) fn native_input_installation() -> Option<String> {
+    let config = Place::resolve(None).and_then(|place| place.load()).ok()?;
+    config
+        .enabled()
+        .then(|| config.text("installation_id").to_owned())
+}
+
+pub(crate) fn require_agy_origin(origin: &Value) -> io::Result<()> {
+    let config = Place::resolve(None)?.load()?;
+    if !config.enabled()
+        || origin["installation_id"] != config.text("installation_id")
+        || origin["kind"] == "owner_direct" && origin["actor_id"] != config.text("owner_id")
+        || origin["kind"] == "owner_endorsed" && origin["endorser_id"] != config.text("owner_id")
+    {
+        return Err(invalid(
+            "Antigravity message origin is outside the enabled installation",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn run(args: &[String]) -> u8 {
     if args
         .first()

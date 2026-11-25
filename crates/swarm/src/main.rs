@@ -55,6 +55,7 @@ fn main() -> ExitCode {
         }
         Some("daemon") => supervisor::run(&args[1..]),
         Some("hook") => hook::run(&args[1..]),
+        Some("native-input") => providers::agy_input::cli(&args[1..]),
         Some("shim") => shim::run(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
         Some("discord") => discord::run(&args[1..]),

@@ -3,7 +3,7 @@ mod pty;
 mod screen;
 
 use crate::ipc::{field, wire};
-use crate::providers::{self, agy, codex_receipt};
+use crate::providers::{self, agy, agy_input, codex_receipt};
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -41,6 +41,7 @@ struct State {
     hook_token: String,
     provider: String,
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    agy_broker: Option<agy_input::Broker>,
     terminal_input: AtomicBool,
     dir: PathBuf,
     working_dir: PathBuf,
@@ -96,13 +97,24 @@ fn serve(dir: &Path) -> io::Result<()> {
     let listener = runtime::bind(&socket)?;
     let provider = &config["provider"];
     let executable = Path::new(field(provider, "executable"));
-    let argv: Vec<_> = bootstrap["argv"]
+    let mut argv: Vec<_> = bootstrap["argv"]
         .as_array()
-        .and_then(|args| args.iter().map(Value::as_str).collect::<Option<_>>())
+        .and_then(|args| {
+            args.iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<_>>()
+        })
         .ok_or_else(|| io::Error::other("malformed transient launch arguments"))?;
     let working_dir = field(&config, "cwd");
     let mut command = Command::new(executable);
     let environment = runtime::launch_env(&Value::Null);
+    let agy_broker = if provider["agy_native_installation"].is_string() {
+        let broker = agy_input::Broker::prepare(dir, &config, &environment)?;
+        broker.launch_args(&mut argv);
+        Some(broker)
+    } else {
+        None
+    };
     command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)));
@@ -194,6 +206,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         hook_token,
         provider: field(provider, "name").to_owned(),
         semantic: channel.is_some().then_some(action_sink),
+        agy_broker,
         terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
@@ -248,6 +261,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         if pty::SHUTDOWN_SIGNAL.load(Ordering::Relaxed) {
             terminate(&state)?;
         }
+        let _native = state
+            .agy_broker
+            .as_ref()
+            .map(|broker| broker.joined.lock().unwrap());
         let mut active = state.child.lock().unwrap();
         let terminate_at = state.terminate_at.lock().unwrap();
         let child = active.as_mut().expect("worker owned while serving");
@@ -266,7 +283,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                 .expect("worker owned during shutdown")
                 .wait()?;
         }
-        drop((active, terminate_at));
+        drop((active, terminate_at, _native));
         thread::sleep(Duration::from_millis(40));
     };
     drop(backend);
@@ -289,6 +306,10 @@ fn serve(dir: &Path) -> io::Result<()> {
 }
 
 fn terminate(state: &State) -> io::Result<()> {
+    let _native = state
+        .agy_broker
+        .as_ref()
+        .map(|broker| broker.joined.lock().unwrap());
     let active = state.child.lock().unwrap();
     let mut deadline = state.terminate_at.lock().unwrap();
     if let Some(child) = active.as_ref().filter(|_| deadline.is_none()) {
@@ -414,6 +435,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     stream.set_read_timeout(Some(runtime::IO_TIMEOUT))?;
     stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
     let hello = runtime::read_control(&mut stream)?;
+    if hello["type"] == "agy_register" {
+        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        return register_agy(&mut stream, state, &hello);
+    }
     if hello["type"] == "hook" {
         return hook_observation(&mut stream, state, &hello);
     }
@@ -439,6 +464,21 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         "signal" if request["sig"] == "term" => {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
+        }
+        "agy_ready" => {
+            let result = agy_ready(state);
+            runtime::write_control(
+                &mut stream,
+                &result.unwrap_or_else(|e| json!({"type":"error", "error":e.to_string()})),
+            )
+        }
+        "semantic" if state.provider == "agy" => {
+            let result = agy_send(state, &request);
+            let reply = match result {
+                Ok(receipt) => json!({"type":"semantic_result", "receipt":receipt}),
+                Err(e) => json!({"type":"error", "error":e.to_string()}),
+            };
+            runtime::write_control(&mut stream, &reply)
         }
         "semantic" => {
             let operation = field(&request, "operation_id");
@@ -528,6 +568,76 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         _ => Err(io::Error::other("unsupported shim operation")),
     }
+}
+
+fn agy_worker_live(state: &State) -> io::Result<()> {
+    let worker = state.child.lock().unwrap();
+    if let Some(worker) = worker.as_ref()
+        && state.terminate_at.lock().unwrap().is_none()
+        && !pty::child_exited(worker)?
+    {
+        return Ok(());
+    }
+    Err(io::Error::other("Antigravity worker is stopping"))
+}
+
+fn register_agy(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
+    let broker = state
+        .agy_broker
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Antigravity native input is disabled"))?;
+    let mut joined = broker.joined.lock().unwrap();
+    agy_worker_live(state)?;
+    let source = broker.validate_registration(request)?;
+    agy_worker_live(state)?;
+    if joined.as_ref().is_some_and(|current| current != &source) {
+        return Err(io::Error::other(
+            "Antigravity registration changed after joining",
+        ));
+    }
+    let mut observed = state.observations.lock().unwrap();
+    let id = source.conversation();
+    if observed
+        .conversation
+        .as_deref()
+        .is_some_and(|current| current != id)
+    {
+        return Err(io::Error::other(
+            "Antigravity registration does not match the observed conversation",
+        ));
+    }
+    observed.conversation = Some(id.to_owned());
+    write_agy_observation(state, &observed)?;
+    *joined = Some(source);
+    runtime::write_control(stream, &json!({"type":"ok"}))
+}
+
+fn agy_ready(state: &State) -> io::Result<Value> {
+    let broker = state
+        .agy_broker
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Antigravity native input is disabled"))?;
+    let joined = broker.joined.lock().unwrap();
+    let source = joined.as_ref().ok_or_else(|| {
+        io::Error::other("Antigravity has no qualified native input registration")
+    })?;
+    agy_worker_live(state)?;
+    broker.verify(source)?;
+    agy_worker_live(state)?;
+    Ok(json!({"type":"ok", "conversation_id":source.conversation()}))
+}
+
+fn agy_send(state: &State, request: &Value) -> io::Result<Value> {
+    let broker = state
+        .agy_broker
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Antigravity native input is disabled"))?;
+    let joined = broker.joined.lock().unwrap();
+    let source = joined.as_ref().ok_or_else(|| {
+        io::Error::other("Antigravity has no qualified native input registration")
+    })?;
+    agy_worker_live(state)?;
+    broker.send(source, &state.token, request, || agy_worker_live(state))
 }
 
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {

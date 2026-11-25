@@ -48,9 +48,13 @@ pub(crate) fn timely(id: &str) -> bool {
 }
 
 pub(crate) fn instance(token: &str) -> String {
+    provider_instance("codex", token)
+}
+
+pub(crate) fn provider_instance(agent: &str, token: &str) -> String {
     format!(
         "{:x}",
-        Sha256::digest(format!("codex-semantic-instance:{token}"))
+        Sha256::digest(format!("{agent}-semantic-instance:{token}"))
     )
 }
 
@@ -98,6 +102,16 @@ pub(crate) fn bind(
     incarnation: &str,
     text: &str,
 ) -> io::Result<()> {
+    bind_intent(root, operation, target, incarnation, &hash(text))
+}
+
+pub(crate) fn bind_intent(
+    root: &Path,
+    operation: &str,
+    target: &str,
+    incarnation: &str,
+    intent: &str,
+) -> io::Result<()> {
     if !timely(operation) {
         return Err(io::Error::other("invalid semantic operation ID"));
     }
@@ -106,7 +120,7 @@ pub(crate) fn bind(
     durable_dir(&dir)?;
     let path = dir.join(format!("semantic-{:x}.json", Sha256::digest(operation)));
     let binding =
-        json!({"operation":operation,"session":target,"instance":incarnation,"intent":hash(text)});
+        json!({"operation":operation,"session":target,"instance":incarnation,"intent":intent});
     match runtime::read_json(&path) {
         Ok(saved) if saved == binding => Ok(()),
         Ok(_) => Err(io::Error::other(
@@ -148,6 +162,17 @@ pub(crate) fn fence(
     token: &str,
     thread: &str,
 ) -> io::Result<()> {
+    fence_for(dir, operation, session, token, thread, "codex")
+}
+
+pub(crate) fn fence_for(
+    dir: &Path,
+    operation: &str,
+    session: &str,
+    token: &str,
+    thread: &str,
+    agent: &str,
+) -> io::Result<()> {
     let semantic = dir.join("semantic");
     durable_dir(&semantic)?;
     let pending = semantic.join("pending.json");
@@ -156,11 +181,11 @@ pub(crate) fn fence(
             let prior = value
                 .as_str()
                 .ok_or_else(|| io::Error::other("damaged pending semantic record"))?;
-            let receipt = load(dir, prior, session, token, thread)?;
+            let receipt = load_for(dir, prior, session, token, thread, agent)?;
             if !receipt.is_some_and(|record| {
                 matches!(
                     record["receipt"]["state"].as_str(),
-                    Some("native_accepted" | "rejected")
+                    Some("native_accepted" | "submitted" | "rejected")
                 )
             }) {
                 return Err(io::Error::other(
@@ -180,21 +205,37 @@ pub(crate) fn save(dir: &Path, operation: &str, hash: &str, receipt: &Value) -> 
     runtime::write_json(&path, &json!({"intent":hash,"receipt":receipt}))
 }
 
-fn valid(record: &Value, operation: &str, session: &str, token: &str, thread: &str) -> bool {
+fn valid(
+    record: &Value,
+    operation: &str,
+    session: &str,
+    token: &str,
+    thread: &str,
+    agent: &str,
+) -> bool {
     let receipt = &record["receipt"];
-    receipt["operation_id"] == operation
+    matches!(agent, "agy" | "codex")
+        && receipt["operation_id"] == operation
         && receipt["session"] == session
-        && receipt["session_instance"] == instance(token)
-        && receipt["agent"] == "codex"
+        && receipt["session_instance"] == provider_instance(agent, token)
+        && receipt["agent"] == agent
         && canonical_thread(thread)
         && receipt["native_session_id"] == thread
         && record["intent"]
             .as_str()
             .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(hex))
+        && (agent != "agy" || super::agy_input::origin(&receipt["origin"]).is_ok())
+        && (agent != "agy"
+            || receipt["native_generation"]
+                .as_str()
+                .is_some_and(runtime::valid_id))
         && match receipt["state"].as_str() {
-            Some("native_accepted") => receipt["native_turn_id"].as_str().is_some_and(|id| {
-                !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
-            }),
+            Some("submitted") if agent == "agy" => receipt["native_turn_id"].is_null(),
+            Some("native_accepted") if agent == "codex" => {
+                receipt["native_turn_id"].as_str().is_some_and(|id| {
+                    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+                })
+            }
             Some("outcome_unknown" | "rejected") => receipt["native_turn_id"].is_null(),
             _ => false,
         }
@@ -207,9 +248,20 @@ pub(crate) fn load(
     token: &str,
     thread: &str,
 ) -> io::Result<Option<Value>> {
+    load_for(dir, operation, session, token, thread, "codex")
+}
+
+pub(crate) fn load_for(
+    dir: &Path,
+    operation: &str,
+    session: &str,
+    token: &str,
+    thread: &str,
+    agent: &str,
+) -> io::Result<Option<Value>> {
     match runtime::read_json(&path(dir, operation)?) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Ok(record) if valid(&record, operation, session, token, thread) => Ok(Some(record)),
+        Ok(record) if valid(&record, operation, session, token, thread, agent) => Ok(Some(record)),
         Ok(_) => Err(io::Error::other("damaged semantic receipt")),
         Err(error) => Err(error),
     }
@@ -226,14 +278,23 @@ mod tests {
             "operation_id":"fixture","session":"ep/s","session_instance":instance("token"),
             "native_session_id":thread,"agent":"codex","state":"native_accepted","native_turn_id":"turn",
         }});
-        assert!(valid(&record, "fixture", "ep/s", "token", thread));
-        assert!(!valid(&record, "fixture", "ep/other", "token", thread));
-        assert!(!valid(&record, "fixture", "ep/s", "other-token", thread));
+        assert!(valid(&record, "fixture", "ep/s", "token", thread, "codex"));
+        assert!(!valid(
+            &record, "fixture", "ep/other", "token", thread, "codex"
+        ));
+        assert!(!valid(
+            &record,
+            "fixture",
+            "ep/s",
+            "other-token",
+            thread,
+            "codex"
+        ));
         record["receipt"]["native_turn_id"] = Value::Null;
-        assert!(!valid(&record, "fixture", "ep/s", "token", thread));
+        assert!(!valid(&record, "fixture", "ep/s", "token", thread, "codex"));
         record["receipt"]["state"] = json!("outcome_unknown");
-        assert!(valid(&record, "fixture", "ep/s", "token", thread));
+        assert!(valid(&record, "fixture", "ep/s", "token", thread, "codex"));
         record["intent"] = json!("z".repeat(64));
-        assert!(!valid(&record, "fixture", "ep/s", "token", thread));
+        assert!(!valid(&record, "fixture", "ep/s", "token", thread, "codex"));
     }
 }

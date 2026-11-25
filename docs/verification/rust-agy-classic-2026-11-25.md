@@ -22,3 +22,15 @@ python3 scripts/verification/parity_agy.py /path/to/pinned-go-swarm target/debug
 ```
 
 A repeated run against the independent arm64 Go rebuild exposed callback reordering in the Rust arm. The shim accepted two status-line connections concurrently and processed a later conflicting UUID before the initial UUID. Rust now processes callbacks in accept order on a private agy status socket. The wrapper waits for a validated acknowledgment with bounded I/O. A fixture opens overlapping connections, holds the first frame for 150 ms, and requires acknowledgment of that frame and refusal of the conflicting second frame. Ten consecutive Go/Rust runs of the advertised-settings scenario passed.
+
+## Native agentapi registration and delivery
+
+The Rust shim opens a registration route for agy 1.4.0, 1.4.5, and 1.4.7 when an enabled local connector was selected at launch. The registration must carry the worker's own tool metadata, exact bootstrap command, workspace, executable identity and loopback agentapi endpoint. Native conversation metadata must confirm the conversation and project. The shim holds the credentials in memory. Registration does not change the agent's tool permission mode.
+
+The pinned Go path requires a message origin for this broker. The Rust daemon likewise requires negotiation and validates the origin against the installed connector and the installation bound to the worker. `swarm message` without an origin continues to refuse. A submitted receipt confirms the provider echoed the exact recipient and text. The operation records the exact origin, session and provider conversation. A wrong native echo leaves an unresolved operation and fences any later sends. The terminal receives no fallback input.
+
+The local fixture exercised the shipped Rust `spawn` launch, native registration role, owner-daemon semantic request, and `swarm message --status`. It refused forged project, tool metadata, endpoint, workspace, origin, installation switch and replay with altered intent. It confirmed exact Unicode and newline delivery once, retained the receipt and live source over a daemon restart, and preserved ambiguity without replay. The fixture implements the measured agentapi shape. Positive delivery with installed agy and the public Discord publication path remain separate from this fixture.
+
+```sh
+python3 scripts/verification/rust_agy_native_input.py target/debug/swarm
+```
