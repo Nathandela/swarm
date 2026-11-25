@@ -176,5 +176,17 @@ func TestStalledWorkerWithoutNoticeEvidenceGetsFinalNotice(t *testing.T) {
 		if !stallNotice(t, s) {
 			t.Fatalf("%s: stalled request ended in silence", name)
 		}
+		if hasReplyObligation(mustSnapshot(t, s)) {
+			t.Fatalf("%s: stalled request kept polling after its final notice", name)
+		}
 	}
+}
+
+func mustSnapshot(t *testing.T, s *Store) State {
+	t.Helper()
+	st, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

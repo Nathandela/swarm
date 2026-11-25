@@ -350,6 +350,8 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 					if err := recordReplyNotice(current, input, discussionStallNotice, true); err != nil {
 						return err
 					}
+					next = 0
+					input.ReplyDeliveryUnknown = true
 				}
 			case !current.replyWaitConsumed && !now.Before(time.Unix(input.ReplyStallSince, 0).Add(discussionReplyWait)):
 				if err := recordReplyNotice(current, input, discussionWorkerWaitNotice, false); err != nil {
