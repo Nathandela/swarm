@@ -7,6 +7,7 @@ mod flags;
 mod hook;
 mod ipc;
 mod providers;
+mod schedule;
 mod setup_trust;
 mod shim;
 mod socket;
@@ -16,7 +17,7 @@ mod workspace;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [daemon|shim|ls|peek|watch|spawn|handoff|message|requests|send|kill|doctor|discord|setup-trust|dispatcher-guide|version]\n";
+const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|send|kill|doctor|discord|setup-trust|dispatcher-guide|version]\n";
 const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
 
@@ -59,6 +60,8 @@ fn main() -> ExitCode {
         Some("shim") => shim::run(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
         Some("discord") => discord::run(&args[1..]),
+        Some("schedule") => schedule::run(&args[1..]),
+        Some("schedule-receipt-bridge") => schedule::worker::bridge(),
         Some("dispatcher-guide") => guide(&args[1..]),
         Some(
             "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "send"

@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,10 @@ type fakeAppServer struct {
 	// words really crossed the socket as an RPC.
 	turnStarts int
 	lastText   string
+	turnPolicy json.RawMessage
+	appArgs    []string
+	receipt    bool
+	final      bool
 }
 
 func runAppServer(args []string) int {
@@ -94,7 +99,7 @@ func runAppServer(args []string) int {
 		return 1
 	}
 	_, seedErr := os.Stat(".fixture-seeded-rollout")
-	s := &fakeAppServer{conns: map[*websocket.Conn]*sync.Mutex{}, rollout: seedErr == nil}
+	s := &fakeAppServer{conns: map[*websocket.Conn]*sync.Mutex{}, rollout: seedErr == nil, appArgs: args}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rpc", s.serveRPC)
 	mux.HandleFunc("/probe", s.probe)
@@ -114,6 +119,16 @@ func runAppServer(args []string) int {
 			"jsonrpc": "2.0", "id": 29, "method": "item/commandExecution/requestApproval",
 			"params": map[string]any{"threadId": thread, "command": "synthetic approval"},
 		})
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /fixture/schedule-finish", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.receipt {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		s.final = true
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/agent-attach", func(w http.ResponseWriter, _ *http.Request) {
@@ -158,7 +173,9 @@ func (s *fakeAppServer) serveRPC(w http.ResponseWriter, r *http.Request) {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params struct {
-				Input []struct {
+				ApprovalPolicy string          `json:"approvalPolicy"`
+				SandboxPolicy  json.RawMessage `json:"sandboxPolicy"`
+				Input          []struct {
 					Text string `json:"text"`
 				} `json:"input"`
 			} `json:"params"`
@@ -174,6 +191,7 @@ func (s *fakeAppServer) serveRPC(w http.ResponseWriter, r *http.Request) {
 			if len(fr.Params.Input) > 0 {
 				s.mu.Lock()
 				s.lastText = fr.Params.Input[0].Text
+				s.turnPolicy, _ = json.Marshal(map[string]any{"approval": fr.Params.ApprovalPolicy, "sandbox": fr.Params.SandboxPolicy})
 				s.mu.Unlock()
 			}
 			if _, err := os.Stat(".fixture-drop-turn-reply"); err == nil {
@@ -189,6 +207,34 @@ func (s *fakeAppServer) serveRPC(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		if fr.Method == "turn/start" && os.Getenv("SWARM_SCHEDULE_RUN") != "" {
+			go s.recordReceipt()
+		}
+	}
+}
+
+const finishSummary = "Fixture assistant result"
+
+func (s *fakeAppServer) recordReceipt() {
+	bin := os.Getenv("SWARM_SCHEDULE_BIN")
+	if bin == "" {
+		return
+	}
+	bridge := exec.Command(bin, "schedule-receipt-bridge")
+	bridge.Stdin = strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"complete","arguments":{"summary":"` + finishSummary + `","links":["fixture:artifact"]}}}` + "\n")
+	output, err := bridge.Output()
+	if err != nil {
+		return
+	}
+	var reply struct {
+		Result *struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(output, &reply) == nil && reply.Result != nil && !reply.Result.IsError {
+		s.mu.Lock()
+		s.receipt = true
+		s.mu.Unlock()
 	}
 }
 
@@ -216,6 +262,16 @@ func (s *fakeAppServer) answer(id json.RawMessage, method string) map[string]any
 		s.rollout = true
 		s.turnStarts++
 		out["result"] = map[string]any{"turn": map[string]any{"id": "01a0033b-d0be-77e1-88e7-584ddeea562d", "status": "inProgress"}}
+	case "thread/read":
+		cwd, _ := os.Getwd()
+		turns := []any{}
+		if s.final {
+			turns = append(turns, map[string]any{
+				"id": "01a0033b-d0be-77e1-88e7-584ddeea562d", "status": "completed", "itemsView": "full",
+				"items": []any{map[string]any{"id": "fixture-final", "type": "agentMessage", "text": finishSummary}},
+			})
+		}
+		out["result"] = map[string]any{"thread": map[string]any{"id": fakeThreadID, "cwd": cwd, "turns": turns}}
 	default:
 		out["result"] = map[string]any{}
 	}
@@ -227,7 +283,9 @@ func (s *fakeAppServer) answer(id json.RawMessage, method string) map[string]any
 func (s *fakeAppServer) probe(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	body := map[string]any{"turnStarts": s.turnStarts, "rollout": s.rollout, "lastText": s.lastText,
-		"openai": os.Getenv("OPENAI_API_KEY") != "", "anthropic": os.Getenv("ANTHROPIC_API_KEY") != ""}
+		"openai": os.Getenv("OPENAI_API_KEY") != "", "anthropic": os.Getenv("ANTHROPIC_API_KEY") != "",
+		"scheduleProof": os.Getenv("SWARM_SCHEDULE_PROOF") != "", "scheduleOwner": os.Getenv("SWARM_DAEMON_SOCK") != "",
+		"receipt": s.receipt, "turnPolicy": s.turnPolicy, "appArgs": s.appArgs}
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)

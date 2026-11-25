@@ -5,6 +5,7 @@ mod supervision;
 
 use crate::ipc::{field, wire};
 use crate::providers::{self, agy, codex_receipt};
+use crate::schedule::worker;
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -42,6 +43,7 @@ struct State {
     hook_token: String,
     provider: String,
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    schedule: Option<worker::Binding>,
     terminal_input: AtomicBool,
     dir: PathBuf,
     working_dir: PathBuf,
@@ -85,6 +87,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         return Err(io::Error::other("incompatible session reservation"));
     }
     let bootstrap = runtime::read_control(&mut io::stdin().lock())?;
+    let schedule = worker::read_binding(&config)?;
     // A reservation can spawn a worker at most once, even after its socket disappears.
     OpenOptions::new()
         .write(true)
@@ -115,7 +118,28 @@ fn serve(dir: &Path) -> io::Result<()> {
         path
     };
     let mut command = Command::new(executable);
-    let environment = runtime::launch_env(&Value::Null);
+    let mut environment = runtime::launch_env(&Value::Null);
+    let mut app_args = vec![
+        "-c".into(),
+        "sandbox_workspace_write.network_access=true".into(),
+    ];
+    if let Some(binding) = &schedule {
+        let transport = &bootstrap["schedule"];
+        let executable = Path::new(field(transport, "binary"));
+        let socket = Path::new(field(transport, "socket"));
+        environment.extend(
+            binding
+                .environment(
+                    field(transport, "proof"),
+                    socket,
+                    executable,
+                    field(&config, "id"),
+                )
+                .map_err(|e| io::Error::other(e.to_string()))?,
+        );
+        app_args = worker::codex_policy(&binding.authority, executable, true)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+    }
     command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)));
@@ -176,8 +200,13 @@ fn serve(dir: &Path) -> io::Result<()> {
         }
         command.current_dir(working_dir);
         if provider["name"] == "codex" && provider["mode"] == "managed" {
-            let (owner, connection) =
-                codex_backend::start(executable, Path::new(working_dir), dir, &environment)?;
+            let (owner, connection) = codex_backend::start(
+                executable,
+                Path::new(working_dir),
+                dir,
+                &environment,
+                &app_args,
+            )?;
             backend = Some(owner);
             command
                 .args(["--remote", &connection.endpoint])
@@ -193,10 +222,18 @@ fn serve(dir: &Path) -> io::Result<()> {
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
-        let _ = runtime::write_json(
-            &dir.join("exit.json"),
-            &json!({"error": err.to_string(), "token": token}),
-        );
+        let lingering = err
+            .get_ref()
+            .is_some_and(|e| e.is::<codex_backend::ContainmentUnknown>())
+            || backend
+                .as_mut()
+                .is_some_and(|owned| owned.shutdown().is_err());
+        if !lingering {
+            let _ = runtime::write_json(
+                &dir.join("exit.json"),
+                &json!({"error": err.to_string(), "token": token}),
+            );
+        }
         let _ = fs::remove_file(&socket);
     })?;
     let pid = std::process::id();
@@ -220,6 +257,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         hook_token,
         provider: field(provider, "name").to_owned(),
         semantic: channel.is_some().then_some(action_sink),
+        schedule: schedule.clone(),
         terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
@@ -252,7 +290,9 @@ fn serve(dir: &Path) -> io::Result<()> {
             state.dir.clone(),
             state.token.clone(),
         );
-        thread::spawn(move || codex_backend::observe(channel, cwd, dir, token, action_receiver));
+        thread::spawn(move || {
+            codex_backend::observe(channel, cwd, dir, token, schedule, action_receiver)
+        });
     }
     let (drained, drain_done) = mpsc::sync_channel(1);
     let output = thread::spawn(move || {
@@ -272,13 +312,13 @@ fn serve(dir: &Path) -> io::Result<()> {
     }
     let status = loop {
         if pty::SHUTDOWN_SIGNAL.load(Ordering::Relaxed) {
-            terminate(&state)?;
+            terminate(&state).map_err(|e| io::Error::other(format!("terminate provider: {e}")))?;
         }
         let mut active = state.child.lock().unwrap();
         let terminate_at = state.terminate_at.lock().unwrap();
         let child = active.as_mut().expect("worker owned while serving");
         let exited = pty::child_exited(child)
-            .map_err(|err| io::Error::other(format!("observe worker exit: {err}")))?;
+            .map_err(|e| io::Error::other(format!("observe provider exit: {e}")))?;
         let kill_group = match *terminate_at {
             // Keep an exited leader unreaped while its descendants grace their TERM.
             Some(at) => Instant::now() >= at,
@@ -286,16 +326,19 @@ fn serve(dir: &Path) -> io::Result<()> {
         };
         if kill_group {
             pty::signal_group(child, libc::SIGKILL)
-                .map_err(|err| io::Error::other(format!("stop worker group: {err}")))?;
+                .map_err(|e| io::Error::other(format!("contain provider process group: {e}")))?;
             break active
                 .take()
                 .expect("worker owned during shutdown")
-                .wait()?;
+                .wait()
+                .map_err(|e| io::Error::other(format!("join provider process: {e}")))?;
         }
         drop((active, terminate_at));
         thread::sleep(Duration::from_millis(40));
     };
-    drop(backend);
+    if let Some(mut owned) = backend {
+        owned.shutdown()?;
+    }
     if state.provider == "agy" {
         let _ = drain_done.recv_timeout(Duration::from_millis(150));
     }
@@ -466,16 +509,36 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
         }
+        "schedule_ready" => {
+            let authority = state.control.lock().unwrap();
+            let ready = state
+                .schedule
+                .as_ref()
+                .is_some_and(|binding| request["attempt"] == binding.attempt_id)
+                && *authority == 0
+                && !state.terminal_input.load(Ordering::Acquire);
+            runtime::write_control(
+                &mut stream,
+                &json!({"type": if ready {"ok"} else {"error"}}),
+            )
+        }
         "semantic" => {
             let operation = field(&request, "operation_id");
             let text = field(&request, "text");
             let session = field(&request, "session");
             let body = (|| {
-                if field(&request, "session_instance") != codex_receipt::instance(&state.token)
+                let scheduled = request["schedule_attempt"].as_str();
+                if scheduled.is_some_and(|attempt| {
+                    state
+                        .schedule
+                        .as_ref()
+                        .is_none_or(|b| b.attempt_id != attempt)
+                }) || field(&request, "session_instance")
+                    != codex_receipt::instance(&state.token)
                     || !codex_receipt::timely(operation)
                     || session.is_empty()
                     || text.is_empty()
-                    || text.len() > 4096
+                    || !worker::prompt_fits(text, scheduled.is_some())
                 {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }
@@ -494,6 +557,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         operation: operation.into(),
                         session: session.into(),
                         text: text.into(),
+                        schedule_attempt: scheduled.map(str::to_owned),
                         answer,
                         not_after: Instant::now() + Duration::from_secs(2),
                     })

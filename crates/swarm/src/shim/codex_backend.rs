@@ -1,6 +1,7 @@
 use super::pty;
 use crate::ipc::field;
 use crate::providers::codex_receipt;
+use crate::schedule::worker;
 use crate::supervisor::runtime;
 use serde_json::{Value, json};
 use std::io;
@@ -16,14 +17,37 @@ use tungstenite::{
 };
 
 pub(super) struct Backend {
-    child: Child,
+    child: Option<Child>,
+}
+
+#[derive(Debug)]
+pub(super) struct ContainmentUnknown(std::io::Error);
+
+impl std::fmt::Display for ContainmentUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Codex App Server stop is unconfirmed: {}", self.0)
+    }
+}
+impl std::error::Error for ContainmentUnknown {}
+
+impl Backend {
+    pub(super) fn shutdown(&mut self) -> io::Result<()> {
+        if let Some(child) = self.child.as_ref() {
+            pty::signal_group(child, libc::SIGKILL)
+                .map_err(|e| io::Error::other(ContainmentUnknown(e)))?;
+            self.child
+                .take()
+                .expect("owned app-server")
+                .wait()
+                .map_err(|e| io::Error::other(ContainmentUnknown(e)))?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Backend {
     fn drop(&mut self) {
-        // Retain the unreaped group leader through containment.
-        let _ = pty::signal_group(&self.child, libc::SIGKILL);
-        let _ = self.child.wait();
+        let _ = self.shutdown();
     }
 }
 
@@ -37,17 +61,13 @@ pub(super) fn start(
     cwd: &Path,
     dir: &Path,
     env: &[(String, String)],
+    policy: &[String],
 ) -> io::Result<(Backend, Channel)> {
     let socket = dir.join("b");
     let endpoint = format!("unix://{}", socket.display());
     let child = Command::new(executable)
-        .args([
-            "app-server",
-            "--listen",
-            &endpoint,
-            "-c",
-            "sandbox_workspace_write.network_access=true",
-        ])
+        .args(["app-server", "--listen", &endpoint])
+        .args(policy)
         .current_dir(cwd)
         .env_clear()
         .envs(env.iter().map(|(key, value)| (key, value)))
@@ -56,18 +76,33 @@ pub(super) fn start(
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()?;
-    let backend = Backend { child };
+    let mut backend = Backend { child: Some(child) };
+    let channel = connect(
+        backend.child.as_ref().expect("owned app-server"),
+        &socket,
+        endpoint,
+    );
+    match channel {
+        Ok(channel) => Ok((backend, channel)),
+        Err(e) => {
+            backend.shutdown()?;
+            Err(e)
+        }
+    }
+}
+
+fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel> {
     let deadline = Instant::now() + Duration::from_secs(4);
     let stream = loop {
-        if let Ok(stream) = UnixStream::connect(&socket) {
-            if runtime::peer_pid(&stream)? != backend.child.id() {
+        if let Ok(stream) = UnixStream::connect(socket) {
+            if runtime::peer_pid(&stream)? != child.id() {
                 return Err(io::Error::other(
                     "Codex app-server peer does not match owned child",
                 ));
             }
             break stream;
         }
-        if Instant::now() >= deadline || pty::child_exited(&backend.child)? {
+        if Instant::now() >= deadline || pty::child_exited(child)? {
             return Err(io::Error::other(
                 "Codex app-server did not bind its private socket",
             ));
@@ -105,13 +140,10 @@ pub(super) fn start(
         }
     }
     send(&mut connection, json!({"method":"initialized","params":{}}))?;
-    Ok((
-        backend,
-        Channel {
-            endpoint,
-            connection,
-        },
-    ))
+    Ok(Channel {
+        endpoint,
+        connection,
+    })
 }
 
 fn send(ws: &mut WebSocket<UnixStream>, message: Value) -> io::Result<()> {
@@ -142,12 +174,24 @@ struct Observation {
     turn: Option<String>,
     requests: std::collections::BTreeMap<String, &'static str>,
     joined: bool,
+    missing_rollout: bool,
+    scheduled_turn: Option<ScheduledTurn>,
     requests_unverified: bool,
     idle: bool,
     ambiguous: bool,
 }
 
 impl Observation {
+    fn schedule_ready(&self) -> bool {
+        (self.joined || self.missing_rollout)
+            && !self.ambiguous
+            && !self.requests_unverified
+            && self.idle
+            && self.turn.is_none()
+            && self.requests.is_empty()
+            && self.scheduled_turn.is_none()
+    }
+
     fn apply(&mut self, message: &Value, cwd: &Path) -> bool {
         let payload = &message["params"];
         let method = field(message, "method");
@@ -249,12 +293,14 @@ pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
     pub text: String,
+    pub schedule_attempt: Option<String>,
     pub not_after: Instant,
     pub answer: SyncSender<io::Result<Value>>,
 }
 
 struct SemanticTarget<'a> {
     dir: &'a Path,
+    schedule: Option<&'a worker::Binding>,
     token: &'a str,
     cwd: &'a Path,
 }
@@ -274,7 +320,7 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
             "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
-            "requests":requests,
+            "requests":requests,"schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
         }),
     );
 }
@@ -318,9 +364,17 @@ fn submit(
         }
         return Ok(record["receipt"].clone());
     }
+    let launch = target
+        .schedule
+        .filter(|binding| action.schedule_attempt.as_deref() == Some(&binding.attempt_id));
+    if action.schedule_attempt.is_some() && (launch.is_none() || !observation.schedule_ready()) {
+        return Err(io::Error::other(
+            "scheduled Codex has no exact opening authority",
+        ));
+    }
     if observation.thread.is_empty()
         || observation.ambiguous
-        || !observation.joined
+        || !(observation.joined || launch.is_some() && observation.missing_rollout)
         || observation.requests_unverified
         || !observation.idle
         || observation.turn.is_some()
@@ -352,15 +406,12 @@ fn submit(
         return Ok(receipt);
     }
     observation.idle = false;
-    if send(
-        ws,
-        json!({
-            "id":rpc,"method":"turn/start","params":{"threadId":observation.thread,
-                "input":[{"type":"text","text":action.text,"text_elements":[]}]}
-        }),
-    )
-    .is_err()
-    {
+    let mut params = json!({"threadId":observation.thread,
+        "input":[{"type":"text","text":action.text,"text_elements":[]}]});
+    if let Some(binding) = launch {
+        worker::codex_turn(&binding.authority, target.cwd, &mut params);
+    }
+    if send(ws, json!({"id":rpc,"method":"turn/start","params":params})).is_err() {
         // Prevent a prepared frame from flushing on a later read after the caller's authority ends.
         let _ = ws.get_ref().shutdown(Shutdown::Both);
         return Ok(receipt);
@@ -382,6 +433,13 @@ fn submit(
                 receipt["state"] = json!("native_accepted");
                 receipt["native_turn_id"] = json!(turn);
                 observation.turn = Some(turn.into());
+                if let Some(binding) = launch {
+                    observation.scheduled_turn = Some(ScheduledTurn {
+                        attempt: binding.attempt_id.clone(),
+                        operation: action.operation.clone(),
+                        turn: turn.into(),
+                    });
+                }
             }
         }
         codex_receipt::save(target.dir, &action.operation, &hash, &receipt)?;
@@ -390,11 +448,66 @@ fn submit(
     Ok(receipt)
 }
 
+struct ScheduledTurn {
+    attempt: String,
+    operation: String,
+    turn: String,
+}
+
+impl ScheduledTurn {
+    fn proof(&self, thread: &Value, id: &str, target: &SemanticTarget<'_>) -> Option<Value> {
+        if field(thread, "id") != id
+            || !codex_receipt::canonical_thread(id)
+            || std::fs::canonicalize(field(thread, "cwd")).ok().as_deref() != Some(target.cwd)
+        {
+            return None;
+        }
+        let turn = thread["turns"]
+            .as_array()?
+            .iter()
+            .find(|turn| turn["id"] == self.turn)?;
+        if !field(turn, "rootTurnId").is_empty() && turn["rootTurnId"] != self.turn {
+            return None;
+        }
+        let mut proof = json!({"token":target.token,"thread":id,"turn":self.turn,
+            "attempt":self.attempt,"operation":self.operation});
+        match field(turn, "status") {
+            "failed" if turn["error"]["codexErrorInfo"] == "usageLimitExceeded" => {
+                proof["outcome"] = json!("usageLimitExceeded");
+            }
+            "completed" if turn["itemsView"].is_null() || turn["itemsView"] == "full" => {
+                let mut messages = turn["items"]
+                    .as_array()?
+                    .iter()
+                    .rev()
+                    .filter(|item| item["type"] == "agentMessage");
+                let latest = messages.next()?;
+                let last = if latest["phase"].is_null() || latest["phase"] == "final_answer" {
+                    latest
+                } else {
+                    messages.find(|item| item["phase"] == "final_answer")?
+                };
+                let text = field(last, "text");
+                let id = field(last, "id");
+                if id.is_empty() || id.len() > 128 || text.is_empty() || text.len() > 64 * 1024 {
+                    return None;
+                }
+                proof["outcome"] = json!("completed");
+                proof["item"] = json!(id);
+                proof["text"] = json!(text);
+            }
+            _ => return None,
+        }
+        Some(proof)
+    }
+}
+
 pub(super) fn observe(
     mut channel: Channel,
     cwd: PathBuf,
     dir: PathBuf,
     token: String,
+    schedule: Option<worker::Binding>,
     actions: Receiver<SemanticAction>,
 ) {
     let mut observation = Observation::default();
@@ -402,9 +515,12 @@ pub(super) fn observe(
         cwd: &cwd,
         dir: &dir,
         token: &token,
+        schedule: schedule.as_ref(),
     };
     let mut serial = 10;
     let mut join = None;
+    let mut history = None;
+    let mut next_history = Instant::now();
     let mut next_join = Some(Instant::now());
     let mut quiet = false;
     loop {
@@ -424,6 +540,21 @@ pub(super) fn observe(
             join = None;
             next_join = None;
         }
+        if history.is_some_and(|(_, deadline)| Instant::now() >= deadline) {
+            history = None;
+        }
+        if observation.scheduled_turn.is_some()
+            && !observation.ambiguous
+            && history.is_none()
+            && Instant::now() >= next_history
+        {
+            serial += 1;
+            if send(&mut channel.connection, json!({
+                "id":serial,"method":"thread/read","params":{"threadId":observation.thread,"includeTurns":true},
+            })).is_err() { break; }
+            history = Some((serial, Instant::now() + Duration::from_secs(3)));
+            next_history = Instant::now() + Duration::from_secs(1);
+        }
         if quiet && let Ok(action) = actions.try_recv() {
             serial += 1;
             let result = submit(
@@ -439,17 +570,38 @@ pub(super) fn observe(
         match read(&mut channel.connection) {
             Ok(Some(message)) => {
                 quiet = false;
-                if join.is_some_and(|(id, _)| message["id"] == id) && message["method"].is_null() {
+                if history.is_some_and(|(id, _)| message["id"] == id) && message["method"].is_null()
+                {
+                    history = None;
+                    if let Some(turn) = &observation.scheduled_turn
+                        && let Some(result) =
+                            turn.proof(&message["result"]["thread"], &observation.thread, &target)
+                        && runtime::write_json(&target.dir.join("schedule-finish.json"), &result)
+                            .is_ok()
+                    {
+                        if result["outcome"] == "completed" {
+                            observation.turn = None;
+                            observation.idle = true;
+                        }
+                        observation.scheduled_turn = None;
+                        persist_observation(&observation, &target);
+                    }
+                } else if join.is_some_and(|(id, _)| message["id"] == id)
+                    && message["method"].is_null()
+                {
                     join = None;
                     if field(&message["result"]["thread"], "id") == observation.thread {
                         observation.joined = true;
+                        observation.missing_rollout = false;
                         observation.idle = observation.turn.is_none()
                             && field(&message["result"]["thread"]["status"], "type") == "idle";
                         persist_observation(&observation, &target);
                     } else if field(&message["error"], "message")
                         .contains("no rollout found for thread id")
                     {
+                        observation.missing_rollout = true;
                         next_join = Some(Instant::now() + Duration::from_secs(1));
+                        persist_observation(&observation, &target);
                     } else {
                         next_join = None;
                     }
@@ -477,6 +629,54 @@ pub(super) fn observe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_finish_is_bound_to_native_root_turn_and_last_assistant_item() {
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let id = "019dc0a0-6bd5-71e1-9bd7-629de956bfe4";
+        let target = SemanticTarget {
+            cwd: &cwd,
+            dir: &cwd,
+            token: "fixture",
+            schedule: None,
+        };
+        let turn = ScheduledTurn {
+            attempt: "attempt".into(),
+            operation: "operation".into(),
+            turn: "owned".into(),
+        };
+        let mut thread = json!({"id":id,"cwd":cwd,"turns":[{
+            "id":"owned","rootTurnId":"different","status":"completed","itemsView":"full",
+            "items":[{"type":"agentMessage","id":"earlier","text":"First result"},
+                {"type":"agentMessage","id":"latest","text":"Corrected result"},
+                {"type":"mcpToolCall","id":"receipt","text":"First result"}],
+        }]});
+        assert!(turn.proof(&thread, id, &target).is_none());
+        thread["turns"][0]["rootTurnId"] = json!("owned");
+        assert_eq!(
+            turn.proof(&thread, id, &target).unwrap()["text"],
+            "Corrected result"
+        );
+        thread["turns"][0]["items"][1]["phase"] = json!("commentary");
+        assert!(turn.proof(&thread, id, &target).is_none());
+        thread["turns"][0]["items"][0]["phase"] = json!("partial_answer");
+        assert!(turn.proof(&thread, id, &target).is_none());
+        thread["turns"][0]["items"][1]["phase"] = json!("final_answer");
+        assert_eq!(
+            turn.proof(&thread, id, &target).unwrap()["text"],
+            "Corrected result"
+        );
+        thread["turns"][0]["itemsView"] = json!("summary");
+        assert!(turn.proof(&thread, id, &target).is_none());
+        thread["turns"][0]["status"] = json!("failed");
+        thread["turns"][0]["error"] = json!({"codexErrorInfo":"usageLimitExceeded"});
+        assert_eq!(
+            turn.proof(&thread, id, &target).unwrap()["outcome"],
+            "usageLimitExceeded"
+        );
+        thread["id"] = json!("019dc0a0-6bd5-71e1-9bd7-629de956bfe5");
+        assert!(turn.proof(&thread, id, &target).is_none());
+    }
 
     #[test]
     fn accepts_only_bound_thread_and_turn() {

@@ -1,6 +1,7 @@
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
 use crate::providers::{self, LaunchPlan, codex_receipt};
+use crate::schedule::{Launch, Result as ScheduleResult, WorkerState, worker};
 use serde_json::{Value, json};
 use std::env;
 use std::fs::{self, DirBuilder};
@@ -27,18 +28,21 @@ enum Phase {
 pub(super) struct Prepared {
     pub(super) lineage: Value,
     isolated: bool,
-    cwd: PathBuf,
+    pub cwd: PathBuf,
     label: String,
     tag: String,
     cols: u16,
     rows: u16,
     provider: LaunchPlan,
     agy_launch: Value,
+    scheduled: Option<(worker::Binding, Value)>,
 }
 
 struct Labels {
     name: String,
     tag: String,
+    schedule_projected: bool,
+    scheduled_completed: bool,
 }
 
 fn sanitize_name(text: &str) -> String {
@@ -61,7 +65,8 @@ pub(super) struct Session {
     created: String,
     state: Mutex<(Phase, String)>,
     proven_owner: OnceLock<(u32, u64)>,
-    launch_plan: Mutex<Option<LaunchPlan>>,
+    launch_plan: Mutex<Option<(LaunchPlan, Value)>>,
+    pub(super) schedule: Option<worker::Binding>,
     observed_status: Mutex<Option<Value>>,
     opened: Instant,
 }
@@ -85,6 +90,7 @@ impl Session {
         {
             return Err(io::Error::other("unproven Rust session reservation"));
         }
+        let schedule = worker::read_binding(&data)?;
         Ok(Self {
             dir,
             notification_gate: Mutex::new(()),
@@ -107,11 +113,14 @@ impl Session {
             labels: Mutex::new(Labels {
                 name: name.into(),
                 tag: field(&data, "tag").into(),
+                schedule_projected: data["schedule_projected"] == true,
+                scheduled_completed: data["scheduled_completed"] == true,
             }),
             created: created.into(),
             state: Mutex::new((Phase::Lost, created.into())),
             proven_owner: OnceLock::new(),
             launch_plan: Mutex::new(None),
+            schedule,
             observed_status: Mutex::new(None),
             opened: Instant::now(),
         })
@@ -221,7 +230,43 @@ impl Session {
                 Value::Null
             },
             provider,
+            scheduled: None,
         })
+    }
+
+    pub(super) fn scheduled_codex_available(cwd: &Path) -> ScheduleResult<()> {
+        let plan = Self::prepare(&json!({"launch":{"agent":"codex","cwd":cwd}}))?;
+        if !providers::codex::managed(&plan.provider.version) {
+            return Err("scheduled Codex requires its managed App Server".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_scheduled(
+        launch: &Launch<'_>,
+        socket: &Path,
+    ) -> ScheduleResult<Prepared> {
+        let binding = worker::Binding::new(launch)?;
+        let mut plan = Self::prepare(&json!({"launch":{
+            "agent":launch.agent,"cwd":launch.workspace,"name":launch.name,"cols":100,"rows":32,
+        }}))?;
+        if plan.provider.agent != "codex"
+            || !providers::codex::managed(&plan.provider.version)
+            || plan.cwd != Path::new(launch.workspace)
+        {
+            return Err(
+                "scheduled Codex requires a managed App Server in the exact occurrence workspace"
+                    .into(),
+            );
+        }
+        let binary = env::current_exe()?;
+        // The remote TUI inherits App Server authority and rejects local overrides.
+        plan.provider.argv.clear();
+        plan.scheduled = Some((
+            binding,
+            json!({"proof":launch.token,"socket":socket,"binary":binary}),
+        ));
+        Ok(plan)
     }
 
     pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
@@ -235,6 +280,7 @@ impl Session {
             rows,
             provider,
             agy_launch,
+            scheduled,
         } = prepared;
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
@@ -260,6 +306,7 @@ impl Session {
             &json!({
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
+                "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
@@ -269,13 +316,14 @@ impl Session {
             }),
         )?;
         let mut session = Self::load(dir)?;
-        *session.launch_plan.get_mut().unwrap() = Some(provider);
+        let secrets = scheduled.map_or(Value::Null, |(_, transient)| transient);
+        *session.launch_plan.get_mut().unwrap() = Some((provider, secrets));
         session.transition(Phase::Starting);
         Ok(session)
     }
 
     pub(super) fn start(&self) -> io::Result<()> {
-        let provider = self
+        let (provider, scheduled) = self
             .launch_plan
             .lock()
             .unwrap()
@@ -315,7 +363,7 @@ impl Session {
         thread::spawn(move || {
             let _ = child.wait();
         });
-        let mut transient = json!({"argv":provider.argv});
+        let mut transient = json!({"argv":provider.argv,"schedule":scheduled});
         if self.owner_interactive {
             transient["owner_socket"] = json!(crate::ipc::socket_path()?);
         }
@@ -514,6 +562,16 @@ impl Session {
         session: &str,
         state: &super::State,
     ) -> io::Result<Value> {
+        self.semantic_send_inner(request, session, state, None)
+    }
+
+    fn semantic_send_inner(
+        &self,
+        request: &Value,
+        session: &str,
+        state: &super::State,
+        scheduled: Option<&str>,
+    ) -> io::Result<Value> {
         let body = &request["composer_send"];
         let operation = field(request, "operation_id");
         let text = field(body, "text");
@@ -522,7 +580,7 @@ impl Session {
             || body["session"] != session
             || !codex_receipt::timely(operation)
             || text.is_empty()
-            || text.len() > 4096
+            || !worker::prompt_fits(text, scheduled.is_some())
             || body.as_object().is_none_or(|fields| {
                 fields.iter().any(|(key, value)| {
                     !matches!(
@@ -559,14 +617,16 @@ impl Session {
             }
             return Ok(record["receipt"].clone());
         }
-        self.semantic_target()?;
+        if scheduled.is_none() {
+            self.semantic_target()?;
+        }
         let mut shim = self.dial()?;
         shim.set_read_timeout(Some(Duration::from_secs(7)))?;
         runtime::write_control(
             &mut shim,
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
-                "session_instance":instance,"text":text,
+                "session_instance":instance,"text":text,"schedule_attempt":scheduled,
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -580,6 +640,153 @@ impl Session {
         }
         self.semantic_status(operation, session, &state.root)?
             .ok_or_else(|| io::Error::other("semantic receipt is unavailable"))
+    }
+
+    pub(super) fn provider_directory(&self) -> &Path {
+        &self.effective
+    }
+
+    fn verified_exit(&self) -> Option<Value> {
+        self.exit()
+            .ok()
+            .filter(|_| owner_gone(&self.dir, &self.token).unwrap_or(false))
+    }
+
+    pub(super) fn workspace_unconfirmed(&self) -> bool {
+        self.verified_exit().is_none()
+    }
+
+    pub(super) fn scheduled_state(&self) -> WorkerState {
+        let exit = self.verified_exit();
+        if exit.as_ref().is_some_and(|row| row["error"].is_string()) {
+            return WorkerState::StartupRefused;
+        }
+        if self.schedule.as_ref().is_some_and(|b| {
+            self.scheduled_proof(&b.attempt_id)
+                .is_some_and(|p| p["outcome"] == "usageLimitExceeded")
+        }) {
+            return if exit.is_some() {
+                WorkerState::QuotaStopped
+            } else {
+                WorkerState::Quota
+            };
+        }
+        if exit.is_some() {
+            return WorkerState::Stopped;
+        }
+        if self.is_live() {
+            let status = self.observed_status.lock().unwrap();
+            return if status.as_ref().is_some_and(|s| s["Interaction"] != "none") {
+                WorkerState::NeedsInput
+            } else {
+                WorkerState::Running
+            };
+        }
+        WorkerState::Unknown
+    }
+
+    pub(super) fn send_scheduled(
+        &self,
+        state: &super::State,
+        session: &str,
+        attempt: &str,
+        text: &str,
+        begin: &mut dyn FnMut() -> ScheduleResult<()>,
+    ) -> ScheduleResult<()> {
+        if !worker::prompt_fits(text, true) {
+            return Err("scheduled opening prompt exceeds the native frame limit".into());
+        }
+        let observation = runtime::read_json(&self.dir.join("observation.json"))?;
+        if observation["token"] != self.token
+            || observation["schedule_ready"] != true
+            || self.status_exchange(&json!({"type":"schedule_ready","attempt":attempt}))?["type"]
+                != "ok"
+        {
+            return Ok(());
+        }
+        let operation = codex_receipt::operation()?;
+        begin()?;
+        runtime::write_json(
+            &self.dir.join("schedule-prompt.json"),
+            &json!({
+                "operation":operation,"session":session,"attempt":attempt,
+            }),
+        )?;
+        let reply = self.semantic_send_inner(&json!({
+            "operation_id":operation,"body_version":1,"composer_send":{
+                "session":session,"session_instance":codex_receipt::instance(&self.token),"text":text,
+            },
+        }), session, state, Some(attempt))?;
+        if reply["state"] != "native_accepted" {
+            return Err("native opening prompt outcome is uncertain".into());
+        }
+        Ok(())
+    }
+
+    fn scheduled_proof(&self, attempt: &str) -> Option<Value> {
+        let proof = runtime::read_json(&self.dir.join("schedule-finish.json")).ok()?;
+        let prompt = runtime::read_json(&self.dir.join("schedule-prompt.json")).ok()?;
+        let session = prompt["session"].as_str()?;
+        if session.split_once('/')?.1 != self.id
+            || proof["token"] != self.token
+            || proof["attempt"] != attempt
+            || prompt["attempt"] != attempt
+            || proof["operation"] != prompt["operation"]
+        {
+            return None;
+        }
+        let operation = field(&prompt, "operation");
+        let receipt = self
+            .semantic_status(operation, session, self.dir.parent()?)
+            .ok()??;
+        if receipt["state"] != "native_accepted"
+            || receipt["native_turn_id"] != proof["turn"]
+            || receipt["native_session_id"] != proof["thread"]
+        {
+            return None;
+        }
+        Some(proof)
+    }
+
+    pub(super) fn scheduled_closing(&self, _: &str, attempt: &str, summary: &str) -> bool {
+        let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.scheduled_proof(attempt).is_some_and(|proof| {
+            proof["outcome"] == "completed"
+                && !field(&proof, "item").is_empty()
+                && normalize(field(&proof, "text")).contains(&normalize(summary))
+        })
+    }
+
+    pub(super) fn scheduled_handoff(&self, _: &str, attempt: &str) -> Option<String> {
+        let proof = self.scheduled_proof(attempt)?;
+        let text: String = field(&proof, "text").chars().take(500).collect();
+        (!text.is_empty()).then(|| format!(" Previous assistant message: {text}"))
+    }
+
+    pub(super) fn project_schedule(&self) -> io::Result<bool> {
+        let mut labels = self.labels.lock().unwrap();
+        if labels.schedule_projected {
+            return Ok(false);
+        }
+        let path = self.dir.join("session.json");
+        let mut meta = runtime::read_json(&path)?;
+        if field(&meta, "id") != self.id
+            || field(&meta, "token") != self.token
+            || worker::read_binding(&meta)?.as_ref().map(|b| &b.attempt_id)
+                != self.schedule.as_ref().map(|b| &b.attempt_id)
+        {
+            return Err(io::Error::other(
+                "scheduled session reservation identity changed",
+            ));
+        }
+        meta["schedule_projected"] = json!(true);
+        meta["scheduled_completed"] = json!(true);
+        meta["tag"] = json!("automation");
+        runtime::write_json(&path, &meta)?;
+        labels.schedule_projected = true;
+        labels.scheduled_completed = true;
+        labels.tag = "automation".into();
+        Ok(true)
     }
 
     pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {
@@ -822,10 +1029,16 @@ impl Session {
             meta["name_set_at"] = json!(now());
         }
         meta[key] = json!(value);
+        if key == "tag" && value != "automation" {
+            meta["scheduled_completed"] = json!(false);
+        }
         runtime::write_json(&path, &meta)?;
         if key == "name" {
             labels.name = value;
         } else {
+            if value != "automation" {
+                labels.scheduled_completed = false;
+            }
             labels.tag = value;
         }
         Ok(true)
@@ -878,6 +1091,9 @@ impl Session {
         }
         if let Some(source) = &self.resumed_from {
             view["resumed_from"] = json!(source);
+        }
+        if labels.scheduled_completed && labels.tag == "automation" {
+            view["scheduled_completed"] = json!(true);
         }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
@@ -941,5 +1157,42 @@ pub(super) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
             Ok(true)
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod schedule_custody_tests {
+    use super::*;
+
+    #[test]
+    fn lost_session_keeps_workspace_until_verified_exit() {
+        let id = runtime::random_id().unwrap();
+        let dir = std::env::temp_dir().join(&id);
+        runtime::private_dir(&dir).unwrap();
+        let token = runtime::random_id().unwrap();
+        runtime::write_json(
+            &dir.join("session.json"),
+            &json!({
+                "schema":1, "id":id, "token":token, "created_at":now(), "name":"fixture",
+                "cwd":dir, "provider":{"name":"codex","mode":"managed"},
+            }),
+        )
+        .unwrap();
+        let session = Session::load(dir.clone()).unwrap();
+        assert!(!session.is_live());
+        assert!(session.workspace_unconfirmed());
+        runtime::write_json(
+            &dir.join("exit.json"),
+            &json!({"token":"other","error":"refused"}),
+        )
+        .unwrap();
+        assert!(session.workspace_unconfirmed());
+        runtime::write_json(
+            &dir.join("exit.json"),
+            &json!({"token":token,"error":"refused"}),
+        )
+        .unwrap();
+        assert!(!session.workspace_unconfirmed());
+        fs::remove_dir_all(dir).unwrap();
     }
 }
