@@ -156,7 +156,7 @@ impl Place {
         Ok(cfg)
     }
 
-    fn lock(&self) -> io::Result<(File, File)> {
+    pub(super) fn lock(&self) -> io::Result<(File, File)> {
         runtime::private_dir(&self.supervisor)?;
         runtime::private_dir(&self.dir)?;
         let lock = |path: &Path| {

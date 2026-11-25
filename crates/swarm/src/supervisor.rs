@@ -411,7 +411,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
-            worker_origin_available && *cap == "message-origin"
+            worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
                 || manager_available
                     && matches!(
                         *cap,
@@ -590,6 +590,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
+                if session.requires_worker_origin_cap()
+                    && !request["composer_send"]["origin"].is_null()
+                    && !caps.contains(&"worker-discord-origin-v1") {
+                    return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"worker Discord origin was not negotiated"}));
+                }
                 if !request["composer_send"]["origin"].is_null() && !caps.contains(&"message-origin") {
                     return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"message origin was not negotiated"}));
                 }

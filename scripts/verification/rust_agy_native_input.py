@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise native registration and delivery through Rust spawn, shim and message."""
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -55,6 +56,12 @@ if args[:1] == ["agentapi"]:
         }}}
     else:
         assert args[1] == "send-message"
+        if Path("hold-native-effect").exists():
+            Path("native-effect-entered").touch()
+            deadline = time.monotonic() + 4
+            while not Path("release-native-effect").exists():
+                assert time.monotonic() < deadline
+                time.sleep(.025)
         with Path("deliveries").open("a") as stream:
             stream.write(json.dumps(args[3]) + "\n")
         result = {"sendMessage":{"recipientId":conversation, "content":args[3]}}
@@ -160,7 +167,7 @@ def run(binary):
             path = work / "deliveries"
             return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-        def request(body, caps):
+        def request(body, caps, before_request=None):
             def exchange(peer, message):
                 payload = b"\x01" + json.dumps(message).encode()
                 peer.write(struct.pack(">I", len(payload)) + payload)
@@ -174,6 +181,8 @@ def run(binary):
                 conn.connect(str(daemon_socket))
                 with conn.makefile("rwb") as peer:
                     hello = exchange(peer, {"op":"hello","protocol_version":1,"capabilities":caps})
+                    if before_request:
+                        before_request(hello)
                     return exchange(peer, body | {"endpoint_id":hello["endpoint_id"]})
 
         def prepare(text, source_id, mint=None):
@@ -201,10 +210,12 @@ def run(binary):
             ledger["worker_inputs"][operation] = {"source_id":source_id,"provider":"agy","composer":composer}
             save()
 
-        def send(operation, composer, *, allow_origin=True, ok=True):
+        def send(operation, composer, *, allow_origin=True, worker_origin=True, before_request=None, ok=True):
             capabilities = ["semantic-send"] + (["message-origin"] if allow_origin else [])
+            if worker_origin:
+                capabilities.append("worker-discord-origin-v1")
             response = request({"op":"semantic_send","session_id":sid,"operation_id":operation,
-                                "body_version":1,"composer_send":composer}, capabilities)
+                                "body_version":1,"composer_send":composer}, capabilities, before_request)
             if ok:
                 assert response["op"] == "ok", response
             else:
@@ -254,8 +265,33 @@ def run(binary):
             send(operation, composer, ok=False)
             assert deliveries() == []
             ledger["worker_excluded"].pop(sid)
+            ledger["consent_floor"] = ""
+            ledger["history_cursor"] = ""
             save()
-            send(operation, composer)
+            send(operation, composer, worker_origin=False, ok=False)
+            assert deliveries() == []
+            (work / "hold-native-effect").touch()
+            with ThreadPoolExecutor(max_workers=1) as tasks:
+                pending = tasks.submit(send, operation, composer)
+                try:
+                    wait_for(lambda: (work / "native-effect-entered").exists(), "guarded native effect")
+                    refused = cli("discord", "disconnect", ok=False)
+                    assert refused.returncode != 0 and b"configuration change is in progress" in refused.stderr
+                    assert json.loads(config.read_text())["enabled"] is True
+                finally:
+                    (work / "release-native-effect").touch()
+                pending.result(timeout=10)
+            (work / "hold-native-effect").unlink()
+            saved_enrollment = config.read_text()
+            late, late_composer, late_source = prepare("late cutover after disconnect", "406")
+            def revoke_after_negotiation(hello):
+                assert "worker-discord-origin-v1" in hello["capabilities"]
+                cli("discord", "disconnect")
+                assert json.loads(config.read_text())["enabled"] is False
+                persist(late, late_composer, late_source)
+            send(late, late_composer, before_request=revoke_after_negotiation, ok=False)
+            assert deliveries() == [text]
+            config.write_text(saved_enrollment)  # Re-enable the private fixture for independent controls.
 
             def status(op):
                 return json.loads(cli("message", sid, "--status", "--operation-id", op).stdout)

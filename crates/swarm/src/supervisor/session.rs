@@ -543,6 +543,10 @@ impl Session {
         }
     }
 
+    pub(super) fn requires_worker_origin_cap(&self) -> bool {
+        self.agent == "agy"
+    }
+
     pub(super) fn semantic_target(&self) -> io::Result<String> {
         if self.agent == "agy" {
             if !self.is_live() {
