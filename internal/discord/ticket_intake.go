@@ -25,6 +25,7 @@ type TicketIntake struct {
 	WebhookID   string           `json:"webhook_id"`
 	Repo        string           `json:"repo"`
 	Project     string           `json:"project"`
+	ManagerCLI  string           `json:"manager_cli,omitempty"`
 	TokenFile   string           `json:"token_file"`
 	GrantSocket string           `json:"grant_socket"`
 	Supervisor  TicketSupervisor `json:"supervisor"`
@@ -57,8 +58,9 @@ type ticketReceipt struct {
 }
 
 type ticketRecord struct {
-	Event   ticketEvent
-	Receipt ticketReceipt
+	Event      ticketEvent
+	Receipt    ticketReceipt
+	ManagerCLI string
 }
 
 const (
@@ -130,7 +132,7 @@ func (s *Service) handleTicket(w http.ResponseWriter, r *http.Request) (any, err
 	if err := event.validate(s.Config.TicketIntake); err != nil {
 		return nil, err
 	}
-	return s.Store.queueTicket(s.Config.InstallationID, event)
+	return s.Store.queueTicket(s.Config.InstallationID, event, s.Config.EffectiveTicketManagerCLI())
 }
 
 func (s *Store) getTicket(installation, eventID string) (record ticketRecord, err error) {
@@ -142,7 +144,7 @@ func (s *Store) getTicket(installation, eventID string) (record ticketRecord, er
 
 // queueTicket reserves the Discord starter and queues exactly one input in the
 // same transaction. Gateway notices and lease changes never mint a new job.
-func (s *Store) queueTicket(installation string, event ticketEvent) (receipt ticketReceipt, err error) {
+func (s *Store) queueTicket(installation string, event ticketEvent, managerCLI string) (receipt ticketReceipt, err error) {
 	err = s.db.Update(func(tx *bolt.Tx) error {
 		meta := tx.Bucket([]byte(teammateMetaBucket))
 		key := ticketKey(installation, event.EventID)
@@ -166,7 +168,7 @@ func (s *Store) queueTicket(installation string, event ticketEvent) (receipt tic
 			return ErrConflict
 		}
 		receipt = ticketReceipt{EventID: event.EventID, State: ticketQueued}
-		if err := putJSON(tx, teammateMetaBucket, key, ticketRecord{Event: event, Receipt: receipt}); err != nil {
+		if err := putJSON(tx, teammateMetaBucket, key, ticketRecord{Event: event, Receipt: receipt, ManagerCLI: managerCLI}); err != nil {
 			return err
 		}
 		if err := meta.Put(starter, []byte(event.EventID)); err != nil {
@@ -241,6 +243,9 @@ func (t *teammateConnector) processTicket(ctx context.Context, candidate teammat
 	if err != nil {
 		return err
 	}
+	if record.ManagerCLI == "" || record.ManagerCLI != cfg.EffectiveTicketManagerCLI() {
+		return store.teammateCandidateChange(cfg.InstallationID, candidate, StateFailed, "ticket provider no longer matches its enrollment", nil)
+	}
 	if a := candidate.Admission; a != nil {
 		switch phase, err := t.manager.AdmissionState(ctx, *a); {
 		case err != nil:
@@ -277,7 +282,8 @@ func (t *teammateConnector) processTicket(ctx context.Context, candidate teammat
 		d := TeammateDiscussion{
 			ID: "dt_" + digest([]string{cfg.InstallationID, route.GuildID, route.ChannelID})[:32], InstallationID: cfg.InstallationID,
 			SupervisorSocket: cfg.TicketIntake.Supervisor.Socket, Route: route, Starter: candidate.Route,
-			TicketEventID: record.Event.EventID, TicketProject: cfg.TicketIntake.Project, TicketSupervisor: cfg.TicketIntake.Supervisor,
+			TicketEventID: record.Event.EventID, TicketProject: cfg.TicketIntake.Project,
+			TicketManagerCLI: record.ManagerCLI, TicketSupervisor: cfg.TicketIntake.Supervisor,
 		}
 		if err = t.checkDiscussion(ctx, d); err != nil {
 			if errors.Is(err, ErrNotAuthorized) || teammateAPIStatus(err, http.StatusForbidden) || teammateAPIStatus(err, http.StatusNotFound) {

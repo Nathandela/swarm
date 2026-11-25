@@ -28,6 +28,7 @@ type DiscussionScope struct {
 	GuildID            string
 	ThreadID           string
 	TicketRequestID    string
+	TicketProvider     string
 	VerifyAudience     func(context.Context) error
 	VerifyRecipient    func(context.Context, string, string) error
 	ProjectEnrolled    func(string) bool
@@ -226,6 +227,9 @@ func (c *Controller) verifyDiscussionLaunch(ctx context.Context, request control
 	}
 	if request.Origin == nil || !c.discussion.validateOrigin(*request.Origin) || request.Launch == nil {
 		return ErrExpired
+	}
+	if c.discussion.TicketRequestID != "" && (c.discussion.TicketProvider == "" || request.Launch.Agent != c.discussion.TicketProvider) {
+		return fmt.Errorf("%w: use the pinned ticket worker provider", ErrControllerUnsupported)
 	}
 	path := request.Project
 	if request.Tool == "swarm_create" {

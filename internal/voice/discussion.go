@@ -99,7 +99,8 @@ func OpenDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Co
 func openDiscussion(ctx context.Context, dir, socketDir, endpoint string, cfg Config, scope DiscussionScope, runtime discussionRuntime) (*DiscussionController, error) {
 	cfg.VMProjectAccess = scope.VMProjectAccess
 	validAudience := (configText(scope.GuildID, 128) && scope.DMOwnerID == "") || (scope.GuildID == "" && configText(scope.DMOwnerID, 128))
-	if cfg.Validate() != nil || !strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) || !configText(scope.InstallationID, 128) || !validAudience || !configText(scope.ThreadID, 128) {
+	if cfg.Validate() != nil || !strings.HasPrefix(cfg.ConversationID, DiscussionConversationPrefix) || !configText(scope.InstallationID, 128) ||
+		!validAudience || !configText(scope.ThreadID, 128) || scope.TicketRequestID != "" && scope.TicketProvider != cfg.Provider {
 		return nil, ErrInvalid
 	}
 	store, err := OpenStore(dir)

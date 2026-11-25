@@ -291,7 +291,7 @@ func TestTicketDiscussionGrantsOneWorkerToTheVerifiedMachineOrigin(t *testing.T)
 	if scope.validateOrigin(origin) {
 		t.Fatal("unenrolled scope accepted a machine grant")
 	}
-	scope.TicketRequestID = origin.RequestID
+	scope.TicketRequestID, scope.TicketProvider = origin.RequestID, "codex"
 	if !scope.validateOrigin(origin) {
 		t.Fatal("enrolled scope refused the machine grant")
 	}
@@ -323,17 +323,20 @@ func TestTicketDiscussionGrantsOneWorkerToTheVerifiedMachineOrigin(t *testing.T)
 	runtime.status.ReadyForInput = false
 	runtime.status.Turn = protocol.ManagerNativeTurn{State: "running", NativeInputID: nonce, NativeTurnID: "ticket-turn"}
 	runtime.proof = protocol.ManagerCallProof{Main: true, NativeInputID: nonce, NativeTurnID: "ticket-turn", NativeCallID: "native-call"}
-	launch := func(actionID string) (json.RawMessage, error) {
-		args := fmt.Appendf(nil, `{"action_id":%q,"agent":"codex","cwd":%q,"prompt":"check the regression"}`, actionID, project)
+	launch := func(actionID, agent string) (json.RawMessage, error) {
+		args := fmt.Appendf(nil, `{"action_id":%q,"agent":%q,"cwd":%q,"prompt":"check the regression"}`, actionID, agent, project)
 		return c.ManagerCall(context.Background(), ManagerToolCall{Name: "swarm_create", Arguments: args})
 	}
-	if _, err := launch("first"); err != nil {
+	if _, err := launch("wrong-provider", "claude"); !errors.Is(err, ErrControllerUnsupported) || worker.launches != 0 {
+		t.Fatalf("a non-enrolled provider launched a worker: launches=%d %v", worker.launches, err)
+	}
+	if _, err := launch("first", "codex"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launch("second"); !errors.Is(err, ErrConflict) || worker.launches != 1 {
+	if _, err := launch("second", "codex"); !errors.Is(err, ErrConflict) || worker.launches != 1 {
 		t.Fatalf("a second action launched a worker: launches=%d %v", worker.launches, err)
 	}
-	if _, err := launch("first"); err != nil || worker.launches != 1 {
+	if _, err := launch("first", "codex"); err != nil || worker.launches != 1 {
 		t.Fatalf("same operation repeated its launch: launches=%d %v", worker.launches, err)
 	}
 	human := discussionFixtureOrigin("human")

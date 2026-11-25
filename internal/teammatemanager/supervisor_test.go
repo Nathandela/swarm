@@ -89,12 +89,12 @@ func TestMailboxDiscoveryKeepsHealthySupervisorWhenHistoricalIndexUnavailable(t 
 func TestTicketSupervisorStaysPinnedAcrossRestartAndNeverFallsBack(t *testing.T) {
 	ticket := discord.TicketSupervisor{StateDir: "/ticket/state", Socket: "/ticket.sock", Endpoint: "ticket"}
 	b := discord.TeammateDiscussion{
-		SupervisorSocket: ticket.Socket, TicketEventID: "event", TicketProject: "fii", TicketSupervisor: ticket,
+		SupervisorSocket: ticket.Socket, TicketEventID: "event", TicketProject: "fii", TicketSupervisor: ticket, TicketManagerCLI: "codex",
 		ID: "thread", InstallationID: "place", Route: discord.Route{GuildID: "guild", ChannelID: "thread"},
 	}
 	r := func(shared string) *Runtime {
 		return &Runtime{vmProjectAccess: true, endpoint: shared, cfg: voice.Config{DaemonSocket: "/" + shared + ".sock"},
-			ticketSupervisor: ticket, previous: &discord.PreviousSupervisor{Endpoint: "old", Socket: "/old.sock"}}
+			ticketSupervisor: ticket, ticketManagerCLI: "codex", previous: &discord.PreviousSupervisor{Endpoint: "old", Socket: "/old.sock"}}
 	}
 	for _, shared := range []string{"shared", "new-shared"} {
 		runtime := r(shared)
@@ -115,6 +115,16 @@ func TestTicketSupervisorStaysPinnedAcrossRestartAndNeverFallsBack(t *testing.T)
 		}
 	}
 	runtime := r("shared")
+	runtime.ticketManagerCLI = "claude"
+	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
+		t.Fatalf("a configured provider change substituted the ticket's pinned provider: %v", err)
+	}
+	runtime.ticketManagerCLI = "codex"
+	noPin := b
+	noPin.TicketManagerCLI = ""
+	if _, _, _, err := runtime.supervisorForDiscussion(noPin); !errors.Is(err, voice.ErrStale) {
+		t.Fatalf("ticket without a persisted provider fell back: %v", err)
+	}
 	runtime.ticketSupervisor.Endpoint = "replacement"
 	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
 		t.Fatalf("configuration change moved an existing ticket: %v", err)
@@ -127,9 +137,10 @@ func TestTicketSupervisorStaysPinnedAcrossRestartAndNeverFallsBack(t *testing.T)
 
 func TestTicketManagerPromptRetainsScopedToolsAlongsideVMMode(t *testing.T) {
 	r := Runtime{vmProjectAccess: true, projects: map[string]string{"fii": "/ticket/fii", "other": "/shared/other"}}
-	ticket := discord.TeammateAdmission{Discussion: discord.TeammateDiscussion{TicketEventID: "event"}}
+	ticket := discord.TeammateAdmission{Discussion: discord.TeammateDiscussion{TicketEventID: "event", TicketManagerCLI: "codex"}}
 	if prompt := r.prompt(ticket, discord.TeammateHistoryPage{}, "thread", nil); strings.Contains(prompt, "ordinary VM commands") ||
-		strings.Contains(prompt, "project choices") || !strings.Contains(prompt, "scoped manager tools") {
+		strings.Contains(prompt, "project choices") || !strings.Contains(prompt, "scoped manager tools") ||
+		!strings.Contains(prompt, "Use codex for the assigned ticket worker") {
 		t.Fatalf("ticket manager got generic VM-mode tools: %s", prompt)
 	}
 	if prompt := r.prompt(discord.TeammateAdmission{}, discord.TeammateHistoryPage{}, "thread", nil); !strings.Contains(prompt, "ordinary VM commands") {

@@ -23,7 +23,7 @@ func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	enrollment, event := ticketFixture()
-	service := NewService(Config{Mode: "teammate", InstallationID: "install", TicketIntake: &enrollment}, store, nil, nil)
+	service := NewService(Config{Mode: "teammate", ManagerCLI: "claude", InstallationID: "install", TicketIntake: &enrollment}, store, nil, nil)
 	service.ticketBearer = "Bearer private test relay authentication"
 	req := func(method, target, auth string, event ticketEvent) *httptest.ResponseRecorder {
 		t.Helper()
@@ -58,11 +58,27 @@ func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 	service.Store = store
+	enrollment.ManagerCLI = "codex"
 	duplicate := req(http.MethodPost, endpoint, bearer, event)
 	status := req(http.MethodGet, endpoint+"?event_id="+event.EventID, bearer, ticketEvent{})
 	if duplicate.Code != http.StatusOK || status.Code != http.StatusOK ||
 		duplicate.Body.String() != reply.Body.String() || status.Body.String() != reply.Body.String() {
 		t.Fatalf("restart lost receipt: first %s duplicate %s status %s", reply.Body, duplicate.Body, status.Body)
+	}
+	pinned, err := store.getTicket("install", event.EventID)
+	if err != nil || pinned.ManagerCLI != "claude" {
+		t.Fatalf("replay changed the original provider: %+v %v", pinned, err)
+	}
+	pending, err := store.teammatePending("install")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("queued receipt lost its pending admission: %v %v", pending, err)
+	}
+	bridge := teammateConnector{service: service}
+	if err := bridge.process(context.Background(), pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	if rejected, err := store.getTicket("install", event.EventID); err != nil || rejected.Receipt.State != ticketBlocked {
+		t.Fatalf("provider mismatch after restart was not blocked before remote effects: %+v %v", rejected, err)
 	}
 	event.Summary = "altered summary"
 	if reply := req(http.MethodPost, endpoint, bearer, event); reply.Code != http.StatusConflict {
@@ -76,6 +92,7 @@ func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
 
 func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	enrollment, event := ticketFixture()
+	enrollment.ManagerCLI = "codex"
 	opener := teammateTestMessage("201", "20", "87", "Ticket\n"+event.AnnouncementMarker, false)
 	opener.Author.Bot, opener.WebhookID = true, enrollment.WebhookID
 	early := teammateTestMessage("202", "201", "77", "<@99> runs first", true)
@@ -118,7 +135,7 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	if pending, err := store.teammatePending(install); err != nil || len(pending) != 0 {
 		t.Fatalf("webhook bypassed trusted admission: %v, %v", pending, err)
 	}
-	if _, err := store.queueTicket(install, event); err != nil {
+	if _, err := store.queueTicket(install, event, bridge.service.Config.EffectiveTicketManagerCLI()); err != nil {
 		t.Fatal(err)
 	}
 	process := func(nextState string) ticketRecord {
@@ -143,7 +160,7 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	original := manager.admitted[0]
 	if original.Authority != AuthorityTicketAssignment || original.Discussion.TicketEventID != event.EventID ||
 		original.Discussion.TicketProject != enrollment.Project || original.Discussion.TicketSupervisor != enrollment.Supervisor ||
-		original.Discussion.SupervisorSocket != enrollment.Supervisor.Socket {
+		original.Discussion.SupervisorSocket != enrollment.Supervisor.Socket || original.Discussion.TicketManagerCLI != "codex" {
 		t.Fatalf("machine provenance missing: %+v", original)
 	}
 	if _, _, err := bridge.resolve(ctx, teammateCandidate{
@@ -245,15 +262,16 @@ func TestTicketRejectsUnverifiedAnnouncementBeforeAnyEffect(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 				}
 			})
+			bridge.service.Config.ManagerCLI = "claude"
 			configureTicketGrantFixture(t, bridge, &enrollment, event, test.grantStatus)
 			install := bridge.service.Config.InstallationID
 			store := bridge.service.Store
-			if _, err := store.queueTicket(install, event); err != nil {
+			if _, err := store.queueTicket(install, event, bridge.service.Config.EffectiveTicketManagerCLI()); err != nil {
 				t.Fatal(err)
 			}
 			duplicateAssignment := event
 			duplicateAssignment.EventID, duplicateAssignment.AnnouncementMessageID = "new-event", "210"
-			if _, err := store.queueTicket(install, duplicateAssignment); !errors.Is(err, ErrConflict) {
+			if _, err := store.queueTicket(install, duplicateAssignment, bridge.service.Config.EffectiveTicketManagerCLI()); !errors.Is(err, ErrConflict) {
 				t.Fatalf("one assignment got another event or thread: %v", err)
 			}
 			pending, err := store.teammatePending(install)
@@ -282,6 +300,18 @@ func TestTicketIntakeRequiresDedicatedSupervisor(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if cfg.EffectiveTicketManagerCLI() != cfg.ManagerCLI {
+		t.Fatal("ticket lane did not inherit the configured manager")
+	}
+	enrollment.ManagerCLI = "claude"
+	if err := cfg.Validate(); err != nil || cfg.EffectiveTicketManagerCLI() != "claude" || cfg.ManagerCLI != "codex" {
+		t.Fatalf("ticket override changed the shared manager: %v", err)
+	}
+	enrollment.ManagerCLI = "opencode"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("ticket lane accepted an unsupported manager")
+	}
+	enrollment.ManagerCLI = ""
 	cfg.ProjectAccess = ProjectAccessVM
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("dedicated tickets changed regular VM discussions: %v", err)

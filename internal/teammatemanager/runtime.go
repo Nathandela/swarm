@@ -31,6 +31,7 @@ type Runtime struct {
 	managerSettingsDir        string
 	previous                  *discord.PreviousSupervisor
 	ticketSupervisor          discord.TicketSupervisor
+	ticketManagerCLI          string
 	vmProjectAccess           bool
 	cfg                       voice.Config
 	dmChannel, dmOwner        string
@@ -111,8 +112,9 @@ func New(ctx context.Context, dir, endpoint, managerSettingsDir string, config d
 		}
 	}
 	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir,
-		previous: config.PreviousSupervisor, ticketSupervisor: ticketSupervisor, vmProjectAccess: config.ProjectAccess == discord.ProjectAccessVM,
-		cfg: cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
+		previous: config.PreviousSupervisor, ticketSupervisor: ticketSupervisor, ticketManagerCLI: config.EffectiveTicketManagerCLI(),
+		vmProjectAccess: config.ProjectAccess == discord.ProjectAccessVM,
+		cfg:             cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
 }
 
 func canonicalDirectory(path string) (string, error) {
@@ -162,9 +164,10 @@ func (r *Runtime) Close() error {
 
 // Unmarked human records predate migration and retain their original supervisor.
 func (r *Runtime) supervisorForDiscussion(b discord.TeammateDiscussion) (endpoint, socket, settings string, err error) {
-	if b.TicketEventID != "" || b.TicketSupervisor != (discord.TicketSupervisor{}) {
+	if b.TicketEventID != "" || b.TicketManagerCLI != "" || b.TicketSupervisor != (discord.TicketSupervisor{}) {
 		p := r.ticketSupervisor
 		if b.TicketEventID == "" || b.TicketProject == "" || p.Endpoint == "" ||
+			(b.TicketManagerCLI != "codex" && b.TicketManagerCLI != "claude") || b.TicketManagerCLI != r.ticketManagerCLI ||
 			b.TicketSupervisor != p || b.SupervisorSocket != p.Socket {
 			return "", "", "", voice.ErrStale
 		}
@@ -243,13 +246,14 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 			return nil, voice.ErrInvalid
 		}
 		cfg.WorkDir = project
+		cfg.Provider = bound.TicketManagerCLI
 		ticketRequestID = discord.TicketAdmissionOperation(bound.InstallationID, bound.TicketEventID)
 		projectEnrolled = func(candidate string) bool { return candidate == project && r.projectEnrolled(candidate) }
 	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
 		ManagerSettingsDir: settings, VMProjectAccess: vmProjectAccess,
-		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID, TicketRequestID: ticketRequestID,
+		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID, TicketRequestID: ticketRequestID, TicketProvider: bound.TicketManagerCLI,
 		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyRecipient: entry.verifyRecipient, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: projectEnrolled,
 	})
 	if err != nil {
@@ -731,6 +735,9 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask workers for explicit needs-input and completion notes, then return after dispatch.\n")
 	} else {
 		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
+	}
+	if input.Discussion.TicketManagerCLI != "" {
+		fmt.Fprintf(&msg, "Use %s for the assigned ticket worker.\n", input.Discussion.TicketManagerCLI)
 	}
 	if len(r.projects) > 1 && !vmProjectAccess && input.Discussion.TicketEventID == "" {
 		names := make([]string, 0, len(r.projects))

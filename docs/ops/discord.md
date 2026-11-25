@@ -123,7 +123,10 @@ Use `swarm discord disconnect` to stop the connector. To go back to the legacy d
 
 The experimental `ticket_intake` config accepts one explicit `guild_id`,
 `channel_id`, `webhook_id`, `repo`, `project`, `token_file`, `grant_socket`, and
-`supervisor`.
+`supervisor`. Optional `manager_cli` selects the dedicated supervisor's
+qualified provider for the ticket manager and worker. It defaults to the
+connector's configured provider. Queuing an assignment pins that provider
+for its discussion and worker.
 The channel must already be enrolled and the project must name an enrolled
 project. The token is a private file distinct from the Discord token. The
 supervisor's `state_dir`, `socket`, and `endpoint` identify the dedicated

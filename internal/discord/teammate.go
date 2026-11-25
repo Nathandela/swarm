@@ -74,6 +74,7 @@ type TeammateDiscussion struct {
 	ParentAnchor       string
 	TicketEventID      string           `json:"ticket_event_id,omitempty"`
 	TicketProject      string           `json:"ticket_project,omitempty"`
+	TicketManagerCLI   string           `json:"ticket_manager_cli,omitempty"`
 	TicketSupervisor   TicketSupervisor `json:"ticket_supervisor,omitzero"`
 	Gap                uint64
 }

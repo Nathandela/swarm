@@ -122,6 +122,14 @@ func (c Config) EffectiveProjectAccess() string {
 	return ProjectAccessEnrolled
 }
 
+// EffectiveTicketManagerCLI selects the provider for new ticket assignments.
+func (c Config) EffectiveTicketManagerCLI() string {
+	if c.TicketIntake != nil && c.TicketIntake.ManagerCLI != "" {
+		return c.TicketIntake.ManagerCLI
+	}
+	return c.ManagerCLI
+}
+
 func (c Config) Validate() error {
 	if c.Version != 1 {
 		return errors.New("discord: unsupported config version")
@@ -163,6 +171,9 @@ func (c Config) Validate() error {
 			!validStatePath(t.TokenFile) || t.TokenFile == c.TokenFile || !validStatePath(t.GrantSocket) ||
 			t.GrantSocket == c.DaemonSocket || t.GrantSocket == t.Supervisor.Socket || t.GrantSocket == t.TokenFile {
 			return errors.New("discord: ticket intake requires an explicit guild/channel/project and distinct private credential")
+		}
+		if provider := c.EffectiveTicketManagerCLI(); provider != "codex" && provider != "claude" {
+			return errors.New("discord: ticket intake requires a Codex or Claude manager")
 		}
 		p := t.Supervisor
 		if !validStatePath(p.StateDir) || !validStatePath(p.Socket) || !validText(p.Endpoint, 128) || p.Socket == c.DaemonSocket ||
