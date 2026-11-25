@@ -1,11 +1,12 @@
 //! Private transport for the pinned DAVE helper. No media or credentials leave this module's pipes.
+use super::call_helper::Helper;
 use super::config::{invalid, snowflake};
 use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 const MAX_LINE: usize = 8192;
@@ -33,14 +34,13 @@ pub(super) enum Event {
 
 impl Media {
     pub(super) fn start(
-        helper: &Path,
+        helper: &Helper,
         guild: &str,
         room: &str,
         bot: &str,
         speakers: Vec<String>,
     ) -> io::Result<Self> {
-        if !helper.is_absolute()
-            || ![guild, room, bot].into_iter().all(snowflake)
+        if ![guild, room, bot].into_iter().all(snowflake)
             || !(1..=16).contains(&speakers.len())
             || speakers.iter().enumerate().any(|(i, speaker)| {
                 !snowflake(speaker) || speaker == bot || speakers[..i].contains(speaker)
@@ -52,9 +52,10 @@ impl Media {
         pipe.set_write_timeout(Some(Duration::from_millis(50)))?;
         let stdin: OwnedFd = child_pipe.try_clone()?.into();
         let stdout: OwnedFd = child_pipe.into();
-        let child = Command::new(helper)
+        let child = helper
+            .command()?
             .env_clear()
-            .env("PATH", "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+            .process_group(0)
             .stdin(Stdio::from(stdin))
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::null())
@@ -150,7 +151,17 @@ impl Media {
     }
 
     pub(super) fn poll(&mut self) -> io::Result<Option<Event>> {
-        if self.child.try_wait()?.is_some() {
+        // Observe the exit without releasing the PID before group teardown.
+        let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                self.child.id(),
+                &mut status,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc != 0 || unsafe { status.si_pid() } != 0 {
             return Err(invalid("call helper exited"));
         }
         if !self.buffered.contains(&b'\n') {
@@ -249,7 +260,8 @@ fn endpoint(value: &Value) -> bool {
 impl Drop for Media {
     fn drop(&mut self) {
         let _ = self.pipe.shutdown(std::net::Shutdown::Both);
-        let _ = self.child.kill();
+        // The group leader remains reserved until wait(), including after exit.
+        let _ = unsafe { libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL) };
         let _ = self.child.wait();
     }
 }
@@ -270,6 +282,69 @@ mod tests {
             assert!(Instant::now() < limit, "helper did not emit an event");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    #[ignore = "needs Node 24.17 and npm ci for the pinned bundle; uses only the private pipe"]
+    fn exact_pinned_helper_runs_with_descendant_permission_removed() {
+        let root = std::path::PathBuf::from(std::env::var_os("SWARM_TEST_HELPER_ROOT").unwrap());
+        let node = fs::canonicalize(std::env::var_os("SWARM_TEST_HELPER_NODE").unwrap()).unwrap();
+        let helper = Helper::pinned(&root.join("swarm-discord-voice"), node.clone()).unwrap();
+        let mut media = Media::start(&helper, "1", "2", "3", vec!["4".into()]).unwrap();
+        assert!(matches!(wait(&mut media).unwrap(), Event::Join));
+        drop(media);
+        let denied = std::process::Command::new(node)
+            .args(["--permission","--allow-addons","--eval",
+                "try {require('node:child_process').spawn('/bin/true'); process.exit(1)} catch(e) {process.exit(e.code==='ERR_ACCESS_DENIED'?0:2)}"])
+            .env_clear().output().unwrap();
+        assert!(
+            denied.status.success(),
+            "node permitted detached process creation"
+        );
+    }
+
+    #[test]
+    fn reaps_group_even_after_leader_exits_with_inherited_media_pipe() {
+        let dir = std::env::temp_dir().join(format!("swarm-call-group-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let helper = dir.join("helper");
+        let pidfile = dir.join("child");
+        let script = format!(
+            "#!/bin/sh\n/bin/sleep 30 &\nprintf '%s' \"$!\" > '{}'\nexit 0\n",
+            pidfile.display()
+        );
+        fs::write(&helper, script).unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut media =
+            Media::start(&Helper::Fixture(helper), "1", "2", "3", vec!["4".into()]).unwrap();
+        assert!(matches!(wait(&mut media),Err(err) if err.to_string() == "call helper exited"));
+        let pid: libc::pid_t = fs::read_to_string(pidfile).unwrap().parse().unwrap();
+        drop(media);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if unsafe { libc::kill(pid, 0) } == -1
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                break;
+            }
+            #[cfg(target_os = "linux")]
+            if fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    stat.rsplit_once(") ")
+                        .map(|(_, rest)| rest.starts_with("Z"))
+                })
+                == Some(true)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "helper descendant survived revocation"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -296,7 +371,14 @@ mod tests {
                 "A".repeat(1280),
             )).unwrap();
             fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
-            let mut media = Media::start(&helper, "1", "2", "3", vec!["4".into()]).unwrap();
+            let mut media = Media::start(
+                &Helper::Fixture(helper.clone()),
+                "1",
+                "2",
+                "3",
+                vec!["4".into()],
+            )
+            .unwrap();
             assert!(matches!(wait(&mut media).unwrap(), Event::Join));
             let state = json!({"t":"VOICE_STATE_UPDATE","d":{"guild_id":"1","channel_id":"2",
                 "user_id":"3","session_id":"test-session","self_mute":false,

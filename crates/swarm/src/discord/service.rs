@@ -40,9 +40,15 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
     let dispatcher = super::dispatcher::Dispatcher::open(cfg, &place.dir)?;
     let (gateway_socket, cursor) = gateway::open(cfg)?;
     repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
-    let scope = dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg));
+    // Serialize binding the call control socket with normal disconnect.
+    let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
+    let scope = match &call_start {
+        Ok(_) => dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg)),
+        Err(_) => None,
+    };
     let driver =
         super::call_runtime::Driver::start(gateway_socket, cursor, cfg, &place.dir, scope.clone());
+    drop(call_start);
     driver.discussion_ready.store(
         !inbox.manager()["binding"].is_null(),
         std::sync::atomic::Ordering::Release,

@@ -1,6 +1,7 @@
 //! The call and media gate stays on the Gateway owner while native and speech I/O run separately.
 use super::{
     call_floor::{FRAME_BYTES, Floor, authorized_words},
+    call_helper::Helper,
     call_media::{Event, Media},
     call_origin,
     call_room::{Change, Room},
@@ -10,7 +11,7 @@ use super::{
 };
 use crate::{socket::DeadlineReader, supervisor::runtime};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -198,7 +199,7 @@ struct Calls {
     channel: String,
     owner: String,
     bot: String,
-    helper: PathBuf,
+    helper: Helper,
     key: String,
     key_file: PathBuf,
     next_key_check: Instant,
@@ -236,16 +237,10 @@ impl Calls {
         let owner = cfg.text("owner_id");
         let bot = cfg.text("application_id");
         let room = Room::new(guild, channel, owner, bot)?;
-        let helper = Path::new(get("helper_path"));
+        let helper = Helper::open(Path::new(get("helper_path")))?;
         let keys = Path::new(get("speech_state_dir"));
-        if !helper.is_absolute()
-            || !keys.is_absolute()
-            || !std::fs::metadata(helper)
-                .is_ok_and(|meta| meta.is_file() && meta.mode() & 0o111 != 0)
-        {
-            return Err(invalid(
-                "configure the pinned helper and private speech credential paths",
-            ));
+        if !keys.is_absolute() {
+            return Err(invalid("configure an absolute speech credential directory"));
         }
         let key_file = keys.join("openai.key");
         let key = load_token(&key_file).map_err(|_| invalid("speech credential unavailable"))?;
@@ -264,7 +259,7 @@ impl Calls {
             channel: channel.into(),
             owner: owner.into(),
             bot: bot.into(),
-            helper: helper.into(),
+            helper,
             key,
             key_file,
             next_key_check: Instant::now(),
@@ -590,15 +585,19 @@ impl Calls {
         let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
             return Ok(());
         };
-        if value["stop"] == self.scope["installation_id"] {
+        if value.as_object().is_some_and(|fields| fields.len() == 1)
+            && value["stop"].as_str() == self.scope["installation_id"].as_str()
+            && value["stop"].is_string()
+        {
             self.room.suspend();
             self.status.store(SUSPENDED, Ordering::Release);
-            self.end(socket)?;
+            self.current.take();
             let _ = stream.write_all(b"y");
-            return Ok(());
+            return self.end(socket);
         }
         if let Some(call) = &self.current
-            && matches_turn(call, &value)
+            && value.as_object().is_some_and(|fields| fields.len() == 4)
+            && matches_coordinate(call, &value)
             && self.room.forward(call.generation, &self.owner, false, now)
         {
             let _ = stream.write_all(b"y");
@@ -628,7 +627,10 @@ fn cue() -> Vec<u8> {
 }
 
 fn matches_turn(call: &Call, origin: &Value) -> bool {
-    let voice = &origin["voice"];
+    matches_coordinate(call, &origin["voice"])
+}
+
+fn matches_coordinate(call: &Call, voice: &Value) -> bool {
     voice["call_id"] == call.id
         && voice["generation"] == call.generation
         && voice["turn_id"]
@@ -637,7 +639,31 @@ fn matches_turn(call: &Call, origin: &Value) -> bool {
             .is_some_and(|digest| voice["body_hash"] == *digest)
 }
 
-pub(super) fn verify_live(dir: &Path, input: &Value) -> io::Result<()> {
+pub(super) fn live_coordinate(origin: &Value) -> Value {
+    let voice = &origin["voice"];
+    json!({"call_id":voice["call_id"],"generation":voice["generation"],
+        "turn_id":voice["turn_id"],"body_hash":voice["body_hash"]})
+}
+
+pub(super) fn verify_live(dir: &Path, origin: &Value) -> io::Result<()> {
+    auth_request(dir, &live_coordinate(origin))
+}
+
+pub(super) fn stop(dir: &Path, installation: &str) -> io::Result<()> {
+    auth_request(dir, &json!({"stop":installation}))
+}
+
+pub(super) fn stop_if_running(dir: &Path, installation: &str) -> io::Result<()> {
+    // No independent call listener is expected for a disabled or older connector.
+    match std::fs::symlink_metadata(dir.join(CALL_SOCKET)) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+        Ok(_) => {}
+    }
+    stop(dir, installation)
+}
+
+fn auth_request(dir: &Path, input: &Value) -> io::Result<()> {
     let path = dir.join(CALL_SOCKET);
     let meta =
         std::fs::symlink_metadata(&path).map_err(|_| invalid("call authority is unavailable"))?;
@@ -690,6 +716,15 @@ mod tests {
 
     #[test]
     fn process_and_gateway_revoke_during_stalled_native_consumer() {
+        stalled_consumer(false);
+    }
+
+    #[test]
+    fn normal_disconnect_revokes_before_unblocking_text_shutdown() {
+        stalled_consumer(true);
+    }
+
+    fn stalled_consumer(disconnect: bool) {
         let mut random = [0_u8; 8];
         fs::File::open("/dev/urandom")
             .unwrap()
@@ -698,6 +733,23 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("swarm-call-{:016x}", u64::from_ne_bytes(random)));
         runtime::private_dir(&dir).unwrap();
+        let text_shutdown = disconnect.then(|| {
+            let lease = runtime::lock(&dir.join("bridge.lock")).unwrap();
+            let listener = runtime::bind(&dir.join("bridge.sock")).unwrap();
+            let (release, wait) = mpsc::sync_channel::<()>(0);
+            let thread = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                // The normal text bridge cannot answer until the native operation returns.
+                wait.recv_timeout(Duration::from_secs(4)).unwrap();
+                let mut bytes = [0; 2048];
+                let _ = stream.read(&mut bytes).unwrap();
+                stream
+                    .write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 16\r\n\r\n{\"stopped\":true}")
+                    .unwrap();
+                drop(lease);
+            });
+            (release, thread)
+        });
         let helper = dir.join("helper");
         let key_file = dir.join("openai.key");
         fs::write(&key_file, "unused-fixture-key").unwrap();
@@ -711,7 +763,7 @@ read -r second
 case "$first" in *voice_server*) ;; *) exit 3;; esac
 case "$second" in *voice_state*) ;; *) exit 4;; esac
 printf '%s\n' '{"type":"ready"}'
-read -r stop
+while read -r command; do :; done
 "#).unwrap();
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
         let server = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -754,21 +806,32 @@ read -r stop
                 &mut server,
                 json!({"op":0,"t":"MESSAGE_CREATE","s":5,"d":{"id":"10"}}),
             );
-            send(&mut server, voice(6, "5", json!("2")));
+            if !disconnect {
+                send(&mut server, voice(6, "5", json!("2")));
+            }
             let leave = recv(&mut server);
             assert_eq!(leave["op"], 4);
             assert!(leave["d"]["channel_id"].is_null());
-            send(&mut server, voice(7, "3", Value::Null));
+            send(
+                &mut server,
+                voice(if disconnect { 6 } else { 7 }, "3", Value::Null),
+            );
         });
         let tcp = TcpStream::connect(address).unwrap();
         tcp.set_read_timeout(Some(FRAME)).unwrap();
         let (mut socket, _) =
             client(format!("ws://{address}"), MaybeTlsStream::Plain(tcp)).unwrap();
         let cfg = Config(
-            json!({"mode":"personal","application_id":"3","owner_id":"4","dm_channel_id":"6",
+            json!({"version":1,"enabled":true,"name":"fixture","mode":"personal","manager_cli":"codex",
+            "installation_id":"test","application_id":"3","owner_id":"4","dm_channel_id":"6",
+            "token_file":dir.join("synthetic-token"),"daemon_socket":dir.join("daemon.sock"),"work_dir":dir,
             "calls":{"mode":"personal","guild_id":"1","room_id":"2","discussion_id":"6",
             "helper_path":helper,"speech_state_dir":dir}}),
         );
+        if disconnect {
+            runtime::write_json(&dir.join("config.json"), &cfg.0).unwrap();
+            runtime::write_json(&dir.join(".rust-offline-owner.json"), &json!("test")).unwrap();
+        }
         let cursor = gateway::ready(&mut socket, &cfg, "never-real").unwrap();
         let driver = Driver::start(
             socket,
@@ -784,8 +847,28 @@ read -r stop
             thread::sleep(Duration::from_millis(5));
         }
         owner_ready.send(()).unwrap();
+        let shutdown = disconnect.then(|| {
+            let place = super::super::config::Place::fixture(dir.clone());
+            thread::spawn(move || place.disconnect())
+        });
         fixture.join().unwrap();
         assert_ne!(driver.status(), "active");
+        if let Some((release, text)) = text_shutdown {
+            let shutdown = shutdown.unwrap();
+            if shutdown.is_finished() {
+                panic!(
+                    "text shutdown completed before release: {:?}",
+                    shutdown.join().unwrap()
+                );
+            }
+            release.send(()).unwrap();
+            text.join().unwrap();
+            shutdown.join().unwrap().unwrap();
+            assert_eq!(
+                runtime::read_json(&dir.join("config.json")).unwrap()["enabled"],
+                false
+            );
+        }
         // Native consumer remained blocked through the leave. Only the text event was queued.
         assert!(
             matches!(driver.inbound.try_recv(),Ok(Ok(Ingress::Discord(event))) if event["d"]["id"] == "10")

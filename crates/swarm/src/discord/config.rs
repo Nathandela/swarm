@@ -96,6 +96,15 @@ const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
 
 impl Place {
+    #[cfg(test)]
+    pub(super) fn fixture(dir: PathBuf) -> Self {
+        Self {
+            supervisor: dir.clone(),
+            dir,
+            explicit: true,
+        }
+    }
+
     pub(super) fn resolve(state: Option<&str>) -> io::Result<Self> {
         let supervisor = absolute(&ipc::state_path()?)?;
         let supplied = state.filter(|s| !s.is_empty());
@@ -146,7 +155,7 @@ impl Place {
         Ok(cfg)
     }
 
-    fn lock(&self) -> io::Result<(File, File)> {
+    pub(super) fn lock(&self) -> io::Result<(File, File)> {
         runtime::private_dir(&self.supervisor)?;
         runtime::private_dir(&self.dir)?;
         let lock = |path: &Path| {
@@ -423,6 +432,7 @@ impl Place {
         let _lease = match runtime::lock(&self.dir.join("bridge.lock")) {
             Ok(lease) => lease,
             Err(err) if existing(&socket)? => {
+                super::call_runtime::stop_if_running(&self.dir, cfg.text("installation_id"))?;
                 let body = json!({});
                 let response = super::local::call(
                     &self.dir,

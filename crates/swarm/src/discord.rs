@@ -2,6 +2,7 @@ mod call_runtime;
 mod call_speech;
 
 mod call_floor;
+mod call_helper;
 
 mod call_media;
 mod call_origin;
@@ -355,7 +356,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
         "stop-call" => {
-            call_runtime::verify_live(&place.dir, &json!({"stop":cfg.text("installation_id")}))?;
+            call_runtime::stop(&place.dir, cfg.text("installation_id"))?;
             println!("Discord calls suspended until restart.");
         }
         "doctor" => return doctor(&place, &cfg, req.get("channel")),

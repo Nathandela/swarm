@@ -2,7 +2,7 @@
 
 ## Personal voice room on the Rust migration branch
 
-The enrolled personal Codex connector can opt in to one ordinary guild voice room. Establish the dispatcher by texting the owner DM first. Prepare the pinned helper with Node 24.17 or later in the Node 24 series, run `npm ci --omit=dev` in `services/discord-voice`, then run `./swarm-discord-voice --check`. The helper runs with `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin` as its PATH.
+The enrolled personal Codex connector can opt in to one ordinary guild voice room. Establish the dispatcher by texting the owner DM first. Prepare the pinned helper with Node 24.17 or later in the Node 24 series, run `npm ci --omit=dev` in `services/discord-voice`, then run `./swarm-discord-voice --check`. The connector looks for Node in `/usr/local/bin`, `/opt/homebrew/bin`, then `/usr/bin`. Use npm 11 with `umask 077` to install the pinned lockfile. Keep the bundle and dependencies owned by the connector user or root and free of group or other write access. Restart the connector after installing a matching bundle.
 
 Add a `calls` object to the private connector `config.json`, then restart the isolated foreground connector.
 

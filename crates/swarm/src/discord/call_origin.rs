@@ -134,7 +134,10 @@ mod tests {
                 let (mut client, _) = listener.accept().unwrap();
                 let mut bytes = Vec::new();
                 client.read_to_end(&mut bytes).unwrap();
-                assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), origin);
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap(),
+                    crate::discord::call_runtime::live_coordinate(&origin)
+                );
                 client.write_all(b"y").unwrap();
             })
         };

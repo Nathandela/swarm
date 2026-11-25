@@ -224,7 +224,10 @@ impl Room {
                     self.awaiting_leave = false;
                     self.leave_sent = false;
                 }
-                self.attempted = matches!(ended, Change::End);
+                // Snapshot refresh never restores consent for an owner who has already called.
+                if self.anchor && !self.occupants.contains_key(&self.owner) {
+                    self.attempted = false;
+                }
                 ended
             }
             "VOICE_STATE_UPDATE" if self.anchor => self.voice(data),
@@ -396,6 +399,25 @@ mod tests {
     fn server(sequence: u64) -> Value {
         json!({"t":"VOICE_SERVER_UPDATE","s":sequence,
             "d":{"guild_id":"1","endpoint":"voice.invalid","token":"never-persist"}})
+    }
+
+    #[test]
+    fn expired_consent_survives_a_fresh_snapshot_with_the_same_owner() {
+        let now = Instant::now();
+        let mut room = Room::new("1", "2", "4", "3").unwrap();
+        room.event(&snapshot(1, 2));
+        let id = room.begin(now).unwrap();
+        room.join(id, now).unwrap();
+        room.event(&voice(2, "3", json!("2"), false));
+        assert!(room.ready(id, now));
+        assert!(room.expire(now + MAX_CALL));
+        assert!(room.leave().is_some());
+        room.event(&voice(3, "3", Value::Null, false));
+        room.event(&snapshot(4, 2));
+        assert!(room.begin(now + MAX_CALL).is_none());
+        room.event(&voice(5, "4", Value::Null, false));
+        room.event(&voice(6, "4", json!("2"), false));
+        assert!(room.begin(now + MAX_CALL).is_some());
     }
 
     #[test]

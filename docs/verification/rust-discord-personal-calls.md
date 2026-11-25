@@ -15,6 +15,14 @@ The media package is byte-identical to `services/discord-voice/` at Go call orac
 | Synthetic PCM and provider event traces | All 480 click alignments preserve playback. Sustained speech interrupts. Overlap and unaddressed team text produce no admissible words. A readout with changed words produces zero playable bytes. |
 | Voice record reopened from disk | Same turn and transcript return the original receipt. A modified body under the same request key and a different supervisor are refused. The store advances from format 2 to format 3 on the first persisted voice record. |
 
+## Review regressions
+
+- Fresh guild snapshots preserve exhausted owner consent while that owner remains in the room. A negative fixture expires the generation, observes the bot leave, refreshes the snapshot and rejects a new call until owner re-entry.
+- The launcher verifies the shipped helper, media module, package metadata and lock against the binary's pinned artifacts. It also records and rechecks local executable and dependency identities and requires owner-controlled paths. It executes the embedded module sources from the held bundle directory with Node subprocess and worker permissions disabled. The compatible pinned native DAVE addon remains part of the trusted dependency bundle.
+- A real helper fixture leaves a descendant with the inherited media pipe after its leader exits. The parent observes the unreaped leader and kills the group before reaping it. The pinned Node fixture uses the real helper to produce a private join and verifies that its process restrictions reject spawning another program.
+- A normal disconnect ends media through the independent call-control socket before waiting for the text bridge. The loopback fixture holds the text shutdown open until it observes the outgoing Gateway leave.
+- Native live authorization sends only the call ID, generation, turn ID and body digest to the call-control socket. The durable native verifier still checks the complete scoped origin before requesting that live decision.
+
 ## Open gates
 
 - Real call and hosted requests have not run from Rust. Validate with a designated private guild, isolated application, throwaway marker, personal room and authorized test window.
