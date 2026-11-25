@@ -27,3 +27,18 @@ go test -count=1 -v ./internal/tui -run '^TestFirstPaintGate_RealDaemon_FiftySes
 ```
 
 In the call reference checkout build to a different path and exercise `discord --help`. No live Discord event, native provider inference, rollback, long soak, screenshot pair or Rust candidate was exercised in this planning pass.
+
+## Published macOS reference for M0
+
+On 25 November 2026, `gh release download v0.29.22 --repo Nathandela/swarm -p checksums.txt -p checksums.txt.sig -p swarm_0.29.22_darwin_all.tar.gz` retrieved the three assets into a private scratch directory. Ed25519 verification of the original checksum bytes and base64-decoded signature succeeded with the [public key in the pinned source](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/internal/upgrade/keys.go). Appending one byte to the checksum document caused verification to fail. The downloaded archive matched its unique signed SHA-256 entry, `381b638c39a03476094ad02a5987e9e6f65238b48717bbba6647271c5da1fc98`. Extracting the regular member `swarm` produced universal x86_64/arm64 Mach-O bytes with SHA-256 `addfa213521388e13278ea9cca4e6eeeb5aa15d3bea61b9e59f737ea78e80129`. Running `version` from scratch printed `swarm 0.29.22 (go1.26.11)`. Its `discord --help` omitted `stop-call`. Use this artifact for published macOS comparisons and record the executing architecture. Linux release-archive execution remains open.
+
+## M0 source build repeatability on Apple Silicon
+
+Two builds in independent scratch directories on this host with Go 1.26.5 and `GOARCH=arm64` produced identical SHA-256 digests within each reference. Both binaries executed their version and Discord help probes. Running the builder with an existing output directory returned exit 2 and preserved its contents.
+
+| Source CLI binary | Native darwin/arm64 SHA-256 |
+|---|---|
+| Main at f26648d6 | `5f92beebd77f4d49a45ca7989a9d88d42bc3192b623356661217f102366fe179` |
+| Calls at da7b9f2d | `683c26bf5bb4fe1e87aea76d435b47473d8f4443b67c14d2be5cf1bad9bededf` |
+
+Repeatability here covers a fixed compiler and target on one host. The published archive above uses the release toolchain, flags and stamps. [Builder and invocation](README.md#running-the-first-milestone)

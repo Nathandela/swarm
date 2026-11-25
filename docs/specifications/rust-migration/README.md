@@ -1,6 +1,6 @@
 # Rust migration decision and delivery roadmap
 
-**Proposed for implementation on `migration/rust-parity`, 25 November 2026.** The deliverable at this revision is the plan. The release decision belongs to a future candidate with measured evidence.
+**Implementation started on `migration/rust-parity`, 25 November 2026.** M0 establishes the reference builds and behavioral inventory. The release decision belongs to a future candidate with measured evidence.
 
 Build the smallest complete daily workflow first. From the familiar board, launch a fixture worker, attach, type, detach, restart the daemon, reattach to the same process, inspect its screen and stop it. Run the same interaction against the shipping Go binary. This slice buys an early answer to the expensive question: can Rust preserve the terminal experience and process survival at the same time? Start independent capture of provider, Discord, scheduling and upgrade behavior on day one. Those contracts take longer to learn than the scaffold takes to build.
 
@@ -15,7 +15,19 @@ Build the smallest complete daily workflow first. From the familiar board, launc
 
 Before each milestone and the final freeze, compare new main commits to the last reviewed SHA. Classify each user-visible delta as retained, retired or separately proposed. Add retained behavior to both the scenario ledger and the candidate before advancing the pin. Record upstream-only branches such as `feat/discord-ticket-admission` as discovery items. Promote a feature from such a branch only with evidence of daily use or an explicit scope decision. Never merge the entire call branch to manufacture a combined oracle. A mixed text/file/call scenario needs independent assertions from each reference.
 
-**Implementation tracking.** Beads epic `agents-tracker-8fp1` owns M0–M11 in order as child issues `.1` through `.12`, with blocking dependencies. Start with `bd show agents-tracker-8fp1.1`. The [top-level CLI inventory](reference-surfaces.tsv) covers the default invocation and every switch arm in the pinned main dispatcher, including internal roles and aliases. Extend that inventory to individual options, environment knobs, persisted contracts and UI actions during M0.
+**Implementation tracking.** Beads epic `agents-tracker-8fp1` owns M0–M11 in order as child issues `.1` through `.12`, with blocking dependencies. Start with `bd show agents-tracker-8fp1.1`. The [top-level CLI inventory](reference-surfaces.tsv) covers the default invocation and every switch arm in the pinned main dispatcher, including internal roles and aliases. The [board control inventory](reference-board-keys.tsv) ties gestures, state guards and retired controls to their Go handlers. Complete individual options, destination-screen controls, configuration, artifacts and positive/refusal scenarios during M0.
+
+### Running the first milestone
+
+From the repository root, run the following on a machine with Git, Python 3 and the Go toolchain installed. Choose a new output directory under an existing parent. The builder reads both pinned commits from the local Git object store. Fetch the call integration branch if the checkout lacks its commit.
+
+```sh
+python3 scripts/verification/build_rust_references.py /tmp/swarm-m0-references
+```
+
+Use the two CLI paths and SHA-256 digests in the resulting `manifest.json` for local comparisons. Each executable must answer `version` and `discord --help`; only the call reference exposes `stop-call`. The separately verified published macOS artifact is recorded in [reference checks](reference-checks.md). A live call also requires its matching media helper and a designated test place.
+
+Before comparing latency, align the actual executable architectures of both arms. On the kickoff machine Go defaults to darwin/amd64 and Rust to aarch64-apple-darwin. Prefix the build command with `env GOARCH=arm64` when comparing with native Apple Silicon Rust. Keep the manifest with the results.
 
 ## Reading and ownership
 
