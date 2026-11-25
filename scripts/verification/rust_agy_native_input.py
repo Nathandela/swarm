@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from parity_agy import wait_for
@@ -139,6 +140,48 @@ def run(binary, guild=False):
             updated.chmod(0o600)
             updated.replace(ledger_file)
         save()
+        revoked_audiences = set()
+        guild_probes = []
+        guild_stop = threading.Event()
+        guild_listener = None
+        if guild:
+            epoch = connector / "guild-worker-epoch.json"
+            epoch.write_text(json.dumps({"epoch":"a" * 24,"cancelled":{}}))
+            epoch.chmod(0o600)
+            guild_path = connector / "g"
+            guild_listener = socket.socket(socket.AF_UNIX)
+            guild_listener.bind(str(guild_path))
+            guild_path.chmod(0o600)
+            guild_listener.listen()
+            guild_listener.settimeout(.1)
+
+            def serve_fixture_audience():
+                while not guild_stop.is_set():
+                    try:
+                        conn, _ = guild_listener.accept()
+                    except TimeoutError:
+                        continue
+                    with conn, conn.makefile("rwb") as stream:
+                        conn.settimeout(2)
+                        frame = stream.read(4)
+                        if len(frame) != 4:
+                            continue
+                        data = stream.read(struct.unpack(">I", frame)[0])
+                        assert data[0] == 1
+                        request = json.loads(data[1:])
+                        operation = request["operation"]
+                        guild_probes.append(operation)
+                        latest = json.loads(ledger_file.read_text())["worker_inputs"][operation]
+                        assert latest["composer"] == request["composer"]
+                        assert latest["provider"] == request["provider"] == "agy"
+                        if operation in revoked_audiences:
+                            continue
+                        receipt = b"\x01" + json.dumps({"epoch":request["epoch"],"challenge":request["challenge"]}).encode()
+                        stream.write(struct.pack(">I",len(receipt)) + receipt)
+                        stream.flush()
+
+            guild_thread = threading.Thread(target=serve_fixture_audience)
+            guild_thread.start()
         provider = tools / "agy"
         provider.write_text(f"#!{sys.executable}\n" + FIXTURE.replace("$CONVERSATION", CONVERSATION))
         provider.chmod(0o700)
@@ -256,6 +299,16 @@ def run(binary, guild=False):
             assert b"Fixture permission request" in cli("peek", sid).stdout
             text = "Native exact input.\n第二行 <angle>"
             assert cli("message", sid, "--text", "no origin", ok=False).returncode == 1
+            if guild:
+                revoked, revoked_composer, revoked_source = prepare("permission revoked at last recheck","408")
+                persist(revoked, revoked_composer, revoked_source)
+                revoked_audiences.add(revoked)
+                send(revoked, revoked_composer, ok=False)
+                assert guild_probes == [revoked]
+                revoked_audiences.remove(revoked)
+                send(revoked, revoked_composer, ok=False)
+                assert guild_probes == [revoked]
+                assert deliveries() == []
             operation, composer, source = prepare(text, "401")
             # A fully formed origin without a persisted worker-specific cutover grants nothing.
             send(operation, composer, ok=False)
@@ -377,6 +430,10 @@ def run(binary, guild=False):
             assert deliveries() == [text, "uncertain native reply"]
             assert not (work / "unexpected-terminal-input").exists()
         finally:
+            if guild_listener is not None:
+                guild_stop.set()
+                guild_thread.join(timeout=3)
+                guild_listener.close()
             if sid:
                 cli("kill", sid, ok=False)
             daemon.terminate()

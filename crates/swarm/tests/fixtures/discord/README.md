@@ -27,3 +27,9 @@ cargo test --locked -p swarm discord::manager -- --ignored
 ```
 
 The Rust arm retains the installed Codex workspace policy. The Go enrolled manager arm applies its explicit full-access manager policy. This fixture qualifies manager custody and the publication path. Native permission-policy parity remains open.
+
+The agy fixture also exercises the private guild effect gate. Run both arms with
+`python3 scripts/verification/rust_agy_native_input.py target/debug/swarm` and the same command with `--guild`.
+The guild arm simulates permission withdrawal at the effect check. It verifies the shim refuses before sending and the same operation stays refused.
+
+A guild worker uses connector-owned REST checks immediately before the native write. The connector seals the exact source and reviews current owner and bot grants, including private-thread membership. Relevant Gateway changes delivered during an in-flight operation cancel it locally. Discord and the provider have independent APIs. A remote permission change after the last REST response and before the native write can still race that write. A submitted or uncertain write retains its original operation ID for readback.

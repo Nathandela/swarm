@@ -133,25 +133,132 @@ impl Transport for Client {
     }
 }
 
+fn matching_provider_receipt(
+    provider: &str,
+    operation: &str,
+    composer: &Value,
+    receipt: &Value,
+) -> bool {
+    if receipt["agent"] != provider
+        || receipt["operation_id"] != operation
+        || receipt["session"] != composer["session"]
+        || receipt["session_instance"] != composer["session_instance"]
+        || receipt["origin"] != composer["origin"]
+    {
+        return false;
+    }
+    let native = field(receipt, "native_session_id");
+    let generation = field(receipt, "native_generation");
+    let state = field(receipt, "state");
+    let bounded = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 512
+            && value.trim() == value
+            && !value.chars().any(char::is_control)
+    };
+    let admission = &receipt["native_admission"];
+    match provider {
+        "agy" => {
+            crate::providers::codex_receipt::canonical_thread(native)
+                && crate::supervisor::runtime::valid_id(generation)
+                && matches!(state, "submitted" | "rejected")
+                && admission.is_null()
+                && receipt["native_turn_id"].is_null()
+                && receipt["native_refusal_code"].is_null()
+        }
+        "hermes" => {
+            bounded(native)
+                && bounded(generation)
+                && receipt["native_generation"] == composer["session_instance"]
+                && match state {
+                    "submitted" => {
+                        receipt["native_refusal_code"].is_null()
+                            && admission["input_id"] == operation
+                            && admission["ref"]["session_id"] == native
+                            && bounded(field(&admission["ref"], "profile_id"))
+                            && bounded(field(admission, "authority_epoch"))
+                            && bounded(field(admission, "admission_id"))
+                            && admission["execution_generation"].is_u64()
+                            && matches!(
+                                field(admission, "status"),
+                                "queued" | "started" | "terminal"
+                            )
+                    }
+                    "rejected" => admission.is_null() && receipt["native_refusal_code"].is_i64(),
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
+}
+
+pub(super) struct Flight {
+    pub(super) operation: String,
+    pub(super) join: std::thread::JoinHandle<()>,
+}
+
+struct Background<'a> {
+    client: Option<Client>,
+    running: &'a mut Option<Flight>,
+}
+
+impl Transport for Background<'_> {
+    fn target(&mut self, id: &str) -> io::Result<(String, String)> {
+        self.client.as_mut().unwrap().target(id)
+    }
+    fn status(&mut self, operation: &str, composer: &Value) -> io::Result<Value> {
+        self.client.as_mut().unwrap().status(operation, composer)
+    }
+    fn send(&mut self, operation: &str, composer: &Value) -> io::Result<()> {
+        let mut client = self.client.take().unwrap();
+        let operation = operation.to_owned();
+        let composer = composer.clone();
+        let saved = operation.clone();
+        *self.running = Some(Flight {
+            operation: saved,
+            join: std::thread::spawn(move || {
+                let _ = Transport::send(&mut client, &operation, &composer);
+            }),
+        });
+        Ok(())
+    }
+}
+
 pub(super) fn tick(
     cfg: &Config,
     inbox: &mut Inbox,
     api: &Discord,
     read_after: &mut Option<String>,
+    running: &mut Option<Flight>,
 ) -> io::Result<()> {
-    if !inbox.has_worker_work() {
+    if running.is_some() || !inbox.has_worker_work() {
         return Ok(());
     }
     let mut caps = CAPS.to_vec();
     if cfg.text("mode") != "personal" {
         caps.push("worker-discord-guild-origin-v1");
     }
-    let Ok(mut transport) = Client::dial(Path::new(cfg.text("daemon_socket")), &caps) else {
+    let Ok(transport) = Client::dial(Path::new(cfg.text("daemon_socket")), &caps) else {
         return Ok(());
     };
     if cfg.check_supervisor(&transport, &caps).is_err() {
         return Ok(());
     }
+    if cfg.text("mode") == "personal" {
+        let mut transport = transport;
+        return dispatch(
+            cfg,
+            inbox,
+            &mut transport,
+            spawn::now_ms(),
+            read_after,
+            |_, id| api.owner_message(cfg, id),
+        );
+    }
+    let mut transport = Background {
+        client: Some(transport),
+        running,
+    };
     dispatch(
         cfg,
         inbox,
@@ -182,15 +289,12 @@ fn dispatch(
     read_after: &mut Option<String>,
     current: impl FnOnce(&Value, &str) -> io::Result<Option<Value>>,
 ) -> io::Result<()> {
-    if let Some((operation, composer)) = inbox.unsettled_worker(read_after.as_deref()) {
+    if let Some((operation, provider, composer)) = inbox.unsettled_worker(read_after.as_deref()) {
         *read_after = Some(operation.clone());
-        if let Ok(receipt) = transport.status(&operation, &composer) {
-            match field(&receipt, "state") {
-                "native_accepted" | "admitted" | "submitted" | "rejected" => {
-                    inbox.settle_worker(&operation, &receipt)?
-                }
-                _ => {}
-            }
+        if let Ok(receipt) = transport.status(&operation, &composer)
+            && matching_provider_receipt(&provider, &operation, &composer, &receipt)
+        {
+            inbox.settle_worker(&operation, &receipt)?;
         }
     }
     let Some(prepared) = inbox.next_worker() else {
@@ -262,6 +366,7 @@ mod tests {
         path: PathBuf,
         sends: usize,
         answer: bool,
+        malformed: bool,
     }
 
     impl Transport for Provider {
@@ -283,9 +388,11 @@ mod tests {
             Err(io::Error::other("fixture lost native reply"))
         }
 
-        fn status(&mut self, _operation: &str, _composer: &Value) -> io::Result<Value> {
+        fn status(&mut self, operation: &str, composer: &Value) -> io::Result<Value> {
             self.answer
-                .then(|| json!({"state":"submitted","native_session_id":"native-session"}))
+                .then(|| json!({"state":"submitted","agent":"agy",
+                    "native_session_id":if self.malformed { "" } else { "11111111-1111-4111-8111-111111111111" },"native_generation":"a".repeat(24),
+                    "operation_id":operation,"session":composer["session"],"session_instance":composer["session_instance"],"origin":composer["origin"]}))
                 .ok_or_else(|| io::Error::other("fixture receipt unavailable"))
         }
     }
@@ -311,6 +418,38 @@ mod tests {
     }
 
     #[test]
+    fn provider_receipt_requires_the_native_identity_and_kind_of_evidence() {
+        let composer =
+            json!({"session":TARGET,"session_instance":"act","origin":{"request_id":"source"}});
+        let base = json!({"agent":"agy","state":"submitted","operation_id":"op","session":TARGET,
+            "session_instance":"act","origin":composer["origin"]});
+        assert!(!matching_provider_receipt("agy", "op", &composer, &base));
+        let mut agy = base;
+        agy["native_session_id"] = json!("11111111-1111-4111-8111-111111111111");
+        agy["native_generation"] = json!("a".repeat(24));
+        assert!(matching_provider_receipt("agy", "op", &composer, &agy));
+        assert!(!matching_provider_receipt("hermes", "op", &composer, &agy));
+        agy["native_turn_id"] = json!("foreign-proof");
+        assert!(!matching_provider_receipt("agy", "op", &composer, &agy));
+        let mut hermes = agy;
+        hermes["agent"] = json!("hermes");
+        hermes["native_generation"] = json!("act");
+        hermes["native_turn_id"] = Value::Null;
+        assert!(!matching_provider_receipt(
+            "hermes", "op", &composer, &hermes
+        ));
+        hermes["native_admission"] = json!({"input_id":"op","admission_id":"native-admission","authority_epoch":"epoch",
+            "execution_generation":0,"status":"queued","ref":{"profile_id":"native-profile","session_id":hermes["native_session_id"]}});
+        assert!(matching_provider_receipt(
+            "hermes", "op", &composer, &hermes
+        ));
+        hermes["native_admission"]["ref"]["session_id"] = json!("otherwise");
+        assert!(!matching_provider_receipt(
+            "hermes", "op", &composer, &hermes
+        ));
+    }
+
+    #[test]
     fn native_worker_cutover_keeps_its_incarnation_and_never_redrives_a_lost_reply() {
         let dir = root();
         let cfg = config();
@@ -327,6 +466,7 @@ mod tests {
             path: dir.clone(),
             sends: 0,
             answer: false,
+            malformed: false,
         };
         dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, id| {
             assert_eq!(owner["id"], id);
@@ -343,6 +483,19 @@ mod tests {
         })
         .unwrap();
         assert_eq!(client.sends, 1);
+        client.answer = true;
+        client.malformed = true;
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, _| {
+            panic!("malformed receipt triggered a new write")
+        })
+        .unwrap();
+        assert_eq!(inbox.worker_status()[0]["state"], "unconfirmed");
+        let disk = runtime::read_json(&dir.join("rust-text-v1.json")).unwrap();
+        assert_eq!(
+            disk["messages"][owner["id"].as_str().unwrap()]["state"],
+            "sending"
+        );
+        client.malformed = false;
         let mut edit = owner.clone();
         edit["content"] = json!(format!("{TARGET} changed after cutover"));
         edit["edited_timestamp"] = json!("2026-11-25T01:01:01Z");
@@ -369,6 +522,7 @@ mod tests {
             path: dir.clone(),
             sends: 0,
             answer: false,
+            malformed: false,
         };
         let stale = message(now - WORKER_EVENT_MAX_AGE_MS - 1, "expired source");
         inbox.admit(&stale).unwrap();

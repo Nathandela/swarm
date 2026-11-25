@@ -96,6 +96,9 @@ const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
 
 impl Place {
+    pub(super) fn supervisor_root(&self) -> &Path {
+        &self.supervisor
+    }
     pub(super) fn resolve(state: Option<&str>) -> io::Result<Self> {
         let supervisor = absolute(&ipc::state_path()?)?;
         let supplied = state.filter(|s| !s.is_empty());

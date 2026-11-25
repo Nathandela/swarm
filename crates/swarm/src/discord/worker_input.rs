@@ -75,6 +75,9 @@ pub(crate) fn lock_connector_worker_input(
         operation,
         composer,
     )?;
+    if !field(&composer["origin"], "guild_id").is_empty() {
+        super::worker_proof::recheck(&place, installation, provider, operation, composer)?;
+    }
     Ok((supervisor_lock, connector_lock, ledger_lock))
 }
 
