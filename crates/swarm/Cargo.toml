@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
+subtle = "2.6"
 libc = "0.2"
 vt100 = "0.18.1"
 time = { version = "0.3", features = ["formatting"] }

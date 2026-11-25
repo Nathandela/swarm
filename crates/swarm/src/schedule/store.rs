@@ -32,21 +32,74 @@ pub(super) struct Store {
     pub host: PathBuf,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Occurrence {
     pub id: String,
-    job_id: String,
+    pub job_id: String,
     revision_id: String,
     request_hash: String,
-    spec: Spec,
-    due_at: String,
+    pub spec: Spec,
+    pub due_at: String,
     claimed_at: Timestamp,
-    manual: bool,
+    pub manual: bool,
     pub state: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    detail: String,
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workspace: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_directory: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<Attempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<Completion>,
+    #[serde(default = "zero_time")]
+    pub projected_at: Timestamp,
+    #[serde(default = "zero_time")]
+    pub released_at: Timestamp,
+    #[serde(default = "zero_time")]
+    pub completed_at: Timestamp,
     #[serde(flatten)]
-    execution: serde_json::Map<String, serde_json::Value>,
+    additional: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub(crate) struct Completion {
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub(super) struct Attempt {
+    pub id: String,
+    pub agent: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub operation_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub completion_token_hash: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub prompt_started: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub prompt_delivered: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dispatch_started: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub workspace: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    pub state: String,
+    pub started_at: Timestamp,
+    pub updated_at: Timestamp,
+    #[serde(flatten)]
+    pub(super) additional: serde_json::Map<String, serde_json::Value>,
+}
+
+pub(super) fn zero_time() -> Timestamp {
+    ZERO.parse().expect("valid zero time")
 }
 
 impl Occurrence {
@@ -55,10 +108,6 @@ impl Occurrence {
             let utc: Timestamp = due.parse()?;
             Ok(digest(format!("{}/{utc}", job.id)))
         };
-        let mut execution = serde_json::Map::new();
-        for field in ["projected_at", "released_at", "completed_at"] {
-            execution.insert(field.to_owned(), ZERO.into());
-        }
         let mut run = Self {
             id: match invocation {
                 Some(id) => id.into(),
@@ -73,7 +122,14 @@ impl Occurrence {
             manual: invocation.is_some(),
             state: "queued".into(),
             detail: String::new(),
-            execution,
+            additional: serde_json::Map::new(),
+            workspace: String::new(),
+            source_directory: String::new(),
+            attempts: Vec::new(),
+            completion: None,
+            projected_at: zero_time(),
+            released_at: zero_time(),
+            completed_at: zero_time(),
         };
         run.request_hash = run.hash()?;
         Ok(run)
@@ -106,22 +162,47 @@ impl Occurrence {
         Ok(digest(go_json(data)))
     }
 
-    fn reserves(&self) -> bool {
+    fn preserves_identity(&self, next: &Self) -> bool {
+        let stable = |a: &str, b: &str| a.is_empty() || a == b;
+        let stable_time = |a: Timestamp, b: Timestamp| a == zero_time() || a == b;
+        if self.attempts.len() > next.attempts.len()
+            || !stable(&self.workspace, &next.workspace)
+            || !stable(&self.source_directory, &next.source_directory)
+            || !stable_time(self.completed_at, next.completed_at)
+            || !stable_time(self.projected_at, next.projected_at)
+            || !stable_time(self.released_at, next.released_at)
+            || (self.completion.is_some() && self.completion != next.completion)
+        {
+            return false;
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for (index, a) in next.attempts.iter().enumerate() {
+            if !valid_id(&a.id) || !ids.insert(&a.id) {
+                return false;
+            }
+            if let Some(b) = self.attempts.get(index)
+                && (a.id != b.id
+                    || a.agent != b.agent
+                    || a.started_at != b.started_at
+                    || !stable(&b.operation_id, &a.operation_id)
+                    || !stable(&b.completion_token_hash, &a.completion_token_hash)
+                    || !stable(&b.session_id, &a.session_id)
+                    || !stable(&b.workspace, &a.workspace)
+                    || (b.dispatch_started && !a.dispatch_started)
+                    || (b.prompt_started && !a.prompt_started)
+                    || (b.prompt_delivered && !a.prompt_delivered))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub(super) fn reserves(&self) -> bool {
         match self.state.as_str() {
             "queued" | "working" | "needs-input" => true,
-            "attention" => {
-                self.execution
-                    .get("attempts")
-                    .and_then(|a| a.as_array())
-                    .and_then(|a| a.last())
-                    .and_then(|a| a["state"].as_str())
-                    == Some("unknown")
-            }
-            "ready" => self
-                .execution
-                .get("released_at")
-                .and_then(|d| d.as_str())
-                .is_none_or(|at| at == ZERO),
+            "attention" => self.attempts.last().is_some_and(|a| a.state == "unknown"),
+            "ready" => self.released_at == zero_time(),
             _ => false,
         }
     }
@@ -178,9 +259,16 @@ impl Store {
         Ok(store)
     }
 
+    pub fn dispatch_lock(&self) -> Result<File> {
+        self.lock_file("dispatch.lock", libc::LOCK_EX)
+    }
+
     fn lock(&self, mode: libc::c_int) -> Result<File> {
-        let lock = private_file(&self.dir.join("state.lock"), true)?
-            .ok_or("missing schedule lock file")?;
+        self.lock_file("state.lock", mode)
+    }
+
+    fn lock_file(&self, name: &str, mode: libc::c_int) -> Result<File> {
+        let lock = private_file(&self.dir.join(name), true)?.ok_or("missing schedule lock file")?;
         loop {
             // The open file owns the lock and releases it when the transaction is over.
             if unsafe { libc::flock(lock.as_raw_fd(), mode) } == 0 {
@@ -384,6 +472,46 @@ impl Store {
         Ok(list.into_iter().map(|(_, run)| run).collect())
     }
 
+    pub fn occurrence(&self, id: &str) -> Result<Occurrence> {
+        self.view(|tx| require(tx, RUNS, id))
+    }
+
+    pub fn active(&self) -> Result<Vec<Occurrence>> {
+        let mut runs = self.view(|tx| {
+            let mut runs = Vec::new();
+            tx.walk(ACTIVE, None, &mut |key, _| {
+                let run: Occurrence = require(tx, RUNS, std::str::from_utf8(key)?)?;
+                runs.push((run.due_at.parse::<Timestamp>()?, run));
+                Ok(())
+            })?;
+            Ok(runs)
+        })?;
+        runs.sort_by(|(at, a), (bt, b)| at.cmp(bt).then_with(|| a.id.cmp(&b.id)));
+        Ok(runs.into_iter().map(|(_, run)| run).collect())
+    }
+
+    pub fn update(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut Occurrence) -> Result<()>,
+    ) -> Result<Occurrence> {
+        self.write(|tx| {
+            let before: Occurrence = require(tx, RUNS, id)?;
+            let mut next = before.clone();
+            f(&mut next)?;
+            if next.request_hash != before.request_hash || next.hash()? != before.request_hash {
+                return Err("schedule occurrence inputs are immutable".into());
+            }
+            if !before.preserves_identity(&next) {
+                return Err("schedule execution identities are immutable".into());
+            }
+            if serde_json::to_vec(&before)? != serde_json::to_vec(&next)? {
+                put_run(tx, &next)?;
+            }
+            Ok(next)
+        })
+    }
+
     pub fn claim_manual(&self, job: &str, invocation: &str, now: Timestamp) -> Result<Occurrence> {
         if !valid_id(invocation) {
             return Err("invalid schedule invocation ID".into());
@@ -584,8 +712,16 @@ fn put_run(tx: &mut dyn WriteBucket, run: &Occurrence) -> Result<()> {
         &format!("{}/{}", run.job_id, run.id),
         run.id.as_bytes(),
     )?;
-    if run.reserves() {
+    let retry = run.state == "blocked"
+        && run.spec.allow_overlap
+        && run
+            .attempts
+            .last()
+            .is_some_and(|a| a.state == "workspace_busy");
+    if run.reserves() || retry || (run.state == "ready" && run.projected_at == zero_time()) {
         tx.put_raw(ACTIVE, &run.id, &[1])?;
+    } else {
+        tx.delete_raw(ACTIVE, &run.id)?;
     }
     Ok(())
 }
@@ -599,7 +735,7 @@ pub(super) fn go_json(data: String) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-fn digest(data: impl AsRef<[u8]>) -> String {
+pub(super) fn digest(data: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(data))
 }
 
@@ -907,13 +1043,10 @@ mod tests {
         assert_eq!(before.request_hash, before.hash().unwrap());
         assert_eq!(before.state, "ready");
         assert_eq!(
-            before.execution["completion"]["summary"],
+            before.completion.as_ref().unwrap().summary,
             "Fixture retained"
         );
-        assert_eq!(
-            before.execution["attempts"][0]["session_id"],
-            "fixture-session"
-        );
+        assert_eq!(before.attempts[0].session_id, "fixture-session");
         assert_eq!(store.templates().unwrap()[0].prompt, "Copy me");
         assert_eq!(fs::read(&path).unwrap(), fixture);
 
@@ -924,7 +1057,11 @@ mod tests {
         assert_eq!(history[0].due_at, "2026-11-01T05:30:00Z");
         assert_eq!(history[0].claimed_at, now);
         assert_eq!(history[1].request_hash, before.request_hash);
-        assert_eq!(history[1].execution, before.execution);
+        assert_eq!(history[1].completion, before.completion);
+        assert_eq!(
+            history[1].attempts[0].operation_id,
+            before.attempts[0].operation_id
+        );
     }
 
     #[test]

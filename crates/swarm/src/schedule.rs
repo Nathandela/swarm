@@ -1,8 +1,10 @@
 mod calendar;
 mod cli;
+mod engine;
 mod rpc;
 mod store;
 mod timer;
+mod workspace;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -166,6 +168,8 @@ fn file(path: &str) -> io::Result<String> {
 }
 
 pub(crate) use cli::run;
+pub(crate) use engine::{Backend, Engine, Launch, LaunchOutcome, WorkerState};
+pub(crate) use store::Completion;
 
 #[cfg(test)]
 struct Temp(PathBuf);
