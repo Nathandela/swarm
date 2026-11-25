@@ -1,18 +1,20 @@
-use super::{Action, Editor, Key, caller_launch_environment, form_header, line};
+use super::{Action, Editor, Key, caller_launch_environment, clip};
 use serde_json::{Map, json};
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use unicode_width::UnicodeWidthStr;
 
 const PROVIDERS: [&str; 5] = ["agy", "claude", "codex", "hermes", "opencode"];
 
 enum Detection {
     Checking,
-    Ready(String),
-    Disabled(String),
+    Ready,
+    Disabled { reason: String, installed: bool },
 }
 
 #[derive(Default)]
@@ -247,8 +249,11 @@ impl Launch {
         let mut changed = false;
         while let Ok((index, result)) = self.detection.try_recv() {
             self.detected[index] = match result {
-                Ok(version) => Detection::Ready(version),
-                Err(error) => Detection::Disabled(error.to_string()),
+                Ok(_) => Detection::Ready,
+                Err(error) => Detection::Disabled {
+                    installed: error.kind() != io::ErrorKind::NotFound,
+                    reason: error.to_string(),
+                },
             };
             changed = true;
         }
@@ -263,7 +268,7 @@ impl Launch {
             self.agent = self
                 .detected
                 .iter()
-                .position(|entry| matches!(entry, Detection::Ready(_)))
+                .position(|entry| matches!(entry, Detection::Ready))
                 .unwrap_or(0);
             self.options = provider_options(PROVIDERS[self.agent]);
             // The prompt and worktree keep focus when the provider options arrive.
@@ -354,8 +359,8 @@ impl Launch {
         }
         match &self.detected[self.agent] {
             Detection::Checking => return Err(io::Error::other("Checking provider availability")),
-            Detection::Disabled(reason) => return Err(io::Error::other(reason.clone())),
-            Detection::Ready(_) => {}
+            Detection::Disabled { reason, .. } => return Err(io::Error::other(reason.clone())),
+            Detection::Ready => {}
         }
         let agent = PROVIDERS[self.agent];
         let raw = self.cwd.text.trim();
@@ -407,139 +412,319 @@ impl Launch {
         ))
     }
 
-    pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
-        let agent = PROVIDERS[self.agent];
-        let compact = rows < 12 || cols < 60;
-        let blocked = !Self::readable((cols, rows));
-        let issue = match &self.detected[self.agent] {
-            Detection::Checking => Some("checking native executable"),
-            Detection::Disabled(reason) => Some(reason.as_str()),
-            Detection::Ready(_) => None,
-        };
-        if blocked {
-            form_header(output, cols, "Resize to 32×8");
-            let label = match self.focus {
-                0 => format!(
-                    "▌ directory   {}",
-                    self.cwd.visible(cols.saturating_sub(14).max(1)).0
-                ),
-                1 => format!("▌ name        {}", self.name.text),
-                2 => format!("▌ tag         {}", self.tag.text),
-                _ => format!("▌ agent       ◂ {agent} ▸"),
-            };
-            line(output, 2, cols, "", &label);
-            line(output, 3, cols, "", "Esc back / n deny");
-            line(output, rows, cols, "\x1b[2m", "esc back");
-            return;
+    fn picker(&self, cols: u16) -> Vec<(&'static str, String)> {
+        if !self.detection_complete {
+            return vec![(DIM, "checking...".into())];
         }
-        let title = if compact {
-            format!("New session · {agent}")
-        } else {
-            "swarm · new session".into()
+        let render = |all_reasons: bool, selected_budget: Option<u16>| {
+            let mut pieces = vec![(DIM, "◂ ".into())];
+            for (i, name) in PROVIDERS.iter().enumerate() {
+                if i != 0 {
+                    pieces.push((PLAIN, "   ".into()));
+                }
+                let selected = i == self.agent;
+                let mark = match (&self.detected[i], selected) {
+                    (_, true) => '●',
+                    (
+                        Detection::Disabled {
+                            installed: false, ..
+                        },
+                        false,
+                    ) => '✕',
+                    _ => '○',
+                };
+                let mut label = format!("{mark} {name}");
+                let style = match &self.detected[i] {
+                    Detection::Disabled { reason, .. } => {
+                        let reason = if selected {
+                            selected_budget
+                                .map_or_else(|| reason.clone(), |budget| clip(reason, budget))
+                        } else if all_reasons {
+                            reason.clone()
+                        } else {
+                            String::new()
+                        };
+                        if !reason.is_empty() {
+                            let _ = write!(&mut label, " ({reason})");
+                        }
+                        DIM
+                    }
+                    _ if selected => ACCENT,
+                    _ => PLAIN,
+                };
+                pieces.push((style, label));
+            }
+            pieces.push((DIM, " ▸".into()));
+            pieces
         };
-        form_header(output, cols, &title);
-        let picker = if !self.detection_complete {
-            "checking...".into()
-        } else if compact {
-            format!("◂ {agent} ▸")
+        let width =
+            |pieces: &[(&str, String)]| pieces.iter().map(|(_, text)| text.width()).sum::<usize>();
+        let budget = usize::from(label_layout("agent", cols).1);
+        let full = render(true, None);
+        if width(&full) <= budget {
+            return full;
+        }
+        let trimmed = render(false, None);
+        if width(&trimmed) <= budget {
+            return trimmed;
+        }
+        let no_reason = render(false, Some(0));
+        let remaining = budget.saturating_sub(width(&no_reason) + 3);
+        if remaining > 0 {
+            return render(false, Some(remaining as u16));
+        }
+        vec![
+            (DIM, "◂ ".into()),
+            (ACCENT, PROVIDERS[self.agent].into()),
+            (DIM, " ▸".into()),
+        ]
+    }
+
+    pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
+        let agent = if self.detection_complete {
+            PROVIDERS[self.agent]
         } else {
-            let entries = PROVIDERS
-                .iter()
-                .zip(&self.detected)
-                .map(|(name, state)| {
-                    let marker = match state {
-                        _ if *name == agent => "●",
-                        Detection::Ready(_) => "○",
-                        Detection::Checking => "…",
-                        Detection::Disabled(_) => "✕",
-                    };
-                    format!("{marker} {name}")
-                })
-                .collect::<Vec<_>>()
-                .join("   ");
-            format!("◂ {entries} ▸")
+            ""
         };
-        let on = |value| if value { "[x] space" } else { "[ ] space" };
-        let available_completion = self
-            .completion
-            .as_ref()
-            .is_some_and(|c| !c.ghost.is_empty() || c.choices.len() > 1);
-        let directory = if self.focus == 0 {
-            self.cwd.visible(cols.saturating_sub(14).max(1)).0
-        } else {
-            self.cwd.text.clone()
-        };
-        let default = |value: &str, fallback: &'static str| {
-            if value.is_empty() {
-                fallback.to_owned()
+        let compact = cols < 64 && rows <= 10;
+        let blocked = !Self::readable((cols, rows));
+
+        let picker = self.picker(cols);
+
+        let edited = |label, editor: &Editor, active, placeholder: &str| {
+            if active {
+                vec![(PLAIN, block_cursor(editor, label_layout(label, cols).1))]
+            } else if editor.text.is_empty() {
+                vec![(DIM, placeholder.to_owned())]
             } else {
-                value.to_owned()
+                vec![(PLAIN, editor.text.clone())]
             }
         };
-        let name = default(&self.name.text, "(optional · defaults to agent-dir)");
-        let tag = default(&self.tag.text, "(optional · groups the board under o)");
-        let options: Vec<_> = self.options.iter().map(LaunchOption::display).collect();
-        let prompt = default(&self.prompt.text, "(optional)");
-        let worktree = format!("{} · isolate in a git worktree", on(self.worktree));
+        let toggle = |value, hint: &str| {
+            vec![
+                (PLAIN, if value { "[x] " } else { "[ ] " }.into()),
+                (DIM, hint.to_owned()),
+            ]
+        };
         let mut fields = vec![
-            ("directory", directory.as_str()),
-            ("name", name.as_str()),
-            ("tag", tag.as_str()),
-            ("agent", picker.as_str()),
+            (
+                "directory",
+                edited("directory", &self.cwd, self.focus == 0, ""),
+            ),
+            (
+                "name",
+                edited(
+                    "name",
+                    &self.name,
+                    self.focus == 1,
+                    "(optional · defaults to agent-dir)",
+                ),
+            ),
+            (
+                "tag",
+                edited(
+                    "tag",
+                    &self.tag,
+                    self.focus == 2,
+                    "(optional · groups the board under o)",
+                ),
+            ),
+            ("agent", picker),
         ];
-        fields.extend(
-            self.options
-                .iter()
-                .zip(&options)
-                .map(|(field, text)| (field.label, text.as_str())),
-        );
-        fields.extend([("prompt", prompt.as_str()), ("worktree", worktree.as_str())]);
-        let mut order: Vec<usize> = (0..fields.len()).collect();
+        for (index, option) in self.options.iter().enumerate() {
+            let active = self.focus == index + 4;
+            let value = match option.input {
+                OptionInput::Toggle => toggle(option.value.text == "true", "space"),
+                OptionInput::Choice(_) => vec![(PLAIN, option.display())],
+                OptionInput::Text(_) => edited(option.label, &option.value, active, "(default)"),
+            };
+            fields.push((option.label, value));
+        }
+        fields.extend([
+            (
+                "prompt",
+                edited(
+                    "prompt",
+                    &self.prompt,
+                    self.focus == self.options.len() + 4,
+                    "(optional)",
+                ),
+            ),
+            (
+                "worktree",
+                toggle(self.worktree, "space · isolate in a git worktree"),
+            ),
+        ]);
+        if self.focus == 0
+            && let Some(completion) = &self.completion
+            && !completion.ghost.is_empty()
+        {
+            fields[0].1.push((DIM, completion.ghost.clone()));
+        }
+        if blocked {
+            spans(output, 1, cols, &[(PLAIN, "Resize to 32×8".into())]);
+            if let Some((label, value)) = fields.get(self.focus) {
+                field(output, 2, cols, label, value, true);
+            }
+            spans(output, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
+            status(output, rows, cols, "esc back");
+            return;
+        }
+        if compact {
+            spans(
+                output,
+                1,
+                cols,
+                &[(PLAIN, format!("New session · {agent}"))],
+            );
+        } else {
+            spans(
+                output,
+                1,
+                cols,
+                &[(TITLE, "swarm".into()), (DIM, " · new session".into())],
+            );
+        }
         let first_row = if compact { 2 } else { 3 };
+        let mut order: Vec<_> = (0..fields.len()).collect();
         if compact && self.focus < order.len() {
             order.remove(self.focus);
             order.insert(0, self.focus);
         }
-        let capacity = usize::from(rows.saturating_sub(first_row));
-        let focused_line = order
+        for (offset, &index) in order
             .iter()
-            .position(|&index| index == self.focus)
-            .unwrap_or(0);
-        let start = (focused_line + 1).saturating_sub(capacity);
-        for (offset, &index) in order.iter().skip(start).take(capacity).enumerate() {
-            let (label, value) = fields[index];
-            let mark = if index == self.focus { "▌" } else { " " };
-            line(
+            .take(usize::from(rows.saturating_sub(first_row)))
+            .enumerate()
+        {
+            let (label, value) = &fields[index];
+            field(
                 output,
-                offset as u16 + first_row,
+                first_row + offset as u16,
                 cols,
-                "",
-                &format!("{mark} {label:<11} {value}"),
+                label,
+                value,
+                index == self.focus,
             );
         }
-        if self.focus == 3 || !compact {
-            let status = match &self.detected[self.agent] {
-                Detection::Ready(version) if !compact => Some(format!("{agent} {version}")),
-                _ => issue.map(|reason| format!("{agent} · {reason}")),
-            };
-            if let Some(status) = status {
-                let bottom = first_row + order.len().saturating_sub(start) as u16;
-                if bottom < rows {
-                    line(output, bottom, cols, "\x1b[2m", &status);
+        let completion = self
+            .completion
+            .as_ref()
+            .is_some_and(|c| !c.ghost.is_empty() || c.choices.len() > 1);
+        let tip = match self.focus {
+            0 if completion => "tab/←→ complete · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left",
+            0 => "type or paste · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left",
+            3 => "arrows change",
+            n if n == self.options.len() + 5 => "space toggle",
+            n if n >= 4 && n < self.options.len() + 4 => match self.options[n - 4].input {
+                OptionInput::Choice(_) => "arrows change",
+                OptionInput::Toggle => "space toggle",
+                OptionInput::Text(choices) if !choices.is_empty() => {
+                    "type or paste · ←→ suggest · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left"
                 }
-            }
-        }
-        let hint = if compact {
-            "esc cancel · enter launch · ↑↓ next"
-        } else if self.focus == 0 && available_completion {
-            "tab/←→ complete · ↑↓ next · enter launch · esc cancel"
-        } else if self.focus == 3 {
-            "arrows change · ↑↓ next · enter launch · esc cancel"
-        } else {
-            "↑↓ next · enter launch · esc cancel"
+                OptionInput::Text(_) => {
+                    "type or paste · ←→ move · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left"
+                }
+            },
+            _ => "type or paste · ←→ move · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left",
         };
-        line(output, rows, cols, "\x1b[2m", hint);
+        let mut hint = format!("{tip} · ↑↓ next · enter launch · esc cancel");
+        if hint.width() > usize::from(cols.saturating_sub(2)) {
+            hint = format!("esc cancel · enter launch · {tip} · ↑↓ next");
+        }
+        status(output, rows, cols, &hint);
     }
+}
+
+const PLAIN: &str = "\x1b[0m";
+const DIM: &str = "\x1b[0;38;5;60m";
+const ACCENT: &str = "\x1b[0;38;5;110m";
+const TITLE: &str = "\x1b[0;1;38;5;110m";
+
+fn spans(output: &mut String, row: u16, cols: u16, pieces: &[(&str, String)]) {
+    let _ = write!(output, "\x1b[{row};1H");
+    let mut remaining = cols;
+    for (style, text) in pieces {
+        let visible = clip(text, remaining);
+        output.push_str(style);
+        output.push_str(&visible);
+        if visible.width() < text.width() {
+            break;
+        }
+        remaining = remaining.saturating_sub(visible.width() as u16);
+        if remaining == 0 {
+            break;
+        }
+    }
+    output.push_str(PLAIN);
+}
+
+fn field(
+    output: &mut String,
+    row: u16,
+    cols: u16,
+    label: &str,
+    value: &[(&str, String)],
+    focused: bool,
+) {
+    let marker = if focused {
+        (ACCENT, "▌".into())
+    } else {
+        (PLAIN, " ".into())
+    };
+    let (label, _) = label_layout(label, cols);
+    let mut pieces = vec![marker, (PLAIN, " ".into()), (DIM, label)];
+    pieces.extend_from_slice(value);
+    spans(output, row, cols, &pieces);
+}
+
+fn label_layout(label: &str, cols: u16) -> (String, u16) {
+    let width = label.width();
+    let max_label = cols.saturating_sub(3);
+    let padded = if (width + 1).max(12) > usize::from(max_label) {
+        if max_label == 0 {
+            String::new()
+        } else {
+            format!("{} ", clip(label, max_label - 1))
+        }
+    } else {
+        format!(
+            "{label}{}",
+            " ".repeat(1.max(12_usize.saturating_sub(width)))
+        )
+    };
+    let remaining = cols.saturating_sub(2 + padded.width() as u16);
+    (padded, remaining)
+}
+
+fn block_cursor(editor: &Editor, width: u16) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let (visible, cursor) = editor.visible(width);
+    if editor.text[..editor.cursor].width() >= usize::from(width) {
+        return format!("{}█", clip(&visible, width - 1));
+    }
+    let before = &editor.text[..editor.cursor];
+    format!(
+        "{before}█{}",
+        clip(&editor.text[editor.cursor..], width.saturating_sub(cursor))
+    )
+}
+
+fn status(output: &mut String, row: u16, cols: u16, hint: &str) {
+    let available = cols.saturating_sub(2);
+    let hint = if hint.width() > usize::from(available) && available > 0 {
+        format!("{}…", clip(hint, available - 1))
+    } else {
+        hint.to_owned()
+    };
+    let version = option_env!("SWARM_BUILD_VERSION").unwrap_or("dev");
+    let gap = usize::from(available).saturating_sub(hint.width() + version.width());
+    let mut pieces = vec![(PLAIN, "  ".into()), (DIM, hint)];
+    if gap >= 3 && !version.is_empty() {
+        pieces.extend([(PLAIN, " ".repeat(gap)), (DIM, version.into())]);
+    }
+    spans(output, row, cols, &pieces);
 }
 
 fn absolute_directory(raw: &str) -> io::Result<PathBuf> {
