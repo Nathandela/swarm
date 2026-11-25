@@ -555,7 +555,7 @@ mod tests {
                     let conversation = &self.launch["manager"]["conversation_id"];
                     self.row = json!({"id":format!("{endpoint}/local"),"endpoint_id":endpoint,
                         "agent":"codex","role":"manager","manager_conversation_id":conversation,
-                        "cwd":self.launch["cwd"],"status":{"process":"running"},
+                        "cwd":self.launch["cwd"],"status":{"Process":"running"},
                         "capabilities":{"session_instance":"incarnation"}});
                     self.binding = json!({"session":self.row["id"],"session_instance":"incarnation",
                         "conversation_id":conversation,"provider":"codex","native_session_id":"provider-thread",
