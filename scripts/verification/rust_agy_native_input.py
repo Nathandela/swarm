@@ -104,7 +104,7 @@ for line in sys.stdin:
 '''
 
 
-def run(binary, guild=False):
+def run(binary, guild=False, ambiguous_proof=False):
     with tempfile.TemporaryDirectory(prefix="agn-", dir=Path("/tmp").resolve()) as tmp:
         root = Path(tmp)
         home, work, tools, state = (root / key for key in ("home", "work", "bin", "s"))
@@ -141,6 +141,7 @@ def run(binary, guild=False):
             updated.replace(ledger_file)
         save()
         revoked_audiences = set()
+        epoch_changes = set()
         guild_probes = []
         guild_stop = threading.Event()
         guild_listener = None
@@ -174,9 +175,13 @@ def run(binary, guild=False):
                         latest = json.loads(ledger_file.read_text())["worker_inputs"][operation]
                         assert latest["composer"] == request["composer"]
                         assert latest["provider"] == request["provider"] == "agy"
-                        if operation in revoked_audiences:
-                            continue
-                        receipt = b"\x01" + json.dumps({"epoch":request["epoch"],"challenge":request["challenge"]}).encode()
+                        if operation in epoch_changes:
+                            changed = epoch.with_suffix(".next")
+                            changed.write_text(json.dumps({"epoch":"b" * 24,"cancelled":{}}))
+                            changed.chmod(0o600)
+                            changed.replace(epoch)
+                        receipt = b"\x01" + json.dumps({"epoch":request["epoch"],"challenge":request["challenge"],
+                            "authorized":operation not in revoked_audiences}).encode()
                         stream.write(struct.pack(">I",len(receipt)) + receipt)
                         stream.flush()
 
@@ -239,7 +244,7 @@ def run(binary, guild=False):
             route = source["route"]
             source["guild_audience_digest"] = digest(["234", source["author"]["id"], route["guild_id"],
                 route["channel_id"], route.get("parent_id"), route["message_id"], source["revision"],
-                source["audience_verified_at_ms"]])
+                source["audience_verified_at_ms"],source.get("audience_roles")])
 
         def prepare(text, source_id, mint=None):
             operation = mint or f"semantic:{time.time_ns() // 1_000_000}:{secrets.token_hex(16)}"
@@ -421,13 +426,15 @@ def run(binary, guild=False):
 
             ambiguous, ambiguous_composer, ambiguous_source = prepare("uncertain native reply", "404")
             persist(ambiguous, ambiguous_composer, ambiguous_source)
+            if guild and ambiguous_proof:
+                epoch_changes.add(ambiguous)
             send(ambiguous, ambiguous_composer, ok=False)
             assert status(ambiguous)["state"] == "outcome_unknown"
             send(ambiguous, ambiguous_composer, ok=False)
             blocked, blocked_composer, blocked_source = prepare("blocked by earlier operation", "405")
             persist(blocked, blocked_composer, blocked_source)
             send(blocked, blocked_composer, ok=False)
-            assert deliveries() == [text, "uncertain native reply"]
+            assert deliveries() == ([text] if guild and ambiguous_proof else [text, "uncertain native reply"])
             assert not (work / "unexpected-terminal-input").exists()
         finally:
             if guild_listener is not None:
@@ -447,6 +454,6 @@ def run(binary, guild=False):
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve(strict=True)
     guild = "--guild" in sys.argv[2:]
-    run(binary, guild=guild)
+    run(binary, guild=guild, ambiguous_proof="--ambiguous-proof" in sys.argv[2:])
     scope = "guild thread" if guild else "personal DM"
     print(f"{scope}: agy registration, exact native delivery, daemon recovery and ambiguous non-replay passed.")

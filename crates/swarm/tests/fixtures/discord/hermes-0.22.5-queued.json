@@ -1,0 +1,23 @@
+{
+  "agent": "hermes",
+  "state": "submitted",
+  "operation_id": "op",
+  "session": "ep-1234abcd/1234567890abcdef12345678",
+  "session_instance": "aaaaaaaaaaaaaaaaaaaaaaaa",
+  "native_generation": "aaaaaaaaaaaaaaaaaaaaaaaa",
+  "native_session_id": "sanitized-native-idxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "origin": {
+    "request_id": "source"
+  },
+  "native_admission": {
+    "status": "queued",
+    "authority_epoch": 1,
+    "execution_generation": null,
+    "ref": {
+      "profile_id": "sanitized-profile",
+      "session_id": "sanitized-native-idxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "input_id": "op",
+    "admission_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

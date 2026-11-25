@@ -181,6 +181,9 @@ impl Inbox {
             })?;
             receipt["addressed_text"] = json!(address);
             receipt["audience_verified_at_ms"] = json!(verified);
+            if source["audience_roles"].is_array() {
+                receipt["audience_roles"] = source["audience_roles"].clone();
+            }
         }
         if !parent.is_empty() {
             receipt["route"]["parent_id"] = json!(parent);
@@ -197,6 +200,14 @@ impl Inbox {
             let mut comparable = receipt.clone();
             comparable["audience_verified_at_ms"] = old["audience_verified_at_ms"].clone();
             comparable["guild_audience_digest"] = old["guild_audience_digest"].clone();
+            if old["audience_roles"].is_null() {
+                comparable
+                    .as_object_mut()
+                    .unwrap()
+                    .shift_remove("audience_roles");
+            } else {
+                comparable["audience_roles"] = old["audience_roles"].clone();
+            }
             if &comparable == old {
                 let mut next = self.data.clone();
                 next["messages"][id] = receipt.clone();
@@ -433,6 +444,13 @@ impl Inbox {
 
     pub(super) fn has_worker_work(&self) -> bool {
         self.next_worker().is_some() || self.unsettled_worker(None).is_some()
+    }
+
+    pub(super) fn worker_source(&self, operation: &str) -> &Value {
+        let id = self.data["worker_inputs"][operation]["source_id"]
+            .as_str()
+            .unwrap_or_default();
+        &self.data["messages"][id]
     }
 
     pub(super) fn worker_status(&self) -> Value {

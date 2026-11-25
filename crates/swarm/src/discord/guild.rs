@@ -56,7 +56,8 @@ pub(super) fn audience_digest(application: &str, source: &Value) -> io::Result<S
         route["parent_id"],
         route["message_id"],
         source["revision"],
-        source["audience_verified_at_ms"]
+        source["audience_verified_at_ms"],
+        source["audience_roles"]
     ]))
 }
 
@@ -181,7 +182,19 @@ fn scoped_message(
             return Ok(None);
         }
     }
+    let mut roles = std::collections::BTreeSet::from([guild.to_owned()]);
+    let mut known_roles = true;
     for member in [cfg.text("application_id"), cfg.text("owner_id")] {
+        let membership = get(&format!("/guilds/{guild}/members/{member}"))?;
+        match membership
+            .as_ref()
+            .filter(|row| row["user"]["id"] == member)
+            .and_then(|row| row["roles"].as_array())
+            .filter(|ids| ids.iter().all(|id| id.as_str().is_some_and(snowflake)))
+        {
+            Some(ids) => roles.extend(ids.iter().filter_map(Value::as_str).map(str::to_owned)),
+            None => known_roles = false,
+        }
         let Some(grant) = get(&format!(
             "/channels/{permission_channel}/permissions/member/{member}"
         ))?
@@ -218,6 +231,9 @@ fn scoped_message(
     source["guild_id"] = json!(guild);
     source["verified_parent_id"] = json!(parent);
     source["audience_verified_at_ms"] = json!(crate::ipc::spawn::now_ms());
+    if known_roles {
+        source["audience_roles"] = json!(roles);
+    }
     Ok(Some(source))
 }
 
@@ -233,6 +249,24 @@ fn lookup(api: &Discord, path: &str) -> io::Result<Option<Value>> {
             Ok(None)
         }
         Err(err) => Err(err),
+    }
+}
+
+pub(super) fn needs_ingest(cfg: &Config, inbox: &Inbox, event: &Value) -> bool {
+    let hint = &event["d"];
+    let guild = hint["guild_id"].as_str().unwrap_or_default();
+    let channel = hint["channel_id"].as_str().unwrap_or_default();
+    if !allowed(cfg, "guild_ids", guild) || !snowflake(channel) {
+        return false;
+    }
+    let known = |id| inbox.has_guild_source(guild, channel, id);
+    match event["t"].as_str() {
+        Some("MESSAGE_CREATE") => address(cfg, hint).is_some(),
+        Some("MESSAGE_UPDATE" | "MESSAGE_DELETE") => hint["id"].as_str().is_some_and(known),
+        Some("MESSAGE_DELETE_BULK") => hint["ids"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().filter_map(Value::as_str).any(known)),
+        _ => false,
     }
 }
 
@@ -332,7 +366,9 @@ mod tests {
             let row=match path {
                 "/channels/112" => json!({"id":"112","guild_id":"101","parent_id":"111","type":12,"thread_metadata":{}}),
                 "/channels/111" => json!({"id":"111","guild_id":"101","type":0}),
-                "/channels/111/permissions/member/200" => json!({"permissions":"66560"}),
+                "/guilds/101/members/200" => json!({"user":{"id":"200"},"roles":["211"]}),
+                    "/guilds/101/members/300" => json!({"user":{"id":"300"},"roles":["311"]}),
+                    "/channels/111/permissions/member/200" => json!({"permissions":"66560"}),
                 "/channels/111/permissions/member/300" => json!({"permissions":if grant {"66560"} else {"0"}}),
                 "/channels/112/thread-members/200" => json!({"id":"112","user_id":"200"}),
                 "/channels/112/thread-members/300" => json!({"id":"112","user_id":if bad_thread {"999"} else {"300"}}),

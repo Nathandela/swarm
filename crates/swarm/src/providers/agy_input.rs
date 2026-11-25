@@ -374,6 +374,7 @@ impl Broker {
             &composer,
         ) {
             Ok(guard) => guard,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => return Ok(result),
             Err(_) => {
                 result["state"] = json!("rejected");
                 receipt::save(&self.dir, operation, &hash, &result)?;
