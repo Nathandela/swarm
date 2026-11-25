@@ -267,13 +267,9 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 	})}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
-	select {
-	case err := <-launch:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("native launch barrier timed out")
+	// Launch bounds both shim startup and the native join and reports the failed stage.
+	if err := <-launch; err != nil {
+		t.Fatal(err)
 	}
 	f.d.authorCapabilitiesForRunning()
 	f.client, err = protocol.Dial(f.d.SocketPath(), []string{protocol.CapSemanticSend})
