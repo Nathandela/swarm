@@ -1524,6 +1524,10 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 	if err := validateManagerSource(spec, endpointID, getSource); err != nil {
 		return daemon.LaunchSpec{}, err
 	}
+	var attachmentReadDir string
+	if m := spec.Manager; spec.AgentType == "claude" && m != nil && m.NativeCLI && schema.IsDiscordManager("manager", m.ConversationID) {
+		attachmentReadDir = discussionAttachmentReadDir(m.ConversationID, m.AuthFile)
+	}
 	// GG-6 scope: refuse a registered-but-non-production adapter at the launch
 	// boundary so a crafted launch RPC cannot spawn it in a real install. The only
 	// such adapter is the fixture-only "reference" (kept registered for the E9.5
@@ -1567,10 +1571,11 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
 		}
 		argv, err := ad.Resume(adapter.ResumeSpec{
-			Manager:        managerAdapterSpec(spec.Manager),
-			Cwd:            spec.Cwd,
-			ConversationID: conversationID,
-			Options:        spec.Options,
+			AttachmentReadDir: attachmentReadDir,
+			Manager:           managerAdapterSpec(spec.Manager),
+			Cwd:               spec.Cwd,
+			ConversationID:    conversationID,
+			Options:           spec.Options,
 		})
 		if err != nil {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: compose argv: %w", err)
@@ -1631,12 +1636,13 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: saved conversation identity is invalid")
 		}
 		argv, rerr := ad.Resume(adapter.ResumeSpec{
-			Manager:        managerAdapterSpec(spec.Manager),
-			Cwd:            spec.Cwd,
-			Relocate:       spec.Options[protocol.OptionResumeRelocate] == "true",
-			ConversationID: srcMeta.ConversationID,
-			Name:           spec.Name,
-			Options:        spec.Options,
+			AttachmentReadDir: attachmentReadDir,
+			Manager:           managerAdapterSpec(spec.Manager),
+			Cwd:               spec.Cwd,
+			Relocate:          spec.Options[protocol.OptionResumeRelocate] == "true",
+			ConversationID:    srcMeta.ConversationID,
+			Name:              spec.Name,
+			Options:           spec.Options,
 		})
 		if rerr != nil {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: compose argv: %w", rerr)
@@ -1668,6 +1674,12 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if spec.Manager == nil && spec.SpawnedFrom != "" {
 			parent, ok := getSource(spec.SpawnedFrom)
 			if ok && schema.IsDiscordManager(parent.Role, parent.ManagerConversationID) {
+				// The daemon rechecks the per-shim proof and live parent under its
+				// launch lock before the child process can start.
+				if spec.AgentType == "claude" && spec.DispatcherProof != "" && spec.OwnerLaunchHash != "" && parent.ManagerNativeCLI &&
+					parent.Status.Process == status.ProcessRunning && parent.ManagerRetirement.OperationID == "" {
+					attachmentReadDir = discussionAttachmentReadDir(parent.ManagerConversationID, parent.ManagerAuthFile)
+				}
 				if spec.Tag == "" {
 					spec.Tag = "DSP"
 				}
@@ -1691,11 +1703,12 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 					spec.Options = workerLaunchOptions(ad, spec.Options)
 				}
 				argv, err := ad.Command(adapter.LaunchSpec{
-					Manager:       managerAdapterSpec(spec.Manager),
-					Cwd:           spec.Cwd,
-					Name:          spec.Name,
-					Options:       spec.Options,
-					InitialPrompt: spec.InitialPrompt,
+					AttachmentReadDir: attachmentReadDir,
+					Manager:           managerAdapterSpec(spec.Manager),
+					Cwd:               spec.Cwd,
+					Name:              spec.Name,
+					Options:           spec.Options,
+					InitialPrompt:     spec.InitialPrompt,
 				})
 				if err != nil {
 					return daemon.LaunchSpec{}, fmt.Errorf("launch: compose %s argv: %w", spec.AgentType, err)

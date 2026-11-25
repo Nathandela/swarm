@@ -251,21 +251,23 @@ type SignalSource struct {
 // LaunchSpec is the input to Command: the working directory, optional native
 // session name, resolved option values, and optional initial prompt.
 type LaunchSpec struct {
-	Manager       *ManagerSpec
-	Cwd           string
-	Name          string
-	Options       map[string]string
-	InitialPrompt string
+	AttachmentReadDir string
+	Manager           *ManagerSpec
+	Cwd               string
+	Name              string
+	Options           map[string]string
+	InitialPrompt     string
 }
 
 // ResumeSpec is the input to Resume: the working directory, the conversation to
 // resume, an optional native session name, and the resolved option values.
 type ResumeSpec struct {
-	Manager        *ManagerSpec
-	Cwd            string
-	ConversationID string
-	Name           string
-	Options        map[string]string
+	AttachmentReadDir string
+	Manager           *ManagerSpec
+	Cwd               string
+	ConversationID    string
+	Name              string
+	Options           map[string]string
 	// Relocate explicitly overrides the conversation's saved working root with Cwd.
 	Relocate bool
 }

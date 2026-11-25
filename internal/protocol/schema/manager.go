@@ -9,6 +9,8 @@ import (
 const EnvManagerVMCLI = "SWARM_MANAGER_VM_CLI"
 
 const DiscussionConversationPrefix = "discord-teammate-"
+const DiscussionAttachmentsDir = "attachments"
+const DiscussionBridgeAuthFile = "bridge.auth"
 
 func IsDiscordManager(role, conversationID string) bool {
 	return role == "manager" && strings.HasPrefix(conversationID, DiscussionConversationPrefix)

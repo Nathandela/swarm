@@ -67,6 +67,10 @@ swarm discord connect --state-dir "$connector" --project-access vm
 
 In VM mode the manager uses its native shell and the installed `swarm` CLI. It can use the same commands, directories, agent types and VM-user access as an ordinary Swarm session. The Discord bridge carries conversation history and deliberate replies and wakes the manager for changes to its workers. Direct children appear as `DSP-` workers. Prior enrolled-mode installations keep their existing configuration until the operator selects VM mode. Named project aliases are optional. Each participant in an admitted teammate discussion can direct the manager.
 
+New or resumed Claude dispatchers and their direct Claude workers can open files uploaded to their discussion through Claude's native Read tool, including files that arrive after launch. The grant covers that discussion's staged files. Claude's native editing tools cannot change them, and explicit Claude read denials still apply. Shell commands retain normal VM-user access. For this grant, use a connector state path without a question mark or backslash.
+
+An already running Claude process picks up the grant on its next launch. If it pauses on a snapshot staged before this change, approve that exact read or attach the file again after the dispatcher resumes. Use a compatible connector to finish pending file intake before downgrading.
+
 ### Bring an existing connector onto the home supervisor
 
 Start new installations from the same Swarm supervisor you use in your terminal. For an installation that already has a separate supervisor, keep the connector directory, its database, and the original supervisor state in place. Each existing discussion has an endpoint-bound manager ledger and may have active workers. Migration starts new discussions on the home supervisor and continues existing discussions on their original supervisor. The main board can attach to those existing managers and workers while their discussions remain active.

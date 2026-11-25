@@ -2,12 +2,17 @@ package skeleton
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -18,6 +23,28 @@ func managerAdapterSpec(m *daemon.ManagerLaunchSpec) *adapter.ManagerSpec {
 		return nil
 	}
 	return &adapter.ManagerSpec{NativeCLI: m.NativeCLI, Command: m.Command, Args: []string{"voice", "mcp", "--socket", m.BridgeSocket, "--auth-file", m.AuthFile, "--conversation", m.ConversationID}}
+}
+
+func discussionAttachmentReadDir(conversationID, authFile string) string {
+	id, ok := strings.CutPrefix(conversationID, schema.DiscussionConversationPrefix)
+	ledger := filepath.Dir(authFile)
+	if !ok || !managerproof.ValidHash(id) || !filepath.IsAbs(authFile) || filepath.Clean(authFile) != authFile ||
+		filepath.Base(ledger) != id || filepath.Base(filepath.Dir(ledger)) != "discussions" || filepath.Base(authFile) != schema.DiscussionBridgeAuthFile {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(authFile)
+	if err != nil || resolved != authFile {
+		return ""
+	}
+	dir := filepath.Join(ledger, schema.DiscussionAttachmentsDir)
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		return ""
+	}
+	if owner, ok := info.Sys().(*syscall.Stat_t); !ok || owner.Uid != uint32(os.Getuid()) {
+		return ""
+	}
+	return dir
 }
 
 func validateManagerSource(spec daemon.LaunchSpec, endpoint string, get func(string) (persist.Meta, bool)) error {

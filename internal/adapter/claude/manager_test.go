@@ -68,3 +68,47 @@ func TestVMManagerKeepsClaudePermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeAttachmentSettingsPreserveHooksAndProtectInputs(t *testing.T) {
+	const dir = "/private/Operators (test [team] *)/attachments"
+	ad := New()
+	for _, resume := range []bool{false, true} {
+		var argv []string
+		var err error
+		if resume {
+			argv, err = ad.Resume(adapter.ResumeSpec{ConversationID: "conv", AttachmentReadDir: dir})
+		} else {
+			argv, err = ad.Command(adapter.LaunchSpec{AttachmentReadDir: dir})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, ok := settingsValue(argv)
+		if !ok || slices.Contains(argv, "--add-dir") || slices.Contains(argv, "--dangerously-skip-permissions") {
+			t.Fatalf("unexpected Claude launch settings: %q", argv)
+		}
+		var settings struct {
+			Hooks       map[string]json.RawMessage
+			Permissions struct {
+				AdditionalDirectories []string
+				Deny                  []string
+			}
+		}
+		if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+			t.Fatal(err)
+		}
+		if len(settings.Hooks) != len(hookEvents) || !slices.Equal(settings.Permissions.AdditionalDirectories, []string{dir}) ||
+			!slices.Equal(settings.Permissions.Deny, []string{`Edit(//private/Operators (test \[team\] \*)/attachments)`, `Edit(//private/Operators (test \[team\] \*)/attachments/**)`}) {
+			t.Fatalf("unexpected Claude settings: %s", raw)
+		}
+	}
+	for _, unsupported := range []string{"", "/private/Operators?/attachments", `/private/Operators\team/attachments`} {
+		argv, err := ad.Command(adapter.LaunchSpec{AttachmentReadDir: unsupported})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, ok := settingsValue(argv); !ok || strings.Contains(raw, `"permissions"`) {
+			t.Fatalf("unscoped launch for %q gained file permissions: %s", unsupported, raw)
+		}
+	}
+}
