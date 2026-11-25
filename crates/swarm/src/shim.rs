@@ -122,7 +122,14 @@ fn serve(dir: &Path) -> io::Result<()> {
         )?;
         path
     };
-    let mut command = Command::new(executable);
+    let agy_acp = provider["name"] == "agy" && provider["mode"] == "acp" && schedule.is_some();
+    let mut command = if agy_acp {
+        let mut relay = Command::new(std::env::current_exe()?);
+        relay.arg("schedule-agy-worker").arg(dir);
+        relay
+    } else {
+        Command::new(executable)
+    };
     let mut environment = runtime::launch_env(&Value::Null);
     let mut app_args = vec![
         "-c".into(),
@@ -142,8 +149,10 @@ fn serve(dir: &Path) -> io::Result<()> {
                 )
                 .map_err(|e| io::Error::other(e.to_string()))?,
         );
-        app_args = worker::codex_policy(&binding.authority, executable, true)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        if provider["name"] == "codex" {
+            app_args = worker::codex_policy(&binding.authority, executable, true)
+                .map_err(|e| io::Error::other(e.to_string()))?;
+        }
     }
     let agy_broker = if schedule.is_none() && provider["agy_native_installation"].is_string() {
         let broker =
@@ -156,7 +165,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)));
-    let agy_args = if provider["name"] == "agy" && provider["agy_status_line"] == true {
+    let agy_args = if !agy_acp && provider["name"] == "agy" && provider["agy_status_line"] == true {
         agy::status_line_args(
             std::env::var_os("HOME").as_deref().map(Path::new),
             &std::env::current_exe()?,
@@ -292,8 +301,9 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let pending = (matches!(state.provider.as_str(), "agy" | "codex") && channel.is_none())
-        .then(|| Arc::new((Mutex::new(None), Condvar::new())));
+    let pending =
+        (!agy_acp && matches!(state.provider.as_str(), "agy" | "codex") && channel.is_none())
+            .then(|| Arc::new((Mutex::new(None), Condvar::new())));
     if let Some(pending) = pending.clone() {
         let state = state.clone();
         thread::spawn(move || terminal_status_writer(&state, &pending));
@@ -442,7 +452,7 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        if state.provider == "agy" {
+        if state.provider == "agy" && state.schedule.is_none() {
             const TAIL: usize = 16 * 1024;
             agy_tail.extend_from_slice(&bytes[..n]);
             if agy_tail.len() > TAIL {
@@ -477,7 +487,7 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             pending.1.notify_one();
         }
     }
-    if state.provider == "agy" {
+    if state.provider == "agy" && state.schedule.is_none() {
         let grid = state.screen.lock().unwrap().parser.screen().contents() + "\n";
         if let Some(id) =
             agy::exit_conversation(&agy_tail).or_else(|| agy::exit_conversation(grid.as_bytes()))
@@ -549,6 +559,16 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 Err(e) => json!({"type":"error", "error":e.to_string()}),
             };
             runtime::write_control(&mut stream, &reply)
+        }
+        "schedule_agy_prompt" => {
+            let result = queue_agy_prompt(state, &request);
+            runtime::write_control(
+                &mut stream,
+                &result.map_or_else(
+                    |err| json!({"type":"error","error":err.to_string()}),
+                    |()| json!({"type":"ok"}),
+                ),
+            )
         }
         "schedule_ready" => {
             let authority = state.control.lock().unwrap();
@@ -640,6 +660,61 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         _ => Err(io::Error::other("unsupported shim operation")),
     }
+}
+
+fn queue_agy_prompt(state: &State, request: &Value) -> io::Result<()> {
+    let authority = state.control.lock().unwrap();
+    let attempt = field(request, "attempt");
+    let conversation = field(request, "conversation_id");
+    let operation = field(request, "operation");
+    let text = field(request, "text");
+    if state.provider != "agy"
+        || state
+            .schedule
+            .as_ref()
+            .is_none_or(|binding| binding.attempt_id != attempt)
+        || *authority != 0
+        || state.terminal_input.load(Ordering::Acquire)
+        || !codex_receipt::canonical_thread(conversation)
+        || !codex_receipt::timely(operation)
+        || text.is_empty()
+        || !worker::prompt_fits(text, true)
+    {
+        return Err(io::Error::other(
+            "Antigravity scheduled prompt is not authorized",
+        ));
+    }
+    agy_worker_live(state)?;
+    let observation = runtime::read_json(&state.dir.join("observation.json"))?;
+    let prompt = runtime::read_json(&state.dir.join("schedule-prompt.json"))?;
+    let path = state.dir.join("agy-prompt.json");
+    if observation["token"] != state.token
+        || observation["attempt"] != attempt
+        || observation["phase"] != "ready"
+        || observation["conversation_id"] != conversation
+        || prompt["operation"] != operation
+        || prompt["attempt"] != attempt
+        || prompt["conversation_id"] != conversation
+        || path.try_exists()?
+    {
+        return Err(io::Error::other(
+            "Antigravity scheduled worker is no longer ready",
+        ));
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(state.dir.join("agy-prompt-claimed"))?
+        .sync_all()?;
+    File::open(&state.dir)?.sync_all()?;
+    runtime::write_json(
+        &path,
+        &json!({
+            "token":state.token,"attempt":attempt,"operation":operation,
+            "conversation_id":conversation,"text":text,
+        }),
+    )
 }
 
 fn agy_worker_live(state: &State) -> io::Result<()> {

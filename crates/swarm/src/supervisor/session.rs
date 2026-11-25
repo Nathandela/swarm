@@ -238,12 +238,21 @@ impl Session {
         })
     }
 
-    pub(super) fn scheduled_codex_available(cwd: &Path) -> ScheduleResult<()> {
-        let plan = Self::prepare(&json!({"launch":{"agent":"codex","cwd":cwd}}))?;
-        if !providers::codex::managed(&plan.provider.version) {
-            return Err("scheduled Codex requires its managed App Server".into());
+    pub(super) fn scheduled_provider_available(agent: &str, cwd: &Path) -> ScheduleResult<()> {
+        let plan = Self::prepare(&json!({"launch":{"agent":agent,"cwd":cwd}}))?;
+        Self::qualify_scheduled(&plan.provider)
+    }
+
+    fn qualify_scheduled(provider: &LaunchPlan) -> ScheduleResult<()> {
+        match provider.agent {
+            "codex" if providers::codex::managed(&provider.version) => Ok(()),
+            "codex" => Err("scheduled Codex requires its managed App Server".into()),
+            "agy" if provider.agy_acp => Ok(()),
+            "agy" => Err(
+                "scheduled agy runs require Antigravity CLI 1.5.12 or newer on the executor".into(),
+            ),
+            _ => Err("provider has no qualified schedule runtime".into()),
         }
-        Ok(())
     }
 
     pub(super) fn prepare_scheduled(
@@ -254,14 +263,12 @@ impl Session {
         let mut plan = Self::prepare(&json!({"launch":{
             "agent":launch.agent,"cwd":launch.workspace,"name":launch.name,"cols":100,"rows":32,
         }}))?;
-        if plan.provider.agent != "codex"
-            || !providers::codex::managed(&plan.provider.version)
-            || plan.cwd != Path::new(launch.workspace)
-        {
-            return Err(
-                "scheduled Codex requires a managed App Server in the exact occurrence workspace"
-                    .into(),
-            );
+        Self::qualify_scheduled(&plan.provider)?;
+        if plan.cwd != Path::new(launch.workspace) {
+            return Err("scheduled provider must launch in the exact occurrence workspace".into());
+        }
+        if launch.agent == "agy" && binding.authority != "agent-default" {
+            return Err("agy requires configured agent permissions for scheduled runs".into());
         }
         let binary = env::current_exe()?;
         // The remote TUI inherits App Server authority and rejects local overrides.
@@ -303,12 +310,14 @@ impl Session {
         } else {
             &label
         };
-        let agy_native_installation =
-            if provider.agent == "agy" && providers::agy_input::qualified(&provider.version) {
-                crate::discord::native_input_installation()
-            } else {
-                None
-            };
+        let agy_native_installation = if scheduled.is_none()
+            && provider.agent == "agy"
+            && providers::agy_input::qualified(&provider.version)
+        {
+            crate::discord::native_input_installation()
+        } else {
+            None
+        };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -321,6 +330,8 @@ impl Session {
                     "agy_native_installation":agy_native_installation,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
+                    } else if provider.agent == "agy" && scheduled.is_some() {
+                        "acp"
                     } else { "classic" },
                     "executable": provider.executable, "identity": provider.identity},
 
@@ -718,7 +729,15 @@ impl Session {
 
     pub(super) fn scheduled_state(&self) -> WorkerState {
         let exit = self.verified_exit();
-        if exit.as_ref().is_some_and(|row| row["error"].is_string()) {
+        if exit.as_ref().is_some_and(|row| row["error"].is_string())
+            || exit.is_some()
+                && self.agent == "agy"
+                && self
+                    .schedule
+                    .as_ref()
+                    .and_then(|binding| self.agy_schedule_observation(&binding.attempt_id))
+                    .is_some_and(|row| row["phase"] == "startup_refused")
+        {
             return WorkerState::StartupRefused;
         }
         if self.schedule.as_ref().is_some_and(|b| {
@@ -735,6 +754,15 @@ impl Session {
             return WorkerState::Stopped;
         }
         if self.is_live() {
+            if self.agent == "agy"
+                && self
+                    .schedule
+                    .as_ref()
+                    .and_then(|binding| self.agy_schedule_observation(&binding.attempt_id))
+                    .is_some_and(|record| record["phase"] == "permission")
+            {
+                return WorkerState::NeedsInput;
+            }
             let status = self.observed_status.lock().unwrap();
             return if status.as_ref().is_some_and(|s| s["Interaction"] != "none") {
                 WorkerState::NeedsInput
@@ -756,7 +784,11 @@ impl Session {
         if !worker::prompt_fits(text, true) {
             return Err("scheduled opening prompt exceeds the native frame limit".into());
         }
-        let observation = runtime::read_json(&self.dir.join("observation.json"))?;
+        let observation = match runtime::read_json(&self.dir.join("observation.json")) {
+            Ok(value) => value,
+            Err(e) if self.agent == "agy" && e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
         if observation["token"] != self.token
             || observation["schedule_ready"] != true
             || self.status_exchange(&json!({"type":"schedule_ready","attempt":attempt}))?["type"]
@@ -770,8 +802,20 @@ impl Session {
             &self.dir.join("schedule-prompt.json"),
             &json!({
                 "operation":operation,"session":session,"attempt":attempt,
+                "conversation_id":observation["conversation_id"],
             }),
         )?;
+        if self.agent == "agy" {
+            let reply = self.status_exchange(&json!({
+                "type":"schedule_agy_prompt","attempt":attempt,"operation":operation,
+                "conversation_id":observation["conversation_id"], "text":text,
+            }))?;
+            return if reply["type"] == "ok" {
+                Ok(())
+            } else {
+                Err("Antigravity opening prompt outcome is uncertain".into())
+            };
+        }
         let reply = self.semantic_send_inner(&json!({
             "operation_id":operation,"body_version":1,"composer_send":{
                 "session":session,"session_instance":codex_receipt::instance(&self.token),"text":text,
@@ -783,7 +827,29 @@ impl Session {
         Ok(())
     }
 
+    fn agy_schedule_observation(&self, attempt: &str) -> Option<Value> {
+        let record = runtime::read_json(&self.dir.join("observation.json")).ok()?;
+        (record["token"] == self.token && record["attempt"] == attempt).then_some(record)
+    }
+
     fn scheduled_proof(&self, attempt: &str) -> Option<Value> {
+        if self.agent == "agy" {
+            let proof = self.agy_schedule_observation(attempt)?;
+            let prompt = runtime::read_json(&self.dir.join("schedule-prompt.json")).ok()?;
+            if proof["phase"] != "finished"
+                || prompt["attempt"] != attempt
+                || prompt["session"].as_str()?.split_once('/')?.1 != self.id
+                || field(&prompt, "operation").is_empty()
+                || proof["conversation_id"] != prompt["conversation_id"]
+                || proof["operation"] != prompt["operation"]
+                || !codex_receipt::canonical_thread(field(&proof, "conversation_id"))
+            {
+                return None;
+            }
+            return Some(
+                json!({"outcome":"completed","item":"final-assistant","text":proof["text"]}),
+            );
+        }
         let proof = runtime::read_json(&self.dir.join("schedule-finish.json")).ok()?;
         let prompt = runtime::read_json(&self.dir.join("schedule-prompt.json")).ok()?;
         let session = prompt["session"].as_str()?;

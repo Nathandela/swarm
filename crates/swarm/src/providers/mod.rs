@@ -22,6 +22,7 @@ pub(crate) struct LaunchPlan {
     pub identity: Value,
     pub version: String,
     pub agy_status_line: bool,
+    pub agy_acp: bool,
 }
 
 pub(crate) fn prepare(
@@ -64,6 +65,9 @@ pub(crate) fn prepare(
         && agy::status_line(&version)
         && probe_output(&executable, cwd, &environment, &["--help"])
             .is_ok_and(|help| agy::advertises_settings(&help));
+    let agy_acp = agent == "agy"
+        && agy::supports_acp(&version)
+        && output.lines().any(|line| line.trim() == version);
     let after = identity(&executable)?;
     if before != after {
         return Err(io::Error::other(
@@ -83,6 +87,7 @@ pub(crate) fn prepare(
         identity: after,
         version,
         agy_status_line,
+        agy_acp,
     })
 }
 

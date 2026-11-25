@@ -99,10 +99,12 @@ pub(crate) fn read_binding(config: &Value) -> io::Result<Option<Binding>> {
         return Ok(None);
     }
     let binding: Binding = serde_json::from_value(config["schedule"].clone())?;
-    if !binding.valid()
-        || config["provider"]["name"] != "codex"
-        || config["provider"]["mode"] != "managed"
-    {
+    let agent = config["provider"]["name"].as_str();
+    let mode = config["provider"]["mode"].as_str();
+    let qualified = matches!((agent, mode), (Some("codex"), Some("managed")))
+        || (matches!((agent, mode), (Some("agy"), Some("acp")))
+            && binding.authority == "agent-default");
+    if !binding.valid() || !qualified {
         return Err(io::Error::other("invalid scheduled worker reservation"));
     }
     Ok(Some(binding))

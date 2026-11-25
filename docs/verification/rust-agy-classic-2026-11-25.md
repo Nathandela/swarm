@@ -36,3 +36,15 @@ python3 scripts/verification/rust_agy_native_input.py target/debug/swarm
 ```
 
 The separate retained Go `TestNativeAgyModalAdmission` passed with the installed 1.4.7 binary and the pinned arm64 helper under the no-egress scratch guard. The installed provider registered via its real tool context, acknowledged the native message, and supplied its marker to the synthetic model. The pending permission-probe command did not execute. This confirms the retained native interface independently of the Rust fixture.
+
+## Scheduled ACP
+
+For agy 1.5.12 and newer, an agent-default scheduled job opens one native ACP v1 conversation through the shim's private PTY relay. The opening prompt is durably claimed for its exact attempt and native conversation before the relay submits it. The provider inherits its ordinary environment and authority. The only Swarm receipt credential forwarded to ACP is the scoped MCP bridge configuration. The relay cancels permission requests during startup and from unrelated conversations. A request for the active conversation waits for the operator's numbered choice.
+
+The paired fixture ran against both Rust and the pinned arm64 Go binary. It verified that the prompt entered the exact native conversation once, an explicit terminal denial cancelled the matching permission request, and the real MCP bridge recorded the scoped receipt. A valid bounded final assistant response completed the occurrence. The same receipt with only earlier or wrong-conversation assistant text left it incomplete. Both binaries refused the 1.5.11 fixture and unsupported observe authority without launching a worker.
+
+The installed 1.4.7 binary was also refused before any worker existed by both Go and Rust. The standalone probe used disposable directories and the scratch-only, no-egress OS guard. The supported ACP path was measured with the paired fixture because the installed binary is below its floor.
+
+```sh
+python3 scripts/verification/parity_agy_acp.py target/debug/swarm /path/to/pinned-go-swarm
+```

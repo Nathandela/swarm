@@ -63,6 +63,7 @@ fn main() -> ExitCode {
         Some("discord") => discord::run(&args[1..]),
         Some("schedule") => schedule::run(&args[1..]),
         Some("schedule-receipt-bridge") => schedule::worker::bridge(),
+        Some("schedule-agy-worker") => schedule::agy::worker(&args[1..]),
         Some("dispatcher-guide") => guide(&args[1..]),
         Some(
             "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "send"
