@@ -156,7 +156,15 @@ fn serve(dir: &Path) -> io::Result<()> {
             }
         }
         if provider["name"] == "opencode" {
-            command.envs(providers::opencode::environment(&Value::Null)?);
+            let environment: Vec<_> = providers::opencode::environment(&Value::Null)?
+                .into_iter()
+                .collect();
+            if providers::opencode::profile(&environment) != config["opencode_profile"] {
+                return Err(io::Error::other(
+                    "OpenCode native profile changed before exec",
+                ));
+            }
+            command.envs(environment);
             let binding = providers::opencode::artifact(
                 dir,
                 Path::new(working_dir),
@@ -206,6 +214,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             &json!({
                 "token": token, "pid": pid, "birth": runtime::birth(pid)?,
                 "worker_pid": child.id(),
+                "worker_birth": opencode.as_ref().map(|backend| backend.worker_birth()),
             }),
         )
     })() {

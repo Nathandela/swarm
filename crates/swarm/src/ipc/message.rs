@@ -365,6 +365,7 @@ pub(super) fn resume(client: &mut Client, args: &[String]) -> CliResult {
     let environment: Vec<_> = std::env::vars_os()
         .filter_map(|(key, value)| Some(format!("{}={}", key.to_str()?, value.to_str()?)))
         .collect();
+    let environment = crate::environment::reliable("opencode", environment);
     let reply = client
         .exchange(
             json!({"op":"opencode_resume","session_id":session,"env":environment}),

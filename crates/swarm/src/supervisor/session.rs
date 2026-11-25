@@ -197,7 +197,7 @@ impl Session {
     }
 
     pub(super) fn prepare_opencode_resume(&self, request: &Value) -> io::Result<Prepared> {
-        if self.agent != "opencode" || self.is_live() || !owner_gone(&self.dir, &self.token)? {
+        if self.agent != "opencode" || self.is_live() || !self.opencode_stopped()? {
             return Err(io::Error::other(
                 "OpenCode resume requires a confirmed stopped worker",
             ));
@@ -250,8 +250,39 @@ impl Session {
         let bound = self
             .opencode_native()
             .is_ok_and(|native| native["rootID"] == *root);
-        (reserved || bound)
-            && (self.is_live() || !owner_gone(&self.dir, &self.token).unwrap_or(false))
+        (reserved || bound) && (self.is_live() || !self.opencode_stopped().unwrap_or(false))
+    }
+
+    fn opencode_stopped(&self) -> io::Result<bool> {
+        if !owner_gone(&self.dir, &self.token)? {
+            return Ok(false);
+        }
+        // An abruptly lost shim is not evidence that its former native TUI exited.
+        match runtime::read_json(&self.dir.join("owner.json")) {
+            Ok(record) if record["token"] == self.token => {
+                let pid = record["worker_pid"]
+                    .as_u64()
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .filter(|pid| *pid > 1);
+                let birth = record["worker_birth"].as_u64().filter(|birth| *birth > 0);
+                let (Some(pid), Some(birth)) = (pid, birth) else {
+                    return Err(io::Error::other("OpenCode worker birth proof unavailable"));
+                };
+                match runtime::birth(pid) {
+                    Ok(actual) => Ok(actual != birth),
+                    Err(err)
+                        if err.kind() == io::ErrorKind::NotFound
+                            || err.raw_os_error() == Some(libc::ESRCH) =>
+                    {
+                        Ok(true)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+            _ => Err(io::Error::other("OpenCode worker custody is unverified")),
+        }
     }
 
     pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
@@ -700,6 +731,9 @@ impl Session {
         body: &Value,
         state: &super::State,
     ) -> io::Result<Value> {
+        if kind == "decision" {
+            opencode::validate_decision(body)?;
+        }
         let native = self.opencode_native()?;
         let instance = field(&native, "sessionInstance");
         if body["session"] != session
@@ -731,8 +765,13 @@ impl Session {
         let sent = self.opencode_exchange(&json!({
             "type":"opencode_operation","session":session,"operation_id":operation,"kind":kind,"body":body
         }));
-        match self.opencode_operation_status(session, operation, kind, &state.root)? {
-            Some(saved) => Ok(saved),
+        match opencode::receipts::read(&self.dir, &self.token, session, operation)? {
+            Some(saved)
+                if saved["kind"] == kind && saved["intent"] == opencode::receipts::intent(body) =>
+            {
+                Ok(saved["receipt"].clone())
+            }
+            Some(_) => Err(io::Error::other("uncorrelated OpenCode operation receipt")),
             None => match sent {
                 Ok(_) => Err(io::Error::other(
                     "OpenCode operation outcome is unknown; inspect --status",

@@ -86,6 +86,7 @@ impl Backend {
             receipt["native_session_id"] = native["rootID"].clone();
             expected_effect = "";
         } else {
+            opencode::validate_decision(request)?;
             let snapshot = self.snapshot(created, 1, "")?;
             let target = field(request, "native_session_id");
             let request_id = field(request, "request_id");
@@ -209,7 +210,12 @@ impl Backend {
         {
             return Ok(());
         }
-        if native["status"] != "rejected" && native["requestHash"] != record["request_hash"] {
+        // The bridge validates decision metadata using JavaScript's native JSON encoding.
+        // The resulting private receipt is correlated by operation and the complete native identity.
+        if native["status"] != "rejected"
+            && (prompt && native["requestHash"] != record["request_hash"]
+                || !opencode::hex_hash(field(&native, "requestHash")))
+        {
             return Ok(());
         }
         match field(&native, "status") {
@@ -235,6 +241,7 @@ impl Backend {
                     field(&native["model"], "providerID"),
                     field(&native["model"], "modelID")
                 ));
+                record["receipt"]["agent"] = native["agent"].clone();
                 record["receipt"]["variant"] = native["variant"].clone();
                 record["receipt"]["selection_basis"] = native["selectionBasis"].clone();
                 record["receipt"]["selection_message_id"] = native["selectionMessageID"].clone();
@@ -302,6 +309,7 @@ impl Backend {
                 field(&info["model"], "modelID")
             ));
             receipt["variant"] = json!(info["model"]["variant"].as_str().unwrap_or("default"));
+            receipt["agent"] = info["agent"].clone();
             receipt["selection_basis"] = json!("native_message_receipt");
             receipt["selection_message_id"] = json!(input);
         }
@@ -368,6 +376,9 @@ fn terminal<'a>(
                         || field(part, "id").is_empty()
                         || !part_ids.insert(field(part, "id"))
                         || part["type"] == "tool"
+                            && part["metadata"]["providerExecuted"] != true
+                            && !(part["state"]["status"] == "error"
+                                && part["state"]["metadata"]["interrupted"] == true)
                 })
             {
                 return None;
@@ -550,5 +561,24 @@ mod tests {
             intent(&json!({"answers":[["b"],["a"]]}))
         );
         assert_eq!(intent(&json!({"a":1,"z":2})), intent(&json!({"z":2,"a":1})));
+    }
+    #[test]
+    fn completion_requires_the_exact_parent_and_tool_free_terminal_parts() {
+        let root = "ses_012345678900";
+        let input = "msg_012345678900";
+        let reply = "msg_012345678901";
+        let mut snapshot = json!({"messages":[{"info":{
+            "id":reply,"sessionID":root,"parentID":input,"role":"assistant",
+            "time":{"created":2,"completed":3},"finish":"stop"
+        },"parts":[{"id":"prt_safe","sessionID":root,"messageID":reply,"type":"tool"}]}]});
+        assert!(terminal(&snapshot, root, input, 1).is_none());
+        snapshot["messages"][0]["parts"][0]["type"] = json!("text");
+        assert_eq!(
+            terminal(&snapshot, root, input, 1),
+            Some(("completed", reply))
+        );
+        assert!(terminal(&snapshot, root, "msg_012345678902", 1).is_none());
+        snapshot["messages"][0]["info"]["summary"] = json!(true);
+        assert!(terminal(&snapshot, root, input, 1).is_none());
     }
 }

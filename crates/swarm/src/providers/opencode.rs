@@ -259,6 +259,94 @@ pub(crate) fn valid_id(value: &str, prefix: &str) -> bool {
     })
 }
 
+pub(crate) fn validate_decision(body: &Value) -> io::Result<()> {
+    const IDENTITY: &[&str] = &[
+        "session",
+        "session_instance",
+        "generation",
+        "root_id",
+        "native_session_id",
+        "request_id",
+    ];
+    let clean =
+        |text: &str| !text.is_empty() && text.len() <= 256 && !text.chars().any(char::is_control);
+    let hash = field(body, "request_hash");
+    let expiry = time::OffsetDateTime::parse(
+        field(body, "expires_at"),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok()
+    .map(|when| when.unix_timestamp_nanos() / 1_000_000);
+    if body.as_object().is_none_or(|fields| {
+        fields.keys().any(|key| {
+            !IDENTITY.contains(&key.as_str())
+                && !matches!(
+                    key.as_str(),
+                    "request_hash" | "expires_at" | "kind" | "reply" | "answers"
+                )
+        })
+    }) || !IDENTITY.iter().all(|key| clean(field(body, key)))
+        || !valid_id(field(body, "root_id"), "ses_")
+        || !valid_id(field(body, "native_session_id"), "ses_")
+        || !hex_hash(hash)
+        || expiry.is_none_or(|ms| !(1..=9_007_199_254_740_991).contains(&ms))
+        || !(body["reply"].is_null() || body["reply"].is_string())
+    {
+        return Err(io::Error::other(
+            "invalid native OpenCode decision identity or expiry",
+        ));
+    }
+    let reply = field(body, "reply");
+    let answers = &body["answers"];
+    let no_answers = answers.is_null() || answers.as_array().is_some_and(Vec::is_empty);
+    match field(body, "kind") {
+        "permission_reply"
+            if valid_id(field(body, "request_id"), "per_")
+                && matches!(reply, "once" | "always" | "reject")
+                && no_answers =>
+        {
+            Ok(())
+        }
+        "question_reject"
+            if valid_id(field(body, "request_id"), "que_") && reply.is_empty() && no_answers =>
+        {
+            Ok(())
+        }
+        "question_reply"
+            if valid_id(field(body, "request_id"), "que_")
+                && reply.is_empty()
+                && answers.as_array().is_some_and(|groups| {
+                    (1..=16).contains(&groups.len())
+                        && groups.iter().all(|group| {
+                            group.as_array().is_some_and(|entries| {
+                                entries.len() <= 128
+                                    && entries.iter().all(|entry| {
+                                        entry.as_str().is_some_and(|text| {
+                                            !text.is_empty()
+                                                && text.len() <= 4096
+                                                && !text.contains('\0')
+                                        })
+                                    })
+                            })
+                        })
+                })
+                && serde_json::to_vec(answers)?.len() <= 16384 =>
+        {
+            Ok(())
+        }
+        _ => Err(io::Error::other(
+            "invalid native OpenCode reply or ordered answers",
+        )),
+    }
+}
+
+pub(crate) fn hex_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +384,23 @@ mod tests {
                 .len(),
             2
         );
+    }
+    #[test]
+    fn decisions_preserve_their_bound_reply_and_answer_shape() {
+        let mut decision = json!({
+            "session":"ep-test/session","session_instance":"incarnation","generation":"backend",
+            "root_id":"ses_0011223344","native_session_id":"ses_0011223345",
+            "request_id":"per_0011223344","request_hash":"a".repeat(64),"expires_at":"2026-11-25T12:00:00Z",
+            "kind":"permission_reply","reply":"once"
+        });
+        assert!(validate_decision(&decision).is_ok());
+        decision["answers"] = json!([["not part of a permission reply"]]);
+        assert!(validate_decision(&decision).is_err());
+        decision["request_id"] = json!("que_0011223344");
+        decision["kind"] = json!("question_reply");
+        decision["reply"] = Value::Null;
+        assert!(validate_decision(&decision).is_ok());
+        decision["answers"] = json!([null]);
+        assert!(validate_decision(&decision).is_err());
     }
 }

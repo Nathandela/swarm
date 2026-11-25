@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -53,6 +53,10 @@ impl Backend {
             ready: AtomicBool::new(false),
             actions: Mutex::new(()),
         })
+    }
+
+    pub(super) fn worker_birth(&self) -> u64 {
+        self.socket.birth
     }
 
     fn http(&self, route: &str, body: Option<&Value>) -> io::Result<Value> {
@@ -242,14 +246,16 @@ impl Backend {
             return;
         }
         let Ok(created) = launched else { return };
-        let connected = AtomicBool::new(false);
+        let epoch = AtomicU64::new(0);
         thread::scope(|scope| {
             let (updates, pending) = std::sync::mpsc::sync_channel(1);
-            let connected = &connected;
+            let epoch = &epoch;
             scope.spawn(move || {
                 loop {
-                    let outcome = self.observe(created, connected, &updates);
-                    connected.store(false, Ordering::Release);
+                    let outcome = self.observe(created, epoch, &updates);
+                    if epoch.load(Ordering::Acquire) % 2 == 1 {
+                        epoch.fetch_add(1, Ordering::AcqRel);
+                    }
                     let _ = updates.try_send(());
                     if let Err(error) = outcome {
                         let _ = self.publish(None, Some(&error));
@@ -258,9 +264,10 @@ impl Backend {
                 }
             });
             loop {
-                if connected.load(Ordering::Acquire) {
+                let current = epoch.load(Ordering::Acquire);
+                if current % 2 == 1 {
                     match self.snapshot(created, 1, "") {
-                        Ok(snapshot) if connected.load(Ordering::Acquire) => {
+                        Ok(snapshot) if epoch.load(Ordering::Acquire) == current => {
                             let _ = self.publish(Some(&snapshot), None);
                         }
                         Err(error) => {
@@ -278,7 +285,7 @@ impl Backend {
     fn observe(
         &self,
         created: u64,
-        connected: &AtomicBool,
+        epoch: &AtomicU64,
         updates: &std::sync::mpsc::SyncSender<()>,
     ) -> io::Result<()> {
         let agent = self.socket.agent(90);
@@ -305,7 +312,7 @@ impl Backend {
         {
             return Err(io::Error::other("OpenCode event stream identity mismatch"));
         }
-        connected.store(true, Ordering::Release);
+        epoch.fetch_add(1, Ordering::AcqRel);
         let _ = updates.try_send(());
         loop {
             let update = event(&mut reader)?;

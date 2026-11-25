@@ -1166,6 +1166,11 @@ impl Launch {
                             .then(|| format!("{key}={}", value.to_string_lossy()))
                     })
                     .collect();
+                let caller_env = if *agent == "opencode" {
+                    crate::environment::reliable("opencode", caller_env)
+                } else {
+                    caller_env
+                };
                 let mut launch = json!({
                     "agent":agent, "cwd":cwd, "options":{}, "env":caller_env,
                     "cols":cols, "rows":rows, "initial_prompt":self.prompt,
