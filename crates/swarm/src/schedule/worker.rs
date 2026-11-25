@@ -14,7 +14,14 @@ pub(crate) const PROOF: &str = "SWARM_SCHEDULE_PROOF";
 pub(crate) const SOCKET: &str = "SWARM_SCHEDULE_SOCKET";
 pub(crate) const BIN: &str = "SWARM_SCHEDULE_BIN";
 pub(crate) const SESSION: &str = "SWARM_SESSION_ID";
-pub(crate) const MAX_PROMPT: usize = 4096;
+pub(crate) fn prompt_fits(text: &str, scheduled: bool) -> bool {
+    if scheduled {
+        // Leave room for the control and native RPC envelopes after JSON escaping.
+        serde_json::to_vec(text).is_ok_and(|encoded| encoded.len() <= ipc::wire::MAX_FRAME - 4096)
+    } else {
+        text.len() <= 4096
+    }
+}
 const MCP: &str = "schedule-receipt-bridge";
 
 #[derive(Clone, Deserialize, Serialize)]

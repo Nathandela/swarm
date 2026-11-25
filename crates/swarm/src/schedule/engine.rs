@@ -252,6 +252,16 @@ impl<B: Backend> Engine<B> {
             return unknown(run);
         }
         let prompt = worker_prompt(run, &self.backend);
+        if !super::worker::prompt_fits(&prompt, true) {
+            return self.transition(
+                run,
+                "attention",
+                "unknown",
+                None,
+                "The scheduled opening prompt exceeds the native frame limit.",
+                now,
+            );
+        }
         let mut begun = None;
         let send = self
             .backend

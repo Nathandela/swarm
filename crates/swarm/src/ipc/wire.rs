@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 
-const MAX_FRAME: usize = 1 << 20;
+pub(crate) const MAX_FRAME: usize = 1 << 20;
 pub const CONTROL: u8 = 1;
 
 pub fn read_frame(reader: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {

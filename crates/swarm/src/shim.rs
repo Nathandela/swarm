@@ -419,7 +419,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     || !codex_receipt::timely(operation)
                     || session.is_empty()
                     || text.is_empty()
-                    || text.len() > worker::MAX_PROMPT
+                    || !worker::prompt_fits(text, scheduled.is_some())
                 {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }

@@ -515,7 +515,7 @@ impl Session {
             || body["session"] != session
             || !codex_receipt::timely(operation)
             || text.is_empty()
-            || text.len() > worker::MAX_PROMPT
+            || !worker::prompt_fits(text, scheduled.is_some())
             || body.as_object().is_none_or(|fields| {
                 fields.iter().any(|(key, value)| {
                     !matches!(
@@ -581,11 +581,18 @@ impl Session {
         &self.cwd
     }
 
-    pub(super) fn scheduled_state(&self) -> WorkerState {
-        let exit = self
-            .exit()
+    fn verified_exit(&self) -> Option<Value> {
+        self.exit()
             .ok()
-            .filter(|_| owner_gone(&self.dir, &self.token).unwrap_or(false));
+            .filter(|_| owner_gone(&self.dir, &self.token).unwrap_or(false))
+    }
+
+    pub(super) fn workspace_unconfirmed(&self) -> bool {
+        self.verified_exit().is_none()
+    }
+
+    pub(super) fn scheduled_state(&self) -> WorkerState {
+        let exit = self.verified_exit();
         if exit.as_ref().is_some_and(|row| row["error"].is_string()) {
             return WorkerState::StartupRefused;
         }
@@ -621,7 +628,7 @@ impl Session {
         text: &str,
         begin: &mut dyn FnMut() -> ScheduleResult<()>,
     ) -> ScheduleResult<()> {
-        if text.len() > worker::MAX_PROMPT {
+        if !worker::prompt_fits(text, true) {
             return Err("scheduled opening prompt exceeds the native frame limit".into());
         }
         let observation = runtime::read_json(&self.dir.join("observation.json"))?;
@@ -912,5 +919,42 @@ pub(super) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
             Ok(true)
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod schedule_custody_tests {
+    use super::*;
+
+    #[test]
+    fn lost_session_keeps_workspace_until_verified_exit() {
+        let id = runtime::random_id().unwrap();
+        let dir = std::env::temp_dir().join(&id);
+        runtime::private_dir(&dir).unwrap();
+        let token = runtime::random_id().unwrap();
+        runtime::write_json(
+            &dir.join("session.json"),
+            &json!({
+                "schema":1, "id":id, "token":token, "created_at":now(), "name":"fixture",
+                "cwd":dir, "provider":{"name":"codex","mode":"managed"},
+            }),
+        )
+        .unwrap();
+        let session = Session::load(dir.clone()).unwrap();
+        assert!(!session.is_live());
+        assert!(session.workspace_unconfirmed());
+        runtime::write_json(
+            &dir.join("exit.json"),
+            &json!({"token":"other","error":"refused"}),
+        )
+        .unwrap();
+        assert!(session.workspace_unconfirmed());
+        runtime::write_json(
+            &dir.join("exit.json"),
+            &json!({"token":token,"error":"refused"}),
+        )
+        .unwrap();
+        assert!(!session.workspace_unconfirmed());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

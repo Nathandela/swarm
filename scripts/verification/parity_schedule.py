@@ -128,7 +128,7 @@ def verify(candidate, provider):
                                       cwd=root / "work", stderr=log)
             fixtures.wait_for(lambda: Path(env["SWARM_DAEMON_SOCK"]).exists(), "fixture owner socket")
             fixtures.wait_for(lambda: (root / "state/daemon.env").exists(), "saved native environment")
-            prompt = "--scheduled fixture\nExact 東京\n"
+            prompt = "--scheduled fixture\nExact 東京\n" + "x" * 8192
             job = json.loads(schedule(
                 "create", "--name", "Cold schedule", "--dir", str(root / "work"),
                 "--agents", "codex", "--authority", "workspace-write", "--workspace", "directory",

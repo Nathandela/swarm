@@ -113,14 +113,7 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> Result<Va
 pub(super) fn conflict(state: &State, path: &Path, scheduled: bool) -> Option<String> {
     let sessions: Vec<_> = state.sessions.read().unwrap().values().cloned().collect();
     sessions.iter().find_map(|session| {
-        let occupied = if session.schedule.is_some() {
-            !matches!(
-                session.scheduled_state(),
-                WorkerState::Stopped | WorkerState::StartupRefused | WorkerState::QuotaStopped
-            )
-        } else {
-            scheduled && session.is_live()
-        };
+        let occupied = (scheduled || session.schedule.is_some()) && session.workspace_unconfirmed();
         let directory = Path::new(session.cwd());
         (occupied && (path.starts_with(directory) || directory.starts_with(path)))
             .then(|| session.cwd().to_owned())

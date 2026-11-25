@@ -476,11 +476,17 @@ impl ScheduledTurn {
                 proof["outcome"] = json!("usageLimitExceeded");
             }
             "completed" if turn["itemsView"].is_null() || turn["itemsView"] == "full" => {
-                let last = turn["items"]
+                let mut messages = turn["items"]
                     .as_array()?
                     .iter()
                     .rev()
-                    .find(|item| item["type"] == "agentMessage")?;
+                    .filter(|item| item["type"] == "agentMessage");
+                let latest = messages.next()?;
+                let last = if latest["phase"].is_null() || latest["phase"] == "final_answer" {
+                    latest
+                } else {
+                    messages.find(|item| item["phase"] == "final_answer")?
+                };
                 let text = field(last, "text");
                 let id = field(last, "id");
                 if id.is_empty() || id.len() > 128 || text.is_empty() || text.len() > 64 * 1024 {
@@ -647,6 +653,15 @@ mod tests {
         }]});
         assert!(turn.proof(&thread, id, &target).is_none());
         thread["turns"][0]["rootTurnId"] = json!("owned");
+        assert_eq!(
+            turn.proof(&thread, id, &target).unwrap()["text"],
+            "Corrected result"
+        );
+        thread["turns"][0]["items"][1]["phase"] = json!("commentary");
+        assert!(turn.proof(&thread, id, &target).is_none());
+        thread["turns"][0]["items"][0]["phase"] = json!("partial_answer");
+        assert!(turn.proof(&thread, id, &target).is_none());
+        thread["turns"][0]["items"][1]["phase"] = json!("final_answer");
         assert_eq!(
             turn.proof(&thread, id, &target).unwrap()["text"],
             "Corrected result"
