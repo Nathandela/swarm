@@ -59,21 +59,72 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
             "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
         );
     }
+    let _guild_authority = if personal {
+        None
+    } else {
+        let verifier = Discord::connect(cfg)?;
+        Some(super::worker_proof::Service::bind(
+            &place.dir,
+            place.supervisor_root().to_owned(),
+            cfg.clone(),
+            move |cfg, guild, channel, id| {
+                super::guild::current(&verifier, cfg, guild, channel, id)
+            },
+        )?)
+    };
     let mut worker_read_after = None;
+    let mut worker_send: Option<super::worker::Flight> = None;
+    let mut guild_events = std::collections::VecDeque::new();
     loop {
+        if worker_send
+            .as_ref()
+            .is_some_and(|send| send.join.is_finished())
+        {
+            let _ = worker_send.take().unwrap().join.join();
+        }
+        if !personal && worker_send.is_none() {
+            while let Some(event) = guild_events.pop_front() {
+                super::guild::ingest(
+                    cfg,
+                    &mut inbox,
+                    &event,
+                    crate::ipc::spawn::now_ms(),
+                    |guild, channel, id| super::guild::current(&api, cfg, guild, channel, id),
+                )?;
+            }
+        }
         if bridge.serve(cfg, &mut inbox, cursor.sequence(), dispatcher.is_some())? {
             let _ = gateway_socket.close(None);
             return Ok(());
         }
-        super::worker::tick(cfg, &mut inbox, &api, &mut worker_read_after)?;
+        super::worker::tick(
+            cfg,
+            &mut inbox,
+            &api,
+            &mut worker_read_after,
+            &mut worker_send,
+        )?;
         if let Some(dispatcher) = &dispatcher {
             dispatcher.tick(cfg, &mut inbox, &api)?;
         }
         let Some(event) = cursor.event(&mut gateway_socket)? else {
             continue;
         };
+        if !personal
+            && super::worker_proof::invalidates(&event)
+            && let Some(flight) = &worker_send
+        {
+            super::worker_proof::invalidate(&place.dir, Some(&flight.operation))?;
+        }
         if personal {
             ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+        } else if worker_send.is_some() {
+            if guild_events.len() >= 128 {
+                return Err(invalid(
+                    "guild event backlog exceeded its safe bound during a worker effect",
+                ));
+            }
+            guild_events.push_back(event);
         } else {
             super::guild::ingest(
                 cfg,

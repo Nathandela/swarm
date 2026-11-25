@@ -498,7 +498,7 @@ impl Inbox {
         self.save(next)
     }
 
-    pub(super) fn unsettled_worker(&self, after: Option<&str>) -> Option<(String, Value)> {
+    pub(super) fn unsettled_worker(&self, after: Option<&str>) -> Option<(String, String, Value)> {
         let rows = self.data["worker_inputs"].as_object()?;
         let entries = || {
             rows.iter()
@@ -508,7 +508,11 @@ impl Inbox {
             .filter(|(op, _)| after.is_none_or(|after| op.as_str() > after))
             .min_by_key(|(op, _)| op.as_str())
             .or_else(|| entries().min_by_key(|(op, _)| op.as_str()))?;
-        Some((op.clone(), entry["composer"].clone()))
+        Some((
+            op.clone(),
+            entry["provider"].as_str()?.to_owned(),
+            entry["composer"].clone(),
+        ))
     }
 
     pub(super) fn settle_worker(&mut self, operation: &str, receipt: &Value) -> io::Result<()> {

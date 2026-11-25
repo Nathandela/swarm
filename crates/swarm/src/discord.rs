@@ -14,6 +14,7 @@ mod receipt;
 mod rest;
 mod service;
 mod worker;
+mod worker_proof;
 
 use crate::ipc;
 use config::{Config, Place, invalid};
