@@ -1,3 +1,8 @@
+#[cfg(test)]
+mod call_media;
+#[cfg(test)]
+mod call_room;
+
 mod config;
 mod dispatcher;
 mod gateway;
