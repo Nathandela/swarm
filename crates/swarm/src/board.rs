@@ -141,9 +141,9 @@ fn board(path: &Path) -> io::Result<()> {
                     } else {
                         None
                     };
-                    let response = if target == "launch" && message["launch"]["agent"] == "opencode"
-                    {
-                        client.exchange(message, target, Duration::from_secs(75))
+                    let response = if target == "launch" {
+                        let timeout = ipc::launch_timeout(field(&message["launch"], "agent"));
+                        client.exchange(message, target, timeout)
                     } else {
                         client.request_body(message, target)
                     };

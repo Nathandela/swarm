@@ -429,24 +429,18 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
     let timeout = if !id.is_empty() {
         request["op"] = json!("owner_launch");
         request["operation_id"] = json!(id);
-        100
+        Duration::from_secs(100)
     } else {
-        match agent {
-            "hermes" => 100,
-            "opencode" => 75,
-            _ => 10,
-        }
+        super::launch_timeout(agent)
     };
-    let reply = client
-        .exchange(request, "launch", Duration::from_secs(timeout))
-        .map_err(|e| {
-            if id.is_empty()
-                && let Some(dest) = destination.as_ref()
-            {
-                dispose_refused(dest, &e, "spawn");
-            }
-            report(e)
-        })?;
+    let reply = client.exchange(request, "launch", timeout).map_err(|e| {
+        if id.is_empty()
+            && let Some(dest) = destination.as_ref()
+        {
+            dispose_refused(dest, &e, "spawn");
+        }
+        report(e)
+    })?;
     if !id.is_empty() && field(&reply, "operation_id") != id {
         return Err((
             1,

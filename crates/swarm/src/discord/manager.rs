@@ -70,11 +70,12 @@ impl Manager {
             return Err(invalid("manager launch has a different discussion binding"));
         }
         let mut client = self.dial()?;
-        let reply = client.request_body(
+        let reply = client.exchange(
             json!({
                 "op":"owner_launch", "operation_id": operation, "launch": launch
             }),
             "launch",
+            crate::ipc::launch_timeout(self.cfg.text("manager_cli")),
         )?;
         self.verify_endpoint(&client, &reply)?;
         let session = &reply["session"];
@@ -203,7 +204,7 @@ impl Manager {
             binding,
             &runtime["turn"]["external_input"],
         )?;
-        Ok(json!({
+        let mut composer = json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
             "text": input["text"],
             "manager_admission": {
@@ -216,7 +217,11 @@ impl Manager {
                 "channel_id":channel, "message_id":input["route"]["message_id"],
                 "discussion_id":self.discussion, "revision":input["revision"],
             }
-        }))
+        });
+        if input["voice_origin"].is_object() {
+            composer["origin"] = input["voice_origin"].clone();
+        }
+        Ok(composer)
     }
 
     pub(super) fn send(&self, operation: &str, composer: &Value) -> io::Result<()> {
@@ -391,7 +396,12 @@ mod tests {
             .mode(0o700)
             .open(bin.join("codex"))
             .unwrap();
-        writeln!(wrapper, "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.167.0'; exit 0 ;;\nesac\nexec '{}/fixture' \"$@\"", bin.display()).unwrap();
+        let cold_start = if rust.is_some() {
+            "app-server) /bin/sleep 5 ;;"
+        } else {
+            ""
+        };
+        writeln!(wrapper, "#!/bin/sh\ncase \"$1\" in\n--version) echo 'codex-cli 0.167.0'; exit 0 ;;\n{cold_start}\nesac\nexec '{}/fixture' \"$@\"", bin.display()).unwrap();
         drop(wrapper);
         let state = root.join("state");
         let socket = root.join("daemon.sock");

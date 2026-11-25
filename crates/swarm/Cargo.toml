@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+base64 = "0.23"
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
 subtle = "2.6"

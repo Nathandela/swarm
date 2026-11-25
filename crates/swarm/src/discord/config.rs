@@ -96,6 +96,15 @@ const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
 
 impl Place {
+    #[cfg(test)]
+    pub(super) fn fixture(dir: PathBuf) -> Self {
+        Self {
+            supervisor: dir.clone(),
+            dir,
+            explicit: true,
+        }
+    }
+
     pub(super) fn resolve(state: Option<&str>) -> io::Result<Self> {
         let supervisor = absolute(&ipc::state_path()?)?;
         let supplied = state.filter(|s| !s.is_empty());
@@ -433,6 +442,7 @@ impl Place {
         let _lease = match runtime::lock(&self.dir.join("bridge.lock")) {
             Ok(lease) => lease,
             Err(err) if existing(&socket)? => {
+                super::call_runtime::stop_if_running(&self.dir, cfg.text("installation_id"))?;
                 let body = json!({});
                 let response = super::local::call(
                     &self.dir,
@@ -519,7 +529,7 @@ impl Config {
                 match key.as_str() {
                     "version" => true,
                     "enabled" => value.is_boolean(),
-                    "projects" | "supervisor" | "previous_supervisor" => {
+                    "projects" | "supervisor" | "previous_supervisor" | "calls" => {
                         value.is_object() || value.is_null()
                     }
                     _ => false,
@@ -641,6 +651,9 @@ impl Config {
             } else {
                 "enrolled"
             });
+        }
+        if self.0["calls"].is_object() {
+            status["calls"] = json!("unavailable");
         }
         status
     }
