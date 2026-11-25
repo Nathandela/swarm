@@ -130,11 +130,36 @@ pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
     // PID the process group ID and the kernel cannot recycle it before wait().
     if unsafe { libc::kill(-(child.id() as i32), signal) } == -1 {
         let err = io::Error::last_os_error();
-        if err.raw_os_error() != Some(libc::ESRCH) {
-            return Err(err);
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
         }
+        #[cfg(target_os = "macos")]
+        if err.raw_os_error() == Some(libc::EPERM)
+            && child_exited(child)?
+            && group_contains_only_leader(child.id())
+        {
+            return Ok(());
+        }
+        return Err(err);
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn group_contains_only_leader(leader: u32) -> bool {
+    // Darwin reports EPERM when every member is a zombie. The unreaped
+    // leader's group is safe only once the kernel reports it as the sole member.
+    const PROC_PGRP_ONLY: u32 = 2;
+    let mut members = [0i32; 2];
+    let bytes = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            leader,
+            members.as_mut_ptr().cast(),
+            size_of_val(&members) as i32,
+        )
+    };
+    bytes == size_of::<i32>() as i32 && members[0] == leader as i32
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};
