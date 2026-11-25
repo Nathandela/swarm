@@ -404,7 +404,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         operation: operation.into(),
                         session: session.into(),
                         text: text.into(),
-                        admission: request["manager_admission"].clone(),
+                        composer: request["composer_send"].clone(),
                         answer,
                         not_after: Instant::now() + Duration::from_secs(2),
                     })

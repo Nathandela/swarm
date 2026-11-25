@@ -25,3 +25,5 @@ SWARM_FAKE_CODEX="$oracle/codex-manager-fixture" \
 SWARM_FAKE_CODEX_MANAGER_PROOF=1 \
 cargo test --locked -p swarm discord::manager -- --ignored
 ```
+
+The Rust arm retains the installed Codex workspace policy. The Go enrolled manager arm applies its explicit full-access manager policy. This fixture qualifies manager custody and the publication path. Native permission-policy parity remains open.

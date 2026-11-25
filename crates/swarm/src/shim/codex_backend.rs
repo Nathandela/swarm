@@ -151,12 +151,17 @@ struct Observation {
     turn: Option<String>,
     requests: std::collections::BTreeMap<String, &'static str>,
     joined: bool,
+    fresh_no_rollout: bool,
     requests_unverified: bool,
     idle: bool,
     ambiguous: bool,
 }
 
 impl Observation {
+    fn can_enter_joined_thread(&self, managed: bool) -> bool {
+        self.joined || managed && self.fresh_no_rollout
+    }
+
     fn apply(&mut self, message: &Value, cwd: &Path) -> bool {
         let payload = &message["params"];
         let method = field(message, "method");
@@ -258,7 +263,7 @@ pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
     pub text: String,
-    pub admission: Value,
+    pub composer: Value,
     pub not_after: Instant,
     pub answer: SyncSender<io::Result<Value>>,
 }
@@ -266,6 +271,7 @@ pub(super) struct SemanticAction {
 struct SemanticTarget<'a> {
     dir: &'a Path,
     token: &'a str,
+    manager: &'a Value,
     cwd: &'a Path,
 }
 
@@ -284,6 +290,8 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
             "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
+            "manager_ingress_ready": (observation.joined || observation.fresh_no_rollout) && observation.idle
+                && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
             "requests":requests,
         }),
     );
@@ -314,24 +322,8 @@ fn submit(
         &codex_receipt::instance(target.token),
         &hash,
     )?;
-    let mut manager_nonce = None;
-    if !action.admission.is_null() {
-        let proof = observation
-            .proof
-            .as_mut()
-            .ok_or_else(|| io::Error::other("manager observer custody is unavailable"))?;
-        let nonce = field(&action.admission, "nonce");
-        if action.admission["binding"] != *proof.binding() {
-            return Err(io::Error::other(
-                "manager admission has the wrong observation generation",
-            ));
-        }
-        let external = action.admission["expected_external_input"]
-            .as_u64()
-            .ok_or_else(|| io::Error::other("manager admission lacks external input evidence"))?;
-        proof.prepare(&action.operation, nonce, &action.text, external)?;
-        manager_nonce = Some(nonce);
-    }
+    let admission = &action.composer["manager_admission"];
+    let manager_nonce = (!admission.is_null()).then(|| field(admission, "nonce"));
     if let Some(record) = codex_receipt::load(
         target.dir,
         &action.operation,
@@ -348,7 +340,7 @@ fn submit(
     }
     if observation.thread.is_empty()
         || observation.ambiguous
-        || !observation.joined && manager_nonce.is_none()
+        || !observation.can_enter_joined_thread(manager_nonce.is_some())
         || observation.requests_unverified
         || !observation.idle
         || observation.turn.is_some()
@@ -362,6 +354,26 @@ fn submit(
         return Err(io::Error::other(
             "semantic authority expired before dispatch",
         ));
+    }
+    if let Some(nonce) = manager_nonce {
+        let proof = observation
+            .proof
+            .as_mut()
+            .ok_or_else(|| io::Error::other("manager observer custody is unavailable"))?;
+        if admission["binding"] != *proof.binding() {
+            return Err(io::Error::other(
+                "manager admission has the wrong observation generation",
+            ));
+        }
+        let external = admission["expected_external_input"]
+            .as_u64()
+            .ok_or_else(|| io::Error::other("manager admission lacks external input evidence"))?;
+        crate::discord::verify_connector_input(
+            target.manager,
+            &action.operation,
+            &action.composer,
+        )?;
+        proof.prepare(&action.operation, nonce, &action.text, external)?;
     }
     let mut receipt = json!({
         "session":action.session,"session_instance":codex_receipt::instance(target.token),
@@ -379,6 +391,19 @@ fn submit(
     if Instant::now() >= action.not_after {
         return Ok(receipt);
     }
+    if manager_nonce.is_some() {
+        crate::discord::verify_connector_input(
+            target.manager,
+            &action.operation,
+            &action.composer,
+        )?;
+        if action.composer["text"] != action.text || action.composer["session"] != action.session {
+            return Err(io::Error::other(
+                "manager shim input differs from the authorized composer",
+            ));
+        }
+    }
+    observation.fresh_no_rollout = false;
     observation.idle = false;
     let mut request = json!({
         "id":rpc,"method":"turn/start","params":{"threadId":observation.thread,
@@ -433,6 +458,7 @@ pub(super) fn observe(
         cwd: &cwd,
         dir: &dir,
         token: &token,
+        manager: &manager,
     };
     let mut serial = 10;
     let mut join = None;
@@ -442,6 +468,7 @@ pub(super) fn observe(
         if !observation.thread.is_empty()
             && !observation.ambiguous
             && !observation.joined
+            && !observation.fresh_no_rollout
             && join.is_none()
             && next_join.is_some_and(|at| Instant::now() >= at)
         {
@@ -449,6 +476,7 @@ pub(super) fn observe(
             if send(&mut channel.connection,json!({
                 "id":serial,"method":"thread/resume","params":{"threadId":observation.thread,"excludeTurns":true}
             })).is_err() { break; }
+            observation.fresh_no_rollout = false;
             join = Some((serial, Instant::now() + Duration::from_secs(3)));
         }
         if join.is_some_and(|(_, deadline)| Instant::now() >= deadline) {
@@ -472,14 +500,23 @@ pub(super) fn observe(
                 quiet = false;
                 if join.is_some_and(|(id, _)| message["id"] == id) && message["method"].is_null() {
                     join = None;
-                    if field(&message["result"]["thread"], "id") == observation.thread {
+                    if message["error"].is_null()
+                        && field(&message["result"]["thread"], "id") == observation.thread
+                    {
                         observation.joined = true;
                         observation.idle = observation.turn.is_none()
                             && field(&message["result"]["thread"]["status"], "type") == "idle";
                         persist_observation(&observation, &target);
-                    } else if field(&message["error"], "message")
-                        .contains("no rollout found for thread id")
+                    } else if message["result"].is_null()
+                        && message["error"]["code"] == -32600
+                        && field(&message["error"], "message")
+                            == format!("no rollout found for thread id {}", observation.thread)
                     {
+                        observation.fresh_no_rollout = observation
+                            .proof
+                            .as_ref()
+                            .is_some_and(|proof| proof.is_virgin());
+                        persist_observation(&observation, &target);
                         next_join = Some(Instant::now() + Duration::from_secs(1));
                     } else {
                         next_join = None;
@@ -533,6 +570,17 @@ pub(super) fn observe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manager_nonce_does_not_bypass_failed_or_unknown_join() {
+        let mut observation = Observation::default();
+        assert!(!observation.can_enter_joined_thread(true));
+        observation.fresh_no_rollout = true;
+        assert!(observation.can_enter_joined_thread(true));
+        assert!(!observation.can_enter_joined_thread(false));
+        observation.fresh_no_rollout = false;
+        assert!(!observation.can_enter_joined_thread(true));
+    }
 
     #[test]
     fn accepts_only_bound_thread_and_turn() {

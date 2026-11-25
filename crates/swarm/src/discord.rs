@@ -51,9 +51,70 @@ pub(crate) fn native_manager_enrollment() -> io::Result<Value> {
     let bridge = std::fs::canonicalize(&place.dir)?.join("manager-v1");
     Ok(
         json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
-        "installation_id":cfg.text("installation_id"), "owner_id":cfg.text("owner_id"),
+        "installation_id":cfg.text("installation_id"), "application_id":cfg.text("application_id"), "owner_id":cfg.text("owner_id"),
         "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")}),
     )
+}
+
+pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
+    let dir = Path::new(
+        scope["launch"]["manager"]["auth_file"]
+            .as_str()
+            .unwrap_or_default(),
+    )
+    .to_owned();
+    let place = dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("invalid connector custody directory"))?;
+    let data = crate::supervisor::runtime::read_json(&place.join("rust-text-v1.json"))?;
+    let identity = &data["identity"];
+    if data["version"] != 2
+        || identity[0] != scope["installation_id"]
+        || identity[1] != scope["application_id"]
+        || identity[2] != scope["owner_id"]
+        || identity[3] != scope["channel_id"]
+        || identity[4] != scope["supervisor_socket"]
+        || data["manager"]["generation"] != 1
+        || data["manager"]["launch"] != scope["launch"]
+    {
+        return Err(invalid(
+            "connector intent does not match the enrolled manager",
+        ));
+    }
+    Ok(data)
+}
+
+pub(crate) fn verify_connector_input(
+    scope: &Value,
+    operation: &str,
+    composer: &Value,
+) -> io::Result<()> {
+    let data = connector_intent(scope)?;
+    let manager = &data["manager"];
+    let input = &manager["input"];
+    let id = input["source_id"]
+        .as_str()
+        .filter(|id| config::snowflake(id))
+        .ok_or_else(|| invalid("connector has no persisted manager cutover"))?;
+    let source = &data["messages"][id];
+    if input["operation"] != operation
+        || input["composer"] != *composer
+        || manager["session"] != composer["session"]
+        || source["state"] != "sending"
+        || source["text"] != composer["text"]
+        || source["revision"] != composer["origin"]["revision"]
+        || source["operation_id"] != composer["origin"]["request_id"]
+        || source["route"]["message_id"] != id
+        || composer["origin"]["message_id"] != id
+        || source["native_input_id"] != composer["manager_admission"]["nonce"]
+        || source["native_binding"] != composer["manager_admission"]["binding"]
+    {
+        return Err(invalid(
+            "semantic request does not match the exact connector cutover",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn run(args: &[String]) -> u8 {

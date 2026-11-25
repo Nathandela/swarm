@@ -53,7 +53,9 @@ impl Session {
         {
             return Err(refuse("manager backend custody changed"));
         }
-        codex_proof::Ledger::snapshot(&self.dir, binding)
+        let mut evidence = codex_proof::Ledger::snapshot(&self.dir, binding)?;
+        evidence["owned_ingress_ready"] = observed["manager_ingress_ready"].clone();
+        Ok(evidence)
     }
 
     pub(in crate::supervisor) fn manager_operation(&self, request: &Value) -> io::Result<Value> {
@@ -80,7 +82,8 @@ impl Session {
                         "unknown"
                     });
                 }
-                let ready = evidence["thread_state"] == "idle"
+                let ready = evidence["owned_ingress_ready"] == true
+                    && evidence["thread_state"] == "idle"
                     && matches!(field(&status, "state"), "idle" | "completed");
                 json!({"op":"manager_runtime","session_id":session,"manager_runtime":{
                     "binding":binding,"ready_for_input":ready,"turn":status,
@@ -119,7 +122,12 @@ impl Session {
         Ok(data)
     }
 
-    pub(super) fn check_manager_input(&self, session: &str, body: &Value) -> io::Result<()> {
+    pub(super) fn check_manager_input(
+        &self,
+        session: &str,
+        operation: &str,
+        body: &Value,
+    ) -> io::Result<()> {
         if self.manager.is_null() {
             if !body["manager_admission"].is_null() || !body["origin"].is_null() {
                 return Err(refuse("ordinary session cannot receive manager authority"));
@@ -157,7 +165,7 @@ impl Session {
                 "semantic input does not match the exact personal manager authority",
             ));
         }
-        Ok(())
+        crate::discord::verify_connector_input(&self.manager, operation, body)
     }
 }
 

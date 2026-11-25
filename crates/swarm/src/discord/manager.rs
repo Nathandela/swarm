@@ -481,6 +481,13 @@ mod tests {
             manager.launch_status(&operation).unwrap()["state"],
             "unknown_operation"
         );
+        if rust.is_some() {
+            assert!(manager.launch(&operation, &request).is_err());
+            let mut inbox = super::super::receipt::Inbox::open(&enrollment, &cfg).unwrap();
+            inbox
+                .set_manager(json!({"generation":1,"launch":request,"launch_operation":operation}))
+                .unwrap();
+        }
         let session = manager.launch(&operation, &request).unwrap();
         let receipt = manager.launch_status(&operation).unwrap();
         assert_eq!(receipt["state"], "applied");
@@ -495,7 +502,7 @@ mod tests {
                 3
             );
             let err = manager.launch(&duplicate, &request).unwrap_err();
-            assert!(err.to_string().contains("durable manager reservation"));
+            assert!(err.to_string().contains("persisted operation"));
         }
         let id = field(&session, "id");
         let deadline = Instant::now() + Duration::from_secs(7);
@@ -534,6 +541,7 @@ mod tests {
             inbox.checkpoint("400").unwrap();
             let admitted = inbox.admit(&source).unwrap().unwrap();
             let composer = manager.composer(&admitted, &native).unwrap();
+            let launch_operation = operation.clone();
             let operation = format!(
                 "semantic:{}:{:032x}",
                 SystemTime::now()
@@ -544,9 +552,15 @@ mod tests {
             );
             if rust.is_some() {
                 inbox.cutover("401",field(&admitted,"revision"),json!({
-                    "generation":1,"launch":request,"session":id,"binding":native["binding"],
+                    "generation":1,"launch":request,"launch_operation":launch_operation,"session":id,"binding":native["binding"],
                     "input":{"operation":operation,"source_id":"401","composer":composer}
                 })).unwrap();
+            }
+            if rust.is_some() {
+                let mut forged = composer.clone();
+                forged["text"] = json!("fabricated Discord text");
+                let err = manager.send(&operation, &forged).unwrap_err();
+                assert!(err.to_string().contains("exact connector cutover"));
             }
             manager.send(&operation, &composer).unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);

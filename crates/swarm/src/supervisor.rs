@@ -101,6 +101,15 @@ impl State {
     }
 
     fn reserve(&self, request: &Value, managed: Option<Value>) -> io::Result<Arc<Session>> {
+        if managed.is_some()
+            && runtime::launch_env(&request["launch"]["env"])
+                .iter()
+                .any(|(key, value)| key == "OPENAI_API_KEY" && !value.is_empty())
+        {
+            return Err(io::Error::other(
+                "manager refuses API-key account substitution",
+            ));
+        }
         let mut prepared = Session::prepare(request)?;
         if let Some(scope) = managed.as_ref() {
             prepared.bind_manager(scope.clone())?;
@@ -123,24 +132,40 @@ impl State {
             runtime::private_dir(&guard_root)?;
             let key = format!("{:x}", Sha256::digest(conversation.as_bytes()));
             let marker = guard_root.join(format!("{key}.json"));
-            match fs::symlink_metadata(&marker) {
-                Ok(_) => {
-                    return Err(io::Error::other(
-                        "discussion already has a durable manager reservation",
-                    ));
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err),
-            }
-            if self
+            let existing = self
                 .sessions
                 .read()
                 .unwrap()
                 .values()
-                .any(|existing| existing.owns_manager(conversation))
-            {
+                .find(|session| session.owns_manager(conversation))
+                .cloned();
+            let recorded = match runtime::read_json(&marker) {
+                Ok(record) => Some(record),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                Err(err) => return Err(err),
+            };
+            if let Some(session) = existing {
+                if recorded.as_ref().is_some_and(|record| {
+                    record["session_id"] != session.id
+                        || record["operation_id"] != scope["launch_operation"]
+                        || record["request_hash"] != scope["request_hash"]
+                }) {
+                    return Err(io::Error::other(
+                        "discussion already has a durable manager reservation",
+                    ));
+                }
+                session.resume_manager_reservation(prepared)?;
+                if recorded.is_none() {
+                    runtime::write_json(
+                        &marker,
+                        &json!({"session_id":session.id,"operation_id":scope["launch_operation"],"request_hash":scope["request_hash"]}),
+                    )?;
+                }
+                return Ok(session);
+            }
+            if recorded.is_some() {
                 return Err(io::Error::other(
-                    "discussion already has an enrolled native manager",
+                    "discussion already has a durable manager reservation",
                 ));
             }
             Some(marker)
@@ -148,13 +173,17 @@ impl State {
             None
         };
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
-        if let Some(marker) = manager_guard {
-            runtime::write_json(&marker, &json!({"session_id":session.id,"scope":managed}))?;
-        }
         self.sessions
             .write()
             .unwrap()
             .insert(session.id.clone(), session.clone());
+        if let Some(marker) = manager_guard {
+            let scope = managed.as_ref().unwrap();
+            runtime::write_json(
+                &marker,
+                &json!({"session_id":session.id,"operation_id":scope["launch_operation"],"request_hash":scope["request_hash"]}),
+            )?;
+        }
         Ok(session)
     }
 
@@ -650,5 +679,97 @@ fn attachment(
     match handoff {
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
         outcome => outcome,
+    }
+}
+
+#[cfg(test)]
+mod manager_reservation_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fixture(root: &std::path::Path, rows: BTreeMap<String, Arc<Session>>) -> State {
+        State {
+            root: root.to_owned(),
+            endpoint: "fixture".into(),
+            socket: root.join("socket"),
+            sessions: RwLock::new(rows),
+            subscribers: Mutex::new(Vec::new()),
+            launch_gate: Mutex::new(()),
+            operation_locks: std::array::from_fn(|_| Mutex::new(())),
+            transactions: RwLock::new(()),
+            deletion_gate: Mutex::new(()),
+            generation: AtomicU64::new(1),
+        }
+    }
+
+    #[test]
+    fn same_manager_operation_recovers_pre_start_without_replaying_a_claimed_session() {
+        let root =
+            std::path::Path::new("/tmp").join(format!("mgr-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let home = root.join("home");
+        let codex_home = home.join(".codex");
+        runtime::private_dir(&codex_home).unwrap();
+        runtime::write_json(
+            &codex_home.join("auth.json"),
+            &json!({"auth_mode":"chatgpt","tokens":{"account_id":"synthetic"}}),
+        )
+        .unwrap();
+        let provider = root.join("codex");
+        fs::write(&provider, b"#!/bin/sh\necho codex-cli 0.167.0\n").unwrap();
+        fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+        let request = json!({"launch":{"agent":"codex","cwd":root,
+            "env":[format!("PATH={}", root.display()),format!("HOME={}",home.display())]}});
+        let scope = json!({"launch":{"manager":{"conversation_id":"conversation"}},
+            "launch_operation":"launch-original","request_hash":"original-hash"});
+        let isolated = fixture(&root, BTreeMap::new());
+        let mut wrong_account = request.clone();
+        wrong_account["launch"]["env"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("OPENAI_API_KEY=fixture-secret"));
+        let err = isolated
+            .reserve(&wrong_account, Some(scope.clone()))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("API-key account substitution"));
+        assert!(!err.to_string().contains("fixture-secret"));
+        let reserved = isolated.reserve(&request, Some(scope.clone())).unwrap();
+        let id = reserved.id.clone();
+        drop(isolated);
+        drop(reserved);
+
+        let recovered = || {
+            fixture(
+                &root,
+                BTreeMap::from([(id.clone(), Arc::new(Session::load(root.join(&id)).unwrap()))]),
+            )
+        };
+        let mut distinct = scope.clone();
+        distinct["launch_operation"] = json!("another-operation");
+        assert!(recovered().reserve(&request, Some(distinct)).is_err());
+        assert_eq!(
+            recovered()
+                .reserve(&request, Some(scope.clone()))
+                .unwrap()
+                .id,
+            id
+        );
+
+        let marker = root
+            .join("manager-launches")
+            .join(format!("{:x}.json", Sha256::digest(b"conversation")));
+        fs::remove_file(marker).unwrap();
+        assert_eq!(
+            recovered()
+                .reserve(&request, Some(scope.clone()))
+                .unwrap()
+                .id,
+            id
+        );
+
+        fs::write(root.join(&id).join("claimed"), b"").unwrap();
+        assert!(recovered().reserve(&request, Some(scope)).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

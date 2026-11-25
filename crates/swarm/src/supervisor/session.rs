@@ -64,7 +64,6 @@ impl Prepared {
             .ok_or_else(|| io::Error::other("manager requires native account HOME"))?;
         scope["account"] = json!(super::manager::account(&home)?);
         scope["account_home"] = json!(home);
-        self.provider.env.retain(|(key, _)| key != "OPENAI_API_KEY");
         self.manager = scope;
         Ok(())
     }
@@ -515,7 +514,7 @@ impl Session {
         {
             return Err(io::Error::other("invalid or stale Codex semantic request"));
         }
-        self.check_manager_input(session, body)?;
+        self.check_manager_input(session, operation, body)?;
         let thread = self.semantic_thread()?;
         {
             use sha2::{Digest, Sha256};
@@ -547,7 +546,7 @@ impl Session {
             &mut shim,
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
-                "session_instance":instance,"text":text,"manager_admission":body["manager_admission"]
+                "session_instance":instance,"text":text,"manager_admission":body["manager_admission"],"composer_send":body
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -660,6 +659,32 @@ impl Session {
             labels.tag = value;
         }
         Ok(true)
+    }
+
+    pub(super) fn resume_manager_reservation(&self, prepared: Prepared) -> io::Result<()> {
+        match fs::symlink_metadata(self.dir.join("claimed")) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "manager launch might already have started",
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+        let saved = runtime::read_json(&self.dir.join("session.json"))?;
+        if self.manager != prepared.manager
+            || saved["provider"]["identity"] != prepared.provider.identity
+            || saved["provider"]["executable"] != json!(prepared.provider.executable)
+            || saved["provider"]["version"] != prepared.provider.version
+            || saved["cwd"] != json!(prepared.cwd)
+        {
+            return Err(io::Error::other(
+                "manager reservation no longer matches its original provider and scope",
+            ));
+        }
+        *self.launch_plan.lock().unwrap() = Some(prepared.provider);
+        self.transition(Phase::Starting);
+        Ok(())
     }
 
     pub(super) fn owns_manager(&self, conversation: &str) -> bool {

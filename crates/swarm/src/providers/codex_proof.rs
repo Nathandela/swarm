@@ -43,6 +43,11 @@ impl Ledger {
         Ok(Self { file, data })
     }
 
+    pub(crate) fn is_virgin(&self) -> bool {
+        self.data["blocked"] == false && self.data["turns"].as_object().is_some_and(|turns| turns.is_empty())
+            && self.data["prepared"].as_object().is_some_and(|prepared| prepared.is_empty())
+    }
+
     pub(crate) fn binding(&self) -> &Value {
         &self.data["binding"]
     }
