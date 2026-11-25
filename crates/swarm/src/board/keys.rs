@@ -13,6 +13,8 @@ pub(super) enum Key {
     Right,
     Home,
     End,
+    EditHome,
+    EditEnd,
     PageUp,
     PageDown,
     Mouse(Mouse),
@@ -106,6 +108,14 @@ impl Keys {
                             b"C" => keys.push(Key::Right),
                             b"D" => keys.push(Key::Left),
                             b"27u" => keys.push(Key::Escape),
+                            b"1;9D" | b"57350;9u" | b"57350;33u" | b"97;5u" => {
+                                keys.push(Key::EditHome)
+                            }
+                            b"1;9C" | b"57351;9u" | b"57351;33u" | b"101;5u" => {
+                                keys.push(Key::EditEnd)
+                            }
+                            b"127;9u" | b"127;33u" | b"8;9u" | b"8;33u" | b"27;9;127~"
+                            | b"27;9;8~" | b"117;5u" => keys.push(Key::CtrlU),
                             b"H" | b"1~" | b"7~" => keys.push(Key::Home),
                             b"F" | b"4~" | b"8~" => keys.push(Key::End),
                             b"5~" => keys.push(Key::PageUp),
@@ -127,6 +137,11 @@ impl Keys {
                 if pending.len() == 1 && !flush {
                     break;
                 }
+                if matches!(pending.get(1), Some(8 | 127)) {
+                    // A legacy ESC prefix encodes Option, not Command, for Backspace.
+                    start += 2;
+                    continue;
+                }
                 keys.push(Key::Escape);
                 start += 1;
                 continue;
@@ -135,9 +150,9 @@ impl Keys {
             let key = match first {
                 b'\r' | b'\n' => Some(Key::Enter),
                 8 | 127 => Some(Key::Backspace),
-                1 => Some(Key::Home),
+                1 => Some(Key::EditHome),
                 3 => Some(Key::CtrlC),
-                5 => Some(Key::End),
+                5 => Some(Key::EditEnd),
                 21 => Some(Key::CtrlU),
                 24 => Some(Key::CtrlX),
                 b'\t' => Some(Key::Tab),
