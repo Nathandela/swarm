@@ -66,24 +66,8 @@ pub(crate) fn prepare(
         .ok_or_else(|| io::Error::other("provider launch requires PATH"))?;
     let executable = resolve(agent, cwd, path)?;
     let before = identity(&executable)?;
-    // Hermes initializes its Python runtime for --version, including on a cold host.
-    let version_budget = Duration::from_secs(if agent == "hermes" { 10 } else { 5 });
-    let output = command_output(
-        &executable,
-        cwd,
-        &environment,
-        &["--version"],
-        version_budget,
-        16 * 1024,
-    )?;
-    let version = match agent {
-        "agy" => agy::version(&output)?,
-        "codex" => codex::version(&output)?,
-        "opencode" => opencode::version(&output)?,
-        "hermes" => hermes::version(&output)?,
-        _ => claude::version(&output)?,
-    }
-    .to_owned();
+    let output = version_banner(agent, &executable, cwd, &environment)?;
+    let version = admitted_version(agent, &output)?.to_owned();
     let agy_status_line = agent == "agy"
         && agy::status_line(&version)
         && probe_output(&executable, cwd, &environment, &["--help"])
@@ -158,6 +142,52 @@ pub(crate) fn prepare(
             String::new()
         },
     })
+}
+
+fn version_banner(
+    agent: &str,
+    executable: &Path,
+    cwd: &Path,
+    environment: &[(String, String)],
+) -> io::Result<String> {
+    // A cold Hermes release probe also initializes its Python runtime.
+    let budget = Duration::from_secs(if agent == "hermes" { 10 } else { 5 });
+    command_output(
+        executable,
+        cwd,
+        environment,
+        &["--version"],
+        budget,
+        16 * 1024,
+    )
+}
+
+fn admitted_version<'a>(agent: &str, output: &'a str) -> io::Result<&'a str> {
+    match agent {
+        "agy" => agy::version(output),
+        "claude" => claude::version(output),
+        "codex" => codex::version(output),
+        "opencode" => opencode::version(output),
+        "hermes" => hermes::version(output),
+        _ => Err(io::Error::other(
+            "Native launch is unavailable on this supervisor",
+        )),
+    }
+}
+
+pub(crate) fn detect_for_board(agent: &str, cwd: &Path) -> io::Result<String> {
+    if agent == "codex" {
+        codex::refuse_unqualified_origin(&Value::Null)?;
+    }
+    let entries = crate::supervisor::runtime::launch_env(&Value::Null);
+    let path = entries
+        .iter()
+        .find(|(key, _)| key == "PATH")
+        .map(|(_, value)| value)
+        .ok_or_else(|| io::Error::other("provider detection requires PATH"))?;
+    let executable = resolve(agent, cwd, path)?;
+    let output = version_banner(agent, &executable, cwd, &entries)?;
+    Ok(admitted_version(agent, &output)?.to_owned())
 }
 
 fn resolve(binary: &str, cwd: &Path, path: &str) -> io::Result<PathBuf> {

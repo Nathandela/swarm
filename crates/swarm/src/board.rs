@@ -1,11 +1,16 @@
 mod attach;
+mod automation;
 mod keys;
+mod launch;
 mod navigation;
 mod preferences;
 mod term;
 
 use crate::ipc::{self, Client, field};
+use crate::schedule::catalog::{CAP as CATALOG_CAP, Read as CatalogRead};
+use automation::Automation;
 use keys::{Key, Keys, Mouse, MouseAction};
+use launch::Launch;
 use navigation::{Focus, GROUPS, ORDERS, Row, capacity, truncation, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
@@ -14,12 +19,17 @@ use std::env;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
 const POLL: Duration = Duration::from_millis(40);
-const ROSTER_CAPS: &[&str] = &["subscribe", "opencode-observation", "resume-relocate"];
+const ROSTER_CAPS: &[&str] = &[
+    "subscribe",
+    "opencode-observation",
+    "resume-relocate",
+    CATALOG_CAP,
+];
 
 pub(crate) fn run() -> u8 {
     match crate::bootstrap::ensure_daemon()
@@ -55,6 +65,9 @@ fn board(path: &Path) -> io::Result<()> {
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
+        if let Some(Modal::Launch(form)) = &mut board.modal {
+            needs_paint |= form.update_detection();
+        }
         if dimensions != geometry || needs_paint {
             if dimensions != geometry {
                 geometry = dimensions;
@@ -132,6 +145,19 @@ fn board(path: &Path) -> io::Result<()> {
                     // Bytes from the initiating key batch belong to the board.
                     break;
                 }
+                Action::Catalog(query) => {
+                    let result = connection.as_mut().map_or_else(
+                        || {
+                            Err(io::Error::other(
+                                "daemon disconnected; reconnect and refresh",
+                            ))
+                        },
+                        |client| query.remote(client),
+                    );
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        view.receive(result);
+                    }
+                }
                 Action::Request(message, target) => {
                     let Some(client) = &mut connection else {
                         continue;
@@ -200,17 +226,30 @@ struct Board {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Hit {
-    Row(Focus),
-    Button(char),
+    Row(Focus, bool),
+    Button {
+        key: char,
+        target: String,
+        running: bool,
+    },
+    Menu {
+        index: usize,
+        key: char,
+        target: String,
+        running: bool,
+    },
+    Attention,
 }
 
 struct Press {
     hit: Hit,
+    y: u16,
     invoke_on_release: bool,
 }
 
 enum Modal {
-    Launch(Launch),
+    Launch(Box<Launch>),
+    Automation(Automation),
     ResumeAgy {
         id: String,
         cwd: Editor,
@@ -244,6 +283,7 @@ enum Action {
     Attach { id: String, name: String },
     Retry,
     SaveLayout(Layout),
+    Catalog(CatalogRead),
     Request(Value, &'static str),
 }
 
@@ -318,7 +358,11 @@ impl Board {
         }
         self.press = None;
         if let Some(modal) = self.modal.take() {
-            if matches!(key, Key::Escape) {
+            if matches!(key, Key::Escape)
+                || (matches!(modal, Modal::Launch(_))
+                    && !Launch::readable(geometry)
+                    && key == Key::Text('n'))
+            {
                 self.notice.clear();
                 return Action::None;
             }
@@ -392,7 +436,7 @@ impl Board {
         match key {
             Key::Text('q') => return Action::Quit,
             Key::Text('n') if online => {
-                self.modal = Some(Modal::Launch(Launch::new()));
+                self.modal = Some(Modal::Launch(Box::new(Launch::new())));
                 self.notice.clear();
             }
             Key::Text('o') => {
@@ -401,6 +445,11 @@ impl Board {
                     focus: 0,
                 });
                 self.notice.clear();
+            }
+            Key::Text('a') => {
+                self.modal = Some(Modal::Automation(Automation::default()));
+                self.notice.clear();
+                return Action::Catalog(CatalogRead::List);
             }
             Key::Text('g') => self.reveal_attention(geometry.1),
             _ if !online => {}
@@ -484,7 +533,7 @@ impl Board {
         let (_, rows) = geometry;
         let action = match &mut modal {
             Modal::Launch(form) => {
-                if matches!(key, Key::Enter) && (!online || !usable(geometry)) {
+                if matches!(key, Key::Enter) && (!online || !Launch::readable(geometry)) {
                     Action::None
                 } else {
                     match form.update(key, geometry) {
@@ -510,6 +559,11 @@ impl Board {
                     cwd.apply(key);
                 }
                 Action::None
+            }
+            Modal::Automation(view) => {
+                let action = view.update(key, geometry);
+                self.modal = Some(modal);
+                return action;
             }
             Modal::Options { draft, focus } => {
                 match key {
@@ -679,6 +733,7 @@ impl Board {
         entries.extend([
             ("New".into(), Some('n')),
             ("Options".into(), Some('o')),
+            ("Automations".into(), Some('a')),
             ("Attention".into(), Some('g')),
             ("Quit".into(), Some('q')),
         ]);
@@ -726,23 +781,59 @@ impl Board {
 
     fn hit(&self, event: Mouse, geometry: (u16, u16)) -> Option<Hit> {
         let (cols, rows) = geometry;
-        if event.x > cols || event.y < 2 || event.y > rows {
+        if event.x == 0 || event.x > cols || event.y == 0 || event.y > rows {
             return None;
+        }
+        if let Some(Modal::More {
+            target,
+            running: was_running,
+            top,
+            ..
+        }) = &self.modal
+        {
+            if !(2..rows).contains(&event.y) {
+                return None;
+            }
+            let index = *top + usize::from(event.y - 2);
+            let key = self.menu(target, *was_running).get(index)?.1?;
+            return Some(Hit::Menu {
+                index,
+                key,
+                target: target.clone(),
+                running: self.by_id(target).is_some_and(running),
+            });
+        }
+        if event.y == 1 {
+            return Some(Hit::Attention);
         }
         if event.y == rows {
             return self
                 .button_view(cols)
                 .into_iter()
                 .find(|(_, _, left, right)| (*left..=*right).contains(&event.x))
-                .map(|(_, button, _, _)| Hit::Button(button));
+                .map(|(_, key, _, _)| Hit::Button {
+                    key,
+                    target: self.selected.clone(),
+                    running: self.row().is_some_and(running),
+                });
         }
         self.display_rows()
             .get(self.top + usize::from(event.y - 2))
-            .map(|row| Hit::Row(row.focus()))
+            .map(|row| {
+                Hit::Row(
+                    row.focus(),
+                    matches!(row, Row::Session(row) if running(row)),
+                )
+            })
     }
 
     fn mouse(&mut self, event: Mouse, geometry: (u16, u16), online: bool) -> Action {
-        if self.modal.is_some() || !usable(geometry) {
+        if self
+            .modal
+            .as_ref()
+            .is_some_and(|modal| !matches!(modal, Modal::More { .. }))
+            || !usable(geometry)
+        {
             self.press = None;
             return Action::None;
         }
@@ -752,18 +843,28 @@ impl Board {
             MouseAction::WheelUp | MouseAction::WheelDown => {
                 self.press = None;
                 if (2..geometry.1).contains(&event.y) {
-                    self.top = if event.action == MouseAction::WheelUp {
-                        self.top.saturating_sub(3)
+                    let down = event.action == MouseAction::WheelDown;
+                    if let Some(Modal::More {
+                        target, running, ..
+                    }) = &self.modal
+                    {
+                        let max = self
+                            .menu(target, *running)
+                            .len()
+                            .saturating_sub(capacity(geometry.1));
+                        if let Some(Modal::More { top, .. }) = &mut self.modal {
+                            *top = scroll(*top, down).min(max);
+                        }
                     } else {
-                        self.top + 3
-                    };
-                    self.clamp_top(geometry.1);
+                        self.top = scroll(self.top, down);
+                        self.clamp_top(geometry.1);
+                    }
                 }
             }
             MouseAction::Press => {
                 if let Some(hit) = hit {
                     let invoke_on_release = match &hit {
-                        Hit::Row(focus @ Focus::Session(_)) => {
+                        Hit::Row(focus @ Focus::Session(_), _) => {
                             let already = self.current_focus().as_ref() == Some(focus);
                             self.set_focus(focus.clone());
                             already
@@ -772,6 +873,7 @@ impl Board {
                     };
                     self.press = Some(Press {
                         hit,
+                        y: event.y,
                         invoke_on_release,
                     });
                 } else {
@@ -781,18 +883,19 @@ impl Board {
             MouseAction::Release => {
                 if let Some(press) = self.press.take()
                     && press.invoke_on_release
+                    && press.y == event.y
                     && hit == Some(press.hit.clone())
                 {
                     match press.hit {
-                        Hit::Row(Focus::Session(id)) => {
+                        Hit::Row(Focus::Session(id), _) => {
                             return self.command(Key::Enter, &id, geometry, online);
                         }
-                        Hit::Row(Focus::Section(section)) => {
+                        Hit::Row(Focus::Section(section), _) => {
                             let collapse =
                                 !self.folded.contains(&(self.layout.group, section.clone()));
                             self.fold(Some(section), collapse, geometry.1);
                         }
-                        Hit::Button(button) => {
+                        Hit::Button { key: button, .. } => {
                             let key = match button {
                                 '⏎' => Key::Enter,
                                 'x' => Key::CtrlX,
@@ -800,6 +903,13 @@ impl Board {
                             };
                             return self.update(key, geometry, online);
                         }
+                        Hit::Menu { index, .. } => {
+                            if let Some(Modal::More { selected, .. }) = &mut self.modal {
+                                *selected = index;
+                            }
+                            return self.update(Key::Enter, geometry, online);
+                        }
+                        Hit::Attention => self.reveal_attention(geometry.1),
                     }
                 }
             }
@@ -815,6 +925,7 @@ impl Board {
         }
         match &self.modal {
             Some(Modal::Launch(form)) => form.view(&mut screen, cols, rows),
+            Some(Modal::Automation(view)) => view.view(&mut screen, cols, rows),
             Some(Modal::ResumeAgy { cwd, .. }) => {
                 line(&mut screen, 1, cols, "\x1b[1m", "Relocate session");
                 line(
@@ -1026,6 +1137,14 @@ fn form_header(output: &mut String, cols: u16, title: &str) {
     line(output, 1, cols, "\x1b[38;2;142;180;230;1m", title);
 }
 
+fn scroll(offset: usize, down: bool) -> usize {
+    if down {
+        offset.saturating_add(1)
+    } else {
+        offset.saturating_sub(1)
+    }
+}
+
 fn running(row: &Value) -> bool {
     field(&row["status"], "Process") == "running"
 }
@@ -1189,26 +1308,6 @@ fn clip(text: &str, columns: u16) -> String {
     clipped
 }
 
-fn edit(value: &mut String, key: Key) {
-    const LIMIT: usize = 16384;
-    match key {
-        Key::Text(ch) if !ch.is_control() && value.len() + ch.len_utf8() <= LIMIT => value.push(ch),
-        Key::Paste(text) => {
-            for ch in text.chars().filter(|ch| !ch.is_control()) {
-                if value.len() + ch.len_utf8() > LIMIT {
-                    break;
-                }
-                value.push(ch);
-            }
-        }
-        Key::Backspace => {
-            value.pop();
-        }
-        Key::CtrlU => value.clear(),
-        _ => {}
-    }
-}
-
 fn caller_launch_environment(agent: &str) -> Vec<String> {
     let entries = env::vars_os()
         .filter_map(|(key, value)| Some(format!("{}={}", key.to_str()?, value.to_str()?)))
@@ -1228,172 +1327,6 @@ fn resume(agent: &str, id: &str, cwd: &Path, (cols, rows): (u16, u16), relocate:
         }}),
         "launch",
     )
-}
-
-struct Launch {
-    agents: Vec<&'static str>,
-    agent: usize,
-    focus: usize,
-    cwd: String,
-    name: String,
-    tag: String,
-    prompt: String,
-    agy_model: String,
-    agy_mode: usize,
-    agy_skip: bool,
-}
-
-impl Launch {
-    fn new() -> Self {
-        let agents = ["agy", "claude", "codex", "hermes", "opencode"]
-            .into_iter()
-            .filter(|program| {
-                env::var_os("PATH").is_some_and(|path| {
-                    env::split_paths(&path).any(|dir| {
-                        use std::os::unix::fs::PermissionsExt;
-                        dir.join(program).metadata().is_ok_and(|meta| {
-                            meta.is_file() && meta.permissions().mode() & 0o111 != 0
-                        })
-                    })
-                })
-            })
-            .collect();
-        Self {
-            agents,
-            agent: 0,
-            focus: 0,
-            cwd: env::current_dir()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            name: String::new(),
-            tag: String::new(),
-            prompt: String::new(),
-            agy_model: String::new(),
-            agy_mode: 0,
-            agy_skip: false,
-        }
-    }
-
-    fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> io::Result<Action> {
-        let agy = self.agents.get(self.agent) == Some(&"agy");
-        let count = if agy { 8 } else { 5 };
-        match key {
-            Key::Up => self.focus = (self.focus + count - 1) % count,
-            Key::Down | Key::Tab => self.focus = (self.focus + 1) % count,
-            Key::Left | Key::Right if agy && self.focus == 6 => {
-                let offset = if matches!(key, Key::Left) { 3 } else { 1 };
-                self.agy_mode = (self.agy_mode + offset) % 4;
-            }
-            Key::Left | Key::Right | Key::Text(' ') if agy && self.focus == 7 => {
-                self.agy_skip = !self.agy_skip;
-            }
-            Key::Left | Key::Right if self.focus == 0 && !self.agents.is_empty() => {
-                let delta = if matches!(key, Key::Left) {
-                    self.agents.len() - 1
-                } else {
-                    1
-                };
-                self.agent = (self.agent + delta) % self.agents.len();
-            }
-            Key::Enter => {
-                let agent = self
-                    .agents
-                    .get(self.agent)
-                    .ok_or_else(|| io::Error::other("no supported agent executable on PATH"))?;
-                let cwd = PathBuf::from(&self.cwd);
-                if !cwd.is_absolute() || !cwd.is_dir() {
-                    return Err(io::Error::other(
-                        "choose an existing absolute workspace directory",
-                    ));
-                }
-                if *agent == "codex" {
-                    crate::providers::codex::refuse_unqualified_origin(&Value::Null)?;
-                }
-                let caller_env = caller_launch_environment(agent);
-                let mut launch = json!({
-                    "agent":agent, "cwd":cwd, "options":{}, "env":caller_env,
-                    "cols":cols, "rows":rows, "initial_prompt":self.prompt,
-                });
-                if agy {
-                    launch["options"] = json!({
-                        "model": self.agy_model,
-                        "mode": (["", "accept-edits", "auto", "plan"][self.agy_mode]),
-                        "dangerously-skip-permissions": self.agy_skip.to_string(),
-                    });
-                }
-                for (key, text) in [("name", &self.name), ("tag", &self.tag)] {
-                    if !text.is_empty() {
-                        launch[key] = json!(text);
-                    }
-                }
-                return Ok(Action::Request(
-                    json!({"op":"launch","launch":launch}),
-                    "launch",
-                ));
-            }
-            key => match self.focus {
-                1 => edit(&mut self.cwd, key),
-                2 => edit(&mut self.name, key),
-                3 => edit(&mut self.tag, key),
-                4 => edit(&mut self.prompt, key),
-                5 => edit(&mut self.agy_model, key),
-                _ => {}
-            },
-        }
-        Ok(Action::None)
-    }
-
-    fn view(&self, output: &mut String, cols: u16, rows: u16) {
-        line(output, 1, cols, "\x1b[38;2;142;180;230;1m", "New session");
-        let agent = self
-            .agents
-            .get(self.agent)
-            .copied()
-            .unwrap_or("No agent found");
-        let mut fields = vec![
-            ("Agent", agent),
-            ("Directory", self.cwd.as_str()),
-            ("Name", &self.name),
-            ("Tag", &self.tag),
-            ("Prompt", &self.prompt),
-        ];
-        if agent == "agy" {
-            fields.extend([
-                ("Model", self.agy_model.as_str()),
-                (
-                    "Execution mode",
-                    ["Default", "accept-edits", "auto", "plan"][self.agy_mode],
-                ),
-                (
-                    "Skip permission prompts",
-                    if self.agy_skip { "Yes" } else { "No" },
-                ),
-            ]);
-        }
-        let capacity = usize::from(rows.saturating_sub(2));
-        let start = (self.focus + 1).saturating_sub(capacity);
-        for (index, (label, value)) in fields.iter().enumerate().skip(start).take(capacity) {
-            let active = index == self.focus;
-            let mark = if active { "▌" } else { " " };
-            line(
-                output,
-                (index - start) as u16 + 2,
-                cols,
-                if active { "\x1b[1m" } else { "" },
-                &format!("{mark} {label}  {value}"),
-            );
-        }
-        if rows >= 2 {
-            line(
-                output,
-                rows,
-                cols,
-                "\x1b[2m",
-                "↑↓ field · ←→ change · enter launch · esc cancel",
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1426,6 +1359,42 @@ mod tests {
             panic!("confirmation did not submit");
         };
         assert_eq!(request["session_id"], "id-a");
+    }
+
+    #[test]
+    fn mouse_release_cannot_redirect_open_after_selection_changes() {
+        let mut board = Board {
+            rows: vec![
+                json!({"id":"a","name":"amber","group":"working","status":{"Process":"running"}}),
+                json!({"id":"b","name":"violet","group":"working","status":{"Process":"running"}}),
+            ],
+            ..Board::default()
+        };
+        board.rebuild_sections();
+        let geometry = (80, 24);
+        let (_, _, x, _) = board
+            .button_view(80)
+            .into_iter()
+            .find(|(_, key, ..)| *key == '⏎')
+            .unwrap();
+        let event = Mouse {
+            x,
+            y: 24,
+            action: MouseAction::Press,
+        };
+        board.update(Key::Mouse(event), geometry, true);
+        board.set_focus(Focus::Session("b".into()));
+        let release = Mouse {
+            action: MouseAction::Release,
+            ..event
+        };
+        assert!(matches!(
+            board.update(Key::Mouse(release), geometry, true),
+            Action::None
+        ));
+        board.update(Key::Mouse(event), geometry, true);
+        assert!(matches!(board.update(Key::Mouse(release), geometry, true),
+            Action::Attach { id, .. } if id == "b"));
     }
 
     #[test]

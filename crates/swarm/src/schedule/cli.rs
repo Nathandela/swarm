@@ -1,4 +1,10 @@
-use super::{Calendar, Result, Spec, calendar::Rule, file, id, store::Store};
+use super::{
+    Calendar, Result, Spec,
+    calendar::Rule,
+    catalog::{Read, Records},
+    file, id,
+    store::Store,
+};
 use jiff::Timestamp;
 use serde::Serialize;
 use std::{
@@ -113,6 +119,17 @@ pub(crate) fn run(args: &[String]) -> u8 {
         if args == ["tick"] {
             return super::rpc::tick();
         }
+        let read = match args.as_slice() {
+            ["list"] | ["list", "--json"] => Some(Read::List),
+            ["list", ..] => return Err("usage: swarm schedule list [--json]".into()),
+            ["show", id] => Some(Read::Get { id: (*id).into() }),
+            ["history", id] => Some(Read::History { id: (*id).into() }),
+            _ => None,
+        };
+        if let Some(read) = read {
+            let records = super::catalog::project(&crate::ipc::state_path()?, read)?;
+            return read_catalog(records, args == ["list"], now, &mut out);
+        }
         let store = Store::open(&crate::ipc::state_path()?, Path::new("/etc/localtime"))?;
         catalog(&store, &args, now, &mut out)
     })();
@@ -125,28 +142,6 @@ pub(crate) fn run(args: &[String]) -> u8 {
 
 fn catalog(store: &Store, args: &[&str], now: Timestamp, out: &mut impl Write) -> Result<()> {
     match args {
-        ["list"] => {
-            let mut rows = vec![["ID".into(), "STATE".into(), "NAME".into(), "NEXT LOCAL TIME".into(), "AGENTS".into()]];
-            for job in store.jobs()? {
-                let mut next = "—".to_owned();
-                if job.state == "active" {
-                    let rule = Rule::compile(&job.spec.calendar, &store.host)?;
-                    if let Some(due) = rule.find(now, false) {
-                        next = due.to_zoned(rule.zone.tz).strftime("%Y-%m-%d %H:%M %Z").to_string();
-                    }
-                }
-                rows.push([job.id, job.state, job.spec.name, next, job.spec.agents.join(" → ")]);
-            }
-            let widths: [usize; 4] = std::array::from_fn(|i| rows.iter().map(|r| r[i].width()).max().unwrap_or(0));
-            for row in rows {
-                for i in 0..4 {
-                    write!(out, "{}{:width$}", row[i], "", width = widths[i] + 2 - row[i].width())?;
-                }
-                writeln!(out, "{}", row[4])?;
-            }
-        }
-        ["list", "--json"] => write_list(out, store.jobs()?)?,
-        ["list", ..] => return Err("usage: swarm schedule list [--json]".into()),
         ["create", rest @ ..] => {
             let spec = read_spec(rest)?;
             super::rpc::host_calendar(&spec.calendar)?;
@@ -163,8 +158,6 @@ fn catalog(store: &Store, args: &[&str], now: Timestamp, out: &mut impl Write) -
             write_json(out, &store.edit(job, revision, spec, now)?)?;
         }
         ["edit", ..] => return Err("usage: swarm schedule edit JOB --spec-file FILE".into()),
-        ["show", job] => write_json(out, &store.job(job)?)?,
-        ["history", job] => write_list(out, store.history(job)?)?,
         ["pause", job] => write_json(out, &store.set_state(job, "paused", now)?)?,
         ["resume", job] => {
             super::rpc::host_calendar(&store.job(job)?.spec.calendar)?;
@@ -181,6 +174,57 @@ fn catalog(store: &Store, args: &[&str], now: Timestamp, out: &mut impl Write) -
         [_, _, _, ..] => return Err("unexpected arguments".into()),
         [verb, _] => return Err(format!("unknown command {verb:?}; see swarm schedule help").into()),
         [] => unreachable!(),
+    }
+    Ok(())
+}
+
+fn read_catalog(records: Records, table: bool, now: Timestamp, out: &mut impl Write) -> Result<()> {
+    match records {
+        Records::List(jobs) if table => {
+            let mut rows = vec![[
+                "ID".into(),
+                "STATE".into(),
+                "NAME".into(),
+                "NEXT LOCAL TIME".into(),
+                "AGENTS".into(),
+            ]];
+            for job in jobs {
+                let mut next = "—".to_owned();
+                if job.state == "active" {
+                    let rule = Rule::compile(&job.spec.calendar, Path::new("/etc/localtime"))?;
+                    if let Some(due) = rule.find(now, false) {
+                        next = due
+                            .to_zoned(rule.zone.tz)
+                            .strftime("%Y-%m-%d %H:%M %Z")
+                            .to_string();
+                    }
+                }
+                rows.push([
+                    job.id,
+                    job.state,
+                    job.spec.name,
+                    next,
+                    job.spec.agents.join(" → "),
+                ]);
+            }
+            let widths: [usize; 4] =
+                std::array::from_fn(|i| rows.iter().map(|r| r[i].width()).max().unwrap_or(0));
+            for row in rows {
+                for i in 0..4 {
+                    write!(
+                        out,
+                        "{}{:width$}",
+                        row[i],
+                        "",
+                        width = widths[i] + 2 - row[i].width()
+                    )?;
+                }
+                writeln!(out, "{}", row[4])?;
+            }
+        }
+        Records::List(jobs) => write_list(out, jobs)?,
+        Records::Get(job) => write_json(out, &job)?,
+        Records::History(runs) => write_list(out, runs)?,
     }
     Ok(())
 }

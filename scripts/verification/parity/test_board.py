@@ -7,6 +7,7 @@ import copy
 import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -24,7 +25,7 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
-def witness(root, tmux=None, cycle=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -44,14 +45,64 @@ def witness(root, tmux=None, cycle=False):
         p.wait_for(roster, "public owner socket")
         return result
 
+    if automations:
+        daemon = start()
+        listing = cli("schedule", "list", "--json")
+        assert listing.returncode == 0 and json.loads(listing.stdout) is None, listing.stderr
+        assert not (root / "state/schedules").exists()
+        spec = root / "automation.json"
+        spec.write_text(json.dumps({
+            "name": "Fixture automation", "prompt": "Wait for synthetic instructions",
+            "directory": str(cwd), "authority": "agent-default", "workspace": "directory",
+            "agents": ["claude"], "calendar": {"kind":"once", "time_zone":"UTC",
+                                               "time":"01:00", "date":"2099-01-01"},
+        }))
+        schedule = cli("schedule", "create", "--spec-file", spec)
+        assert schedule.returncode == 0, schedule.stderr
+        job = json.loads(schedule.stdout)["id"]
+        listing = cli("schedule", "list", "--json")
+        assert listing.returncode == 0 and [row["id"] for row in json.loads(listing.stdout)] == [job]
+        assert json.loads(cli("schedule", "show", job).stdout)["id"] == job
+        assert json.loads(cli("schedule", "history", job).stdout) is None
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"swarm")
+            board.send(b"m")
+            board.wait_bytes(b"More")
+            board.send(b"a")
+            board.wait_bytes(b"Fixture automation")
+            board.send(b"\r")
+            board.wait_bytes(b"Status")
+            board.send(b"h")
+            board.wait_bytes(b"No runs for this automation")
+            daemon.terminate()
+            daemon.wait(timeout=5)
+            offline = cli("schedule", "list", "--json")
+            assert offline.returncode == 0 and [row["id"] for row in json.loads(offline.stdout)] == [job]
+            board.wait_bytes(b"daemon connection lost")
+            board.send(b"u")
+            board.wait_bytes(b"daemon disconnected")
+            board.send(b"\x1b[27u\x1b[27u")
+            def quit_catalog():
+                board.drain()
+                return board.child.poll() is not None
+            p.wait_for(quit_catalog, "automation board quit")
+            assert board.child.returncode == 0
+        finally:
+            board.close()
+        return
+
     def terminal(payload, fresh):
         board = p.Board([str(root / "bin/board")], root, env)
         try:
             if fresh:
                 board.wait_bytes(b"swarm")
                 board.send(b"n")
-                board.wait_bytes(b"New session")
-                board.send(b"\x1b[B\x1b[Bamber\r")
+                board.wait_bytes(b"new session")
+                board.wait_bytes(b"2.1.100")
+                board.send(b"\x15" + os.fsencode(cwd / "qual") + b"\t")
+                board.wait_bytes(b"/qualified/")
+                board.send(b"\x1b[Bamber\r")
                 board.wait_bytes(b"fixture ready")
             else:
                 board.wait_bytes(b"amber")
@@ -143,13 +194,18 @@ def witness(root, tmux=None, cycle=False):
         return
 
     if tmux is not None:
-        grid_witness(root, cli, roster, start, tmux)
+        if form_grid:
+            launch_grid_witness(root, roster, start, tmux)
+        else:
+            grid_witness(root, cli, roster, start, tmux)
         return
 
+    (cwd / "qualified").mkdir()
     daemon = start()
     before = terminal(b"before", True)
     rows, = roster()
     assert len(rows) == 1 and rows[0]["name"] == "amber"
+    assert Path(rows[0]["cwd"]) == cwd / "qualified"
     identity = rows[0]["id"]
     daemon.kill()
     daemon.wait(timeout=5)
@@ -356,7 +412,51 @@ def grid_witness(root, cli, roster, start, tmux):
     daemon.wait(timeout=5)
 
 
-def run(supervisor, client, tmux=None, evidence=None, cycle=False):
+def launch_grid_witness(root, roster, start, tmux):
+    """Resolve launch layout in a real outer terminal at the reference breakpoints."""
+    command = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
+    def run(*argv):
+        proc = subprocess.run([*command, *argv], env=p.environment(root), cwd=root / "work",
+                              capture_output=True, timeout=4)
+        assert proc.returncode == 0, (argv, proc.stderr)
+        return proc.stdout
+
+    def frame(cols, rows):
+        raw = run("capture-pane", "-pe", "-S", "0", "-E", str(rows - 1), "-t", "form:0.0")
+        return {"ansi_base64": base64.b64encode(raw).decode(),
+                "cells": resolve_cells(raw, cols, rows)}
+
+    def landmark(fragments, cols, rows, *, settled=False):
+        def observed():
+            snapshot = frame(cols, rows)
+            text = "\n".join("".join(cell[0] for cell in row) for row in snapshot["cells"]).lower()
+            return snapshot if (any(fragment in text for fragment in fragments)
+                                and (not settled or "claude" in text)) else None
+        return p.wait_for(observed, f"{cols}x{rows} {fragments!r}")
+
+    daemon = start()
+    frames = []
+    for cols, rows in ((80, 24), (40, 8), (24, 4)):
+        run("new-session", "-d", "-s", "form", "-x", str(cols), "-y", str(rows),
+            "-c", root / "work", root / "bin/board")
+        landmark(("swarm", "(n)", "no sessions"), cols, rows)
+        run("send-keys", "-t", "form:0.0", "n")
+        compact_block = cols < 32 or rows < 8
+        directory = landmark(("resize to 32",) if compact_block else ("▌ directory",), cols, rows)
+        run("send-keys", "-t", "form:0.0", "Down", "Down", "Down")
+        agent = landmark(("▌ agent",), cols, rows, settled=True)
+        if compact_block:
+            run("send-keys", "-t", "form:0.0", "Enter")
+            landmark(("resize to 32",), cols, rows)
+            assert roster() == ([],), "compact launch unexpectedly created a session"
+        frames.append({"cols": cols, "rows": rows, "directory": directory, "agent": agent})
+        run("kill-session", "-t", "form")
+    daemon.terminate()
+    daemon.wait(timeout=5)
+    p.write_json(root / "grid.json", {"form_frames": frames, "first_divergence": None})
+
+
+def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False):
     root = Path(tempfile.mkdtemp(prefix="pb-", dir=Path("/tmp").resolve()))
     child = driver = None
     previous = {}
@@ -371,10 +471,14 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False):
             dest.chmod(0o700)
         p.table()
         command = [*p.guard(root), sys.executable, root / "bin/test_board.py", "_inside", root]
-        if cycle:
+        if automations:
+            command.append("--automations")
+        elif cycle:
             command.append("--cycle")
         elif tmux is not None:
             command.append(tmux)
+            if form_grid:
+                command.append("--form-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
@@ -402,25 +506,33 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False):
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = "running-session cycling" if cycle else "board launch, attach and live reattach"
-    print(f"{exercise} passed; cleanup {cleanup}")
+    exercise = ("comparative launch-form grids" if form_grid else
+                "local automation CLI and owner dashboard catalog/disconnect" if automations else
+                "running-session cycling" if cycle else "board launch, attach and live reattach")
+    print(f"{exercise} {'captured' if form_grid else 'passed'}; cleanup {cleanup}")
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
         compare_grid_receipts(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) in (3, 4) and sys.argv[1] == "_inside":
-        mode = sys.argv[3] if len(sys.argv) == 4 else None
-        witness(Path(sys.argv[2]), Path(mode) if mode and mode != "--cycle" else None, mode == "--cycle")
+    elif len(sys.argv) in (3, 4, 5) and sys.argv[1] == "_inside":
+        mode = sys.argv[3] if len(sys.argv) >= 4 else None
+        witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
+                mode == "--cycle", mode == "--automations", len(sys.argv) == 5)
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
         parser.add_argument("--board", required=True, type=p.binary_path)
         modes = parser.add_mutually_exclusive_group()
         modes.add_argument("--tmux", type=p.binary_path)
+        modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
+        parser.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle)
+        if args.form_grid and not args.tmux:
+            parser.error("--form-grid requires --tmux")
+        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
+            args.form_grid)
