@@ -389,9 +389,6 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     let message = json!({"op":"semantic_send","session_id":id,"operation_id":operation,
         "body_version":1,"composer_send":composer});
     let mut wrong = message.clone();
-    wrong["operation_id"] = json!(format!(
-        "semantic:{millis}:00000000000000000000000000000000"
-    ));
     wrong["composer_send"]["origin"]["installation_id"] = json!("different");
     assert_eq!(peer.query(wrong)["op"], "error");
     assert!(admissions.lock().unwrap().is_empty());
@@ -465,12 +462,36 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
             .join(id.split_once('/').unwrap().1)
             .exists()
     );
+    let source_dir = fixture.path.join("rust-v1").join(local);
+    let binding: Value =
+        serde_json::from_slice(&fs::read(source_dir.join("hermes-input.json")).unwrap()).unwrap();
+    let reservation = source_dir.join("hermes-successor.json");
+    // Cut point after reserving the transfer and before the successor shim can start.
+    fs::write(&reservation, json!({
+        "worker":"001100110011001100110011","token":"aaffaaffaaffaaffaaffaaff","binding":binding["binding"],
+    }).to_string()).unwrap();
+    peer = fixture.restart();
+    let stopped = peer.query(json!({"op":"kill","session_id":id}));
+    assert!(
+        stopped["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("scoped cancellation requested")),
+        "{stopped}"
+    );
+    assert_eq!(fs::read_to_string(&reservation).unwrap().trim(), "null");
     let mut disabled: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
     disabled["enabled"] = json!(false);
     fs::write(&config, disabled.to_string()).unwrap();
+    owner_changed.store(true, Ordering::Relaxed);
+    let failed = fixture.launch(&mut peer, json!({"resume_from":id}));
+    assert_eq!(failed["error_code"], "outcome_unknown", "{failed}");
+    owner_changed.store(false, Ordering::Relaxed);
     let resumed = fixture.launch(&mut peer, json!({"resume_from":id}));
     assert_eq!(resumed["session"]["conversation_id"], NATIVE, "{resumed}");
     let successor = resumed["session"]["id"].as_str().unwrap();
+    // Once the successor owner record is durable, restart cannot restore
+    // predecessor stop authority.
+    peer = fixture.restart();
     let scoped = peer.query(json!({"op":"kill","session_id":id}));
     assert!(
         scoped["error"]

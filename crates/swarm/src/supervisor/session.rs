@@ -405,24 +405,6 @@ impl Session {
         self.hermes_native
     }
 
-    pub(super) fn hermes_check_successor(&self) -> io::Result<()> {
-        if self.hermes_native && self.dir.join("hermes-successor.json").try_exists()? {
-            return Err(io::Error::other(
-                "Hermes native session already has a retained successor",
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn hermes_mark_successor(&self, id: &str) -> io::Result<()> {
-        if !self.hermes_native {
-            return Ok(());
-        }
-        let _authority = self.hermes_authority.lock().unwrap();
-        self.hermes_check_successor()?;
-        runtime::write_json(&self.dir.join("hermes-successor.json"), &json!(id))
-    }
-
     pub(super) fn kill(&self) -> io::Result<()> {
         if self.hermes_native {
             return self.hermes_kill();

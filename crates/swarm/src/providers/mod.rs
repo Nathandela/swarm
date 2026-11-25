@@ -105,7 +105,7 @@ pub(crate) fn prepare(
                 environment.push((key.clone(), value.as_str().unwrap().into()));
             }
         }
-        native = json!({"options":request["options"],"retained":retained,"initial_prompt":request["initial_prompt"]});
+        native = json!({"options":request["options"],"retained":retained,"predecessor":request["hermes_predecessor"],"initial_prompt":request["initial_prompt"]});
     }
     if agent == "hermes" && native.is_null() {
         environment.extend(hermes::native::origins(&request["env"], false)?);

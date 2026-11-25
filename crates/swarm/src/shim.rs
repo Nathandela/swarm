@@ -3,7 +3,10 @@ mod pty;
 mod screen;
 
 use crate::ipc::{field, wire};
-use crate::providers::{self, codex_receipt, hermes::native};
+use crate::providers::{
+    self, codex_receipt,
+    hermes::{native, transfer},
+};
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -135,6 +138,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     let mut backend = None;
     let mut channel = None;
     let mut hermes = None;
+    let mut hermes_transfer = None;
     let pid = std::process::id();
     let mut viewer = Vec::<String>::new();
     let (mut child, master) = (|| {
@@ -167,6 +171,12 @@ fn serve(dir: &Path) -> io::Result<()> {
                 return Err(io::Error::other("invalid Hermes shared-native launch plan"));
             }
             let plan = &bootstrap["hermes"];
+            if !plan["retained"].is_null() {
+                hermes_transfer = Some(transfer::start(
+                    dir.parent().ok_or_else(|| io::Error::other("missing Hermes session root"))?,
+                    field(plan, "predecessor"), field(&config, "id"), token, &plan["retained"],
+                )?);
+            }
             let cwd = Path::new(working_dir).canonicalize()?;
             let binding = native::prepare(
                 executable,
@@ -224,6 +234,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         let _ = fs::remove_file(&socket);
         return Err(err);
     }
+    drop(hermes_transfer);
     let (action_sink, action_receiver) = mpsc::sync_channel(1);
     let state = Arc::new(State {
         token: token.into(),

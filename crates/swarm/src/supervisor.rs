@@ -139,7 +139,7 @@ impl State {
         }
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
         if let Some(source) = source {
-            source.hermes_mark_successor(&session.id)?;
+            source.hermes_mark_successor(&session)?;
         }
         self.sessions
             .write()

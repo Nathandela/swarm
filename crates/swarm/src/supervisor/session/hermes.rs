@@ -1,5 +1,5 @@
 use super::*;
-use crate::providers::hermes::{classic_id, native};
+use crate::providers::hermes::{classic_id, native, transfer};
 use sha2::{Digest, Sha256};
 
 pub(super) fn unknown_native_status() -> Value {
@@ -108,6 +108,7 @@ impl Session {
             if Path::new(field(&descriptor.binding.0, "directory")) != *cwd {
                 return Err(io::Error::other("Hermes saved working directory changed"));
             }
+            launch["hermes_predecessor"] = json!(self.id);
             launch["hermes_retained_binding"] = descriptor.binding.0;
             launch["hermes_retained_origins"] = descriptor.raw["origins"].clone();
         } else {
@@ -149,14 +150,43 @@ impl Session {
         view["capabilities"] = capabilities;
     }
 
-    pub(super) fn hermes_kill(&self) -> io::Result<()> {
-        let _gate = self.hermes_authority.lock().unwrap();
-        if self.dir.join("hermes-successor.json").try_exists()? {
+    pub(in crate::supervisor) fn hermes_check_successor(&self) -> io::Result<()> {
+        if self.hermes_native {
+            let _custody = transfer::lock(&self.dir)?;
+            self.hermes_has_transferred(&self.hermes_descriptor()?.binding)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::supervisor) fn hermes_mark_successor(&self, successor: &Self) -> io::Result<()> {
+        if self.hermes_native {
+            let _authority = self.hermes_authority.lock().unwrap();
+            let _custody = transfer::lock(&self.dir)?;
+            let descriptor = self.hermes_descriptor()?;
+            self.hermes_has_transferred(&descriptor.binding)?;
+            transfer::prepare(
+                &self.dir,
+                &transfer::reservation(&successor.id, &successor.token, &descriptor.binding.0),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn hermes_has_transferred(&self, binding: &native::Binding) -> io::Result<()> {
+        if transfer::owned(&self.dir, &binding.0)? {
             return Err(io::Error::other(
                 "Hermes native stop authority belongs to the retained successor",
             ));
         }
+        Ok(())
+    }
+
+    pub(super) fn hermes_kill(&self) -> io::Result<()> {
+        let _gate = self.hermes_authority.lock().unwrap();
+        let _custody = transfer::lock(&self.dir)?;
         let descriptor = self.hermes_descriptor()?;
+        self.hermes_has_transferred(&descriptor.binding)?;
+        transfer::prepare(&self.dir, &Value::Null)?;
         runtime::write_json(&self.dir.join("hermes-stop.json"), &descriptor.raw)?;
         let result = descriptor.binding.stop();
         if let Ok(mut shim) = self.dial() {
@@ -202,18 +232,17 @@ impl Session {
         let text_hash = codex_receipt::hash(text);
         let intent = semantic_intent(&text_hash, origin);
         let _authority = self.hermes_authority.lock().unwrap();
-        {
-            let digest = Sha256::digest(operation);
-            let _operation = state.operation_locks
-                [usize::from(digest[0]) % state.operation_locks.len()]
-            .lock()
-            .unwrap();
-            codex_receipt::bind(&state.root, operation, session, instance, &intent)?;
-        }
         let dir = self.dir.join("hermes-semantic");
         runtime::private_dir(&dir)?;
         fs::File::open(&self.dir)?.sync_all()?;
         if let Some(receipt) = self.hermes_semantic_status(operation, session, &state.root)? {
+            codex_receipt::verify_binding(
+                &state.root,
+                operation,
+                session,
+                instance,
+                &codex_receipt::hash(&intent),
+            )?;
             return Ok(receipt);
         }
         if let Ok(prior) = runtime::read_json(&dir.join("pending.json")) {
@@ -263,6 +292,14 @@ impl Session {
                 body,
             )?)
         };
+        {
+            let digest = Sha256::digest(operation);
+            let _operation = state.operation_locks
+                [usize::from(digest[0]) % state.operation_locks.len()]
+            .lock()
+            .unwrap();
+            codex_receipt::bind(&state.root, operation, session, instance, &intent)?;
+        }
         let path = semantic_path(&dir, operation);
         let mut record = json!({"version":2,"descriptor":descriptor.raw,"text_hash":text_hash,"intent":codex_receipt::hash(&intent),"receipt":
             descriptor.receipt(session, operation, "uncertain", None)});
