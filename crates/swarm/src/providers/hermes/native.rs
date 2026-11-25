@@ -17,6 +17,38 @@ const PROTOCOL: &str = "hermes-gateway-v1";
 pub(crate) const NORMAL_ORIGINS: &[&str] =
     &["HERMES_HOME", "HERMES_GATEWAY_LOCK_DIR", "XDG_STATE_HOME"];
 
+pub(crate) fn descriptor_hash(descriptor: &Value) -> String {
+    let mut descriptor = descriptor.clone();
+    descriptor.sort_all_objects();
+    crate::providers::codex_receipt::hash(&descriptor.to_string())
+}
+
+pub(crate) fn read_descriptor(dir: &Path, owner: &Value, meta: &Value) -> io::Result<Value> {
+    let descriptor = runtime::read_json(&dir.join(DESCRIPTOR))?;
+    if owner["hermes_descriptor_sha256"] != descriptor_hash(&descriptor)
+        || meta["provider"]["name"] != "hermes"
+        || meta["provider"]["mode"] != "shared-native"
+        || owner["token"] != meta["token"]
+        || descriptor["token"] != meta["token"]
+        || descriptor["worker_id"] != meta["id"]
+        || descriptor["provider_version"] != meta["provider"]["version"]
+        || !runtime::valid_id(field(meta, "id"))
+        || !runtime::valid_id(field(meta, "token"))
+        || !runtime::valid_id(field(&descriptor, "generation"))
+        || owner["pid"].as_u64().is_none_or(|pid| pid <= 1)
+        || owner["birth"].as_u64().is_none_or(|birth| birth == 0)
+        || owner["worker_pid"].as_u64().is_none_or(|pid| pid <= 1)
+        || descriptor["shim_pid"] != owner["pid"]
+        || descriptor["shim_birth"] != owner["birth"]
+    {
+        return Err(io::Error::other(
+            "Hermes native descriptor does not match its shim owner",
+        ));
+    }
+    Binding::load(descriptor["binding"].clone())?;
+    Ok(descriptor)
+}
+
 pub(crate) fn origins(env: &Value, native: bool) -> io::Result<Vec<(String, String)>> {
     let entries = if let Some(list) = env.as_array() {
         list.iter()

@@ -43,23 +43,8 @@ pub(crate) fn owned(source: &Path, binding: &Value) -> io::Result<bool> {
         Err(err) => return Err(err),
     };
     let meta = runtime::read_json(&successor.join("session.json"))?;
-    let descriptor = runtime::read_json(&successor.join(native::DESCRIPTOR))?;
-    if owner["token"] != token
-        || meta["id"] != worker
-        || meta["token"] != token
-        || meta["provider"]["name"] != "hermes"
-        || meta["provider"]["mode"] != "shared-native"
-        || descriptor["worker_id"] != worker
-        || descriptor["token"] != token
-        || descriptor["provider_version"] != meta["provider"]["version"]
-        || descriptor["binding"] != *binding
-        || descriptor["shim_pid"] != owner["pid"]
-        || descriptor["shim_birth"] != owner["birth"]
-        || owner["worker_pid"].as_u64().is_none_or(|pid| pid <= 1)
-        || owner["pid"].as_u64().is_none_or(|pid| pid <= 1)
-        || owner["birth"].as_u64().is_none_or(|birth| birth == 0)
-        || !runtime::valid_id(field(&descriptor, "generation"))
-    {
+    let descriptor = native::read_descriptor(&successor, &owner, &meta)?;
+    if meta["id"] != worker || meta["token"] != token || descriptor["binding"] != *binding {
         return Err(io::Error::other("unproven Hermes successor custody"));
     }
     Ok(true)
@@ -77,7 +62,24 @@ pub(crate) fn start(
     }
     let source = root.join(predecessor);
     let custody = lock(&source)?;
-    if runtime::read_json(&source.join(SUCCESSOR))? != reservation(worker, token, binding) {
+    let owner = runtime::read_json(&source.join("owner.json"))?;
+    let meta = runtime::read_json(&source.join("session.json"))?;
+    if let Some(pid) = owner["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        && runtime::birth(pid).ok() == owner["birth"].as_u64()
+        && !runtime::read_json(&source.join("exit.json"))
+            .is_ok_and(|exit| exit["token"] == meta["token"])
+    {
+        return Err(io::Error::other(
+            "Hermes predecessor viewer still has custody",
+        ));
+    }
+    let descriptor = native::read_descriptor(&source, &owner, &meta)?;
+    if meta["id"] != predecessor
+        || descriptor["binding"] != *binding
+        || runtime::read_json(&source.join(SUCCESSOR))? != reservation(worker, token, binding)
+    {
         return Err(io::Error::other("Hermes viewer transfer was superseded"));
     }
     Ok(custody)

@@ -1,6 +1,6 @@
 //! The connector records the worker effect before the supervisor can perform it.
 use super::config::{Config, Place, invalid, snowflake};
-use super::receipt::hash;
+use super::receipt::{boundary, hash, valid_boundary};
 use crate::ipc::field;
 use crate::providers::codex_receipt;
 use crate::supervisor::runtime;
@@ -33,9 +33,11 @@ pub(crate) fn lock_connector_worker_input(
     provider: &str,
     operation: &str,
     composer: &Value,
-) -> io::Result<File> {
-    let (place, _) = owned(supervisor, socket)?;
-    let lock = lock_ledger(&place.dir)?;
+) -> io::Result<(File, File, File)> {
+    let place = Place::for_supervisor(supervisor)?;
+    // Match configure/disconnect order, then serialize worker ledger changes.
+    let (supervisor_lock, connector_lock) = place.lock()?;
+    let ledger_lock = lock_ledger(&place.dir)?;
     place.verify_selection()?;
     let config = place.load()?;
     place.ensure_owned(&config)?;
@@ -48,7 +50,7 @@ pub(crate) fn lock_connector_worker_input(
         operation,
         composer,
     )?;
-    Ok(lock)
+    Ok((supervisor_lock, connector_lock, ledger_lock))
 }
 
 pub(super) fn lock_ledger(place: &Path) -> io::Result<File> {
@@ -94,9 +96,14 @@ fn verify(
     let ledger = runtime::read_json(&place.dir.join("rust-text-v1.json"))?;
     let source = &ledger["messages"][source_id];
     let cutover = &ledger["worker_inputs"][operation];
-    let number = |value: &Value| value.as_str().and_then(|id| id.parse::<u64>().ok());
-    let floor = number(&ledger["consent_floor"]).ok_or_else(refused)?;
-    let cursor = number(&ledger["history_cursor"]).ok_or_else(refused)?;
+    let checkpoint = |field| {
+        let value = &ledger[field];
+        (value.is_string() && valid_boundary(value))
+            .then(|| boundary(value))
+            .ok_or_else(refused)
+    };
+    let floor = checkpoint("consent_floor")?;
+    let cursor = checkpoint("history_cursor")?;
     let message = source_id.parse::<u64>().map_err(|_| refused())?;
     let revision = hash(&json!([
         owner,

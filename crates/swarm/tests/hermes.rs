@@ -360,6 +360,31 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
             && row["conversation_id"] == NATIVE)
             .then_some(())
     });
+    let local = id.split_once('/').unwrap().1;
+    let source_dir = fixture.path.join("rust-v1").join(local);
+    let descriptor_path = source_dir.join("hermes-input.json");
+    let original_descriptor = fs::read(&descriptor_path).unwrap();
+    let mut alternate: Value = serde_json::from_slice(&original_descriptor).unwrap();
+    alternate["binding"]["session_id"] = json!(format!("local-{}", "a".repeat(64)));
+    fs::write(&descriptor_path, alternate.to_string()).unwrap();
+    assert!(peer.view(id)["conversation_id"].is_null());
+    assert_eq!(
+        peer.query(json!({"op":"semantic_target","session_id":id}))["op"],
+        "error"
+    );
+    let blocked = peer.query(json!({"op":"kill","session_id":id}));
+    assert!(
+        blocked["error"]
+            .as_str()
+            .is_some_and(|err| err.contains("descriptor")),
+        "{blocked}"
+    );
+    assert_eq!(peer.view(id)["status"]["Process"], "running");
+    assert!(methods.lock().unwrap().iter().all(|(method, _)| !matches!(
+        method.as_str(),
+        "session.interrupt" | "process.stop" | "prompt.cancel"
+    )));
+    fs::write(descriptor_path, original_descriptor).unwrap();
     let target = peer.query(json!({"op":"semantic_target","session_id":id}));
     assert_eq!(target["op"], "semantic_target", "{target}");
     let millis = std::time::SystemTime::now()
@@ -418,7 +443,6 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     let message = json!({"op":"semantic_send","session_id":id,"operation_id":ambiguous,"body_version":1,
         "composer_send":{"session":id,"session_instance":target["semantic_target_instance"],"text":"fixture lost reply"}});
     assert_eq!(peer.query(message.clone())["error_code"], "outcome_unknown");
-    let local = id.split_once('/').unwrap().1;
     let held = fixture
         .path
         .join("rust-v1")
@@ -462,7 +486,6 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
             .join(id.split_once('/').unwrap().1)
             .exists()
     );
-    let source_dir = fixture.path.join("rust-v1").join(local);
     let binding: Value =
         serde_json::from_slice(&fs::read(source_dir.join("hermes-input.json")).unwrap()).unwrap();
     let reservation = source_dir.join("hermes-successor.json");
@@ -492,6 +515,23 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     // Once the successor owner record is durable, restart cannot restore
     // predecessor stop authority.
     peer = fixture.restart();
+    let successor_path = fixture
+        .path
+        .join("rust-v1")
+        .join(successor.split_once('/').unwrap().1)
+        .join("hermes-input.json");
+    let intact = fs::read(&successor_path).unwrap();
+    let mut damaged: Value = serde_json::from_slice(&intact).unwrap();
+    damaged["origins"]["HERMES_HOME"] = json!("/alternate");
+    fs::write(&successor_path, damaged.to_string()).unwrap();
+    let unproven = peer.query(json!({"op":"kill","session_id":id}));
+    assert!(
+        unproven["error"]
+            .as_str()
+            .is_some_and(|err| err.contains("descriptor")),
+        "{unproven}"
+    );
+    fs::write(successor_path, intact).unwrap();
     let scoped = peer.query(json!({"op":"kill","session_id":id}));
     assert!(
         scoped["error"]

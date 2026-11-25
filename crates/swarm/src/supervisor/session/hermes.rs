@@ -49,23 +49,15 @@ impl Session {
     }
 
     pub(super) fn hermes_descriptor(&self) -> io::Result<Descriptor> {
-        let descriptor = runtime::read_json(&self.dir.join(native::DESCRIPTOR))?;
         let owner = runtime::read_json(&self.dir.join("owner.json"))?;
         let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        let descriptor = native::read_descriptor(&self.dir, &owner, &meta)?;
         if meta["token"] != self.token
-            || owner["token"] != self.token
-            || !owner["pid"].is_u64()
-            || !owner["birth"].is_u64()
-            || descriptor["token"] != self.token
-            || descriptor["worker_id"] != self.id
-            || descriptor["shim_pid"] != owner["pid"]
-            || descriptor["shim_birth"] != owner["birth"]
-            || descriptor["provider_version"] != meta["provider"]["version"]
-            || !runtime::valid_id(field(&descriptor, "generation"))
+            || meta["id"] != self.id
             || descriptor["binding"]["directory"].as_str().map(Path::new) != Some(&self.effective)
         {
             return Err(io::Error::other(
-                "Hermes native descriptor does not match its launch",
+                "Hermes native descriptor does not match its reservation",
             ));
         }
         let binding = native::Binding::load(descriptor["binding"].clone())?;
@@ -162,6 +154,11 @@ impl Session {
         if self.hermes_native {
             let _authority = self.hermes_authority.lock().unwrap();
             let _custody = transfer::lock(&self.dir)?;
+            if self.owner_identity().is_ok() && self.exit().is_err() {
+                return Err(io::Error::other(
+                    "Hermes predecessor viewer still has custody",
+                ));
+            }
             let descriptor = self.hermes_descriptor()?;
             self.hermes_has_transferred(&descriptor.binding)?;
             transfer::prepare(

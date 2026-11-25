@@ -214,6 +214,8 @@ fn serve(dir: &Path) -> io::Result<()> {
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
+        // A durable refusal permits immediate retry from the predecessor.
+        drop(hermes_transfer.take());
         let _ = runtime::write_json(
             &dir.join("exit.json"),
             &json!({"error": err.to_string(), "token": token}),
@@ -221,13 +223,14 @@ fn serve(dir: &Path) -> io::Result<()> {
         let _ = fs::remove_file(&socket);
     })?;
     if let Err(err) = (|| {
-        runtime::write_json(
-            &dir.join("owner.json"),
-            &json!({
-                "token": token, "pid": pid, "birth": runtime::birth(pid)?,
-                "worker_pid": child.id(),
-            }),
-        )
+        let mut owner = json!({
+            "token": token, "pid": pid, "birth": runtime::birth(pid)?,
+            "worker_pid": child.id(),
+        });
+        if let Some((_, descriptor)) = &hermes {
+            owner["hermes_descriptor_sha256"] = json!(native::descriptor_hash(descriptor));
+        }
+        runtime::write_json(&dir.join("owner.json"), &owner)
     })() {
         let _ = pty::signal_group(&child, libc::SIGKILL);
         let _ = child.wait();
@@ -321,7 +324,11 @@ fn serve(dir: &Path) -> io::Result<()> {
         thread::sleep(Duration::from_millis(40));
     };
     drop(backend);
-    if let Some((binding, descriptor)) = hermes {
+    if let Some((binding, descriptor)) = hermes
+        && runtime::read_json(&dir.join("owner.json"))
+            .and_then(|owner| native::read_descriptor(dir, &owner, &config))
+            .is_ok_and(|stored| stored == descriptor)
+    {
         let stopped = runtime::read_json(&dir.join("hermes-stop.json"))
             .is_ok_and(|record| record == descriptor)
             && binding.stop().is_ok();

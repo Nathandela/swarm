@@ -256,14 +256,14 @@ impl Inbox {
     }
 }
 
-fn valid_boundary(value: &Value) -> bool {
+pub(super) fn valid_boundary(value: &Value) -> bool {
     value.is_null()
         || value
             .as_str()
             .is_some_and(|id| id.is_empty() || snowflake(id))
 }
 
-fn boundary(value: &Value) -> u64 {
+pub(super) fn boundary(value: &Value) -> u64 {
     value
         .as_str()
         .and_then(|id| id.parse().ok())
