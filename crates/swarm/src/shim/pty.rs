@@ -130,36 +130,30 @@ pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
     // PID the process group ID and the kernel cannot recycle it before wait().
     if unsafe { libc::kill(-(child.id() as i32), signal) } == -1 {
         let err = io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            #[cfg(target_os = "macos")]
+            if signal == libc::SIGKILL
+                && err.raw_os_error() == Some(libc::EPERM)
+                && child_exited(child)?
+                && group_contains_only(child)
+            {
+                return Ok(());
+            }
+            return Err(err);
         }
-        #[cfg(target_os = "macos")]
-        if err.raw_os_error() == Some(libc::EPERM)
-            && child_exited(child)?
-            && group_contains_only_leader(child.id())
-        {
-            return Ok(());
-        }
-        return Err(err);
     }
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn group_contains_only_leader(leader: u32) -> bool {
-    // Darwin reports EPERM when every member is a zombie. The unreaped
-    // leader's group is safe only once the kernel reports it as the sole member.
-    const PROC_PGRP_ONLY: u32 = 2;
-    let mut members = [0i32; 2];
-    let bytes = unsafe {
-        libc::proc_listpids(
-            PROC_PGRP_ONLY,
-            leader,
-            members.as_mut_ptr().cast(),
-            size_of_val(&members) as i32,
-        )
-    };
-    bytes == size_of::<i32>() as i32 && members[0] == leader as i32
+fn group_contains_only(child: &Child) -> bool {
+    // XNU can return EPERM when its group signal sees only the unreaped zombie.
+    // An exact two-slot census distinguishes that case from live descendants or denied inspection.
+    let mut members = [0 as libc::pid_t; 2];
+    let pid = child.id() as libc::pid_t;
+    let size = std::mem::size_of_val(&members) as libc::c_int;
+    let found = unsafe { libc::proc_listpgrppids(pid, members.as_mut_ptr().cast(), size) };
+    found == 1 && members[0] == pid
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};

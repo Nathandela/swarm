@@ -17,7 +17,7 @@ import time
 
 CONVERSATION = "11111111-1111-4111-8111-111111111111"
 FIXTURE = r'''
-import json, os, subprocess, sys
+import json, os, socket, struct, subprocess, sys, time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -30,6 +30,9 @@ if args == ["--help"]:
     raise SystemExit(0)
 assert os.isatty(0) and os.isatty(1)
 Path(f"argv-{os.getpid()}").write_text(json.dumps(args))
+Path("fixture-api-keys").write_text(json.dumps([
+    key for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY") if key in os.environ
+]))
 if args[:1] == ["--settings"]:
     setting = json.loads(args[1])["statusLine"]
     def status(state, conversation, title):
@@ -38,6 +41,19 @@ if args[:1] == ["--settings"]:
     status("reviewing", "$CONVERSATION", "Provider title")
     if os.environ.get("SWARM_RUST_HOOK_SOCKET"):
         status("working", "22222222-2222-4222-8222-222222222222", "Wrong conversation")
+        status("idle", "malformed-id", "Malformed conversation")
+        status("error", None, "Wrong JSON type")
+        with socket.socket(socket.AF_UNIX) as peer:
+            peer.settimeout(2)
+            peer.connect(os.environ["SWARM_RUST_HOOK_SOCKET"])
+            payload = b"\x01" + json.dumps({
+                "type":"hook", "event":"AgyStatusLine", "token":os.environ["SWARM_HOOK_TOKEN"],
+                "payload":{"conversation_id":False, "agent_state":"working",
+                           "conversation_title":"Unvalidated shim frame", "observed_ns":time.time_ns()},
+            }).encode()
+            peer.sendall(struct.pack(">I",len(payload)) + payload)
+            assert peer.recv(1) == b"", "shim acknowledged malformed conversation"
+        Path("negative-probes-complete").touch()
 print("\033[2J\033[HAGY READY\n>\n-----\n", flush=True)
 for line in sys.stdin:
     if "finish" in line:
@@ -67,7 +83,8 @@ def run_fixture(binary, version, *, settings=False, rust=False):
         cli_settings = home / ".gemini/antigravity-cli/settings.json"
         cli_settings.parent.mkdir(parents=True)
         cli_settings.write_text(json.dumps({"statusLine": {
-            "type": "command", "command": "tee original-status.json | wc -c",
+            "type": "command",
+            "command": "env | sed -n '/^SWARM_[^=]*=/s/=.*//p' > saved-command-env; tee original-status.json | wc -c",
             "enabled": True, "stack_with_default": False, "padding": 2,
         }}))
         provider = tools / "agy"
@@ -77,6 +94,7 @@ def run_fixture(binary, version, *, settings=False, rust=False):
         env = {
             "HOME": str(home), "PATH": f"{tools}:/usr/bin:/bin", "TERM": "xterm-256color",
             "SHELL": "/bin/sh", "TMPDIR": str(root),
+            "ANTHROPIC_API_KEY": "synthetic-anthropic-secret", "OPENAI_API_KEY": "synthetic-openai-secret",
             "SWARM_DAEMON_STATE": str(daemon_socket.parent),
             "SWARM_DAEMON_SOCK": str(daemon_socket), "SWARM_DAEMON_REMOTE_SOCK": "",
             "SWARM_DAEMON_LOCK": str(root / "lock"), "SWARM_DAEMON_LOG": str(root / "log"),
@@ -126,6 +144,8 @@ def run_fixture(binary, version, *, settings=False, rust=False):
             }
             wait_for(lambda: row().get("status") == expected, f"agy status {expected}")
             assert row()["agent"] == "agy"
+            if rust:
+                assert json.loads((work / "fixture-api-keys").read_text()) == []
             argv = json.loads(next(work.glob("argv-*")).read_text())
             if settings:
                 assert argv[0] == "--settings"
@@ -135,6 +155,10 @@ def run_fixture(binary, version, *, settings=False, rust=False):
                 argv = argv[2:]
                 wait_for(lambda: (work / "original-status.json").exists(), "preserved status command")
                 wait_for(lambda: row().get("name") == "Provider title", "owned title")
+                if rust:
+                    wait_for(lambda: (work / "negative-probes-complete").exists(), "hook refusal controls")
+                    assert (work / "saved-command-env").read_bytes() == b""
+                    assert row()["status"] == expected and row()["name"] == "Provider title"
             else:
                 assert not (work / "original-status.json").exists()
             assert argv == ["--model", "Synthetic model", "--prompt-interactive", "ordinary launch"], argv

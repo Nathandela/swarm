@@ -12,7 +12,9 @@ Tested on macOS on 25 November 2026 against Go reference `f26648d69086e329132ac7
 
 The actual CLI binary had SHA-256 `b7a13e53c9f49921692676ef8edc2e60ceb67064c00bc732d9a364ec3ad75b32`. The actual-provider trial used private homes and workspaces with an OS guard that denied external network and writes outside the test root. The tested Go and Rust clients each used their own daemon and socket.
 
-The status-line gate requires both a compatible version and a bounded help probe advertising the flag. This is an intentional divergence from the pinned Go version-only gate on the installed build above. The wrapper is observational and conveys no permission to submit work or approve a tool. Rust's classic transport refuses semantic submission without a qualified native input registration. Go's optional native agentapi broker (versions 1.4.0, 1.4.5 and 1.4.7), authenticated native turns, and scheduled ACP (1.5.12 or newer) remain separate qualification items. The fixture confirms no positive broker or ACP behavior.
+The status-line gate requires both a compatible version and a bounded help probe advertising the flag. This is an intentional divergence from the pinned Go version-only gate on the installed build above. The wrapper is observational and conveys no permission to submit work or approve a tool. Rust's classic transport refuses semantic submission without a qualified native input registration. The fixture also supplies unrelated provider API keys and checks that agy receives neither. It inspects the inherited environment of the preserved status-line command, and exercises malformed conversation fields through both the public hook and a direct framed callback. Rust preserved the joined title and permission state after those callbacks.
+
+Go's optional native agentapi broker (versions 1.4.0, 1.4.5 and 1.4.7), authenticated native turns, and scheduled ACP (1.5.12 or newer) remain separate qualification items. The fixture confirms no positive broker or ACP behavior.
 
 ```sh
 cargo build

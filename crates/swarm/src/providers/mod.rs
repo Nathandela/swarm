@@ -39,12 +39,10 @@ pub(crate) fn prepare(
     if agent == "codex" {
         codex::refuse_unqualified_origin(&request["env"])?;
     }
-    environment.retain(|(name, _)| {
-        name != if agent == "codex" {
-            "ANTHROPIC_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
-        }
+    environment.retain(|(name, _)| match name.as_str() {
+        "ANTHROPIC_API_KEY" => agent == "claude",
+        "OPENAI_API_KEY" => agent == "codex",
+        _ => true,
     });
     let path = environment
         .iter()

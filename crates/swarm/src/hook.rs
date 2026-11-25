@@ -1,4 +1,4 @@
-use crate::providers::{agy, claude, codex_receipt};
+use crate::providers::{agy, claude};
 use crate::supervisor::runtime;
 use serde_json::{Map, Value, json};
 use std::env;
@@ -88,11 +88,13 @@ fn agy_status_line(args: &[String]) -> u8 {
     {
         return 0;
     }
-    let mut child = match Command::new("/bin/sh")
-        .args(["-c", command])
-        .stdin(Stdio::piped())
-        .spawn()
+    let mut saved = Command::new("/bin/sh");
+    saved.args(["-c", command]).stdin(Stdio::piped());
+    for (key, _) in env::vars_os().filter(|(key, _)| key.as_encoded_bytes().starts_with(b"SWARM_"))
     {
+        saved.env_remove(key);
+    }
+    let mut child = match saved.spawn() {
         Ok(child) => child,
         Err(_) => return 1,
     };
@@ -121,16 +123,10 @@ fn post_agy(raw: &Value) -> io::Result<()> {
         return Ok(());
     }
     let field = |key| raw[key].as_str().unwrap_or("").trim();
-    let mut id = field("conversation_id");
-    if id.is_empty() {
-        id = field("session_id");
-    }
-    if !codex_receipt::canonical_thread(id) {
-        id = "";
-    }
+    let id = agy::status_conversation(raw)?;
     let state = field("agent_state");
     let title = field("conversation_title");
-    if state.is_empty() && title.is_empty() && id.is_empty() {
+    if state.is_empty() && title.is_empty() && id.is_none() {
         return Ok(());
     }
     let at = SystemTime::now()
@@ -138,16 +134,18 @@ fn post_agy(raw: &Value) -> io::Result<()> {
         .map_err(io::Error::other)?;
     let mut stream = UnixStream::connect(socket)?;
     stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    let mut payload = json!({
+        "agent_state":state.chars().take(32).collect::<String>(),
+        "conversation_title":title.chars().take(128).collect::<String>(),
+        "observed_ns":u64::try_from(at.as_nanos()).map_err(io::Error::other)?,
+    });
+    if let Some(id) = id {
+        payload["conversation_id"] = json!(id);
+    }
     runtime::write_control(
         &mut stream,
         &json!({
-            "type":"hook", "event":agy::EVENT, "token":token,
-            "payload":{
-                "agent_state":state.chars().take(32).collect::<String>(),
-                "conversation_id":id,
-                "conversation_title":title.chars().take(128).collect::<String>(),
-                "observed_ns": u64::try_from(at.as_nanos()).map_err(io::Error::other)?,
-            },
+            "type":"hook", "event":agy::EVENT, "token":token, "payload":payload,
         }),
     )
 }

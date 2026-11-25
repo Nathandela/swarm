@@ -130,6 +130,19 @@ pub(crate) fn status_line_args(home: Option<&Path>, binary: &Path) -> Vec<String
     vec!["--settings".into(), json!({"statusLine": line}).to_string()]
 }
 
+pub(crate) fn status_conversation(payload: &Value) -> io::Result<Option<&str>> {
+    payload
+        .get("conversation_id")
+        .or_else(|| payload.get("session_id"))
+        .map(|id| {
+            id.as_str()
+                .map(str::trim)
+                .filter(|id| super::codex_receipt::canonical_thread(id))
+                .ok_or_else(|| io::Error::other("invalid Antigravity status-line conversation"))
+        })
+        .transpose()
+}
+
 pub(crate) fn hook_status(state: &str) -> Option<Value> {
     let (turn, interaction) = match state {
         "working" | "tool_use" | "initializing" => ("active", "none"),

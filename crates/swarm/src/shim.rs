@@ -556,17 +556,16 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
 fn agy_hook_observation(stream: &mut UnixStream, state: &State, payload: &Value) -> io::Result<()> {
     let mut observed = state.observations.lock().unwrap();
     let at = payload["observed_ns"].as_u64().unwrap_or_default();
-    let id = field(payload, "conversation_id");
+    let id = agy::status_conversation(payload)?;
     if at <= observed.agy_latest {
         return Err(io::Error::other("stale Antigravity status line"));
     }
     let mut changed = false;
-    if !id.is_empty() {
-        if !codex_receipt::canonical_thread(id)
-            || observed
-                .conversation
-                .as_deref()
-                .is_some_and(|first| first != id)
+    if let Some(id) = id {
+        if observed
+            .conversation
+            .as_deref()
+            .is_some_and(|first| first != id)
         {
             return Err(io::Error::other("Antigravity hook conversation changed"));
         }
