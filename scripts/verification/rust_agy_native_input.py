@@ -103,7 +103,7 @@ for line in sys.stdin:
 '''
 
 
-def run(binary):
+def run(binary, guild=False):
     with tempfile.TemporaryDirectory(prefix="agn-", dir=Path("/tmp").resolve()) as tmp:
         root = Path(tmp)
         home, work, tools, state = (root / key for key in ("home", "work", "bin", "s"))
@@ -117,9 +117,10 @@ def run(binary):
         daemon_socket = state / "d"
         config = connector / "config.json"
         config.write_text(json.dumps({
-            "version": 1, "enabled": True, "mode": "personal",
+            "version": 1, "enabled": True, "mode": "teammate" if guild else "personal",
             "installation_id": "fixture-only", "name": "Local fixture",
-            "application_id": "234", "owner_id": "123", "dm_channel_id": "456",
+            "application_id": "234", "owner_id": "123",
+            **({"guild_ids":["301"],"channel_ids":["455"]} if guild else {"dm_channel_id": "456"}),
             "token_file": str(credentials), "daemon_socket": str(daemon_socket),
             "work_dir": str(work), "manager_cli": "codex",
         }))
@@ -128,8 +129,10 @@ def run(binary):
         ownership.write_text(json.dumps("fixture-only"))
         ownership.chmod(0o600)
         ledger_file = connector / "rust-text-v1.json"
-        ledger = {"version":2, "identity":["fixture-only","234","123","456",str(daemon_socket)],
-                  "consent_floor":"400","history_cursor":"420","messages":{},"outbox":{},"worker_inputs":{}}
+        snowflake_base = (time.time_ns() // 1_000_000 - 1_420_070_400_000) << 22
+        source_key = lambda key: str(snowflake_base + int(key)) if guild else key
+        ledger = {"version":2, "identity":["fixture-only","234","123","" if guild else "456",str(daemon_socket)],
+                  "consent_floor":source_key("400"),"history_cursor":source_key("420"),"messages":{},"outbox":{},"worker_inputs":{}}
         def save():
             updated = ledger_file.with_suffix(".update")
             updated.write_text(json.dumps(ledger))
@@ -185,24 +188,41 @@ def run(binary):
                         before_request(hello)
                     return exchange(peer, body | {"endpoint_id":hello["endpoint_id"]})
 
+        def digest(value):
+            raw = json.dumps(value, separators=(",", ":"), ensure_ascii=False).replace("&", r"\u0026").replace("<", r"\u003c").replace(">", r"\u003e")
+            return hashlib.sha256(raw.encode()).hexdigest()
+
+        def seal_audience(source):
+            route = source["route"]
+            source["guild_audience_digest"] = digest(["234", source["author"]["id"], route["guild_id"],
+                route["channel_id"], route.get("parent_id"), route["message_id"], source["revision"],
+                source["audience_verified_at_ms"]])
+
         def prepare(text, source_id, mint=None):
             operation = mint or f"semantic:{time.time_ns() // 1_000_000}:{secrets.token_hex(16)}"
             instance = request({"op":"semantic_target","session_id":sid},
                                ["semantic-target"])["semantic_target_instance"]
-            source = f"owner original for message {source_id}"
-            def digest(value):
-                return hashlib.sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()
-            revision = digest(["123",source,"456","",source_id,None,"",None])
+            source_id = source_key(source_id)
+            source = f"<@234> {sid} {text}" if guild else f"owner original for message {source_id}"
+            revision = digest(["123",source,"456","301" if guild else "",source_id,None,"",None])
             request_id = "da_" + digest(["fixture-only",source_id])[:32]
             origin = {"kind":"owner_direct","installation_id":"fixture-only","request_id":request_id,
                       "actor_id":"123","channel_id":"456","message_id":source_id,"revision":revision}
+            if guild:
+                origin["guild_id"] = "301"
             composer = {"session":sid,"session_instance":instance,"text":text,"origin":origin}
-            return operation, composer, {
+            receipt = {
                 "operation_id":request_id,"revision":revision,"text":source,
-                "route":{"guild_id":"","channel_id":"456","message_id":source_id},
+                "route":{"guild_id":"301" if guild else "","channel_id":"456","message_id":source_id,
+                         **({"parent_id":"455"} if guild else {})},
+                **({"addressed_text":f"{sid} {text}", "audience_verified_at_ms":time.time_ns() // 1_000_000} if guild else {}),
                 "author":{"id":"123"},"authority":"owner_direct","supervisor_socket":str(daemon_socket),
                 "state":"sending","worker_operation":operation,
             }
+
+            if guild:
+                seal_audience(receipt)
+            return operation, composer, receipt
 
         def persist(operation, composer, source):
             source_id = composer["origin"]["message_id"]
@@ -210,10 +230,12 @@ def run(binary):
             ledger["worker_inputs"][operation] = {"source_id":source_id,"provider":"agy","composer":composer}
             save()
 
-        def send(operation, composer, *, allow_origin=True, worker_origin=True, before_request=None, ok=True):
+        def send(operation, composer, *, allow_origin=True, worker_origin=True, guild_origin=True, before_request=None, ok=True):
             capabilities = ["semantic-send"] + (["message-origin"] if allow_origin else [])
             if worker_origin:
                 capabilities.append("worker-discord-origin-v1")
+            if guild and guild_origin:
+                capabilities.append("worker-discord-guild-origin-v1")
             response = request({"op":"semantic_send","session_id":sid,"operation_id":operation,
                                 "body_version":1,"composer_send":composer}, capabilities, before_request)
             if ok:
@@ -237,8 +259,8 @@ def run(binary):
             operation, composer, source = prepare(text, "401")
             # A fully formed origin without a persisted worker-specific cutover grants nothing.
             send(operation, composer, ok=False)
-            ledger["manager"] = {"input":{"operation":operation,"composer":composer,"source_id":"401"}}
-            ledger["messages"]["401"] = source.copy()
+            ledger["manager"] = {"input":{"operation":operation,"composer":composer,"source_id":source_key("401")}}
+            ledger["messages"][source_key("401")] = source.copy()
             save()
             send(operation, composer, ok=False)
             persist(operation, composer, source)
@@ -259,6 +281,19 @@ def run(binary):
             outside, outside_composer, outside_source = prepare(text, "400")
             persist(outside, outside_composer, outside_source)
             send(outside, outside_composer, ok=False)
+            if guild:
+                send(operation, composer, guild_origin=False, ok=False)
+                ledger["messages"][source_key("401")]["route"]["parent_id"] = "999"
+                save()
+                send(operation, composer, ok=False)
+                ledger["messages"][source_key("401")]["route"]["parent_id"] = "455"
+                ledger["messages"][source_key("401")]["audience_verified_at_ms"] -= 31_000
+                seal_audience(ledger["messages"][source_key("401")])
+                save()
+                send(operation, composer, ok=False)
+                ledger["messages"][source_key("401")]["audience_verified_at_ms"] = time.time_ns() // 1_000_000
+                seal_audience(ledger["messages"][source_key("401")])
+                save()
             send(operation, composer, allow_origin=False, ok=False)
             ledger["worker_excluded"] = {sid:True}
             save()
@@ -318,7 +353,7 @@ def run(binary):
 
             stale, stale_composer, stale_source = prepare("edited source", "402")
             persist(stale, stale_composer, stale_source)
-            ledger["messages"]["402"] = stale_source | {"text":"new source revision"}
+            ledger["messages"][source_key("402")] = stale_source | {"text":"new source revision"}
             save()
             send(stale, stale_composer, ok=False)
 
@@ -328,7 +363,7 @@ def run(binary):
             send(revoked, revoked_composer, ok=False)
             assert status(revoked)["state"] == "rejected"
             assert not (work / "revoke-before-effect").exists()
-            ledger["messages"]["403"] = revoked_source | {"state":"withdrawn"}
+            ledger["messages"][source_key("403")] = revoked_source | {"state":"withdrawn"}
             save()
 
             ambiguous, ambiguous_composer, ambiguous_source = prepare("uncertain native reply", "404")
@@ -353,5 +388,8 @@ def run(binary):
 
 
 if __name__ == "__main__":
-    run(Path(sys.argv[1]).resolve(strict=True))
-    print("agy registration, exact native delivery, daemon recovery and ambiguous non-replay passed.")
+    binary = Path(sys.argv[1]).resolve(strict=True)
+    guild = "--guild" in sys.argv[2:]
+    run(binary, guild=guild)
+    scope = "guild thread" if guild else "personal DM"
+    print(f"{scope}: agy registration, exact native delivery, daemon recovery and ambiguous non-replay passed.")

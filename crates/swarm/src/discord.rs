@@ -1,16 +1,19 @@
 mod worker_input;
 pub(crate) use worker_input::{
-    lock_connector_worker_input, verify_connector_worker_input, worker_input_installation,
+    lock_connector_worker_input, verify_connector_worker_input, worker_input_guild_available,
+    worker_input_installation,
 };
 mod config;
 mod dispatcher;
 mod gateway;
+mod guild;
 mod local;
 mod manager;
 pub(crate) mod provenance;
 mod receipt;
 mod rest;
 mod service;
+mod worker;
 
 use crate::ipc;
 use config::{Config, Place, invalid};

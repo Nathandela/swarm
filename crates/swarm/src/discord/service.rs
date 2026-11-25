@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 const STOP_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
-    if cfg.text("mode") != "personal" {
+    let personal = cfg.text("mode") == "personal";
+    if !personal && !super::guild::enabled(cfg) {
         return Err(io::Error::other(
-            "the Rust foreground connector currently supports personal owner DMs",
+            "the Rust foreground connector requires an owner DM or enrolled guild with a configured owner",
         ));
     }
     let (_lease, listener) = place.claim(cfg)?;
@@ -28,8 +29,10 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
     let mut inbox = Inbox::open(&place.dir, cfg)?;
     let api = Discord::connect(cfg)?;
     api.verify_app(cfg)?;
-    api.verify_dm(cfg, None)?;
-    if inbox.cursor().is_none() {
+    if personal {
+        api.verify_dm(cfg, None)?;
+    }
+    if inbox.cursor().is_none() && personal {
         let baseline = api.owner_history(cfg, "", 1)?;
         let baseline = baseline
             .first()
@@ -37,26 +40,49 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
             .unwrap_or("");
         inbox.checkpoint(baseline)?;
     }
-    let dispatcher = super::dispatcher::Dispatcher::open(cfg, &place.dir)?;
+    if inbox.cursor().is_none() {
+        // Guild history never creates new worker admissions. Before READY use
+        // the current Discord creation boundary for fresh Gateway events only.
+        inbox.checkpoint("")?;
+    }
+    let dispatcher = if personal {
+        super::dispatcher::Dispatcher::open(cfg, &place.dir)?
+    } else {
+        None
+    };
     let (mut gateway_socket, mut cursor) = gateway::open(cfg)?;
-    repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
-    if dispatcher.is_none() {
+    if personal {
+        repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
+    }
+    if personal && dispatcher.is_none() {
         eprintln!(
             "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
         );
     }
+    let mut worker_read_after = None;
     loop {
-        if bridge.serve(cfg, &inbox, cursor.sequence(), dispatcher.is_some())? {
+        if bridge.serve(cfg, &mut inbox, cursor.sequence(), dispatcher.is_some())? {
             let _ = gateway_socket.close(None);
             return Ok(());
         }
+        super::worker::tick(cfg, &mut inbox, &api, &mut worker_read_after)?;
         if let Some(dispatcher) = &dispatcher {
             dispatcher.tick(cfg, &mut inbox, &api)?;
         }
         let Some(event) = cursor.event(&mut gateway_socket)? else {
             continue;
         };
-        ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+        if personal {
+            ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+        } else {
+            super::guild::ingest(
+                cfg,
+                &mut inbox,
+                &event,
+                crate::ipc::spawn::now_ms(),
+                |guild, channel, id| super::guild::current(&api, cfg, guild, channel, id),
+            )?;
+        }
     }
 }
 
@@ -199,7 +225,13 @@ impl Bridge {
         Ok(this)
     }
 
-    fn serve(&self, cfg: &Config, inbox: &Inbox, sequence: u64, native: bool) -> io::Result<bool> {
+    fn serve(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        sequence: u64,
+        native: bool,
+    ) -> io::Result<bool> {
         let (mut client, _) = match self.listener.accept() {
             Ok(pair) => pair,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(false),
@@ -225,7 +257,7 @@ impl Drop for Bridge {
 fn request(
     stream: &mut UnixStream,
     cfg: &Config,
-    inbox: &Inbox,
+    inbox: &mut Inbox,
     sequence: u64,
     native: bool,
 ) -> io::Result<bool> {
@@ -285,8 +317,26 @@ fn request(
             });
             status["connector"] = json!({
                 "state": if native { "scoped_dispatcher" } else { "receipt_only" },
-                "pending_admissions": inbox.pending_count()
+                "pending_admissions": inbox.pending_count(),
+                "worker_deliveries":inbox.worker_status()
             });
+            respond(stream, "200 OK", status)?;
+        } else if method == "POST"
+            && [
+                format!("/installation-v1/{identity:x}/exclude"),
+                format!("/installation-v1/{identity:x}/include"),
+            ]
+            .iter()
+            .any(|route| route == path)
+        {
+            let target: Value = serde_json::from_slice(&body)?;
+            let target = target["target_id"]
+                .as_str()
+                .ok_or_else(|| invalid("missing worker session ID"))?;
+            inbox.set_worker_excluded(target, path.ends_with("/exclude"))?;
+            let mut status = cfg.status();
+            status["connected"] = json!(true);
+            status["connector"] = json!({"worker_deliveries":inbox.worker_status()});
             respond(stream, "200 OK", status)?;
         } else if stop {
             respond(stream, "200 OK", json!({"stopped":true}))?;
@@ -499,14 +549,14 @@ mod tests {
     fn private_runtime_reports_queue_and_accepts_only_bound_shutdown() {
         let dir = fixture_dir();
         let cfg = config();
-        let inbox = Inbox::open(&dir, &cfg).unwrap();
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         let socket = dir.join("bridge.sock");
         let listener = runtime::bind(&socket).unwrap();
         let bridge = Bridge::new(socket.clone(), listener).unwrap();
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(3);
             while Instant::now() < deadline {
-                if bridge.serve(&cfg, &inbox, 12, false).unwrap() {
+                if bridge.serve(&cfg, &mut inbox, 12, false).unwrap() {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -517,6 +567,17 @@ mod tests {
         assert_eq!(status["connector"]["state"], "receipt_only");
         assert_eq!(status["teammate"]["pending"], 0);
         assert_eq!(status["teammate"]["gateway_sequence"], 12);
+        let target = "ep-1234abcd/1234567890abcdef12345678";
+        let change = json!({"target_id":target});
+        assert!(super::super::local::call(&dir, "exclude", "", Some(("other", &change))).is_err());
+        super::super::local::call(&dir, "exclude", "", Some(("issued", &change))).unwrap();
+        let file = dir.join("rust-text-v1.json");
+        assert_eq!(
+            runtime::read_json(&file).unwrap()["worker_excluded"][target],
+            true
+        );
+        super::super::local::call(&dir, "include", "", Some(("issued", &change))).unwrap();
+        assert!(runtime::read_json(&file).unwrap()["worker_excluded"][target].is_null());
         let body = json!({});
         assert!(super::super::local::call(&dir, "shutdown", "", Some(("other", &body))).is_err());
         assert_eq!(
