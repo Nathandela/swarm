@@ -122,7 +122,7 @@ pub(super) fn decode_json(file: File) -> io::Result<Value> {
     Ok(serde_json::from_slice(&read_private_file(file, 1 << 20)?)?)
 }
 
-fn read_private_file(file: File, max: usize) -> io::Result<Vec<u8>> {
+pub(super) fn read_private_file(file: File, max: usize) -> io::Result<Vec<u8>> {
     validate_file(&file)?;
     let mut payload = Vec::new();
     file.take(max as u64 + 1).read_to_end(&mut payload)?;

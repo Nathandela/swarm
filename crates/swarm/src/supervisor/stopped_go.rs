@@ -1,6 +1,9 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
 use super::runtime;
 use crate::ipc::field;
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, de};
+use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::ffi::CStr;
@@ -20,9 +23,65 @@ pub(super) struct Store {
     rows: Mutex<BTreeMap<String, Entry>>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(transparent)]
+struct RawFields(BTreeMap<String, Box<RawValue>>);
+
+impl<'de> Deserialize<'de> for RawFields {
+    fn deserialize<D: Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
+        struct Object;
+        impl<'de> Visitor<'de> for Object {
+            type Value = RawFields;
+
+            fn expecting(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                out.write_str("a Go metadata object with unique fields")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                let mut fields = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry()? {
+                    if fields.insert(key, value).is_some() {
+                        return Err(de::Error::custom("duplicate Go metadata field"));
+                    }
+                }
+                Ok(RawFields(fields))
+            }
+        }
+        input.deserialize_map(Object)
+    }
+}
+
+impl RawFields {
+    fn parsed(&self) -> Value {
+        Value::Object(
+            self.0
+                .iter()
+                .map(|(key, value)| {
+                    // Untouched values are written from the raw map, even if they are
+                    // unknown to this release or exceed the ordinary Value numeric range.
+                    let parsed = serde_json::from_str(value.get()).unwrap_or(Value::Bool(true));
+                    (key.clone(), parsed)
+                })
+                .collect(),
+        )
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self
+                .0
+                .iter()
+                .zip(&other.0)
+                .all(|((a_key, a_value), (b_key, b_value))| {
+                    a_key == b_key && a_value.get() == b_value.get()
+                })
+    }
+}
+
 struct Entry {
     dir: File,
     meta: Value,
+    raw: RawFields,
     needs_sync: bool,
 }
 
@@ -34,19 +93,19 @@ impl Entry {
         sync: impl FnOnce(&File) -> io::Result<()>,
     ) -> io::Result<bool> {
         if self.meta[key] != value {
-            let mut revised = self.meta.clone();
-            revised[key] = json!(value);
+            let mut revised = self.raw.clone();
+            revised.0.insert(key.to_owned(), to_raw_value(&value)?);
             if key == "name" {
-                revised["name_set_at"] = json!(
-                    OffsetDateTime::now_utc()
-                        .format(&Rfc3339)
-                        .expect("UTC timestamp")
-                );
+                let now = OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .expect("UTC timestamp");
+                revised.0.insert("name_set_at".into(), to_raw_value(&now)?);
             }
             replace_meta(&self.dir, &revised, || {})?;
             // renameat committed the new name. Keep the cache aligned even if
             // directory sync fails, and require a successful sync to acknowledge a retry.
-            self.meta = revised;
+            self.meta = revised.parsed();
+            self.raw = revised;
             self.needs_sync = true;
         }
         if self.needs_sync {
@@ -76,6 +135,14 @@ fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> io::Result<File> {
 
 fn read_at(dir: &File, name: &CStr) -> io::Result<Value> {
     runtime::decode_json(open_at(dir, name, libc::O_RDONLY)?)
+}
+
+fn read_meta(dir: &File) -> io::Result<RawFields> {
+    let file = open_at(dir, c"meta.json", libc::O_RDONLY)?;
+    Ok(serde_json::from_slice(&runtime::read_private_file(
+        file,
+        1 << 20,
+    )?)?)
 }
 
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
@@ -283,6 +350,19 @@ fn valid_meta(meta: &Value, id: &str) -> bool {
         && ["name", "tag", "cwd", "agent_type"]
             .iter()
             .all(|key| meta[*key].is_string())
+        && (meta["agent_cwd"].is_null() || meta["agent_cwd"].is_string())
+        && (meta["launch_options"].is_null()
+            || meta["launch_options"]
+                .as_object()
+                .is_some_and(|map| map.values().all(Value::is_string)))
+        && meta["status"].as_object().is_some_and(|status| {
+            status.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "Process" | "Turn" | "Interaction" | "Attention" | "NativeWorkUnknown"
+                )
+            })
+        })
         && Path::new(field(meta, "cwd")).is_absolute()
         && nonzero_time(&meta["created_at"])
         && timestamp(&meta["last_activity"]).is_some()
@@ -326,18 +406,19 @@ impl Store {
                         "Go session directory is not physically bound and owner-private",
                     ));
                 }
-                let meta = read_at(&file, c"meta.json")?;
+                let raw = read_meta(&file)?;
+                let meta = raw.parsed();
                 if meta["schema_version"] != 1 && meta["schema_version"].is_u64() {
-                    return Ok((file, meta));
+                    return Ok((file, meta, raw));
                 }
                 if !valid_meta(&meta, id) {
                     return Err(io::Error::other(
                         "malformed Go metadata or directory ID mismatch",
                     ));
                 }
-                Ok((file, meta))
+                Ok((file, meta, raw))
             })();
-            let (file, meta) = match loaded {
+            let (file, meta, raw) = match loaded {
                 Ok(entry) => entry,
                 Err(e) => {
                     eprintln!("daemon: skipped corrupt Go session {id}: {e}");
@@ -350,6 +431,7 @@ impl Store {
                 Entry {
                     dir: file,
                     meta,
+                    raw,
                     needs_sync: false,
                 },
             );
@@ -400,7 +482,7 @@ impl Store {
         if current.mode() & 0o077 != 0
             || current.uid() != entry.dir.metadata()?.uid()
             || !same_file(&entry.dir.metadata()?, &current)
-            || read_at(&entry.dir, c"meta.json")? != entry.meta
+            || !read_meta(&entry.dir)?.same_as(&entry.raw)
         {
             return Err(io::Error::other(
                 "stopped Go session changed outside the supervisor",
@@ -419,7 +501,11 @@ impl Store {
     }
 }
 
-fn replace_meta(dir: &File, meta: &Value, before_replace: impl FnOnce()) -> io::Result<()> {
+fn replace_meta(
+    dir: &File,
+    meta: &impl Serialize,
+    before_replace: impl FnOnce(),
+) -> io::Result<()> {
     use std::io::Write;
     let temporary =
         std::ffi::CString::new(format!("meta.json.tmp{}", runtime::random_id()?)).unwrap();
@@ -518,20 +604,30 @@ mod tests {
         const OPAQUE: &str = "12345678901234567890.98765432101234567890123";
         let dir = std::env::temp_dir().join(runtime::random_id().unwrap());
         runtime::private_dir(&dir).unwrap();
+        const RESERVED: &str = r#"{"$serde_json::private::Number":"47"}"#;
+        let raw: RawFields = serde_json::from_str(&format!(
+            r#"{{"tag":"old","extra":[{OPAQUE}, {RESERVED}, 1e10000]}}"#
+        ))
+        .unwrap();
         let mut entry = Entry {
             dir: File::open(&dir).unwrap(),
-            meta: serde_json::from_str(&format!(r#"{{"tag":"old","opaque":{OPAQUE}}}"#)).unwrap(),
+            meta: raw.parsed(),
+            raw,
             needs_sync: false,
         };
-        replace_meta(&entry.dir, &entry.meta, || {}).unwrap();
+        replace_meta(&entry.dir, &entry.raw, || {}).unwrap();
         let error = entry.set_label("tag", "new".into(), |_| {
             Err(io::Error::other("sync failed"))
         });
         assert_eq!(error.unwrap_err().to_string(), "sync failed");
         assert_eq!(entry.meta["tag"], "new");
-        assert_eq!(read_at(&entry.dir, c"meta.json").unwrap(), entry.meta);
+        assert!(read_meta(&entry.dir).unwrap().same_as(&entry.raw));
         let raw = fs::read_to_string(dir.join("meta.json")).unwrap();
-        assert!(raw.contains(OPAQUE), "{raw}");
+        assert!(
+            raw.contains(&format!("[{OPAQUE}, {RESERVED}, 1e10000]")),
+            "{raw}"
+        );
+        assert!(serde_json::from_str::<RawFields>(r#"{"tag":"one","tag":"two"}"#).is_err());
         assert!(
             entry
                 .set_label("tag", "new".into(), File::sync_all)

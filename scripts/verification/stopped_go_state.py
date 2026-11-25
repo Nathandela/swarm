@@ -168,7 +168,7 @@ def rehearse(go, rust, base):
     qualified = copied / local
     meta = qualified / "meta.json"
     fixture_record = disk(meta)
-    fixture_record["future_inert_fixture"] = {"opaque": ["label migration treats this as data", 2]}
+    fixture_record["future_inert_fixture"] = {"opaque": ["label migration treats this as data", 2, {"$serde_json::private::Number": "47"}]}
     private(meta, fixture_record)
     protected = {p.name: p.read_bytes() for p in qualified.iterdir() if p.is_file() and p != meta}
     assert SENTINEL.encode() in protected["shim-launch.json"]
