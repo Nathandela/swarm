@@ -1,7 +1,7 @@
 //! One owner-personal discussion on the native supervisor's exact manager binding.
 use super::config::{Config, invalid};
 use super::manager::Manager;
-use super::receipt::{Inbox, Observation, hash};
+use super::receipt::{Inbox, Observation, hash, publication_nonce, verify_publication};
 use super::rest::{Discord, Post};
 use crate::{ipc::field, socket::DeadlineReader, supervisor::runtime};
 use serde_json::{Value, json};
@@ -204,12 +204,16 @@ impl Dispatcher {
     ) -> io::Result<()> {
         for nonce in inbox.pending_publications() {
             let entry = inbox.publication(&nonce);
+            verify_publication(&nonce, &entry)?;
             let publication = &entry["proof"];
             let input = &state["input"];
             if publication["binding"] != state["binding"]
                 || publication["turn_id"] != input["turn_id"]
                 || publication["source_id"] != input["source_id"]
                 || input["turn_id"].is_null()
+                || input["final_nonce"] != nonce
+                || publication["call_receipt"]["native_input_id"]
+                    != input["composer"]["manager_admission"]["nonce"]
             {
                 return Err(invalid(
                     "queued publication is out of the current native input scope",
@@ -337,16 +341,19 @@ impl Dispatcher {
         if proof["native_turn_id"] != input["turn_id"] {
             return Err(invalid("manager publication belongs to another turn"));
         }
-        let nonce = hash(&json!([state["binding"], input["turn_id"], output]))?[..24].to_owned();
+        let publication = json!({
+            "binding":state["binding"], "turn_id":input["turn_id"],
+            "source_id":input["source_id"], "output_id":output,"body":body,
+            "native_call_id":proof["native_call_id"], "call_receipt":proof,
+            "host_meta":call["meta"], "arguments":args, "arguments_hash":hash(&args)?
+        });
+        let nonce = publication_nonce(&publication)?;
         if input["final_nonce"]
             .as_str()
             .is_some_and(|saved| saved != nonce)
         {
             return Err(invalid("a final publication is already selected"));
         }
-        let publication = json!({
-            "binding":state["binding"], "turn_id":input["turn_id"], "source_id":input["source_id"], "output_id":output, "body":body, "native_call_id":proof["native_call_id"]
-        });
         state["input"]["final_nonce"] = json!(nonce);
         inbox.prepare_publication(&nonce, publication, state)?;
         Ok(json!({"output_id":output,"state":inbox.publication(&nonce)["state"]}))
@@ -625,20 +632,21 @@ mod tests {
         );
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         inbox.checkpoint("100").unwrap();
+        let (nonce, proof) = super::super::receipt::fixture_publication("deliberate reply");
         inbox
-            .prepare_publication("nonce", json!({"body":"deliberate reply"}), Value::Null)
+            .prepare_publication(&nonce, proof, Value::Null)
             .unwrap();
-        inbox.publication_state("nonce", "sending", None).unwrap();
+        inbox.publication_state(&nonce, "sending", None).unwrap();
         let api = MockDiscord {
             outcome: RefCell::new(Post::Acknowledged(Value::Null)),
             posted: RefCell::new(Vec::new()),
         };
-        let Post::Acknowledged(receipt) = api.post(&cfg, "nonce", "deliberate reply") else {
+        let Post::Acknowledged(receipt) = api.post(&cfg, &nonce, "deliberate reply") else {
             panic!("expected acknowledgement")
         };
         assert!(inbox.observe(&receipt, Observation::Rest).unwrap());
-        assert_eq!(inbox.publication("nonce")["rest_acknowledged"], true);
-        assert!(inbox.publication("nonce")["history_seen"].is_null());
+        assert_eq!(inbox.publication(&nonce)["rest_acknowledged"], true);
+        assert!(inbox.publication(&nonce)["history_seen"].is_null());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -731,6 +739,38 @@ mod tests {
         dispatcher.tool(&mut inbox, &publish).unwrap();
         let nonce = field(&inbox.manager()["input"], "final_nonce").to_owned();
         assert_eq!(inbox.pending_publications(), std::slice::from_ref(&nonce));
+        let outbox = dir.join("rust-text-v1.json");
+        let original = runtime::read_json(&outbox).unwrap();
+        drop(inbox);
+        for damage in ["body", "nonce", "arguments", "source"] {
+            let mut corrupted = original.clone();
+            let entries = corrupted["outbox"].as_object_mut().unwrap();
+            if damage == "nonce" {
+                let entry = entries.shift_remove(&nonce).unwrap();
+                entries.insert("wrong_nonce".into(), entry);
+            } else {
+                let entry = entries.get_mut(&nonce).unwrap();
+                match damage {
+                    "body" => entry["body"] = json!("unapproved text"),
+                    "arguments" => entry["proof"]["arguments"]["text"] = json!("altered call"),
+                    "source" => entry["proof"]["source_id"] = json!("991"),
+                    _ => unreachable!(),
+                }
+            }
+            runtime::write_json(&outbox, &corrupted).unwrap();
+            assert!(Inbox::open(&dir, &cfg).is_err());
+            assert!(api.posted.borrow().is_empty());
+        }
+        runtime::write_json(&outbox, &original).unwrap();
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let mut displaced = inbox.manager().clone();
+        displaced["input"]["final_nonce"] = json!("other-output");
+        assert!(
+            dispatcher
+                .deliver(&cfg, &mut inbox, &api, &displaced, millis().unwrap())
+                .is_err()
+        );
+        assert!(api.posted.borrow().is_empty());
         state.lock().unwrap().wrong_binding = true;
         assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
         assert!(api.posted.borrow().is_empty());

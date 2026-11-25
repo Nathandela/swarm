@@ -384,9 +384,13 @@ mod tests {
         drop(inbox);
 
         let file = dir.join("rust-text-v1.json");
-        let mut snapshot = runtime::read_json(&file).unwrap();
-        snapshot["outbox"]["nonce-1"] = json!({"state":"sending", "body":"confirmed text"});
-        runtime::write_json(&file, &snapshot).unwrap();
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let (nonce, proof) = super::super::receipt::fixture_publication("confirmed text");
+        inbox
+            .prepare_publication(&nonce, proof, Value::Null)
+            .unwrap();
+        inbox.publication_state(&nonce, "sending", None).unwrap();
+        drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         let old = owner_source("999", "prior to selected boundary");
         let gap = owner_source("1001", "missing while disconnected");
@@ -394,12 +398,12 @@ mod tests {
         edited["content"] = json!("edited while disconnected");
         edited["edited_timestamp"] = json!("2026-11-25T09:10:00Z");
         let confirmation = json!({"id":"1005", "author":{"id":"200","bot":true},
-            "nonce":"nonce-1", "channel_id":"400", "content":"confirmed text"});
+            "nonce":nonce, "channel_id":"400", "content":"confirmed text"});
         let mut wrong = confirmation.clone();
         wrong["channel_id"] = json!("401");
         inbox.observe(&wrong, Observation::Gateway).unwrap();
         assert_eq!(
-            runtime::read_json(&file).unwrap()["outbox"]["nonce-1"]["state"],
+            runtime::read_json(&file).unwrap()["outbox"][&nonce]["state"],
             "sending"
         );
         repair(&mut inbox, |_| {
@@ -418,8 +422,8 @@ mod tests {
             state["messages"]["1001"]["text"],
             "missing while disconnected"
         );
-        assert_eq!(state["outbox"]["nonce-1"]["message_id"], "1005");
-        assert_eq!(state["outbox"]["nonce-1"]["history_seen"], true);
+        assert_eq!(state["outbox"][&nonce]["message_id"], "1005");
+        assert_eq!(state["outbox"][&nonce]["history_seen"], true);
         assert_eq!(
             state["messages"]["1002"]["text"],
             "edited while disconnected"

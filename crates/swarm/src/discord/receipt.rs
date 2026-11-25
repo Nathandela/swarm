@@ -52,6 +52,16 @@ impl Inbox {
                 "Discord inbox cannot prove its schema, enrolled identity and original consent boundary",
             ));
         }
+        if data["outbox"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .any(|(nonce, entry)| verify_publication(nonce, entry).is_err())
+        {
+            return Err(invalid(
+                "Discord outbox publication evidence failed integrity checks",
+            ));
+        }
         Ok(Self { file, data })
     }
 
@@ -255,6 +265,50 @@ fn boundary(value: &Value) -> u64 {
         .unwrap_or_default()
 }
 
+pub(super) fn publication_nonce(proof: &Value) -> io::Result<String> {
+    Ok(hash(&json!([
+        proof["binding"],
+        proof["turn_id"],
+        proof["output_id"]
+    ]))?[..24]
+        .to_owned())
+}
+
+pub(super) fn verify_publication(nonce: &str, entry: &Value) -> io::Result<()> {
+    let proof = &entry["proof"];
+    let args = &proof["arguments"];
+    let native = &proof["call_receipt"];
+    let host = super::provenance::coordinates(&proof["binding"], &proof["host_meta"])?;
+    let mut canonical = args.clone();
+    canonical.sort_all_objects();
+    if entry["proof_digest"] != hash(proof)?
+        || publication_nonce(proof)? != nonce
+        || entry["body"] != proof["body"]
+        || args.as_object().is_none_or(|fields| fields.len() != 4)
+        || args["final"] != true
+        || args["sequence"] != 1
+        || args["output_id"] != proof["output_id"]
+        || args["text"] != proof["body"]
+        || proof["arguments_hash"] != hash(&canonical)?
+        || !proof["source_id"].as_str().is_some_and(snowflake)
+        || native["main"] != true
+        || native["native_turn_id"] != proof["turn_id"]
+        || native["native_call_id"] != proof["native_call_id"]
+        || native["native_call_id"] != host.call
+        || host
+            .turn
+            .is_some_and(|turn| native["native_turn_id"] != turn)
+        || !native["native_input_id"]
+            .as_str()
+            .is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(invalid(
+            "publication differs from its authenticated native tool receipt",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn hash(value: &Value) -> io::Result<String> {
     // Go's encoding/json escapes HTML-sensitive characters before hashing.
     let text = serde_json::to_string(value)?
@@ -304,6 +358,10 @@ impl Inbox {
         proof: Value,
         manager: Value,
     ) -> io::Result<()> {
+        let entry_new = json!({
+            "proof":proof, "proof_digest":hash(&proof)?, "body":proof["body"], "state":"prepared"
+        });
+        verify_publication(nonce, &entry_new)?;
         let entry = &self.data["outbox"][nonce];
         if !entry.is_null() {
             if entry["proof"] == proof {
@@ -332,7 +390,7 @@ impl Inbox {
             return Err(invalid("publication ledger reached its capacity"));
         }
         let mut next = self.data.clone();
-        next["outbox"][nonce] = json!({"proof":proof, "body":proof["body"], "state":"prepared"});
+        next["outbox"][nonce] = entry_new;
         next["manager"] = manager;
         self.save(next)
     }
@@ -428,4 +486,19 @@ impl Inbox {
         next["manager"] = manager;
         self.save(next)
     }
+}
+
+#[cfg(test)]
+pub(super) fn fixture_publication(body: &str) -> (String, Value) {
+    let mut args = json!({"output_id":"fixture-output","sequence":1,"text":body,"final":true});
+    args.sort_all_objects();
+    let proof = json!({
+        "body":body, "source_id":"101", "output_id":"fixture-output", "turn_id":"fixture-turn",
+        "binding":{"provider":"codex","native_session_id":"fixture-thread"},
+        "native_call_id":"fixture-call", "arguments":args, "arguments_hash":hash(&args).unwrap(),
+        "host_meta":{"callId":"fixture-call", "threadId":"fixture-thread", "sessionId":"fixture-thread",
+            "x-codex-turn-metadata":{"turn_id":"fixture-turn","thread_id":"fixture-thread","session_id":"fixture-thread"}},
+        "call_receipt":{"main":true,"native_call_id":"fixture-call","native_turn_id":"fixture-turn","native_input_id":"a".repeat(64)}
+    });
+    (publication_nonce(&proof).unwrap(), proof)
 }
