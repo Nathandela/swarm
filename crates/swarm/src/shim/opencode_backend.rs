@@ -1,11 +1,7 @@
 mod http;
 mod operations;
 
-use crate::{
-    ipc::field,
-    providers::{codex_receipt, opencode},
-    supervisor::runtime,
-};
+use crate::{ipc::field, providers::opencode, supervisor::runtime};
 use http::LocalSocket;
 use serde_json::{Value, json};
 use std::{
@@ -152,7 +148,7 @@ impl Backend {
         ))
     }
 
-    pub(super) fn launch(&self, initial: &Value) -> io::Result<u64> {
+    pub(super) fn launch(&self, initial: &Value, intent: &Value) -> io::Result<u64> {
         let ready = self.bound()?;
         let created = ready["nativeCreatedAtMS"].as_u64().unwrap_or_default();
         let mut ack = self.envelope();
@@ -175,67 +171,48 @@ impl Backend {
             ));
         }
         if self.binding["initialPrompt"] == true {
-            let text = field(initial, "text");
             let mut body = self.envelope();
-            let operation = opencode::nonce()?;
-            let hash = codex_receipt::hash(text);
-            body["operationID"] = json!(operation);
-            body["requestHash"] = json!(hash);
+            body["operationID"] = intent["operationID"].clone();
+            body["requestHash"] = intent["requestHash"].clone();
             for key in ["text", "expectedModel", "expectedAgent"] {
                 body[key] = initial[key].clone();
             }
+            let native = opencode::receipts::native(&self.dir, &self.token)?;
             let receipt_path = self.dir.join("opencode-initial.json");
-            let save = |state: &str, message: &Value| {
-                runtime::write_json(
-                    &receipt_path,
-                    &json!({
-                        "token":self.token,"operation_id":operation,"request_hash":hash,"state":state,"message_id":message,
-                    }),
-                )
-            };
-            save("outcome_unknown", &Value::Null)?;
-            // A lost POST reply is read back through the bridge receipt endpoint, never reposted.
-            let receipt = self.http("/initial", Some(&body)).ok();
-            let valid = |receipt: &Value| {
-                self.matches(receipt, created)
-                    && receipt["operationID"] == operation
-                    && receipt["requestHash"] == hash
-            };
-            let receipt = if receipt
+            let record =
+                |witness: &Value| opencode::initial::record(&self.token, &native, intent, witness);
+            runtime::write_json(&receipt_path, &record(&Value::Null))?;
+            // Receipt reads can settle a lost reply without reissuing the initial input.
+            let mut receipt = self
+                .http("/initial", Some(&body))
+                .ok()
+                .map(|witness| record(&witness));
+            if !receipt
                 .as_ref()
-                .is_some_and(|r| valid(r) && r["status"] != "uncertain")
+                .is_some_and(|r| opencode::initial::valid(&self.token, &native, intent, r))
             {
-                receipt.unwrap()
-            } else {
-                self.http("/initial", None)?
-            };
-            if !valid(&receipt) {
-                return Err(io::Error::other(
-                    "OpenCode initial input receipt is uncorrelated",
-                ));
+                receipt = self
+                    .http("/initial", None)
+                    .ok()
+                    .map(|witness| record(&witness));
             }
-            if receipt["status"] == "rejected" && receipt["nativeEffect"] == "none" {
-                save("rejected", &Value::Null)?;
+            let receipt = receipt
+                .filter(|r| opencode::initial::valid(&self.token, &native, intent, r))
+                .ok_or_else(|| io::Error::other("OpenCode initial input outcome is unknown"))?;
+            runtime::write_json(&receipt_path, &receipt)?;
+            if receipt["state"] == "rejected" {
                 return Err(io::Error::other(format!(
                     "OpenCode initial input rejected ({})",
-                    field(&receipt, "reason")
+                    field(&receipt["bridge_receipt"], "reason")
                 )));
             }
-            if receipt["status"] != "admitted"
-                || !opencode::valid_id(field(&receipt, "messageID"), "msg_")
-            {
-                return Err(io::Error::other(
-                    "OpenCode initial input outcome is unknown",
-                ));
-            }
-            save("native_accepted", &receipt["messageID"])?;
         }
         self.ready.store(true, Ordering::Release);
         Ok(created)
     }
 
-    pub(super) fn run(&self, initial: &Value) {
-        let launched = self.launch(initial);
+    pub(super) fn run(&self, initial: &Value, intent: &Value) {
+        let launched = self.launch(initial, intent);
         if runtime::write_json(
             &self.dir.join("opencode-launch.json"),
             &match &launched {
@@ -328,6 +305,7 @@ impl Backend {
                 ));
             }
             let _ = updates.try_send(());
+            let _ = self.checkpoint_terminal(created, &update);
         }
     }
 

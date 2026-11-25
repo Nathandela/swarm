@@ -343,18 +343,8 @@ impl Session {
                 "OpenCode resume requires the original checkout and an explicit environment",
             ));
         }
-        let binding = runtime::read_json(&self.dir.join("opencode-binding.json"))?;
-        if binding["initialPrompt"] != false {
-            let record = runtime::read_json(&self.dir.join("opencode-initial.json"))?;
-            if record["token"] != self.token
-                || !matches!(field(&record, "state"), "native_accepted" | "rejected")
-            {
-                return Err(io::Error::other(
-                    "OpenCode prior initial input remains unresolved",
-                ));
-            }
-        }
         let native = self.opencode_native()?;
+        opencode::initial::verify_resume(&self.dir, &self.token, &native, &meta)?;
         let mut launch = json!({"agent":"opencode","cwd":self.cwd,"env":request["env"],"name":meta["name"],"tag":meta["tag"],"rows":meta["rows"],"cols":meta["cols"]});
         for key in ["cols", "rows", "name"] {
             if let Some(value) = request
@@ -459,6 +449,12 @@ impl Session {
         } else {
             &label
         };
+        let initial = if provider.agent == "opencode" && !field(&provider.native, "text").is_empty()
+        {
+            opencode::initial::intent(&opencode::nonce()?, &provider.native)
+        } else {
+            Value::Null
+        };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -474,6 +470,7 @@ impl Session {
                     "executable": provider.executable, "identity": provider.identity},
                 "opencode_profile": (provider.agent == "opencode").then(|| opencode::profile(&provider.env)),
                 "opencode_resume": resume,
+                "opencode_initial": initial,
 
             }),
         )?;

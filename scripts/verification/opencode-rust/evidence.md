@@ -18,3 +18,13 @@ The digest checks used arbitrary numeric metadata and reordered object keys. Cha
 An early exploratory Mac run inherited an existing daemon socket and queried its roster. It performed no production mutation. The committed runners set explicit private state and socket paths and verify the derived owner endpoint before launch.
 
 Worktree-backed resume, historical child transcripts and 24/72-hour runs remain outside this evidence. The model provider in Linux returned fixture data. The macOS run exercised the no-model lifecycle.
+
+## Initial and terminal proof follow-up
+
+The runtime in the follow-up revision passed 37 Rust unit tests and 7 integration tests, with one inherited ignored test. Clippy passed with warnings denied. The pinned Go bridge remained byte-identical.
+
+The installed Linux 1.19.3 loopback probe passed with binary SHA-256 `a8a0e239f4b954a26deceb5001354922608eb5676e7a5997c2cde357ad9c670d`. It recorded the original initial operation and intent hash, verified the admitted native user message, and resumed the exact root. It also created a proven no-effect native initial rejection and resumed its unchanged empty history. Replacing either recorded witness with a token and state alone blocked resume. After both native tool decisions, a terminal SSE event led to an exact message read and a persisted terminal receipt before the owner queried its outcome. The provider still received four loopback model calls.
+
+Rust regressions cover rejecting wrong operation, text or option hashes, missing message proof, and foreign incarnations. They also cover terminal recovery past fifty newer native rows and the native continuation rules for provider-executed tools and interrupted orphan tools. If the SSE checkpoint was missed, status reads inspect up to eight scoped 50-row history pages within a bounded reconciliation attempt.
+
+The macOS 1.19.3 lifecycle probe passed with binary SHA-256 `c3e4b65fb5ff8384faf993228f9bf1944b2834f2d739b071a73e0d79e1d7375e`. Its no-input worker retained the same root across daemon restart and resumed under a new incarnation after confirmed shutdown.

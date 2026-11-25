@@ -257,6 +257,20 @@ fn serve(dir: &Path) -> io::Result<()> {
                 ));
             }
             command.envs(environment);
+            let initial = &bootstrap["native"];
+            let intent = &config["opencode_initial"];
+            if (intent.is_null() != field(initial, "text").is_empty())
+                || !intent.is_null()
+                    && *intent
+                        != providers::opencode::initial::intent(
+                            field(intent, "operationID"),
+                            initial,
+                        )
+            {
+                return Err(io::Error::other(
+                    "OpenCode initial input differs from the reservation",
+                ));
+            }
             let binding = providers::opencode::artifact(
                 dir,
                 Path::new(working_dir),
@@ -374,7 +388,8 @@ fn serve(dir: &Path) -> io::Result<()> {
     }
     if let Some(opencode) = opencode {
         let initial = bootstrap["native"].clone();
-        thread::spawn(move || opencode.run(&initial));
+        let intent = config["opencode_initial"].clone();
+        thread::spawn(move || opencode.run(&initial, &intent));
     }
     let (drained, drain_done) = mpsc::sync_channel(1);
     let output = thread::spawn(move || {

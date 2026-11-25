@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import http.client
 import http.server
 import json
@@ -48,6 +49,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         prompt = str(messages[latest].get('content')) if latest>=0 else ''
         names = [tool['function']['name'] for tool in incoming.get('tools',[]) if tool.get('type')=='function']
         actions = []
+        if names and 'RUST_SEMANTIC' in prompt and any(m['role']=='tool' for m in after):
+            time.sleep(0.35)
         if names and 'RUST_SEMANTIC' in prompt and not any(m['role']=='tool' for m in after):
             if 'question' in names:
                 actions.append(('question', {'questions':[{
@@ -217,7 +220,14 @@ try:
     def completed():
         current=output('message',row,'--status','--operation-id',operation)
         return current if current['state']=='completed' else None
+    persisted=root/'state'/'rust-v1'/row.split('/')[-1]/'opencode-receipts'/(hashlib.sha256(operation.encode()).hexdigest()+'.json')
+    def checkpointed():
+        receipt=json.loads(persisted.read_text())['receipt']
+        return receipt if receipt['state']=='completed' else None
+    durable=wait(checkpointed)
+    assert durable['outcome_source']=='reconciled_message',durable
     done=wait(completed)
+    assert done==durable
     assert output('message',row,'--operation-id',operation,'--text','RUST_SEMANTIC. Reply fixture only.')==done
     prior=history()
     first=history(row, 1)
@@ -234,6 +244,24 @@ try:
     print('existing native draft fenced semantic dispatch',flush=True)
     cli('kill',row)
     wait(lambda:all(item['id']!=row or item['status']['Process']=='exited' for item in output('ls','--json')))
+    def check_initial_receipt(identifier,state):
+        session_dir=root/'state'/'rust-v1'/identifier.split('/')[-1]
+        receipt_file=session_dir/'opencode-initial.json'
+        original=receipt_file.read_text()
+        proof=json.loads(original)
+        planned=json.loads((session_dir/'session.json').read_text())['opencode_initial']
+        assert proof['state']==state and proof['intent']==planned
+        assert proof['bridge_receipt']['intentHash']==planned['intentHash']
+        receipt_file.write_text(json.dumps({'token':proof['token'],'state':state}))
+        try:
+            refused=resume_request(env, identifier, root/'project')
+            assert refused['op']=='error' and 'initial input remains unverified' in refused['error']
+        finally:
+            receipt_file.write_text(original)
+        return proof['bridge_receipt']
+    admission=check_initial_receipt(row,'native_accepted')
+    assert any(row['info']['id']==admission['messageID'] and row['info']['role']=='user'
+               for row in prior['history'])
     for bad_id in ('must-use-reliable-protocol', 42):
         assert resume_request(env, row, root/'project', operation_id=bad_id)['op'] == 'error'
     resumed=resume_request(env, row, root/'project')['session']
@@ -244,9 +272,21 @@ try:
     assert prior['session_instance']!=after['session_instance']
     assert [m['info']['id'] for m in prior['history']]==[m['info']['id'] for m in after['history']]
     assert output('message',row,'--status','--operation-id',operation)==done
+    previous_ids={item['id'] for item in output('ls','--json')}
+    rejected=cli('spawn','--cli','opencode','--dir',str(root/'project'),'--model','fixture/fixture',
+                 '--prompt','/fixture-no-native-effect',check=False)
+    assert rejected.returncode!=0 and 'initial_command_unsupported' in rejected.stderr,rejected.stderr
+    rejected_id=next(item['id'] for item in output('ls','--json') if item['id'] not in previous_ids)
+    cli('kill',rejected_id)
+    wait(lambda:any(item['id']==rejected_id and item['status']['Process']=='exited' for item in output('ls','--json')))
+    witness=check_initial_receipt(rejected_id,'rejected')
+    assert witness['nativeEffect']=='none' and 'messageID' not in witness
+    rejected_resume=resume_request(env, rejected_id, root/'project')['session']
+    assert history(rejected_resume['id'])['history']==[]
+    print('admission and rejection resume require their saved initial bridge proof',flush=True)
     print(json.dumps({'version':'1.19.3','guard':'IPv4 and IPv6 external egress rejected; loopback only',
        'local_provider_calls':len(request_log),'cards':cards,'semantic_state':done['state'],
-       'history_pagination':True,'daemon_restart':True,'confirmed_resume':True,'duplicate_exact':True,'draft_fence':True,'canonical_decision_digest':True}))
+       'history_pagination':True,'daemon_restart':True,'confirmed_resume':True,'duplicate_exact':True,'draft_fence':True,'canonical_decision_digest':True,'initial_witness':True,'durable_terminal_event':True}))
 finally:
     try:
         for item in output('ls','--json'):
