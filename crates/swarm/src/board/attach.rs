@@ -12,10 +12,14 @@ const MAX_SNAPSHOT: u64 = 200 * 1024 * 1024;
 const POLL: Duration = Duration::from_millis(40);
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
-const KITTY_DETACH: &[u8] = b"\x1b[113;5u";
-const KITTY_DETACH_PRESS: &[u8] = b"\x1b[113;5:1u";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Exit {
+    Board,
+    Next,
+    Previous,
+}
 
-pub(super) fn run(path: &Path, id: &str, name: &str, output: &mut impl Write) -> io::Result<()> {
+pub(super) fn run(path: &Path, id: &str, name: &str, output: &mut impl Write) -> io::Result<Exit> {
     let mut client = Client::dial(path, &["attach"])?;
     let lease = client.request("attach", Some(id), "lease")?;
     if field(&lease, "endpoint_id") != client.endpoint() || field(&lease, "session_id") != id {
@@ -74,15 +78,18 @@ pub(super) fn run(path: &Path, id: &str, name: &str, output: &mut impl Write) ->
                 break;
             }
             last_input = Instant::now();
-            let (bytes, detached) = filter.feed(&input[..count]);
+            let (bytes, command) = filter.feed(&input[..count]);
             if !bytes.is_empty() {
                 wire::write_frame(&mut stream, INPUT, &bytes)?;
             }
-            if detached {
-                let _ = send_control("detach", None, &mut stream);
-                break;
+            if let Some(exit) = command {
+                send_control("detach", None, &mut stream)?;
+                return Ok(exit);
             }
-        } else if !filter.pending.is_empty() && last_input.elapsed() >= POLL {
+        } else if !filter.paste
+            && !filter.pending.is_empty()
+            && last_input.elapsed() >= Duration::from_millis(50)
+        {
             wire::write_frame(&mut stream, INPUT, &std::mem::take(&mut filter.pending))?;
         }
         if socket_ready {
@@ -110,7 +117,7 @@ pub(super) fn run(path: &Path, id: &str, name: &str, output: &mut impl Write) ->
             }
         }
     }
-    Ok(())
+    Ok(Exit::Board)
 }
 
 fn worker_size((cols, rows): (u16, u16)) -> (u16, u16) {
@@ -120,7 +127,10 @@ fn worker_size((cols, rows): (u16, u16)) -> (u16, u16) {
 fn hint(output: &mut String, name: &str, (cols, rows): (u16, u16)) {
     use std::fmt::Write;
     if rows >= 3 {
-        let text = super::clip(&format!("{name}  ctrl+q returns to swarm"), cols);
+        let text = super::clip(
+            &format!("{name}  ctrl+q returns to swarm  ctrl+p/ctrl+n switch"),
+            cols,
+        );
         let _ = write!(
             output,
             "\x1b7\x1b[?6l\x1b[1;{}r\x1b[{rows};1H\x1b[2m{text}\x1b[0m\x1b[K\x1b8",
@@ -267,34 +277,99 @@ fn style(run: &Value, output: &mut String) {
 struct AttachKeys {
     pending: Vec<u8>,
     paste: bool,
+    string_payload: bool,
+    escape: bool,
 }
 
 impl AttachKeys {
-    fn feed(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+    fn feed(&mut self, bytes: &[u8]) -> (Vec<u8>, Option<Exit>) {
         let mut out = Vec::with_capacity(bytes.len() + self.pending.len());
         for &byte in bytes {
-            self.pending.push(byte);
-            loop {
-                let pending = self.pending.as_slice();
-                if !self.paste && matches!(pending, b"\x11" | KITTY_DETACH | KITTY_DETACH_PRESS) {
-                    self.pending.clear();
-                    return (out, true);
+            if self.paste {
+                self.pending.push(byte);
+                while !PASTE_END.starts_with(&self.pending) {
+                    out.push(self.pending.remove(0));
                 }
-                if pending == PASTE_START || pending == PASTE_END {
-                    self.paste = pending == PASTE_START;
+                if self.pending == PASTE_END {
                     out.append(&mut self.pending);
-                    break;
+                    self.paste = false;
                 }
-                if [PASTE_START, PASTE_END, KITTY_DETACH, KITTY_DETACH_PRESS]
-                    .iter()
-                    .any(|sequence| sequence.starts_with(pending))
-                {
-                    break;
-                }
-                out.push(self.pending.remove(0));
+                continue;
             }
+            if self.string_payload {
+                out.push(byte);
+                if byte == 7 || (self.escape && byte == b'\\') {
+                    self.string_payload = false;
+                }
+                self.escape = byte == 27;
+                continue;
+            }
+            if self.escape && matches!(byte, b']' | b'P' | b'_' | b'^' | b'X') {
+                self.string_payload = true;
+                out.append(&mut self.pending);
+                out.push(byte);
+                self.escape = false;
+                continue;
+            }
+            self.escape = byte == 27;
+            if let Some(exit) = match byte {
+                0x11 => Some(Exit::Board),
+                0x0e => Some(Exit::Next),
+                0x10 => Some(Exit::Previous),
+                _ => None,
+            } {
+                out.append(&mut self.pending);
+                return (out, Some(exit));
+            }
+            if byte == 27 {
+                out.append(&mut self.pending);
+                self.pending.push(byte);
+                continue;
+            }
+            if self.pending.is_empty() {
+                out.push(byte);
+                continue;
+            }
+            self.pending.push(byte);
+            if self.pending == b"\x1b[" {
+                continue;
+            }
+            if self.pending.starts_with(b"\x1b[")
+                && !(0x40..=0x7e).contains(&byte)
+                && self.pending.len() < 64
+            {
+                continue;
+            }
+            if self.pending == PASTE_START {
+                self.paste = true;
+            } else if let Some(exit) = kitty_command(&self.pending) {
+                self.pending.clear();
+                return (out, Some(exit));
+            }
+            out.append(&mut self.pending);
         }
-        (out, false)
+        (out, None)
+    }
+}
+
+fn kitty_command(frame: &[u8]) -> Option<Exit> {
+    let text = std::str::from_utf8(frame.strip_prefix(b"\x1b[")?.strip_suffix(b"u")?).ok()?;
+    let mut fields = text.split(';');
+    let key = fields.next()?.split(':').next()?;
+    let mut modifiers = fields.next()?.split(':');
+    let mask: u16 = modifiers.next()?.parse().ok()?;
+    // Caps and Num Lock do not change the shortcut. Modified chords and releases belong to the PTY.
+    if mask.checked_sub(1)? & !0xc0 != 4
+        || !matches!(modifiers.next(), None | Some("1" | "2"))
+        || modifiers.next().is_some()
+    {
+        return None;
+    }
+    match key {
+        "113" => Some(Exit::Board),
+        "110" => Some(Exit::Next),
+        "112" => Some(Exit::Previous),
+        _ => None,
     }
 }
 
@@ -303,13 +378,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fragmented_bracketed_paste_and_detach_keep_earlier_bytes() {
-        let mut filter = AttachKeys::default();
-        assert_eq!(filter.feed(b"before\x1b[20"), (b"before".to_vec(), false));
-        assert_eq!(
-            filter.feed(b"0~\x11\x1b[201~\x1b[113;"),
-            (b"\x1b[200~\x11\x1b[201~".to_vec(), false)
-        );
-        assert_eq!(filter.feed(b"5uignored"), (Vec::new(), true));
+    fn attachment_controls_survive_chunking_and_preserve_worker_input() {
+        for (key, exit) in [
+            (b'n', Exit::Next),
+            (b'p', Exit::Previous),
+            (b'q', Exit::Board),
+        ] {
+            let mut filter = AttachKeys::default();
+            assert_eq!(filter.feed(b"before\x1b[20"), (b"before".to_vec(), None));
+            let pasted = [b"0~".as_slice(), &[key & 31], b"\x1b[110;5u\x1b[20"].concat();
+            let (out, command) = filter.feed(&pasted);
+            assert_eq!(command, None);
+            assert_eq!(out, [PASTE_START, &[key & 31], b"\x1b[110;5u"].concat());
+            assert_eq!(filter.feed(b"1~"), (PASTE_END.to_vec(), None));
+            for sequence in [
+                b"\x1b[112;6u".as_slice(),
+                b"\x1b[110;5:3u",
+                b"\x1b]title\x0e\x1b[113;5u\x07",
+                b"\x1bPdata\x10\x1b\\",
+            ] {
+                assert_eq!(filter.feed(sequence), (sequence.to_vec(), None));
+            }
+            for byte in format!("\x1b[{};5:1", key).bytes() {
+                assert_eq!(filter.feed(&[byte]), (Vec::new(), None));
+            }
+            assert_eq!(filter.feed(b"uignored"), (Vec::new(), Some(exit)));
+            assert_eq!(
+                filter.feed(&[b'a', key & 31, b'b']),
+                (vec![b'a'], Some(exit))
+            );
+        }
     }
 }

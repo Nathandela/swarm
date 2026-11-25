@@ -35,6 +35,8 @@ scripts/verification/parity/test_board.py \
 
 Use the pinned Go supervisor and then the Rust candidate supervisor. The witness gives Linux a single private namespace for the entire arm so killing the daemon alone cannot end the shim's namespace.
 
+Pass `--cycle` to drive two running sessions through Ctrl+N, Kitty Ctrl+P, legacy Ctrl+P, detach and reattach. The driver checks each unique echo through the public `peek` command, the complete worker input log and the restored terminal settings. Both Go/Go and Rust/Rust passed this exercise on macOS arm64 and Linux x86_64.
+
 For an independent cell-grid observer, pass `--tmux /absolute/path/to/tmux --grid-evidence /path/to/new.json`. This lane starts a fixture through the public CLI so the same scenario works with either board. Tmux drives the actual PTY and captures every fixture row before and after daemon death. The receipt preserves tmux's raw ANSI serialization and an expanded 80×23 grid with cell text, widths, continuation cells, attributes and resolved colors. It observes the cursor and modes through tmux, and verifies bracketed paste independently from the fixture's literal input log. The reserved Swarm chrome row is outside this fixture grid.
 
 The pinned Go oracle preserves the live acute accent in `é` but loses it in the pre-restart shim projection and on reattach. Its cell difference remains in the receipt and the continuity check exits nonzero. The Rust snapshot preserves the combining cluster; compare its cells and modes with the Go live projection. Tmux capture does not expose every terminal state, including focus and alternate-scroll reporting.

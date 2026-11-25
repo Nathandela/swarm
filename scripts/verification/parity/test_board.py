@@ -24,7 +24,7 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
-def witness(root, tmux=None):
+def witness(root, tmux=None, cycle=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -81,6 +81,66 @@ def witness(root, tmux=None):
             return worker, birth
         finally:
             board.close()
+
+    if cycle:
+        daemon = start()
+        sessions = []
+        for name in ("amber", "violet"):
+            launch = cli("spawn", "--cli", "claude", "--name", name,
+                         "--dir", cwd, "--prompt", "offline fixture")
+            assert launch.returncode == 0, launch.stderr
+            sessions.append(launch.stdout.decode().strip())
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"violet")
+            board.send(b"\r")
+            board.wait_bytes(b"fixture ready")
+
+            def identify(marker):
+                board.send(marker + b"\r")
+                board.wait_bytes(b"fixture received " + marker)
+                def owners():
+                    return [identity for identity in sessions
+                            if b"fixture received " + marker in cli("peek", identity).stdout]
+                found = p.wait_for(owners, "worker echo in the owning session")
+                assert len(found) == 1, found
+                return found[0]
+
+            first = identify(b"first-only")
+            offset = len(board.capture)
+            board.send(b"\x0e")
+            board.wait_bytes(b"fixture ready", offset)
+            second = identify(b"second-only")
+            assert first != second
+            offset = len(board.capture)
+            board.send(b"\x1b[112;5u")
+            board.wait_bytes(b"first-only", offset)
+            assert identify(b"wrapped-back") == first
+            offset = len(board.capture)
+            board.send(b"\x10")
+            board.wait_bytes(b"second-only", offset)
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"violet", offset)
+            offset = len(board.capture)
+            board.send(b"\r")
+            board.wait_bytes(b"second-only", offset)
+            assert identify(b"last-selection") == second
+            assert (root / "effects/input").read_bytes() == b"first-only\rsecond-only\rwrapped-back\rlast-selection\r"
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"violet", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "board quit after cycling")
+            assert board.child.returncode == 0
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        for identity in sessions:
+            assert cli("kill", identity).returncode == 0
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
 
     if tmux is not None:
         grid_witness(root, cli, roster, start, tmux)
@@ -296,7 +356,7 @@ def grid_witness(root, cli, roster, start, tmux):
     daemon.wait(timeout=5)
 
 
-def run(supervisor, client, tmux=None, evidence=None):
+def run(supervisor, client, tmux=None, evidence=None, cycle=False):
     root = Path(tempfile.mkdtemp(prefix="pb-", dir=Path("/tmp").resolve()))
     child = driver = None
     previous = {}
@@ -311,7 +371,9 @@ def run(supervisor, client, tmux=None, evidence=None):
             dest.chmod(0o700)
         p.table()
         command = [*p.guard(root), sys.executable, root / "bin/test_board.py", "_inside", root]
-        if tmux is not None:
+        if cycle:
+            command.append("--cycle")
+        elif tmux is not None:
             command.append(tmux)
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
@@ -340,21 +402,25 @@ def run(supervisor, client, tmux=None, evidence=None):
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    print(f"board launch, attach and live reattach passed; cleanup {cleanup}")
+    exercise = "running-session cycling" if cycle else "board launch, attach and live reattach"
+    print(f"{exercise} passed; cleanup {cleanup}")
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
         compare_grid_receipts(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (3, 4) and sys.argv[1] == "_inside":
-        witness(Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) == 4 else None)
+        mode = sys.argv[3] if len(sys.argv) == 4 else None
+        witness(Path(sys.argv[2]), Path(mode) if mode and mode != "--cycle" else None, mode == "--cycle")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
         parser.add_argument("--board", required=True, type=p.binary_path)
-        parser.add_argument("--tmux", type=p.binary_path)
+        modes = parser.add_mutually_exclusive_group()
+        modes.add_argument("--tmux", type=p.binary_path)
+        modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        run(args.supervisor, args.board, args.tmux, args.grid_evidence)
+        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle)

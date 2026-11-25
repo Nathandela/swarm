@@ -246,16 +246,43 @@ impl Board {
         &mut self,
         path: &Path,
         id: &str,
-        name: &str,
+        label: &str,
         output: &mut impl Write,
     ) -> io::Result<()> {
-        let result = attach::run(path, id, name, output);
+        let mut ring: Vec<_> = self
+            .display_rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                Row::Session(row) if running(row) => {
+                    Some((field(row, "id").to_owned(), name(row).to_owned()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut index = ring
+            .iter()
+            .position(|(target, _)| target == id)
+            .unwrap_or_else(|| {
+                ring.push((id.to_owned(), label.to_owned()));
+                ring.len() - 1
+            });
+        loop {
+            let (id, label) = &ring[index];
+            match attach::run(path, id, label, output) {
+                Ok(attach::Exit::Next) => index = (index + 1) % ring.len(),
+                Ok(attach::Exit::Previous) => index = (index + ring.len() - 1) % ring.len(),
+                Ok(attach::Exit::Board) => break,
+                Err(error) => {
+                    self.notice = error.to_string();
+                    break;
+                }
+            }
+            self.set_focus(Focus::Session(ring[index].0.clone()));
+            self.reveal_focus(term::size().1);
+        }
         output.write_all(term::RESTORE.as_bytes())?;
         if !term::stopped() {
             output.write_all(term::ENTER_BOARD.as_bytes())?;
-        }
-        if let Err(error) = result {
-            self.notice = error.to_string();
         }
         Ok(())
     }
