@@ -9,24 +9,8 @@ import (
 //go:embed skills/swarm-dispatcher/SKILL.md
 var dispatcherSkill string
 
-const dispatcherGuide = `Publish a direct answer, or briefly acknowledge new work once. In a shared thread, answer direct questions and leave room for others. For a direct reply or clarification in shared Discord, set recipient_id to the verified Discord participant. For a participant seen only in history, include their recipient_message_id.
-After interruption, compare this discussion’s messages with the original worker, replies and receipts. Skip source messages with a confirmed answer. Treat a new message ID as new input, even when it repeats a question. Leave uncertain actions on hold. Ask only for missing information.
-For a replacement, read the scoped Discord history and check each relevant earlier human ID with swarm_discussion_history (source receipt, anchor the message ID). A scheduled final covers the original revision. Confirmed Discord message IDs show delivery of that reply. A former manager turn ending does not establish delivery or job success.
-If several receipts need sorting and a small tools-disabled model is already approved, optionally give it only verified message IDs, reply states and former_manager_turn_end values. Use a fresh context with no inherited history, tools, hooks or file access. Ask it to group IDs by final scheduled, progress scheduled and unknown. Check each ID and label against the receipts before replying. Otherwise group them directly.
-Start work with ordinary swarm spawn on this supervisor. Keep the same worker for follow-ups.
-
-In the worker's prompt, request both notifications:
-  When blocked, run swarm teammate message --kind needs-input --text "your question".
-  Read the answer with swarm teammate reply --id MESSAGE_ID --wait 90s.
-  When finished, run swarm teammate message --kind complete --text "result and evidence".
-  Record the evidence in the native final reply too.
-
-To return a file, add --file PATH to the worker's completion note for each file. Read the exact note and pass the selected file_ids to publish.
-Keep each returned note ID. Retry an uncertain send with the same ID, kind, text and files. Check the saved receipt if a file has changed.
-Return after dispatch. Answer a worker question through the reply action in its wake.
-Check the evidence from the worker's native turn or inspect the same session with swarm peek.
-Cite what you observed. If only the note is available, attribute the claim to the worker. Publish the result in the same conversation.
-`
+//go:embed skills/swarm-dispatcher/guide.txt
+var dispatcherGuide string
 
 func runDispatcherGuide(args []string, stdout, stderr io.Writer) int {
 	switch {
