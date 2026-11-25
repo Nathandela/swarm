@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import threading
 import subprocess
@@ -196,7 +197,37 @@ def verify(binary, expect_retained_history=False):
                 assert REPLY in json.dumps(recovered["worker_data"], ensure_ascii=False)
             assert json.loads(pilot("exit"))["receipt"] == "exited"
             contexts.remove(context)
-            invoke("kill", id)
+            if expect_retained_history:
+                state = root / "state/rust-v1" / id.split("/")[1]
+                owner = json.loads((state / "owner.json").read_text())
+                worker = int((root / "effects/worker").read_text())
+                assert owner["worker_pid"] == worker
+                boot = fixtures.generation(worker)
+                assert boot is not None
+                _, context = entry()
+                initial = [json.loads(line) for line in pilot(
+                    "watch",id,"--once","--timeout","150ms",expected=2).splitlines()]
+                checkpoint = initial[0]["cursor"]
+                daemon.kill()
+                daemon.wait(timeout=5)
+                assert fixtures.generation(worker) == boot
+                os.kill(worker,signal.SIGTERM)
+                fixtures.wait_for((state / "exit.json").exists,"worker exit while owner is down")
+                daemon = start(log)
+                pilot("roster",expected=1)
+                pilot("exit")
+                contexts.remove(context)
+                _,context = entry()
+                replay = [json.loads(line) for line in pilot(
+                    "watch",id,"--once","--after",str(checkpoint),"--timeout","4s").splitlines()]
+                assert replay[0]["cursor"]==checkpoint and replay[-1]["receipt"]=="event"
+                assert replay[-1]["worker_data"]["type"]=="exited",replay
+                assert REPLY in json.dumps(json.loads(pilot("view",id))["worker_data"],ensure_ascii=False)
+                pilot("exit")
+                contexts.remove(context)
+                print("Rust Pilot replays a worker exit during supervisor downtime")
+            else:
+                invoke("kill", id)
             invoke("watch",id,"--until","completed","--timeout","4s")
             observations["restart"] = True
             return observations

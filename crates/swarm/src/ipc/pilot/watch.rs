@@ -225,12 +225,18 @@ pub(super) fn run(ctx: &Context, client: &mut Client, args: &[String]) -> Result
     }
     let rows = client.sessions().map_err(fail)?;
     for id in ids.keys().cloned().collect::<Vec<_>>() {
-        if !rows.iter().any(|row| row["id"] == id) {
+        let present = rows.iter().any(|row| row["id"] == id);
+        let scoped = id.split_once('/').filter(|(endpoint, local)| {
+            *endpoint == client.endpoint() && !local.is_empty() && !local.contains('/')
+        });
+        // An explicit replay can name a retired discussion. A fresh snapshot
+        // still requires a current row rather than waiting on a mistyped ID.
+        if !present && (after.is_none() || scoped.is_none()) {
             return Err(misuse(format!(
                 "watch: discussion {id:?} is absent; refresh roster"
             )));
         }
-        if let Some((_, local)) = id.split_once('/') {
+        if let Some((_, local)) = scoped {
             ids.insert(local.to_owned(), id);
         }
     }

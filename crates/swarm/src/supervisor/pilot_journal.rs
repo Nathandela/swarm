@@ -38,10 +38,11 @@ impl Journal {
             roster: BTreeMap::new(),
             unavailable: false,
         };
+        let mut legacy = false;
         match runtime::read_json(&file) {
             Ok(raw) => {
                 let parsed = (|| {
-                    if raw["version"] != 1 {
+                    if raw["version"] != 1 && raw["version"] != 2 {
                         return None;
                     }
                     let head = raw["head"].as_u64()?;
@@ -57,12 +58,32 @@ impl Journal {
                     {
                         return None;
                     }
-                    Some((head, records, seen))
+                    let previous = BTreeMap::from_iter(
+                        raw["roster"]
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .map(|(id, row)| (id.clone(), row.clone())),
+                    );
+                    if raw["version"] == 2
+                        && (!raw["roster"].is_object()
+                            || previous.iter().any(|(id, row)| {
+                                row["session_id"] != *id
+                                    || row["type"] != "roster"
+                                    || !row["group"].is_string()
+                                    || !row["process"].is_string()
+                            }))
+                    {
+                        return None;
+                    }
+                    Some((head, records, seen, previous))
                 })();
-                if let Some((head, records, seen)) = parsed {
+                if let Some((head, records, seen, previous)) = parsed {
+                    legacy = raw["version"] == 1;
                     owned.head = head;
                     owned.records = records;
                     owned.seen = seen;
+                    owned.roster = previous;
                 } else {
                     owned.unavailable = true;
                 }
@@ -70,34 +91,52 @@ impl Journal {
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(_) => owned.unavailable = true,
         }
-        for row in rows {
-            if let Some((id, projection)) = projection(&row) {
-                owned.roster.insert(id, projection);
+        let current: BTreeMap<_, _> = rows
+            .into_iter()
+            .filter_map(|row| projection(&row))
+            .collect();
+        let mut events = Vec::new();
+        let mut gap = legacy;
+        for id in owned.roster.keys().filter(|id| !current.contains_key(*id)) {
+            if super::removal::completed(root, id).unwrap_or(false) {
+                events.push(json!({"session_id":id,"type":"deleted"}));
+                owned.seen.shift_remove(id);
+            } else {
+                // A skipped or unreadable session is not evidence of deletion.
+                gap = true;
             }
         }
-        Self {
+        for (id, row) in &current {
+            if let Some(event) = transition(id, owned.roster.get(id), row) {
+                events.push(event)
+            }
+        }
+        if gap {
+            // Keep available interactions for view while forcing old cursors to
+            // reconcile the new projection before advancing.
+            events.push(json!({"session_id":"*","type":"structured_gap","recovery_gap":true}));
+        }
+        owned.roster = current;
+        let journal = Self {
             file,
             owned: Mutex::new(owned),
             change: Condvar::new(),
+        };
+        {
+            let mut inner = journal.owned.lock().unwrap();
+            journal.commit(&mut inner, events);
         }
+        journal
     }
 
     pub(super) fn publish(&self, row: &Value, captures: Vec<Value>) {
-        let Some((id, mut projected)) = projection(row) else {
+        let Some((id, projected)) = projection(row) else {
             return;
         };
         let mut inner = self.owned.lock().unwrap();
-        let kind = match field(&row["status"], "Process") {
-            "exited" => "exited",
-            "lost" => "lost",
-            _ => "group_transition",
-        };
-        let mut events = Vec::new();
-        if inner.roster.get(&id).is_none_or(|previous| {
-            previous["group"] != projected["group"] || previous["process"] != projected["process"]
-        }) {
-            events.push(json!({"session_id":id,"type":kind,"group":projected["group"]}));
-        }
+        let mut events = transition(&id, inner.roster.get(&id), &projected)
+            .into_iter()
+            .collect::<Vec<_>>();
         let mut seen = inner.seen.get(&id).and_then(Value::as_u64).unwrap_or(0);
         let mut captures = captures
             .into_iter()
@@ -122,9 +161,10 @@ impl Journal {
         if seen > 0 {
             inner.seen.insert(id.clone(), json!(seen));
         }
-        self.add(&mut inner, events);
-        projected["cursor"] = json!(inner.head);
-        inner.roster.insert(id, projected);
+        if !events.is_empty() {
+            inner.roster.insert(id, projected);
+            self.commit(&mut inner, events);
+        }
         self.change.notify_all();
     }
 
@@ -132,16 +172,16 @@ impl Journal {
         let mut inner = self.owned.lock().unwrap();
         if inner.roster.remove(id).is_some() {
             inner.seen.shift_remove(id);
-            self.add(&mut inner, vec![json!({"session_id":id,"type":"deleted"})]);
+            self.commit(&mut inner, vec![json!({"session_id":id,"type":"deleted"})]);
             self.change.notify_all();
         }
     }
 
-    fn add(&self, inner: &mut Inner, mut events: Vec<Value>) {
-        if inner.unavailable || events.is_empty() {
+    fn commit(&self, inner: &mut Inner, events: Vec<Value>) {
+        if inner.unavailable {
             return;
         }
-        for mut event in events.drain(..) {
+        for mut event in events {
             let Some(next) = inner.head.checked_add(1) else {
                 inner.unavailable = true;
                 return;
@@ -168,12 +208,19 @@ impl Journal {
             remove += 1;
         }
         inner.records.drain(..remove);
-        if runtime::write_json(
-            &self.file,
-            &json!({"version":1,"head":inner.head,"records":inner.records,"seen":inner.seen}),
-        )
-        .is_err()
-        {
+        let current = json!({"version":2,"head":inner.head,"records":inner.records,"seen":inner.seen,"roster":inner.roster});
+        let persisted = serde_json::to_vec(&current)
+            .map_err(io::Error::other)
+            .and_then(|bytes| {
+                if bytes.len() >= 1 << 20 {
+                    return Err(io::Error::other(
+                        "pilot journal state exceeds its read limit",
+                    ));
+                }
+                use std::io::Write;
+                runtime::write_atomic(&self.file, |file| file.write_all(&bytes))
+            });
+        if persisted.is_err() {
             // A cursor after an uncertain persistence result cannot be advertised.
             inner.unavailable = true;
         }
@@ -207,7 +254,11 @@ impl Journal {
         let (head, full, events, roster) = {
             let inner = self.owned.lock().unwrap();
             ensure(&inner)?;
-            let full = from < inner.head.saturating_sub(inner.records.len() as u64);
+            let full = from < inner.head.saturating_sub(inner.records.len() as u64)
+                || inner.records.iter().any(|event| {
+                    event["recovery_gap"] == true
+                        && event["cursor"].as_u64().is_some_and(|cursor| cursor > from)
+                });
             let events = if full {
                 Vec::new()
             } else {
@@ -330,11 +381,37 @@ fn ensure(inner: &Inner) -> io::Result<()> {
     }
 }
 
+fn transition(id: &str, previous: Option<&Value>, current: &Value) -> Option<Value> {
+    if previous == Some(current) {
+        return None;
+    }
+    let kind = match field(current, "process") {
+        "exited" if previous.is_none_or(|row| row["process"] != "exited") => "exited",
+        "lost" if previous.is_none_or(|row| row["process"] != "lost") => "lost",
+        _ if previous.is_none() => "launched",
+        _ if previous.is_some_and(|row| {
+            row["group"] != current["group"] || row["process"] != current["process"]
+        }) =>
+        {
+            "group_transition"
+        }
+        _ => "session_state",
+    };
+    let mut event = current.clone();
+    event
+        .as_object_mut()
+        .expect("roster projection")
+        .shift_remove("process");
+    event["session_id"] = json!(id);
+    event["type"] = json!(kind);
+    Some(event)
+}
+
 fn projection(row: &Value) -> Option<(String, Value)> {
     let (_, local) = field(row, "id").split_once('/')?;
     Some((
         local.to_owned(),
-        json!({"session_id":local,"type":"roster","group":row["group"],"agent":row["agent"],"name":row["name"],"process":row["status"]["Process"]}),
+        json!({"session_id":local,"type":"roster","group":row["group"],"agent":row["agent"],"name":row["name"],"process":row["status"]["Process"],"tag":row["tag"]}),
     ))
 }
 
@@ -360,6 +437,118 @@ pub(super) fn refresh(journal: &Journal, session: &Session, endpoint: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(local: &str, name: &str, group: &str, process: &str) -> Value {
+        json!({"id":format!("endpoint/{local}"),"name":name,"agent":"claude","group":group,"status":{"Process":process}})
+    }
+
+    fn initial_snapshot(journal: &Journal, after: u64) -> Value {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(move || journal.stream(server, "endpoint", after, 0).unwrap());
+            let first = runtime::read_control(&mut client).unwrap();
+            drop(client);
+            first
+        })
+    }
+
+    #[test]
+    fn interrupted_commit_recovers_exit_updates_deletion_and_creation_from_previous_head() {
+        let path =
+            Path::new("/tmp").join(format!("pilot-recovery-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&path.join("deleted")).unwrap();
+        let removed = "0123456789abcdef01234567";
+        let before = [
+            row("exit", "exit", "working", "running"),
+            row("rename", "old", "working", "running"),
+            row(removed, "removed", "completed", "exited"),
+        ];
+        let current = [
+            row("exit", "exit", "completed", "exited"),
+            row("rename", "new", "working", "running"),
+            row("added", "added", "working", "running"),
+        ];
+        let mut book = Journal::load(&path, before);
+        let saved = runtime::read_json(&path.join("pilot-journal.json")).unwrap();
+        let checkpoint = saved["head"].as_u64().unwrap();
+        book.file = path.join("blocked").join("pilot-journal.json");
+        book.publish(&current[0], Vec::new());
+        assert!(book.history("exit", 20).is_err());
+        assert_eq!(
+            runtime::read_json(&path.join("pilot-journal.json")).unwrap(),
+            saved
+        );
+        drop(book);
+        runtime::write_json(
+            &path.join("deleted").join(removed),
+            &json!({"schema":1,"id":removed,"device":1,"inode":2}),
+        )
+        .unwrap();
+        let recovered = Journal::load(&path, current.clone());
+        let snapshot = initial_snapshot(&recovered, checkpoint);
+        assert_eq!(snapshot["full_resync"], false);
+        let after: Vec<_> = snapshot["journal"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| (field(event, "session_id"), field(event, "type")))
+            .collect();
+        assert_eq!(
+            after,
+            [
+                (removed, "deleted"),
+                ("added", "launched"),
+                ("exit", "exited"),
+                ("rename", "session_state")
+            ]
+        );
+        assert!(
+            snapshot["roster"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["session_id"] == "rename" && entry["name"] == "new")
+        );
+        let new_head = snapshot["cursor"].as_u64().unwrap();
+        let restarted = Journal::load(&path, current);
+        assert_eq!(restarted.owned.lock().unwrap().head, new_head);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_or_unproven_disappearance_forces_a_recovery_gap() {
+        let path = Path::new("/tmp").join(format!("pilot-gap-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&path).unwrap();
+        runtime::write_json(
+            &path.join("pilot-journal.json"),
+            &json!({"version":1,"head":4,"records":[],"seen":{}}),
+        )
+        .unwrap();
+        let book = Journal::load(&path, [row("skipped", "worker", "working", "running")]);
+        assert!(
+            book.owned
+                .lock()
+                .unwrap()
+                .records
+                .iter()
+                .any(|event| event["recovery_gap"] == true)
+        );
+        let previous = book.owned.lock().unwrap().head;
+        let restarted = Journal::load(&path, []);
+        let owned = restarted.owned.lock().unwrap();
+        assert_eq!(owned.head, previous + 1);
+        assert_eq!(owned.records.last().unwrap()["recovery_gap"], true);
+        assert!(!owned.records.iter().any(|event| event["type"] == "deleted"));
+        drop(owned);
+        let snapshot = initial_snapshot(&restarted, previous);
+        assert_eq!(snapshot["full_resync"], true);
+        assert_eq!(snapshot["cursor"], previous + 1);
+        assert_eq!(snapshot["roster"], json!([]));
+        std::fs::remove_dir_all(path).unwrap();
+    }
 
     #[test]
     fn retained_reply_cursor_survives_reload_without_duplication() {

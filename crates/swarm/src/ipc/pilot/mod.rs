@@ -228,6 +228,9 @@ fn view(client: &mut Client, id: &str) -> Result<Value> {
     {
         return Ok(json!({"state":row,"history":items,"source":"structured_history"}));
     }
+    if matches!(field(&row["status"], "Process"), "exited" | "lost") {
+        return Ok(json!({"state":row,"source":"observed_process_state"}));
+    }
     client
         .request("terminal_subscribe", Some(id), "ok")
         .map_err(fail)?;
