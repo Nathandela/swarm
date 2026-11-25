@@ -98,7 +98,7 @@ pub(crate) fn lock_held(path: &Path) -> io::Result<bool> {
     }
 }
 
-fn uid() -> u32 {
+pub(crate) fn uid() -> u32 {
     // geteuid requires no pointers and has no process side effects.
     unsafe { libc::geteuid() }
 }

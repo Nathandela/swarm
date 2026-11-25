@@ -67,6 +67,12 @@ def exercise(root):
         assert "failed" in converge(code=1)
         assert daemon.poll() is None
         saved.write_bytes(original)
+        birth = p.generation(daemon.pid)
+        assert birth is not None
+        if sys.platform == "darwin":
+            birth = birth[0] * 1_000_000 + birth[1]
+        run(after, ["daemon","--replace-idle",str(daemon.pid),str(birth)], timer, 2)
+        assert daemon.poll() is None and saved.read_bytes() == original
         unusable_log = dict(timer, SWARM_DAEMON_LOG=str(root / "work"))
         assert "failed" in run(after, ["daemon", "restart", "--unattended"], unusable_log, 1)
         assert daemon.poll() is None and run(before, ["ls","--json"], env)

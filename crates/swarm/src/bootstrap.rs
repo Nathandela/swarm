@@ -1,8 +1,9 @@
 //! Interactive board auto-start. Scripting commands only dial an existing daemon.
 use crate::{ipc, supervisor::runtime};
 use std::env;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::fd::AsFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -277,10 +278,56 @@ fn converge() -> io::Result<(u8, String)> {
     }
 }
 
+fn prepared_environment(root: &Path) -> io::Result<bool> {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+    let saved = crate::environment::restore(root)?;
+    let expected: BTreeMap<_, _> = saved
+        .iter()
+        .map(|entry| {
+            let (key, value) = entry.split_once('=').expect("validated environment");
+            (OsString::from(key), OsString::from(value))
+        })
+        .collect();
+    let actual: BTreeMap<_, _> = env::vars_os()
+        .filter(|(key, _)| {
+            !matches!(
+                key.to_str(),
+                Some(
+                    "SWARM_DAEMON_STATE"
+                        | "SWARM_DAEMON_SOCK"
+                        | "SWARM_DAEMON_LOCK"
+                        | "SWARM_DAEMON_LOG"
+                )
+            )
+        })
+        .collect();
+    if actual != expected {
+        return Ok(false);
+    }
+    let path = ipc::env_path("SWARM_DAEMON_LOG").unwrap_or_else(|| root.join("daemon.log"));
+    let log = std::fs::symlink_metadata(path)?;
+    if !log.is_file() || log.nlink() != 1 || log.mode() & 0o077 != 0 || log.uid() != runtime::uid()
+    {
+        return Ok(false);
+    }
+    for fd in [io::stdout().as_fd(), io::stderr().as_fd()] {
+        let open = File::from(fd.try_clone_to_owned()?).metadata()?;
+        if (open.dev(), open.ino()) != (log.dev(), log.ino()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn replace_idle(pid: u32, birth: u64) -> io::Result<bool> {
     let root = ipc::state_path()?.canonicalize()?;
+    if !prepared_environment(&root)? {
+        return Ok(false);
+    }
     let mut client = ipc::Client::dial(&ipc::socket_path()?, &[UNATTENDED])?;
-    if !client.supports(UNATTENDED)
+    if client.build_version() == option_env!("SWARM_BUILD_VERSION").unwrap_or("dev")
+        || !client.supports(UNATTENDED)
         || client.endpoint() != crate::supervisor::endpoint(&root)
         || runtime::peer_pid(client.stream())? != pid
         || runtime::birth(pid)? != birth
