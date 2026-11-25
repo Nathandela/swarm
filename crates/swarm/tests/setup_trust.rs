@@ -1,3 +1,5 @@
+mod support;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -15,7 +17,7 @@ impl Fixture {
     }
 
     fn run(&self, action: &str, workspace: &Path, options: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_swarm"))
+        Command::new(support::executable())
             .env_clear()
             .env("HOME", &self.0)
             .env("XDG_CONFIG_HOME", self.0.join(".config"))

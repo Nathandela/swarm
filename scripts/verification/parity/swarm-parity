@@ -83,16 +83,21 @@ if LIBPROC is not None:
                                     ctypes.c_void_p, ctypes.c_int)
 
 
-def generation(pid):
+def process_identity(pid):
     if sys.platform.startswith("linux"):
         try:
-            return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
-        except (OSError, IndexError):
-            return None
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return fields[19], int(fields[1])
+        except (OSError, IndexError, ValueError):
+            return None, None
     info = DarwinProcessInfo()
     if LIBPROC.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
-        return (info.seconds, info.microseconds)
-    return None
+        return (info.seconds, info.microseconds), info.prefix[4]
+    return None, None
+
+
+def generation(pid):
+    return process_identity(pid)[0]
 
 
 def executable(pid):
@@ -111,8 +116,7 @@ def role(root, pid, command):
     argv = command.split()
     if not argv:
         return None
-    binary = str(root / "bin/swarm")
-    if argv[0] == binary and executable(pid) == binary:
+    if argv[0] in (str(root / "bin/swarm"), str(root / "bin/board")) and executable(pid) == argv[0]:
         return "swarm"
     if (len(argv) > 1 and argv[1] in (str(root / "bin/claude"), str(root / "bin/driver"))
             and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(executable(pid)).name.lower())):
@@ -121,24 +125,35 @@ def role(root, pid, command):
 
 
 def owned(root, driver, previous):
-    rows = table()
-    # Detached production roles re-exec the staged binary or the fixture by absolute path.
-    matches = {
-        pid: row for pid, row in rows.items()
-        if not row[2].startswith("Z") and (
-            (driver is not None and pid == driver)
-            or (pid in previous and previous[pid] == generation(pid))
-            or role(root, pid, row[3]) is not None
-        )
-    }
-    while descendants := {
-        pid: row for pid, row in rows.items()
-        if pid not in matches and row[0] in matches and not row[2].startswith("Z")
-    }:
+    rows = {pid: row for pid, row in table().items() if not row[2].startswith("Z")}
+    matches = {}
+    unresolved = {}
+    for pid, row in rows.items():
+        staged = str(root / "bin") + "/" in row[3]
+        if not (pid in previous or (driver and pid == driver[0]) or staged):
+            continue
+        birth, _ = process_identity(pid)
+        if birth is None:
+            continue
+        if (driver == (pid, birth) or previous.get(pid) == birth
+                or (staged and role(root, pid, row[3]) is not None)):
+            if generation(pid) == birth:
+                matches[pid] = birth
+            else:
+                unresolved[pid] = None
+    while True:
+        descendants = {}
+        for pid, row in rows.items():
+            if pid in matches or row[0] not in matches:
+                continue
+            birth, parent = process_identity(pid)
+            if birth is not None and parent == row[0] and generation(parent) == matches[parent]:
+                descendants[pid] = birth
+        if not descendants:
+            break
         matches.update(descendants)
-    identities = {pid: generation(pid) for pid in matches}
-    previous.update({pid: birth for pid, birth in identities.items() if birth is not None})
-    return identities
+    previous.update(matches)
+    return matches | unresolved
 
 
 def reap(root, driver, previous):
@@ -154,7 +169,7 @@ def reap(root, driver, previous):
                     victims[pid] = birth
                     try:
                         os.kill(pid, action)
-                    except ProcessLookupError:
+                    except (ProcessLookupError, PermissionError):
                         pass
             time.sleep(0.05)
     remaining = owned(root, driver, previous)
@@ -462,6 +477,7 @@ def run_arm(root, binary, config, control):
 
     previous = {}
     child = None
+    driver = None
     timed_out = False
     result = {"events": [], "observations": []}
     try:
@@ -472,9 +488,10 @@ def run_arm(root, binary, config, control):
                  control, *prefix],
                 env=environment(root), stdout=log, stderr=log, start_new_session=True,
             )
+            driver = (child.pid, generation(child.pid))
             deadline = time.monotonic() + config["timeout"]
             while child.poll() is None:
-                owned(root, child.pid, previous)
+                owned(root, driver, previous)
                 if time.monotonic() >= deadline:
                     timed_out = True
                     break
@@ -482,10 +499,14 @@ def run_arm(root, binary, config, control):
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         result["failure"] = {"stage": "isolation", "class": type(exc).__name__}
     finally:
-        driver = child.pid if child is not None and child.poll() is None else None
+        if child is not None:
+            child.poll()
         result["cleanup"] = reap(root, driver, previous)
         if child is not None:
-            child.wait(timeout=2)
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                result["cleanup"]["remaining"] = sorted(set(result["cleanup"]["remaining"]) | {child.pid})
     observations = root / "observations.json"
     if observations.exists():
         result.update(json.loads(bounded_read(observations)))
@@ -514,9 +535,11 @@ def supervise(config, path):
                                       "class": type(exc).__name__}}, replace=False)
         return 1
     root = Path(tempfile.mkdtemp(prefix="sp-", dir=Path("/tmp").resolve()))
+    preserve = True
     try:
         ref = run_arm(root / "r", Path(config["reference"]), config, "none")
         candidate = run_arm(root / "c", Path(config["candidate"]), config, config["control"])
+        preserve = any(arm["cleanup"]["remaining"] for arm in (ref, candidate))
         mismatch = compare(ref, candidate)
         failure = any("failure" in arm or arm["cleanup"]["remaining"] for arm in (ref, candidate))
         result = "incomplete" if any(
@@ -530,10 +553,13 @@ def supervise(config, path):
                             for k, v in environment(root / "r").items()},
             "reference": ref, "candidate": candidate, "first_divergence": mismatch,
         }
+        if preserve:
+            report["preserved_scratch"] = str(root)
         write_json(path, report, replace=False)
         return 0 if result == "passed" else 1
     finally:
-        shutil.rmtree(root)
+        if not preserve:
+            shutil.rmtree(root)
 
 
 def main():

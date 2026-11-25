@@ -5,6 +5,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ def compare(reference, candidate):
     try:
         for name in ["home", "runtime", "tmp", "work", "state", "bin", "effects"]:
             (root / name).mkdir(mode=0o700)
-        go = root / "bin/go-swarm"
+        go = root / "bin/swarm"
         rust = root / "bin/rust-swarm"
         for source, target in [(reference, go), (candidate, rust), (p.FIXTURE, root / "bin/claude")]:
             shutil.copyfile(source, target)
@@ -50,9 +51,20 @@ def compare(reference, candidate):
             p.wait_for(lambda: (root/"d.sock").exists(), "owner socket")
             same("ls")
             same("ls", "--json")
-            spawn = run(go, "spawn", "--cli", "claude", "--name", "amber & clay", "--dir", str(root/"work"), "--prompt", "offline fixture")
+            id_result = run(rust, "spawn", "--new-operation-id")
+            assert id_result.returncode == 0, snapshot(id_result)
+            operation = id_result.stdout.decode().strip()
+            spawn_args = ["spawn", "--operation-id", operation, "--cli", "claude", "--name",
+                          "amber & clay", "--dir", str(root / "work/absent/.."), "--prompt", "offline fixture"]
+            spawn = run(rust, *spawn_args)
             assert spawn.returncode == 0, snapshot(spawn)
             session = spawn.stdout.decode().strip()
+            env["SWARM_TEST_UNRELATED"] = "must-not-enter-reliable-request"
+            replay = run(go, *spawn_args)
+            assert snapshot(replay) == snapshot(spawn), (snapshot(replay), snapshot(spawn))
+            status = json.loads(same("spawn", "--status", operation))
+            assert status["session_id"] == session and status["state"] == "applied", status
+            print("Rust launch, exact retry and Go/Rust receipt agree")
             p.wait_for(lambda: (root/"effects"/"worker").exists(), "worker started")
             p.wait_for(lambda: b"fixture ready" in run(go, "peek", session).stdout, "fixture screen")
             time.sleep(.4)
@@ -64,6 +76,13 @@ def compare(reference, candidate):
             same("peek", session, "--lines", "0", "--lines", "1")
             same("peek", session, "--lines", "garbage", status=2)
             same("peek", session, "--help", status=2)
+            same("kill", status=1)
+            same("send", status=2)
+            same("send", session, "--help", status=2)
+            same("send", session, "--key", "missing", status=2)
+            same("send", session, "--text", "x", "--key", "up", status=2)
+            same("spawn", "--help", status=2)
+            same("spawn", "--cli", "claude", status=2)
             same("ls", "--help", status=2)
             same("ls", "--json=perhaps", status=2)
             same("ls", "---json", status=2)
@@ -72,13 +91,24 @@ def compare(reference, candidate):
             same("peek", "mismatch/missing", status=1)
             same("watch", session, "--until", "change", "--timeout", "5ms", status=2)
             same("watch", "missing", "--timeout", "5ms", status=1)
+            for index, binary in enumerate((go, rust)):
+                text = f"steer-{index}"
+                p.wait_for(lambda: (root / "effects/input").exists(), "fixture input reader")
+                before = (root / "effects/input").read_bytes()
+                result = run(binary, "send", session, "--text", text, "--no-submit")
+                assert snapshot(result) == (0, b"", b""), snapshot(result)
+                p.wait_for(lambda: text.encode() in (root / "effects/input").read_bytes()[len(before):], "steering bytes")
+                result = run(binary, "send", session, "--key", "enter")
+                assert snapshot(result) == (0, b"", b""), snapshot(result)
+                p.wait_for(lambda: (root / "effects/input").read_bytes().endswith(b"\r"), "submit key")
+            print("Go and Rust steering reached the original worker")
             for binary in (go, rust):
                 children.append(subprocess.Popen(
                     [*guard, binary, "watch", session, "--until", "completed", "--timeout", "5s"],
                     env=env, cwd=root / "work", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 ))
             time.sleep(.3)
-            killed = run(go, "kill", session)
+            killed = run(rust, "kill", session)
             assert killed.returncode == 0, snapshot(killed)
             events = [(*child.communicate(timeout=6), child.returncode) for child in children]
             assert events[0] == events[1] and events[0][2] == 0, events
@@ -92,13 +122,11 @@ def compare(reference, candidate):
             if child.poll() is None:
                 child.terminate()
                 child.communicate(timeout=5)
-        try:
-            cleanup = p.reap(root, None, previous)
-            print("cleanup", cleanup)
-            if cleanup["remaining"]:
-                raise RuntimeError("fixture processes survived cleanup")
-        finally:
-            shutil.rmtree(root)
+        cleanup = p.reap(root, None, previous)
+        print("cleanup", cleanup)
+        if cleanup["remaining"]:
+            raise RuntimeError(f"fixture processes survived cleanup; retained {root}")
+        shutil.rmtree(root)
 
 
 if __name__ == "__main__":

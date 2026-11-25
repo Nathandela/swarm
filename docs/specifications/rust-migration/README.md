@@ -29,6 +29,8 @@ Use the two CLI paths and SHA-256 digests in the resulting `manifest.json` for l
 
 Before comparing latency, align the actual executable architectures of both arms. On the kickoff machine Go defaults to darwin/amd64 and Rust to aarch64-apple-darwin. Prefix the build command with `env GOARCH=arm64` when comparing with native Apple Silicon Rust. Keep the manifest with the results.
 
+Current phase results and open qualification gates are recorded in the [fleet verification log](../../verification/rust-migration.md).
+
 ## Reading and ownership
 
 | For this decision | Start here |

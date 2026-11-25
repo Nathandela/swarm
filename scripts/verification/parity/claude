@@ -30,9 +30,17 @@ with (effects / "input").open("ab", buffering=0) as log:
     while data := os.read(0, 1):
         log.write(data)
         if data in (b"\n", b"\r"):
-            os.write(1, b"fixture received " + pending
-                     + (b"\r" if (effects / "extra-cr").exists() else b"")
-                     + b"\r\nfixture end")
+            if (effects / "grid").exists() and pending == b"before":
+                os.write(1, b"\x1b[?1049h\x1b[?25l\x1b[?1h\x1b[?1002h\x1b[?1006h"
+                            b"\x1b[?2004h\x1b[2J\x1b[1;1Hfixture grid"
+                            b"\x1b[2;3H\x1b[1;4;38;2;20;130;200m"
+                            + "年e\u0301Z".encode() +
+                            b"\x1b[0m\x1b[3;5H\x1b[7;48;5;42mstyled\x1b[0m"
+                            b"\x1b[4;1Hgrid end\x1b[6;11H")
+            else:
+                os.write(1, b"fixture received " + pending
+                         + (b"\r" if (effects / "extra-cr").exists() else b"")
+                         + b"\r\nfixture end")
             pending.clear()
         else:
             pending.extend(data)

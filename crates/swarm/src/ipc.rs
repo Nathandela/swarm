@@ -1,15 +1,18 @@
+mod actions;
 mod duration;
-mod wire;
+pub(crate) mod spawn;
+pub(crate) mod wire;
 
+use crate::socket::DeadlineReader;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::env;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const VERSION: u64 = 1;
+pub(crate) const VERSION: u64 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const WATCH_TIMEOUT: Duration = Duration::from_secs(600);
 const EVENT_LIMIT: usize = 256;
@@ -17,10 +20,20 @@ const OBSERVATION: &str = "opencode-observation";
 
 pub fn run(args: &[String]) -> i32 {
     let verb = args[0].as_str();
+    if args == ["spawn", "--new-operation-id"] {
+        return spawn::print_id().map_or_else(
+            |(code, err)| {
+                eprintln!("{err}");
+                code
+            },
+            |()| 0,
+        );
+    }
     let caps = match verb {
+        "spawn" => spawn::CAPS,
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
-        "peek" => &[],
+        "send" | "kill" | "peek" => &[],
         _ => unreachable!(),
     };
     let path = match socket_path() {
@@ -43,6 +56,9 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
     let result = match verb {
+        "spawn" => spawn::run(&mut client, &args[1..]),
+        "send" => actions::send(&mut client, &args[1..]),
+        "kill" => actions::kill(&mut client, &args[1..]),
         "ls" => list(&mut client, &args[1..]),
         "peek" => peek(&mut client, &args[1..]),
         "watch" => watch(&mut client, &args[1..]),
@@ -59,13 +75,13 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
 
-fn socket_path() -> io::Result<PathBuf> {
+pub(crate) fn state_path() -> io::Result<PathBuf> {
     let state = if let Some(path) = env_path("SWARM_DAEMON_STATE") {
         path
     } else if let Some(path) = env_path("XDG_STATE_HOME").filter(|path| path.is_absolute()) {
@@ -75,17 +91,33 @@ fn socket_path() -> io::Result<PathBuf> {
             .ok_or_else(|| io::Error::other("$HOME is not defined"))?
             .join(".local/state/swarm/sessions")
     };
+    Ok(state)
+}
+
+pub(crate) fn socket_path() -> io::Result<PathBuf> {
+    let state = state_path()?;
     Ok(env_path("SWARM_DAEMON_SOCK").unwrap_or_else(|| state.join("daemon.sock")))
 }
 
-struct Client {
+#[derive(Debug)]
+struct Refusal(String, bool);
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Refusal {}
+
+pub(crate) struct Client {
     stream: UnixStream,
     endpoint: String,
     pushes: VecDeque<Value>,
+    capabilities: Vec<String>,
 }
 
 impl Client {
-    fn dial(path: &Path, caps: &[&str]) -> io::Result<Self> {
+    pub(crate) fn dial(path: &Path, caps: &[&str]) -> io::Result<Self> {
         let mut client = Self {
             stream: UnixStream::connect(path).map_err(|err| {
                 let reason = match err.kind() {
@@ -101,6 +133,7 @@ impl Client {
             })?,
             endpoint: String::new(),
             pushes: VecDeque::new(),
+            capabilities: Vec::new(),
         };
         client.stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
         let mut hello = json!({
@@ -134,10 +167,18 @@ impl Client {
             .filter(|id| !id.is_empty())
             .ok_or_else(|| io::Error::other("protocol: handshake reply has no endpoint id"))?
             .to_owned();
+        client.capabilities = reply["capabilities"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|s| caps.contains(s))
+            .map(str::to_owned)
+            .collect();
         Ok(client)
     }
 
-    fn send(&mut self, message: &Value) -> io::Result<()> {
+    pub(crate) fn send(&mut self, message: &Value) -> io::Result<()> {
         wire::write_frame(
             &mut self.stream,
             wire::CONTROL,
@@ -145,8 +186,8 @@ impl Client {
         )
     }
 
-    fn receive(&mut self, deadline: Instant) -> io::Result<Value> {
-        let (tag, payload) = wire::read_frame(&mut DeadlineReader(&mut self.stream, deadline))?;
+    pub(crate) fn receive(&mut self, deadline: Instant) -> io::Result<Value> {
+        let (tag, payload) = wire::read_frame(&mut DeadlineReader(&self.stream, deadline))?;
         if tag != wire::CONTROL {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -156,12 +197,38 @@ impl Client {
         Ok(serde_json::from_slice(&payload)?)
     }
 
-    fn request(&mut self, op: &str, session: Option<&str>, expected: &str) -> io::Result<Value> {
-        let mut message = json!({"op": op, "endpoint_id": self.endpoint});
-        if let Some(id) = session.filter(|id| !id.is_empty()) {
-            message["session_id"] = json!(id);
+    pub(crate) fn request(
+        &mut self,
+        op: &str,
+        session: Option<&str>,
+        expected: &str,
+    ) -> io::Result<Value> {
+        self.request_body(
+            json!({"op": op, "session_id": session.unwrap_or_default()}),
+            expected,
+        )
+    }
+
+    pub(crate) fn supports(&self, cap: &str) -> bool {
+        self.capabilities.iter().any(|s| s == cap)
+    }
+    pub(crate) fn request_body(&mut self, message: Value, expected: &str) -> io::Result<Value> {
+        self.exchange(message, expected, REQUEST_TIMEOUT)
+    }
+    fn exchange(
+        &mut self,
+        mut message: Value,
+        expected: &str,
+        timeout: Duration,
+    ) -> io::Result<Value> {
+        message["endpoint_id"] = json!(self.endpoint);
+        if field(&message, "session_id").is_empty() {
+            message
+                .as_object_mut()
+                .expect("owner control envelope")
+                .shift_remove("session_id");
         }
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         self.send(&message)?;
         loop {
             let reply = self.receive(deadline).map_err(|err| {
@@ -174,7 +241,23 @@ impl Client {
                 }
             })?;
             match field(&reply, "op") {
-                "error" => return Err(io::Error::other(field(&reply, "error").to_owned())),
+                "error" => {
+                    let error = field(&reply, "error");
+                    let prefix = match field(&message, "op") {
+                        "owner_launch" => Some("owner launch"),
+                        "owner_launch_status" => Some("launch status"),
+                        _ => None,
+                    };
+                    return Err(io::Error::other(Refusal(
+                        match prefix {
+                            Some(p) => {
+                                format!("protocol: {p}: {error} ({})", field(&reply, "error_code"))
+                            }
+                            None => error.to_owned(),
+                        },
+                        field(&reply, "error_code") == "invalid_field",
+                    )));
+                }
                 "event" | "terminal_snapshot" if self.pushes.len() < EVENT_LIMIT => {
                     self.pushes.push_back(reply);
                 }
@@ -184,32 +267,50 @@ impl Client {
         }
     }
 
-    fn push(&mut self, deadline: Instant) -> io::Result<Value> {
+    pub(crate) fn push(&mut self, deadline: Instant) -> io::Result<Value> {
         match self.pushes.pop_front() {
             Some(message) => Ok(message),
             None => self.receive(deadline),
         }
     }
 
-    fn sessions(&mut self) -> io::Result<Vec<Value>> {
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    pub(crate) fn stream(&self) -> &UnixStream {
+        &self.stream
+    }
+
+    pub(crate) fn has_push(&self) -> bool {
+        !self.pushes.is_empty()
+    }
+
+    pub(crate) fn take_snapshot(&mut self, length: usize) -> io::Result<Vec<u8>> {
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let mut data = Vec::new();
+        while data.len() < length {
+            let (tag, chunk) = wire::read_frame(&mut DeadlineReader(&self.stream, deadline))?;
+            if tag != 4 || chunk.is_empty() || chunk.len() > length - data.len() {
+                return Err(io::Error::other(
+                    "protocol: invalid attach snapshot framing",
+                ));
+            }
+            data.extend_from_slice(&chunk);
+        }
+        Ok(data)
+    }
+
+    pub(crate) fn into_attach_parts(self) -> (UnixStream, String) {
+        (self.stream, self.endpoint)
+    }
+
+    pub(crate) fn sessions(&mut self) -> io::Result<Vec<Value>> {
         match self.request("list", None, "list")?.get_mut("sessions") {
             None | Some(Value::Null) => Ok(Vec::new()),
             Some(Value::Array(rows)) => Ok(std::mem::take(rows)),
             _ => Err(io::Error::other("protocol: invalid session roster")),
         }
-    }
-}
-
-struct DeadlineReader<'a>(&'a mut UnixStream, Instant);
-
-impl Read for DeadlineReader<'_> {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let remaining = self.1.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(io::ErrorKind::TimedOut.into());
-        }
-        self.0.set_read_timeout(Some(remaining))?;
-        self.0.read(bytes)
     }
 }
 
@@ -219,24 +320,28 @@ fn report(err: io::Error) -> (i32, String) {
     (1, err.to_string())
 }
 
-fn field<'a>(row: &'a Value, key: &str) -> &'a str {
+pub(crate) fn field<'a>(row: &'a Value, key: &str) -> &'a str {
     row[key].as_str().unwrap_or_default()
 }
 
 fn json_out(value: &Value) -> io::Result<()> {
     // Go encoding/json escapes these characters even for terminal output.
-    let output = serde_json::to_string_pretty(value)?
+    let output = escape_json(serde_json::to_string_pretty(value)?);
+    writeln!(io::stdout().lock(), "{output}")
+}
+
+fn escape_json(value: String) -> String {
+    value
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026")
         .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029");
-    writeln!(io::stdout().lock(), "{output}")
+        .replace('\u{2029}', "\\u2029")
 }
 
 fn list(client: &mut Client, args: &[String]) -> CliResult {
     let mut as_json = false;
-    options(args, &["json"], Some("json"), |name, value| {
+    options(args, &["json"], &["json"], |name, value| {
         as_json = match value {
             "1" | "t" | "T" | "true" | "TRUE" | "True" => true,
             "0" | "f" | "F" | "false" | "FALSE" | "False" => false,
@@ -294,7 +399,7 @@ fn peek(client: &mut Client, args: &[String]) -> CliResult {
         ));
     };
     let mut count = None;
-    let rest = options(args, &["lines"], None, |name, value| {
+    let rest = options(args, &["lines"], &[], |name, value| {
         count = Some(
             duration::go_int(value)
                 .map_err(|err| format!("invalid value {value:?} for flag -{name}: {err}"))?,
@@ -352,7 +457,7 @@ fn watch(client: &mut Client, args: &[String]) -> CliResult {
     };
     let mut until = "needs_input";
     let mut timeout_ns = WATCH_TIMEOUT.as_nanos() as i64;
-    let rest = options(args, &["until", "timeout"], None, |name, value| {
+    let rest = options(args, &["until", "timeout"], &[], |name, value| {
         if name == "until" {
             until = value;
         } else {
@@ -458,6 +563,10 @@ fn flag_error(verb: &str, status: i32, error: String) -> (i32, String) {
     eprint!(
         "{}",
         match verb {
+            "spawn" =>
+                "  -cli string\n    \tagent CLI to launch (required)\n  -delegate string\n    \tdelegation document to hand the new session\n  -dir string\n    \tworking directory (default: the caller's cwd)\n  -handoff string\n    \thandoff document to hand the new session\n  -model string\n    \tmodel to launch the agent with\n  -name string\n    \tsession label (default: the daemon's)\n  -new-operation-id\n    \tprint a new durable operation ID for a later launch\n  -operation-id string\n    \tdurable operation ID from swarm spawn --new-operation-id; reuse only for an exact retry\n  -prompt string\n    \tinline instructions for the new session\n  -status string\n    \tread the durable launch outcome for this operation ID as JSON\n  -worktree\n    \trun the session in an isolated git worktree (default for --handoff and --delegate in a git checkout)\n",
+            "send" =>
+                "  -key string\n    \tone named key: enter, esc, ctrl-c, tab, up, down\n  -no-submit\n    \tleave the text unsent instead of submitting it\n  -text string\n    \tmessage to type into the session\n",
             "ls" => "  -json\n    \tprint the full session roster as JSON\n",
             "peek" =>
                 "  -lines int\n    \tprint only the last N lines (default: the whole screen)\n",
@@ -474,7 +583,7 @@ fn flag_error(verb: &str, status: i32, error: String) -> (i32, String) {
 fn options<'a>(
     mut args: &'a [String],
     names: &[&str],
-    boolean: Option<&str>,
+    boolean: &[&str],
     mut set: impl FnMut(&str, &'a str) -> Result<(), String>,
 ) -> Result<&'a [String], String> {
     while let Some((arg, rest)) = args.split_first() {
@@ -502,7 +611,7 @@ fn options<'a>(
         args = rest;
         let value = match value {
             Some(value) => value,
-            None if boolean == Some(name) => "true",
+            None if boolean.contains(&name) => "true",
             None => {
                 let (value, rest) = args
                     .split_first()

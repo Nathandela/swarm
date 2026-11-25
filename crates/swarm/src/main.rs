@@ -1,10 +1,19 @@
+mod board;
+mod bootstrap;
+mod discord;
+mod environment;
+mod hook;
 mod ipc;
+mod providers;
 mod setup_trust;
+mod shim;
+mod socket;
+mod supervisor;
 
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [ls|peek|watch|setup-trust|dispatcher-guide|version]\n";
+const USAGE: &str = "usage: swarm [daemon|shim|ls|peek|watch|spawn|send|kill|discord|setup-trust|dispatcher-guide|version]\n";
 const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
 
@@ -42,12 +51,17 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             0
         }
+        Some("daemon") => supervisor::run(&args[1..]),
+        Some("hook") => hook::run(&args[1..]),
+        Some("shim") => shim::run(&args[1..]),
+        Some("discord") => discord::run(&args[1..]),
         Some("dispatcher-guide") => guide(&args[1..]),
-        Some("ls" | "peek" | "watch") => ipc::run(&args) as u8,
+        Some("ls" | "peek" | "watch" | "spawn" | "send" | "kill") => ipc::run(&args) as u8,
         None if !io::stdin().is_terminal() || !io::stdout().is_terminal() => {
             eprintln!("swarm: not a terminal; the TUI needs an interactive terminal");
             1
         }
+        None => board::run(),
         _ => {
             eprint!("{USAGE}");
             2

@@ -1,0 +1,431 @@
+use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
+use crate::ipc::field;
+use crate::providers::{self, LaunchPlan};
+use serde_json::{Value, json};
+use std::env;
+use std::fs::{self, DirBuilder};
+use std::io;
+use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Starting,
+    Running,
+    Exited,
+    Lost,
+}
+
+pub(super) struct Prepared {
+    cwd: PathBuf,
+    label: String,
+    cols: u16,
+    rows: u16,
+    provider: LaunchPlan,
+}
+
+pub(super) struct Session {
+    pub id: String,
+    dir: PathBuf,
+    token: String,
+    cwd: String,
+    name: String,
+    created: String,
+    state: Mutex<(Phase, String)>,
+    proven_owner: OnceLock<(u32, u64)>,
+    launch_plan: Mutex<Option<LaunchPlan>>,
+    observed_status: Mutex<Option<Value>>,
+    opened: Instant,
+}
+
+impl Session {
+    pub(super) fn load(dir: PathBuf) -> io::Result<Self> {
+        runtime::private_dir(&dir)?;
+        let data = runtime::read_json(&dir.join("session.json"))?;
+        let id = field(&data, "id");
+        let token = field(&data, "token");
+        let created = field(&data, "created_at");
+        let name = field(&data, "name");
+        let cwd = field(&data, "cwd");
+        if data["schema"] != 1
+            || !runtime::valid_id(id)
+            || dir.file_name().and_then(|name| name.to_str()) != Some(id)
+            || !runtime::valid_id(token)
+            || created.is_empty()
+            || name.is_empty()
+            || cwd.is_empty()
+        {
+            return Err(io::Error::other("unproven Rust session reservation"));
+        }
+        Ok(Self {
+            dir,
+            id: id.into(),
+            token: token.into(),
+            cwd: cwd.into(),
+            name: name.into(),
+            created: created.into(),
+            state: Mutex::new((Phase::Lost, created.into())),
+            proven_owner: OnceLock::new(),
+            launch_plan: Mutex::new(None),
+            observed_status: Mutex::new(None),
+            opened: Instant::now(),
+        })
+    }
+
+    pub(super) fn prepare(request: &Value) -> io::Result<Prepared> {
+        let req = &request["launch"];
+        if !req.is_object() {
+            return Err(io::Error::other("missing request"));
+        }
+        let valid_optional =
+            |key, valid: fn(&Value) -> bool| req[key].is_null() || valid(&req[key]);
+        if !["agent", "cwd", "name", "initial_prompt"]
+            .into_iter()
+            .all(|key| valid_optional(key, Value::is_string))
+            || !valid_optional("worktree", Value::is_boolean)
+            || !valid_optional("env", |value| {
+                value
+                    .as_array()
+                    .is_some_and(|env| env.iter().all(Value::is_string))
+            })
+            || !valid_optional("options", Value::is_object)
+            || !(request["operation_id"].is_null() || request["operation_id"].is_string())
+        {
+            return Err(io::Error::other("invalid launch field type"));
+        }
+        if !["cols", "rows"].into_iter().all(|key| {
+            valid_optional(key, |value| {
+                value.as_i64().is_some_and(|n| (0..=300).contains(&n))
+            })
+        }) {
+            return Err(io::Error::other("cols/rows out of range"));
+        }
+        if !field(request, "operation_id").is_empty()
+            || req["worktree"] == true
+            || req.as_object().unwrap().iter().any(|(key, value)| {
+                !matches!(
+                    key.as_str(),
+                    "agent"
+                        | "cwd"
+                        | "name"
+                        | "env"
+                        | "initial_prompt"
+                        | "cols"
+                        | "rows"
+                        | "options"
+                        | "worktree"
+                ) && !value.is_null()
+            })
+            || req["options"].as_object().is_some_and(|options| {
+                options.iter().any(|(key, value)| {
+                    !matches!(key.as_str(), "model" | "dangerously-skip-permissions")
+                        || !value.is_string()
+                })
+            })
+        {
+            return Err(io::Error::other("unsupported launch options"));
+        }
+        let raw_cwd = field(req, "cwd");
+        if raw_cwd.is_empty() || !Path::new(raw_cwd).is_dir() {
+            return Err(io::Error::other("cwd is not an existing directory"));
+        }
+        let cwd = fs::canonicalize(raw_cwd)?;
+        if cwd.to_str().is_none() {
+            return Err(io::Error::other("cwd is not representable as UTF-8"));
+        }
+        let label: String = field(req, "name")
+            .trim()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(80)
+            .collect();
+        let provider = providers::prepare(
+            field(req, "agent"),
+            &cwd,
+            &label,
+            req,
+            runtime::launch_env(&req["env"]),
+        )?;
+        let (cols, rows) = runtime::dims(req);
+        Ok(Prepared {
+            cwd,
+            label,
+            cols,
+            rows,
+            provider,
+        })
+    }
+
+    pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
+        let Prepared {
+            cwd,
+            label,
+            cols,
+            rows,
+            provider,
+        } = prepared;
+        let label = if label.is_empty() {
+            "Claude Code"
+        } else {
+            &label
+        };
+        let id = runtime::random_id()?;
+        let dir = root.join(&id);
+        DirBuilder::new().mode(0o700).create(&dir)?;
+        runtime::write_json(
+            &dir.join("session.json"),
+            &json!({
+                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
+                "created_at": now(), "cols": cols, "rows": rows,
+                "provider": {"name": "claude", "version": provider.version,
+                    "executable": provider.executable, "identity": provider.identity},
+
+            }),
+        )?;
+        let mut session = Self::load(dir)?;
+        *session.launch_plan.get_mut().unwrap() = Some(provider);
+        session.transition(Phase::Starting);
+        Ok(session)
+    }
+
+    pub(super) fn start(&self) -> io::Result<()> {
+        let provider = self
+            .launch_plan
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| io::Error::other("no unconsumed provider launch plan"))?;
+        let mut shim = Command::new(env::current_exe()?);
+        shim.env_clear().envs(provider.env);
+        shim.arg("shim")
+            .arg("--rust-session")
+            .arg(&self.dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // The child becomes session leader before exec; daemon/terminal teardown
+        // has no controlling-terminal or process-group authority over it.
+        unsafe {
+            shim.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = shim.spawn()?;
+        let mut bootstrap = child.stdin.take().expect("piped shim input");
+        // Even a long-lived supervisor reaps its detached shims when they exit.
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        runtime::write_control(&mut bootstrap, &json!({"argv": provider.argv}))
+    }
+
+    fn exit(&self) -> io::Result<Value> {
+        let exit = runtime::read_json(&self.dir.join("exit.json"))?;
+        if field(&exit, "token") != self.token {
+            return Err(io::Error::other("exit report custody mismatch"));
+        }
+        Ok(exit)
+    }
+
+    pub(super) fn await_ready(&self) -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if self.dial().is_ok() {
+                self.transition(Phase::Running);
+                return Ok(());
+            }
+            if let Ok(exit) = self.exit() {
+                self.transition(Phase::Exited);
+                let reason = field(&exit, "error");
+                return Err(io::Error::other(
+                    if reason.is_empty() {
+                        "worker exited during launch"
+                    } else {
+                        reason
+                    }
+                    .to_owned(),
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::other(
+                    "shim startup outcome is uncertain; inspect the roster before retrying",
+                ));
+            }
+            thread::sleep(Duration::from_millis(30));
+        }
+    }
+
+    fn owner_identity(&self) -> io::Result<(u32, u64)> {
+        let owner = runtime::read_json(&self.dir.join("owner.json"))?;
+        let pid = owner["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 1)
+            .ok_or_else(|| io::Error::other("invalid shim process identity"))?;
+        let birth = runtime::birth(pid)?;
+        if field(&owner, "token") != self.token || owner["birth"].as_u64() != Some(birth) {
+            return Err(io::Error::other("shim birth identity mismatch"));
+        }
+        Ok((pid, birth))
+    }
+
+    pub(super) fn dial(&self) -> io::Result<UnixStream> {
+        let (pid, birth) = self.owner_identity()?;
+        let mut stream = UnixStream::connect(self.dir.join("p"))?;
+        stream.set_read_timeout(Some(IO_TIMEOUT))?;
+        stream.set_write_timeout(Some(IO_TIMEOUT))?;
+        if runtime::peer_pid(&stream)? != pid || runtime::birth(pid)? != birth {
+            return Err(io::Error::other("shim socket peer identity mismatch"));
+        }
+        runtime::write_control(
+            &mut stream,
+            &json!({
+                "type": "hello", "wire_version": SHIM_VERSION, "token": self.token
+            }),
+        )?;
+        let reply = runtime::read_control(&mut stream)?;
+        if field(&reply, "type") != "hello"
+            || reply["wire_version"] != SHIM_VERSION
+            || field(&reply, "token") != self.token
+        {
+            return Err(io::Error::other("shim custody handshake refused"));
+        }
+        self.proven_owner.get_or_init(|| (pid, birth));
+        Ok(stream)
+    }
+
+    pub(super) fn kill(&self) -> io::Result<()> {
+        if self.exit().is_ok() {
+            return Ok(());
+        }
+        let reply = self.status_exchange(&json!({"type": "signal", "sig": "term"}));
+        match reply {
+            Ok(reply) if field(&reply, "type") == "ok" => Ok(()),
+            _ if self.exit().is_ok() => Ok(()),
+            Ok(_) => Err(io::Error::other("shim did not acknowledge termination")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {
+        let mut shim = self.dial()?;
+        runtime::write_control(&mut shim, request)?;
+        runtime::read_control(&mut shim)
+    }
+
+    pub(super) fn reconcile(&self) -> bool {
+        let (previous, _) = self.state.lock().unwrap().clone();
+        if previous == Phase::Exited {
+            return false;
+        }
+        if previous == Phase::Running
+            && self
+                .proven_owner
+                .get()
+                .is_some_and(|(pid, start)| runtime::birth(*pid).ok() == Some(*start))
+        {
+            return self.refresh_provider_status();
+        }
+        if self.exit().is_ok() {
+            return self.transition(Phase::Exited);
+        }
+        if self.dial().is_ok() {
+            return self.transition(Phase::Running);
+        }
+        if self.opened.elapsed() >= Duration::from_secs(3) {
+            return self.transition(Phase::Lost);
+        }
+        false
+    }
+
+    fn refresh_provider_status(&self) -> bool {
+        let Ok(record) = runtime::read_json(&self.dir.join("observation.json")) else {
+            return false;
+        };
+        let status = &record["status"];
+        if field(&record, "token") != self.token
+            || status["Process"] != "running"
+            || !matches!(field(status, "Turn"), "active" | "idle" | "unknown")
+            || !matches!(
+                field(status, "Interaction"),
+                "none" | "permission" | "prompt"
+            )
+        {
+            return false;
+        }
+        let mut observed = self.observed_status.lock().unwrap();
+        if observed.as_ref() == Some(status) {
+            return false;
+        }
+        *observed = Some(status.clone());
+        drop(observed);
+        self.state.lock().unwrap().1 = now();
+        true
+    }
+
+    fn transition(&self, next: Phase) -> bool {
+        let mut current = self.state.lock().unwrap();
+        if current.0 == next || current.0 == Phase::Exited {
+            return false;
+        }
+        *current = (next, now());
+        true
+    }
+
+    pub(super) fn is_live(&self) -> bool {
+        matches!(
+            self.state.lock().unwrap().0,
+            Phase::Starting | Phase::Running
+        )
+    }
+
+    pub(super) fn view(&self, endpoint: &str) -> Value {
+        let state = self.state.lock().unwrap();
+        let process = match state.0 {
+            Phase::Starting | Phase::Running => "running",
+            Phase::Exited => "exited",
+            Phase::Lost => "lost",
+        };
+        let mut status = json!({"Process": process, "Turn": "unknown", "Interaction": "none"});
+        if process == "running"
+            && let Some(observed) = self.observed_status.lock().unwrap().as_ref()
+        {
+            status = observed.clone();
+        }
+        let group = if process != "running" {
+            "completed"
+        } else if status["Attention"] == true {
+            "needs_input"
+        } else if status["Turn"] != "idle" {
+            "working"
+        } else if status["Interaction"] != "none" {
+            "needs_input"
+        } else {
+            "ready_for_review"
+        };
+        json!({
+            "endpoint_id": endpoint, "id": format!("{endpoint}/{}", self.id),
+            "agent": "claude", "name": self.name, "cwd": self.cwd,
+            "status": status,
+            "group": group, "group_entered_at": state.1, "last_activity": state.1,
+            "created_at": self.created, "summary": "",
+        })
+    }
+}
+
+fn now() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("current UTC timestamp")
+}

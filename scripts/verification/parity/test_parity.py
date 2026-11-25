@@ -43,10 +43,20 @@ class ParityTests(unittest.TestCase):
         executable = {100: "/usr/bin/python3", 101: str(root / "bin/swarm"),
                       102: "/usr/bin/tail", 103: "/usr/bin/tail", 104: "/usr/bin/sleep"}
         with (patch.object(parity, "table", return_value=rows),
-              patch.object(parity, "generation", side_effect=lambda pid: pid + 10),
+              patch.object(parity, "process_identity", side_effect=lambda pid: (pid + 10, rows[pid][0])),
               patch.object(parity, "executable", side_effect=executable.__getitem__)):
             identities = {102: 1}  # PID was recycled after registration.
-            self.assertEqual(parity.owned(root, 100, identities), {100: 110, 101: 111, 104: 114})
+            self.assertEqual(parity.owned(root, (100, 110), identities), {100: 110, 101: 111, 104: 114})
+
+    def test_reused_process_is_never_registered_under_second_birth(self):
+        root = Path("/tmp/swarm-parity-owner-test")
+        rows = {101: (1, "", "S", f"{root}/bin/swarm shim")}
+        with (patch.object(parity, "table", return_value=rows),
+              patch.object(parity, "process_identity", side_effect=[(11, 1), (12, 1)]),
+              patch.object(parity, "executable", return_value=str(root / "bin/swarm"))):
+            identities = {}
+            self.assertEqual(parity.owned(root, None, identities), {101: None})
+            self.assertEqual(identities, {})
 
 
 def qualify(binary):

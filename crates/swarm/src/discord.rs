@@ -1,0 +1,354 @@
+mod config;
+mod gateway;
+mod local;
+mod rest;
+
+use crate::ipc;
+use config::{Config, Place, invalid};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::io::{self, Read};
+use std::path::Path;
+
+const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
+
+pub(crate) fn run(args: &[String]) -> u8 {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "-h" || arg == "--help")
+    {
+        println!("{USAGE}");
+        return 0;
+    }
+    match Request::parse(args) {
+        Ok(request) => match execute(&request) {
+            Ok(ok) => u8::from(!ok),
+            Err(err) => {
+                eprintln!("discord: {err}");
+                1
+            }
+        },
+        Err(err) => {
+            eprintln!("discord: {err}\n{USAGE}");
+            2
+        }
+    }
+}
+
+struct Request<'a> {
+    command: &'a str,
+    id: &'a str,
+    options: BTreeMap<&'a str, Vec<&'a str>>,
+}
+
+impl<'a> Request<'a> {
+    fn parse(args: &'a [String]) -> io::Result<Self> {
+        let [command, rest @ ..] = args else {
+            return Err(invalid("specify a command"));
+        };
+        let mut rest = rest.iter().map(String::as_str);
+        let mut flags: &[&str] = &[];
+        let allowed: &[&str] = match command.as_str() {
+            "connect" => {
+                flags = &["install", "all-channels"];
+                &[
+                    "name",
+                    "application-id",
+                    "owner-id",
+                    "token-file",
+                    "workdir",
+                    "guild",
+                    "channel",
+                    "allow-user",
+                    "mode",
+                    "manager",
+                    "project-access",
+                    "project",
+                    "receptionist-cli",
+                    "receptionist-model",
+                ]
+            }
+            "migrate-supervisor" => {
+                flags = &["dry-run"];
+                &["from-state-dir", "from-socket", "from-lock", "from-log"]
+            }
+            "run" => {
+                flags = &["unattended"];
+                &[]
+            }
+            "status" | "disconnect" | "include" | "exclude" => &[],
+            "doctor" => &["channel"],
+            "context" => &["offset"],
+            "reply" => &["body-file", "publication-id"],
+            "propose" => &["candidate-ids"],
+            "resume-manual" => &["session", "instance", "external-input"],
+            _ => return Err(invalid("unknown command")),
+        };
+        let id = if matches!(
+            command.as_str(),
+            "include" | "exclude" | "context" | "reply" | "propose" | "resume-manual"
+        ) {
+            rest.next()
+                .filter(|id| !id.is_empty() && !id.starts_with('-'))
+                .ok_or_else(|| invalid("need a reference or target ID first"))?
+        } else {
+            ""
+        };
+        let mut options: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        while let Some(arg) = rest.next() {
+            let arg = arg
+                .strip_prefix('-')
+                .ok_or_else(|| invalid("unexpected positional argument"))?;
+            let arg = arg.strip_prefix('-').unwrap_or(arg);
+            let (name, value) = arg
+                .split_once('=')
+                .map_or((arg, None), |(name, value)| (name, Some(value)));
+            let value = if flags.contains(&name) {
+                match value {
+                    None | Some("true") => "true",
+                    Some("false") => "false",
+                    _ => return Err(invalid("invalid boolean option")),
+                }
+            } else if name == "state-dir" || allowed.contains(&name) {
+                value
+                    .or_else(|| rest.next())
+                    .ok_or_else(|| invalid("missing option value"))?
+            } else {
+                return Err(invalid("unknown option"));
+            };
+            let values = options.entry(name).or_default();
+            if !matches!(name, "guild" | "channel" | "allow-user" | "project") {
+                values.clear();
+            }
+            values.push(value);
+        }
+        let req = Self {
+            command,
+            id,
+            options,
+        };
+        req.validate()?;
+        Ok(req)
+    }
+
+    fn get(&self, flag: &str) -> Option<&str> {
+        self.values(flag).last().copied()
+    }
+
+    fn values(&self, flag: &str) -> &[&str] {
+        self.options.get(flag).map_or(&[], Vec::as_slice)
+    }
+
+    fn on(&self, flag: &str) -> bool {
+        self.get(flag) == Some("true")
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        match self.command {
+            "context"
+                if self
+                    .get("offset")
+                    .is_some_and(|n| n.parse::<i64>().map_or(true, |n| n < 0)) =>
+            {
+                Err(invalid("invalid offset"))
+            }
+            "reply"
+                if self.get("body-file").unwrap_or_default().is_empty()
+                    || self.get("publication-id") == Some("") =>
+            {
+                Err(invalid("missing body file/publication ID"))
+            }
+            "propose" => {
+                self.candidates()?;
+                Ok(())
+            }
+            "resume-manual"
+                if !["session", "instance"]
+                    .iter()
+                    .all(|flag| self.get(flag).is_some_and(|v| !v.is_empty()))
+                    || self
+                        .get("external-input")
+                        .is_none_or(|n| n.parse::<u64>().is_err()) =>
+            {
+                Err(invalid(
+                    "specify --session, --instance and --external-input from status",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn candidates(&self) -> io::Result<Vec<String>> {
+        let raw = self.get("candidate-ids").unwrap_or_default();
+        if raw.len() <= 8192
+            && let Ok(ids) = serde_json::from_str::<Vec<String>>(raw)
+            && (1..=10).contains(&ids.len())
+            && ids.iter().all(|id| !id.is_empty() && id.len() <= 512)
+        {
+            return Ok(ids);
+        }
+        Err(invalid(
+            "--candidate-ids must contain 1 to 10 valid target IDs as JSON",
+        ))
+    }
+}
+
+fn execute(req: &Request<'_>) -> io::Result<bool> {
+    let place = Place::resolve(req.get("state-dir"))?;
+    match req.command {
+        "connect" => return connect(req, place),
+        "disconnect" => {
+            place.disconnect()?;
+            println!("Discord connector disconnected.");
+            return Ok(true);
+        }
+        "migrate-supervisor" => {
+            return Err(io::Error::other(
+                "supervisor migration is unavailable in this Rust build",
+            ));
+        }
+        _ => {}
+    }
+    let cfg = place.load()?;
+    match req.command {
+        "run" => {
+            if !cfg.enabled() {
+                return Err(io::Error::other("connector is disabled"));
+            }
+            return Err(io::Error::other(
+                "native Discord dispatcher service is unavailable in this Rust build",
+            ));
+        }
+        "status" => {
+            let status = local::call(&place.dir, "status", "", None)
+                .ok()
+                .filter(|status| status["installation_id"] == cfg.text("installation_id"))
+                .unwrap_or_else(|| cfg.status());
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        }
+        "doctor" => return doctor(&place, &cfg, req.get("channel")),
+        _ => {
+            let mut query = String::new();
+            let request = match req.command {
+                "context" => {
+                    query = format!(
+                        "?offset={}&ref={}",
+                        req.get("offset").unwrap_or("0").parse::<i64>().unwrap(),
+                        local::escape(req.id)
+                    );
+                    None
+                }
+                "include" | "exclude" => Some(json!({"target_id": req.id})),
+                "reply" => {
+                    let mut body = String::new();
+                    std::fs::File::open(req.get("body-file").unwrap())?
+                        .take(65537)
+                        .read_to_string(&mut body)?;
+                    if body.is_empty() || body.len() > 65536 {
+                        return Err(invalid("reply body must be 1 to 65536 bytes"));
+                    }
+                    Some(
+                        json!({"ref": req.id, "id": req.get("publication-id").unwrap_or("final"), "body": body}),
+                    )
+                }
+                "propose" => Some(json!({"ref": req.id, "candidate_ids": req.candidates()?})),
+                "resume-manual" => Some(
+                    json!({"discussion": req.id, "session": req.get("session"), "instance": req.get("instance"), "external_input": req.get("external-input").unwrap().parse::<u64>().unwrap()}),
+                ),
+                _ => unreachable!(),
+            };
+            if request.is_some() && !cfg.enabled() {
+                return Err(io::Error::other("connector is disabled"));
+            }
+            let request = request
+                .as_ref()
+                .map(|body| (cfg.text("installation_id"), body));
+            let result = local::call(&place.dir, req.command, &query, request)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+    }
+    Ok(true)
+}
+
+fn connect(req: &Request<'_>, place: Place) -> io::Result<bool> {
+    if req.on("install") {
+        return Err(io::Error::other(
+            "service activation is unavailable in this Rust build",
+        ));
+    }
+    let cfg = place.configure(req)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "name": cfg.text("name"), "installation_id": cfg.text("installation_id"),
+            "state_dir": place.dir, "installed": false,
+            "next": format!("swarm discord run --state-dir '{}'", place.dir.to_string_lossy().replace('\'', "'\\''"))
+        }))?
+    );
+    Ok(true)
+}
+
+fn doctor(place: &Place, cfg: &Config, channel: Option<&str>) -> io::Result<bool> {
+    if !cfg.managed() {
+        return Err(io::Error::other(
+            "this place uses the legacy connector; native manager checks require --mode teammate or --mode personal",
+        ));
+    }
+    let mut findings = Vec::new();
+    let mut check = |name: &str, result: io::Result<&str>| {
+        findings.push(match result {
+            Ok(detail) => json!({"check": name, "status": "ok", "detail": detail}),
+            Err(err) => json!({"check": name, "status": "fail", "detail": err.to_string()}),
+        });
+    };
+    let check_path = |root: &str| {
+        if Path::new(root).is_dir() {
+            Ok(())
+        } else {
+            Err(invalid("workspace must be a directory"))
+        }
+    };
+    let root = cfg.text("work_dir");
+    check("default workspace", check_path(root).map(|_| root));
+    if let Some(projects) = cfg.0["projects"].as_object() {
+        let mut projects: Vec<_> = projects.iter().collect();
+        projects.sort_by_key(|(name, _)| *name);
+        for (project, value) in projects {
+            let root = value.as_str().unwrap();
+            check(
+                &format!("project {project}"),
+                check_path(root).map(|_| root),
+            );
+        }
+    }
+    match rest::Discord::connect(cfg) {
+        Err(err) => check("bot credential", Err(err)),
+        Ok(discord) => match discord.verify_app(cfg) {
+            Err(err) => check("Discord app", Err(err)),
+            Ok(username) => {
+                check("Discord app", Ok(&username));
+                check("Gateway", place.probe_gateway(cfg));
+                if cfg.text("mode") == "personal" {
+                    check("owner DM", discord.verify_dm(cfg, channel));
+                } else {
+                    check(
+                        "discussion access",
+                        Err(io::Error::other(
+                            "guild discussion permissions are unavailable in this Rust build",
+                        )),
+                    );
+                }
+            }
+        },
+    }
+    let caps = cfg.manager_capabilities();
+    check(
+        "home daemon",
+        ipc::Client::dial(Path::new(cfg.text("daemon_socket")), &caps)
+            .and_then(|client| cfg.check_supervisor(&client, &caps))
+            .map(|_| "manager capabilities negotiated"),
+    );
+    let ok = findings.iter().all(|result| result["status"] != "fail");
+    println!("{}", serde_json::to_string_pretty(&Value::Array(findings))?);
+    Ok(ok)
+}
