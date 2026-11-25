@@ -53,6 +53,24 @@ pub(crate) fn read(
     Ok(Some(record))
 }
 
+pub(crate) fn pending_prompt(dir: &Path, token: &str) -> io::Result<Option<(String, Value)>> {
+    let last = runtime::read_json(&dir.join("opencode-last-prompt.json"))?;
+    let operation = last
+        .as_str()
+        .ok_or_else(|| io::Error::other("invalid pending OpenCode prompt"))?;
+    let record = runtime::read_json(&path(dir, operation)?)?;
+    let session = field(&record["receipt"], "session");
+    Ok(read(dir, token, session, operation)?
+        .filter(|record| {
+            record["kind"] == "prompt"
+                && matches!(
+                    field(&record["receipt"], "state"),
+                    "outcome_unknown" | "native_accepted"
+                )
+        })
+        .map(|record| (operation.to_owned(), record)))
+}
+
 pub(crate) fn bridge_matches(record: &Value, bridge: &Value) -> bool {
     let receipt = &record["receipt"];
     bridge["version"] == 1
@@ -205,7 +223,10 @@ fn valid(record: &Value, native: &Value, token: &str, session: &str, operation: 
                 && proof["assistant"] == r["native_turn_id"]
                 && super::valid_id(field(proof, "assistant"), "msg_")
                 && proof["assistant"] != input
-                && r["outcome_source"] == "reconciled_snapshot"
+                && matches!(
+                    field(r, "outcome_source"),
+                    "reconciled_snapshot" | "reconciled_message"
+                )
         }
         _ => false,
     }

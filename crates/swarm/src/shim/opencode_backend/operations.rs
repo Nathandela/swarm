@@ -178,7 +178,7 @@ impl Backend {
                 "native_accepted" | "outcome_unknown"
             )
         {
-            let _ = self.reconcile_prompt(created, operation, record);
+            let _ = self.reconcile_prompt(created, operation, record, None);
         }
         if !matches!(
             field(&record["receipt"], "state"),
@@ -241,6 +241,7 @@ impl Backend {
         created: u64,
         operation: &str,
         record: &mut Value,
+        terminal_id: Option<&str>,
     ) -> io::Result<()> {
         let root = field(record, "target");
         let input = field(record, "message_id");
@@ -300,12 +301,25 @@ impl Backend {
             "id":input,"session":root,"created_ms":at,"agent":info["agent"],
             "model":receipt["model"],"text_hash":record["text_hash"],
         });
-        if let Ok(snapshot) = self.snapshot(created, 50, "")
-            && let Some((state, native_message)) = terminal(&snapshot, root, input, at)
-        {
+        let outcome = if let Some(id) = terminal_id {
+            self.http(&format!("/message?messageID={id}"), None)
+                .ok()
+                .filter(|row| row["info"]["id"] == id)
+                .and_then(|row| {
+                    terminal_outcome(&json!({"messages":[row]}), root, input, at)
+                        .map(|(_, _, state, id)| (state, id.to_owned()))
+                })
+        } else {
+            find_terminal(root, input, at, |before| self.snapshot(created, 50, before))
+        };
+        if let Some((state, native_message)) = outcome {
             receipt["state"] = json!(state);
             receipt["native_turn_id"] = json!(native_message);
-            receipt["outcome_source"] = json!("reconciled_snapshot");
+            receipt["outcome_source"] = json!(if terminal_id.is_some() {
+                "reconciled_message"
+            } else {
+                "reconciled_snapshot"
+            });
             record["terminal_proof"] = json!({"state":state,"assistant":native_message,"parent":row["info"]["id"],"session":row["info"]["sessionID"]});
         }
         if record["receipt"] != receipt {
@@ -315,14 +329,35 @@ impl Backend {
         }
         Ok(())
     }
+    pub(super) fn checkpoint_terminal(&self, created: u64, event: &Value) -> io::Result<()> {
+        let info = &event["properties"]["info"];
+        let id = field(info, "id");
+        if event["type"] != "message.updated"
+            || info["role"] != "assistant"
+            || info["sessionID"] != self.binding["rootID"]
+            || !opencode::valid_id(id, "msg_")
+            || !(info["time"]["completed"].is_u64() || info["error"].is_object())
+        {
+            return Ok(());
+        }
+        let Ok(_action) = self.actions.try_lock() else {
+            return Ok(());
+        };
+        if let Some((operation, mut record)) = receipts::pending_prompt(&self.dir, &self.token)?
+            && info["parentID"] == record["message_id"]
+        {
+            self.reconcile_prompt(created, &operation, &mut record, Some(id))?;
+        }
+        Ok(())
+    }
 }
 
-fn terminal<'a>(
+fn terminal_outcome<'a>(
     snapshot: &'a Value,
     root: &str,
     input: &str,
     at: u64,
-) -> Option<(&'static str, &'a str)> {
+) -> Option<(bool, u64, &'static str, &'a str)> {
     let mut results = snapshot["messages"]
         .as_array()?
         .iter()
@@ -376,7 +411,41 @@ fn terminal<'a>(
         })
         .collect::<Vec<_>>();
     results.sort_unstable();
-    results.last().map(|(_, _, state, id)| (*state, *id))
+    results.last().copied()
+}
+
+fn find_terminal(
+    root: &str,
+    input: &str,
+    at: u64,
+    mut read: impl FnMut(&str) -> io::Result<Value>,
+) -> Option<(&'static str, String)> {
+    let started = std::time::Instant::now();
+    let mut before = String::new();
+    let mut cursors = std::collections::BTreeSet::new();
+    let mut best = None;
+    // shortcut: recover bounded history after a missed SSE checkpoint; wider history needs event indexing.
+    for _ in 0..8 {
+        let Ok(snapshot) = read(&before) else { break };
+        if let Some((failed, time, state, id)) = terminal_outcome(&snapshot, root, input, at) {
+            let result = (failed, time, state, id.to_owned());
+            if best.as_ref().is_none_or(|other| &result > other) {
+                best = Some(result);
+            }
+        }
+        let cursor = field(&snapshot, "nextCursor");
+        if cursor.is_empty()
+            || !cursors.insert(cursor.to_owned())
+            || snapshot["messages"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["info"]["id"] == input))
+            || started.elapsed() >= std::time::Duration::from_secs(6)
+        {
+            break;
+        }
+        cursor.clone_into(&mut before);
+    }
+    best.map(|(_, _, state, id)| (state, id))
 }
 
 fn unexpired(record: &Value, now: u64) -> Option<u64> {
@@ -562,15 +631,29 @@ mod tests {
             "id":reply,"sessionID":root,"parentID":input,"role":"assistant",
             "time":{"created":2,"completed":3},"finish":"stop"
         },"parts":[{"id":"prt_safe","sessionID":root,"messageID":reply,"type":"tool"}]}]});
-        assert!(terminal(&snapshot, root, input, 1).is_none());
+        assert!(terminal_outcome(&snapshot, root, input, 1).is_none());
+        snapshot["messages"][0]["parts"][0]["metadata"]["providerExecuted"] = json!(true);
+        assert_eq!(
+            terminal_outcome(&snapshot, root, input, 1),
+            Some((false, 3, "completed", reply))
+        );
+        snapshot["messages"][0]["parts"][0]["metadata"] = Value::Null;
+        snapshot["messages"][0]["parts"][0]["state"] =
+            json!({"status":"error","metadata":{"interrupted":true}});
+        assert_eq!(
+            terminal_outcome(&snapshot, root, input, 1),
+            Some((false, 3, "completed", reply))
+        );
+        snapshot["messages"][0]["parts"][0]["state"]["metadata"]["interrupted"] = json!(false);
+        assert!(terminal_outcome(&snapshot, root, input, 1).is_none());
         snapshot["messages"][0]["parts"][0]["type"] = json!("text");
         assert_eq!(
-            terminal(&snapshot, root, input, 1),
-            Some(("completed", reply))
+            terminal_outcome(&snapshot, root, input, 1),
+            Some((false, 3, "completed", reply))
         );
-        assert!(terminal(&snapshot, root, "msg_012345678902", 1).is_none());
+        assert!(terminal_outcome(&snapshot, root, "msg_012345678902", 1).is_none());
         snapshot["messages"][0]["info"]["summary"] = json!(true);
-        assert!(terminal(&snapshot, root, input, 1).is_none());
+        assert!(terminal_outcome(&snapshot, root, input, 1).is_none());
     }
     #[test]
     fn request_card_still_authorizes_after_two_minutes_and_expires_at_five() {
@@ -578,5 +661,33 @@ mod tests {
         let record = json!({"expiry_ms":issued + CARD_TTL_MS});
         assert!(unexpired(&record, issued + 180_000).is_some());
         assert!(unexpired(&record, issued + 300_000).is_none());
+    }
+    #[test]
+    fn recovers_an_exact_terminal_outside_fifty_newer_native_rows() {
+        let root = "ses_012345678900";
+        let input = "msg_012345678900";
+        let reply = "msg_012345678901";
+        let mut cursors = Vec::new();
+        let rows: Vec<_> = (0..50)
+            .map(|index| {
+                json!({"info":{
+            "id":format!("msg_{index:012}"),"sessionID":root,"role":"user",
+            "time":{"created":100+index}
+        },"parts":[]})
+            })
+            .collect();
+        let outcome = find_terminal(root, input, 1, |cursor| {
+            cursors.push(cursor.to_owned());
+            Ok(if cursor.is_empty() {
+                json!({"messages":rows,"nextCursor":"older"})
+            } else {
+                json!({"messages":[{"info":{
+                    "id":reply,"sessionID":root,"parentID":input,"role":"assistant",
+                    "time":{"created":2,"completed":3},"finish":"stop"
+                },"parts":[]}],"nextCursor":""})
+            })
+        });
+        assert_eq!(cursors, ["", "older"]);
+        assert_eq!(outcome, Some(("completed", reply.to_owned())));
     }
 }

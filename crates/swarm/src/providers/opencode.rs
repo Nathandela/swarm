@@ -1,3 +1,4 @@
+pub(crate) mod initial;
 pub(crate) mod receipts;
 use crate::{ipc::field, supervisor::runtime};
 use serde_json::{Value, json};
@@ -12,6 +13,10 @@ const BRIDGE: &str = include_str!("../../../../internal/opencodebridge/tui.mjs")
 fn bridge_source() -> io::Result<String> {
     let mut source = BRIDGE.to_owned();
     for (original, replacement) in [
+        (
+            "const { before, text, startedAt, intentHash, ...receipt } = initial",
+            "const { before, text, startedAt, ...receipt } = initial",
+        ),
         (
             r#"return digest(JSON.stringify([body.version, body.sessionInstance, body.backendGeneration, body.rootID, body.kind, body.targetID, body.messageID ?? null, body.text ?? null, body.requestID ?? null, body.reply ?? null, body.answers ?? null, body.expectedRequest === undefined ? null : canonical(body.expectedRequest), body.requestExpiresAtMS ?? null]))"#,
             "return digest(canonical(body))",
