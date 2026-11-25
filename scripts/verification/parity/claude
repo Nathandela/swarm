@@ -6,14 +6,19 @@ import signal
 import struct
 import sys
 import termios
+import time
 import tty
 import fcntl
 
+effects = Path(sys.argv[0]).parent.parent / "effects"
 if "--version" in sys.argv:
+    barrier = effects / "form-cold"
+    deadline = time.monotonic() + 3
+    while barrier.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
     print("2.1.100 (Claude Code)")
     sys.exit(0)
 
-effects = Path(sys.argv[0]).parent.parent / "effects"
 effects.mkdir(exist_ok=True)
 (effects / "worker").write_text(f"{os.getpid()}\n")
 tty.setraw(0)

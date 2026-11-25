@@ -99,7 +99,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
                 board.wait_bytes(b"swarm")
                 board.send(b"n")
                 board.wait_bytes(b"new session")
-                board.wait_bytes(b"2.1.100")
+                board.wait_bytes("● claude".encode())
                 board.send(b"\x15" + os.fsencode(cwd / "qual") + b"\t")
                 board.wait_bytes(b"/qualified/")
                 board.send(b"\x1b[Bamber\r")
@@ -437,12 +437,15 @@ def launch_grid_witness(root, roster, start, tmux):
     daemon = start()
     frames = []
     for cols, rows in ((80, 24), (40, 8), (24, 4)):
+        barrier = root / "effects/form-cold"
+        barrier.touch()
         run("new-session", "-d", "-s", "form", "-x", str(cols), "-y", str(rows),
             "-c", root / "work", root / "bin/board")
         landmark(("swarm", "(n)", "no sessions"), cols, rows)
         run("send-keys", "-t", "form:0.0", "n")
         compact_block = cols < 32 or rows < 8
         directory = landmark(("resize to 32",) if compact_block else ("▌ directory",), cols, rows)
+        barrier.unlink()
         run("send-keys", "-t", "form:0.0", "Down", "Down", "Down")
         agent = landmark(("▌ agent",), cols, rows, settled=True)
         if compact_block:
@@ -453,11 +456,42 @@ def launch_grid_witness(root, roster, start, tmux):
         run("kill-session", "-t", "form")
     daemon.terminate()
     daemon.wait(timeout=5)
-    p.write_json(root / "grid.json", {"form_frames": frames, "first_divergence": None})
+    p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
 
 
-def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False):
-    root = Path(tempfile.mkdtemp(prefix="pb-", dir=Path("/tmp").resolve()))
+def compare_forms(reference, candidate):
+    ref, rust = (json.loads(Path(path).read_bytes()) for path in (reference, candidate))
+    assert ref["tmux"] == rust["tmux"], "form receipts use different terminal engines"
+    assert ref["form_cwd"] == rust["form_cwd"], "form receipts use different workspace paths"
+    expected_sizes = [(80, 24), (40, 8), (24, 4)]
+    assert [(f["cols"], f["rows"]) for f in ref["form_frames"]] == expected_sizes
+    mismatches = 0
+    for r, c in zip(ref["form_frames"], rust["form_frames"], strict=True):
+        assert (r["cols"], r["rows"]) == (c["cols"], c["rows"])
+        for landmark in ("directory", "agent"):
+            count = 0
+            for y, (rrow, crow) in enumerate(zip(r[landmark]["cells"], c[landmark]["cells"], strict=True)):
+                for x, (expected, actual) in enumerate(zip(rrow, crow, strict=True)):
+                    if expected != actual:
+                        if count < 3:
+                            print(f"{r['cols']}×{r['rows']} {landmark} cell {x},{y} expected {expected!r} got {actual!r}")
+                        count += 1
+            print(f"{r['cols']}×{r['rows']} {landmark} — {count} cell mismatches")
+            mismatches += count
+    if mismatches:
+        raise SystemExit(1)
+
+
+def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
+        form_root=None):
+    scratch = Path("/tmp").resolve()
+    if form_root is None:
+        root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
+    else:
+        root = form_root.resolve()
+        if not form_grid or root.parent != scratch:
+            raise ValueError("form root must be a new direct child of /tmp")
+        root.mkdir(mode=0o700)
     child = driver = None
     previous = {}
     try:
@@ -513,7 +547,9 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
+    if sys.argv[1:2] == ["--compare-forms"] and len(sys.argv) == 4:
+        compare_forms(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
         compare_grid_receipts(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (3, 4, 5) and sys.argv[1] == "_inside":
         mode = sys.argv[3] if len(sys.argv) >= 4 else None
@@ -528,6 +564,7 @@ if __name__ == "__main__":
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
+        parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
         parser.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
@@ -535,4 +572,4 @@ if __name__ == "__main__":
         if args.form_grid and not args.tmux:
             parser.error("--form-grid requires --tmux")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
-            args.form_grid)
+            args.form_grid, args.form_root)

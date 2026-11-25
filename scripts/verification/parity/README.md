@@ -55,3 +55,12 @@ and reads its list, detail and empty run history through both the CLI and the
 board. It then stops the supervisor and verifies the board reports its
 disconnection while the CLI still reads the local catalog offline. It never
 starts a scheduled worker.
+
+For exact comparisons, pass the same fresh `--form-root /tmp/pb-form-example`
+for the two sequential `--form-grid` commands. The harness creates and removes
+this private root separately per arm. It holds the fixture's version reply
+until the cold directory frame is recorded, then waits for the selected
+provider before recording the settled agent frame. Compare the two receipts
+with `test_board.py --compare-forms GO.json RUST.json`. The comparator requires
+the same workspace path and terminal engine, and reports cell differences
+without substitutions.
