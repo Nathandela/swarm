@@ -98,6 +98,10 @@ func TestDaemonHostSubprocess(t *testing.T) {
 			os.Exit(1)
 		}
 	}
+	// The worker can announce its PID before Launch finishes saving shim custody.
+	if err := os.WriteFile(filepath.Join(pidDir, "launched"), []byte("ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	select {} // serve until the parent SIGKILLs this process
 }
 
@@ -166,7 +170,8 @@ func TestSurvival_RealKillNineReconnectsAll(t *testing.T) {
 			killTree(p)
 		}
 	})
-	waitDial(t, sock, pollTimeout) // the host is serving (reconcile+launch done)
+	waitFile(t, filepath.Join(pidDir, "launched"), launchTimeout)
+	waitDial(t, sock, pollTimeout)
 
 	// REAL kill -9 of the REAL daemon process.
 	if err := syscall.Kill(hostPID, syscall.SIGKILL); err != nil {
