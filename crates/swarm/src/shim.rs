@@ -1115,6 +1115,16 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
             observed.conversation = Some(id.to_owned());
         }
     }
+    if event == "Stop"
+        && conversation.is_some()
+        && !cwd.is_empty()
+        && observed.conversation.as_deref() == conversation
+    {
+        let reply = field(payload, "last_assistant_message");
+        if !reply.is_empty() && reply.len() <= 4096 {
+            capture_pilot_reply(state, reply)?;
+        }
+    }
     observed.state.apply(event, payload);
     runtime::write_json(
         &state.dir.join("observation.json"),
@@ -1125,6 +1135,38 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
         }),
     )?;
     runtime::write_control(stream, &json!({"type":"ok"}))
+}
+
+fn capture_pilot_reply(state: &State, text: &str) -> io::Result<()> {
+    let path = state.dir.join("pilot-replies.json");
+    let mut record = match runtime::read_json(&path) {
+        Ok(record) if record["token"] == state.token => record,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            json!({"token":state.token,"next":1,"captures":[]})
+        }
+        Err(err) => return Err(err),
+        _ => {
+            return Err(io::Error::other(
+                "pilot history file belongs to another worker",
+            ));
+        }
+    };
+    let next = record["next"]
+        .as_u64()
+        .filter(|n| *n > 0 && *n < u64::MAX)
+        .ok_or_else(|| io::Error::other("invalid pilot history sequence"))?;
+    let captures = record["captures"]
+        .as_array_mut()
+        .filter(|rows| rows.len() <= 16)
+        .ok_or_else(|| io::Error::other("invalid pilot history captures"))?;
+    if captures.len() == 16 {
+        captures.remove(0);
+    }
+    captures.push(
+        json!({"sequence":next,"item":{"kind":"agent_message","status":"completed","text":text}}),
+    );
+    record["next"] = json!(next + 1);
+    runtime::write_json(&path, &record)
 }
 
 fn receive_agy_hook(stream: &mut UnixStream, state: &State) -> io::Result<()> {

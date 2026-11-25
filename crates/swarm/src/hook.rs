@@ -49,7 +49,10 @@ fn post(args: &[String]) -> io::Result<()> {
         .collect();
     for argument in arguments {
         if let Some((key, value)) = argument.split_once('=')
-            && !matches!(key, "turn" | "interaction" | "cwd" | "session_id")
+            && !matches!(
+                key,
+                "turn" | "interaction" | "cwd" | "session_id" | "last_assistant_message"
+            )
             && value.len() <= 4096
         {
             fields.insert(key.to_owned(), json!(value));

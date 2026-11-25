@@ -21,6 +21,20 @@ fn receipt(root: &Path, id: &str) -> io::Result<Option<Value>> {
     }
 }
 
+pub(super) fn completed(root: &Path, id: &str) -> io::Result<bool> {
+    if !runtime::valid_id(id) {
+        return Ok(false);
+    }
+    let absent = |path: &Path| match path.symlink_metadata() {
+        Ok(_) => Ok(false),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(err),
+    };
+    Ok(receipt(root, id)?.is_some()
+        && absent(&root.join(id))?
+        && absent(&root.join(format!(".deleting-{id}")))?)
+}
+
 // Returns true if this deletion is in progress or already complete.
 fn resume(root: &Path, id: &str) -> io::Result<bool> {
     let path = root.join(format!(".deleting-{id}"));

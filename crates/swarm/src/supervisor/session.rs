@@ -1382,6 +1382,20 @@ impl Session {
         runtime::read_control(&mut shim)
     }
 
+    pub(super) fn pilot_replies(&self) -> Vec<Value> {
+        if self.agent != "claude" {
+            return Vec::new();
+        }
+        match runtime::read_json(&self.dir.join("pilot-replies.json")) {
+            Ok(file) if file["token"] == self.token => file["captures"]
+                .as_array()
+                .filter(|list| list.len() <= 16)
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
     pub(super) fn reconcile(&self) -> bool {
         let (previous, _) = self.state.lock().unwrap().clone();
         if previous == Phase::Exited {
