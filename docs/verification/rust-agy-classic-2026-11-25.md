@@ -20,3 +20,5 @@ Go's optional native agentapi broker (versions 1.4.0, 1.4.5 and 1.4.7), authenti
 cargo build
 python3 scripts/verification/parity_agy.py /path/to/pinned-go-swarm target/debug/swarm
 ```
+
+A repeated run against the independent arm64 Go rebuild exposed callback reordering in the Rust arm. The shim accepted two status-line connections concurrently and processed a later conflicting UUID before the initial UUID. Rust now processes callbacks in accept order on a private agy status socket. The wrapper waits for a validated acknowledgment with bounded I/O. A fixture opens overlapping connections, holds the first frame for 150 ms, and requires acknowledgment of that frame and refusal of the conflicting second frame. Ten consecutive Go/Rust runs of the advertised-settings scenario passed.

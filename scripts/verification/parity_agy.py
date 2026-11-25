@@ -38,6 +38,31 @@ if args[:1] == ["--settings"]:
     def status(state, conversation, title):
         payload = {"agent_state": state, "conversation_id": conversation, "conversation_title": title}
         subprocess.run(setting["command"], shell=True, input=json.dumps(payload).encode(), check=True)
+    if hook_socket := os.environ.get("SWARM_RUST_HOOK_SOCKET"):
+        def frame(conversation, state, title, stamp):
+            body = b"" + json.dumps({
+                "type":"hook", "event":"AgyStatusLine", "token":os.environ["SWARM_HOOK_TOKEN"],
+                "payload":{"conversation_id":conversation, "agent_state":state,
+                           "conversation_title":title, "observed_ns":stamp},
+            }).encode()
+            return struct.pack(">I",len(body)) + body
+
+        stamp = time.time_ns()
+        first = frame("$CONVERSATION", "reviewing", "Provider title", stamp)
+        later = frame("22222222-2222-4222-8222-222222222222", "working", "Overtook first frame", stamp + 1)
+        with socket.socket(socket.AF_UNIX) as a, socket.socket(socket.AF_UNIX) as b:
+            for peer in (a, b):
+                peer.settimeout(2)
+                peer.connect(hook_socket)
+            a.sendall(first[:5])
+            b.sendall(later)
+            time.sleep(.15)
+            a.sendall(first[5:])
+            with a.makefile("rb") as probe:
+                reply = probe.read(struct.unpack(">I",probe.read(4))[0])
+                assert reply[:1] == b"" and json.loads(reply[1:])["type"] == "ok"
+            assert b.recv(1) == b"", "later callback won before the acknowledged first frame"
+
     status("reviewing", "$CONVERSATION", "Provider title")
     if os.environ.get("SWARM_RUST_HOOK_SOCKET"):
         status("working", "22222222-2222-4222-8222-222222222222", "Wrong conversation")

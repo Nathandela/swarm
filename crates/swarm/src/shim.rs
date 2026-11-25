@@ -114,10 +114,20 @@ fn serve(dir: &Path) -> io::Result<()> {
     } else {
         Vec::new()
     };
-    let hook_token = if provider["name"] == "claude" || !agy_args.is_empty() {
+    let hook_socket = if agy_args.is_empty() {
+        socket.clone()
+    } else {
+        dir.join("h")
+    };
+    let agy_listener = if agy_args.is_empty() {
+        None
+    } else {
+        Some(runtime::bind(&hook_socket)?)
+    };
+    let hook_token = if provider["name"] == "claude" || agy_listener.is_some() {
         let hook_token = runtime::random_id()?;
         command
-            .env("SWARM_RUST_HOOK_SOCKET", &socket)
+            .env("SWARM_RUST_HOOK_SOCKET", &hook_socket)
             .env("SWARM_HOOK_TOKEN", &hook_token);
         hook_token
     } else {
@@ -225,6 +235,15 @@ fn serve(dir: &Path) -> io::Result<()> {
     });
     let shared = state.clone();
     thread::spawn(move || accept(listener, shared));
+    if let Some(listener) = agy_listener {
+        let state = state.clone();
+        thread::spawn(move || {
+            // Keep acceptance and application in order even if callers time out waiting for a reply.
+            for mut stream in listener.incoming().flatten() {
+                let _ = receive_agy_hook(&mut stream, &state);
+            }
+        });
+    }
     let status = loop {
         if pty::SHUTDOWN_SIGNAL.load(Ordering::Relaxed) {
             terminate(&state)?;
@@ -261,6 +280,9 @@ fn serve(dir: &Path) -> io::Result<()> {
         }),
     )?;
     let _ = fs::remove_file(socket);
+    if state.provider == "agy" {
+        let _ = fs::remove_file(dir.join("h"));
+    }
     // Do not wait for a provider-owned descendant that holds the slave open.
     drop(output);
     Ok(())
@@ -511,14 +533,6 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
     let event = field(request, "event");
     let payload = &request["payload"];
-    if state.provider == "agy"
-        && event == agy::EVENT
-        && !state.hook_token.is_empty()
-        && field(request, "token") == state.hook_token
-        && payload.is_object()
-    {
-        return agy_hook_observation(stream, state, payload);
-    }
     if state.provider != "claude"
         || field(request, "token") != state.hook_token
         || !providers::claude::EVENTS.contains(&event)
@@ -551,6 +565,22 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
         }),
     )?;
     runtime::write_control(stream, &json!({"type":"ok"}))
+}
+
+fn receive_agy_hook(stream: &mut UnixStream, state: &State) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_millis(250)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    let request = runtime::read_control(stream)?;
+    let payload = &request["payload"];
+    if request["type"] != "hook"
+        || request["event"] != agy::EVENT
+        || state.hook_token.is_empty()
+        || request["token"] != state.hook_token
+        || !payload.is_object()
+    {
+        return Err(io::Error::other("invalid Antigravity hook custody"));
+    }
+    agy_hook_observation(stream, state, payload)
 }
 
 fn agy_hook_observation(stream: &mut UnixStream, state: &State, payload: &Value) -> io::Result<()> {
