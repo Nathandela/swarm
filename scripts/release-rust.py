@@ -118,6 +118,9 @@ def stage_media(scratch, node_archives):
         modules = bundle / "node_modules"
         (modules / ".package-lock.json").unlink()
         target_dep = f"@snazzah/davey-{suffix}" + ("-gnu" if os_name == "linux" else "")
+        if os_name == "linux":
+            # The addon publishes glibc/musl packages without npm libc metadata.
+            shutil.rmtree(modules / f"@snazzah/davey-{suffix}-musl", ignore_errors=True)
         installed = {p.relative_to(modules).as_posix() for p in (modules / "@snazzah").glob("davey-*")}
         require(installed == {target_dep}, f"wrong DAVE native module tree for {platform}: {installed}")
         upstream = node_components(node_archives, platform)
