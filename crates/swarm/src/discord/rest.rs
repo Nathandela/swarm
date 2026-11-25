@@ -13,6 +13,12 @@ pub(super) struct Discord {
     authorization: String,
 }
 
+pub(super) enum Post {
+    Acknowledged(Value),
+    RateLimited(u64),
+    Unconfirmed,
+}
+
 impl Discord {
     pub(super) fn connect(cfg: &Config) -> io::Result<Self> {
         let token = load_token(Path::new(cfg.text("token_file")))?;
@@ -169,6 +175,48 @@ impl Discord {
             ));
         }
         Ok(Some(message))
+    }
+
+    pub(super) fn post_reply(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
+        let channel = cfg.text("dm_channel_id");
+        let url = format!("{API}/channels/{channel}/messages");
+        let mut response = match self
+            .agent
+            .post(url)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .header("Authorization", &self.authorization)
+            .send_json(json!({
+                "content": body, "nonce": nonce, "enforce_nonce": true,
+                "allowed_mentions": {"parse":[]}
+            })) {
+            Ok(response) => response,
+            Err(_) => return Post::Unconfirmed,
+        };
+        if response.status().as_u16() == 429 {
+            let millis = response
+                .headers()
+                .get("retry-after")
+                .and_then(|header| header.to_str().ok())
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|secs| secs.is_finite() && *secs > 0.0)
+                .map(|secs| (secs * 1000.0).ceil() as u64)
+                .unwrap_or(60_000);
+            return Post::RateLimited(millis);
+        }
+        if !response.status().is_success() {
+            return Post::Unconfirmed;
+        }
+        match response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE)
+            .read_json::<Value>()
+        {
+            Ok(message) => Post::Acknowledged(message),
+            Err(_) => Post::Unconfirmed,
+        }
     }
 
     pub(super) fn verify_dm(

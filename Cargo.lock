@@ -654,6 +654,7 @@ dependencies = [
  "libc",
  "serde_json",
  "sha2",
+ "subtle",
  "time",
  "tungstenite",
  "unicode-width",

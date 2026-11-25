@@ -1,6 +1,8 @@
 mod config;
+mod dispatcher;
 mod gateway;
 mod local;
+mod manager;
 mod receipt;
 mod rest;
 mod service;

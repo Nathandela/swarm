@@ -37,15 +37,21 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
             .unwrap_or("");
         inbox.checkpoint(baseline)?;
     }
+    let dispatcher = super::dispatcher::Dispatcher::open(cfg, &place.dir)?;
     let (mut gateway_socket, mut cursor) = gateway::open(cfg)?;
     repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
-    eprintln!(
-        "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
-    );
+    if dispatcher.is_none() {
+        eprintln!(
+            "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
+        );
+    }
     loop {
-        if bridge.serve(cfg, &inbox, cursor.sequence())? {
+        if bridge.serve(cfg, &inbox, cursor.sequence(), dispatcher.is_some())? {
             let _ = gateway_socket.close(None);
             return Ok(());
+        }
+        if let Some(dispatcher) = &dispatcher {
+            dispatcher.tick(cfg, &mut inbox, &api)?;
         }
         let Some(event) = cursor.event(&mut gateway_socket)? else {
             continue;
@@ -193,13 +199,13 @@ impl Bridge {
         Ok(this)
     }
 
-    fn serve(&self, cfg: &Config, inbox: &Inbox, sequence: u64) -> io::Result<bool> {
+    fn serve(&self, cfg: &Config, inbox: &Inbox, sequence: u64, native: bool) -> io::Result<bool> {
         let (mut client, _) = match self.listener.accept() {
             Ok(pair) => pair,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(err) => return Err(err),
         };
-        match request(&mut client, cfg, inbox, sequence) {
+        match request(&mut client, cfg, inbox, sequence, native) {
             Ok(stop) => Ok(stop),
             Err(_) => Ok(false), // A bad local request must not stop Gateway.
         }
@@ -221,6 +227,7 @@ fn request(
     cfg: &Config,
     inbox: &Inbox,
     sequence: u64,
+    native: bool,
 ) -> io::Result<bool> {
     stream.set_write_timeout(Some(STOP_WAIT))?;
     let stop = {
@@ -274,12 +281,11 @@ fn request(
                 "pending": inbox.pending_count(),
                 "gateway_sequence": sequence,
                 "gap_epoch": 0,
-                "ingress_issue": "native dispatcher reconciliation is unavailable"
+                "ingress_issue": if native { "" } else { "native dispatcher reconciliation is unavailable" }
             });
             status["connector"] = json!({
-                "state": "receipt_only",
-                "pending_admissions": inbox.pending_count(),
-                "diagnostic": "native dispatcher reconciliation is unavailable"
+                "state": if native { "scoped_dispatcher" } else { "receipt_only" },
+                "pending_admissions": inbox.pending_count()
             });
             respond(stream, "200 OK", status)?;
         } else if stop {
@@ -496,7 +502,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(3);
             while Instant::now() < deadline {
-                if bridge.serve(&cfg, &inbox, 12).unwrap() {
+                if bridge.serve(&cfg, &inbox, 12, false).unwrap() {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(5));
