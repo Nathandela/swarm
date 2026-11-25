@@ -141,7 +141,13 @@ fn board(path: &Path) -> io::Result<()> {
                     } else {
                         None
                     };
-                    match client.request_body(message, target) {
+                    let response = if target == "launch" && message["launch"]["agent"] == "opencode"
+                    {
+                        client.exchange(message, target, Duration::from_secs(75))
+                    } else {
+                        client.request_body(message, target)
+                    };
+                    match response {
                         Ok(reply) => {
                             let id = field(&reply["session"], "id");
                             if label.is_some() && !id.is_empty() {
@@ -253,7 +259,7 @@ impl Board {
             .display_rows()
             .into_iter()
             .filter_map(|row| match row {
-                Row::Session(row) if running(row) => {
+                Row::Session(row) if running(row) && !linked_dispatcher(row) => {
                     Some((field(row, "id").to_owned(), name(row).to_owned()))
                 }
                 _ => None,
@@ -408,7 +414,7 @@ impl Board {
                     }
                     self.notice = if linked_dispatcher(row) {
                         "Continue this dispatcher in its Discord thread".into()
-                    } else if field(row, "agent") == "agy" {
+                    } else if matches!(field(row, "agent"), "agy" | "opencode") {
                         "Session ended · r resume · ctrl+x delete".into()
                     } else {
                         "Session ended · ctrl+x delete".into()
@@ -417,11 +423,14 @@ impl Board {
             }
             Key::Text('r') => {
                 if let Some(row) = self.by_id(id).filter(|row| {
-                    field(row, "agent") == "agy" && !running(row) && !linked_dispatcher(row)
+                    matches!(field(row, "agent"), "agy" | "opencode")
+                        && !running(row)
+                        && !linked_dispatcher(row)
                 }) {
                     let cwd = Path::new(field(row, "cwd"));
-                    if cwd.is_dir() {
-                        return agy_resume(id, cwd, geometry, false);
+                    let agent = field(row, "agent");
+                    if cwd.is_dir() || agent == "opencode" {
+                        return resume(agent, id, cwd, geometry, false);
                     }
                     let cwd = cwd
                         .ancestors()
@@ -486,7 +495,7 @@ impl Board {
                     {
                         let path = Path::new(cwd.text.trim());
                         if path.is_absolute() && path.is_dir() {
-                            return agy_resume(id, path, geometry, true);
+                            return resume("agy", id, path, geometry, true);
                         }
                         self.notice = "Choose an existing absolute workspace directory".into();
                     }
@@ -642,7 +651,10 @@ impl Board {
                 entries.push(("Open".into(), Some('⏎')));
             }
             if !linked_dispatcher(row) {
-                if unchanged && !expected_running && field(row, "agent") == "agy" {
+                if unchanged
+                    && !expected_running
+                    && matches!(field(row, "agent"), "agy" | "opencode")
+                {
                     entries.push(("Resume".into(), Some('r')));
                 }
                 entries.extend([("Rename".into(), Some('e')), ("Tag".into(), Some('t'))]);
@@ -1185,24 +1197,22 @@ fn edit(value: &mut String, key: Key) {
     }
 }
 
-fn caller_launch_environment() -> Vec<String> {
-    env::vars_os()
-        .filter_map(|(key, value)| {
-            let key = key.to_str()?;
-            crate::environment::child_key(key).then(|| format!("{key}={}", value.to_string_lossy()))
-        })
-        .collect()
+fn caller_launch_environment(agent: &str) -> Vec<String> {
+    let entries = env::vars_os()
+        .filter_map(|(key, value)| Some(format!("{}={}", key.to_str()?, value.to_str()?)))
+        .collect();
+    crate::environment::reliable(agent, entries)
 }
 
-fn agy_resume(id: &str, cwd: &Path, (cols, rows): (u16, u16), relocate: bool) -> Action {
+fn resume(agent: &str, id: &str, cwd: &Path, (cols, rows): (u16, u16), relocate: bool) -> Action {
     let mut options = json!({"resume_from": id});
     if relocate {
         options["resume_relocate"] = json!("true");
     }
     Action::Request(
         json!({"op":"launch","launch":{
-            "agent":"agy", "cwd":cwd, "cols":cols, "rows":rows,
-            "env":caller_launch_environment(), "options":options,
+            "agent":agent, "cwd":cwd, "cols":cols, "rows":rows,
+            "env":caller_launch_environment(agent), "options":options,
         }}),
         "launch",
     )
@@ -1285,7 +1295,10 @@ impl Launch {
                         "choose an existing absolute workspace directory",
                     ));
                 }
-                let caller_env = caller_launch_environment();
+                if *agent == "codex" {
+                    crate::providers::codex::refuse_unqualified_origin(&Value::Null)?;
+                }
+                let caller_env = caller_launch_environment(agent);
                 let mut launch = json!({
                     "agent":agent, "cwd":cwd, "options":{}, "env":caller_env,
                     "cols":cols, "rows":rows, "initial_prompt":self.prompt,

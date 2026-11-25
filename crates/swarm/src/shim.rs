@@ -1,4 +1,5 @@
 mod codex_backend;
+mod opencode_backend;
 mod pty;
 mod screen;
 mod supervision;
@@ -46,6 +47,7 @@ struct State {
     schedule: Option<worker::Binding>,
     manager: bool,
     terminal_input: AtomicBool,
+    opencode: Option<Arc<opencode_backend::Backend>>,
     dir: PathBuf,
     working_dir: PathBuf,
     observations: Mutex<ProviderObservation>,
@@ -214,9 +216,12 @@ fn serve(dir: &Path) -> io::Result<()> {
     }
     let mut backend = None;
     let mut channel = None;
+    let mut opencode_binding = None;
     let (mut child, master) = (|| {
-        if !matches!(field(provider, "name"), "claude" | "codex" | "agy")
-            || providers::identity(executable)? != provider["identity"]
+        if !matches!(
+            field(provider, "name"),
+            "claude" | "codex" | "agy" | "opencode"
+        ) || providers::identity(executable)? != provider["identity"]
         {
             return Err(io::Error::other(
                 "provider executable identity changed before exec",
@@ -242,6 +247,26 @@ fn serve(dir: &Path) -> io::Result<()> {
                 ));
             }
         }
+        if provider["name"] == "opencode" {
+            let environment: Vec<_> = providers::opencode::environment(&Value::Null)?
+                .into_iter()
+                .collect();
+            if providers::opencode::profile(&environment) != config["opencode_profile"] {
+                return Err(io::Error::other(
+                    "OpenCode native profile changed before exec",
+                ));
+            }
+            command.envs(environment);
+            let binding = providers::opencode::artifact(
+                dir,
+                Path::new(working_dir),
+                field(&config, "id"),
+                !field(&bootstrap["native"], "text").is_empty(),
+                &config["opencode_resume"],
+            )?;
+            command.env("OPENCODE_TUI_CONFIG", dir.join("opencode-tui.json"));
+            opencode_binding = Some(binding);
+        }
         command.args(agy_args).args(&manager_args).args(argv);
         pty::start(command, cols, rows)
     })()
@@ -260,6 +285,28 @@ fn serve(dir: &Path) -> io::Result<()> {
         }
         let _ = fs::remove_file(&socket);
     })?;
+    let opencode = match opencode_binding {
+        Some(binding) => match opencode_backend::Backend::new(
+            binding,
+            field(provider, "version"),
+            child.id(),
+            dir,
+            token,
+        ) {
+            Ok(backend) => Some(Arc::new(backend)),
+            Err(err) => {
+                let _ = pty::signal_group(&child, libc::SIGKILL);
+                let _ = child.wait();
+                let _ = runtime::write_json(
+                    &dir.join("exit.json"),
+                    &json!({"error":err.to_string(),"token":token}),
+                );
+                let _ = fs::remove_file(&socket);
+                return Err(err);
+            }
+        },
+        None => None,
+    };
     let pid = std::process::id();
     if let Err(err) = (|| {
         runtime::write_json(
@@ -267,6 +314,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             &json!({
                 "token": token, "pid": pid, "birth": runtime::birth(pid)?,
                 "worker_pid": child.id(),
+                "worker_birth": opencode.as_ref().map(|backend| backend.worker_birth()),
             }),
         )
     })() {
@@ -279,6 +327,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     let state = Arc::new(State {
         token: token.into(),
         hook_token,
+        opencode: opencode.clone(),
         provider: field(provider, "name").to_owned(),
         semantic: channel.is_some().then_some(action_sink),
         schedule: schedule.clone(),
@@ -322,6 +371,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         thread::spawn(move || {
             codex_backend::observe(channel, cwd, dir, token, schedule, action_receiver, manager)
         });
+    }
+    if let Some(opencode) = opencode {
+        let initial = bootstrap["native"].clone();
+        thread::spawn(move || opencode.run(&initial));
     }
     let (drained, drain_done) = mpsc::sync_channel(1);
     let output = thread::spawn(move || {
@@ -533,7 +586,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             let terminal = screen::terminal(state.screen.lock().unwrap().parser.screen());
             runtime::write_control(&mut stream, &terminal)
         }
-        "attach" => attach(stream, state),
+        "attach" => {
+            opencode_terminal_ready(state)?;
+            attach(stream, state)
+        }
         "signal" if request["sig"] == "term" => {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
@@ -550,6 +606,60 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 &mut stream,
                 &json!({"type": if ready {"ok"} else {"error"}}),
             )
+        }
+        "opencode_requests" | "opencode_operation" | "opencode_history" => {
+            let result = (|| {
+                stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+                let native = state
+                    .opencode
+                    .as_ref()
+                    .filter(|native| native.ready.load(Ordering::Acquire))
+                    .ok_or_else(|| io::Error::other("OpenCode native binding is unavailable"))?;
+                let session = field(&request, "session");
+                match field(&request, "type") {
+                    "opencode_requests" => native.requests(
+                        session,
+                        field(&request, "request_id"),
+                        field(&request, "native_session_id"),
+                    ),
+                    "opencode_history" => native.history(
+                        request["limit"].as_u64().unwrap_or(50),
+                        field(&request, "before"),
+                    ),
+                    _ => {
+                        let params = (!request["body"].is_null()).then_some(&request["body"]);
+                        let guard = if params.is_some() {
+                            let guard = state.control.try_lock().map_err(|_| {
+                                io::Error::other("OpenCode terminal input is active")
+                            })?;
+                            if *guard != 0 {
+                                return Err(io::Error::other("OpenCode terminal is attached"));
+                            }
+                            Some(guard)
+                        } else {
+                            None
+                        };
+                        let result = native.operation(
+                            session,
+                            field(&request, "operation_id"),
+                            field(&request, "kind"),
+                            params,
+                        );
+                        drop(guard);
+                        Ok(result?.unwrap_or(Value::Null))
+                    }
+                }
+            })();
+            let response = match result {
+                Ok(body) if serde_json::to_vec(&body)?.len() < (1 << 20) - 4096 => {
+                    json!({"type":"opencode_result","body":body})
+                }
+                Ok(_) => {
+                    json!({"type":"error","error":"OpenCode native response exceeds the IPC limit; request a smaller page"})
+                }
+                Err(error) => json!({"type":"error","error":error.to_string()}),
+            };
+            runtime::write_control(&mut stream, &response)
         }
         "semantic" => {
             let operation = field(&request, "operation_id");
@@ -614,6 +724,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     "terminal input requires an explicit manager custody transition",
                 ));
             }
+            opencode_terminal_ready(state)?;
             let text = field(&request, "data");
             if text.is_empty() || text.len() > 4096 {
                 return Err(io::Error::other("invalid shim input payload"));
@@ -635,6 +746,19 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         _ => Err(io::Error::other("unsupported shim operation")),
     }
+}
+
+fn opencode_terminal_ready(state: &State) -> io::Result<()> {
+    if state
+        .opencode
+        .as_ref()
+        .is_some_and(|native| !native.ready.load(Ordering::Acquire))
+    {
+        return Err(io::Error::other(
+            "OpenCode native launch or initial input remains unresolved",
+        ));
+    }
+    Ok(())
 }
 
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {

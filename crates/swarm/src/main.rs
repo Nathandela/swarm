@@ -18,7 +18,7 @@ mod workspace;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|send|kill|doctor|discord|setup-trust|dispatcher-guide|version]\n";
+const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|doctor|discord|setup-trust|dispatcher-guide|version]\n";
 const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
 
@@ -66,8 +66,8 @@ fn main() -> ExitCode {
         Some("manager-mcp") => manager_mcp::run(&args[1..]),
         Some("dispatcher-guide") => guide(&args[1..]),
         Some(
-            "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "send"
-            | "kill",
+            "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "decide"
+            | "send" | "kill",
         ) => ipc::run(&args) as u8,
         None if !io::stdin().is_terminal() || !io::stdout().is_terminal() => {
             eprintln!("swarm: not a terminal; the TUI needs an interactive terminal");

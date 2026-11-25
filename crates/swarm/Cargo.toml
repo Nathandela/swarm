@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
 subtle = "2.6"
 libc = "0.2"

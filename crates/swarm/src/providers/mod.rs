@@ -3,6 +3,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;
+pub(crate) mod opencode;
 
 use serde_json::{Value, json};
 use std::fs;
@@ -22,6 +23,7 @@ pub(crate) struct LaunchPlan {
     pub identity: Value,
     pub version: String,
     pub agy_status_line: bool,
+    pub native: Value,
 }
 
 pub(crate) fn prepare(
@@ -35,6 +37,7 @@ pub(crate) fn prepare(
         "claude" | "claude-code" => "claude",
         "codex" => "codex",
         "agy" => "agy",
+        "opencode" => "opencode",
         _ => return Err(io::Error::other("unsupported provider")),
     };
     if agent == "codex" {
@@ -43,8 +46,12 @@ pub(crate) fn prepare(
     environment.retain(|(name, _)| match name.as_str() {
         "ANTHROPIC_API_KEY" => agent == "claude",
         "OPENAI_API_KEY" => agent == "codex",
+        "HOME" if agent == "opencode" => false,
         _ => true,
     });
+    if agent == "opencode" {
+        environment.extend(opencode::environment(&request["env"])?);
+    }
     let path = environment
         .iter()
         .rev()
@@ -57,6 +64,7 @@ pub(crate) fn prepare(
     let version = match agent {
         "agy" => agy::version(&output)?,
         "codex" => codex::version(&output)?,
+        "opencode" => opencode::version(&output)?,
         _ => claude::version(&output)?,
     }
     .to_owned();
@@ -70,10 +78,11 @@ pub(crate) fn prepare(
             "provider executable changed during admission",
         ));
     }
-    let argv = match agent {
-        "agy" => agy::argv(request)?,
-        "codex" => codex::argv(request)?,
-        _ => claude::argv(label, request)?,
+    let (argv, native) = match agent {
+        "agy" => (agy::argv(request)?, Value::Null),
+        "codex" => (codex::argv(request)?, Value::Null),
+        "opencode" => opencode::launch(request)?,
+        _ => (claude::argv(label, request)?, Value::Null),
     };
     Ok(LaunchPlan {
         agent,
@@ -83,6 +92,7 @@ pub(crate) fn prepare(
         identity: after,
         version,
         agy_status_line,
+        native,
     })
 }
 

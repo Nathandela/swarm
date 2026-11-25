@@ -121,6 +121,11 @@ impl State {
                 "manager refuses API-key account substitution",
             ));
         }
+        if !request["operation_id"].is_null() && request["operation_id"] != "" {
+            return Err(io::Error::other(
+                "launch operation requires the reliable owner launch protocol",
+            ));
+        }
         let mut request = request.clone();
         // The caller cannot stamp a linked launch; only resolving an owned source can.
         if let Some(fields) = request.as_object_mut() {
@@ -138,11 +143,31 @@ impl State {
                 )));
             }
         }
-        let resume = field(launch, "agent") == "agy" && !field(options, "resume_from").is_empty();
+        let resume = matches!(field(launch, "agent"), "agy" | "opencode")
+            && !field(options, "resume_from").is_empty();
         let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
         if resume {
             let source = field(options, "resume_from").to_owned();
             let session = self.session(&json!({"session_id":source}))?;
+            if field(launch, "agent") == "opencode" {
+                if managed.is_some()
+                    || launch["options"]
+                        .as_object()
+                        .is_none_or(|options| options.len() != 1)
+                    || launch.as_object().is_none_or(|fields| {
+                        fields.keys().any(|key| {
+                            !matches!(
+                                key.as_str(),
+                                "agent" | "cwd" | "env" | "name" | "cols" | "rows" | "options"
+                            )
+                        })
+                    })
+                {
+                    return Err(io::Error::other("unsupported OpenCode resume parameters"));
+                }
+                let prepared = session.prepare_opencode_resume(launch, &source)?;
+                return self.reserve_prepared(prepared, false, None, None);
+            }
             session.expand_agy_resume(&mut request, &source)?;
         }
         let (bound, source) = handoff::bind(self, &request)?;
@@ -192,6 +217,16 @@ impl State {
                 io::ErrorKind::WouldBlock,
                 format!("workspace overlaps active Swarm session in {directory}"),
             ));
+        }
+        if !prepared.resume.is_null()
+            && self
+                .sessions
+                .read()
+                .unwrap()
+                .values()
+                .any(|session| session.opencode_owns(&prepared.resume["rootID"]))
+        {
+            return Err(io::Error::other("OpenCode root already has a worker"));
         }
         let manager_guard = if let Some(scope) = managed.as_ref() {
             let conversation = field(&scope["launch"]["manager"], "conversation_id");
@@ -421,6 +456,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "resume-relocate"
                         | "semantic-send"
                         | "semantic-target"
+                        | "opencode-history-v1"
                         | "native-requests-v1"
                         | crate::bootstrap::RESTART
                 )
@@ -565,12 +601,35 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");
-                if body["session"] != id || !["request_id","native_session_id"].into_iter()
-                    .all(|key|body[key].is_null() || body[key] == "") {
-                    return Err(io::Error::other("only native request summary reads are supported"));
+                if body["session"] != id
+                    || !["request_id","native_session_id"].into_iter().all(|key|body[key].is_null() || body[key].is_string())
+                    || field(body,"request_id").is_empty() != field(body,"native_session_id").is_empty()
+                {
+                    return Err(io::Error::other("invalid native request read"));
                 }
-                let result=session.native_requests(id)?;
+                let result=session.native_requests(id,body)?;
                 reply(&writer,state,json!({"op":"native_requests","session_id":id,"native_requests_result":result}))
+            }),
+            "opencode_history" if caps.contains(&"opencode-history-v1") => state.session(&request).and_then(|session| {
+                let page = session.opencode_history(request["limit"].as_u64().unwrap_or(50),field(&request,"before"))?;
+                reply(&writer,state,json!({"op":"opencode_history","session_id":request["session_id"],"history_result":page}))
+            }),
+            "native_decide" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
+                let id = field(&request,"session_id");
+                let operation = field(&request,"operation_id");
+                let body = &request["native_decision"];
+                if request["body_version"] != 1 || !body.is_object() {
+                    return Err(io::Error::other("invalid native decision envelope"));
+                }
+                let result = session.opencode_action(id,operation,"decision",body,state)?;
+                reply(&writer,state,json!({"op":"native_decide","session_id":id,"operation_id":operation,"native_decision_receipt":result}))
+            }),
+            "native_decision_status" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
+                let id = field(&request,"session_id");
+                let operation = field(&request,"operation_id");
+                let result = session.opencode_operation_status(id,operation,"decision",&state.root)?
+                    .ok_or_else(||io::Error::other("native decision operation is unknown"))?;
+                reply(&writer,state,json!({"op":"native_decision_status","session_id":id,"operation_id":operation,"native_decision_receipt":result}))
             }),
             "semantic_target" if caps.contains(&"semantic-target") => state.session(&request).and_then(|session| {
                 let instance = session.semantic_target()?;
@@ -591,9 +650,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 }
                 let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
-                    "native_accepted" => json!({"op":"ok","operation_id":operation}),
-                    "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Codex app-server rejected semantic input"}),
-                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Codex semantic submission outcome is unknown; inspect --status"}),
+                    "native_accepted" | "completed" | "failed" | "cancelled" | "declined" => json!({"op":"ok","operation_id":operation}),
+                    "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Native provider rejected semantic input"}),
+                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Native semantic submission outcome is unknown; inspect --status"}),
                 };
                 reply(&writer,state,response)
             }),

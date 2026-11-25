@@ -171,3 +171,142 @@ pub(super) fn requests(client: &mut Client, args: &[String]) -> CliResult {
     }
     json_out(result).map_err(report)
 }
+
+pub(super) fn decide(client: &mut Client, args: &[String]) -> CliResult {
+    let Some((session, args)) = args
+        .split_first()
+        .filter(|(id, _)| !id.is_empty() && !id.starts_with('-'))
+    else {
+        return Err((2, "decide requires a session".into()));
+    };
+    let mut flags = std::collections::BTreeMap::new();
+    let extra = options(
+        args,
+        &[
+            "status",
+            "operation-id",
+            "request-id",
+            "native-session-id",
+            "request-hash",
+            "reply",
+            "answers",
+        ],
+        &["status"],
+        |key, value| {
+            if flags.insert(key.to_owned(), value).is_some() {
+                return Err(format!("duplicate --{key}"));
+            }
+            Ok(())
+        },
+    )
+    .map_err(|error| (2, error))?;
+    if !extra.is_empty() {
+        return Err((2, "unexpected native decision arguments".into()));
+    }
+    let get = |key| flags.get(key).copied().unwrap_or_default();
+    let status = flags
+        .get("status")
+        .map(|value| crate::flags::parse_bool("status", value))
+        .transpose()
+        .map_err(|error| (2, error))?
+        .unwrap_or(false);
+    let operation = get("operation-id");
+    let (op, operation, body) = if status {
+        if operation.is_empty()
+            || flags
+                .keys()
+                .any(|key| !matches!(key.as_str(), "status" | "operation-id"))
+        {
+            return Err((2, "decide --status requires only --operation-id".into()));
+        }
+        ("native_decision_status", operation.to_owned(), Value::Null)
+    } else {
+        let request = get("request-id");
+        let target = get("native-session-id");
+        let hash = get("request-hash");
+        let answer = get("answers");
+        let reply = get("reply");
+        if request.is_empty()
+            || target.is_empty()
+            || hash.is_empty()
+            || !matches!(reply, "once" | "always" | "reject" | "answer")
+            || (reply == "answer") == answer.is_empty()
+        {
+            return Err((
+                2,
+                "decide requires the exact request ID, native session ID, hash and reply".into(),
+            ));
+        }
+        let card = client
+            .exchange(
+                json!({
+                    "op":"native_requests","session_id":session,"native_requests":{
+                        "session":session,"request_id":request,"native_session_id":target,
+                    },
+                }),
+                "native_requests",
+                Duration::from_secs(18),
+            )
+            .map_err(report)?;
+        let card = &card["native_requests_result"]["request"];
+        if card["request_hash"] != hash
+            || card["request_id"] != request
+            || card["native_session_id"] != target
+            || card["session"] != session.as_str()
+        {
+            return Err((
+                1,
+                "OpenCode request content changed or the card expired".into(),
+            ));
+        }
+        let kind = match (field(card, "kind"), reply) {
+            ("permission", "once" | "always" | "reject") => "permission_reply",
+            ("question", "answer") => "question_reply",
+            ("question", "reject") => "question_reject",
+            _ => return Err((2, "reply is not offered for this native request".into())),
+        };
+        let mut body = json!({"session":session,"kind":kind});
+        for name in [
+            "session_instance",
+            "root_id",
+            "generation",
+            "native_session_id",
+            "request_id",
+            "request_hash",
+            "expires_at",
+        ] {
+            body[name] = card[name].clone();
+        }
+        if kind == "permission_reply" {
+            body["reply"] = json!(reply);
+        } else if kind == "question_reply" {
+            let answers = serde_json::from_str::<Vec<Vec<String>>>(answer).map_err(|_| {
+                (
+                    2,
+                    "--answers requires grouped JSON arrays of strings".into(),
+                )
+            })?;
+            body["answers"] = json!(answers);
+        }
+        (
+            "native_decide",
+            if operation.is_empty() {
+                codex_receipt::operation().map_err(report)?
+            } else {
+                operation.to_owned()
+            },
+            body,
+        )
+    };
+    let result = client.exchange(json!({
+        "op":op,"session_id":session,"operation_id":operation,"body_version":1,"native_decision":body,
+    }),op,Duration::from_secs(35)).map_err(|error|(1,format!("operation_id={operation}: {error}")))?;
+    let receipt = &result["native_decision_receipt"];
+    if receipt["operation_id"] != operation || receipt["session"] != session.as_str() {
+        return Err((
+            1,
+            format!("operation_id={operation}: uncorrelated OpenCode decision outcome"),
+        ));
+    }
+    json_out(receipt).map_err(report)
+}
