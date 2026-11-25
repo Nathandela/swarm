@@ -1,11 +1,17 @@
-use crate::providers::claude;
+use crate::providers::{agy, claude, codex_receipt};
 use crate::supervisor::runtime;
 use serde_json::{Map, Value, json};
 use std::env;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run(args: &[String]) -> u8 {
+    if args.first().is_some_and(|event| event == agy::EVENT) {
+        return agy_status_line(&args[1..]);
+    }
     match post(args) {
         Ok(()) => 0,
         Err(error) => {
@@ -63,4 +69,85 @@ fn post(args: &[String]) -> io::Result<()> {
         return Err(io::Error::other("shim refused provider hook"));
     }
     Ok(())
+}
+
+fn agy_status_line(args: &[String]) -> u8 {
+    const LIMIT: u64 = 96 * 1024;
+    let mut stdin = io::stdin().lock();
+    let mut input = Vec::new();
+    let _ = (&mut stdin).take(LIMIT + 1).read_to_end(&mut input);
+    if input.len() as u64 <= LIMIT
+        && let Ok(raw) = serde_json::from_slice::<Value>(&input)
+    {
+        let _ = post_agy(&raw);
+    }
+    let [command] = args else { return 0 };
+    if command.is_empty()
+        || command.starts_with("swarm hook AgyStatusLine")
+        || command.contains(" hook AgyStatusLine ")
+    {
+        return 0;
+    }
+    let mut child = match Command::new("/bin/sh")
+        .args(["-c", command])
+        .stdin(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return 1,
+    };
+    if let Some(mut pipe) = child.stdin.take() {
+        let _ = pipe
+            .write_all(&input)
+            .and_then(|_| io::copy(&mut stdin, &mut pipe).map(|_| ()));
+    }
+    match child.wait() {
+        Ok(status) => status
+            .code()
+            .or_else(|| status.signal().map(|n| 128 + n))
+            .unwrap_or(1) as u8,
+        Err(_) => 1,
+    }
+}
+
+fn post_agy(raw: &Value) -> io::Result<()> {
+    let (Ok(socket), Ok(token)) = (
+        env::var("SWARM_RUST_HOOK_SOCKET"),
+        env::var("SWARM_HOOK_TOKEN"),
+    ) else {
+        return Ok(());
+    };
+    if !runtime::valid_id(&token) {
+        return Ok(());
+    }
+    let field = |key| raw[key].as_str().unwrap_or("").trim();
+    let mut id = field("conversation_id");
+    if id.is_empty() {
+        id = field("session_id");
+    }
+    if !codex_receipt::canonical_thread(id) {
+        id = "";
+    }
+    let state = field("agent_state");
+    let title = field("conversation_title");
+    if state.is_empty() && title.is_empty() && id.is_empty() {
+        return Ok(());
+    }
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?;
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    runtime::write_control(
+        &mut stream,
+        &json!({
+            "type":"hook", "event":agy::EVENT, "token":token,
+            "payload":{
+                "agent_state":state.chars().take(32).collect::<String>(),
+                "conversation_id":id,
+                "conversation_title":title.chars().take(128).collect::<String>(),
+                "observed_ns": u64::try_from(at.as_nanos()).map_err(io::Error::other)?,
+            },
+        }),
+    )
 }

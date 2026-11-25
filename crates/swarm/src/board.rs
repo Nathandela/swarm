@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
 const POLL: Duration = Duration::from_millis(40);
-const ROSTER_CAPS: &[&str] = &["subscribe", "opencode-observation"];
+const ROSTER_CAPS: &[&str] = &["subscribe", "opencode-observation", "resume-relocate"];
 
 pub(crate) fn run() -> u8 {
     match crate::bootstrap::ensure_daemon()
@@ -205,6 +205,10 @@ struct Press {
 
 enum Modal {
     Launch(Launch),
+    ResumeAgy {
+        id: String,
+        cwd: Editor,
+    },
     Options {
         draft: Layout,
         focus: usize,
@@ -318,7 +322,7 @@ impl Board {
         if !usable(geometry) {
             return Action::None;
         }
-        if matches!(key, Key::Enter | Key::CtrlX | Key::Text('e' | 't'))
+        if matches!(key, Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r'))
             && self.current_focus().is_some()
             && !self.visible(rows)
         {
@@ -342,7 +346,7 @@ impl Board {
                     top: selected.saturating_sub(capacity(rows) - 1),
                 });
             }
-            Key::Text('n' | 'o') | Key::Enter | Key::CtrlX | Key::Text('e' | 't') => {
+            Key::Text('n' | 'o') | Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r') => {
                 let id = self.selected.clone();
                 return self.command(key, &id, geometry, online);
             }
@@ -377,9 +381,29 @@ impl Board {
                     }
                     self.notice = if linked_dispatcher(row) {
                         "Continue this dispatcher in its Discord thread".into()
+                    } else if field(row, "agent") == "agy" {
+                        "Session ended · r resume · ctrl+x delete".into()
                     } else {
                         "Session ended · ctrl+x delete".into()
                     };
+                }
+            }
+            Key::Text('r') => {
+                if let Some(row) = self.by_id(id).filter(|row| {
+                    field(row, "agent") == "agy" && !running(row) && !linked_dispatcher(row)
+                }) {
+                    let cwd = Path::new(field(row, "cwd"));
+                    if cwd.is_dir() {
+                        return agy_resume(id, cwd, geometry, false);
+                    }
+                    let cwd = cwd
+                        .ancestors()
+                        .find(|path| path.is_dir())
+                        .unwrap_or(Path::new("/"));
+                    self.modal = Some(Modal::ResumeAgy {
+                        id: id.to_owned(),
+                        cwd: Editor::new(&cwd.to_string_lossy()),
+                    });
                 }
             }
             Key::Text('e' | 't') => {
@@ -428,6 +452,21 @@ impl Board {
                         }
                     }
                 }
+            }
+            Modal::ResumeAgy { id, cwd } => {
+                if matches!(key, Key::Enter) {
+                    if online && usable(geometry) && self.by_id(id).is_some_and(|row| !running(row))
+                    {
+                        let path = Path::new(cwd.text.trim());
+                        if path.is_absolute() && path.is_dir() {
+                            return agy_resume(id, path, geometry, true);
+                        }
+                        self.notice = "Choose an existing absolute workspace directory".into();
+                    }
+                } else {
+                    cwd.apply(key);
+                }
+                Action::None
             }
             Modal::Options { draft, focus } => {
                 match key {
@@ -576,6 +615,9 @@ impl Board {
                 entries.push(("Open".into(), Some('⏎')));
             }
             if !linked_dispatcher(row) {
+                if unchanged && !expected_running && field(row, "agent") == "agy" {
+                    entries.push(("Resume".into(), Some('r')));
+                }
                 entries.extend([("Rename".into(), Some('e')), ("Tag".into(), Some('t'))]);
                 if unchanged {
                     let label = if expected_running { "Kill" } else { "Delete" };
@@ -727,6 +769,23 @@ impl Board {
         }
         match &self.modal {
             Some(Modal::Launch(form)) => form.view(&mut screen, cols, rows),
+            Some(Modal::ResumeAgy { cwd, .. }) => {
+                line(&mut screen, 1, cols, "\x1b[1m", "Relocate session");
+                line(
+                    &mut screen,
+                    2,
+                    cols,
+                    "",
+                    &format!("Directory  {}", cwd.text),
+                );
+                line(
+                    &mut screen,
+                    rows,
+                    cols,
+                    "\x1b[2m",
+                    "enter relocate · esc cancel",
+                );
+            }
             Some(Modal::Options { draft, focus }) => {
                 form_header(&mut screen, cols, "Options");
                 for (index, (label, value)) in [
@@ -1091,6 +1150,29 @@ fn edit(value: &mut String, key: Key) {
     }
 }
 
+fn caller_launch_environment() -> Vec<String> {
+    env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.to_str()?;
+            crate::environment::child_key(key).then(|| format!("{key}={}", value.to_string_lossy()))
+        })
+        .collect()
+}
+
+fn agy_resume(id: &str, cwd: &Path, (cols, rows): (u16, u16), relocate: bool) -> Action {
+    let mut options = json!({"resume_from": id});
+    if relocate {
+        options["resume_relocate"] = json!("true");
+    }
+    Action::Request(
+        json!({"op":"launch","launch":{
+            "agent":"agy", "cwd":cwd, "cols":cols, "rows":rows,
+            "env":caller_launch_environment(), "options":options,
+        }}),
+        "launch",
+    )
+}
+
 struct Launch {
     agents: Vec<&'static str>,
     agent: usize,
@@ -1099,6 +1181,9 @@ struct Launch {
     name: String,
     tag: String,
     prompt: String,
+    agy_model: String,
+    agy_mode: usize,
+    agy_skip: bool,
 }
 
 impl Launch {
@@ -1127,13 +1212,25 @@ impl Launch {
             name: String::new(),
             tag: String::new(),
             prompt: String::new(),
+            agy_model: String::new(),
+            agy_mode: 0,
+            agy_skip: false,
         }
     }
 
     fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> io::Result<Action> {
+        let agy = self.agents.get(self.agent) == Some(&"agy");
+        let count = if agy { 8 } else { 5 };
         match key {
-            Key::Up => self.focus = (self.focus + 4) % 5,
-            Key::Down | Key::Tab => self.focus = (self.focus + 1) % 5,
+            Key::Up => self.focus = (self.focus + count - 1) % count,
+            Key::Down | Key::Tab => self.focus = (self.focus + 1) % count,
+            Key::Left | Key::Right if agy && self.focus == 6 => {
+                let offset = if matches!(key, Key::Left) { 3 } else { 1 };
+                self.agy_mode = (self.agy_mode + offset) % 4;
+            }
+            Key::Left | Key::Right | Key::Text(' ') if agy && self.focus == 7 => {
+                self.agy_skip = !self.agy_skip;
+            }
             Key::Left | Key::Right if self.focus == 0 && !self.agents.is_empty() => {
                 let delta = if matches!(key, Key::Left) {
                     self.agents.len() - 1
@@ -1153,17 +1250,18 @@ impl Launch {
                         "choose an existing absolute workspace directory",
                     ));
                 }
-                let caller_env: Vec<_> = env::vars_os()
-                    .filter_map(|(key, value)| {
-                        let key = key.to_str()?;
-                        crate::environment::child_key(key)
-                            .then(|| format!("{key}={}", value.to_string_lossy()))
-                    })
-                    .collect();
+                let caller_env = caller_launch_environment();
                 let mut launch = json!({
                     "agent":agent, "cwd":cwd, "options":{}, "env":caller_env,
                     "cols":cols, "rows":rows, "initial_prompt":self.prompt,
                 });
+                if agy {
+                    launch["options"] = json!({
+                        "model": self.agy_model,
+                        "mode": (["", "accept-edits", "auto", "plan"][self.agy_mode]),
+                        "dangerously-skip-permissions": self.agy_skip.to_string(),
+                    });
+                }
                 for (key, text) in [("name", &self.name), ("tag", &self.tag)] {
                     if !text.is_empty() {
                         launch[key] = json!(text);
@@ -1179,6 +1277,7 @@ impl Launch {
                 2 => edit(&mut self.name, key),
                 3 => edit(&mut self.tag, key),
                 4 => edit(&mut self.prompt, key),
+                5 => edit(&mut self.agy_model, key),
                 _ => {}
             },
         }
@@ -1192,13 +1291,26 @@ impl Launch {
             .get(self.agent)
             .copied()
             .unwrap_or("No agent found");
-        let fields = [
+        let mut fields = vec![
             ("Agent", agent),
             ("Directory", self.cwd.as_str()),
             ("Name", &self.name),
             ("Tag", &self.tag),
             ("Prompt", &self.prompt),
         ];
+        if agent == "agy" {
+            fields.extend([
+                ("Model", self.agy_model.as_str()),
+                (
+                    "Execution mode",
+                    ["Default", "accept-edits", "auto", "plan"][self.agy_mode],
+                ),
+                (
+                    "Skip permission prompts",
+                    if self.agy_skip { "Yes" } else { "No" },
+                ),
+            ]);
+        }
         let capacity = usize::from(rows.saturating_sub(2));
         let start = (self.focus + 1).saturating_sub(capacity);
         for (index, (label, value)) in fields.iter().enumerate().skip(start).take(capacity) {
@@ -1218,7 +1330,7 @@ impl Launch {
                 rows,
                 cols,
                 "\x1b[2m",
-                "↑↓ field · ←→ agent · enter launch · esc cancel",
+                "↑↓ field · ←→ change · enter launch · esc cancel",
             );
         }
     }
