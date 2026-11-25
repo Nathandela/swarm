@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::io;
 use std::path::{Path, PathBuf};
 
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 const MAX_RECORDS: usize = 2048;
 const MAX_STORE_BYTES: usize = 1 << 20;
 
@@ -42,9 +42,13 @@ impl Inbox {
             || data["identity"] != identity
             || !data["messages"].is_object()
             || !data["outbox"].is_object()
+            || !valid_boundary(&data["consent_floor"])
+            || !valid_boundary(&data["history_cursor"])
+            || data["consent_floor"].is_null() != data["history_cursor"].is_null()
+            || boundary(&data["consent_floor"]) > boundary(&data["history_cursor"])
         {
             return Err(invalid(
-                "Discord inbox identity or schema does not match the enrolled place",
+                "Discord inbox cannot prove its schema, enrolled identity and original consent boundary",
             ));
         }
         Ok(Self { file, data })
@@ -70,6 +74,9 @@ impl Inbox {
         let Some(id) = source["id"].as_str().filter(|id| snowflake(id)) else {
             return Ok(None);
         };
+        if !self.within_consent(id) {
+            return Ok(None);
+        }
         let Some(body) = source["content"]
             .as_str()
             .filter(|body| !body.trim().is_empty() && body.len() <= 16384)
@@ -148,7 +155,8 @@ impl Inbox {
             return Ok(());
         };
         let entry = &self.data["outbox"][nonce];
-        if entry.is_null()
+        if !self.within_consent(id)
+            || entry.is_null()
             || entry["state"] != "sending" && entry["state"] != "uncertain"
             || message["author"]["id"] != app
             || message["author"]["bot"] != true
@@ -178,16 +186,37 @@ impl Inbox {
         self.data["history_cursor"].as_str()
     }
 
+    pub(super) fn within_consent(&self, id: &str) -> bool {
+        self.data["consent_floor"].is_string()
+            && id
+                .parse::<u64>()
+                .is_ok_and(|id| id > boundary(&self.data["consent_floor"]))
+    }
+
     pub(super) fn checkpoint(&mut self, id: &str) -> io::Result<()> {
         if !id.is_empty() && !snowflake(id) {
             return Err(invalid("invalid personal history checkpoint"));
         }
-        if self.cursor() != Some(id) {
+        let id_value = json!(id);
+        if self.cursor().is_none() || boundary(&id_value) > boundary(&self.data["history_cursor"]) {
             let mut next = self.data.clone();
-            next["history_cursor"] = json!(id);
+            if self.cursor().is_none() {
+                next["consent_floor"] = id_value.clone();
+            }
+            next["history_cursor"] = id_value;
             self.save(next)?;
         }
         Ok(())
+    }
+
+    pub(super) fn pending_ids(&self) -> Vec<u64> {
+        self.data["messages"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, row)| row["state"] == "prepared")
+            .filter_map(|(id, _)| id.parse().ok())
+            .collect()
     }
 
     pub(super) fn pending_count(&self) -> usize {
@@ -198,6 +227,20 @@ impl Inbox {
             .filter(|row| row["state"] == "prepared")
             .count()
     }
+}
+
+fn valid_boundary(value: &Value) -> bool {
+    value.is_null()
+        || value
+            .as_str()
+            .is_some_and(|id| id.is_empty() || snowflake(id))
+}
+
+fn boundary(value: &Value) -> u64 {
+    value
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_default()
 }
 
 fn hash(value: &Value) -> io::Result<String> {
