@@ -126,7 +126,7 @@ func (claudeAdapter) SupportedVersions() adapter.VersionConstraint {
 // injection (T-2) + any declared option flags + the initial prompt (positional).
 // It is pure and deterministic — the settings JSON is emitted with sorted keys.
 func (claudeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
-	settings, err := hookSettingsJSON()
+	settings, err := hookSettingsJSON(spec.AttachmentReadDir)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (claudeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	settings, err := hookSettingsJSON()
+	settings, err := hookSettingsJSON(spec.AttachmentReadDir)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func (claudeAdapter) TranscriptFileName(convID string) string {
 // hookSettingsJSON renders the inline --settings value that installs the swarm
 // hooks per-invocation. It marshals a fixed structure (sorted map keys), so the
 // output is deterministic and valid JSON.
-func hookSettingsJSON() (string, error) {
+func hookSettingsJSON(attachmentReadDir string) (string, error) {
 	type cmd struct {
 		Type    string `json:"type"`
 		Command string `json:"command"`
@@ -277,9 +277,26 @@ func hookSettingsJSON() (string, error) {
 	for _, h := range hookEvents {
 		hooks[h.event] = []matcher{{Hooks: []cmd{{Type: "command", Command: hookCommandPrefix + h.event}}}}
 	}
-	b, err := json.Marshal(struct {
-		Hooks map[string][]matcher `json:"hooks"`
-	}{Hooks: hooks})
+	type permissions struct {
+		AdditionalDirectories []string `json:"additionalDirectories"`
+		Deny                  []string `json:"deny"`
+	}
+	settings := struct {
+		Hooks       map[string][]matcher `json:"hooks"`
+		Permissions *permissions         `json:"permissions,omitempty"`
+	}{Hooks: hooks}
+	// Claude 2.1.332 doesn't reliably enforce literal ? or backslash rules.
+	// Leave its permissions unchanged when we cannot protect the added directory.
+	if attachmentReadDir != "" && !strings.ContainsAny(attachmentReadDir, "\\?") {
+		// Claude uses gitignore patterns and requires two leading slashes for
+		// absolute permission rules. Escape the path before adding the wildcard.
+		path := strings.NewReplacer("[", `\[`, "]", `\]`, "*", `\*`).Replace(attachmentReadDir)
+		settings.Permissions = &permissions{
+			AdditionalDirectories: []string{attachmentReadDir},
+			Deny:                  []string{"Edit(/" + path + ")", "Edit(/" + path + "/**)"},
+		}
+	}
+	b, err := json.Marshal(settings)
 	if err != nil {
 		return "", err
 	}

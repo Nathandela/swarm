@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -166,7 +167,25 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 		identity = append(identity, sources[1].route.MessageID, teammateRevision(sources[1].message))
 	}
 	key := digest(identity)
-	final := filepath.Join(root, key)
+	destination := root
+	if scoped, ok := t.manager.(interface {
+		AttachmentDirectory(TeammateDiscussion) (string, error)
+	}); ok {
+		destination, err = scoped.AttachmentDirectory(a.Discussion)
+		if err != nil {
+			return "", err
+		}
+	}
+	final := filepath.Join(destination, key)
+	if destination != root {
+		// Active or already-admitted turns may still reference the old absolute path.
+		old := filepath.Join(root, key)
+		if _, err := os.Lstat(old); err == nil {
+			final = old
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
 	manifest := filepath.Join(final, "files.json")
 	if info, err := os.Lstat(final); err == nil {
 		if !info.IsDir() || info.Mode().Perm() != 0700 {
@@ -182,7 +201,7 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	entries, err := os.ReadDir(root)
+	dirs, err := attachmentBundles(root, destination)
 	if err != nil {
 		return "", err
 	}
@@ -207,26 +226,17 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 	}
 	var used int64
 	bundles := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		key := strings.TrimPrefix(entry.Name(), ".pending-")
-		_, hashErr := hex.DecodeString(key)
-		if len(key) != 64 || hashErr != nil {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return "", err
-		}
-		dir := filepath.Join(root, entry.Name())
+	for _, dir := range dirs {
 		// Completed files in this revision's staging directory resume after restart.
 		// They count once via total below.
 		if dir == tmp {
 			continue
 		}
-		leased := entry.Name() == key && activeDiscussions[attachmentDiscussion(dir)]
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return "", err
+		}
+		leased := !strings.HasPrefix(filepath.Base(dir), ".pending-") && activeDiscussions[attachmentDiscussion(dir)]
 		if !pinned[dir] && !leased && t.service.Now().Sub(info.ModTime()) > 7*24*time.Hour {
 			if err = os.RemoveAll(dir); err != nil {
 				return "", err
@@ -285,11 +295,18 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 			} else if att.Size < 0 || att.Size > attachmentMaxFile || total+att.Size > attachmentMaxMessage || used+int64(total)+int64(att.Size)+65536 > attachmentMaxStore {
 				file.Unavailable = "Attachment exceeds storage limits."
 			} else {
-				// Keep v0.29.16 filenames for direct personal bundles, including
-				// partially downloaded bundles that survive an upgrade.
 				label := fmt.Sprintf("file-%d%s", len(files)+1, inboundAttachmentExtension(att.ContentType))
 				if legacyNames {
-					label = fmt.Sprintf("file-%d", candidate.index+1)
+					oldLabel := fmt.Sprintf("file-%d", candidate.index+1)
+					label = oldLabel
+					if destination != root {
+						label += inboundAttachmentExtension(att.ContentType)
+						if oldLabel != label {
+							if err = reuseLegacyAttachment(tmp, oldLabel, label, int64(att.Size)); err != nil {
+								return "", err
+							}
+						}
+					}
 				}
 				dest := filepath.Join(tmp, label)
 				existing, statErr := os.Lstat(dest)
@@ -361,7 +378,76 @@ func (t *teammateConnector) snapshotAttachments(ctx context.Context, a TeammateA
 	if err = os.Rename(tmp, final); err != nil {
 		return "", err
 	}
-	return manifest, syncAttachmentDir(root)
+	if destination == root {
+		return manifest, syncAttachmentDir(root)
+	}
+	return manifest, errors.Join(syncAttachmentDir(root), syncAttachmentDir(destination),
+		syncAttachmentDir(filepath.Dir(destination)), syncAttachmentDir(filepath.Dir(filepath.Dir(destination))))
+}
+
+// Include legacy bundles and every discussion in the existing connector-wide limits.
+func attachmentBundles(legacy, scoped string) ([]string, error) {
+	roots := []string{legacy}
+	if scoped != legacy {
+		discussions := filepath.Dir(filepath.Dir(scoped))
+		entries, err := os.ReadDir(discussions)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || !attachmentHash(entry.Name()) {
+				continue
+			}
+			path := filepath.Join(discussions, entry.Name(), schema.DiscussionAttachmentsDir)
+			info, err := os.Lstat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if !info.IsDir() || info.Mode().Perm() != 0700 {
+				continue
+			}
+			roots = append(roots, path)
+		}
+	}
+	var dirs []string
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && attachmentHash(strings.TrimPrefix(entry.Name(), ".pending-")) {
+				dirs = append(dirs, filepath.Join(root, entry.Name()))
+			}
+		}
+	}
+	return dirs, nil
+}
+
+func attachmentHash(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func reuseLegacyAttachment(dir, oldLabel, label string, size int64) error {
+	old := filepath.Join(dir, oldLabel)
+	info, err := os.Lstat(old)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != size {
+		return ErrConflict
+	}
+	return os.Rename(old, filepath.Join(dir, label))
 }
 
 func attachmentDiscussion(dir string) string {

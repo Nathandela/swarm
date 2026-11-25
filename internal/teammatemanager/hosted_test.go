@@ -24,7 +24,8 @@ import (
 	"github.com/Nathandela/swarm/internal/voice"
 )
 
-// This opt-in rehearsal uses a real native account. Discord messages and authors are synthetic.
+// Discord messages and authors are synthetic. The scoped attachment case also
+// uses a local model stub; other cases use a native account.
 func TestHostedTeammateLifecycle(t *testing.T) {
 	bin, workdir := os.Getenv("SWARM_TEAMMATE_TEST_BINARY"), os.Getenv("SWARM_TEAMMATE_TEST_MANAGER_DIR")
 	if bin == "" && workdir == "" {
@@ -67,6 +68,11 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	steeringProof := "cobalt lantern " + hex.EncodeToString(marker[3:])
 	if err := os.WriteFile(filepath.Join(project, "second.txt"), []byte(steeringProof+"\n"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	var scopedClaude *hostedScopedClaude
+	if os.Getenv("SWARM_TEAMMATE_TEST_CLAUDE_ATTACHMENT_SCOPE") == "1" {
+		workdir = project
+		scopedClaude = prepareHostedScopedClaude(t, root, project, bin)
 	}
 	armResumeFailures := prepareHostedResumeFailures(t, root)
 	socket := filepath.Join(state, "daemon.sock")
@@ -176,6 +182,12 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 	if vmMode {
 		cfg.ProjectAccess = discord.ProjectAccessVM
 		cfg.Projects = nil // The real job below uses an unregistered directory.
+	}
+	if scopedClaude != nil {
+		if !vmMode {
+			t.Fatal("scoped Claude attachment rehearsal requires SWARM_TEAMMATE_TEST_VM=1")
+		}
+		cfg.ManagerCLI = "claude"
 	}
 	personal := os.Getenv("SWARM_TEAMMATE_TEST_PERSONAL") == "1"
 	if personal {
@@ -486,6 +498,10 @@ func TestHostedTeammateLifecycle(t *testing.T) {
 			}
 			return true
 		})
+		return
+	}
+	if scopedClaude != nil {
+		scopedClaude.run(t, ctx, r, thread, reader, project, wait, roster)
 		return
 	}
 	if fixture := os.Getenv("SWARM_TEAMMATE_TEST_ATTACHMENT_FIXTURE"); fixture != "" {

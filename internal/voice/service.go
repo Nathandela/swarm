@@ -13,12 +13,13 @@ import (
 
 	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/voice/openailive"
 )
 
 const (
 	managerControlSocket = "control.sock"
-	managerBridgeAuth    = "bridge.auth"
+	managerBridgeAuth    = schema.DiscussionBridgeAuthFile
 	managerTickInterval  = 500 * time.Millisecond
 )
 

@@ -19,12 +19,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
 )
 
 type attachmentTransport func(*http.Request) (*http.Response, error)
 
 func (f attachmentTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type attachmentScopedManager struct {
+	TeammateManager
+	root string
+}
+
+func (m attachmentScopedManager) AttachmentDirectory(d TeammateDiscussion) (string, error) {
+	path := filepath.Join(m.root, "discussions", digest([]string{d.InstallationID, d.ID}), schema.DiscussionAttachmentsDir)
+	return path, os.MkdirAll(path, 0700)
+}
 
 func TestPersonalAttachmentOnlyHandoff(t *testing.T) {
 	var marker [8]byte
@@ -117,6 +128,8 @@ func TestPersonalAttachmentOnlyHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.service.Store.Close() })
+	// Resume the old flat pending bundle after upgrading to discussion-scoped staging.
+	conn.manager = attachmentScopedManager{manager, dir}
 	pending, err = conn.service.Store.teammatePending(cfg.InstallationID)
 	if err != nil || len(pending) != 1 || pending[0].Route.MessageID != "200" {
 		t.Fatalf("original DM not pending after restart: %v %v", pending, err)
@@ -128,7 +141,8 @@ func TestPersonalAttachmentOnlyHandoff(t *testing.T) {
 		t.Fatalf("admissions %d downloads %d", len(manager.admitted), cdn)
 	}
 	a := manager.admitted[0]
-	if a.Text != "" || !filepath.IsAbs(a.AttachmentManifest) {
+	destination, err := conn.manager.(attachmentScopedManager).AttachmentDirectory(a.Discussion)
+	if err != nil || a.Text != "" || filepath.Dir(filepath.Dir(a.AttachmentManifest)) != destination {
 		t.Fatalf("missing attachment-only handoff: %+v", a)
 	}
 	raw, err := os.ReadFile(a.AttachmentManifest)
@@ -140,7 +154,7 @@ func TestPersonalAttachmentOnlyHandoff(t *testing.T) {
 		t.Fatal("invalid manifest")
 	}
 	for i, expected := range [][]byte{doc, encoded.Bytes()} {
-		if files[i].File != fmt.Sprintf("file-%d", i+1) {
+		if files[i].File != []string{"file-1.txt", "file-2.png"}[i] {
 			t.Fatalf("unexpected local path %q", files[i].File)
 		}
 		got, err := os.ReadFile(filepath.Join(filepath.Dir(a.AttachmentManifest), files[i].File))
@@ -547,17 +561,33 @@ func TestGuildAttachmentRetentionThroughActiveDiscussion(t *testing.T) {
 		return a.AttachmentManifest
 	}
 	original := stage(current, "210")
+	scoped := attachmentScopedManager{bridge.manager, filepath.Dir(bridge.service.Store.db.Path())}
+	bridge.manager = scoped
+	if replay := stage(current, "210"); replay != original {
+		t.Fatal("upgrade moved a legacy path still in use")
+	}
+	fresh := stage(current, "211")
+	currentDir, err := scoped.AttachmentDirectory(current)
+	if err != nil || filepath.Dir(filepath.Dir(fresh)) != currentDir {
+		t.Fatalf("new file outside the discussion directory: %s, %v", fresh, err)
+	}
 	now = now.Add(8 * 24 * time.Hour)
-	stage(later, "220")
-	if _, err := os.Stat(original); err != nil {
-		t.Fatal("live discussion lost its original files", err)
+	if other := stage(later, "220"); filepath.Dir(filepath.Dir(other)) == currentDir {
+		t.Fatal("a second discussion shared the first discussion directory")
+	}
+	for _, manifest := range []string{original, fresh} {
+		if _, err := os.Stat(manifest); err != nil {
+			t.Fatal("live discussion lost its files", err)
+		}
 	}
 	if err := bridge.service.Store.teammatePark(current, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	stage(later, "221")
-	if _, err := os.Stat(original); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("settled discussion's expired files were not reclaimed", err)
+	for _, manifest := range []string{original, fresh} {
+		if _, err := os.Stat(manifest); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("settled discussion's expired files were not reclaimed", err)
+		}
 	}
 }
 

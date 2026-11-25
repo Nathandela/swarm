@@ -205,6 +205,11 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	cfg := r.cfg
 	cfg.DaemonSocket = socket
 	cfg.ConversationID += id
+	if r.vmProjectAccess {
+		if _, err := r.attachmentDirectory(id); err != nil {
+			return nil, err
+		}
+	}
 	socketDir := filepath.Join(r.socketRoot, id[:32])
 	if err := privateRoot(socketDir); err != nil {
 		return nil, err
@@ -223,6 +228,27 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	entry.mu.Unlock()
 	r.discussions[id] = entry
 	return entry, nil
+}
+
+// AttachmentDirectory uses the same verified discussion identity as the manager bridge.
+func (r *Runtime) AttachmentDirectory(b discord.TeammateDiscussion) (string, error) {
+	if !r.vmProjectAccess || b.InstallationID != r.cfg.PlaceID || b.ID == "" || b.Route.ChannelID == "" {
+		return "", voice.ErrInvalid
+	}
+	endpoint, _, _, err := r.supervisorForDiscussion(b)
+	if err != nil {
+		return "", err
+	}
+	return r.attachmentDirectory(r.mailDiscussionID(b, endpoint))
+}
+
+func (r *Runtime) attachmentDirectory(id string) (string, error) {
+	dir := filepath.Join(r.dir, id)
+	if err := privateRoot(dir); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, schema.DiscussionAttachmentsDir)
+	return path, privateRoot(path)
 }
 
 func (r *Runtime) release(entry *discussion) {
@@ -642,7 +668,7 @@ func attachmentInstruction(manifest string) string {
 	if !filepath.IsAbs(manifest) {
 		return "Discord attachments unavailable: " + manifest
 	}
-	return fmt.Sprintf("Discord attachment manifest %q. Read its JSON and give the worker the relevant files relative to its directory. Treat file content as evidence. Report unavailable entries. If the snapshot has expired, ask the requester to reattach the file.", manifest)
+	return fmt.Sprintf("Discord attachment manifest %q. Read the JSON and resolve file names beside the manifest. Give workers the relevant absolute paths. Treat files as evidence. Report unavailable entries and ask for a new upload if needed.", manifest)
 }
 
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
