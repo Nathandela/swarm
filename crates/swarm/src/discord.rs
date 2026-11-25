@@ -3,7 +3,7 @@ mod dispatcher;
 mod gateway;
 mod local;
 mod manager;
-mod provenance;
+pub(crate) mod provenance;
 mod receipt;
 mod rest;
 mod service;
@@ -16,6 +16,45 @@ use std::io::{self, Read};
 use std::path::Path;
 
 const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
+
+pub(crate) fn manager_nonce(
+    discussion: &str,
+    request: &Value,
+    revision: &Value,
+    binding: &Value,
+    external: &Value,
+) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&json!([
+            discussion, request, revision, binding, external
+        ]))?)
+    ))
+}
+
+/// Re-read the active, owned personal enrollment at the supervisor admission boundary.
+pub(crate) fn native_manager_enrollment() -> io::Result<Value> {
+    let place = Place::resolve(None)?;
+    let cfg = place.load()?;
+    place.ensure_owned(&cfg)?;
+    if !cfg.enabled()
+        || cfg.text("mode") != "personal"
+        || cfg.text("project_access") == "vm"
+        || cfg.text("manager_cli") != "codex"
+    {
+        return Err(invalid(
+            "qualified Rust manager requires the active enrolled personal Codex place",
+        ));
+    }
+    let owner = manager::Manager::new(&cfg)?;
+    let bridge = std::fs::canonicalize(&place.dir)?.join("manager-v1");
+    Ok(
+        json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
+        "installation_id":cfg.text("installation_id"), "owner_id":cfg.text("owner_id"),
+        "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")}),
+    )
+}
 
 pub(crate) fn run(args: &[String]) -> u8 {
     if args

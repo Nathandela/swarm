@@ -1,3 +1,5 @@
+mod manager_runtime;
+
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
 use crate::providers::{self, LaunchPlan, codex_receipt};
@@ -31,6 +33,41 @@ pub(super) struct Prepared {
     cols: u16,
     rows: u16,
     provider: LaunchPlan,
+    manager: Value,
+}
+
+impl Prepared {
+    pub(super) fn bind_manager(&mut self, mut scope: Value) -> io::Result<()> {
+        let version: Vec<_> = self
+            .provider
+            .version
+            .split('.')
+            .map(str::parse::<u32>)
+            .collect::<Result<_, _>>()
+            .map_err(|_| io::Error::other("unqualified manager provider version"))?;
+        let release = (
+            version[0],
+            version.get(1).copied().unwrap_or(0),
+            version.get(2).copied().unwrap_or(0),
+        );
+        if self.provider.agent != "codex" || release < (0, 167, 0) {
+            return Err(io::Error::other(
+                "manager requires a qualified Codex native-turn runtime",
+            ));
+        }
+        let home = self
+            .provider
+            .env
+            .iter()
+            .find(|(name, _)| name == "HOME")
+            .map(|(_, home)| PathBuf::from(home))
+            .ok_or_else(|| io::Error::other("manager requires native account HOME"))?;
+        scope["account"] = json!(super::manager::account(&home)?);
+        scope["account_home"] = json!(home);
+        self.provider.env.retain(|(key, _)| key != "OPENAI_API_KEY");
+        self.manager = scope;
+        Ok(())
+    }
 }
 
 struct Labels {
@@ -46,6 +83,7 @@ pub(super) struct Session {
     pub id: String,
     dir: PathBuf,
     token: String,
+    manager: Value,
     agent: String,
     cwd: String,
     labels: Mutex<Labels>,
@@ -80,6 +118,7 @@ impl Session {
             dir,
             id: id.into(),
             token: token.into(),
+            manager: data["manager"].clone(),
             agent: match field(&data["provider"], "name") {
                 "codex" => "codex",
                 _ => "claude",
@@ -182,6 +221,7 @@ impl Session {
             cols,
             rows,
             provider,
+            manager: Value::Null,
         })
     }
 
@@ -193,6 +233,7 @@ impl Session {
             cols,
             rows,
             provider,
+            manager,
         } = prepared;
         let label = if label.is_empty() {
             if provider.agent == "codex" {
@@ -210,7 +251,7 @@ impl Session {
             &dir.join("session.json"),
             &json!({
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
-                "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
+                "created_at": now(), "cols": cols, "rows": rows, "tag":tag,"manager":manager,
                 "provider": {"name": provider.agent, "version": provider.version,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
@@ -459,7 +500,12 @@ impl Session {
                 fields.iter().any(|(key, value)| {
                     !matches!(
                         key.as_str(),
-                        "session" | "session_instance" | "text" | "expected_turn"
+                        "session"
+                            | "session_instance"
+                            | "text"
+                            | "expected_turn"
+                            | "manager_admission"
+                            | "origin"
                     ) && !value.is_null()
                 })
             })
@@ -469,6 +515,7 @@ impl Session {
         {
             return Err(io::Error::other("invalid or stale Codex semantic request"));
         }
+        self.check_manager_input(session, body)?;
         let thread = self.semantic_thread()?;
         {
             use sha2::{Digest, Sha256};
@@ -491,14 +538,16 @@ impl Session {
             }
             return Ok(record["receipt"].clone());
         }
-        self.semantic_target()?;
+        if self.manager.is_null() {
+            self.semantic_target()?;
+        }
         let mut shim = self.dial()?;
         shim.set_read_timeout(Some(Duration::from_secs(7)))?;
         runtime::write_control(
             &mut shim,
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
-                "session_instance":instance,"text":text,
+                "session_instance":instance,"text":text,"manager_admission":body["manager_admission"]
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -613,6 +662,10 @@ impl Session {
         Ok(true)
     }
 
+    pub(super) fn owns_manager(&self, conversation: &str) -> bool {
+        self.manager["launch"]["manager"]["conversation_id"] == conversation
+    }
+
     pub(super) fn view(&self, endpoint: &str) -> Value {
         let state = self.state.lock().unwrap();
         let process = match state.0 {
@@ -647,6 +700,12 @@ impl Session {
         });
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
+        }
+        if !self.manager.is_null() {
+            view["role"] = json!("manager");
+            view["manager_conversation_id"] =
+                self.manager["launch"]["manager"]["conversation_id"].clone();
+            view["capabilities"] = json!({"session_instance":codex_receipt::instance(&self.token)});
         }
         view
     }

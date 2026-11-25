@@ -41,6 +41,7 @@ struct State {
     hook_token: String,
     provider: String,
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    manager: bool,
     terminal_input: AtomicBool,
     dir: PathBuf,
     working_dir: PathBuf,
@@ -89,6 +90,23 @@ fn serve(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()?;
     let socket = dir.join("p");
     let listener = runtime::bind(&socket)?;
+    let scope = &config["manager"];
+    let manager_args = if scope.is_null() {
+        Vec::new()
+    } else {
+        let auth = Path::new(field(&scope["launch"]["manager"], "auth_file"));
+        let credential = crate::manager_mcp::read_credential(auth)?;
+        use sha2::{Digest, Sha256};
+        if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes()))
+            || scope["account"]
+                != crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
+        {
+            return Err(io::Error::other(
+                "manager launch custody changed before exec",
+            ));
+        }
+        crate::supervisor::manager::mcp_args(scope, field(&config, "id"))?
+    };
     let provider = &config["provider"];
     let executable = Path::new(field(provider, "executable"));
     let argv: Vec<_> = bootstrap["argv"]
@@ -127,8 +145,13 @@ fn serve(dir: &Path) -> io::Result<()> {
         }
         command.current_dir(working_dir);
         if provider["name"] == "codex" && provider["mode"] == "managed" {
-            let (owner, connection) =
-                codex_backend::start(executable, Path::new(working_dir), dir, &environment)?;
+            let (owner, connection) = codex_backend::start(
+                executable,
+                Path::new(working_dir),
+                dir,
+                &environment,
+                &manager_args,
+            )?;
             backend = Some(owner);
             command
                 .args(["--remote", &connection.endpoint])
@@ -140,7 +163,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                 ));
             }
         }
-        command.args(argv);
+        command.args(&manager_args).args(argv);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
@@ -171,6 +194,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         hook_token,
         provider: field(provider, "name").to_owned(),
         semantic: channel.is_some().then_some(action_sink),
+        manager: !scope.is_null(),
         terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
@@ -198,7 +222,13 @@ fn serve(dir: &Path) -> io::Result<()> {
             state.dir.clone(),
             state.token.clone(),
         );
-        thread::spawn(move || codex_backend::observe(channel, cwd, dir, token, action_receiver));
+        let mut manager = scope.clone();
+        if !manager.is_null() {
+            manager["session_id"] = config["id"].clone();
+        }
+        thread::spawn(move || {
+            codex_backend::observe(channel, cwd, dir, token, action_receiver, manager)
+        });
     }
     let output = thread::spawn(move || drain(reader, pending));
     let shared = state.clone();
@@ -355,6 +385,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     || session.is_empty()
                     || text.is_empty()
                     || text.len() > 4096
+                    || state.manager != !request["manager_admission"].is_null()
                 {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }
@@ -373,6 +404,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         operation: operation.into(),
                         session: session.into(),
                         text: text.into(),
+                        admission: request["manager_admission"].clone(),
                         answer,
                         not_after: Instant::now() + Duration::from_secs(2),
                     })
@@ -388,6 +420,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             runtime::write_control(&mut stream, &response)
         }
         "input" => {
+            if state.manager {
+                return Err(io::Error::other(
+                    "terminal input requires an explicit manager custody transition",
+                ));
+            }
             let text = field(&request, "data");
             if text.is_empty() || text.len() > 4096 {
                 return Err(io::Error::other("invalid shim input payload"));
@@ -521,6 +558,11 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }
             match tag {
                 DATA_IN => {
+                    if state.manager {
+                        return Err(io::Error::other(
+                            "manager terminal input requires a custody transition",
+                        ));
+                    }
                     if !bytes.is_empty() {
                         state.terminal_input.store(true, Ordering::Release);
                     }

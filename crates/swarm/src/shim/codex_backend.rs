@@ -1,6 +1,6 @@
 use super::pty;
 use crate::ipc::field;
-use crate::providers::codex_receipt;
+use crate::providers::{codex_proof, codex_receipt};
 use crate::supervisor::runtime;
 use serde_json::{Value, json};
 use std::io;
@@ -30,6 +30,8 @@ impl Drop for Backend {
 pub(super) struct Channel {
     pub endpoint: String,
     connection: WebSocket<UnixStream>,
+    pid: u32,
+    birth: u64,
 }
 
 pub(super) fn start(
@@ -37,6 +39,7 @@ pub(super) fn start(
     cwd: &Path,
     dir: &Path,
     env: &[(String, String)],
+    manager_args: &[String],
 ) -> io::Result<(Backend, Channel)> {
     let socket = dir.join("b");
     let endpoint = format!("unix://{}", socket.display());
@@ -48,6 +51,7 @@ pub(super) fn start(
             "-c",
             "sandbox_workspace_write.network_access=true",
         ])
+        .args(manager_args)
         .current_dir(cwd)
         .env_clear()
         .envs(env.iter().map(|(key, value)| (key, value)))
@@ -105,11 +109,15 @@ pub(super) fn start(
         }
     }
     send(&mut connection, json!({"method":"initialized","params":{}}))?;
+    let pid = backend.child.id();
+    let birth = runtime::birth(pid)?;
     Ok((
         backend,
         Channel {
             endpoint,
             connection,
+            pid,
+            birth,
         },
     ))
 }
@@ -138,6 +146,7 @@ fn read(ws: &mut WebSocket<UnixStream>) -> io::Result<Option<Value>> {
 
 #[derive(Default)]
 struct Observation {
+    proof: Option<codex_proof::Ledger>,
     thread: String,
     turn: Option<String>,
     requests: std::collections::BTreeMap<String, &'static str>,
@@ -249,6 +258,7 @@ pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
     pub text: String,
+    pub admission: Value,
     pub not_after: Instant,
     pub answer: SyncSender<io::Result<Value>>,
 }
@@ -304,6 +314,24 @@ fn submit(
         &codex_receipt::instance(target.token),
         &hash,
     )?;
+    let mut manager_nonce = None;
+    if !action.admission.is_null() {
+        let proof = observation
+            .proof
+            .as_mut()
+            .ok_or_else(|| io::Error::other("manager observer custody is unavailable"))?;
+        let nonce = field(&action.admission, "nonce");
+        if action.admission["binding"] != *proof.binding() {
+            return Err(io::Error::other(
+                "manager admission has the wrong observation generation",
+            ));
+        }
+        let external = action.admission["expected_external_input"]
+            .as_u64()
+            .ok_or_else(|| io::Error::other("manager admission lacks external input evidence"))?;
+        proof.prepare(&action.operation, nonce, &action.text, external)?;
+        manager_nonce = Some(nonce);
+    }
     if let Some(record) = codex_receipt::load(
         target.dir,
         &action.operation,
@@ -320,7 +348,7 @@ fn submit(
     }
     if observation.thread.is_empty()
         || observation.ambiguous
-        || !observation.joined
+        || !observation.joined && manager_nonce.is_none()
         || observation.requests_unverified
         || !observation.idle
         || observation.turn.is_some()
@@ -352,15 +380,14 @@ fn submit(
         return Ok(receipt);
     }
     observation.idle = false;
-    if send(
-        ws,
-        json!({
-            "id":rpc,"method":"turn/start","params":{"threadId":observation.thread,
-                "input":[{"type":"text","text":action.text,"text_elements":[]}]}
-        }),
-    )
-    .is_err()
-    {
+    let mut request = json!({
+        "id":rpc,"method":"turn/start","params":{"threadId":observation.thread,
+            "input":[{"type":"text","text":action.text,"text_elements":[]}]}
+    });
+    if let Some(nonce) = manager_nonce {
+        request["params"]["clientUserMessageId"] = json!(nonce);
+    }
+    if send(ws, request).is_err() {
         // Prevent a prepared frame from flushing on a later read after the caller's authority ends.
         let _ = ws.get_ref().shutdown(Shutdown::Both);
         return Ok(receipt);
@@ -370,6 +397,9 @@ fn submit(
         let Ok(message) = read(ws) else { break };
         let Some(message) = message else { continue };
         if message["id"] != rpc || !message["method"].is_null() {
+            if let Some(proof) = observation.proof.as_mut() {
+                proof.observe(&message)?;
+            }
             observe_frame(observation, &message, target);
             continue;
         }
@@ -396,6 +426,7 @@ pub(super) fn observe(
     dir: PathBuf,
     token: String,
     actions: Receiver<SemanticAction>,
+    manager: Value,
 ) {
     let mut observation = Observation::default();
     let target = SemanticTarget {
@@ -455,6 +486,31 @@ pub(super) fn observe(
                     }
                 } else {
                     observe_frame(&mut observation, &message, &target);
+                    if !manager.is_null() && !observation.thread.is_empty() {
+                        if observation.proof.is_none() {
+                            let binding = json!({
+                                "session":format!("{}/{}", field(&manager,"endpoint_id"),field(&manager,"session_id")),
+                                "session_instance":codex_receipt::instance(&token),
+                                "conversation_id":manager["launch"]["manager"]["conversation_id"],
+                                "provider":"codex","native_session_id":observation.thread,
+                                "native_generation":format!("{}:{}",channel.pid,channel.birth),
+                                "observation_generation":codex_receipt::hash(&format!("{}:{}:{}",token,channel.pid,channel.birth)),
+                                "login_epoch":manager["account"]
+                            });
+                            let Ok(proof) = codex_proof::Ledger::open(&dir, &binding) else {
+                                break;
+                            };
+                            if runtime::write_json(&dir.join("manager-binding.json"),&json!({
+                                "binding":binding,"pid":channel.pid,"birth":channel.birth,"token":token
+                            })).is_err() { break; }
+                            observation.proof = Some(proof);
+                        }
+                        if let Some(proof) = observation.proof.as_mut()
+                            && proof.observe(&message).is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
             }
             Ok(None) => {

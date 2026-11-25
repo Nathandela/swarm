@@ -6,6 +6,7 @@ mod environment;
 mod flags;
 mod hook;
 mod ipc;
+mod manager_mcp;
 mod providers;
 mod setup_trust;
 mod shim;
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
         Some("shim") => shim::run(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
         Some("discord") => discord::run(&args[1..]),
+        Some("manager-mcp") => manager_mcp::run(&args[1..]),
         Some("dispatcher-guide") => guide(&args[1..]),
         Some("ls" | "peek" | "watch" | "spawn" | "message" | "requests" | "send" | "kill") => {
             ipc::run(&args) as u8

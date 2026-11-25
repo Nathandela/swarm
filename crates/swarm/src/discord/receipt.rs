@@ -246,7 +246,7 @@ impl Inbox {
             .as_object()
             .unwrap()
             .values()
-            .filter(|row| row["state"] == "prepared")
+            .filter(|row| matches!(row["state"].as_str(), Some("prepared" | "sending")))
             .count()
     }
 }

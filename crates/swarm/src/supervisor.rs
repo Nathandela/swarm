@@ -1,3 +1,4 @@
+pub(crate) mod manager;
 mod reliable;
 mod removal;
 pub(crate) mod runtime;
@@ -49,6 +50,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
 struct State {
     root: PathBuf,
     endpoint: String,
+    socket: PathBuf,
     sessions: RwLock<BTreeMap<String, Arc<Session>>>,
     subscribers: Mutex<Vec<Weak<Subscriber>>>,
     launch_gate: Mutex<()>,
@@ -98,8 +100,11 @@ impl State {
         });
     }
 
-    fn reserve(&self, request: &Value) -> io::Result<Arc<Session>> {
-        let prepared = Session::prepare(request)?;
+    fn reserve(&self, request: &Value, managed: Option<Value>) -> io::Result<Arc<Session>> {
+        let mut prepared = Session::prepare(request)?;
+        if let Some(scope) = managed.as_ref() {
+            prepared.bind_manager(scope.clone())?;
+        }
         let _reservation = self.launch_gate.lock().unwrap();
         if self
             .sessions
@@ -112,7 +117,40 @@ impl State {
         {
             return Err(io::Error::other("session limit reached"));
         }
+        let manager_guard = if let Some(scope) = managed.as_ref() {
+            let conversation = field(&scope["launch"]["manager"], "conversation_id");
+            let guard_root = self.root.join("manager-launches");
+            runtime::private_dir(&guard_root)?;
+            let key = format!("{:x}", Sha256::digest(conversation.as_bytes()));
+            let marker = guard_root.join(format!("{key}.json"));
+            match fs::symlink_metadata(&marker) {
+                Ok(_) => {
+                    return Err(io::Error::other(
+                        "discussion already has a durable manager reservation",
+                    ));
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+            if self
+                .sessions
+                .read()
+                .unwrap()
+                .values()
+                .any(|existing| existing.owns_manager(conversation))
+            {
+                return Err(io::Error::other(
+                    "discussion already has an enrolled native manager",
+                ));
+            }
+            Some(marker)
+        } else {
+            None
+        };
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
+        if let Some(marker) = manager_guard {
+            runtime::write_json(&marker, &json!({"session_id":session.id,"scope":managed}))?;
+        }
         self.sessions
             .write()
             .unwrap()
@@ -193,6 +231,7 @@ fn serve() -> io::Result<()> {
     let state = Arc::new(State {
         root: runtime_root,
         endpoint,
+        socket,
         sessions: RwLock::new(sessions),
         subscribers: Mutex::new(Vec::new()),
         launch_gate: Mutex::new(()),
@@ -249,22 +288,29 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             json!({"op": "error", "error": "incompatible protocol version"}),
         );
     }
+    let manager_available = crate::discord::native_manager_enrollment()
+        .is_ok_and(|scope| scope["supervisor_socket"] == state.socket.to_string_lossy().as_ref());
     let caps: Vec<_> = hello["capabilities"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
-            matches!(
-                *cap,
-                "attach"
-                    | "subscribe"
-                    | "owner-launch"
-                    | "semantic-send"
-                    | "semantic-target"
-                    | "native-requests-v1"
-                    | crate::bootstrap::RESTART
-            )
+            manager_available
+                && matches!(
+                    *cap,
+                    "manager-launch" | "manager-provenance" | "message-origin"
+                )
+                || matches!(
+                    *cap,
+                    "attach"
+                        | "subscribe"
+                        | "owner-launch"
+                        | "semantic-send"
+                        | "semantic-target"
+                        | "native-requests-v1"
+                        | crate::bootstrap::RESTART
+                )
         })
         .collect();
     let mut welcome = json!({
@@ -342,11 +388,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer, state, json!({"op": "ok"}))
             }
             "owner_launch" | "owner_launch_status" => {
-                reliable::handle(state, &request, caps.contains(&"owner-launch"))
+                reliable::handle(state, &request, caps.contains(&"owner-launch"), caps.contains(&"manager-launch"))
                     .and_then(|v| reply(&writer, state, v))
             }
             "launch" => {
-                let message = match state.reserve(&request) {
+                let message = match state.reserve(&request, None) {
                     Err(e) => {
                         json!({"op":"error","error_code":"invalid_field","error":e.to_string()})
                     }
@@ -390,6 +436,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     json!({"op": "ok", "session_id": request["session_id"]}),
                 )
             }),
+            "manager_runtime" | "manager_input_status" | "manager_resolve_call"
+                if caps.contains(&"manager-provenance") => state.session(&request).and_then(|session| {
+                    let body = session.manager_operation(&request)?;
+                    reply(&writer,state,body)
+                }),
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");
@@ -413,6 +464,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
+                if !request["composer_send"]["manager_admission"].is_null()
+                    && !(caps.contains(&"manager-provenance") && caps.contains(&"message-origin")) {
+                    return reply(&writer,state,json!({"op":"error","error_code":"op_not_implemented","error":"requires manager provenance and message origin"}));
+                }
                 let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
                     "native_accepted" => json!({"op":"ok","operation_id":operation}),

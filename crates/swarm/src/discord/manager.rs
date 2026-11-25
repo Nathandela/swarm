@@ -196,16 +196,13 @@ impl Manager {
                 "manager or source is outside the current personal discussion grant",
             ));
         }
-        let nonce = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&json!([
-                self.discussion,
-                input["operation_id"],
-                input["revision"],
-                binding,
-                runtime["turn"]["external_input"]
-            ]))?)
-        );
+        let nonce = super::manager_nonce(
+            &self.discussion,
+            &input["operation_id"],
+            &input["revision"],
+            binding,
+            &runtime["turn"]["external_input"],
+        )?;
         Ok(json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
             "text": input["text"],
@@ -348,10 +345,38 @@ mod tests {
         }
     }
 
+    struct FixtureAudience {
+        source: Value,
+        posts: std::cell::RefCell<Vec<(String, String)>>,
+    }
+
+    impl super::super::dispatcher::Audience for FixtureAudience {
+        fn current(&self, _cfg: &Config, id: &str) -> io::Result<Option<Value>> {
+            Ok((self.source["id"] == id).then(|| self.source.clone()))
+        }
+
+        fn verify(&self, cfg: &Config) -> io::Result<()> {
+            assert_eq!(cfg.text("dm_channel_id"), "400");
+            Ok(())
+        }
+
+        fn post(&self, cfg: &Config, nonce: &str, text: &str) -> super::super::rest::Post {
+            self.posts.borrow_mut().push((nonce.into(), text.into()));
+            super::super::rest::Post::Acknowledged(json!({
+                "id":"402","channel_id":cfg.text("dm_channel_id"),"author":{"id":"200","bot":true},
+                "nonce":nonce,"content":text
+            }))
+        }
+    }
+
     #[test]
-    #[ignore = "requires local pinned Go Swarm and fake-Codex binaries; executes no Discord or provider network calls"]
+    #[ignore = "requires an isolated Go or Rust supervisor and fake-Codex binaries; no network calls"]
     fn pinned_go_owner_protocol_and_scoped_launch() {
-        let go = std::env::var_os("SWARM_GO_ORACLE").expect("set exact Go oracle binary");
+        let rust = std::env::var_os("SWARM_RUST_MANAGER_ORACLE");
+        let go = rust
+            .clone()
+            .or_else(|| std::env::var_os("SWARM_GO_ORACLE"))
+            .expect("set exact owner oracle binary");
         let codex = std::env::var_os("SWARM_FAKE_CODEX").expect("set exact fake-Codex binary");
         let root = Path::new("/tmp").join(format!("gdm-{}", &runtime::random_id().unwrap()[..10]));
         runtime::private_dir(&root).unwrap();
@@ -387,6 +412,13 @@ mod tests {
             "owner_id":"300","application_id":"200","dm_channel_id":"400","manager_cli":"codex",
             "daemon_socket":socket,"token_file":root.join("synthetic-token"),"work_dir":root
         })).unwrap();
+        if rust.is_some() {
+            runtime::write_json(
+                &enrollment.join(".rust-offline-owner.json"),
+                &json!("fixture"),
+            )
+            .unwrap();
+        }
         let launch = Command::new(go)
             .arg("daemon")
             .env_clear()
@@ -408,7 +440,7 @@ mod tests {
         };
         let cfg = Config(
             json!({"mode":"personal","installation_id":"fixture","dm_channel_id":"400","owner_id":"300",
-            "manager_cli":"codex","name":"fixture","work_dir":root,"daemon_socket":socket,"supervisor":{"state_dir":state}}),
+            "manager_cli":"codex","name":"fixture","application_id":"200","work_dir":root,"daemon_socket":socket,"supervisor":{"state_dir":state}}),
         );
         let manager = Manager::new(&cfg).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -424,7 +456,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(25));
         }
-        let bridge = root.join("bridge");
+        let bridge = enrollment.join("manager-v1");
         runtime::private_dir(&bridge).unwrap();
         let bridge_socket = bridge.join("bridge.sock");
         let auth = bridge.join("bridge.auth");
@@ -453,6 +485,18 @@ mod tests {
         let receipt = manager.launch_status(&operation).unwrap();
         assert_eq!(receipt["state"], "applied");
         assert_eq!(receipt["session_id"], session["id"]);
+        if rust.is_some() {
+            let duplicate = format!(
+                "launch:{}:{:032x}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis(),
+                3
+            );
+            let err = manager.launch(&duplicate, &request).unwrap_err();
+            assert!(err.to_string().contains("durable manager reservation"));
+        }
         let id = field(&session, "id");
         let deadline = Instant::now() + Duration::from_secs(7);
         let row = loop {
@@ -484,16 +528,12 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_millis(100));
             };
-            let composer = manager
-                .composer(
-                    &json!({
-                        "authority":"owner_direct","supervisor_socket":socket,"author":{"id":"300"},
-                        "route":{"channel_id":"400","message_id":"401"},"text":"go fixture input",
-                        "operation_id":"fixture-dm-401","revision":"fixture-revision"
-                    }),
-                    &native,
-                )
-                .unwrap();
+            let source = json!({"id":"401","type":0,"content":"go fixture input","attachments":[],
+                "channel_id":"400","author":{"id":"300"}});
+            let mut inbox = super::super::receipt::Inbox::open(&enrollment, &cfg).unwrap();
+            inbox.checkpoint("400").unwrap();
+            let admitted = inbox.admit(&source).unwrap().unwrap();
+            let composer = manager.composer(&admitted, &native).unwrap();
             let operation = format!(
                 "semantic:{}:{:032x}",
                 SystemTime::now()
@@ -502,6 +542,12 @@ mod tests {
                     .as_millis(),
                 2
             );
+            if rust.is_some() {
+                inbox.cutover("401",field(&admitted,"revision"),json!({
+                    "generation":1,"launch":request,"session":id,"binding":native["binding"],
+                    "input":{"operation":operation,"source_id":"401","composer":composer}
+                })).unwrap();
+            }
             manager.send(&operation, &composer).unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
             let turn = loop {
@@ -517,6 +563,36 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_millis(100));
             };
+            if rust.is_some() {
+                let mut altered = composer.clone();
+                altered["origin"]["installation_id"] = json!("other-installation");
+                assert!(manager.send(&operation, &altered).is_err());
+                let mut unbound = composer.clone();
+                unbound.as_object_mut().unwrap().shift_remove("origin");
+                unbound
+                    .as_object_mut()
+                    .unwrap()
+                    .shift_remove("manager_admission");
+                let mut owner = manager.dial().unwrap();
+                assert!(
+                    owner
+                        .request_body(
+                            json!({"op":"semantic_send","body_version":1,"operation_id":operation,
+                    "session_id":id,"composer_send":unbound}),
+                            "ok"
+                        )
+                        .is_err()
+                );
+                assert!(
+                    owner
+                        .request_body(
+                            json!({"op":"send_input","session_id":id,
+                    "send_input":{"text":"raw fixture refusal"}}),
+                            "ok"
+                        )
+                        .is_err()
+                );
+            }
             let session = &native["binding"]["native_session_id"];
             let host = json!({"callId":"fixture-native-call","threadId":session,"sessionId":session,
                 "x-codex-turn-metadata":{"turn_id":turn["native_turn_id"],"thread_id":session,"session_id":session}});
@@ -536,6 +612,56 @@ mod tests {
                 composer["manager_admission"]["nonce"]
             );
             assert_eq!(proof["native_call_id"], "fixture-native-call");
+            if let Some(binary) = rust.as_ref() {
+                drop(_listener);
+                let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &enrollment)
+                    .unwrap()
+                    .unwrap();
+                let fake = FixtureAudience {
+                    source,
+                    posts: std::cell::RefCell::new(Vec::new()),
+                };
+                let local = id.split_once('/').unwrap().1;
+                let mut proxy = Command::new(binary)
+                    .arg("manager-mcp")
+                    .arg(&bridge_socket)
+                    .arg(&auth)
+                    .arg(field(&native["binding"], "conversation_id"))
+                    .arg(local)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let mut to_proxy = proxy.stdin.take().unwrap();
+                writeln!(
+                    to_proxy,
+                    "{}",
+                    json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                    "params":{"name":"publish","arguments":args,"_meta":host}})
+                )
+                .unwrap();
+                drop(to_proxy);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while fake.posts.borrow().is_empty() {
+                    dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                    assert!(
+                        Instant::now() < deadline,
+                        "native tool never reached scoped publication"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                let response = proxy.wait_with_output().unwrap();
+                assert!(response.status.success());
+                let receipt: Value = serde_json::from_slice(&response.stdout).unwrap();
+                assert!(receipt["result"]["isError"].is_null());
+                assert!(!String::from_utf8_lossy(&response.stdout).contains(&"a".repeat(64)));
+                let posts = fake.posts.borrow();
+                assert_eq!(posts.len(), 1);
+                assert_eq!(posts[0].1, "go-fixture text");
+                assert_eq!(inbox.publication(&posts[0].0)["rest_acknowledged"], true);
+            }
             let mut stale = host;
             stale["x-codex-turn-metadata"]["turn_id"] = json!("old-turn");
             assert!(

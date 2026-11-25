@@ -42,7 +42,12 @@ fn refusal(id: &str, code: &str, error: &str) -> Value {
     json!({"op":"error","operation_id":id,"error_code":code,"error":error})
 }
 
-pub(super) fn handle(state: &State, request: &Value, negotiated: bool) -> io::Result<Value> {
+pub(super) fn handle(
+    state: &State,
+    request: &Value,
+    negotiated: bool,
+    manager_negotiated: bool,
+) -> io::Result<Value> {
     let status = request["op"] == "owner_launch_status";
     let id = field(
         request,
@@ -80,6 +85,24 @@ pub(super) fn handle(state: &State, request: &Value, negotiated: bool) -> io::Re
     let _gate = state.operation_locks[usize::from(key[0]) % state.operation_locks.len()]
         .lock()
         .unwrap();
+    let mut launch = request["launch"].clone();
+    let managed = if launch["manager"].is_null() {
+        None
+    } else {
+        if !manager_negotiated {
+            return Ok(refusal(
+                id,
+                "op_not_implemented",
+                "manager-launch capability was not negotiated",
+            ));
+        }
+        let scope = match super::manager::launch_scope(state, &launch) {
+            Ok(scope) => scope,
+            Err(err) => return Ok(refusal(id, "manager_launch_prerequisite", &err.to_string())),
+        };
+        launch.as_object_mut().unwrap().shift_remove("manager");
+        Some(scope)
+    };
     let mut normalized = request["launch"].clone();
     let Some(object) = normalized.as_object_mut() else {
         return Ok(refusal(id, "invalid_field", "missing launch request"));
@@ -122,7 +145,7 @@ pub(super) fn handle(state: &State, request: &Value, negotiated: bool) -> io::Re
             "owner launch outcome is uncertain; inspect its status",
         ));
     }
-    let session = match state.reserve(&json!({"launch":request["launch"]})) {
+    let session = match state.reserve(&json!({"launch":launch}), managed) {
         Ok(s) => s,
         Err(e) => return Ok(refusal(id, "invalid_field", &format!("launch: {e}"))),
     };

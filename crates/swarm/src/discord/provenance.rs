@@ -3,12 +3,12 @@ use super::config::invalid;
 use serde_json::Value;
 use std::io;
 
-pub(super) struct Coordinates<'a> {
-    pub(super) call: &'a str,
-    pub(super) turn: Option<&'a str>,
+pub(crate) struct Coordinates<'a> {
+    pub(crate) call: &'a str,
+    pub(crate) turn: Option<&'a str>,
 }
 
-pub(super) fn coordinates<'a>(binding: &Value, meta: &'a Value) -> io::Result<Coordinates<'a>> {
+pub(crate) fn coordinates<'a>(binding: &Value, meta: &'a Value) -> io::Result<Coordinates<'a>> {
     let valid = |key: &str| {
         meta[key]
             .as_str()
