@@ -127,7 +127,7 @@ impl Inbox {
         parent: &str,
         address: Option<&str>,
     ) -> io::Result<Option<Value>> {
-        let [installation, _, owner, _, supervisor] = self.identity();
+        let [installation, application, owner, _, supervisor] = self.identity();
         let Some(id) = source["id"].as_str().filter(|id| snowflake(id)) else {
             return Ok(None);
         };
@@ -176,14 +176,33 @@ impl Inbox {
             "supervisor_socket": supervisor, "state": "prepared", "edited_at": edited
         });
         if let Some(address) = address {
+            let verified = source["audience_verified_at_ms"].as_u64().ok_or_else(|| {
+                invalid("guild worker source lacks its scoped permission observation")
+            })?;
             receipt["addressed_text"] = json!(address);
+            receipt["audience_verified_at_ms"] = json!(verified);
         }
         if !parent.is_empty() {
             receipt["route"]["parent_id"] = json!(parent);
         }
+        if !guild.is_empty() {
+            receipt["guild_audience_digest"] =
+                json!(super::guild::audience_digest(application, &receipt)?);
+        }
         let old = &self.data["messages"][id];
         if old["state"] == "withdrawn" || old == &receipt {
             return Ok((old == &receipt).then(|| old.clone()));
+        }
+        if !guild.is_empty() && old["state"] == "prepared" {
+            let mut comparable = receipt.clone();
+            comparable["audience_verified_at_ms"] = old["audience_verified_at_ms"].clone();
+            comparable["guild_audience_digest"] = old["guild_audience_digest"].clone();
+            if &comparable == old {
+                let mut next = self.data.clone();
+                next["messages"][id] = receipt.clone();
+                self.save(next)?;
+                return Ok(Some(receipt));
+            }
         }
         if !old["worker_operation"].is_null() && old["revision"] != receipt["revision"] {
             self.withdraw(id)?;
@@ -413,7 +432,7 @@ impl Inbox {
     }
 
     pub(super) fn has_worker_work(&self) -> bool {
-        self.next_worker().is_some() || !self.unsettled_workers().is_empty()
+        self.next_worker().is_some() || self.unsettled_worker(None).is_some()
     }
 
     pub(super) fn worker_status(&self) -> Value {
@@ -479,15 +498,17 @@ impl Inbox {
         self.save(next)
     }
 
-    pub(super) fn unsettled_workers(&self) -> Vec<(String, Value)> {
-        self.data["worker_inputs"]
-            .as_object()
-            .into_iter()
-            .flat_map(|rows| rows.iter())
-            .filter(|(op, _)| self.data["worker_delivery"][*op].is_null())
-            .take(4)
-            .map(|(op, row)| (op.clone(), row["composer"].clone()))
-            .collect()
+    pub(super) fn unsettled_worker(&self, after: Option<&str>) -> Option<(String, Value)> {
+        let rows = self.data["worker_inputs"].as_object()?;
+        let entries = || {
+            rows.iter()
+                .filter(|(op, _)| self.data["worker_delivery"][*op].is_null())
+        };
+        let (op, entry) = entries()
+            .filter(|(op, _)| after.is_none_or(|after| op.as_str() > after))
+            .min_by_key(|(op, _)| op.as_str())
+            .or_else(|| entries().min_by_key(|(op, _)| op.as_str()))?;
+        Some((op.clone(), entry["composer"].clone()))
     }
 
     pub(super) fn settle_worker(&mut self, operation: &str, receipt: &Value) -> io::Result<()> {

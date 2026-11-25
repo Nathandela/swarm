@@ -13,10 +13,10 @@ fn owned(supervisor: &Path, socket: &str) -> io::Result<(Place, Config)> {
     let config = place.load()?;
     place.ensure_owned(&config)?;
     if !config.enabled()
-        || config.text("mode") != "personal"
+        || config.text("mode") != "personal" && !super::guild::enabled(&config)
         || config.text("daemon_socket") != socket
     {
-        return Err(invalid("no owned personal connector for this supervisor"));
+        return Err(invalid("no owned worker connector for this supervisor"));
     }
     Ok((place, config))
 }
@@ -24,6 +24,10 @@ fn owned(supervisor: &Path, socket: &str) -> io::Result<(Place, Config)> {
 pub(crate) fn worker_input_installation(supervisor: &Path, socket: &str) -> Option<String> {
     let (_, config) = owned(supervisor, socket).ok()?;
     Some(config.text("installation_id").into())
+}
+
+pub(crate) fn worker_input_guild_available(supervisor: &Path, socket: &str) -> bool {
+    owned(supervisor, socket).is_ok_and(|(_, cfg)| super::guild::enabled(&cfg))
 }
 
 /// Called both at admission and immediately before the provider effect.
@@ -90,21 +94,25 @@ fn verify(
     let refused = || invalid("semantic input does not match the exact connector worker cutover");
     let origin = &composer["origin"];
     let owner = config.text("owner_id");
-    let channel = config.text("dm_channel_id");
+    let personal = config.text("mode") == "personal";
+    let guild = field(origin, "guild_id");
+    let channel = field(origin, "channel_id");
     let source_id = origin["message_id"]
         .as_str()
         .filter(|id| snowflake(id))
         .ok_or_else(refused)?;
     if !config.enabled()
-        || config.text("mode") != "personal"
+        || !personal && !super::guild::enabled(config)
         || config.text("daemon_socket") != socket
         || installation != config.text("installation_id")
         || origin["installation_id"] != installation
         || origin["kind"] != "owner_direct"
         || origin["actor_id"] != owner
-        || origin["channel_id"] != channel
+        || !snowflake(channel)
+        || personal && (channel != config.text("dm_channel_id") || !guild.is_empty())
+        || !personal && !snowflake(guild)
         || !field(origin, "requester_id").is_empty() && origin["requester_id"] != owner
-        || ["guild_id", "endorser_id", "discussion_id"]
+        || ["endorser_id", "discussion_id"]
             .into_iter()
             .any(|key| !field(origin, key).is_empty())
         || !codex_receipt::timely(operation)
@@ -130,7 +138,7 @@ fn verify(
         owner,
         source["text"],
         channel,
-        "",
+        guild,
         source_id,
         source["edited_at"],
         "",
@@ -141,7 +149,7 @@ fn verify(
         installation,
         config.text("application_id"),
         owner,
-        channel,
+        config.text("dm_channel_id"),
         socket
     ]);
     if ledger["version"] != 2
@@ -158,7 +166,9 @@ fn verify(
         || !source["native_binding"].is_null()
         || source["authority"] != "owner_direct"
         || source["author"]["id"] != owner
-        || source["route"] != json!({"guild_id":"","channel_id":channel,"message_id":source_id})
+        || personal
+            && source["route"] != json!({"guild_id":"","channel_id":channel,"message_id":source_id})
+        || !personal && !super::guild::authorized_worker_route(config, source, composer)
         || source["supervisor_socket"] != socket
         || !source["text"]
             .as_str()

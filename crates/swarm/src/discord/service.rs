@@ -59,12 +59,13 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
             "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
         );
     }
+    let mut worker_read_after = None;
     loop {
         if bridge.serve(cfg, &mut inbox, cursor.sequence(), dispatcher.is_some())? {
             let _ = gateway_socket.close(None);
             return Ok(());
         }
-        super::worker::tick(cfg, &mut inbox, &api)?;
+        super::worker::tick(cfg, &mut inbox, &api, &mut worker_read_after)?;
         if let Some(dispatcher) = &dispatcher {
             dispatcher.tick(cfg, &mut inbox, &api)?;
         }
@@ -566,6 +567,17 @@ mod tests {
         assert_eq!(status["connector"]["state"], "receipt_only");
         assert_eq!(status["teammate"]["pending"], 0);
         assert_eq!(status["teammate"]["gateway_sequence"], 12);
+        let target = "ep-1234abcd/1234567890abcdef12345678";
+        let change = json!({"target_id":target});
+        assert!(super::super::local::call(&dir, "exclude", "", Some(("other", &change))).is_err());
+        super::super::local::call(&dir, "exclude", "", Some(("issued", &change))).unwrap();
+        let file = dir.join("rust-text-v1.json");
+        assert_eq!(
+            runtime::read_json(&file).unwrap()["worker_excluded"][target],
+            true
+        );
+        super::super::local::call(&dir, "include", "", Some(("issued", &change))).unwrap();
+        assert!(runtime::read_json(&file).unwrap()["worker_excluded"][target].is_null());
         let body = json!({});
         assert!(super::super::local::call(&dir, "shutdown", "", Some(("other", &body))).is_err());
         assert_eq!(

@@ -405,6 +405,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         crate::discord::worker_input_installation(root, state.socket.to_string_lossy().as_ref())
             .is_some()
     });
+    let guild_worker_available = state.root.parent().is_some_and(|root| {
+        crate::discord::worker_input_guild_available(root, state.socket.to_string_lossy().as_ref())
+    });
     let caps: Vec<_> = hello["capabilities"]
         .as_array()
         .into_iter()
@@ -412,6 +415,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .filter_map(Value::as_str)
         .filter(|cap| {
             worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
+                || guild_worker_available && *cap == "worker-discord-guild-origin-v1"
                 || manager_available
                     && matches!(
                         *cap,
@@ -594,6 +598,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     && !request["composer_send"]["origin"].is_null()
                     && !caps.contains(&"worker-discord-origin-v1") {
                     return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"worker Discord origin was not negotiated"}));
+                }
+                if session.requires_worker_origin_cap()
+                    && !field(&request["composer_send"]["origin"], "guild_id").is_empty()
+                    && !caps.contains(&"worker-discord-guild-origin-v1") {
+                    return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"guild worker Discord origin was not negotiated"}));
                 }
                 if !request["composer_send"]["origin"].is_null() && !caps.contains(&"message-origin") {
                     return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"message origin was not negotiated"}));

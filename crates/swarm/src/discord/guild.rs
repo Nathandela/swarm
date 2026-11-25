@@ -31,12 +31,73 @@ pub(super) fn address(cfg: &Config, message: &Value) -> Option<String> {
     {
         return None;
     }
-    let raw = message["content"].as_str()?;
+    mentioned_text(cfg, message["content"].as_str()?)
+}
+
+fn mentioned_text(cfg: &Config, raw: &str) -> Option<String> {
+    let bot = cfg.text("application_id");
     let text = raw
         .replace(&format!("<@{bot}>"), "")
         .replace(&format!("<@!{bot}>"), "");
+    if raw == text {
+        return None;
+    }
     worker::target_text(&text)?;
     Some(text.trim().to_owned())
+}
+
+pub(super) fn audience_digest(application: &str, source: &Value) -> io::Result<String> {
+    let route = &source["route"];
+    super::receipt::hash(&json!([
+        application,
+        source["author"]["id"],
+        route["guild_id"],
+        route["channel_id"],
+        route["parent_id"],
+        route["message_id"],
+        source["revision"],
+        source["audience_verified_at_ms"]
+    ]))
+}
+
+pub(super) fn authorized_worker_route(cfg: &Config, source: &Value, composer: &Value) -> bool {
+    let route = &source["route"];
+    let guild = route["guild_id"].as_str().unwrap_or_default();
+    let channel = route["channel_id"].as_str().unwrap_or_default();
+    let parent = route["parent_id"].as_str().unwrap_or_default();
+    let origin = &composer["origin"];
+    let now = crate::ipc::spawn::now_ms();
+    let sealed = audience_digest(cfg.text("application_id"), source)
+        .is_ok_and(|digest| source["guild_audience_digest"] == digest);
+    sealed
+        && enabled(cfg)
+        && snowflake(guild)
+        && snowflake(channel)
+        && allowed(cfg, "guild_ids", guild)
+        && (parent.is_empty() || snowflake(parent) && parent != channel)
+        && (!cfg.0["channel_ids"]
+            .as_array()
+            .is_some_and(|ids| !ids.is_empty())
+            || allowed(cfg, "channel_ids", channel)
+            || allowed(cfg, "channel_ids", parent))
+        && origin["guild_id"] == guild
+        && origin["channel_id"] == channel
+        && origin["message_id"] == route["message_id"]
+        && source["audience_verified_at_ms"]
+            .as_u64()
+            .is_some_and(|at| at <= now && now - at <= 30_000)
+        && route["message_id"]
+            .as_str()
+            .is_some_and(|id| worker::fresh(id, now))
+        && source["text"]
+            .as_str()
+            .and_then(|raw| mentioned_text(cfg, raw))
+            .is_some_and(|rendered| {
+                source["addressed_text"] == rendered
+                    && worker::target_text(&rendered).is_some_and(|(session, text)| {
+                        composer["session"] == session && composer["text"] == text
+                    })
+            })
 }
 
 fn audience(cfg: &Config, guild: &str, id: &str, channel: &Value) -> Option<String> {
@@ -156,6 +217,7 @@ fn scoped_message(
     }
     source["guild_id"] = json!(guild);
     source["verified_parent_id"] = json!(parent);
+    source["audience_verified_at_ms"] = json!(crate::ipc::spawn::now_ms());
     Ok(Some(source))
 }
 

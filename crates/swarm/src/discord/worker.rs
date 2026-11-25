@@ -133,7 +133,12 @@ impl Transport for Client {
     }
 }
 
-pub(super) fn tick(cfg: &Config, inbox: &mut Inbox, api: &Discord) -> io::Result<()> {
+pub(super) fn tick(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    api: &Discord,
+    read_after: &mut Option<String>,
+) -> io::Result<()> {
     if !inbox.has_worker_work() {
         return Ok(());
     }
@@ -147,19 +152,26 @@ pub(super) fn tick(cfg: &Config, inbox: &mut Inbox, api: &Discord) -> io::Result
     if cfg.check_supervisor(&transport, &caps).is_err() {
         return Ok(());
     }
-    dispatch(cfg, inbox, &mut transport, spawn::now_ms(), |route, id| {
-        if cfg.text("mode") == "personal" {
-            api.owner_message(cfg, id)
-        } else {
-            super::guild::current(
-                api,
-                cfg,
-                field(route, "guild_id"),
-                field(route, "channel_id"),
-                id,
-            )
-        }
-    })
+    dispatch(
+        cfg,
+        inbox,
+        &mut transport,
+        spawn::now_ms(),
+        read_after,
+        |route, id| {
+            if cfg.text("mode") == "personal" {
+                api.owner_message(cfg, id)
+            } else {
+                super::guild::current(
+                    api,
+                    cfg,
+                    field(route, "guild_id"),
+                    field(route, "channel_id"),
+                    id,
+                )
+            }
+        },
+    )
 }
 
 fn dispatch(
@@ -167,9 +179,11 @@ fn dispatch(
     inbox: &mut Inbox,
     transport: &mut impl Transport,
     now: u64,
+    read_after: &mut Option<String>,
     current: impl FnOnce(&Value, &str) -> io::Result<Option<Value>>,
 ) -> io::Result<()> {
-    for (operation, composer) in inbox.unsettled_workers() {
+    if let Some((operation, composer)) = inbox.unsettled_worker(read_after.as_deref()) {
+        *read_after = Some(operation.clone());
         if let Ok(receipt) = transport.status(&operation, &composer) {
             match field(&receipt, "state") {
                 "native_accepted" | "admitted" | "submitted" | "rejected" => {
@@ -314,7 +328,7 @@ mod tests {
             sends: 0,
             answer: false,
         };
-        dispatch(&cfg, &mut inbox, &mut client, now, |_, id| {
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, id| {
             assert_eq!(owner["id"], id);
             Ok(Some(owner.clone()))
         })
@@ -324,7 +338,7 @@ mod tests {
         let op = inbox.worker_status()[0]["operation_id"].clone();
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| {
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, _| {
             panic!("lost write replayed")
         })
         .unwrap();
@@ -334,7 +348,7 @@ mod tests {
         edit["edited_timestamp"] = json!("2026-11-25T01:01:01Z");
         assert!(inbox.admit(&edit).unwrap().is_none());
         client.answer = true;
-        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| {
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, _| {
             panic!("edit re-authorized the old operation")
         })
         .unwrap();
@@ -358,18 +372,24 @@ mod tests {
         };
         let stale = message(now - WORKER_EVENT_MAX_AGE_MS - 1, "expired source");
         inbox.admit(&stale).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| {
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, _| {
             panic!("expired source reached REST")
         })
         .unwrap();
         let exclude = message(now, "excluded source");
         inbox.admit(&exclude).unwrap();
         inbox.set_worker_excluded(TARGET, true).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| Ok(Some(exclude))).unwrap();
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, _| {
+            Ok(Some(exclude))
+        })
+        .unwrap();
         inbox.set_worker_excluded(TARGET, false).unwrap();
         let deleting = message(now + 1, "deleted source");
         inbox.admit(&deleting).unwrap();
-        dispatch(&cfg, &mut inbox, &mut client, now, |_, _| Ok(None)).unwrap();
+        dispatch(&cfg, &mut inbox, &mut client, now, &mut None, |_, _| {
+            Ok(None)
+        })
+        .unwrap();
         assert_eq!(client.sends, 0);
         assert!(inbox.worker_status().as_array().unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
