@@ -77,7 +77,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
             board.wait_bytes(b"No runs for this automation")
             daemon.terminate()
             daemon.wait(timeout=5)
-            assert cli("schedule", "list").returncode != 0
+            offline = cli("schedule", "list", "--json")
+            assert offline.returncode == 0 and [row["id"] for row in json.loads(offline.stdout)] == [job]
             board.wait_bytes(b"daemon connection lost")
             board.send(b"u")
             board.wait_bytes(b"daemon disconnected")
@@ -506,7 +507,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             child.wait(timeout=2)
         shutil.rmtree(root)
     exercise = ("comparative launch-form grids" if form_grid else
-                "owner automation list, detail, history and disconnect" if automations else
+                "local automation CLI and owner dashboard catalog/disconnect" if automations else
                 "running-session cycling" if cycle else "board launch, attach and live reattach")
     print(f"{exercise} {'captured' if form_grid else 'passed'}; cleanup {cleanup}")
 

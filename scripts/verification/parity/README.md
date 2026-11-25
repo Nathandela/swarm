@@ -52,5 +52,6 @@ roster empty.
 The `--automations` witness uses a Rust supervisor and board. It verifies a
 read-only empty catalog, seeds a far-future fixture through `schedule create`,
 and reads its list, detail and empty run history through both the CLI and the
-board. It then stops the supervisor and verifies the board and CLI report the
-disconnection. It never starts a scheduled worker.
+board. It then stops the supervisor and verifies the board reports its
+disconnection while the CLI still reads the local catalog offline. It never
+starts a scheduled worker.

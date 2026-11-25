@@ -1,7 +1,7 @@
 use super::{
     Calendar, Result, Spec,
     calendar::Rule,
-    catalog::{CAP, Read, Records},
+    catalog::{Read, Records},
     file, id,
     store::Store,
 };
@@ -127,8 +127,8 @@ pub(crate) fn run(args: &[String]) -> u8 {
             _ => None,
         };
         if let Some(read) = read {
-            let mut client = crate::ipc::Client::dial(&crate::ipc::socket_path()?, &[CAP])?;
-            return read_catalog(read.remote(&mut client)?, args == ["list"], now, &mut out);
+            let records = super::catalog::project(&crate::ipc::state_path()?, read)?;
+            return read_catalog(records, args == ["list"], now, &mut out);
         }
         let store = Store::open(&crate::ipc::state_path()?, Path::new("/etc/localtime"))?;
         catalog(&store, &args, now, &mut out)
