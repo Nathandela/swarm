@@ -17,7 +17,7 @@ impl Ledger {
     pub(crate) fn open(dir: &Path, binding: &Value) -> io::Result<Self> {
         let file = dir.join("manager-proof.json");
         let initial = json!({
-            "schema":1,"binding":binding,"external_input":0,"blocked":false,
+            "schema":1,"binding":binding,"external_input":0,"blocked":false,"observed_turn":false,
             "prepared":{},"turns":{},"calls":{},"messages":{},"thread_state":"unknown"
         });
         let data = match read_evidence(&file) {
@@ -44,8 +44,14 @@ impl Ledger {
     }
 
     pub(crate) fn is_virgin(&self) -> bool {
-        self.data["blocked"] == false && self.data["turns"].as_object().is_some_and(|turns| turns.is_empty())
-            && self.data["prepared"].as_object().is_some_and(|prepared| prepared.is_empty())
+        self.data["blocked"] == false
+            && self.data["observed_turn"] == false
+            && self.data["turns"]
+                .as_object()
+                .is_some_and(|turns| turns.is_empty())
+            && self.data["prepared"]
+                .as_object()
+                .is_some_and(|prepared| prepared.is_empty())
     }
 
     pub(crate) fn binding(&self) -> &Value {
@@ -124,6 +130,7 @@ impl Ledger {
                 if !parent.is_empty() && parent != turn {
                     return Ok(());
                 }
+                next["observed_turn"] = json!(true);
                 if !valid(turn)
                     || next["turns"][turn]["closed"] == true
                     || next["current"].as_str().is_some_and(|prior| {
@@ -142,6 +149,9 @@ impl Ledger {
                 let parent = field(&params["turn"], "rootTurnId");
                 if !parent.is_empty() && parent != turn {
                     return Ok(());
+                }
+                if valid(turn) {
+                    next["observed_turn"] = json!(true);
                 }
                 if next["current"] == turn && !next["turns"][turn].is_null() {
                     next["turns"][turn]["closed"] = json!(true);

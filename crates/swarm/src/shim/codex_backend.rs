@@ -159,7 +159,13 @@ struct Observation {
 
 impl Observation {
     fn can_enter_joined_thread(&self, managed: bool) -> bool {
-        self.joined || managed && self.fresh_no_rollout
+        self.joined
+            || managed
+                && self.fresh_no_rollout
+                && self
+                    .proof
+                    .as_ref()
+                    .is_some_and(codex_proof::Ledger::is_virgin)
     }
 
     fn apply(&mut self, message: &Value, cwd: &Path) -> bool {
@@ -188,6 +194,12 @@ impl Observation {
         if self.thread.is_empty() || field(payload, "threadId") != self.thread {
             return false;
         }
+        let turn = field(&payload["turn"], "id");
+        let parent = field(&payload["turn"], "rootTurnId");
+        let revoked = matches!(method, "turn/started" | "turn/completed")
+            && !turn.is_empty()
+            && (parent.is_empty() || parent == turn)
+            && std::mem::take(&mut self.fresh_no_rollout);
         match method {
             "turn/started" => {
                 let id = field(&payload["turn"], "id");
@@ -198,8 +210,8 @@ impl Observation {
                 self.idle = false;
             }
             "turn/completed" => {
-                if self.turn.as_deref() != Some(field(&payload["turn"], "id")) {
-                    return false;
+                if self.turn.as_deref() != Some(turn) {
+                    return revoked;
                 }
                 self.turn = None;
                 self.idle = true;
@@ -290,7 +302,7 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
             "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
-            "manager_ingress_ready": (observation.joined || observation.fresh_no_rollout) && observation.idle
+            "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
                 && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
             "requests":requests,
         }),
@@ -576,10 +588,62 @@ mod tests {
         let mut observation = Observation::default();
         assert!(!observation.can_enter_joined_thread(true));
         observation.fresh_no_rollout = true;
-        assert!(observation.can_enter_joined_thread(true));
-        assert!(!observation.can_enter_joined_thread(false));
-        observation.fresh_no_rollout = false;
-        assert!(!observation.can_enter_joined_thread(true));
+        assert!(
+            !observation.can_enter_joined_thread(true),
+            "volatile exception requires authoritative proof"
+        );
+    }
+
+    #[test]
+    fn observed_turn_permanently_revokes_unjoined_manager_exception() {
+        let root = Path::new("/tmp").join(format!("virgin-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let binding = json!({"native_session_id":"native-thread"});
+        let frame = |method, thread| {
+            json!({"method":method,"params":{"threadId":thread,
+            "turn":{"id":"exact-turn","rootTurnId":"exact-turn","status":"completed"}}})
+        };
+        for methods in [
+            &["turn/started", "turn/completed"][..],
+            &["turn/completed"][..],
+        ] {
+            let mut observation = Observation {
+                thread: "native-thread".into(),
+                idle: true,
+                fresh_no_rollout: true,
+                proof: Some(codex_proof::Ledger::open(&root, &binding).unwrap()),
+                ..Observation::default()
+            };
+            assert!(observation.can_enter_joined_thread(true));
+            let foreign = frame("turn/completed", "other-thread");
+            assert!(!observation.apply(&foreign, &root));
+            observation
+                .proof
+                .as_mut()
+                .unwrap()
+                .observe(&foreign)
+                .unwrap();
+            assert!(observation.can_enter_joined_thread(true));
+
+            for method in methods {
+                let event = frame(*method, "native-thread");
+                assert!(observation.apply(&event, &root));
+                observation.proof.as_mut().unwrap().observe(&event).unwrap();
+                assert!(!observation.fresh_no_rollout);
+                assert!(!observation.can_enter_joined_thread(true));
+            }
+            assert!(observation.idle);
+            observation.proof = Some(codex_proof::Ledger::open(&root, &binding).unwrap());
+            observation.fresh_no_rollout = true;
+            assert!(
+                !observation.can_enter_joined_thread(true),
+                "reopened ledger must veto a stale exception"
+            );
+            observation.joined = true;
+            assert!(observation.can_enter_joined_thread(true));
+            std::fs::remove_file(root.join("manager-proof.json")).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
