@@ -1,0 +1,35 @@
+kind	name_or_path	owner	retained_or_disposition	source_anchor
+environment	SWARM_DAEMON_STATE, SWARM_DAEMON_SOCK, SWARM_DAEMON_LOCK, SWARM_DAEMON_LOG	daemon bootstrap	retain installed unit and client handshake contracts	internal/daemon/client.go#ClientConfig; cmd/swarm/main.go#skeletonConfigFromEnv
+environment	XDG_STATE_HOME / HOME fallback	state root	retain exact absolute-path fallback behavior	internal/persist/persist.go#DefaultDir
+environment	XDG_CONFIG_HOME via platform user-config lookup	board preference root	retain owner's config location without writing into daemon-owned state	internal/tui/layout_store.go#DefaultLayoutPath
+environment	PATH and launch environment	launch boundary	retain filtered caller environment; never substitute daemon environment	internal/persist/env.go#FilterEnv; docs/specifications/system-spec.md#S-6
+environment	SWARM_SESSION_ID, SWARM_HOOK_TOKEN, SWARM_HOOK_SEQ_FILE, SWARM_HOOK_CAPTURE	hook ingress	retain authenticated per-session hook variables and sequence/capture semantics	internal/hookclient/hookclient.go#FromEnv
+environment	SWARM_SHIM_HOOK_SOCK	shim hook ingress	retain optional local fast path; old shim absence is supported	internal/hookclient/shimpost.go#EnvHookSocket
+environment	SWARM_SCHEDULE_ATTEMPT, SWARM_SCHEDULE_RUN, SWARM_SCHEDULE_PROOF, SWARM_SCHEDULE_SOCKET, SWARM_SCHEDULE_BIN	scheduled worker	retain scoped completion proof and bridge protocol	internal/daemon/schedule.go#ScheduleEnvAttempt
+environment	SWARM_FAKE_AGENT_BIN; SWARM_SHIM_SESSION	fixture/re-exec	fixture-only knob; prevent accidental production exposure	cmd/swarm/main.go#envFakeAgentBin
+environment	SSH_CONNECTION; CODEX_HOME; CODEX_PROFILE	reat as caller/provider environment	preserve SSH mode detection; custom Codex homes are inspectable only where CLI contract permits; never log credential values	cmd/swarm/voice_ssh.go#dispatchVoiceSSH; cmd/swarm/reattach_codex.go#runCodexReattach
+environment	Provider credential variables and native home files	provider-owned launch context	retain caller-filter rules and provider native login custody; Swarm must not export or copy secrets to diagnostics	internal/persist/env.go#FilterEnv; internal/adapter/authprobe.go#AuthCredentialsFile
+environment	SWARM_HOOK_TOKEN and worker proof variables	authenticated callback boundary	inject only per-session/per-worker scope; reject missing, stale or foreign proof	internal/hookclient/hookclient.go#FromEnv; internal/workermail
+artifact	<state>/sessions/<id>/meta.json	persistence	retain readable schema, atomic writes, old-schema behavior, permissions	internal/persist/persist.go#Save
+config	<state>/launch-presets.json	machine-authored launch policy	retain validated preset IDs/revisions and refuse corrupt or unsafe policy	internal/daemon/launchpreset.go#LoadLaunchPresets
+config	<user-config>/swarm/board-layout.json	owner board preference	retain grouping/order/attached-return-button preference; missing means first-run defaults	internal/tui/layout_store.go#DefaultLayoutPath
+artifact	<state>/daemon.env	daemon restart	retain filtered saved environment and refusal when absent/corrupt	internal/daemon/savedenv.go#SavedEnvPath
+artifact	<state>/journal/, idempotency records	owner durability	retain bounded journal and operation receipt recovery	internal/daemon/journal.go; internal/idempotency
+artifact	<state>/schedule catalog and run evidence	scheduler	retain schedule records, receipts, workspace custody	internal/schedule; internal/scheduledexec
+artifact	<state>/schedules/state.db	scheduler catalog	retain versioned schedule state and migration/refusal behavior	internal/schedule/store.go#Open
+artifact	<state>/pilot/<context>/context.json	private pilot context	retain caller binding, expiry, daemon binding, atomic updates and file permissions	cmd/swarm/pilot.go#runPilotEntry
+artifact	<state>/pilot/<context>/pending-<sha256(discussion-id)>	pilot operation ledger	retain pending mutation identity and replay/recovery behavior	cmd/swarm/pilot.go#pilotPendingPath
+artifact	<connector-state>/config.json and discord.db	Discord connector/discussion store	retain per-place config, discussions, receipts and databases; no cross-place key reuse	internal/discord/config.go#ConfigPath; internal/discord/store.go#OpenStore
+artifact	<daemon-state>/discord-active.json	active connector selection	retain selected place and supervisor migration behavior	internal/discord/config.go#ActiveState
+artifact	<session>/opencode binding and generated opencode-tui.mjs/opencode-tui.json	OpenCode native runtime	retain installed generated integration while native worker capability is retained; detect changed install	internal/daemon/opencode_launch.go#prepareOpenCodeLaunch
+artifact	provider home: ~/.codex/auth.json, ~/.codex/config.toml, ~/.claude/.credentials.json, ~/.claude.json	provider-owned identity/config	read only for characterized discovery; don't migrate, overwrite, or claim Swarm ownership	internal/adapter/codex/authprobe.go#AuthCredentialsFile; internal/adapter/detect/modelprobe.go#ProbeModels
+artifact	project-local Claude hooks and .claude-plugin assets	provider callback install	retain invocation-local authenticated hook installation and atomic project config handling	internal/claudeinput/plugin.go#Install
+artifact	<state>/accounts, logins, native-process.json and credential records	legacy Swarm-managed account pool	retire account switching; preserve outstanding identity and safety metadata until explicitly migrated/disposed	internal/logins; internal/loginmigration
+artifact	<state>/manager-deletion/<id>.json	manager deletion fence	retain recovery/cleanup ownership until deletion proof is complete	internal/daemon/manager_deletion.go#Record
+artifact	<session>/identity-tail.bin, hook spool/floor/incarnation, hook fold/applied	shim/provider observation	retain bounded replay and deduplication semantics across daemon restart	internal/persist/inventory.go#InspectSessions
+artifact	launchd/systemd service files and Homebrew cask	installer	retain unit owner, environment and replacement/uninstall semantics; classify active/dormant legacy units	internal/remote/supervise/unit.go#Spec
+artifact	checksummed archives, manifest, release signature	local distribution	retain exact archive membership, digest/signature checks and first-hop install proof	docs/specifications/rust-migration/transition.md (release stages)
+artifact	<state>/<session>/shim-launch.json, exit.json, hooks spool	shim and hooks	retain live adoption and hook replay compatibility	internal/persist/inventory.go#InspectSessions
+artifact	launchd/systemd units and Homebrew cask	installer	retain supervised daemon/Discord/schedule behavior; capture install owner and replacement rules	internal/remote/supervise/unit.go#Spec
+artifact	Go archives, checksums, signing key identity	manual release	retain verification contract; candidate artifact details in transition.md	cmd/swarm/upgrade.go#runUpgrade; scripts/signchecksums
+artifact	Android, iOS, relay/push gateway artifacts	mobile distribution	retire from Rust shipping tree; no automatic cloud deletion	docs/specifications/rust-migration/source-map.md#Source-ownership-and-retirement-inventory

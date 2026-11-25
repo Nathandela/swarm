@@ -1,0 +1,27 @@
+id	case	kind	owner	disposition	evidence_anchor
+S01	Start board with daemon absent	positive	client/supervisor	retain	docs/specifications/system-spec.md:257-278 (scenario row 1); cmd/swarm/main.go#runTUI
+S02	Launch with valid directory and provider	positive	launch/provider/shim	retain	docs/specifications/system-spec.md:257-278 (scenario row 2); internal/daemon/launch.go
+S03	Close client then reopen live session	continuity	shim/supervisor	retain	docs/specifications/system-spec.md:257-278 (scenario row 3)
+S04	Typed provider attention arrives authenticated	positive	provider hook/status	retain per adapter capability	docs/specifications/system-spec.md:257-278 (scenario row 4); internal/hookclient/hookclient.go#FromEnv
+S05	Typed provider event updates lifecycle	positive	provider driver	retain where characterized	docs/specifications/system-spec.md:257-278 (scenario row 5); internal/adapter
+S06	No typed signal; grid heuristic and silence staleness	fallback	status engine	retain	docs/specifications/system-spec.md:257-278 (scenario row 6); docs/invariants/system-invariants.md (S7 invariant)
+S07	Attach receives screen snapshot then live bytes	positive	shim/terminal	retain	docs/specifications/system-spec.md:257-278 (scenario row 7); internal/tui/attach.go#updateAttach
+S08	Detach key versus literal pasted bytes	boundary	terminal client	retain	docs/specifications/system-spec.md:257-278 (scenario row 8); internal/tui/attach.go#updateAttach
+S09	Resize while controller lease held	positive	lease/shim	retain	docs/specifications/system-spec.md:257-278 (scenario row 9); docs/specifications/system-spec.md:97 (P-5)
+S10	Daemon SIGKILL and restart adopts same shim	crash recovery	supervisor/shim	retain	docs/specifications/system-spec.md:257-278 (scenario row 10); internal/daemon/compatmatrix_test.go
+S11	Upgrade with live sessions defers safely	upgrade	installer/supervisor	retain	docs/specifications/system-spec.md:257-278 (scenario row 11); cmd/swarm/upgrade.go#runUpgrade
+S12	Host reboot marks lost; native identity enables explicit resume	unavailable recovery	provider/session store	retain qualified behavior	docs/specifications/system-spec.md:257-278 (scenario row 12); docs/specifications/system-spec.md:152 (R-2)
+S13	Nonexistent launch directory suggestions and second-submit creation	refusal then confirm	launch form/daemon	retain	docs/specifications/system-spec.md:257-278 (scenario row 13); docs/specifications/system-spec.md:115 (L-3)
+S14	Provider binary unavailable in launch form	unavailable	provider detection	retain disabled affordance and explanation	docs/specifications/system-spec.md:257-278 (scenario row 14); docs/specifications/system-spec.md:114 (L-2)
+S15	Long-running output rotates/caps transcript without idle spin	resource bound	shim/client	retain	docs/specifications/system-spec.md:257-278 (scenario row 15); docs/specifications/system-spec.md#N-3
+S16	Second controller or stale lease input	refusal	attach lease	retain explicit refusal/transfer and stale rejection	docs/specifications/system-spec.md:257-278 (scenario row 16); docs/specifications/system-spec.md:97 (P-5)
+S17	Kill ordinary process tree and shared-owner provider session	refusal boundary	process containment/provider driver	retain distinct stop proof; never kill shared native owner	docs/specifications/system-spec.md:257-278 (scenario row 17); docs/adr/ADR-037-hermes-shared-native-owner.md
+S18	Launch caller environment passes allowlist	boundary	launch environment	retain filtered environment and TERM rule	docs/specifications/system-spec.md:257-278 (scenario row 18); docs/specifications/system-spec.md:85 (S-6)
+R01	Refuse unsupported or stale native request; no provider write	refusal	provider driver/context guard	retain fail closed	docs/invariants/system-invariants.md (S13 invariant); docs/specifications/system-spec.md:147 (C-5)
+R02	Refuse handoff on missing/noncanonical identity or unsafe transcript; launch nothing	refusal	handoff/launch owner	retain named refusal; no fallback launch	docs/specifications/system-spec.md:155 (R-5)
+R03	Refuse cleanup when worktree ownership or shared use is unproved	refusal	workspace custody	retain data-safe refusal	docs/specifications/system-spec.md:153 (R-3)
+R04	Refuse stale/changed captured board target at confirmation	refusal	TUI/supervisor	retain no mutation after target/state change	docs/specifications/rust-migration/reference-board-keys.tsv
+R05	Refuse corrupt/newer metadata without overwrite; roster remains scannable	refusal/persistence	store	retain old-or-new atomicity and visible corruption	docs/invariants/system-invariants.md (S8 invariant); internal/persist/persist.go#decodeMeta
+R06	Uncertain operation after dispatch survives restart without automatic retry	refusal/recovery	idempotency owner	retain uncertain outcome; reconcile before retry	docs/specifications/system-spec.md:74 (D-9); internal/idempotency
+R07	No unattended action from unknown provider version or stale feed	refusal	ContextGuard	retain observe-only/fail-closed behavior	docs/specifications/system-spec.md:147 (C-5); docs/invariants/system-invariants.md (S13 invariant)
+R08	Missing saved daemon environment blocks unattended restart	refusal	daemon restart	retain stopped diagnostic outcome	 internal/daemon/savedenv.go#LoadSavedEnv; cmd/swarm/unattended.go#runDaemonRestartUnattended

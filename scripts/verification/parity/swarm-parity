@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+"""Drive the public Swarm entry points using two disposable fixture arms."""
+import argparse
+import ctypes
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import pty
+import random
+import re
+import resource
+import select
+import shutil
+import socket
+import signal
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+
+HERE = Path(__file__).resolve().parent
+SCENARIO = "terminal.fixture.attach"
+LIMIT = 256 * 1024
+GEOMETRY = (80, 24)
+FIXTURE = HERE / "claude"
+
+
+def write_json(path, value, *, replace=True):
+    fd, name = tempfile.mkstemp(prefix=".swarm-parity-", dir=path.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream, indent=2, ensure_ascii=True)
+            stream.write("\n")
+        if replace:
+            temp.replace(path)
+        else:
+            os.link(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def hash_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while chunk := file.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def table():
+    output = subprocess.check_output(
+        ["/bin/ps", "-ww", "-axo", "pid=,ppid=,lstart=,state=,command="],
+        env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"}, text=True, timeout=3,
+    )
+    rows = {}
+    for line in output.splitlines():
+        match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(.{24})\s+(\S+)\s+(.*)", line)
+        if match:
+            pid, parent, birth, status, command = match.groups()
+            rows[int(pid)] = (int(parent), birth, status, command)
+    if os.getpid() not in rows:
+        raise RuntimeError("process observation unavailable")
+    return rows
+
+
+class DarwinProcessInfo(ctypes.Structure):
+    # The prefix of proc_bsdinfo up to the two aligned start-time fields.
+    _fields_ = [("prefix", ctypes.c_uint32 * 30), ("seconds", ctypes.c_uint64),
+                ("microseconds", ctypes.c_uint64)]
+
+
+LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib") if sys.platform == "darwin" else None
+if LIBPROC is not None:
+    LIBPROC.proc_pidpath.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
+    LIBPROC.proc_pidinfo.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                    ctypes.c_void_p, ctypes.c_int)
+
+
+def generation(pid):
+    if sys.platform.startswith("linux"):
+        try:
+            return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        except (OSError, IndexError):
+            return None
+    info = DarwinProcessInfo()
+    if LIBPROC.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
+        return (info.seconds, info.microseconds)
+    return None
+
+
+def executable(pid):
+    if sys.platform.startswith("linux"):
+        try:
+            return os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            return ""
+    path = ctypes.create_string_buffer(4096)
+    if LIBPROC.proc_pidpath(pid, path, len(path)) <= 0:
+        return ""
+    return os.fsdecode(path.value)
+
+
+def role(root, pid, command):
+    argv = command.split()
+    if not argv:
+        return None
+    binary = str(root / "bin/swarm")
+    if argv[0] == binary and executable(pid) == binary:
+        return "swarm"
+    if (len(argv) > 1 and argv[1] in (str(root / "bin/claude"), str(root / "bin/driver"))
+            and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(executable(pid)).name.lower())):
+        return "fixture" if argv[1] == str(root / "bin/claude") else "tty-driver"
+    return None
+
+
+def owned(root, driver, previous):
+    rows = table()
+    # Detached production roles re-exec the staged binary or the fixture by absolute path.
+    matches = {
+        pid: row for pid, row in rows.items()
+        if not row[2].startswith("Z") and (
+            (driver is not None and pid == driver)
+            or (pid in previous and previous[pid] == generation(pid))
+            or role(root, pid, row[3]) is not None
+        )
+    }
+    while descendants := {
+        pid: row for pid, row in rows.items()
+        if pid not in matches and row[0] in matches and not row[2].startswith("Z")
+    }:
+        matches.update(descendants)
+    identities = {pid: generation(pid) for pid in matches}
+    previous.update({pid: birth for pid, birth in identities.items() if birth is not None})
+    return identities
+
+
+def reap(root, driver, previous):
+    victims = {}
+    for action in (signal.SIGTERM, signal.SIGKILL):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            matches = owned(root, driver, previous)
+            if not matches:
+                break
+            for pid, birth in matches.items():
+                if birth is not None and generation(pid) == birth:
+                    victims[pid] = birth
+                    try:
+                        os.kill(pid, action)
+                    except ProcessLookupError:
+                        pass
+            time.sleep(0.05)
+    remaining = owned(root, driver, previous)
+    removed_sockets = 0
+    if not remaining:
+        for path in root.rglob("*"):
+            if stat.S_ISSOCK(path.lstat().st_mode):
+                path.unlink()
+                removed_sockets += 1
+    return {"reaped": len(victims), "removed_sockets": removed_sockets,
+            "remaining": sorted(remaining)}
+
+
+def guard(root):
+    if sys.platform == "darwin":
+        profile = root / "fixture.sb"
+        quote = json.dumps(str(root))
+        profile.write_text(f"""(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write* (subpath {quote}) (literal "/dev/null") (literal "/dev/tty")
+  (literal "/dev/ptmx") (regex #"^/dev/tty[sS][0-9]+$"))
+(deny network*)
+(allow network-bind (local unix-socket (subpath {quote})))
+(allow network-outbound (remote unix-socket (subpath {quote})))
+(allow network-inbound (local unix-socket (subpath {quote})))
+""")
+        prefix = ["/usr/bin/sandbox-exec", "-f", str(profile)]
+        subprocess.run([*prefix, "/usr/bin/true"], check=True, timeout=3,
+                       capture_output=True)
+        return prefix
+    if sys.platform.startswith("linux"):
+        if not Path("/usr/bin/bwrap").is_file():
+            raise RuntimeError("Linux fixture isolation requires /usr/bin/bwrap")
+        prefix = ["/usr/bin/bwrap", "--unshare-net", "--unshare-pid", "--unshare-ipc",
+                  "--dev", "/dev", "--proc", "/proc"]
+        for directory in ("/usr", "/bin", "/lib", "/lib64", "/etc/terminfo"):
+            if Path(directory).exists():
+                prefix += ["--ro-bind", directory, directory]
+        prefix += ["--bind", str(root), str(root), "--"]
+        subprocess.run([*prefix, "/usr/bin/true"], check=True, timeout=3, capture_output=True)
+        return prefix
+    raise RuntimeError("fixture isolation unavailable on this OS")
+
+
+def environment(root):
+    return {
+        "PATH": f"{root}/bin:/usr/bin:/bin",
+        "HOME": f"{root}/home", "CLAUDE_CONFIG_DIR": f"{root}/home/.claude",
+        "XDG_CONFIG_HOME": f"{root}/home/config", "XDG_DATA_HOME": f"{root}/home/data",
+        "XDG_RUNTIME_DIR": f"{root}/runtime", "TMPDIR": f"{root}/tmp",
+        "TZ": "UTC", "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8",
+        "TERM": "xterm-256color", "COLORTERM": "truecolor",
+        "SWARM_DAEMON_STATE": f"{root}/state", "SWARM_DAEMON_SOCK": f"{root}/d.sock",
+        "SWARM_DAEMON_LOCK": f"{root}/d.lock", "SWARM_DAEMON_LOG": f"{root}/daemon.log",
+    }
+
+
+def bounded_read(path):
+    with path.open("rb") as file:
+        data = file.read(LIMIT + 1)
+    if len(data) > LIMIT:
+        raise RuntimeError("fixture evidence exceeds capture limit")
+    return data
+
+
+def wait_for(check, label, timeout=5):
+    until = time.monotonic() + timeout
+    while time.monotonic() < until:
+        value = check()
+        if value:
+            return value
+        time.sleep(0.02)
+    raise RuntimeError(f"deadline waiting for {label}")
+
+
+class Board:
+    def __init__(self, command, root, env):
+        self.master, self.slave = pty.openpty()
+        self.resize(*GEOMETRY)
+        self.original_mode = termios.tcgetattr(self.master)
+        self.capture = bytearray()
+        self.child = subprocess.Popen(
+            [sys.executable, str(root / "bin/driver"), "_tty", *command],
+            stdin=self.slave, stdout=self.slave, stderr=self.slave, cwd=root / "work",
+            env=env, start_new_session=True,
+        )
+
+    def resize(self, cols, rows):
+        fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+    def drain(self):
+        if select.select([self.master], [], [], 0)[0]:
+            self.capture.extend(os.read(self.master, 8192))
+        if len(self.capture) > LIMIT:
+            raise RuntimeError("PTY capture limit exceeded")
+
+    def wait_bytes(self, expected, start=0):
+        def match():
+            self.drain()
+            return self.capture.find(expected, start) >= 0
+        wait_for(match, repr(expected))
+
+    def send(self, data):
+        if os.write(self.master, data) != len(data):
+            raise RuntimeError("short PTY input write")
+
+    def close(self):
+        if self.child.poll() is None:
+            self.child.terminate()
+            try:
+                self.child.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
+                self.child.wait(timeout=2)
+        os.close(self.slave)
+        os.close(self.master)
+
+
+def drive(root, seed, control, prefix):
+    command = [*prefix, str(root / "bin/swarm")]
+    env = environment(root)
+    evidence = []
+    events = []
+    stage = "prepare"
+    output = root / "observations.json"
+
+    def checkpoint(name, value):
+        evidence.append({"name": name, "value": value})
+        write_json(output, {"events": events, "observations": evidence})
+
+    def cli(*argv, receipt=None):
+        events.append({"cli": ["$SESSION" if item == receipt else item.replace(str(root), "$ARM")
+                               for item in argv]})
+        with (root / "stdout").open("wb") as stdout, (root / "stderr").open("wb") as stderr:
+            proc = subprocess.run([*command, *argv], env=env, cwd=root / "work",
+                                  timeout=5, stdout=stdout, stderr=stderr)
+        return proc.returncode, bounded_read(root / "stdout"), bounded_read(root / "stderr")
+
+    def effect(name):
+        path = root / "effects" / name
+        return bounded_read(path) if path.exists() else b""
+
+    try:
+        stage = "daemon"
+        events.append({"cli": ["daemon"]})
+        with (root / "daemon-stderr").open("wb") as log:
+            daemon = subprocess.Popen([*command, "daemon"], env=env, cwd=root / "work",
+                                      stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+        def listening():
+            if daemon.poll() is not None:
+                raise RuntimeError("fixture daemon exited")
+            with socket.socket(socket.AF_UNIX) as probe:
+                probe.settimeout(0.2)
+                try:
+                    probe.connect(env["SWARM_DAEMON_SOCK"])
+                except OSError:
+                    return False
+            return True
+        wait_for(listening, "fixture daemon socket")
+        stage = "empty-roster"
+        code, out, err = cli("ls", "--json")
+        checkpoint(stage, [code, json.loads(out), len(err)])
+        if code or json.loads(out) != []:
+            raise RuntimeError("expected a fresh empty roster")
+        stage = "spawn"
+        code, out, err = cli("spawn", "--cli", "claude", "--name", "amber",
+                             "--dir", str(root / "work"), "--prompt", "offline fixture")
+        if code or not out.strip():
+            checkpoint(stage, {"exit": code, "stdout_bytes": len(out), "stderr_bytes": len(err)})
+            raise RuntimeError("fixture spawn refused")
+        identity = out.decode().strip()
+        checkpoint(stage, {"exit": code, "receipt_lines": len(out.splitlines())})
+        stage = "fixture-worker"
+        fixture_pid = int(wait_for(lambda: effect("worker"), "fixture worker pid"))
+        def match_worker():
+            for pid, row in table().items():
+                if role(root, pid, row[3]) != "fixture" or row[2].startswith("Z"):
+                    continue
+                try:
+                    native_pid = (
+                        next(int(line.split()[-1]) for line in Path(f"/proc/{pid}/status").read_text().splitlines()
+                             if line.startswith("NSpid:"))
+                        if sys.platform.startswith("linux") else pid
+                    )
+                except (OSError, StopIteration):
+                    continue
+                if native_pid == fixture_pid and (birth := generation(pid)):
+                    return pid, birth
+            return None
+        worker, worker_identity = wait_for(match_worker, "fixture worker identity")
+        checkpoint(stage, True)
+        if control in ("timeout", "driver-kill"):
+            # Leave the detached daemon, shim and worker for the external supervisor.
+            if control == "driver-kill":
+                os.kill(os.getpid(), signal.SIGKILL)
+            while True:
+                time.sleep(1)
+        stage = "roster"
+        code, out, err = cli("ls", "--json")
+        rows = json.loads(out)
+        matches = [{key: row[key] for key in ("name", "agent", "status") if key in row}
+                   for row in rows if row.get("id") == identity]
+        checkpoint(stage, {"exit": code, "count": len(rows), "matches": matches})
+        if code or len(rows) != 1 or len(matches) != 1 or matches[0].get("name") != "amber":
+            raise RuntimeError("spawn receipt did not resolve to the fixture session")
+        stage = "board"
+        events.append({"pty": "open", "geometry": GEOMETRY})
+        board = Board(command, root, env)
+        try:
+            board.wait_bytes(b"amber")
+            checkpoint("board-row", "amber")
+            stage = "attach"
+            events.append({"key_hex": "0d"})
+            board.send(b"\r")
+            board.wait_bytes(b"fixture ready")
+            checkpoint(stage, "fixture ready")
+            stage = "worker-echo"
+            payload = f"swarm-{random.Random(seed).getrandbits(32):08x}".encode()
+            events.append({"key_hex": (payload + b"\r").hex()})
+            board.send(payload + b"\r")
+            echo = b"fixture received " + payload
+            pattern = re.compile(re.escape(echo) + b"[\r\n]*fixture end")
+            def find_echo():
+                board.drain()
+                return pattern.search(board.capture)
+            received = wait_for(find_echo, "fixture echo")
+            checkpoint(stage, received.group().hex())
+            stage = "worker-input"
+            checkpoint(stage, effect("input").hex())
+            if effect("input") != payload + b"\r":
+                raise RuntimeError("fixture input was not delivered exactly once")
+            stage = "resize"
+            events.append({"resize": [91, 27]})
+            write_json(output, {"events": events, "observations": evidence})
+            board.resize(91, 27)
+            wait_for(lambda: effect("size") == b"91x26\n", "worker size 91x26")
+            checkpoint(stage, effect("size").decode().strip())
+            stage = "detach"
+            start = len(board.capture)
+            events.append({"key_hex": "11"})
+            board.send(b"\x11")
+            board.wait_bytes(b"\x1b[?1049h", start)
+            checkpoint(stage, "alternate-screen-enter")
+            stage = "quit"
+            events.append({"key_hex": "1b5b323775"})
+            board.send(b"\x1b[27u")
+            def exited():
+                board.drain()
+                return board.child.poll() is not None
+            wait_for(exited, "board quit")
+            restored = termios.tcgetattr(board.master) == board.original_mode
+            checkpoint(stage, {"exit": board.child.returncode, "restored": restored})
+            if board.child.returncode or not restored:
+                raise RuntimeError("board quit did not restore the terminal")
+            stage = "detach-effect"
+            checkpoint(stage, {"worker_identity_unchanged": generation(worker) == worker_identity,
+                               "input_hex": effect("input").hex()})
+            if generation(worker) != worker_identity or effect("input") != payload + b"\r":
+                raise RuntimeError("detach affected the fixture worker")
+        finally:
+            board.close()
+        stage = "kill"
+        code, _, _ = cli("kill", identity, receipt=identity)
+        checkpoint(stage, code)
+        if code:
+            raise RuntimeError("fixture kill refused")
+        stage = "complete"
+    except (OSError, RuntimeError, ValueError, termios.error, subprocess.SubprocessError) as exc:
+        # Exception text can include binary output/paths. Persist structured landmarks only.
+        write_json(output, {"events": events, "observations": evidence,
+                            "failure": {"stage": stage, "class": type(exc).__name__}})
+        return 1
+    return 0
+
+
+def compare(reference, candidate):
+    left = reference["observations"]
+    right = candidate["observations"]
+    for index in range(max(len(left), len(right))):
+        expected = left[index] if index < len(left) else None
+        actual = right[index] if index < len(right) else None
+        if expected != actual:
+            return {"index": index, "last_good": left[index - 1]["name"] if index else None,
+                    "expected": expected, "actual": actual}
+    return None
+
+
+def run_arm(root, binary, config, control):
+    root.mkdir(mode=0o700)
+    for name in ("bin", "tmp", "home", "work", "runtime", "effects", "state"):
+        (root / name).mkdir(mode=0o700)
+    staged = root / "bin/swarm"
+    shutil.copyfile(binary, staged)
+    staged.chmod(0o700)
+    if hash_file(staged) != config["sha256"][str(binary)]:
+        raise RuntimeError("source binary changed during staging")
+    shutil.copyfile(Path(__file__).resolve(), root / "bin/driver")
+    shutil.copyfile(FIXTURE, root / "bin/claude")
+    if control == "echo":
+        (root / "effects" / "extra-cr").touch()
+    (root / "bin/claude").chmod(0o700)
+    if hash_file(root / "bin/claude") != config["fixture_sha256"]:
+        raise RuntimeError("fixture changed during staging")
+
+    previous = {}
+    child = None
+    timed_out = False
+    result = {"events": [], "observations": []}
+    try:
+        prefix = guard(root)
+        with (root / "driver.log").open("wb") as log:
+            child = subprocess.Popen(
+                [sys.executable, __file__, "_drive", str(root), str(config["seed"]),
+                 control, *prefix],
+                env=environment(root), stdout=log, stderr=log, start_new_session=True,
+            )
+            deadline = time.monotonic() + config["timeout"]
+            while child.poll() is None:
+                owned(root, child.pid, previous)
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    break
+                time.sleep(0.05)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        result["failure"] = {"stage": "isolation", "class": type(exc).__name__}
+    finally:
+        driver = child.pid if child is not None and child.poll() is None else None
+        result["cleanup"] = reap(root, driver, previous)
+        if child is not None:
+            child.wait(timeout=2)
+    observations = root / "observations.json"
+    if observations.exists():
+        result.update(json.loads(bounded_read(observations)))
+    if timed_out:
+        result["failure"] = {"stage": "driver-timeout", "class": "deadline"}
+    elif child is not None and child.returncode and "failure" not in result:
+        result["failure"] = {"stage": "driver-exit", "class": child.returncode}
+    return result
+
+
+def binary_path(value):
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError("each arm requires an absolute path to an executable file")
+    return path.resolve()
+
+
+def supervise(config, path):
+    try:
+        table()
+        if not generation(os.getpid()):
+            raise RuntimeError("kernel process birth time unavailable")
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        write_json(path, {"schema": 1, "result": "incomplete", "recipe": config,
+                          "failure": {"stage": "host-process-observation",
+                                      "class": type(exc).__name__}}, replace=False)
+        return 1
+    root = Path(tempfile.mkdtemp(prefix="sp-", dir=Path("/tmp").resolve()))
+    try:
+        ref = run_arm(root / "r", Path(config["reference"]), config, "none")
+        candidate = run_arm(root / "c", Path(config["candidate"]), config, config["control"])
+        mismatch = compare(ref, candidate)
+        failure = any("failure" in arm or arm["cleanup"]["remaining"] for arm in (ref, candidate))
+        result = "incomplete" if any(
+            arm.get("failure", {}).get("stage") == "isolation" for arm in (ref, candidate)
+        ) else "failed" if failure or mismatch else "passed"
+        report = {
+            "schema": 1, "result": result, "recipe": config,
+            "platform": {"os": platform.system(), "version": platform.release(),
+                         "arch": platform.machine(), "python": platform.python_version()},
+            "environment": {k: v.replace(str(root / "r"), "$ARM")
+                            for k, v in environment(root / "r").items()},
+            "reference": ref, "candidate": candidate, "first_divergence": mismatch,
+        }
+        write_json(path, report, replace=False)
+        return 0 if result == "passed" else 1
+    finally:
+        shutil.rmtree(root)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_subparsers(dest="command", required=True)
+    run = modes.add_parser("run")
+    for role in ("reference", "candidate"):
+        run.add_argument(f"--{role}", required=True)
+    run.add_argument("--scenario", default=SCENARIO, choices=[SCENARIO])
+    run.add_argument("--seed", default=194, type=int)
+    run.add_argument("--timeout", default=25, type=int, choices=range(2, 61), metavar="2..60")
+    run.add_argument("--negative-control", default="none",
+                     choices=("none", "echo", "timeout", "driver-kill"))
+    replay = modes.add_parser("replay")
+    replay.add_argument("--bundle", required=True, type=Path)
+    replay.add_argument("--reference")
+    replay.add_argument("--candidate")
+    for mode in (run, replay):
+        mode.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    try:
+        if args.output is None:
+            args.output = Path(tempfile.mkdtemp(prefix="swarm-parity-report-")) / "result.json"
+        if args.output.exists() or args.output.is_symlink():
+            raise ValueError("output must name a new file")
+        previous = None
+        if args.command == "replay":
+            bundle = json.loads(bounded_read(args.bundle))
+            if bundle.get("schema") != 1:
+                raise ValueError("unknown replay bundle schema")
+            previous = bundle["recipe"]
+            if set(previous) != {"reference", "candidate", "scenario", "seed", "timeout",
+                                 "control", "sha256", "fixture_sha256", "driver_sha256"}:
+                raise ValueError("unknown replay recipe fields")
+            args.scenario, args.seed, args.timeout, args.negative_control = (
+                previous[key] for key in ("scenario", "seed", "timeout", "control")
+            )
+            if (args.scenario != SCENARIO or type(args.seed) is not int
+                    or type(args.timeout) is not int or not 2 <= args.timeout <= 60
+                    or args.negative_control not in ("none", "echo", "timeout", "driver-kill")):
+                raise ValueError("invalid replay recipe")
+        reference = binary_path(args.reference if args.reference is not None else previous["reference"])
+        candidate = binary_path(args.candidate if args.candidate is not None else previous["candidate"])
+        if reference == FIXTURE or candidate == FIXTURE:
+            raise ValueError("the provider fixture is not a Swarm binary")
+        config = {"reference": str(reference), "candidate": str(candidate),
+                  "scenario": args.scenario, "seed": args.seed, "timeout": args.timeout,
+                  "control": args.negative_control, "sha256": {
+                      str(binary): hash_file(binary) for binary in (reference, candidate)},
+                  "fixture_sha256": hash_file(FIXTURE),
+                  "driver_sha256": hash_file(Path(__file__).resolve())}
+        if previous and (
+                any(config[key] != previous[key] for key in ("fixture_sha256", "driver_sha256"))
+                or any(config["sha256"][config[key]] != previous["sha256"][previous[key]]
+                       for key in ("reference", "candidate"))):
+            raise ValueError("replay hashes differ from the captured run")
+        result = supervise(config, args.output)
+        print(args.output)
+        return result
+    except (KeyError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        parser.exit(2, f"swarm-parity: {exc}\n")
+
+
+if __name__ == "__main__":
+    os.umask(0o077)
+    if len(sys.argv) > 1 and sys.argv[1] == "_tty":
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        os.execv(sys.argv[2], sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "_drive":
+        resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        sys.exit(drive(Path(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5:]))
+    sys.exit(main())

@@ -1,0 +1,29 @@
+entry_point	operation_or_syntax	source_owner	disposition	evidence_owner
+pilot	roster, open, view, send, await, watch, create, resume, launch-status, exit	cmd/swarm/pilot.go#runPilot	retain private-context boundary and operation-specific validation	M6/M8
+schedule	list, create, templates, show, history, pause, resume, archive, timer install|status|uninstall	cmd/swarm/schedule.go#dispatchSchedule; cmd/swarm/schedule.go#scheduleTimerCLI	retain scheduling catalog and timer; prove due/missed/refusal cases	M7
+schedule	tick, run, complete	cmd/swarm/schedule_dispatch.go#dispatchScheduleWork	internal installed timer/worker contract; retain replacement compatibility	M7
+discord	connect, migrate-supervisor, run, status, doctor, disconnect	cmd/swarm/discord.go#dispatchDiscord	retain connector lifecycle and discussion service; migration preview must be read-only	M8/M10
+discord	context, reply, exclude, include, propose, resume-manual	cmd/swarm/discord.go#dispatchDiscord	retain scoped discussion operations; refusal on bad IDs, body, audience or stale counters	M8
+teammate	receipt, message, reply	cmd/swarm/teammate.go#dispatchTeammate	retain authenticated worker-to-manager return and durable receipt	M6/M8
+voice	interrupt-manager, interrupt-status, question, answer, resume, ack, replace, replacement	cmd/swarm/voice.go#dispatchVoice	retain Discord call manager controls; refusal and uncertain outcome must be explicit	M9
+voice	serve, status, text, ptt, read, receipt, publications, switch, setup	cmd/swarm/voice_manager_cli.go#dispatchVoiceManager	retain configured speech and manager continuity needed by calls; retire unrelated device-specific modes	M9/M10
+voice	capture, enroll, revoke, device-endpoint, devices, --host, panel, start, stop	cmd/swarm/voice.go#dispatchVoice	retire standalone device/SSH/panel product; no device pairing route in Rust	M10
+remote	init, devices, revoke, regrant, pair, presets, off, on, status	cmd/swarm/remote.go#runRemote; cmd/swarm/presets.go#runRemotePresets	retire phone pairing/control surface	M10
+relay	doctor	cmd/swarm/relay.go#runRelay	retire mobile relay operator surface	M10
+setup-trust	on|off|status plus absolute workspace	cmd/swarm/setup_trust.go#runSetupTrust	retain exact physical workspace trust and fail-closed validation	M5
+native-input	register-agy|register-hermes and provider callback payload	cmd/swarm/native_input.go#runNativeInput	internal provider-installed hook contract; retire only unreachable mobile pairing messages	M5
+hook	provider hook event on stdin	cmd/swarm/main.go#runHook	retain authenticated sequence, bounded spool and acknowledgement semantics	M5
+shim	--config JSON launch contract	cmd/swarm/main.go#runShim	retain installed shim argv/config and mixed-version compatibility	M2/M3
+daemon	run|restart [--unattended]	cmd/swarm/main.go#runDaemon; cmd/swarm/unattended.go#runDaemonRestartUnattended	retain singleton, saved environment and missing/corrupt-environment refusal	M3/M10
+dispatcher-guide	no args; embedded instructions/assets	cmd/swarm/dispatcher_guide.go#runDispatcherGuide	retain current worker delegation guidance and shipped assets	M6/M8
+checkout inventory	[--json] [PATH ...]; repeated --supervisor-state/--discord-state	cmd/swarm/checkout.go#runCheckout	retain read-only inspection and partial-evidence output	M6
+clean	[--apply] [--json]	cmd/swarm/clean.go#runClean	retain preview default and refuse cleanup without certified ownership	M7
+relogin	[--dry-run] [--force] [--auto on|off]	cmd/swarm/relogin.go#runRelogin	retain native identity recovery; retire managed account-pool controls	M7/M10
+refresh	[--json] [--auto on|off]	cmd/swarm/cli_refresh.go#runCLIRefresh	retain bounded provider CLI refresh controls	M7
+upgrade	check|--stage|--activate|--rollback|--unattended [--json]	cmd/swarm/upgrade.go#runUpgrade	retain checksum/signature validation, defer, activation and rollback	M10
+send	<session> plus text/key and submit selection	cmd/swarm/sendpeek.go#runSend	retain exact framing; stale lease/invalid key must refuse	M3/M5
+peek	<session> [--lines N]	cmd/swarm/sendpeek.go#runPeek	retain bounded screen read without taking control	M2
+message	<session> semantic send or --status by operation id	cmd/swarm/message.go#runMessage	retain idempotent receipt; ambiguous dispatch cannot resend	M5
+requests	<session> list or --request-id/--native-session-id inspect	cmd/swarm/native_requests.go#runNativeRequests	retain native request identity; stale/foreign request is unavailable	M5
+decide	<session> request identity/hash, reply and optional answers JSON	cmd/swarm/native_requests.go#runNativeDecide	retain validation and receipt lookup; reject stale hash/audience before provider effect	M5
+version	version and --version	cmd/swarm/main.go#runVersion	retain truthful candidate build identity	M10

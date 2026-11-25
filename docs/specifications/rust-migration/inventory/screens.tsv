@@ -1,0 +1,14 @@
+surface	interaction_owner	retained_or_disposition	evidence_owner	source_anchor
+Board and More menu	TUI navigation	reference in reference-board-keys.tsv	M4	internal/tui/general.go#updateGeneral; internal/tui/board_menu.go#updateMore
+Launch form	TUI launch form	retain launch; capture each provider form and validation/refusal	M4/M5	internal/tui/launch.go#updateLaunch
+Attach view	TUI attach	retain PTY control, detach, resize, reconnect and terminal restore	M2/M4	internal/tui/attach.go#updateAttach
+Resume and relocation	TUI resume	retain explicit existing-directory relocation; no implicit create	M4/M6	internal/tui/resume.go#updateResume; docs/specifications/system-spec.md#R-2
+Handoff form	TUI handoff	retain passive/manual/none and hands-off cases; capture refusals	M6	internal/tui/handoff.go#updateHandoff
+Options	TUI options	retain layout/group/order and supported settings; retire managed login and pairing routes	M4/M10	internal/tui/options.go#updateOptions
+Schedule browser and editor	TUI schedule	retain only when schedule service configured; capture read-only and mutation paths	M7	internal/tui/schedules_input.go#updateSchedule; internal/tui/schedules_form.go#updateScheduleDraft
+Schedule run detail	TUI schedule	retain inspect, attach, resume, pause/archive/delete confirmation	M7	internal/tui/schedules_input.go#updateSchedule
+Inline name/tag editor	TUI board overlay	retain captured identity, cancel, stale-target refusal	M4	internal/tui/general.go#updateRename
+Kill/delete confirmation	TUI board overlay	retain single confirm and captured state revalidation	M3/M4	internal/tui/general.go#updateConfirm
+Compact form viewport	shared form guard	retain readable mutation stop and available cancel/refusal controls	M4	internal/tui/form_viewport.go#guardFormInput
+Provider login view	TUI logins	retire Swarm-managed account pool controls; native provider login remains	M10	internal/tui/logins.go#updateLogins
+Mobile pairing overlay	TUI overlay	retire mobile device pairing route	M10	internal/tui/pairing_modal.go#updatePairing

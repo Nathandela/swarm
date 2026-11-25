@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Offline substitute for the Claude executable on the fixture PATH."""
+import os
+from pathlib import Path
+import signal
+import struct
+import sys
+import termios
+import tty
+import fcntl
+
+if "--version" in sys.argv:
+    print("2.1.100 (Claude Code)")
+    sys.exit(0)
+
+effects = Path(sys.argv[0]).parent.parent / "effects"
+effects.mkdir(exist_ok=True)
+(effects / "worker").write_text(f"{os.getpid()}\n")
+tty.setraw(0)
+
+def geometry(*_):
+    rows, cols, _, _ = struct.unpack("HHHH", fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))
+    (effects / "size").write_text(f"{cols}x{rows}\n")
+
+signal.signal(signal.SIGWINCH, geometry)
+geometry()
+os.write(1, b"\x1b[2J\x1b[Hfixture ready\r\n")
+with (effects / "input").open("ab", buffering=0) as log:
+    pending = bytearray()
+    while data := os.read(0, 1):
+        log.write(data)
+        if data in (b"\n", b"\r"):
+            os.write(1, b"fixture received " + pending
+                     + (b"\r" if (effects / "extra-cr").exists() else b"")
+                     + b"\r\nfixture end")
+            pending.clear()
+        else:
+            pending.extend(data)
+        if len(pending) > 256:
+            sys.exit(2)

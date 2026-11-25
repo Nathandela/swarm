@@ -1,0 +1,316 @@
+command	flag	source	registration	disposition	evidence_owner
+checkout inventory	-h	cmd/swarm/checkout.go#46	flag.implicit Go help	retain; verify defaults, validation and refusal	workspace custody inventory (M6)
+checkout inventory	-help	cmd/swarm/checkout.go#46	flag.implicit Go help	retain; verify defaults, validation and refusal	workspace custody inventory (M6)
+checkout inventory	--json	cmd/swarm/checkout.go#49	flag.Bool	retain; verify defaults, validation and refusal	workspace custody inventory (M6)
+checkout inventory	--supervisor-state	cmd/swarm/checkout.go#51	flag.Var	retain; verify defaults, validation and refusal	workspace custody inventory (M6)
+checkout inventory	--discord-state	cmd/swarm/checkout.go#52	flag.Var	retain; verify defaults, validation and refusal	workspace custody inventory (M6)
+clean	-h	cmd/swarm/clean.go#48	flag.implicit Go help	retain; verify defaults, validation and refusal	safe local storage cleanup (M7)
+clean	-help	cmd/swarm/clean.go#48	flag.implicit Go help	retain; verify defaults, validation and refusal	safe local storage cleanup (M7)
+clean	--apply	cmd/swarm/clean.go#50	flag.Bool	retain; verify defaults, validation and refusal	safe local storage cleanup (M7)
+clean	--json	cmd/swarm/clean.go#51	flag.Bool	retain; verify defaults, validation and refusal	safe local storage cleanup (M7)
+decide	-h	cmd/swarm/native_requests.go#48	flag.implicit Go help	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	-help	cmd/swarm/native_requests.go#48	flag.implicit Go help	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--request-id	cmd/swarm/native_requests.go#50	flag.String	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--native-session-id	cmd/swarm/native_requests.go#51	flag.String	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--request-hash	cmd/swarm/native_requests.go#52	flag.String	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--reply	cmd/swarm/native_requests.go#53	flag.String	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--answers	cmd/swarm/native_requests.go#54	flag.String	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--status	cmd/swarm/native_requests.go#55	flag.Bool	retain; verify defaults, validation and refusal	provider native decision (M5)
+decide	--operation-id	cmd/swarm/native_requests.go#56	flag.String	retain; verify defaults, validation and refusal	provider native decision (M5)
+discord <dynamic subcommand>	-h	cmd/swarm/discord.go#104	flag.implicit Go help	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	-help	cmd/swarm/discord.go#104	flag.implicit Go help	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--state-dir	cmd/swarm/discord.go#106	flag.String	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--dry-run	cmd/swarm/discord.go#114	flag.BoolVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--from-state-dir	cmd/swarm/discord.go#115	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--from-socket	cmd/swarm/discord.go#116	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--from-lock	cmd/swarm/discord.go#117	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--from-log	cmd/swarm/discord.go#118	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--unattended	cmd/swarm/discord.go#122	flag.BoolVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--session	cmd/swarm/discord.go#127	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--instance	cmd/swarm/discord.go#128	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--external-input	cmd/swarm/discord.go#129	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--channel	cmd/swarm/discord.go#132	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--all-channels	cmd/swarm/discord.go#135	flag.BoolVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--mode	cmd/swarm/discord.go#136	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--manager	cmd/swarm/discord.go#137	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--project-access	cmd/swarm/discord.go#138	flag.Func	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--project	cmd/swarm/discord.go#145	flag.Func	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--name	cmd/swarm/discord.go#158	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--application-id	cmd/swarm/discord.go#159	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--owner-id	cmd/swarm/discord.go#160	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--token-file	cmd/swarm/discord.go#161	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--workdir	cmd/swarm/discord.go#162	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--receptionist-cli	cmd/swarm/discord.go#163	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--receptionist-model	cmd/swarm/discord.go#164	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--install	cmd/swarm/discord.go#165	flag.BoolVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--allowed Discord ID (repeat for multiple)	cmd/swarm/discord.go#171	flag.Func	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--offset	cmd/swarm/discord.go#175	flag.IntVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--body-file	cmd/swarm/discord.go#178	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--publication-id	cmd/swarm/discord.go#179	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+discord <dynamic subcommand>	--candidate-ids	cmd/swarm/discord.go#182	flag.StringVar	retain text/discussion; calls use call pin	M8/M9
+doctor	-h	cmd/swarm/doctor.go#61	flag.implicit Go help	split; retain local diagnostics, remove retired sections	M7/M10
+doctor	-help	cmd/swarm/doctor.go#61	flag.implicit Go help	split; retain local diagnostics, remove retired sections	M7/M10
+doctor	--json	cmd/swarm/doctor.go#63	flag.Bool	split; retain local diagnostics, remove retired sections	M7/M10
+handoff	-h	cmd/swarm/handoff.go#35	flag.implicit Go help	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+handoff	-help	cmd/swarm/handoff.go#35	flag.implicit Go help	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+handoff	--cli	cmd/swarm/handoff.go#41	flag.String	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+handoff	--model	cmd/swarm/handoff.go#42	flag.String	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+handoff	--name	cmd/swarm/handoff.go#43	flag.String	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+handoff	--context-file	cmd/swarm/handoff.go#44	flag.String	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+handoff	--supervision	cmd/swarm/handoff.go#45	flag.String	retain; verify defaults, validation and refusal	supervisor handoff (M6)
+ls	-h	cmd/swarm/agentverbs.go#54	flag.implicit Go help	retain; verify defaults, validation and refusal	read-only session roster (M4)
+ls	-help	cmd/swarm/agentverbs.go#54	flag.implicit Go help	retain; verify defaults, validation and refusal	read-only session roster (M4)
+ls	--json	cmd/swarm/agentverbs.go#56	flag.Bool	retain; verify defaults, validation and refusal	read-only session roster (M4)
+message	-h	cmd/swarm/message.go#59	flag.implicit Go help	retain; verify defaults, validation and refusal	provider operation driver (M5)
+message	-help	cmd/swarm/message.go#59	flag.implicit Go help	retain; verify defaults, validation and refusal	provider operation driver (M5)
+message	--text	cmd/swarm/message.go#61	flag.String	retain; verify defaults, validation and refusal	provider operation driver (M5)
+message	--status	cmd/swarm/message.go#62	flag.Bool	retain; verify defaults, validation and refusal	provider operation driver (M5)
+message	--operation-id	cmd/swarm/message.go#63	flag.String	retain; verify defaults, validation and refusal	provider operation driver (M5)
+peek	-h	cmd/swarm/sendpeek.go#90	flag.implicit Go help	retain; verify defaults, validation and refusal	shim screen snapshot (M2)
+peek	-help	cmd/swarm/sendpeek.go#90	flag.implicit Go help	retain; verify defaults, validation and refusal	shim screen snapshot (M2)
+peek	--lines	cmd/swarm/sendpeek.go#92	flag.Int	retain; verify defaults, validation and refusal	shim screen snapshot (M2)
+pilot	-h	cmd/swarm/pilot.go#71	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion workflow (M6/M8)
+pilot	-help	cmd/swarm/pilot.go#71	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion workflow (M6/M8)
+pilot	--context	cmd/swarm/pilot.go#73	flag.String	retain; verify defaults, validation and refusal	discussion workflow (M6/M8)
+pilot	-h	cmd/swarm/pilot.go#136	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion workflow (M6/M8)
+pilot	-help	cmd/swarm/pilot.go#136	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion workflow (M6/M8)
+pilot	--context	cmd/swarm/pilot.go#138	flag.String	retain; verify defaults, validation and refusal	discussion workflow (M6/M8)
+pilot await	-h	cmd/swarm/pilot.go#612	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot await	-help	cmd/swarm/pilot.go#612	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot await	--timeout	cmd/swarm/pilot.go#614	flag.Duration	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	-h	cmd/swarm/pilot.go#553	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	-help	cmd/swarm/pilot.go#553	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	--cli	cmd/swarm/pilot.go#555	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	--prompt	cmd/swarm/pilot.go#556	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	--dir	cmd/swarm/pilot.go#557	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	--name	cmd/swarm/pilot.go#558	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot create	--tag	cmd/swarm/pilot.go#559	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot send	-h	cmd/swarm/pilot.go#435	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot send	-help	cmd/swarm/pilot.go#435	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+pilot send	--text	cmd/swarm/pilot.go#437	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+reattach	-h	cmd/swarm/reattach.go#147	flag.implicit Go help	retain; verify defaults, validation and refusal	provider history import (M6)
+reattach	-help	cmd/swarm/reattach.go#147	flag.implicit Go help	retain; verify defaults, validation and refusal	provider history import (M6)
+reattach	--cli	cmd/swarm/reattach.go#149	flag.String	retain; verify defaults, validation and refusal	provider history import (M6)
+reattach	--all	cmd/swarm/reattach.go#150	flag.Bool	retain; verify defaults, validation and refusal	provider history import (M6)
+reattach	--take-over	cmd/swarm/reattach.go#151	flag.Bool	retain; verify defaults, validation and refusal	provider history import (M6)
+reattach	--session	cmd/swarm/reattach.go#152	flag.String	retain; verify defaults, validation and refusal	provider history import (M6)
+reattach	--dry-run	cmd/swarm/reattach.go#153	flag.Bool	retain; verify defaults, validation and refusal	provider history import (M6)
+refresh	-h	cmd/swarm/cli_refresh.go#25	flag.implicit Go help	retain; verify defaults, validation and refusal	provider CLI maintenance (M7)
+refresh	-help	cmd/swarm/cli_refresh.go#25	flag.implicit Go help	retain; verify defaults, validation and refusal	provider CLI maintenance (M7)
+refresh	--auto	cmd/swarm/cli_refresh.go#27	flag.String	retain; verify defaults, validation and refusal	provider CLI maintenance (M7)
+refresh	--json	cmd/swarm/cli_refresh.go#28	flag.Bool	retain; verify defaults, validation and refusal	provider CLI maintenance (M7)
+relay doctor	-h	cmd/swarm/relay.go#67	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+relay doctor	-help	cmd/swarm/relay.go#67	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+relay doctor	--timeout	cmd/swarm/relay.go#69	flag.Duration	retire mobile/pairing entry point	M10 retirement
+relogin	-h	cmd/swarm/relogin.go#93	flag.implicit Go help	split; retain native re-login recovery	M7/M10
+relogin	-help	cmd/swarm/relogin.go#93	flag.implicit Go help	split; retain native re-login recovery	M7/M10
+relogin	--dry-run	cmd/swarm/relogin.go#95	flag.Bool	split; retain native re-login recovery	M7/M10
+relogin	--force	cmd/swarm/relogin.go#96	flag.Bool	split; retain native re-login recovery	M7/M10
+relogin	--auto	cmd/swarm/relogin.go#97	flag.String	split; retain native re-login recovery	M7/M10
+remote init	-h	cmd/swarm/remote.go#151	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote init	-help	cmd/swarm/remote.go#151	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote init	--relay-url	cmd/swarm/remote.go#153	flag.String	retire mobile/pairing entry point	M10 retirement
+remote init	--relay-namespace	cmd/swarm/remote.go#154	flag.String	retire mobile/pairing entry point	M10 retirement
+remote init	--relay-pin	cmd/swarm/remote.go#155	flag.String	retire mobile/pairing entry point	M10 retirement
+remote init	--relay-tls-policy	cmd/swarm/remote.go#156	flag.String	retire mobile/pairing entry point	M10 retirement
+remote init	--relay-pin-compat	cmd/swarm/remote.go#157	flag.String	retire mobile/pairing entry point	M10 retirement
+remote init	--push-gateway-url	cmd/swarm/remote.go#158	flag.String	retire mobile/pairing entry point	M10 retirement
+remote pair	-h	cmd/swarm/remote.go#1419	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote pair	-help	cmd/swarm/remote.go#1419	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote pair	--capability	cmd/swarm/remote.go#1421	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets add	-h	cmd/swarm/presets.go#135	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote presets add	-help	cmd/swarm/presets.go#135	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote presets add	--name	cmd/swarm/presets.go#137	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets add	--agent	cmd/swarm/presets.go#138	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets add	--root	cmd/swarm/presets.go#139	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets add	--worktree	cmd/swarm/presets.go#140	flag.Bool	retire mobile/pairing entry point	M10 retirement
+remote presets add	--option	cmd/swarm/presets.go#142	flag.Var	retire mobile/pairing entry point	M10 retirement
+remote presets edit	-h	cmd/swarm/presets.go#239	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote presets edit	-help	cmd/swarm/presets.go#239	flag.implicit Go help	retire mobile/pairing entry point	M10 retirement
+remote presets edit	--name	cmd/swarm/presets.go#241	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets edit	--agent	cmd/swarm/presets.go#242	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets edit	--root	cmd/swarm/presets.go#243	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets edit	--worktree	cmd/swarm/presets.go#244	flag.String	retire mobile/pairing entry point	M10 retirement
+remote presets edit	--option	cmd/swarm/presets.go#246	flag.Var	retire mobile/pairing entry point	M10 retirement
+requests	-h	cmd/swarm/native_requests.go#25	flag.implicit Go help	retain; verify defaults, validation and refusal	provider native-request observer (M5)
+requests	-help	cmd/swarm/native_requests.go#25	flag.implicit Go help	retain; verify defaults, validation and refusal	provider native-request observer (M5)
+requests	--request-id	cmd/swarm/native_requests.go#27	flag.String	retain; verify defaults, validation and refusal	provider native-request observer (M5)
+requests	--native-session-id	cmd/swarm/native_requests.go#28	flag.String	retain; verify defaults, validation and refusal	provider native-request observer (M5)
+schedule create	-h	cmd/swarm/schedule.go#260	flag.implicit Go help	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	-help	cmd/swarm/schedule.go#260	flag.implicit Go help	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--name	cmd/swarm/schedule.go#262	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--dir	cmd/swarm/schedule.go#263	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--workspace	cmd/swarm/schedule.go#264	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--authority	cmd/swarm/schedule.go#265	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--agents	cmd/swarm/schedule.go#266	flag.String	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--prompt-file	cmd/swarm/schedule.go#267	flag.String	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--allow-overlap	cmd/swarm/schedule.go#268	flag.BoolVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--catch-up	cmd/swarm/schedule.go#269	flag.DurationVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--once	cmd/swarm/schedule.go#271	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--daily	cmd/swarm/schedule.go#272	flag.Bool	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--weekdays	cmd/swarm/schedule.go#273	flag.Bool	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--weekly	cmd/swarm/schedule.go#274	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--cron	cmd/swarm/schedule.go#275	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--time	cmd/swarm/schedule.go#276	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+schedule create	--timezone	cmd/swarm/schedule.go#277	flag.StringVar	retain; verify defaults, validation and refusal	scheduler catalog (M7)
+send	-h	cmd/swarm/sendpeek.go#37	flag.implicit Go help	retain; verify defaults, validation and refusal	supervisor submit boundary (M3/M5)
+send	-help	cmd/swarm/sendpeek.go#37	flag.implicit Go help	retain; verify defaults, validation and refusal	supervisor submit boundary (M3/M5)
+send	--text	cmd/swarm/sendpeek.go#39	flag.String	retain; verify defaults, validation and refusal	supervisor submit boundary (M3/M5)
+send	--no-submit	cmd/swarm/sendpeek.go#40	flag.Bool	retain; verify defaults, validation and refusal	supervisor submit boundary (M3/M5)
+send	--key	cmd/swarm/sendpeek.go#41	flag.String	retain; verify defaults, validation and refusal	supervisor submit boundary (M3/M5)
+shim	-h	cmd/swarm/main.go#808	flag.implicit Go help	internal contract; preserve only installed consumer requirements	M2/M5/M7
+shim	-help	cmd/swarm/main.go#808	flag.implicit Go help	internal contract; preserve only installed consumer requirements	M2/M5/M7
+shim	--config	cmd/swarm/main.go#810	flag.String	internal contract; preserve only installed consumer requirements	M2/M5/M7
+shim	--require-opencode-tui	cmd/swarm/main.go#811	flag.Bool	internal contract; preserve only installed consumer requirements	M2/M5/M7
+shim	--require-manager	cmd/swarm/main.go#812	flag.Bool	internal contract; preserve only installed consumer requirements	M2/M5/M7
+shim	--require durable shim identity before starting the worker	cmd/swarm/main.go#813	flag.Bool	internal contract; preserve only installed consumer requirements	M2/M5/M7
+spawn	-h	cmd/swarm/spawn.go#40	flag.implicit Go help	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	-help	cmd/swarm/spawn.go#40	flag.implicit Go help	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--cli	cmd/swarm/spawn.go#42	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--dir	cmd/swarm/spawn.go#43	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--model	cmd/swarm/spawn.go#44	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--worktree	cmd/swarm/spawn.go#45	flag.Bool	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--name	cmd/swarm/spawn.go#46	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--prompt	cmd/swarm/spawn.go#47	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--handoff	cmd/swarm/spawn.go#48	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--delegate	cmd/swarm/spawn.go#49	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--operation-id	cmd/swarm/spawn.go#50	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--new-operation-id	cmd/swarm/spawn.go#51	flag.Bool	retain; verify defaults, validation and refusal	supervisor launch (M6)
+spawn	--status	cmd/swarm/spawn.go#52	flag.String	retain; verify defaults, validation and refusal	supervisor launch (M6)
+swarm schedule complete	-h	cmd/swarm/schedule_dispatch.go#116	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm schedule complete	-help	cmd/swarm/schedule_dispatch.go#116	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm schedule complete	--summary	cmd/swarm/schedule_dispatch.go#118	flag.String	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm schedule complete	--link	cmd/swarm/schedule_dispatch.go#120	flag.Func	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm schedule run	-h	cmd/swarm/schedule_dispatch.go#80	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm schedule run	-help	cmd/swarm/schedule_dispatch.go#80	flag.implicit Go help	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm schedule run	--operation-id	cmd/swarm/schedule_dispatch.go#82	flag.Func	retain; verify defaults, validation and refusal	CLI operation; see manual-operations.tsv (M0 capture)
+swarm-char	-h	cmd/swarm-char/main.go#77	flag.implicit Go help	retain as local-only characterization tool	M1/M10
+swarm-char	-help	cmd/swarm-char/main.go#77	flag.implicit Go help	retain as local-only characterization tool	M1/M10
+swarm-char	--cli	cmd/swarm-char/main.go#79	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--version	cmd/swarm-char/main.go#80	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--scenario	cmd/swarm-char/main.go#81	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--cwd	cmd/swarm-char/main.go#82	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--cols	cmd/swarm-char/main.go#83	flag.Int	retain as local-only characterization tool	M1/M10
+swarm-char	--rows	cmd/swarm-char/main.go#84	flag.Int	retain as local-only characterization tool	M1/M10
+swarm-char	--geometry	cmd/swarm-char/main.go#85	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--timeout	cmd/swarm-char/main.go#86	flag.Duration	retain as local-only characterization tool	M1/M10
+swarm-char	--out	cmd/swarm-char/main.go#87	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--input	cmd/swarm-char/main.go#88	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--hook-sink	cmd/swarm-char/main.go#89	flag.String	retain as local-only characterization tool	M1/M10
+swarm-char	--adapter	cmd/swarm-char/main.go#90	flag.String	retain as local-only characterization tool	M1/M10
+swarm-publish	-h	cmd/swarm-publish/main.go#36	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	-help	cmd/swarm-publish/main.go#36	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	--aab	cmd/swarm-publish/main.go#38	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	--key	cmd/swarm-publish/main.go#39	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	--package	cmd/swarm-publish/main.go#40	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	--push-gateway-url	cmd/swarm-publish/main.go#41	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	--track	cmd/swarm-publish/main.go#42	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-publish	--dry-run	cmd/swarm-publish/main.go#43	flag.Bool	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	-h	cmd/swarm-pushgw/main.go#147	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	-help	cmd/swarm-pushgw/main.go#147	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--listen	cmd/swarm-pushgw/main.go#150	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--admin-listen	cmd/swarm-pushgw/main.go#151	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--dev	cmd/swarm-pushgw/main.go#152	flag.Bool	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--allow-firestore-emulator	cmd/swarm-pushgw/main.go#153	flag.Bool	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--google-credentials	cmd/swarm-pushgw/main.go#154	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--gcp-project-id	cmd/swarm-pushgw/main.go#155	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--firestore-namespace	cmd/swarm-pushgw/main.go#156	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--token-keyring-file	cmd/swarm-pushgw/main.go#157	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--registration-admission-file	cmd/swarm-pushgw/main.go#158	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--gcp-project-number	cmd/swarm-pushgw/main.go#159	flag.Int64	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--android-package	cmd/swarm-pushgw/main.go#160	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--play-signing-cert-sha256	cmd/swarm-pushgw/main.go#161	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--tls-cert	cmd/swarm-pushgw/main.go#163	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--tls-key	cmd/swarm-pushgw/main.go#164	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--insecure-http	cmd/swarm-pushgw/main.go#165	flag.Bool	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--trusted-proxies	cmd/swarm-pushgw/main.go#166	flag.String	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-wakes-per-address	cmd/swarm-pushgw/main.go#168	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-wakes-per-address-window	cmd/swarm-pushgw/main.go#169	flag.Duration	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-wakes-per-source	cmd/swarm-pushgw/main.go#170	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-wakes-per-source-window	cmd/swarm-pushgw/main.go#171	flag.Duration	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-registrations-per-source	cmd/swarm-pushgw/main.go#172	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-registrations-per-source-window	cmd/swarm-pushgw/main.go#173	flag.Duration	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-registrations-global	cmd/swarm-pushgw/main.go#174	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-registrations-global-window	cmd/swarm-pushgw/main.go#175	flag.Duration	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-allocations-per-source	cmd/swarm-pushgw/main.go#176	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-allocations-per-source-window	cmd/swarm-pushgw/main.go#177	flag.Duration	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-allocations-global	cmd/swarm-pushgw/main.go#178	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-allocations-global-window	cmd/swarm-pushgw/main.go#179	flag.Duration	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw	--quota-allocations-per-installation	cmd/swarm-pushgw/main.go#180	flag.Int	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw healthcheck	-h	cmd/swarm-pushgw/main.go#118	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw healthcheck	-help	cmd/swarm-pushgw/main.go#118	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
+swarm-pushgw healthcheck	--url	cmd/swarm-pushgw/main.go#120	flag.String	retire standalone publication/gateway binary	M10 retirement
+teammate message	-h	cmd/swarm/teammate.go#54	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	-help	cmd/swarm/teammate.go#54	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--kind	cmd/swarm/teammate.go#56	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--text	cmd/swarm/teammate.go#57	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--id	cmd/swarm/teammate.go#58	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--file	cmd/swarm/teammate.go#60	flag.Func	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate receipt	-h	cmd/swarm/teammate.go#27	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
+teammate receipt	-help	cmd/swarm/teammate.go#27	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
+teammate receipt	--id	cmd/swarm/teammate.go#29	flag.String	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
+teammate reply	-h	cmd/swarm/teammate.go#116	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate reply	-help	cmd/swarm/teammate.go#116	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate reply	--id	cmd/swarm/teammate.go#118	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate reply	--wait	cmd/swarm/teammate.go#119	flag.Duration	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+upgrade	-h	cmd/swarm/upgrade.go#22	flag.implicit Go help	split; retain verified local upgrade contract	M10
+upgrade	-help	cmd/swarm/upgrade.go#22	flag.implicit Go help	split; retain verified local upgrade contract	M10
+upgrade	--stage	cmd/swarm/upgrade.go#24	flag.Bool	split; retain verified local upgrade contract	M10
+upgrade	--activate	cmd/swarm/upgrade.go#25	flag.Bool	split; retain verified local upgrade contract	M10
+upgrade	--rollback	cmd/swarm/upgrade.go#26	flag.Bool	split; retain verified local upgrade contract	M10
+upgrade	--unattended	cmd/swarm/upgrade.go#27	flag.Bool	split; retain verified local upgrade contract	M10
+upgrade	--allow-downgrade	cmd/swarm/upgrade.go#28	flag.Bool	split; retain verified local upgrade contract	M10
+upgrade	--json	cmd/swarm/upgrade.go#29	flag.Bool	split; retain verified local upgrade contract	M10
+voice --host	-h	cmd/swarm/voice_ssh.go#21	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice --host	-help	cmd/swarm/voice_ssh.go#21	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice --host	--host	cmd/swarm/voice_ssh.go#23	flag.String	retire standalone device/SSH/panel control	M10 retirement
+voice --host	--enroll	cmd/swarm/voice_ssh.go#24	flag.Bool	retire standalone device/SSH/panel control	M10 retirement
+voice --host	--print-url	cmd/swarm/voice_ssh.go#25	flag.Bool	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	-h	cmd/swarm/voice_device.go#21	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	-help	cmd/swarm/voice_device.go#21	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	--device-key	cmd/swarm/voice_device.go#25	flag.StringVar	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	--id	cmd/swarm/voice_device.go#28	flag.StringVar	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	-h	cmd/swarm/voice_manager_cli.go#23	flag.implicit Go help	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	-help	cmd/swarm/voice_manager_cli.go#23	flag.implicit Go help	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--device-listen	cmd/swarm/voice_manager_cli.go#34	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--manager	cmd/swarm/voice_manager_cli.go#35	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--dir	cmd/swarm/voice_manager_cli.go#36	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--model	cmd/swarm/voice_manager_cli.go#37	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--from	cmd/swarm/voice_manager_cli.go#39	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--manager	cmd/swarm/voice_manager_cli.go#40	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--dir	cmd/swarm/voice_manager_cli.go#41	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--unattended	cmd/swarm/voice_manager_cli.go#43	flag.BoolVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--state-dir	cmd/swarm/voice_manager_cli.go#44	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--publication	cmd/swarm/voice_manager_cli.go#47	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--id	cmd/swarm/voice_manager_cli.go#49	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	-h	cmd/swarm/voice_recovery_cli.go#20	flag.implicit Go help	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	-help	cmd/swarm/voice_recovery_cli.go#20	flag.implicit Go help	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--instance	cmd/swarm/voice_recovery_cli.go#27	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--generation	cmd/swarm/voice_recovery_cli.go#28	flag.Uint64Var	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--external	cmd/swarm/voice_recovery_cli.go#32	flag.Uint64Var	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--admission	cmd/swarm/voice_recovery_cli.go#34	flag.Uint64Var	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--operation	cmd/swarm/voice_recovery_cli.go#35	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--turn	cmd/swarm/voice_recovery_cli.go#36	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--request	cmd/swarm/voice_recovery_cli.go#39	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--hash	cmd/swarm/voice_recovery_cli.go#40	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	--id	cmd/swarm/voice_recovery_cli.go#41	flag.StringVar	split: preserve configured Discord speech; retire device control	M9/M10
+voice <dynamic subcommand>	-h	cmd/swarm/voice_unit.go#44	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	-help	cmd/swarm/voice_unit.go#44	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice <dynamic subcommand>	--state-dir	cmd/swarm/voice_unit.go#46	flag.StringVar	retire standalone device/SSH/panel control	M10 retirement
+voice capture	-h	cmd/swarm/voice_capture.go#19	flag.implicit Go help	retire standalone device surface	M9/M10
+voice capture	-help	cmd/swarm/voice_capture.go#19	flag.implicit Go help	retire standalone device surface	M9/M10
+voice capture	--end	cmd/swarm/voice_capture.go#21	flag.String	retire standalone device surface	M9/M10
+voice capture	--take	cmd/swarm/voice_capture.go#22	flag.String	retire standalone device surface	M9/M10
+voice capture	--id	cmd/swarm/voice_capture.go#23	flag.String	retire standalone device surface	M9/M10
+voice mcp	-h	cmd/swarm/voice.go#73	flag.implicit Go help	split: preserve configured Discord speech; retire device control	M9/M10
+voice mcp	-help	cmd/swarm/voice.go#73	flag.implicit Go help	split: preserve configured Discord speech; retire device control	M9/M10
+voice mcp	--socket	cmd/swarm/voice.go#75	flag.String	split: preserve configured Discord speech; retire device control	M9/M10
+voice mcp	--auth-file	cmd/swarm/voice.go#76	flag.String	split: preserve configured Discord speech; retire device control	M9/M10
+voice mcp	--conversation	cmd/swarm/voice.go#77	flag.String	split: preserve configured Discord speech; retire device control	M9/M10
+voice panel	-h	cmd/swarm/voice_panel.go#20	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice panel	-help	cmd/swarm/voice_panel.go#20	flag.implicit Go help	retire standalone device/SSH/panel control	M10 retirement
+voice panel	--print-url	cmd/swarm/voice_panel.go#22	flag.Bool	retire standalone device/SSH/panel control	M10 retirement
+watch	-h	cmd/swarm/agentverbs.go#113	flag.implicit Go help	retain; verify defaults, validation and refusal	session status observer (M4/M5)
+watch	-help	cmd/swarm/agentverbs.go#113	flag.implicit Go help	retain; verify defaults, validation and refusal	session status observer (M4/M5)
+watch	--until	cmd/swarm/agentverbs.go#115	flag.String	retain; verify defaults, validation and refusal	session status observer (M4/M5)
+watch	--timeout	cmd/swarm/agentverbs.go#116	flag.Duration	retain; verify defaults, validation and refusal	session status observer (M4/M5)

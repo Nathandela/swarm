@@ -94,6 +94,8 @@ func TestCheckoutInventoryDiscoversLiveDescendantAndHiddenResume(t *testing.T) {
 	worktree := filepath.Join(inventoryTempDir(t), "linked")
 	inventoryGit(t, repo, "worktree", "add", "-qb", "independent", worktree)
 	ext := inventoryTempDir(t)
+	// This test process stands in for the live shim whose cwd the inventory inspects.
+	t.Chdir(ext)
 	start, err := procstart.StartTime(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
