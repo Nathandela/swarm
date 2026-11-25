@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only Swarm preview release workflow. Run with Python 3.11+."""
+"""Local-only Swarm preview release workflow. Build with Python 3.11+, verify with 3.10+."""
 import argparse
 import base64
 import gzip
@@ -10,11 +10,9 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-import stat
 import subprocess
 import tarfile
 import tempfile
-import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLCHAIN = "stable"
@@ -66,8 +64,11 @@ def digest(data):
 
 
 def file_hash(path):
+    hash = hashlib.sha256()
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hash.update(chunk)
+    return hash.hexdigest()
 
 
 def host_platform():
@@ -150,10 +151,16 @@ def archive(path, files):
                 tar.addfile(member, io.BytesIO(data))
 
 
-def build(args):
+def check_source(source):
     require(output("git", "status", "--porcelain", "--untracked-files=all") == "", "dirty release source")
-    source = output("git", "rev-parse", "HEAD")
-    require(source == args.source, "source commit differs from the requested freeze")
+    require(output("git", "rev-parse", "HEAD") == source, "source commit differs from the requested freeze")
+
+
+def build(args):
+    import tomllib
+
+    source = args.source
+    check_source(source)
     manifest = tomllib.loads((ROOT / "crates/swarm/Cargo.toml").read_text())
     version = manifest["package"]["version"]
     require(args.version == version and re.fullmatch(VERSION, version), "crate version differs from release version")
@@ -184,7 +191,8 @@ def build(args):
                                 for p in GROUPS["darwin_all"]), "-output", bins["darwin_all"])
         run("lipo", "-verify_arch", "arm64", "x86_64", bins["darwin_all"])
         # The resulting universal CLI must have a valid ad hoc Mach-O signature.
-        run("codesign", "--force", "--sign", "-", bins["darwin_all"])
+        run("codesign", "--force", "--timestamp=none", "--sign", "-", bins["darwin_all"])
+        check_source(source)
         compat = json.loads(output(bins["darwin_all"], "release-info"))
         require(compat["source"] == source and compat["version"] == version
                 and compat["media_pins_sha256"] == file_hash(pins_file), "built CLI freeze differs")

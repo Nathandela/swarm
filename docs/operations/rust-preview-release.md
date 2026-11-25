@@ -24,7 +24,7 @@ The builder obtains the release card from the compiled CLI. It makes one univers
 
 ## Sign and verify
 
-Use OpenSSL 3 with Ed25519 support. Set `SWARM_OPENSSL` to its absolute path if your system's default command lacks it. Transfer the artifact set to your offline signing environment. Verify its hashes and compare them to the recorded build evidence before signing:
+Signing and verification use Python 3.10+ and OpenSSL 3 with Ed25519 support. Set `SWARM_OPENSSL` to its absolute path if your system's default command lacks it. Transfer the artifact set to your offline signing environment. Verify its hashes and compare them to the recorded build evidence before signing:
 
 ```sh
 python3 scripts/release-rust.py sign /path/to/artifacts --private-key /offline/release-ed25519.pem
