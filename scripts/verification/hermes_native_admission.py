@@ -34,6 +34,12 @@ def run(args):
     # its isolated editable install would. Native implementation files stay read-only.
     body = original.read_text()
     first, rest = body.split('\n', 1)
+    if first == '#!/bin/sh':
+        # uv uses a shell trampoline for console entries in long virtualenv paths.
+        trampoline, end, rest = rest.split('\n', 2)
+        python = original.parent / 'python'
+        assert trampoline.startswith("'''exec'") and end == "' '''" and python.is_file()
+        first = '#!' + str(python)
     runtime = {'HERMES_NODE': str(Path(args.node).resolve()), 'HERMES_TUI_DIR': str(source / 'ui-tui'),
                'HERMES_PYTHON_SRC_ROOT': str(source), 'HERMES_PYTHON': first[2:]}
     private.write_text(first + '\nimport os,sys\nsys.path.insert(0, ' + repr(str(source)) + ')\n'

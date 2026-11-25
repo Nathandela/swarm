@@ -5,7 +5,10 @@ mod screen;
 mod supervision;
 
 use crate::ipc::{field, wire};
-use crate::providers::{self, agy, agy_input, codex_receipt};
+use crate::providers::{
+    self, agy, agy_input, codex_receipt,
+    hermes::{native, transfer},
+};
 use crate::schedule::worker;
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
@@ -87,7 +90,9 @@ fn serve(dir: &Path) -> io::Result<()> {
     let config_file = dir.join("session.json");
     let config = runtime::read_json(&config_file)?;
     let token = field(&config, "token");
-    if config["schema"] != 1 || !runtime::valid_id(token) {
+    let hermes_native =
+        config["provider"]["name"] == "hermes" && config["provider"]["mode"] == "shared-native";
+    if config["schema"] != (if hermes_native { 2 } else { 1 }) || !runtime::valid_id(token) {
         return Err(io::Error::other("incompatible session reservation"));
     }
     let bootstrap = runtime::read_control(&mut io::stdin().lock())?;
@@ -151,6 +156,9 @@ fn serve(dir: &Path) -> io::Result<()> {
         Command::new(executable)
     };
     let mut environment = runtime::launch_env(&Value::Null);
+    if provider["name"] == "hermes" {
+        environment.extend(native::origins(&Value::Null, hermes_native)?);
+    }
     let mut app_args = vec![
         "-c".into(),
         "sandbox_workspace_write.network_access=true".into(),
@@ -243,11 +251,15 @@ fn serve(dir: &Path) -> io::Result<()> {
     }
     let mut backend = None;
     let mut channel = None;
+    let mut hermes = None;
+    let mut hermes_transfer = None;
+    let pid = std::process::id();
+    let mut viewer = Vec::<String>::new();
     let mut opencode_binding = None;
     let (mut child, master) = (|| {
         if !matches!(
             field(provider, "name"),
-            "claude" | "codex" | "agy" | "opencode"
+            "claude" | "codex" | "agy" | "opencode" | "hermes"
         ) || providers::identity(executable)? != provider["identity"]
         {
             return Err(io::Error::other(
@@ -308,10 +320,57 @@ fn serve(dir: &Path) -> io::Result<()> {
             command.env("OPENCODE_TUI_CONFIG", dir.join("opencode-tui.json"));
             opencode_binding = Some(binding);
         }
-        command.args(agy_args).args(&manager_args).args(argv);
+        if hermes_native {
+            if bootstrap["hermes"].is_null()
+                || !providers::hermes::native_version(field(provider, "version"))
+            {
+                return Err(io::Error::other("invalid Hermes shared-native launch plan"));
+            }
+            let plan = &bootstrap["hermes"];
+            if !plan["retained"].is_null() {
+                hermes_transfer = Some(transfer::start(
+                    dir.parent().ok_or_else(|| io::Error::other("missing Hermes session root"))?,
+                    field(plan, "predecessor"), field(&config, "id"), token, &plan["retained"],
+                )?);
+            }
+            let cwd = Path::new(working_dir).canonicalize()?;
+            let binding = native::prepare(
+                executable,
+                &cwd,
+                field(&config, "id"),
+                &plan["options"],
+                &environment,
+                &plan["retained"],
+            )?;
+            let origins: std::collections::BTreeMap<_,_> = environment.iter().filter(|(key,_)|
+                native::NORMAL_ORIGINS.contains(&key.as_str())).map(|(key,value)| (key,value)).collect();
+            let descriptor = json!({"worker_id":config["id"],"token":token,"shim_pid":pid,"origins":origins,
+                "shim_birth":runtime::birth(pid)?,"generation":runtime::random_id()?,
+                "provider_version":provider["version"],"binding":binding.0});
+            runtime::write_json(&dir.join(native::DESCRIPTOR), &descriptor)?;
+            viewer.extend([
+                "chat".into(),
+                "--tui".into(),
+                "--resume".into(),
+                binding.id().into(),
+            ]);
+            if !field(plan, "initial_prompt").is_empty() {
+                viewer.extend(["-q".into(), field(plan, "initial_prompt").into()]);
+            }
+            command.env("HERMES_HOME", field(&binding.0, "home"));
+            if providers::identity(executable)? != provider["identity"] {
+                return Err(io::Error::other(
+                    "Hermes executable changed before viewer exec",
+                ));
+            }
+            hermes = Some((binding, descriptor));
+            argv.clear();
+        }
+        command.args(agy_args).args(&manager_args).args(argv).args(&viewer);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
+        drop(hermes_transfer.take());
         let lingering = err
             .get_ref()
             .is_some_and(|e| e.is::<codex_backend::ContainmentUnknown>())
@@ -348,22 +407,23 @@ fn serve(dir: &Path) -> io::Result<()> {
         },
         None => None,
     };
-    let pid = std::process::id();
     if let Err(err) = (|| {
-        runtime::write_json(
-            &dir.join("owner.json"),
-            &json!({
-                "token": token, "pid": pid, "birth": runtime::birth(pid)?,
-                "worker_pid": child.id(),
-                "worker_birth": opencode.as_ref().map(|backend| backend.worker_birth()),
-            }),
-        )
+        let mut owner = json!({
+            "token": token, "pid": pid, "birth": runtime::birth(pid)?,
+            "worker_pid": child.id(),
+            "worker_birth": opencode.as_ref().map(|backend| backend.worker_birth()),
+        });
+        if let Some((_, descriptor)) = &hermes {
+            owner["hermes_descriptor_sha256"] = json!(native::descriptor_hash(descriptor));
+        }
+        runtime::write_json(&dir.join("owner.json"), &owner)
     })() {
         let _ = pty::signal_group(&child, libc::SIGKILL);
         let _ = child.wait();
         let _ = fs::remove_file(&socket);
         return Err(err);
     }
+    drop(hermes_transfer);
     let (action_sink, action_receiver) = mpsc::sync_channel(1);
     let state = Arc::new(State {
         token: token.into(),
@@ -394,12 +454,36 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let pending =
-        (!agy_acp && matches!(state.provider.as_str(), "agy" | "codex") && channel.is_none())
-            .then(|| Arc::new((Mutex::new(None), Condvar::new())));
+    let pending = (!agy_acp
+        && matches!(state.provider.as_str(), "agy" | "codex" | "hermes")
+        && channel.is_none()
+        && !hermes_native)
+        .then(|| Arc::new((Mutex::new(None), Condvar::new())));
     if let Some(pending) = pending.clone() {
         let state = state.clone();
         thread::spawn(move || terminal_status_writer(&state, &pending));
+    }
+    if let Some((binding, _)) = &hermes {
+        let state = state.clone();
+        let binding = binding.clone();
+        thread::spawn(move || {
+            let mut last = Value::Null;
+            loop {
+                let status = binding.inspect().unwrap_or_else(|_| json!({"Process":"running","Turn":"unknown","Interaction":"error","Attention":true}));
+                if status != last
+                    && runtime::write_json(
+                        &state.dir.join("observation.json"),
+                        &json!({
+                            "token":state.token,"conversation_id":binding.id(),"status":status
+                        }),
+                    )
+                    .is_ok()
+                {
+                    last = status;
+                }
+                thread::sleep(Duration::from_secs(2));
+            }
+        });
     }
     if let Some(channel) = channel {
         let (cwd, dir, token) = (
@@ -472,6 +556,16 @@ fn serve(dir: &Path) -> io::Result<()> {
     if state.provider == "agy" {
         let _ = drain_done.recv_timeout(Duration::from_millis(150));
     }
+    if let Some((binding, descriptor)) = hermes
+        && runtime::read_json(&dir.join("owner.json"))
+            .and_then(|owner| native::read_descriptor(dir, &owner, &config))
+            .is_ok_and(|stored| stored == descriptor)
+    {
+        let stopped = runtime::read_json(&dir.join("hermes-stop.json"))
+            .is_ok_and(|record| record == descriptor)
+            && binding.stop().is_ok();
+        let _ = binding.detach(stopped);
+    }
     runtime::write_json(
         &dir.join("exit.json"),
         &json!({
@@ -532,6 +626,7 @@ fn terminal_status_writer(state: &State, pending: &PendingStatus) {
             &state.dir.join("observation.json"),
             &json!({
                 "token": state.token, "status": status,
+                "conversation_id": state.observations.lock().unwrap().conversation,
             }),
         );
     }
@@ -543,6 +638,7 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
     let mut observed = None;
     let mut last_emit = Instant::now();
     let mut agy_tail = Vec::new();
+    let mut classic_tail = Vec::new();
     loop {
         let n = match master.read(&mut bytes) {
             Ok(0) => break,
@@ -569,19 +665,46 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             let _ = sub.conn.shutdown(Shutdown::Both);
             screen.subscriber = None;
         }
+        let mut identity_changed = false;
         let status = pending.as_ref().and_then(|_| {
+            let screen = screen.parser.screen();
             if state.provider == "agy" {
-                agy::terminal_status(screen.parser.screen())
-            } else {
-                providers::codex::terminal_status(screen.parser.screen())
+                return agy::terminal_status(screen);
             }
+            if state.provider != "hermes" {
+                return providers::codex::terminal_status(screen);
+            }
+            let (_, width) = screen.size();
+            let width = width.get();
+            let rows: Vec<_> = screen.rows(0, width).collect();
+            let mut observation = state.observations.lock().unwrap();
+            if observation.conversation.is_none() {
+                let bytes = &bytes[..n];
+                let remove = (classic_tail.len() + bytes.len()).saturating_sub(64 * 1024);
+                classic_tail.drain(..remove);
+                classic_tail.extend_from_slice(bytes);
+                observation.conversation =
+                    providers::hermes::classic_observation(&classic_tail, &rows);
+                identity_changed = observation.conversation.is_some();
+                if identity_changed {
+                    classic_tail = Vec::new();
+                }
+            }
+            providers::hermes::grid(&rows, width)
         });
         drop(screen);
         if let Some(pending) = &pending
-            && let Some(status) = status.filter(|status| {
-                observed.as_ref() != Some(status)
-                    || (state.provider == "agy" && last_emit.elapsed() >= Duration::from_secs(1))
-            })
+            && let Some(status) = if identity_changed {
+                status.or_else(|| observed.clone()).or_else(|| {
+                    Some(json!({"Process":"running", "Turn":"unknown","Interaction":"none"}))
+                })
+            } else {
+                status.filter(|status| {
+                    observed.as_ref() != Some(status)
+                        || (state.provider == "agy"
+                            && last_emit.elapsed() >= Duration::from_secs(1))
+                })
+            }
         {
             last_emit = Instant::now();
             observed = Some(status.clone());

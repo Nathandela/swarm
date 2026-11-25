@@ -143,11 +143,32 @@ impl State {
                 )));
             }
         }
-        let resume = matches!(field(launch, "agent"), "agy" | "opencode")
+        let resume = matches!(field(launch, "agent"), "agy" | "opencode" | "hermes")
             && !field(options, "resume_from").is_empty();
         let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
+        if field(launch, "agent") == "hermes" && options.get("resume_from").is_some() && !resume {
+            return Err(io::Error::other("resume_from requires a saved session"));
+        }
         if resume {
             let source = field(options, "resume_from").to_owned();
+            if field(launch, "agent") == "hermes" {
+                if managed.is_some()
+                    || !["spawned_from", "spawn_intent", "supervision"]
+                        .into_iter()
+                        .all(|key| launch[key].is_null())
+                {
+                    return Err(io::Error::other("unsupported Hermes resume lineage"));
+                }
+                let qualified = if source.contains('/') {
+                    source
+                } else {
+                    format!("{}/{}", self.endpoint, source)
+                };
+                let predecessor = self.session(&json!({"session_id":qualified}))?;
+                predecessor.verify_effective()?;
+                let prepared = Session::prepare_bound(&request, Some(&predecessor))?;
+                return self.reserve_prepared_bound(prepared, false, None, None, Some(predecessor));
+            }
             let session = self.session(&json!({"session_id":source}))?;
             if field(launch, "agent") == "opencode" {
                 if managed.is_some()
@@ -185,10 +206,21 @@ impl State {
 
     fn reserve_prepared(
         &self,
+        prepared: session::Prepared,
+        scheduled: bool,
+        source: Option<(String, String)>,
+        managed: Option<Value>,
+    ) -> io::Result<Arc<Session>> {
+        self.reserve_prepared_bound(prepared, scheduled, source, managed, None)
+    }
+
+    fn reserve_prepared_bound(
+        &self,
         mut prepared: session::Prepared,
         scheduled: bool,
         source: Option<(String, String)>,
         managed: Option<Value>,
+        predecessor: Option<Arc<Session>>,
     ) -> io::Result<Arc<Session>> {
         let _reservation = self.launch_gate.lock().unwrap();
         if let Some((local, instance)) = source {
@@ -211,6 +243,21 @@ impl State {
             >= SESSION_LIMIT
         {
             return Err(io::Error::other("session limit reached"));
+        }
+        if let Some(predecessor) = &predecessor {
+            if !self
+                .sessions
+                .read()
+                .unwrap()
+                .get(&predecessor.id)
+                .is_some_and(|stored| Arc::ptr_eq(stored, predecessor))
+            {
+                return Err(io::Error::other(
+                    "Hermes resume source is no longer retained",
+                ));
+            }
+            predecessor.verify_effective()?;
+            predecessor.hermes_check_successor()?;
         }
         if let Some(directory) = scheduling::conflict(self, &prepared.cwd, scheduled) {
             return Err(io::Error::new(
@@ -275,6 +322,9 @@ impl State {
             None
         };
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
+        if let Some(predecessor) = predecessor {
+            predecessor.hermes_mark_successor(&session)?;
+        }
         self.sessions
             .write()
             .unwrap()
@@ -595,7 +645,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 )
             }),
             "kill" => state.session(&request).and_then(|session| {
-                session.kill()?;
+                if let Err(err) = session.kill() {
+                    return if session.is_shared_hermes() {
+                        reply(&writer,state,json!({"op":"error","error_code":"outcome_unknown","error":err.to_string()}))
+                    } else {
+                        Err(err)
+                    };
+                }
                 reply(
                     &writer,
                     state,
@@ -670,7 +726,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     && !(caps.contains(&"manager-provenance") && caps.contains(&"message-origin")) {
                     return reply(&writer,state,json!({"op":"error","error_code":"op_not_implemented","error":"requires manager provenance and message origin"}));
                 }
-                let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
+                let receipt = match session.semantic_send(&request,field(&request,"session_id"),state) {
+                    Ok(receipt) => receipt,
+                    Err(err) if session.requires_worker_origin_cap() && err.kind() == io::ErrorKind::Interrupted => {
+                        return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Current connector authorization is unconfirmed; inspect --status"}));
+                    }
+                    Err(err) => return Err(err),
+                };
                 let response = match field(&receipt,"state") {
                     "native_accepted" | "submitted" | "completed" | "failed" | "cancelled" | "declined" => json!({"op":"ok","operation_id":operation}),
                     "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Native provider rejected semantic input"}),

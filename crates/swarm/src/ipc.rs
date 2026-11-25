@@ -239,7 +239,12 @@ impl Client {
         self.capabilities.iter().any(|s| s == cap)
     }
     pub(crate) fn request_body(&mut self, message: Value, expected: &str) -> io::Result<Value> {
-        self.exchange(message, expected, REQUEST_TIMEOUT)
+        let timeout = if message["op"] == "launch" && message["launch"]["agent"] == "hermes" {
+            launch_timeout("hermes")
+        } else {
+            REQUEST_TIMEOUT
+        };
+        self.exchange(message, expected, timeout)
     }
     pub(crate) fn exchange(
         &mut self,

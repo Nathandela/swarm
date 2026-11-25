@@ -1,0 +1,23 @@
+{
+  "supervisor": "rust",
+  "two_sessions_one_owner": true,
+  "connector_cutover": true,
+  "wrong_installation_refused": true,
+  "native_admission_statuses": [
+    "queued",
+    "queued"
+  ],
+  "daemon_restart_retained": true,
+  "sibling_job_survived": true,
+  "delete_refused": true,
+  "exact_resume": true,
+  "native_approval_preserved": true,
+  "loopback_model_calls": 5,
+  "source_pin": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "provider_version": "0.22.5",
+  "platform": "Linux",
+  "os_write_guard": true,
+  "os_network_guard": true,
+  "no_production_auth": true,
+  "rust_binary_sha256": "fc91613aa82b4098cf8049923368634b6a4c498feaad97e70bc03f30fc02cc52"
+}
