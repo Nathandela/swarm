@@ -102,8 +102,32 @@ impl State {
         });
     }
 
-    fn reserve(&self, request: &Value) -> io::Result<Arc<Session>> {
-        let (bound, source) = handoff::bind(self, request)?;
+    fn reserve(&self, request: &Value, caps: &[&str]) -> io::Result<Arc<Session>> {
+        let mut request = request.clone();
+        // The caller cannot stamp a linked launch; only resolving an owned source can.
+        if let Some(fields) = request.as_object_mut() {
+            fields.remove("resolved_agy_source");
+        }
+        let launch = &request["launch"];
+        let options = &launch["options"];
+        for (key, cap) in [
+            ("resume_conversation_id", "external-resume"),
+            ("resume_relocate", "resume-relocate"),
+        ] {
+            if options.get(key).is_some() && !caps.contains(&cap) {
+                return Err(io::Error::other(format!(
+                    "{cap} capability was not negotiated"
+                )));
+            }
+        }
+        let resume = field(launch, "agent") == "agy" && !field(options, "resume_from").is_empty();
+        let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
+        if resume {
+            let source = field(options, "resume_from").to_owned();
+            let session = self.session(&json!({"session_id":source}))?;
+            session.expand_agy_resume(&mut request, &source)?;
+        }
+        let (bound, source) = handoff::bind(self, &request)?;
         let mut prepared = Session::prepare(&bound)?;
         let _reservation = self.launch_gate.lock().unwrap();
         if let Some((local, instance)) = source {
@@ -280,6 +304,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 "attach"
                     | "subscribe"
                     | "owner-launch"
+                    | "external-resume"
+                    | "resume-relocate"
                     | "semantic-send"
                     | "semantic-target"
                     | "native-requests-v1"
@@ -362,11 +388,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer, state, json!({"op": "ok"}))
             }
             "owner_launch" | "owner_launch_status" => {
-                reliable::handle(state, &request, caps.contains(&"owner-launch"))
+                reliable::handle(state, &request, &caps)
                     .and_then(|v| reply(&writer, state, v))
             }
             "launch" => {
-                let message = match state.reserve(&request) {
+                let message = match state.reserve(&request, &caps) {
                     Err(e) => {
                         json!({"op":"error","error_code":"invalid_field","error":e.to_string()})
                     }

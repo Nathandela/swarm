@@ -33,6 +33,7 @@ pub(super) struct Prepared {
     cols: u16,
     rows: u16,
     provider: LaunchPlan,
+    agy_launch: Value,
 }
 
 struct Labels {
@@ -51,6 +52,7 @@ pub(super) struct Session {
     pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
     agent: String,
+    resumed_from: Option<String>,
     cwd: String,
     effective: PathBuf,
     pub(super) lineage: Value,
@@ -91,9 +93,13 @@ impl Session {
             token: token.into(),
             agent: match field(&data["provider"], "name") {
                 "codex" => "codex",
+                "agy" => "agy",
                 _ => "claude",
             }
             .into(),
+            resumed_from: data["agy_launch"]["resumed_from"]
+                .as_str()
+                .map(str::to_owned),
             cwd: cwd.into(),
             lineage: data["lineage"].clone(),
             owner_interactive: unrestricted_owner(&data),
@@ -163,7 +169,9 @@ impl Session {
                     let agent = field(req, "agent");
                     let supported = key == "model"
                         || (agent == "codex" && key == "sandbox")
-                        || (matches!(agent, "claude" | "claude-code")
+                        || (agent == "agy"
+                            && matches!(key.as_str(), "mode" | "resume_conversation_id"))
+                        || (matches!(agent, "agy" | "claude" | "claude-code")
                             && key == "dangerously-skip-permissions");
                     !supported || !value.is_string()
                 })
@@ -207,6 +215,11 @@ impl Session {
             label,
             cols,
             rows,
+            agy_launch: if provider.agent == "agy" {
+                json!({"options": req["options"], "resumed_from": request["resolved_agy_source"]})
+            } else {
+                Value::Null
+            },
             provider,
         })
     }
@@ -221,6 +234,7 @@ impl Session {
             cols,
             rows,
             provider,
+            agy_launch,
         } = prepared;
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
@@ -231,10 +245,10 @@ impl Session {
             None
         };
         let label = if label.is_empty() {
-            if provider.agent == "codex" {
-                "Codex"
-            } else {
-                "Claude Code"
+            match provider.agent {
+                "agy" => "agy",
+                "codex" => "Codex",
+                _ => "Claude Code",
             }
         } else {
             &label
@@ -245,8 +259,8 @@ impl Session {
             &dir.join("session.json"),
             &json!({
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"lineage":lineage,
-                "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
-                "provider": {"name": provider.agent, "version": provider.version,
+                "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
+                "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
                     } else { "classic" },
@@ -417,6 +431,11 @@ impl Session {
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
+        if self.agent == "agy" {
+            return Err(io::Error::other(
+                "Antigravity has no qualified native input registration",
+            ));
+        }
         if self.agent != "codex" || !self.is_live() {
             return Err(io::Error::other("session has no live Codex app-server"));
         }
@@ -598,25 +617,133 @@ impl Session {
         let Ok(record) = runtime::read_json(&self.dir.join("observation.json")) else {
             return false;
         };
+        if field(&record, "token") != self.token {
+            return false;
+        }
+        let renamed = self.agent == "agy"
+            && self
+                .observe_agy_title(&record["provider_title"])
+                .unwrap_or(false);
         let status = &record["status"];
-        if field(&record, "token") != self.token
-            || status["Process"] != "running"
+        if status["Process"] != "running"
             || !matches!(field(status, "Turn"), "active" | "idle" | "unknown")
             || !matches!(
                 field(status, "Interaction"),
-                "none" | "permission" | "prompt"
+                "none" | "permission" | "prompt" | "error"
             )
         {
-            return false;
+            return renamed;
         }
         let mut observed = self.observed_status.lock().unwrap();
         if observed.as_ref() == Some(status) {
-            return false;
+            return renamed;
         }
         *observed = Some(status.clone());
         drop(observed);
         self.state.lock().unwrap().1 = now();
         true
+    }
+
+    fn observe_agy_title(&self, title: &Value) -> io::Result<bool> {
+        let name = sanitize_name(field(title, "name"));
+        let Some(observed) = title["observed_ns"].as_u64() else {
+            return Ok(false);
+        };
+        let mut labels = self.labels.lock().unwrap();
+        if name.is_empty() {
+            return Ok(false);
+        }
+        let path = self.dir.join("session.json");
+        let mut meta = runtime::read_json(&path)?;
+        if field(&meta, "token") != self.token || field(&meta, "id") != self.id {
+            return Err(io::Error::other("session reservation identity changed"));
+        }
+        let previous = &meta["agy_title"];
+        if previous["observed_ns"].as_u64().unwrap_or(0) >= observed || previous["name"] == name {
+            return Ok(false);
+        }
+        let set_at = OffsetDateTime::parse(field(&meta, "name_set_at"), &Rfc3339)
+            .map(|at| at.unix_timestamp_nanos())
+            .unwrap_or(0);
+        let baseline = previous.is_null() && set_at != 0;
+        let changed = !baseline && i128::from(observed) > set_at && labels.name != name;
+        meta["agy_title"] = json!({"name": name, "observed_ns": observed});
+        if changed {
+            let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(observed))
+                .map_err(io::Error::other)?
+                .format(&Rfc3339)
+                .map_err(io::Error::other)?;
+            meta["name_set_at"] = json!(timestamp);
+            meta["name"] = json!(name);
+        }
+        runtime::write_json(&path, &meta)?;
+        if changed {
+            labels.name = name;
+        }
+        Ok(changed)
+    }
+
+    pub(super) fn expand_agy_resume(&self, request: &mut Value, source: &str) -> io::Result<()> {
+        if self.agent != "agy" || self.exit().is_err() {
+            return Err(io::Error::other(
+                "resume requires an exited Antigravity session",
+            ));
+        }
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        if field(&meta, "token") != self.token || field(&meta, "id") != self.id {
+            return Err(io::Error::other("session reservation identity changed"));
+        }
+        let launch = &mut request["launch"];
+        let options = launch["options"]
+            .as_object_mut()
+            .ok_or_else(|| io::Error::other("invalid resume options"))?;
+        let relocate = options.remove("resume_relocate");
+        if options.remove("resume_from").is_none()
+            || options.contains_key("resume_conversation_id")
+            || relocate.as_ref().is_some_and(|value| value != "true")
+        {
+            return Err(io::Error::other("invalid Antigravity resume options"));
+        }
+        let observed = runtime::read_json(&self.dir.join("observation.json")).ok();
+        let history = &meta["agy_launch"]["options"];
+        let conversation = observed
+            .as_ref()
+            .filter(|record| record["token"] == self.token)
+            .map(|record| field(record, "conversation_id"))
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| field(history, "resume_conversation_id"));
+        if !codex_receipt::canonical_thread(conversation) {
+            return Err(io::Error::other(
+                "no captured Antigravity conversation identity",
+            ));
+        }
+        for key in ["model", "mode", "dangerously-skip-permissions"] {
+            if let Some(value) = history.get(key) {
+                options.entry(key).or_insert_with(|| value.clone());
+            }
+        }
+        options.insert("resume_conversation_id".into(), json!(conversation));
+        if relocate.is_none() {
+            if !field(launch, "cwd").is_empty()
+                && fs::canonicalize(field(launch, "cwd")).ok().as_deref()
+                    != Some(Path::new(&self.cwd))
+            {
+                return Err(io::Error::other(
+                    "resume directory differs from the original workspace",
+                ));
+            }
+            launch["cwd"] = json!(self.cwd);
+        } else if !Path::new(field(launch, "cwd")).is_absolute() {
+            return Err(io::Error::other(
+                "resume relocation requires an absolute directory",
+            ));
+        }
+        if field(launch, "name").is_empty() {
+            launch["name"] = meta["name"].clone();
+        }
+        launch["tag"] = meta["tag"].clone();
+        request["resolved_agy_source"] = json!(source);
+        Ok(())
     }
 
     fn transition(&self, next: Phase) -> bool {
@@ -748,6 +875,9 @@ impl Session {
             .load(std::sync::atomic::Ordering::Acquire)
         {
             view["supervision_pending"] = json!(true);
+        }
+        if let Some(source) = &self.resumed_from {
+            view["resumed_from"] = json!(source);
         }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);

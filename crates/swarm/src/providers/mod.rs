@@ -1,3 +1,4 @@
+pub(crate) mod agy;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod codex_receipt;
@@ -5,8 +6,9 @@ pub(crate) mod codex_receipt;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Read};
-use std::os::fd::AsRawFd;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -18,6 +20,7 @@ pub(crate) struct LaunchPlan {
     pub executable: PathBuf,
     pub identity: Value,
     pub version: String,
+    pub agy_status_line: bool,
 }
 
 pub(crate) fn prepare(
@@ -30,17 +33,16 @@ pub(crate) fn prepare(
     let agent = match agent {
         "claude" | "claude-code" => "claude",
         "codex" => "codex",
+        "agy" => "agy",
         _ => return Err(io::Error::other("unsupported provider")),
     };
     if agent == "codex" {
         codex::refuse_unqualified_origin(&request["env"])?;
     }
-    environment.retain(|(name, _)| {
-        name != if agent == "codex" {
-            "ANTHROPIC_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
-        }
+    environment.retain(|(name, _)| match name.as_str() {
+        "ANTHROPIC_API_KEY" => agent == "claude",
+        "OPENAI_API_KEY" => agent == "codex",
+        _ => true,
     });
     let path = environment
         .iter()
@@ -50,23 +52,27 @@ pub(crate) fn prepare(
         .ok_or_else(|| io::Error::other("provider launch requires PATH"))?;
     let executable = resolve(agent, cwd, path)?;
     let before = identity(&executable)?;
-    let output = version_output(&executable, cwd, &environment)?;
-    let version = if agent == "codex" {
-        codex::version(&output)?
-    } else {
-        claude::version(&output)?
+    let output = probe_output(&executable, cwd, &environment, "--version")?;
+    let version = match agent {
+        "agy" => agy::version(&output)?,
+        "codex" => codex::version(&output)?,
+        _ => claude::version(&output)?,
     }
     .to_owned();
+    let agy_status_line = agent == "agy"
+        && agy::status_line(&version)
+        && probe_output(&executable, cwd, &environment, "--help")
+            .is_ok_and(|help| agy::advertises_settings(&help));
     let after = identity(&executable)?;
     if before != after {
         return Err(io::Error::other(
             "provider executable changed during admission",
         ));
     }
-    let argv = if agent == "codex" {
-        codex::argv(request)?
-    } else {
-        claude::argv(label, request)?
+    let argv = match agent {
+        "agy" => agy::argv(request)?,
+        "codex" => codex::argv(request)?,
+        _ => claude::argv(label, request)?,
     };
     Ok(LaunchPlan {
         agent,
@@ -75,6 +81,7 @@ pub(crate) fn prepare(
         executable,
         identity: after,
         version,
+        agy_status_line,
     })
 }
 
@@ -107,9 +114,21 @@ pub(crate) fn identity(executable: &Path) -> io::Result<Value> {
     }))
 }
 
-fn version_output(executable: &Path, cwd: &Path, env: &[(String, String)]) -> io::Result<String> {
+fn probe_output(
+    executable: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    flag: &str,
+) -> io::Result<String> {
+    let (mut output_socket, writer) = UnixStream::pair()?;
+    output_socket.set_nonblocking(true)?;
+    let stderr = if flag == "--help" {
+        Stdio::from(OwnedFd::from(writer.try_clone()?))
+    } else {
+        Stdio::null()
+    };
     let mut child = Command::new(executable)
-        .arg("--version")
+        .arg(flag)
         .current_dir(cwd)
         .env_clear()
         .envs(
@@ -120,25 +139,21 @@ fn version_output(executable: &Path, cwd: &Path, env: &[(String, String)]) -> io
                 .map(|(name, value)| (name, value)),
         )
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stderr(stderr)
         .spawn()?;
-    let mut stdout = child.stdout.take().expect("version output captured");
     let result = (|| {
-        // Nonblocking reads bound the probe even if a descendant inherits stdout.
-        if unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
+        // Nonblocking reads bound the probe even if a descendant inherits the output.
         let mut buffer = [0; 1024];
         let mut output = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let idle = match stdout.read(&mut buffer) {
+            let idle = match output_socket.read(&mut buffer) {
                 Ok(0) => true,
                 Ok(n) => {
                     output.extend_from_slice(&buffer[..n]);
                     if output.len() > 16 * 1024 {
-                        return Err(io::Error::other("provider version output exceeds limit"));
+                        return Err(io::Error::other("provider probe output exceeds limit"));
                     }
                     false
                 }
@@ -148,13 +163,13 @@ fn version_output(executable: &Path, cwd: &Path, env: &[(String, String)]) -> io
             };
             if idle && let Some(status) = child.try_wait()? {
                 if !status.success() {
-                    return Err(io::Error::other("provider version command failed"));
+                    return Err(io::Error::other("provider probe command failed"));
                 }
                 return String::from_utf8(output)
-                    .map_err(|_| io::Error::other("provider version output is not UTF-8"));
+                    .map_err(|_| io::Error::other("provider probe output is not UTF-8"));
             }
             if Instant::now() >= deadline {
-                return Err(io::Error::other("provider version command timed out"));
+                return Err(io::Error::other("provider probe command timed out"));
             }
             if idle {
                 std::thread::sleep(Duration::from_millis(10));

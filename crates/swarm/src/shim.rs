@@ -4,7 +4,7 @@ mod screen;
 mod supervision;
 
 use crate::ipc::{field, wire};
-use crate::providers::{self, codex_receipt};
+use crate::providers::{self, agy, codex_receipt};
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -58,6 +58,11 @@ struct State {
 struct ProviderObservation {
     state: providers::claude::Observation,
     conversation: Option<String>,
+    agy_status: Option<Value>,
+    agy_hook_status: Option<Value>,
+    agy_hook_at: Option<Instant>,
+    agy_title: Option<Value>,
+    agy_latest: u64,
 }
 
 struct ScreenState {
@@ -114,7 +119,15 @@ fn serve(dir: &Path) -> io::Result<()> {
     command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)));
-    let hook_token = if provider["name"] == "claude" {
+    let agy_args = if provider["name"] == "agy" && provider["agy_status_line"] == true {
+        agy::status_line_args(
+            std::env::var_os("HOME").as_deref().map(Path::new),
+            &std::env::current_exe()?,
+        )
+    } else {
+        Vec::new()
+    };
+    let hook_token = if provider["name"] == "claude" || !agy_args.is_empty() {
         let hook_token = runtime::random_id()?;
         command
             .env("SWARM_RUST_HOOK_SOCKET", &socket)
@@ -144,7 +157,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     let mut backend = None;
     let mut channel = None;
     let (mut child, master) = (|| {
-        if !matches!(field(provider, "name"), "claude" | "codex")
+        if !matches!(field(provider, "name"), "claude" | "codex" | "agy")
             || providers::identity(executable)? != provider["identity"]
         {
             return Err(io::Error::other(
@@ -166,7 +179,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                 ));
             }
         }
-        command.args(argv);
+        command.args(agy_args).args(argv);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
@@ -200,7 +213,12 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
-        observations: Mutex::new(ProviderObservation::default()),
+        observations: Mutex::new(ProviderObservation {
+            conversation: config["agy_launch"]["options"]["resume_conversation_id"]
+                .as_str()
+                .map(str::to_owned),
+            ..ProviderObservation::default()
+        }),
         master,
         screen: Mutex::new(ScreenState {
             parser: vt100::Parser::new(rows.try_into().unwrap(), cols.try_into().unwrap(), 0),
@@ -212,11 +230,11 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let pending = (state.provider == "codex" && channel.is_none())
+    let pending = (matches!(state.provider.as_str(), "agy" | "codex") && channel.is_none())
         .then(|| Arc::new((Mutex::new(None), Condvar::new())));
     if let Some(pending) = pending.clone() {
         let state = state.clone();
-        thread::spawn(move || codex_status_writer(&state, &pending));
+        thread::spawn(move || terminal_status_writer(&state, &pending));
     }
     if let Some(channel) = channel {
         let (cwd, dir, token) = (
@@ -226,7 +244,11 @@ fn serve(dir: &Path) -> io::Result<()> {
         );
         thread::spawn(move || codex_backend::observe(channel, cwd, dir, token, action_receiver));
     }
-    let output = thread::spawn(move || drain(reader, pending));
+    let (drained, drain_done) = mpsc::sync_channel(1);
+    let output = thread::spawn(move || {
+        drain(reader, pending);
+        let _ = drained.send(());
+    });
     let shared = state.clone();
     thread::spawn(move || accept(listener, shared));
     let status = loop {
@@ -236,14 +258,16 @@ fn serve(dir: &Path) -> io::Result<()> {
         let mut active = state.child.lock().unwrap();
         let terminate_at = state.terminate_at.lock().unwrap();
         let child = active.as_mut().expect("worker owned while serving");
-        let exited = pty::child_exited(child)?;
+        let exited = pty::child_exited(child)
+            .map_err(|err| io::Error::other(format!("observe worker exit: {err}")))?;
         let kill_group = match *terminate_at {
             // Keep an exited leader unreaped while its descendants grace their TERM.
             Some(at) => Instant::now() >= at,
             None => exited,
         };
         if kill_group {
-            pty::signal_group(child, libc::SIGKILL)?;
+            pty::signal_group(child, libc::SIGKILL)
+                .map_err(|err| io::Error::other(format!("stop worker group: {err}")))?;
             break active
                 .take()
                 .expect("worker owned during shutdown")
@@ -253,6 +277,9 @@ fn serve(dir: &Path) -> io::Result<()> {
         thread::sleep(Duration::from_millis(40));
     };
     drop(backend);
+    if state.provider == "agy" {
+        let _ = drain_done.recv_timeout(Duration::from_millis(150));
+    }
     runtime::write_json(
         &dir.join("exit.json"),
         &json!({
@@ -277,7 +304,7 @@ fn terminate(state: &State) -> io::Result<()> {
 
 type PendingStatus = (Mutex<Option<Value>>, Condvar);
 
-fn codex_status_writer(state: &State, pending: &PendingStatus) {
+fn terminal_status_writer(state: &State, pending: &PendingStatus) {
     loop {
         let mut slot = pending.0.lock().unwrap();
         while slot.is_none() {
@@ -285,6 +312,23 @@ fn codex_status_writer(state: &State, pending: &PendingStatus) {
         }
         let status = slot.take().expect("notification carries a status");
         drop(slot);
+        if state.provider == "agy" {
+            let mut observed = state.observations.lock().unwrap();
+            let can_fallback = observed.agy_hook_status.as_ref().is_none_or(|hook| {
+                hook["Interaction"] != "error"
+                    && observed
+                        .agy_hook_at
+                        .is_some_and(|at| at.elapsed() >= Duration::from_secs(30))
+            });
+            if can_fallback
+                && (observed.agy_hook_status.take().is_some()
+                    || observed.agy_status.as_ref() != Some(&status))
+            {
+                observed.agy_status = Some(status);
+                let _ = write_agy_observation(state, &observed);
+            }
+            continue;
+        }
         let _ = runtime::write_json(
             &state.dir.join("observation.json"),
             &json!({
@@ -298,6 +342,8 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
     let mut bytes = [0; 8192];
     let mut master = &state.master;
     let mut observed = None;
+    let mut last_emit = Instant::now();
+    let mut agy_tail = Vec::new();
     loop {
         let n = match master.read(&mut bytes) {
             Ok(0) => break,
@@ -309,6 +355,13 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
+        if state.provider == "agy" {
+            const TAIL: usize = 16 * 1024;
+            agy_tail.extend_from_slice(&bytes[..n]);
+            if agy_tail.len() > TAIL {
+                agy_tail.drain(..agy_tail.len() - TAIL);
+            }
+        }
         let mut screen = state.screen.lock().unwrap();
         screen.parser.process(&bytes[..n]);
         if let Some(sub) = &screen.subscriber
@@ -317,16 +370,36 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             let _ = sub.conn.shutdown(Shutdown::Both);
             screen.subscriber = None;
         }
-        let status = pending
-            .as_ref()
-            .and_then(|_| providers::codex::terminal_status(screen.parser.screen()));
+        let status = pending.as_ref().and_then(|_| {
+            if state.provider == "agy" {
+                agy::terminal_status(screen.parser.screen())
+            } else {
+                providers::codex::terminal_status(screen.parser.screen())
+            }
+        });
         drop(screen);
         if let Some(pending) = &pending
-            && let Some(status) = status.filter(|status| observed.as_ref() != Some(status))
+            && let Some(status) = status.filter(|status| {
+                observed.as_ref() != Some(status)
+                    || (state.provider == "agy" && last_emit.elapsed() >= Duration::from_secs(1))
+            })
         {
+            last_emit = Instant::now();
             observed = Some(status.clone());
             *pending.0.lock().unwrap() = Some(status);
             pending.1.notify_one();
+        }
+    }
+    if state.provider == "agy" {
+        let grid = state.screen.lock().unwrap().parser.screen().contents() + "\n";
+        if let Some(id) =
+            agy::exit_conversation(&agy_tail).or_else(|| agy::exit_conversation(grid.as_bytes()))
+        {
+            let mut observed = state.observations.lock().unwrap();
+            if observed.conversation.is_none() {
+                observed.conversation = Some(id.into());
+                let _ = write_agy_observation(&state, &observed);
+            }
         }
     }
 }
@@ -445,6 +518,14 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
     let event = field(request, "event");
     let payload = &request["payload"];
+    if state.provider == "agy"
+        && event == agy::EVENT
+        && !state.hook_token.is_empty()
+        && field(request, "token") == state.hook_token
+        && payload.is_object()
+    {
+        return agy_hook_observation(stream, state, payload);
+    }
     if state.provider != "claude"
         || field(request, "token") != state.hook_token
         || !providers::claude::EVENTS.contains(&event)
@@ -477,6 +558,62 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
         }),
     )?;
     runtime::write_control(stream, &json!({"type":"ok"}))
+}
+
+fn agy_hook_observation(stream: &mut UnixStream, state: &State, payload: &Value) -> io::Result<()> {
+    let mut observed = state.observations.lock().unwrap();
+    let at = payload["observed_ns"].as_u64().unwrap_or_default();
+    let id = agy::status_conversation(payload)?;
+    if at <= observed.agy_latest {
+        return Err(io::Error::other("stale Antigravity status line"));
+    }
+    let mut changed = false;
+    if let Some(id) = id {
+        if observed
+            .conversation
+            .as_deref()
+            .is_some_and(|first| first != id)
+        {
+            return Err(io::Error::other("Antigravity hook conversation changed"));
+        }
+        if observed.conversation.is_none() {
+            observed.conversation = Some(id.to_owned());
+            changed = true;
+        }
+    }
+    observed.agy_latest = at;
+    if let Some(status) = agy::hook_status(field(payload, "agent_state")) {
+        observed.agy_hook_at = Some(Instant::now());
+        if observed.agy_hook_status.as_ref() != Some(&status) {
+            observed.agy_hook_status = Some(status);
+            changed = true;
+        }
+    }
+    let title = field(payload, "conversation_title");
+    if !title.is_empty()
+        && observed
+            .agy_title
+            .as_ref()
+            .is_none_or(|old| old["name"] != title)
+    {
+        observed.agy_title = Some(json!({"name": title, "observed_ns": at}));
+        changed = true;
+    }
+    if changed {
+        write_agy_observation(state, &observed)?;
+    }
+    runtime::write_control(stream, &json!({"type":"ok"}))
+}
+
+fn write_agy_observation(state: &State, observed: &ProviderObservation) -> io::Result<()> {
+    runtime::write_json(
+        &state.dir.join("observation.json"),
+        &json!({
+            "token": state.token, "conversation_id": observed.conversation,
+            "status": observed.agy_hook_status.as_ref().or(observed.agy_status.as_ref()),
+            "provider_title": observed.agy_title,
+        }),
+    )
 }
 
 fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {

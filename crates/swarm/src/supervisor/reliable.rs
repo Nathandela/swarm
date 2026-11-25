@@ -42,7 +42,7 @@ fn refusal(id: &str, code: &str, error: &str) -> Value {
     json!({"op":"error","operation_id":id,"error_code":code,"error":error})
 }
 
-pub(super) fn handle(state: &State, request: &Value, negotiated: bool) -> io::Result<Value> {
+pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Result<Value> {
     let status = request["op"] == "owner_launch_status";
     let id = field(
         request,
@@ -52,7 +52,7 @@ pub(super) fn handle(state: &State, request: &Value, negotiated: bool) -> io::Re
             "operation_id"
         },
     );
-    if !negotiated {
+    if !caps.contains(&"owner-launch") {
         return Ok(refusal(
             id,
             "op_not_implemented",
@@ -122,7 +122,7 @@ pub(super) fn handle(state: &State, request: &Value, negotiated: bool) -> io::Re
             "owner launch outcome is uncertain; inspect its status",
         ));
     }
-    let session = match state.reserve(&json!({"launch":request["launch"]})) {
+    let session = match state.reserve(&json!({"launch":request["launch"]}), caps) {
         Ok(s) => s,
         Err(e) => return Ok(refusal(id, "invalid_field", &format!("launch: {e}"))),
     };

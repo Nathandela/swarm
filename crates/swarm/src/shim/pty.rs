@@ -131,10 +131,29 @@ pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
     if unsafe { libc::kill(-(child.id() as i32), signal) } == -1 {
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::ESRCH) {
+            #[cfg(target_os = "macos")]
+            if signal == libc::SIGKILL
+                && err.raw_os_error() == Some(libc::EPERM)
+                && child_exited(child)?
+                && group_contains_only(child)
+            {
+                return Ok(());
+            }
             return Err(err);
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn group_contains_only(child: &Child) -> bool {
+    // XNU can return EPERM when its group signal sees only the unreaped zombie.
+    // An exact two-slot census distinguishes that case from live descendants or denied inspection.
+    let mut members = [0 as libc::pid_t; 2];
+    let pid = child.id() as libc::pid_t;
+    let size = std::mem::size_of_val(&members) as libc::c_int;
+    let found = unsafe { libc::proc_listpgrppids(pid, members.as_mut_ptr().cast(), size) };
+    found == 1 && members[0] == pid
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};
