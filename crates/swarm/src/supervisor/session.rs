@@ -1,3 +1,4 @@
+mod hermes;
 mod manager_runtime;
 
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
@@ -96,6 +97,8 @@ pub(super) struct Session {
     agent: String,
     resumed_from: Option<String>,
     agy_native_installation: Option<String>,
+    hermes_native: bool,
+    hermes_authority: Mutex<()>,
     cwd: String,
     effective: PathBuf,
     pub(super) lineage: Value,
@@ -119,7 +122,9 @@ impl Session {
         let created = field(&data, "created_at");
         let name = field(&data, "name");
         let cwd = field(&data, "cwd");
-        if data["schema"] != 1
+        let hermes_native =
+            data["provider"]["name"] == "hermes" && data["provider"]["mode"] == "shared-native";
+        if data["schema"] != (if hermes_native { 2 } else { 1 })
             || !runtime::valid_id(id)
             || dir.file_name().and_then(|name| name.to_str()) != Some(id)
             || !runtime::valid_id(token)
@@ -141,6 +146,7 @@ impl Session {
                 "codex" => "codex",
                 "agy" => "agy",
                 "opencode" => "opencode",
+                "hermes" => "hermes",
                 _ => "claude",
             }
             .into(),
@@ -151,6 +157,8 @@ impl Session {
             agy_native_installation: data["provider"]["agy_native_installation"]
                 .as_str()
                 .map(str::to_owned),
+            hermes_native,
+            hermes_authority: Mutex::new(()),
             cwd: cwd.into(),
             lineage: data["lineage"].clone(),
             owner_interactive: unrestricted_owner(&data),
@@ -172,15 +180,26 @@ impl Session {
     }
 
     pub(super) fn prepare(request: &Value) -> io::Result<Prepared> {
+        Self::prepare_bound(request, None)
+    }
+
+    pub(super) fn prepare_bound(request: &Value, source: Option<&Self>) -> io::Result<Prepared> {
         let req = &request["launch"];
         if !req.is_object() {
             return Err(io::Error::other("missing request"));
         }
         let valid_optional =
             |key, valid: fn(&Value) -> bool| req[key].is_null() || valid(&req[key]);
-        if !["agent", "cwd", "name", "tag", "initial_prompt"]
-            .into_iter()
-            .all(|key| valid_optional(key, Value::is_string))
+        if ![
+            "agent",
+            "cwd",
+            "name",
+            "tag",
+            "initial_prompt",
+            "resume_from",
+        ]
+        .into_iter()
+        .all(|key| valid_optional(key, Value::is_string))
             || !valid_optional("worktree", Value::is_boolean)
             || !valid_optional("env", |value| {
                 value
@@ -226,6 +245,9 @@ impl Session {
                         || (agent == "opencode" && key == "agent")
                         || (agent == "agy"
                             && matches!(key.as_str(), "mode" | "resume_conversation_id"))
+                        || (agent == "hermes"
+                            && (providers::hermes::OPTIONS.contains(&key.as_str())
+                                || key == "resume_from"))
                         || (matches!(agent, "agy" | "claude" | "claude-code")
                             && key == "dangerously-skip-permissions");
                     !supported || !value.is_string()
@@ -238,16 +260,25 @@ impl Session {
         if raw_cwd.is_empty() || !Path::new(raw_cwd).is_dir() {
             return Err(io::Error::other("cwd is not an existing directory"));
         }
-        let cwd = fs::canonicalize(raw_cwd)?;
+        let mut cwd = fs::canonicalize(raw_cwd)?;
         if cwd.to_str().is_none() {
             return Err(io::Error::other("cwd is not representable as UTF-8"));
         }
         let label = sanitize_name(field(req, "name"));
+        let mut launch = req.clone();
+        if let Some(source) = source {
+            if field(req, "agent") != "hermes" || source.agent != "hermes" {
+                return Err(io::Error::other(
+                    "unsupported saved-session resume provider",
+                ));
+            }
+            source.hermes_resume(&mut launch, &mut cwd)?;
+        }
         let provider = providers::prepare(
             field(req, "agent"),
             &cwd,
             &label,
-            req,
+            &launch,
             runtime::launch_env(&req["env"]),
         )?;
         let (cols, rows) = runtime::dims(req);
@@ -455,6 +486,7 @@ impl Session {
                 "agy" => "agy",
                 "codex" => "Codex",
                 "opencode" => "OpenCode",
+                "hermes" => "Hermes",
                 _ => "Claude Code",
             }
         } else {
@@ -465,6 +497,14 @@ impl Session {
             opencode::initial::intent(&opencode::nonce()?, &provider.native)
         } else {
             Value::Null
+        };
+        let hermes_installation = if !provider.hermes.is_null() {
+            root.parent().and_then(|supervisor| {
+                let socket = crate::ipc::socket_path().ok()?;
+                crate::discord::worker_input_installation(supervisor, socket.to_str()?)
+            })
+        } else {
+            None
         };
         let agy_native_installation = if scheduled.is_none()
             && provider.agent == "agy"
@@ -482,17 +522,19 @@ impl Session {
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
+                "schema": if provider.hermes.is_null() { 1 } else { 2 }, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
                     "agy_native_installation":agy_native_installation,
-                    "mode": if provider.agent == "opencode" || provider.agent == "codex" && providers::codex::managed(&provider.version) {
+                    "mode": if !provider.hermes.is_null() {
+                        "shared-native"
+                    } else if provider.agent == "opencode" || provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
                     } else if provider.agent == "agy" && scheduled.is_some() {
                         "acp"
                     } else { "classic" },
-                    "executable": provider.executable, "identity": provider.identity},
+                    "executable": provider.executable, "identity": provider.identity, "hermes_profile":provider.hermes_profile,"hermes_installation":hermes_installation},
                 "opencode_profile": (provider.agent == "opencode").then(|| opencode::profile(&provider.env)),
                 "opencode_resume": resume,
                 "opencode_initial": initial,
@@ -547,8 +589,7 @@ impl Session {
         thread::spawn(move || {
             let _ = child.wait();
         });
-        let mut transient =
-            json!({"argv":provider.argv,"schedule":scheduled,"native":provider.native});
+        let mut transient = json!({"argv":provider.argv,"schedule":scheduled,"native":provider.native,"hermes":provider.hermes});
         if self.owner_interactive {
             transient["owner_socket"] = json!(crate::ipc::socket_path()?);
         }
@@ -564,6 +605,7 @@ impl Session {
             + Duration::from_secs(match self.agent.as_str() {
                 "opencode" => 45,
                 "codex" => 85,
+                "hermes" if self.hermes_native => 75,
                 _ => 3,
             });
         loop {
@@ -647,7 +689,14 @@ impl Session {
         Ok(stream)
     }
 
+    pub(super) fn is_shared_hermes(&self) -> bool {
+        self.hermes_native
+    }
+
     pub(super) fn kill(&self) -> io::Result<()> {
+        if self.hermes_native {
+            return self.hermes_kill();
+        }
         if self.exit().is_ok() {
             return Ok(());
         }
@@ -661,6 +710,11 @@ impl Session {
     }
 
     pub(super) fn confirm_exit(&self) -> io::Result<()> {
+        if self.hermes_native {
+            return Err(io::Error::other(
+                "Hermes native work completion is unproven; session and workspace retained",
+            ));
+        }
         match self.exit() {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => self.kill()?,
@@ -684,10 +738,14 @@ impl Session {
     }
 
     pub(super) fn requires_worker_origin_cap(&self) -> bool {
-        self.agent == "agy"
+        self.agent == "agy" || self.hermes_native
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
+        if self.hermes_native {
+            self.dial()?;
+            return self.hermes_descriptor()?.validate_target();
+        }
         if self.agent == "agy" {
             if !self.is_live() {
                 return Err(io::Error::other("Antigravity session is no longer live"));
@@ -729,6 +787,11 @@ impl Session {
     }
 
     pub(super) fn native_requests(&self, session: &str, body: &Value) -> io::Result<Value> {
+        if self.agent == "hermes" {
+            return Err(io::Error::other(
+                "Hermes approvals and questions are controlled in the native viewer",
+            ));
+        }
         if self.agent == "opencode" {
             return self.opencode_exchange(&json!({
                 "type":"opencode_requests","session":session,"request_id":body["request_id"],"native_session_id":body["native_session_id"],
@@ -782,6 +845,10 @@ impl Session {
         session: &str,
         root: &Path,
     ) -> io::Result<Option<Value>> {
+        if self.hermes_native {
+            let _authority = self.hermes_authority.lock().unwrap();
+            return self.hermes_semantic_status(operation, session, root);
+        }
         if self.agent == "opencode" {
             return self.opencode_operation_status(session, operation, "prompt", root);
         }
@@ -813,6 +880,9 @@ impl Session {
         session: &str,
         state: &super::State,
     ) -> io::Result<Value> {
+        if self.hermes_native {
+            return self.hermes_semantic_send(request, session, state);
+        }
         self.semantic_send_inner(request, session, state, None)
     }
 
@@ -1598,7 +1668,12 @@ impl Session {
         {
             status = observed.clone();
         }
-        let group = if process != "running" {
+        if self.hermes_native && process != "running" {
+            status = hermes::unknown_native_status();
+        }
+        let group = if status["NativeWorkUnknown"] == true {
+            "needs_input"
+        } else if process != "running" {
             "completed"
         } else if status["Attention"] == true {
             "needs_input"
@@ -1635,6 +1710,9 @@ impl Session {
         }
         if labels.scheduled_completed && labels.tag == "automation" {
             view["scheduled_completed"] = json!(true);
+        }
+        if self.agent == "hermes" {
+            self.hermes_view_fields(&mut view);
         }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);

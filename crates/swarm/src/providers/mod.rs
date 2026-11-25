@@ -4,6 +4,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;
+pub(crate) mod hermes;
 pub(crate) mod opencode;
 
 use serde_json::{Value, json};
@@ -26,6 +27,8 @@ pub(crate) struct LaunchPlan {
     pub agy_status_line: bool,
     pub native: Value,
     pub agy_acp: bool,
+    pub hermes: Value,
+    pub hermes_profile: String,
 }
 
 pub(crate) fn prepare(
@@ -40,14 +43,15 @@ pub(crate) fn prepare(
         "codex" => "codex",
         "agy" => "agy",
         "opencode" => "opencode",
+        "hermes" => "hermes",
         _ => return Err(io::Error::other("unsupported provider")),
     };
     if agent == "codex" {
         codex::refuse_unqualified_origin(&request["env"])?;
     }
     environment.retain(|(name, _)| match name.as_str() {
-        "ANTHROPIC_API_KEY" => agent == "claude",
-        "OPENAI_API_KEY" => agent == "codex",
+        "ANTHROPIC_API_KEY" => matches!(agent, "claude" | "hermes"),
+        "OPENAI_API_KEY" => matches!(agent, "codex" | "hermes"),
         "HOME" if agent == "opencode" => false,
         _ => true,
     });
@@ -67,6 +71,7 @@ pub(crate) fn prepare(
         "agy" => agy::version(&output)?,
         "codex" => codex::version(&output)?,
         "opencode" => opencode::version(&output)?,
+        "hermes" => hermes::version(&output)?,
         _ => claude::version(&output)?,
     }
     .to_owned();
@@ -83,9 +88,47 @@ pub(crate) fn prepare(
             "provider executable changed during admission",
         ));
     }
+    let mut hermes_launch = Value::Null;
+    let retained = &request["hermes_retained_binding"];
+    if agent == "hermes"
+        && (!retained.is_null()
+            || crate::discord::native_input_enabled()
+                && crate::ipc::field(request, "resume_conversation_id").is_empty()
+                && hermes::native_version(&version))
+    {
+        if !hermes::native_version(&version) {
+            return Err(io::Error::other(
+                "Hermes native resume requires a qualified current runtime",
+            ));
+        }
+        let origins = hermes::native::origins(&request["env"], true)?;
+        if retained.is_null() {
+            environment.extend(origins);
+        } else {
+            let saved = request["hermes_retained_origins"]
+                .as_object()
+                .ok_or_else(|| {
+                    io::Error::other("Hermes native resume home selectors are unproven")
+                })?;
+            for (key, value) in saved {
+                if !hermes::native::NORMAL_ORIGINS.contains(&key.as_str())
+                    || value.as_str().is_none_or(|v| v.contains('\0'))
+                {
+                    return Err(io::Error::other("invalid retained Hermes home selector"));
+                }
+                environment.push((key.clone(), value.as_str().unwrap().into()));
+            }
+        }
+        hermes_launch = json!({"options":request["options"],"retained":retained,"predecessor":request["hermes_predecessor"],"initial_prompt":request["initial_prompt"]});
+    }
+    if agent == "hermes" && hermes_launch.is_null() {
+        environment.extend(hermes::native::origins(&request["env"], false)?);
+    }
     let (argv, native) = match agent {
         "agy" => (agy::argv(request)?, Value::Null),
         "codex" => (codex::argv(request)?, Value::Null),
+        "hermes" if hermes_launch.is_null() => (hermes::argv(request)?, Value::Null),
+        "hermes" => (Vec::new(), Value::Null),
         "opencode" => opencode::launch(request)?,
         _ => (claude::argv(label, request)?, Value::Null),
     };
@@ -99,6 +142,12 @@ pub(crate) fn prepare(
         agy_status_line,
         native,
         agy_acp,
+        hermes: hermes_launch,
+        hermes_profile: if agent == "hermes" {
+            crate::ipc::field(&request["options"], "profile").to_owned()
+        } else {
+            String::new()
+        },
     })
 }
 
@@ -137,6 +186,22 @@ fn probe_output(
     env: &[(String, String)],
     args: &[&str],
 ) -> io::Result<String> {
+    let limit = if args.first() == Some(&"agentapi") {
+        64 * 1024
+    } else {
+        16 * 1024
+    };
+    command_output(executable, cwd, env, args, Duration::from_secs(5), limit)
+}
+
+fn command_output(
+    executable: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    args: &[&str],
+    budget: Duration,
+    limit: usize,
+) -> io::Result<String> {
     let (mut output_socket, writer) = UnixStream::pair()?;
     output_socket.set_nonblocking(true)?;
     let stderr = if args == ["--help"] {
@@ -151,7 +216,8 @@ fn probe_output(
         .envs(
             env.iter()
                 .filter(|(name, _)| {
-                    !matches!(name.as_str(), "ANTHROPIC_API_KEY" | "OPENAI_API_KEY")
+                    args.ends_with(&["gateway", "ensure"])
+                        || !matches!(name.as_str(), "ANTHROPIC_API_KEY" | "OPENAI_API_KEY")
                 })
                 .map(|(name, value)| (name, value)),
         )
@@ -163,19 +229,14 @@ fn probe_output(
         // Nonblocking reads bound the probe even if a descendant inherits the output.
         let mut buffer = [0; 1024];
         let mut output = Vec::new();
-        let limit = if args.first() == Some(&"agentapi") {
-            64 * 1024
-        } else {
-            16 * 1024
-        };
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + budget;
         loop {
             let idle = match output_socket.read(&mut buffer) {
                 Ok(0) => true,
                 Ok(n) => {
                     output.extend_from_slice(&buffer[..n]);
                     if output.len() > limit {
-                        return Err(io::Error::other("provider probe output exceeds limit"));
+                        return Err(io::Error::other("provider command output exceeds limit"));
                     }
                     false
                 }
@@ -185,13 +246,13 @@ fn probe_output(
             };
             if idle && let Some(status) = child.try_wait()? {
                 if !status.success() {
-                    return Err(io::Error::other("provider probe command failed"));
+                    return Err(io::Error::other("provider command failed"));
                 }
                 return String::from_utf8(output)
-                    .map_err(|_| io::Error::other("provider probe output is not UTF-8"));
+                    .map_err(|_| io::Error::other("provider command output is not UTF-8"));
             }
             if Instant::now() >= deadline {
-                return Err(io::Error::other("provider probe command timed out"));
+                return Err(io::Error::other("provider command timed out"));
             }
             if idle {
                 std::thread::sleep(Duration::from_millis(10));

@@ -152,6 +152,12 @@ pub(crate) fn verify_connector_input(
     Ok(())
 }
 
+pub(crate) fn native_input_enabled() -> bool {
+    Place::resolve(None)
+        .and_then(|place| place.load())
+        .is_ok_and(|config| config.enabled())
+}
+
 pub(crate) fn run(args: &[String]) -> u8 {
     if args
         .first()

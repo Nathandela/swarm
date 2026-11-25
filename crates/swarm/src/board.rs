@@ -416,20 +416,27 @@ impl Board {
                         "Continue this dispatcher in its Discord thread".into()
                     } else if matches!(field(row, "agent"), "agy" | "opencode") {
                         "Session ended · r resume · ctrl+x delete".into()
+                    } else if field(row, "agent") == "hermes"
+                        && !field(row, "conversation_id").is_empty()
+                    {
+                        if row["status"]["NativeWorkUnknown"] == true {
+                            "Hermes viewer ended · r resume".into()
+                        } else {
+                            "Session ended · r resume · ctrl+x delete".into()
+                        }
                     } else {
                         "Session ended · ctrl+x delete".into()
                     };
                 }
             }
             Key::Text('r') => {
-                if let Some(row) = self.by_id(id).filter(|row| {
-                    matches!(field(row, "agent"), "agy" | "opencode")
-                        && !running(row)
-                        && !linked_dispatcher(row)
-                }) {
+                if let Some(row) = self
+                    .by_id(id)
+                    .filter(|row| resumable(row) && !running(row) && !linked_dispatcher(row))
+                {
                     let cwd = Path::new(field(row, "cwd"));
                     let agent = field(row, "agent");
-                    if cwd.is_dir() || agent == "opencode" {
+                    if cwd.is_dir() || agent != "agy" {
                         return resume(agent, id, cwd, geometry, false);
                     }
                     let cwd = cwd
@@ -1021,6 +1028,11 @@ fn form_header(output: &mut String, cols: u16, title: &str) {
 
 fn running(row: &Value) -> bool {
     field(&row["status"], "Process") == "running"
+}
+
+fn resumable(row: &Value) -> bool {
+    matches!(field(row, "agent"), "agy" | "opencode")
+        || field(row, "agent") == "hermes" && !field(row, "conversation_id").is_empty()
 }
 
 fn linked_dispatcher(row: &Value) -> bool {

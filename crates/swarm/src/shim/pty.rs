@@ -132,11 +132,7 @@ pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::ESRCH) {
             #[cfg(target_os = "macos")]
-            if signal == libc::SIGKILL
-                && err.raw_os_error() == Some(libc::EPERM)
-                && child_exited(child)?
-                && group_contains_only(child)
-            {
+            if err.raw_os_error() == Some(libc::EPERM) && zombie_only_group(child)? {
                 return Ok(());
             }
             return Err(err);
@@ -146,14 +142,20 @@ pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn group_contains_only(child: &Child) -> bool {
-    // XNU can return EPERM when its group signal sees only the unreaped zombie.
-    // An exact two-slot census distinguishes that case from live descendants or denied inspection.
-    let mut members = [0 as libc::pid_t; 2];
-    let pid = child.id() as libc::pid_t;
-    let size = std::mem::size_of_val(&members) as libc::c_int;
-    let found = unsafe { libc::proc_listpgrppids(pid, members.as_mut_ptr().cast(), size) };
-    found == 1 && members[0] == pid
+fn zombie_only_group(child: &Child) -> io::Result<bool> {
+    if !child_exited(child)? {
+        return Ok(false);
+    }
+    // Darwin returns EPERM when the only group member is the unreaped leader.
+    let mut members = [0; 2];
+    let count = unsafe {
+        libc::proc_listpgrppids(
+            child.id() as libc::pid_t,
+            members.as_mut_ptr().cast(),
+            std::mem::size_of_val(&members) as libc::c_int,
+        )
+    };
+    Ok(count == 1 && members[0] == child.id() as libc::pid_t)
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};
