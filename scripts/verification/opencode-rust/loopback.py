@@ -184,7 +184,7 @@ try:
         if card['kind']=='question':
             binding_path=root/'state'/'rust-v1'/row.split('/')[-1]/'opencode-binding.json'
             binding=json.loads(binding_path.read_text())
-            def digest(body):
+            def digest(body, method="POST", route="/dispatchDigest"):
                 class PrivateBridge(http.client.HTTPConnection):
                     def connect(self):
                         self.sock=socket.socket(socket.AF_UNIX)
@@ -192,7 +192,7 @@ try:
                         self.sock.connect(binding['socketPath'])
                 with_bridge=PrivateBridge('localhost')
                 try:
-                    with_bridge.request('POST','/dispatchDigest',json.dumps(body),{
+                    with_bridge.request(method,route,json.dumps(body) if method=='POST' else None,{
                         'Authorization':f"Bearer {binding['token']}",'Content-Type':'application/json'})
                     reply=with_bridge.getresponse()
                     return reply.status,json.loads(reply.read())
@@ -209,6 +209,7 @@ try:
             assert digest(dict(request_body,extra='invalid'))[1]['requestHash']!=exact['requestHash']
             assert digest(dict(request_body,sessionInstance='bad'))[0]==422
             assert digest(None)[0]==422
+            assert digest(None,"GET","/receipt?operationID=verify-content-digest")==(200,None)
             assert output('requests',row,*query)['request']['request_hash']==card['request_hash']
             invalid=output('decide',row,*query,'--request-hash',card['request_hash'],
                            '--reply','answer','--answers','[["blue"],["red"]]')

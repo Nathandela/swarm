@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
-if [ "${OPENCODE_RUST_FIXTURE_CLEAN:-}" != 1 ]; then
-  exec /usr/bin/env -i PATH="$PATH" OPENCODE_RUST_FIXTURE_CLEAN=1 /bin/bash "$0" "$@"
+if [ "${SWARM_NATIVE_FIXTURE_CLEAN:-}" != 1 ]; then
+  exec /usr/bin/env -i PATH="$PATH" SWARM_NATIVE_FIXTURE_CLEAN=1 /bin/bash "$0" "$@"
 fi
 if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then
   printf '%s\n' 'usage: run-macos.sh /absolute/path/to/rust-swarm' >&2

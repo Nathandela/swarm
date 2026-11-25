@@ -9,7 +9,7 @@ The runner needs Python 3, bubblewrap with working user namespaces, and the inst
 ```sh
 run_root=$(mktemp -d /dev/shm/oc.XXXXXXXX)
 cp /path/to/linux/swarm "$run_root/swarm"
-cp scripts/verification/opencode-rust/{loopback.py,run-linux.sh} "$run_root/"
+cp scripts/verification/opencode-rust/loopback.py scripts/verification/opencode-rust/run-linux.sh "$run_root/"
 sh "$run_root/run-linux.sh" "$run_root" qualification
 ```
 
