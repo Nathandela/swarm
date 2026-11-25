@@ -25,6 +25,7 @@ enum Phase {
 }
 
 pub(super) struct Prepared {
+    pub(super) lineage: Value,
     isolated: bool,
     cwd: PathBuf,
     label: String,
@@ -45,11 +46,15 @@ fn sanitize_name(text: &str) -> String {
 
 pub(super) struct Session {
     pub id: String,
-    dir: PathBuf,
+    pub(super) dir: PathBuf,
+    pub(super) notification_gate: Mutex<()>,
+    pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
     agent: String,
     cwd: String,
     effective: PathBuf,
+    pub(super) lineage: Value,
+    pub(super) owner_interactive: bool,
     labels: Mutex<Labels>,
     created: String,
     state: Mutex<(Phase, String)>,
@@ -80,6 +85,8 @@ impl Session {
         }
         Ok(Self {
             dir,
+            notification_gate: Mutex::new(()),
+            supervision_pending: std::sync::atomic::AtomicBool::new(false),
             id: id.into(),
             token: token.into(),
             agent: match field(&data["provider"], "name") {
@@ -88,6 +95,8 @@ impl Session {
             }
             .into(),
             cwd: cwd.into(),
+            lineage: data["lineage"].clone(),
+            owner_interactive: unrestricted_owner(&data),
             effective: PathBuf::from(data["checkout"]["path"].as_str().unwrap_or(cwd)),
             labels: Mutex::new(Labels {
                 name: name.into(),
@@ -136,6 +145,9 @@ impl Session {
                     key.as_str(),
                     "agent"
                         | "cwd"
+                        | "spawned_from"
+                        | "spawn_intent"
+                        | "supervision"
                         | "name"
                         | "tag"
                         | "env"
@@ -181,7 +193,14 @@ impl Session {
             return Err(io::Error::other("worktree: cwd is not a git repository"));
         }
         let tag = sanitize_name(field(req, "tag")).trim().to_owned();
+        let mut lineage = json!({});
+        for key in ["spawned_from", "spawn_intent", "supervision"] {
+            if !field(req, key).is_empty() {
+                lineage[key] = req[key].clone();
+            }
+        }
         Ok(Prepared {
+            lineage,
             isolated,
             tag,
             cwd,
@@ -194,6 +213,7 @@ impl Session {
 
     pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
         let Prepared {
+            lineage,
             isolated,
             tag,
             cwd,
@@ -203,6 +223,8 @@ impl Session {
             provider,
         } = prepared;
         let id = runtime::random_id()?;
+        use std::os::unix::fs::MetadataExt;
+        let physical = cwd.metadata()?;
         let checkout = if isolated {
             Some(crate::workspace::plan(&cwd, &id, &label)?)
         } else {
@@ -222,7 +244,7 @@ impl Session {
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label, "checkout":checkout,
+                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
                 "provider": {"name": provider.agent, "version": provider.version,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
@@ -279,7 +301,11 @@ impl Session {
         thread::spawn(move || {
             let _ = child.wait();
         });
-        runtime::write_control(&mut bootstrap, &json!({"argv": provider.argv}))
+        let mut transient = json!({"argv":provider.argv});
+        if self.owner_interactive {
+            transient["owner_socket"] = json!(crate::ipc::socket_path()?);
+        }
+        runtime::write_control(&mut bootstrap, &transient)
     }
 
     fn exit(&self) -> io::Result<Value> {
@@ -609,6 +635,27 @@ impl Session {
         )
     }
 
+    pub(super) fn incarnation(&self) -> String {
+        codex_receipt::instance(&self.token)
+    }
+    pub(super) fn verify_effective(&self) -> io::Result<&Path> {
+        if let Some((repo, record)) = self.checkout_record()? {
+            crate::workspace::verify(&repo, &self.id, &record)?;
+        } else {
+            let meta = runtime::read_json(&self.dir.join("session.json"))?;
+            let actual = self.effective.metadata()?;
+            use std::os::unix::fs::MetadataExt;
+            if self.effective.canonicalize()? != self.effective
+                || !actual.is_dir()
+                || meta["cwd_identity"] != json!([actual.dev(), actual.ino()])
+            {
+                return Err(io::Error::other(
+                    "handoff: source checkout identity changed or cannot be proved",
+                ));
+            }
+        }
+        Ok(&self.effective)
+    }
     pub(super) fn uses_directory(&self, root: &Path) -> bool {
         [Path::new(&self.cwd), self.effective.as_path()]
             .into_iter()
@@ -689,11 +736,31 @@ impl Session {
             "group": group, "group_entered_at": state.1, "last_activity": state.1,
             "created_at": self.created, "summary": "",
         });
+        if let Some(lineage) = self.lineage.as_object() {
+            for key in ["spawned_from", "spawn_intent", "supervision"] {
+                if let Some(value) = lineage.get(key) {
+                    view[key] = value.clone();
+                }
+            }
+        }
+        if self
+            .supervision_pending
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            view["supervision_pending"] = json!(true);
+        }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
         }
         view
     }
+}
+
+fn unrestricted_owner(data: &Value) -> bool {
+    data["manager"].is_null()
+        && data["schedule"].is_null()
+        && data["worker_discussion"].is_null()
+        && field(data, "role").is_empty()
 }
 
 fn now() -> String {

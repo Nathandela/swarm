@@ -1,6 +1,7 @@
 use crate::flags::options;
 mod actions;
 mod duration;
+mod handoff;
 mod message;
 pub(crate) mod spawn;
 pub(crate) mod wire;
@@ -37,7 +38,7 @@ pub fn run(args: &[String]) -> i32 {
         "requests" => &["native-requests-v1"],
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
-        "send" | "kill" | "peek" => &[],
+        "handoff" | "send" | "kill" | "peek" => &[],
         _ => unreachable!(),
     };
     let path = match socket_path() {
@@ -60,6 +61,7 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
     let result = match verb {
+        "handoff" => handoff::run(&mut client, &args[1..]),
         "spawn" => spawn::run(&mut client, &args[1..]),
         "message" => message::run(&mut client, &args[1..]),
         "requests" => message::requests(&mut client, &args[1..]),

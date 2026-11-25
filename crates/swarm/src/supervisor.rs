@@ -1,7 +1,9 @@
+mod handoff;
 mod reliable;
 mod removal;
 pub(crate) mod runtime;
 mod session;
+mod supervision;
 
 use crate::ipc::{self, VERSION, field, wire};
 use runtime::{DATA_IN, DATA_OUT, IO_TIMEOUT, SNAPSHOT};
@@ -55,6 +57,7 @@ struct State {
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
     deletion_gate: Mutex<()>,
+    handoff_wake: SyncSender<()>,
     generation: AtomicU64,
 }
 
@@ -83,6 +86,7 @@ impl State {
     }
 
     fn publish(&self, session: &Session) {
+        let _ = self.handoff_wake.try_send(());
         let event = json!({
             "op": "event", "endpoint_id": self.endpoint, "session": session.view(&self.endpoint)
         });
@@ -99,8 +103,19 @@ impl State {
     }
 
     fn reserve(&self, request: &Value) -> io::Result<Arc<Session>> {
-        let prepared = Session::prepare(request)?;
+        let (bound, source) = handoff::bind(self, request)?;
+        let mut prepared = Session::prepare(&bound)?;
         let _reservation = self.launch_gate.lock().unwrap();
+        if let Some((local, instance)) = source {
+            if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
+                s.is_live() && s.incarnation() == instance && s.verify_effective().is_ok()
+            }) {
+                return Err(io::Error::other(
+                    "handoff: source changed during provider admission",
+                ));
+            }
+            prepared.lineage["source_instance"] = json!(instance);
+        }
         if self
             .sessions
             .read()
@@ -190,7 +205,9 @@ fn serve() -> io::Result<()> {
     runtime::reclaim_socket(&socket)?;
     let listener = runtime::bind(&socket)?;
     crate::environment::save(&root)?;
+    let (handoff_wake, handoff_events) = mpsc::sync_channel(1);
     let state = Arc::new(State {
+        handoff_wake,
         root: runtime_root,
         endpoint,
         sessions: RwLock::new(sessions),
@@ -201,6 +218,9 @@ fn serve() -> io::Result<()> {
         deletion_gate: Mutex::new(()),
         generation: AtomicU64::new(1),
     });
+    let handoffs = state.clone();
+    let _ = handoffs.handoff_wake.try_send(());
+    thread::spawn(move || supervision::run(handoffs, handoff_events));
     let monitor = state.clone();
     thread::spawn(move || {
         loop {

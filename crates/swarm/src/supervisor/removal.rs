@@ -99,6 +99,7 @@ pub(super) fn delete(state: &State, request: &Value) -> io::Result<()> {
         state.session(request)?
     };
     let stopped = session.confirm_exit();
+    let _notify = session.notification_gate.lock().unwrap();
     let _cleanup = state.deletion_gate.lock().unwrap();
     // A concurrent delete may have completed while we waited for the exact exit.
     if resume(&state.root, id)? {

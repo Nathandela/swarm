@@ -46,5 +46,5 @@ with (effects / "input").open("ab", buffering=0) as log:
             pending.clear()
         else:
             pending.extend(data)
-        if len(pending) > 256:
+        if len(pending) > 4096:
             sys.exit(2)

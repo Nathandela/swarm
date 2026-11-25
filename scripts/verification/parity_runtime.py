@@ -91,8 +91,8 @@ def drive(root, guard):
         command = [*guard, binary]
         address = Path(env["SWARM_DAEMON_SOCK"])
 
-        def invoke(*args, expected=0):
-            result = subprocess.run([*command, *args], env=env, cwd=root / "work",
+        def invoke(*args, expected=0, overrides=None):
+            result = subprocess.run([*command, *args], env={**env, **(overrides or {})}, cwd=root / "work",
                                     capture_output=True, timeout=6)
             assert result.returncode == expected, (args, result.returncode, result.stderr)
             return result.stdout
@@ -349,6 +349,38 @@ def drive(root, guard):
             assert delete(second)["op"]=="ok"
             assert (repo/"uncommitted").read_text()=="primary only" and git(repo,"rev-parse","HEAD")==head
             print("two real git worktrees kept independent HEADs; shared checkout was retained until released")
+            parent = invoke("spawn","--cli","claude","--name","source","--dir",str(root/"work"),"--prompt","parent").decode().strip()
+            fixtures.wait_for(lambda: b"fixture ready" in invoke("peek",parent), "new source PTY")
+            fire("Stop")
+            fixtures.wait_for(lambda: any(r["id"]==parent and r["status"]["Turn"]=="idle" for r in json.loads(invoke("ls","--json"))), "observed idle parent")
+            with attach(address,parent)[0] as controller:
+                doc=root/"work/context.md"
+                doc.write_text("disposable handoff evidence")
+                response=invoke("handoff","--cli","claude","--context-file",str(doc),overrides={"SWARM_SESSION_ID":parent.split("/")[1]})
+                handed=response.decode().strip()
+                invoke("kill",handed)
+                def passive_row():
+                    return next(r for r in json.loads(invoke("ls","--json")) if r["id"]==handed)
+                fixtures.wait_for(lambda: passive_row().get("supervision_pending"),"source lease defers notification")
+                assert passive_row()["spawned_from"]==parent.split("/")[1] and passive_row()["supervision"]=="passive"
+                marker=f"[swarm supervision {handed.split('/')[1]}#".encode()
+                assert marker not in (root/"effects/input").read_bytes()
+                daemon.kill()
+                daemon.wait(timeout=5)
+            daemon=launch_daemon(log)
+            fixtures.wait_for(ready,"restart with pending supervision")
+            fixtures.wait_for(lambda: (root/"effects/input").read_bytes().count(marker)==1,"one durable handoff notice", timeout=10)
+            fixtures.wait_for(lambda: not passive_row().get("supervision_pending"),"recorded delivery")
+            invoke("send",parent,"--text","unfinished fixture draft","--no-submit")
+            fixtures.wait_for(lambda: (root/"effects/input").read_bytes().endswith(b"unfinished fixture draft"), "live source draft bytes")
+            another=invoke("handoff","--cli","claude","--context-file",str(doc),overrides={"SWARM_SESSION_ID":parent.split("/")[1]}).decode().strip()
+            invoke("kill",another)
+            fixtures.wait_for(lambda: any(r["id"]==another and r.get("supervision_pending") for r in json.loads(invoke("ls","--json"))),"unsigned draft held notice")
+            assert (root/"effects/input").read_bytes().endswith(b"unfinished fixture draft")
+            assert (root/"effects/input").read_bytes().count(marker)==1
+            invoke("kill",parent)
+            print("passive handoff retained a single attention event across attachment and daemon replacement")
+
 
     finally:
         if daemon and daemon.poll() is None:

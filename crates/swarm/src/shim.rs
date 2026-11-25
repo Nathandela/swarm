@@ -1,6 +1,7 @@
 mod codex_backend;
 mod pty;
 mod screen;
+mod supervision;
 
 use crate::ipc::{field, wire};
 use crate::providers::{self, codex_receipt};
@@ -126,6 +127,19 @@ fn serve(dir: &Path) -> io::Result<()> {
         .env("TERM", "xterm-256color")
         .env("SWARM_SESSION_ID", field(&config, "id"));
     let (cols, rows) = runtime::dims(&config);
+    // A local agent's CLI commands belong to its own supervisor, including private places.
+    if config["manager"].is_null()
+        && config["schedule"].is_null()
+        && let Some(socket) = bootstrap["owner_socket"].as_str()
+    {
+        let root = dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| io::Error::other("unproven supervisor root"))?;
+        command
+            .env("SWARM_DAEMON_SOCK", socket)
+            .env("SWARM_DAEMON_STATE", root);
+    }
     pty::arm_shutdown()?;
     let mut backend = None;
     let mut channel = None;
@@ -399,6 +413,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             };
             runtime::write_control(&mut stream, &response)
         }
+        "supervision_input" => {
+            let response = supervision::notify(state, &request)
+                .unwrap_or_else(|e| json!({"type":"error","error":e.to_string()}));
+            runtime::write_control(&mut stream, &response)
+        }
         "input" => {
             let text = field(&request, "data");
             if text.is_empty() || text.len() > 4096 {
@@ -406,40 +425,16 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }
             let _guard = state.control.lock().unwrap();
             state.terminal_input.store(true, Ordering::Release);
-            let bracketed = request["paste"] == true
-                && state
-                    .screen
-                    .lock()
-                    .unwrap()
-                    .parser
-                    .screen()
-                    .bracketed_paste();
-            let mut data = Vec::new();
-            if bracketed {
-                data.extend_from_slice(b"\x1b[200~");
-            }
-            data.extend_from_slice(text.as_bytes());
-            if bracketed {
-                data.extend_from_slice(b"\x1b[201~");
-            }
-            if let Err(err) = pty::input(&state.master, &data) {
+            if let Err(e) = write_input(
+                state,
+                text,
+                request["paste"] == true,
+                request["submit"] == true,
+            ) {
                 return runtime::write_control(
                     &mut stream,
-                    &json!({
-                        "type": "error", "error": format!("input delivery may have been partial: {err}")
-                    }),
+                    &json!({"type":"error","error":e.to_string()}),
                 );
-            }
-            if request["submit"] == true {
-                thread::sleep(Duration::from_millis(150));
-                if let Err(err) = pty::input(&state.master, b"\r") {
-                    return runtime::write_control(
-                        &mut stream,
-                        &json!({
-                            "type": "error", "error": format!("text delivered but submit failed: {err}")
-                        }),
-                    );
-                }
             }
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
         }
@@ -571,4 +566,31 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
     let _ = stream.shutdown(Shutdown::Both);
     let _ = pump.join();
     result
+}
+
+fn write_input(state: &State, text: &str, paste: bool, submit: bool) -> io::Result<()> {
+    let bracketed = paste
+        && state
+            .screen
+            .lock()
+            .unwrap()
+            .parser
+            .screen()
+            .bracketed_paste();
+    let mut data = Vec::new();
+    if bracketed {
+        data.extend_from_slice(b"\x1b[200~");
+    }
+    data.extend_from_slice(text.as_bytes());
+    if bracketed {
+        data.extend_from_slice(b"\x1b[201~");
+    }
+    pty::input(&state.master, &data)
+        .map_err(|e| io::Error::other(format!("input delivery may have been partial: {e}")))?;
+    if submit {
+        thread::sleep(Duration::from_millis(150));
+        pty::input(&state.master, b"\r")
+            .map_err(|e| io::Error::other(format!("text delivered but submit failed: {e}")))?;
+    }
+    Ok(())
 }
