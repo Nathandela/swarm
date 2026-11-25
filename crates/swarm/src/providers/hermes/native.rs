@@ -173,6 +173,25 @@ fn control(
 #[derive(Clone)]
 pub(crate) struct Binding(pub(crate) Value);
 
+fn execution_state(snapshot: &Value) -> &str {
+    if let Some(state) = snapshot["execution_state"].as_str() {
+        return state;
+    }
+    // The v0.22.5 snapshot projects the execution handle through running and prompts.
+    match snapshot["running"].as_bool() {
+        Some(true) => "running",
+        Some(false)
+            if snapshot["prompts"]
+                .as_array()
+                .is_some_and(|prompts| !prompts.is_empty()) =>
+        {
+            "waiting"
+        }
+        Some(false) => "idle",
+        None => "unknown",
+    }
+}
+
 impl Binding {
     pub(crate) fn load(record: Value) -> io::Result<Self> {
         let binding = Self(record);
@@ -320,6 +339,20 @@ impl Binding {
     }
 
     fn activity(&self, client: &mut Client, snapshot: &Value) -> io::Result<Value> {
+        let interaction = snapshot["prompts"].as_array().and_then(|prompts| {
+            if prompts.iter().any(|prompt| prompt["kind"] == "approval") {
+                Some("permission")
+            } else if !prompts.is_empty() {
+                Some("prompt")
+            } else {
+                None
+            }
+        });
+        if let Some(interaction) = interaction {
+            return Ok(
+                json!({"Process":"running","Turn":"active","Interaction":interaction,"Attention":true}),
+            );
+        }
         let params = json!({"session_id":self.id()});
         let processes = client.rpc("process.list", params.clone())?;
         let agents = client.rpc("subagent.list", params)?;
@@ -351,23 +384,14 @@ impl Binding {
                 "completed" | "failed" | "interrupted" | "cancelled"
             )
         });
-        match field(snapshot, "execution_state") {
+        match execution_state(snapshot) {
             "running" | "waiting" => active = true,
             "idle" => {}
             _ => return Err(io::Error::other("Hermes execution status is unknown")),
         }
-        let interaction = snapshot["prompts"].as_array().and_then(|prompts| {
-            if prompts.iter().any(|prompt| prompt["kind"] == "approval") {
-                Some("permission")
-            } else if !prompts.is_empty() {
-                Some("prompt")
-            } else {
-                None
-            }
-        });
         Ok(
             json!({"Process":"running","Turn":if active {"active"} else {"idle"},
-            "Interaction":interaction.unwrap_or("none"),"Attention":interaction.is_some()}),
+            "Interaction":"none","Attention":false}),
         )
     }
 
@@ -427,7 +451,13 @@ impl Binding {
             && receipt["ref"]["session_id"] == self.id()
             && receipt["authority_epoch"] == self.0["authority_epoch"]
             && !field(receipt, "admission_id").is_empty()
-            && receipt["execution_generation"].is_u64()
+            && receipt
+                .get("execution_generation")
+                .is_some_and(|generation| {
+                    generation.is_u64()
+                        || generation.is_null()
+                            && matches!(field(receipt, "status"), "queued" | "terminal")
+                })
             && matches!(field(receipt, "status"), "queued" | "started" | "terminal")
             && receipt["input_id"] == operation
     }
@@ -435,10 +465,7 @@ impl Binding {
     pub(crate) fn stop(&self) -> io::Result<()> {
         let mut client = self.connect(Instant::now() + Duration::from_secs(5))?;
         let snapshot = self.snapshot(&mut client)?;
-        let mut uncertain = !matches!(
-            field(&snapshot, "execution_state"),
-            "idle" | "running" | "waiting"
-        );
+        let mut uncertain = !matches!(execution_state(&snapshot), "idle" | "running" | "waiting");
         if let Some(pending) = snapshot["pending"].as_array() {
             for receipt in pending {
                 match field(receipt, "status") {
@@ -457,7 +484,7 @@ impl Binding {
                 }
             }
         }
-        if matches!(field(&snapshot, "execution_state"), "running" | "waiting") {
+        if matches!(execution_state(&snapshot), "running" | "waiting") {
             uncertain |= snapshot["execution_generation"].as_u64().is_none_or(|generation| generation == 0)
                 || client.rpc("session.interrupt", json!({"session_id":self.id(),"execution_generation":snapshot["execution_generation"]})).is_err();
         }

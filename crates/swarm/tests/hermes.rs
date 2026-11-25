@@ -253,7 +253,7 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
                         .push((method.to_owned(), params.clone()));
                     let snapshot = || {
                         json!({"session_id":NATIVE,"authority_epoch":4,"subscription_id":"scope",
-                        "execution_state":"running","execution_generation":3,"info":{"cwd":ws_home.parent().unwrap()},
+                        "running":true,"execution_generation":3,"info":{"cwd":ws_home.parent().unwrap()},
                         "pending":*admissions.lock().unwrap(),"prompts":[{"kind":"approval","prompt_id":"a1"}]})
                     };
                     let result = match method {
@@ -269,7 +269,7 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
                             assert_eq!(params["session_id"], NATIVE);
                             let receipt = json!({"ref":{"profile_id":ws_home,"session_id":NATIVE},
                                 "input_id":params["input_id"],"admission_id":"queued-id","status":"queued",
-                                "execution_generation":0,"authority_epoch":4});
+                                "execution_generation":if params["text"] == "fixture lost reply" {json!(0)} else {Value::Null},"authority_epoch":4});
                             admissions.lock().unwrap().push(receipt.clone());
                             receipt
                         }
@@ -432,7 +432,7 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
     );
     assert_eq!(
         observed["semantic_receipt"]["native_admission"]["execution_generation"],
-        0
+        Value::Null
     );
     assert_eq!(
         peer.query(json!({"op":"delete","session_id":id}))["op"],
