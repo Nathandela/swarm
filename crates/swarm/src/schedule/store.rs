@@ -1,4 +1,8 @@
-use super::{Job, Result, Spec, Template, calendar::Rule, id, valid_id, validate_text};
+use super::{
+    Job, Result, Spec, Template,
+    calendar::{Rule, Zone},
+    id, valid_id, validate_text,
+};
 use bbolt_rs::{
     Bolt, BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi,
 };
@@ -349,7 +353,7 @@ impl Store {
             if spec.calendar != job.spec.calendar {
                 self.check_future(&spec, now)?;
             }
-            if let Some(old) = self.evaluate(tx, &job, before(now)?, now)? {
+            if let Some(old) = self.evaluate(tx, &job, before(now)?, now, &mut None)? {
                 save_evaluation(tx, old, None)?;
             }
             job.spec = spec;
@@ -369,10 +373,7 @@ impl Store {
             if job.state == "archived" {
                 return Err(ARCHIVED.into());
             }
-            if state == "active" {
-                self.check_future(&job.spec, now)?;
-            }
-            if let Some(old) = self.evaluate(tx, &job, before(now)?, now)? {
+            if let Some(old) = self.evaluate(tx, &job, before(now)?, now, &mut None)? {
                 let reason = format!("job was {state} before this trigger was claimed");
                 save_evaluation(tx, old, Some(&reason))?;
             }
@@ -545,8 +546,9 @@ impl Store {
     pub fn claim_due(&self, now: Timestamp) -> Result<Vec<Occurrence>> {
         let due = |tx: &dyn ReadBucket| -> Result<Vec<Evaluation>> {
             let mut list = Vec::new();
+            let mut host = None;
             for job in records(tx, JOBS)? {
-                if let Some(evaluation) = self.evaluate(tx, &job, now, now)? {
+                if let Some(evaluation) = self.evaluate(tx, &job, now, now, &mut host)? {
                     list.push(evaluation);
                 }
             }
@@ -579,6 +581,7 @@ impl Store {
         job: &Job,
         through: Timestamp,
         now: Timestamp,
+        host: &mut Option<Zone>,
     ) -> Result<Option<Evaluation>> {
         if job.state != "active" {
             return Ok(None);
@@ -593,7 +596,7 @@ impl Store {
                 cursor = Some(from);
             }
         }
-        let rule = Rule::compile(&job.spec.calendar, &self.host)?;
+        let rule = Rule::compile_cached(&job.spec.calendar, &self.host, host)?;
         let mut zone = None;
         if let Some(active_zone) = &rule.zone.id {
             let old = get::<String>(tx, EVALUATED, &format!("{}/zone", job.id))?;
@@ -1090,6 +1093,36 @@ mod tests {
         assert_eq!(
             history[1].attempts[0].operation_id,
             before.attempts[0].operation_id
+        );
+    }
+
+    #[test]
+    fn idle_claims_leave_large_archived_history_unread() {
+        let dir = Temp::new();
+        let store = Store::open(&dir.0, Path::new("/etc/localtime")).unwrap();
+        let now = ts("2026-01-01T10:00:00Z");
+        let job = store.create(spec(&dir.0), now, true).unwrap();
+        store
+            .write(|tx| {
+                for index in 0..1200 {
+                    let when = Timestamp::from_second(now.as_second() - i64::from(index))?;
+                    let mut run = Occurrence::new(&job, when.to_string(), when, now, None)?;
+                    run.state = "incomplete".into();
+                    put_run(tx, &run)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        store.set_state(&job.id, "archived", now).unwrap();
+        assert_eq!(store.history(&job.id).unwrap().len(), 1200);
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            assert!(store.active().unwrap().is_empty());
+            assert!(store.claim_due(now).unwrap().is_empty());
+        }
+        eprintln!(
+            "20 idle claim and active-index reads with 1200 terminal rows: {:?}",
+            started.elapsed()
         );
     }
 

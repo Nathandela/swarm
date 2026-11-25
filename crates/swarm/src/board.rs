@@ -877,12 +877,20 @@ impl Board {
                 Row::Session(row) => {
                     let tag = field(row, "tag");
                     let separator = if tag.is_empty() { "" } else { " #" };
+                    let automation = if tag == "automation" && row["scheduled_completed"] == true {
+                        " ◆"
+                    } else {
+                        ""
+                    };
                     let details = if cols >= 64 {
                         format!("   {:<8}  {}", field(row, "agent"), field(row, "cwd"))
                     } else {
                         String::new()
                     };
-                    format!("{marker} {}{separator}{tag}{details}", name(row))
+                    format!(
+                        "{marker} {}{automation}{separator}{tag}{details}",
+                        name(row)
+                    )
                 }
             };
             let style = if selected {

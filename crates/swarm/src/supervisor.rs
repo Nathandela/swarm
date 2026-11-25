@@ -1,6 +1,7 @@
 mod reliable;
 mod removal;
 pub(crate) mod runtime;
+mod scheduling;
 mod session;
 
 use crate::ipc::{self, VERSION, field, wire};
@@ -56,6 +57,7 @@ struct State {
     transactions: RwLock<()>,
     deletion_gate: Mutex<()>,
     generation: AtomicU64,
+    schedule_socket: Option<PathBuf>,
 }
 
 impl State {
@@ -99,7 +101,14 @@ impl State {
     }
 
     fn reserve(&self, request: &Value) -> io::Result<Arc<Session>> {
-        let prepared = Session::prepare(request)?;
+        self.reserve_prepared(Session::prepare(request)?, false)
+    }
+
+    fn reserve_prepared(
+        &self,
+        prepared: session::Prepared,
+        scheduled: bool,
+    ) -> io::Result<Arc<Session>> {
         let _reservation = self.launch_gate.lock().unwrap();
         if self
             .sessions
@@ -111,6 +120,12 @@ impl State {
             >= SESSION_LIMIT
         {
             return Err(io::Error::other("session limit reached"));
+        }
+        if let Some(directory) = scheduling::conflict(self, &prepared.cwd, scheduled) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("workspace overlaps active Swarm session in {directory}"),
+            ));
         }
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
         self.sessions
@@ -190,6 +205,12 @@ fn serve() -> io::Result<()> {
     runtime::reclaim_socket(&socket)?;
     let listener = runtime::bind(&socket)?;
     crate::environment::save(&root)?;
+    let receipt = scheduling::socket(&socket)
+        .map_err(|e| {
+            eprintln!("daemon: scheduled completion listener unavailable: {e}");
+            e
+        })
+        .ok();
     let state = Arc::new(State {
         root: runtime_root,
         endpoint,
@@ -200,7 +221,11 @@ fn serve() -> io::Result<()> {
         transactions: RwLock::new(()),
         deletion_gate: Mutex::new(()),
         generation: AtomicU64::new(1),
+        schedule_socket: receipt.as_ref().map(|(path, _)| path.clone()),
     });
+    if let Some((_, listener)) = receipt {
+        scheduling::receipts(listener, state.clone());
+    }
     let monitor = state.clone();
     thread::spawn(move || {
         loop {
@@ -264,7 +289,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     | "semantic-target"
                     | "native-requests-v1"
                     | crate::bootstrap::RESTART
-            )
+            ) || (state.schedule_socket.is_some() && scheduling::CAPS.contains(cap))
         })
         .collect();
     let mut welcome = json!({
@@ -340,6 +365,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     });
                 }
                 reply(&writer, state, json!({"op": "ok"}))
+            }
+            "schedule_tick" | "schedule_run" | "schedule_workspace_check" | "schedule_route_check" | "schedule_native_status" => {
+                let message = match scheduling::handle(state, &request, &caps) {
+                    Ok(message) => message,
+                    Err(e) => json!({"op":"error","error_code":"invalid_field","error":e.to_string()}),
+                };
+                reply(&writer, state, message)
             }
             "owner_launch" | "owner_launch_status" => {
                 reliable::handle(state, &request, caps.contains(&"owner-launch"))

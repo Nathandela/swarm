@@ -258,11 +258,11 @@ fn read_spec(args: &[&str]) -> Result<Spec> {
     }
     let get = |key| values.get(key).copied().unwrap_or_default();
     let choices = [
-        ("once", get("once") != ""),
+        ("once", !get("once").is_empty()),
         ("daily", get("daily") == "true"),
         ("weekdays", get("weekdays") == "true"),
-        ("weekly", get("weekly") != ""),
-        ("cron", get("cron") != ""),
+        ("weekly", !get("weekly").is_empty()),
+        ("cron", !get("cron").is_empty()),
     ];
     let mut kinds = choices
         .into_iter()

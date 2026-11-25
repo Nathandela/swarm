@@ -51,8 +51,21 @@ pub(super) struct Rule {
 
 impl Rule {
     pub fn compile(cal: &Calendar, host: &Path) -> Result<Self> {
+        Self::compile_cached(cal, host, &mut None)
+    }
+
+    pub fn compile_cached(
+        cal: &Calendar,
+        host: &Path,
+        resolved: &mut Option<Zone>,
+    ) -> Result<Self> {
         let zone = match cal.time_zone.as_str() {
-            "host" => Zone::host(host)?,
+            "host" => {
+                if resolved.is_none() {
+                    *resolved = Some(Zone::host(host)?);
+                }
+                resolved.as_ref().expect("captured host zone").clone()
+            }
             "" | "Local" => {
                 return Err("select the host time zone or a named IANA time zone".into());
             }

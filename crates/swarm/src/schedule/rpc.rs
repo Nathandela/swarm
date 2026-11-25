@@ -41,9 +41,17 @@ pub(super) fn owner(from_timer: bool) -> Result<Client> {
 }
 
 pub(super) fn qualified_timer() -> Result<()> {
-    if !owner(false)?.supports("schedule-native") {
+    let mut client = owner(false)?;
+    if !client.supports("schedule-native") {
         return Err("timer installation requires the native schedule supervisor with unattended startup support".into());
     }
+    let root = std::fs::canonicalize(ipc::state_path()?)?;
+    request(
+        &mut client,
+        json!({"op":"schedule_native_status","state_dir":root}),
+        "schedule_native_status",
+    )?;
+    crate::environment::restore(&root)?;
     Ok(())
 }
 

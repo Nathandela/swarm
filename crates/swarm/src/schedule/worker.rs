@@ -14,6 +14,7 @@ pub(crate) const PROOF: &str = "SWARM_SCHEDULE_PROOF";
 pub(crate) const SOCKET: &str = "SWARM_SCHEDULE_SOCKET";
 pub(crate) const BIN: &str = "SWARM_SCHEDULE_BIN";
 pub(crate) const SESSION: &str = "SWARM_SESSION_ID";
+pub(crate) const MAX_PROMPT: usize = 4096;
 const MCP: &str = "schedule-receipt-bridge";
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -86,6 +87,20 @@ impl Binding {
     }
 }
 
+pub(crate) fn read_binding(config: &Value) -> io::Result<Option<Binding>> {
+    if config["schedule"].is_null() {
+        return Ok(None);
+    }
+    let binding: Binding = serde_json::from_value(config["schedule"].clone())?;
+    if !binding.valid()
+        || config["provider"]["name"] != "codex"
+        || config["provider"]["mode"] != "managed"
+    {
+        return Err(io::Error::other("invalid scheduled worker reservation"));
+    }
+    Ok(Some(binding))
+}
+
 fn path_string(path: &Path) -> Result<&str> {
     path.to_str()
         .filter(|s| path.is_absolute() && !s.chars().any(char::is_control))
@@ -134,6 +149,19 @@ pub(crate) fn codex_policy(
         .into_iter()
         .flat_map(|cfg| ["-c".into(), cfg])
         .collect())
+}
+
+pub(crate) fn codex_turn(authority: &str, cwd: &Path, params: &mut Value) {
+    let sandbox = match authority {
+        "observe" => json!({"type":"readOnly","networkAccess":false}),
+        "workspace-write" => {
+            json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true})
+        }
+        _ => return,
+    };
+    params["cwd"] = json!(cwd);
+    params["approvalPolicy"] = json!("never");
+    params["sandboxPolicy"] = sandbox;
 }
 
 #[derive(Deserialize)]

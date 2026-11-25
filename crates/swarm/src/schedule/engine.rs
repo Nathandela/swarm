@@ -37,6 +37,7 @@ pub(crate) enum WorkerState {
     Running,
     NeedsInput,
     Quota,
+    QuotaStopped,
     Stopped,
     StartupRefused,
     Unknown,
@@ -195,7 +196,7 @@ impl<B: Backend> Engine<B> {
             return Ok(());
         }
         match worker {
-            WorkerState::Quota => {
+            WorkerState::Quota | WorkerState::QuotaStopped => {
                 let next = self.change(run, |current, attempt| {
                     attempt.state = "stopping".into();
                     attempt.updated_at = now;
@@ -571,12 +572,10 @@ impl<B: Backend> Engine<B> {
             && self
                 .backend
                 .closing_matches(session, attempt_id, &report.summary)
+            && let Err(err) = self.finalize(&saved, Some(session), now)
+            && !err.is::<Changed>()
         {
-            if let Err(err) = self.finalize(&saved, Some(session), now)
-                && !err.is::<Changed>()
-            {
-                return Err(err);
-            }
+            return Err(err);
         }
         Ok(())
     }
@@ -683,7 +682,10 @@ impl<B: Backend> Engine<B> {
 }
 
 fn stopped(state: WorkerState) -> bool {
-    matches!(state, WorkerState::Stopped | WorkerState::StartupRefused)
+    matches!(
+        state,
+        WorkerState::Stopped | WorkerState::StartupRefused | WorkerState::QuotaStopped
+    )
 }
 
 fn elapsed(now: Timestamp, since: Timestamp, seconds: i128) -> bool {
