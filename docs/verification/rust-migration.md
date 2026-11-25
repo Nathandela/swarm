@@ -20,3 +20,7 @@ A separate macOS regression exercised four handoff outcomes 100 consecutive time
 The first full cross-built Rust test round on Linux found a wide-character snapshot mismatch also observed on macOS, and a Discord test that tried to run the build host’s executable path. The fleet runs the actual Linux binaries on `tf_nathan` in private scratch without replacing the installed Swarm or using an automated runner. [Linux test runner](../../scripts/verification/rust_linux_tests.py).
 
 Mixed-language live shim adoption, complete provider semantics, live Discord text/files/calls, 24-hour soaks, the full target matrix and installed upgrade/rollback remain release gates.
+
+### Subsequent host rounds
+
+The complete macOS Go normal and race rounds both passed using `-p 2 -timeout 35m` (97 tested packages and eight without tests in each round). Isolated Rust board launch, attach, daemon termination, reattach and worker-identity checks then passed 100 consecutive runs on macOS and 100 on Linux. The frozen macOS executable had SHA-256 `21003f09d255a340cfa521282111b343ac500a7c44eaae10e0a8aa0375926eae`. Linux used `d1a2a2dcada0d35b3c2b34a8caa7598a8c60d72bd7adb274f93045bb5cb17748`. These repetitions cover one scripted journey. Full dashboard coverage and the mixed-load soak remain open.

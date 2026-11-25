@@ -116,7 +116,7 @@ def role(root, pid, command):
     argv = command.split()
     if not argv:
         return None
-    if argv[0] in (str(root / "bin/swarm"), str(root / "bin/board")) and executable(pid) == argv[0]:
+    if argv[0] in (str(root / "bin/swarm"), str(root / "bin/board"), str(root / "bin/codex")) and executable(pid) == argv[0]:
         return "swarm"
     if (len(argv) > 1 and argv[1] in (str(root / "bin/claude"), str(root / "bin/driver"))
             and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(executable(pid)).name.lower())):
@@ -204,7 +204,7 @@ def guard(root):
     if sys.platform.startswith("linux"):
         if not Path("/usr/bin/bwrap").is_file():
             raise RuntimeError("Linux fixture isolation requires /usr/bin/bwrap")
-        prefix = ["/usr/bin/bwrap", "--unshare-net", "--unshare-pid", "--unshare-ipc",
+        prefix = ["/usr/bin/bwrap", "--tmpfs", "/tmp", "--unshare-net", "--unshare-pid", "--unshare-ipc",
                   "--dev", "/dev", "--proc", "/proc"]
         for directory in ("/usr", "/bin", "/lib", "/lib64", "/etc/terminfo"):
             if Path(directory).exists():

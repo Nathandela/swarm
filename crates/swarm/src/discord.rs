@@ -1,7 +1,12 @@
 mod config;
+mod dispatcher;
 mod gateway;
 mod local;
+mod manager;
+mod provenance;
+mod receipt;
 mod rest;
+mod service;
 
 use crate::ipc;
 use config::{Config, Place, invalid};
@@ -232,14 +237,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     }
     let cfg = place.load()?;
     match req.command {
-        "run" => {
-            if !cfg.enabled() {
-                return Err(io::Error::other("connector is disabled"));
-            }
-            return Err(io::Error::other(
-                "native Discord dispatcher service is unavailable in this Rust build",
-            ));
-        }
+        "run" => service::run(&place, &cfg)?,
         "status" => {
             let status = local::call(&place.dir, "status", "", None)
                 .ok()

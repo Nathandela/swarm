@@ -180,19 +180,46 @@ impl Place {
         Ok((supervisor, connector))
     }
 
+    fn ensure_owned(&self, cfg: &Config) -> io::Result<()> {
+        if existing(&self.dir.join("discord.db"))?
+            || runtime::read_json(&self.dir.join(OWNER)).ok().as_ref()
+                != Some(&json!(cfg.text("installation_id")))
+        {
+            return Err(io::Error::other(
+                "existing connector custody requires a qualified migration",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn claim(
+        &self,
+        cfg: &Config,
+    ) -> io::Result<(File, std::os::unix::net::UnixListener)> {
+        let _locks = self.lock()?;
+        self.verify_selection()?;
+        let current = self.load()?;
+        if current.0 != cfg.0 || !cfg.enabled() {
+            return Err(io::Error::other(
+                "connector is disabled or its configuration changed",
+            ));
+        }
+        self.ensure_owned(cfg)?;
+        let lease = runtime::lock(&self.dir.join("bridge.lock"))?;
+        self.ensure_owned(cfg)?;
+        let path = self.dir.join("bridge.sock");
+        runtime::reclaim_socket(&path)?;
+        Ok((lease, runtime::bind(&path)?))
+    }
+
     fn ensure_offline(&self, cfg: Option<&Config>) -> io::Result<()> {
         if existing(&self.dir.join("bridge.sock"))? || existing(&self.dir.join("discord.db"))? {
             return Err(io::Error::other(
                 "existing connector custody requires a qualified migration",
             ));
         }
-        if let Some(cfg) = cfg
-            && runtime::read_json(&self.dir.join(OWNER)).ok().as_ref()
-                != Some(&json!(cfg.text("installation_id")))
-        {
-            return Err(io::Error::other(
-                "existing connector custody requires a qualified migration",
-            ));
+        if let Some(cfg) = cfg {
+            self.ensure_owned(cfg)?;
         }
         Ok(())
     }
@@ -391,7 +418,36 @@ impl Place {
             return self.ensure_offline(None);
         }
         let mut cfg = self.load()?;
-        self.ensure_offline(Some(&cfg))?;
+        self.ensure_owned(&cfg)?;
+        let socket = self.dir.join("bridge.sock");
+        let _lease = match runtime::lock(&self.dir.join("bridge.lock")) {
+            Ok(lease) => lease,
+            Err(err) if existing(&socket)? => {
+                let body = json!({});
+                let response = super::local::call(
+                    &self.dir,
+                    "shutdown",
+                    "",
+                    Some((cfg.text("installation_id"), &body)),
+                )?;
+                if response["stopped"] != true {
+                    return Err(err);
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    if let Ok(lease) = runtime::lock(&self.dir.join("bridge.lock")) {
+                        break lease;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(err);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+            Err(err) => return Err(err),
+        };
+        self.ensure_owned(&cfg)?;
+        runtime::reclaim_socket(&socket)?;
         if cfg.enabled() {
             cfg.0["enabled"] = json!(false);
             runtime::write_json(&self.dir.join(CONFIG), &cfg.0)?;

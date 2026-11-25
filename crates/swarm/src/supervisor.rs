@@ -1,7 +1,10 @@
+mod handoff;
 mod reliable;
 mod removal;
 pub(crate) mod runtime;
+mod scheduling;
 mod session;
+mod supervision;
 
 use crate::ipc::{self, VERSION, field, wire};
 use runtime::{DATA_IN, DATA_OUT, IO_TIMEOUT, SNAPSHOT};
@@ -55,7 +58,9 @@ struct State {
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
     deletion_gate: Mutex<()>,
+    handoff_wake: SyncSender<()>,
     generation: AtomicU64,
+    schedule_socket: Option<PathBuf>,
 }
 
 impl State {
@@ -83,6 +88,7 @@ impl State {
     }
 
     fn publish(&self, session: &Session) {
+        let _ = self.handoff_wake.try_send(());
         let event = json!({
             "op": "event", "endpoint_id": self.endpoint, "session": session.view(&self.endpoint)
         });
@@ -123,8 +129,27 @@ impl State {
             let session = self.session(&json!({"session_id":source}))?;
             session.expand_agy_resume(&mut request, &source)?;
         }
-        let prepared = Session::prepare(&request)?;
+        let (bound, source) = handoff::bind(self, &request)?;
+        self.reserve_prepared(Session::prepare(&bound)?, false, source)
+    }
+
+    fn reserve_prepared(
+        &self,
+        mut prepared: session::Prepared,
+        scheduled: bool,
+        source: Option<(String, String)>,
+    ) -> io::Result<Arc<Session>> {
         let _reservation = self.launch_gate.lock().unwrap();
+        if let Some((local, instance)) = source {
+            if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
+                s.is_live() && s.incarnation() == instance && s.verify_effective().is_ok()
+            }) {
+                return Err(io::Error::other(
+                    "handoff: source changed during provider admission",
+                ));
+            }
+            prepared.lineage["source_instance"] = json!(instance);
+        }
         if self
             .sessions
             .read()
@@ -135,6 +160,12 @@ impl State {
             >= SESSION_LIMIT
         {
             return Err(io::Error::other("session limit reached"));
+        }
+        if let Some(directory) = scheduling::conflict(self, &prepared.cwd, scheduled) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("workspace overlaps active Swarm session in {directory}"),
+            ));
         }
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
         self.sessions
@@ -214,7 +245,15 @@ fn serve() -> io::Result<()> {
     runtime::reclaim_socket(&socket)?;
     let listener = runtime::bind(&socket)?;
     crate::environment::save(&root)?;
+    let (handoff_wake, handoff_events) = mpsc::sync_channel(1);
+    let receipt = scheduling::socket(&socket)
+        .map_err(|e| {
+            eprintln!("daemon: scheduled completion listener unavailable: {e}");
+            e
+        })
+        .ok();
     let state = Arc::new(State {
+        handoff_wake,
         root: runtime_root,
         endpoint,
         sessions: RwLock::new(sessions),
@@ -224,7 +263,14 @@ fn serve() -> io::Result<()> {
         transactions: RwLock::new(()),
         deletion_gate: Mutex::new(()),
         generation: AtomicU64::new(1),
+        schedule_socket: receipt.as_ref().map(|(path, _)| path.clone()),
     });
+    let handoffs = state.clone();
+    let _ = handoffs.handoff_wake.try_send(());
+    thread::spawn(move || supervision::run(handoffs, handoff_events));
+    if let Some((_, listener)) = receipt {
+        scheduling::receipts(listener, state.clone());
+    }
     let monitor = state.clone();
     thread::spawn(move || {
         loop {
@@ -291,7 +337,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     | "semantic-target"
                     | "native-requests-v1"
                     | crate::bootstrap::RESTART
-            )
+            ) || (state.schedule_socket.is_some() && scheduling::CAPS.contains(cap))
         })
         .collect();
     let mut welcome = json!({
@@ -367,6 +413,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     });
                 }
                 reply(&writer, state, json!({"op": "ok"}))
+            }
+            "schedule_tick" | "schedule_run" | "schedule_workspace_check" | "schedule_route_check" | "schedule_native_status" => {
+                let message = match scheduling::handle(state, &request, &caps) {
+                    Ok(message) => message,
+                    Err(e) => json!({"op":"error","error_code":"invalid_field","error":e.to_string()}),
+                };
+                reply(&writer, state, message)
             }
             "owner_launch" | "owner_launch_status" => {
                 reliable::handle(state, &request, &caps)

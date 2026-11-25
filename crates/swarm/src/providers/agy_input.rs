@@ -175,6 +175,7 @@ impl Broker {
     pub(crate) fn prepare(
         dir: &Path,
         config: &Value,
+        cwd: &Path,
         environment: &[(String, String)],
     ) -> io::Result<Self> {
         let provider = &config["provider"];
@@ -204,7 +205,7 @@ impl Broker {
             session: session.into(),
             executable: PathBuf::from(field(provider, "executable")),
             pinned: provider["identity"].clone(),
-            cwd: PathBuf::from(field(config, "cwd")),
+            cwd: cwd.canonicalize()?,
             version: version.into(),
             environment: environment.to_vec(),
             registration_token,

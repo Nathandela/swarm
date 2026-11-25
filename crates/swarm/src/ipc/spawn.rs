@@ -120,7 +120,7 @@ fn private_dir(path: &Path) -> io::Result<File> {
     Ok(dir)
 }
 
-fn snapshot(id: &str, source: &str) -> io::Result<PathBuf> {
+pub(super) fn snapshot(id: &str, source: &str) -> io::Result<PathBuf> {
     let tmp = absolute(&env::temp_dir())?;
     if id.is_empty() {
         let data = fs::read(source)?;
@@ -213,6 +213,24 @@ fn snapshot(id: &str, source: &str) -> io::Result<PathBuf> {
     lock.sync_all()?;
     File::open(tmp)?.sync_all()?;
     Ok(destination)
+}
+
+pub(super) fn dispose_refused(path: &Path, e: &io::Error, verb: &str) {
+    // A lost acknowledgement can leave a live worker reading this file.
+    if e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<super::Refusal>())
+        .is_some_and(|r| r.1)
+    {
+        let _ = fs::remove_file(path);
+        if let Some(dir) = path.parent() {
+            let _ = fs::remove_dir(dir);
+        }
+    } else {
+        eprintln!(
+            "{verb}: unconfirmed launch; retained handoff at {}",
+            path.display()
+        );
+    }
 }
 
 fn write_snapshot(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -425,21 +443,7 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
             if id.is_empty()
                 && let Some(dest) = destination.as_ref()
             {
-                // A lost acknowledgement can leave a live worker reading this file.
-                if e.get_ref()
-                    .and_then(|inner| inner.downcast_ref::<super::Refusal>())
-                    .is_some_and(|refusal| refusal.1)
-                {
-                    let _ = fs::remove_file(dest);
-                    if let Some(dir) = dest.parent() {
-                        let _ = fs::remove_dir(dir);
-                    }
-                } else {
-                    eprintln!(
-                        "spawn: unconfirmed launch; retained handoff at {}",
-                        dest.display()
-                    );
-                }
+                dispose_refused(dest, &e, "spawn");
             }
             report(e)
         })?;

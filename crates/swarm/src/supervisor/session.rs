@@ -1,6 +1,7 @@
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
 use crate::providers::{self, LaunchPlan, codex_receipt};
+use crate::schedule::{Launch, Result as ScheduleResult, WorkerState, worker};
 use serde_json::{Value, json};
 use std::env;
 use std::fs::{self, DirBuilder};
@@ -25,18 +26,23 @@ enum Phase {
 }
 
 pub(super) struct Prepared {
-    cwd: PathBuf,
+    pub(super) lineage: Value,
+    isolated: bool,
+    pub cwd: PathBuf,
     label: String,
     tag: String,
     cols: u16,
     rows: u16,
     provider: LaunchPlan,
     agy_launch: Value,
+    scheduled: Option<(worker::Binding, Value)>,
 }
 
 struct Labels {
     name: String,
     tag: String,
+    schedule_projected: bool,
+    scheduled_completed: bool,
 }
 
 fn sanitize_name(text: &str) -> String {
@@ -45,17 +51,23 @@ fn sanitize_name(text: &str) -> String {
 
 pub(super) struct Session {
     pub id: String,
-    dir: PathBuf,
+    pub(super) dir: PathBuf,
+    pub(super) notification_gate: Mutex<()>,
+    pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
     agent: String,
     resumed_from: Option<String>,
     agy_native_installation: Option<String>,
     cwd: String,
+    effective: PathBuf,
+    pub(super) lineage: Value,
+    pub(super) owner_interactive: bool,
     labels: Mutex<Labels>,
     created: String,
     state: Mutex<(Phase, String)>,
     proven_owner: OnceLock<(u32, u64)>,
-    launch_plan: Mutex<Option<LaunchPlan>>,
+    launch_plan: Mutex<Option<(LaunchPlan, Value)>>,
+    pub(super) schedule: Option<worker::Binding>,
     observed_status: Mutex<Option<Value>>,
     opened: Instant,
 }
@@ -79,8 +91,11 @@ impl Session {
         {
             return Err(io::Error::other("unproven Rust session reservation"));
         }
+        let schedule = worker::read_binding(&data)?;
         Ok(Self {
             dir,
+            notification_gate: Mutex::new(()),
+            supervision_pending: std::sync::atomic::AtomicBool::new(false),
             id: id.into(),
             token: token.into(),
             agent: match field(&data["provider"], "name") {
@@ -96,14 +111,20 @@ impl Session {
                 .as_str()
                 .map(str::to_owned),
             cwd: cwd.into(),
+            lineage: data["lineage"].clone(),
+            owner_interactive: unrestricted_owner(&data),
+            effective: PathBuf::from(data["checkout"]["path"].as_str().unwrap_or(cwd)),
             labels: Mutex::new(Labels {
                 name: name.into(),
                 tag: field(&data, "tag").into(),
+                schedule_projected: data["schedule_projected"] == true,
+                scheduled_completed: data["scheduled_completed"] == true,
             }),
             created: created.into(),
             state: Mutex::new((Phase::Lost, created.into())),
             proven_owner: OnceLock::new(),
             launch_plan: Mutex::new(None),
+            schedule,
             observed_status: Mutex::new(None),
             opened: Instant::now(),
         })
@@ -138,12 +159,14 @@ impl Session {
             return Err(io::Error::other("cols/rows out of range"));
         }
         if !field(request, "operation_id").is_empty()
-            || req["worktree"] == true
             || req.as_object().unwrap().iter().any(|(key, value)| {
                 !matches!(
                     key.as_str(),
                     "agent"
                         | "cwd"
+                        | "spawned_from"
+                        | "spawn_intent"
+                        | "supervision"
                         | "name"
                         | "tag"
                         | "env"
@@ -186,8 +209,20 @@ impl Session {
             runtime::launch_env(&req["env"]),
         )?;
         let (cols, rows) = runtime::dims(req);
+        let isolated = req["worktree"] == true;
+        if isolated && !crate::workspace::is_repo(&cwd) {
+            return Err(io::Error::other("worktree: cwd is not a git repository"));
+        }
         let tag = sanitize_name(field(req, "tag")).trim().to_owned();
+        let mut lineage = json!({});
+        for key in ["spawned_from", "spawn_intent", "supervision"] {
+            if !field(req, key).is_empty() {
+                lineage[key] = req[key].clone();
+            }
+        }
         Ok(Prepared {
+            lineage,
+            isolated,
             tag,
             cwd,
             label,
@@ -199,11 +234,49 @@ impl Session {
                 Value::Null
             },
             provider,
+            scheduled: None,
         })
+    }
+
+    pub(super) fn scheduled_codex_available(cwd: &Path) -> ScheduleResult<()> {
+        let plan = Self::prepare(&json!({"launch":{"agent":"codex","cwd":cwd}}))?;
+        if !providers::codex::managed(&plan.provider.version) {
+            return Err("scheduled Codex requires its managed App Server".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_scheduled(
+        launch: &Launch<'_>,
+        socket: &Path,
+    ) -> ScheduleResult<Prepared> {
+        let binding = worker::Binding::new(launch)?;
+        let mut plan = Self::prepare(&json!({"launch":{
+            "agent":launch.agent,"cwd":launch.workspace,"name":launch.name,"cols":100,"rows":32,
+        }}))?;
+        if plan.provider.agent != "codex"
+            || !providers::codex::managed(&plan.provider.version)
+            || plan.cwd != Path::new(launch.workspace)
+        {
+            return Err(
+                "scheduled Codex requires a managed App Server in the exact occurrence workspace"
+                    .into(),
+            );
+        }
+        let binary = env::current_exe()?;
+        // The remote TUI inherits App Server authority and rejects local overrides.
+        plan.provider.argv.clear();
+        plan.scheduled = Some((
+            binding,
+            json!({"proof":launch.token,"socket":socket,"binary":binary}),
+        ));
+        Ok(plan)
     }
 
     pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
         let Prepared {
+            lineage,
+            isolated,
             tag,
             cwd,
             label,
@@ -211,7 +284,16 @@ impl Session {
             rows,
             provider,
             agy_launch,
+            scheduled,
         } = prepared;
+        let id = runtime::random_id()?;
+        use std::os::unix::fs::MetadataExt;
+        let physical = cwd.metadata()?;
+        let checkout = if isolated {
+            Some(crate::workspace::plan(&cwd, &id, &label)?)
+        } else {
+            None
+        };
         let label = if label.is_empty() {
             match provider.agent {
                 "agy" => "agy",
@@ -227,15 +309,15 @@ impl Session {
             } else {
                 None
             };
-        let id = runtime::random_id()?;
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
+                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
-                "provider": {"name": provider.agent, "version": provider.version, "agy_status_line":provider.agy_status_line,
+                "schedule":scheduled.as_ref().map(|(binding,_)| binding),
+                "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
                     "agy_native_installation":agy_native_installation,
                     "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
@@ -245,18 +327,29 @@ impl Session {
             }),
         )?;
         let mut session = Self::load(dir)?;
-        *session.launch_plan.get_mut().unwrap() = Some(provider);
+        let secrets = scheduled.map_or(Value::Null, |(_, transient)| transient);
+        *session.launch_plan.get_mut().unwrap() = Some((provider, secrets));
         session.transition(Phase::Starting);
         Ok(session)
     }
 
     pub(super) fn start(&self) -> io::Result<()> {
-        let provider = self
+        let (provider, scheduled) = self
             .launch_plan
             .lock()
             .unwrap()
             .take()
             .ok_or_else(|| io::Error::other("no unconsumed provider launch plan"))?;
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        if !meta["checkout"].is_null() {
+            crate::workspace::create(Path::new(&self.cwd), &self.id, &meta["checkout"])
+                .inspect_err(|e| {
+                    let _ = runtime::write_json(
+                        &self.dir.join("exit.json"),
+                        &json!({"token":self.token,"error":e.to_string()}),
+                    );
+                })?;
+        }
         let mut shim = Command::new(env::current_exe()?);
         shim.env_clear().envs(provider.env);
         shim.arg("shim")
@@ -281,7 +374,11 @@ impl Session {
         thread::spawn(move || {
             let _ = child.wait();
         });
-        runtime::write_control(&mut bootstrap, &json!({"argv": provider.argv}))
+        let mut transient = json!({"argv":provider.argv,"schedule":scheduled});
+        if self.owner_interactive {
+            transient["owner_socket"] = json!(crate::ipc::socket_path()?);
+        }
+        runtime::write_control(&mut bootstrap, &transient)
     }
 
     fn exit(&self) -> io::Result<Value> {
@@ -493,6 +590,16 @@ impl Session {
         session: &str,
         state: &super::State,
     ) -> io::Result<Value> {
+        self.semantic_send_inner(request, session, state, None)
+    }
+
+    fn semantic_send_inner(
+        &self,
+        request: &Value,
+        session: &str,
+        state: &super::State,
+        scheduled: Option<&str>,
+    ) -> io::Result<Value> {
         let body = &request["composer_send"];
         let operation = field(request, "operation_id");
         let text = field(body, "text");
@@ -501,7 +608,7 @@ impl Session {
             || body["session"] != session
             || !codex_receipt::timely(operation)
             || text.is_empty()
-            || text.len() > 4096
+            || !worker::prompt_fits(text, scheduled.is_some())
             || body.as_object().is_none_or(|fields| {
                 fields.iter().any(|(key, value)| {
                     !matches!(
@@ -566,7 +673,9 @@ impl Session {
             }
             return Ok(record["receipt"].clone());
         }
-        self.semantic_target()?;
+        if scheduled.is_none() {
+            self.semantic_target()?;
+        }
         let mut shim = self.dial()?;
         shim.set_read_timeout(Some(Duration::from_secs(if self.agent == "agy" {
             12
@@ -577,7 +686,7 @@ impl Session {
             &mut shim,
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
-                "session_instance":instance,"text":text,"origin":origin,
+                "session_instance":instance,"text":text,"origin":origin,"schedule_attempt":scheduled,
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -591,6 +700,153 @@ impl Session {
         }
         self.semantic_status(operation, session, &state.root)?
             .ok_or_else(|| io::Error::other("semantic receipt is unavailable"))
+    }
+
+    pub(super) fn provider_directory(&self) -> &Path {
+        &self.effective
+    }
+
+    fn verified_exit(&self) -> Option<Value> {
+        self.exit()
+            .ok()
+            .filter(|_| owner_gone(&self.dir, &self.token).unwrap_or(false))
+    }
+
+    pub(super) fn workspace_unconfirmed(&self) -> bool {
+        self.verified_exit().is_none()
+    }
+
+    pub(super) fn scheduled_state(&self) -> WorkerState {
+        let exit = self.verified_exit();
+        if exit.as_ref().is_some_and(|row| row["error"].is_string()) {
+            return WorkerState::StartupRefused;
+        }
+        if self.schedule.as_ref().is_some_and(|b| {
+            self.scheduled_proof(&b.attempt_id)
+                .is_some_and(|p| p["outcome"] == "usageLimitExceeded")
+        }) {
+            return if exit.is_some() {
+                WorkerState::QuotaStopped
+            } else {
+                WorkerState::Quota
+            };
+        }
+        if exit.is_some() {
+            return WorkerState::Stopped;
+        }
+        if self.is_live() {
+            let status = self.observed_status.lock().unwrap();
+            return if status.as_ref().is_some_and(|s| s["Interaction"] != "none") {
+                WorkerState::NeedsInput
+            } else {
+                WorkerState::Running
+            };
+        }
+        WorkerState::Unknown
+    }
+
+    pub(super) fn send_scheduled(
+        &self,
+        state: &super::State,
+        session: &str,
+        attempt: &str,
+        text: &str,
+        begin: &mut dyn FnMut() -> ScheduleResult<()>,
+    ) -> ScheduleResult<()> {
+        if !worker::prompt_fits(text, true) {
+            return Err("scheduled opening prompt exceeds the native frame limit".into());
+        }
+        let observation = runtime::read_json(&self.dir.join("observation.json"))?;
+        if observation["token"] != self.token
+            || observation["schedule_ready"] != true
+            || self.status_exchange(&json!({"type":"schedule_ready","attempt":attempt}))?["type"]
+                != "ok"
+        {
+            return Ok(());
+        }
+        let operation = codex_receipt::operation()?;
+        begin()?;
+        runtime::write_json(
+            &self.dir.join("schedule-prompt.json"),
+            &json!({
+                "operation":operation,"session":session,"attempt":attempt,
+            }),
+        )?;
+        let reply = self.semantic_send_inner(&json!({
+            "operation_id":operation,"body_version":1,"composer_send":{
+                "session":session,"session_instance":codex_receipt::instance(&self.token),"text":text,
+            },
+        }), session, state, Some(attempt))?;
+        if reply["state"] != "native_accepted" {
+            return Err("native opening prompt outcome is uncertain".into());
+        }
+        Ok(())
+    }
+
+    fn scheduled_proof(&self, attempt: &str) -> Option<Value> {
+        let proof = runtime::read_json(&self.dir.join("schedule-finish.json")).ok()?;
+        let prompt = runtime::read_json(&self.dir.join("schedule-prompt.json")).ok()?;
+        let session = prompt["session"].as_str()?;
+        if session.split_once('/')?.1 != self.id
+            || proof["token"] != self.token
+            || proof["attempt"] != attempt
+            || prompt["attempt"] != attempt
+            || proof["operation"] != prompt["operation"]
+        {
+            return None;
+        }
+        let operation = field(&prompt, "operation");
+        let receipt = self
+            .semantic_status(operation, session, self.dir.parent()?)
+            .ok()??;
+        if receipt["state"] != "native_accepted"
+            || receipt["native_turn_id"] != proof["turn"]
+            || receipt["native_session_id"] != proof["thread"]
+        {
+            return None;
+        }
+        Some(proof)
+    }
+
+    pub(super) fn scheduled_closing(&self, _: &str, attempt: &str, summary: &str) -> bool {
+        let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.scheduled_proof(attempt).is_some_and(|proof| {
+            proof["outcome"] == "completed"
+                && !field(&proof, "item").is_empty()
+                && normalize(field(&proof, "text")).contains(&normalize(summary))
+        })
+    }
+
+    pub(super) fn scheduled_handoff(&self, _: &str, attempt: &str) -> Option<String> {
+        let proof = self.scheduled_proof(attempt)?;
+        let text: String = field(&proof, "text").chars().take(500).collect();
+        (!text.is_empty()).then(|| format!(" Previous assistant message: {text}"))
+    }
+
+    pub(super) fn project_schedule(&self) -> io::Result<bool> {
+        let mut labels = self.labels.lock().unwrap();
+        if labels.schedule_projected {
+            return Ok(false);
+        }
+        let path = self.dir.join("session.json");
+        let mut meta = runtime::read_json(&path)?;
+        if field(&meta, "id") != self.id
+            || field(&meta, "token") != self.token
+            || worker::read_binding(&meta)?.as_ref().map(|b| &b.attempt_id)
+                != self.schedule.as_ref().map(|b| &b.attempt_id)
+        {
+            return Err(io::Error::other(
+                "scheduled session reservation identity changed",
+            ));
+        }
+        meta["schedule_projected"] = json!(true);
+        meta["scheduled_completed"] = json!(true);
+        meta["tag"] = json!("automation");
+        runtime::write_json(&path, &meta)?;
+        labels.schedule_projected = true;
+        labels.scheduled_completed = true;
+        labels.tag = "automation".into();
+        Ok(true)
     }
 
     pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {
@@ -773,6 +1029,48 @@ impl Session {
         )
     }
 
+    pub(super) fn incarnation(&self) -> String {
+        codex_receipt::instance(&self.token)
+    }
+    pub(super) fn verify_effective(&self) -> io::Result<&Path> {
+        if let Some((repo, record)) = self.checkout_record()? {
+            crate::workspace::verify(&repo, &self.id, &record)?;
+        } else {
+            let meta = runtime::read_json(&self.dir.join("session.json"))?;
+            let actual = self.effective.metadata()?;
+            use std::os::unix::fs::MetadataExt;
+            if self.effective.canonicalize()? != self.effective
+                || !actual.is_dir()
+                || meta["cwd_identity"] != json!([actual.dev(), actual.ino()])
+            {
+                return Err(io::Error::other(
+                    "handoff: source checkout identity changed or cannot be proved",
+                ));
+            }
+        }
+        Ok(&self.effective)
+    }
+    pub(super) fn uses_directory(&self, root: &Path) -> bool {
+        [Path::new(&self.cwd), self.effective.as_path()]
+            .into_iter()
+            .any(|p| {
+                p.starts_with(root) || p.canonicalize().is_ok_and(|path| path.starts_with(root))
+            })
+    }
+    pub(super) fn checkout_record(&self) -> io::Result<Option<(PathBuf, Value)>> {
+        let data = runtime::read_json(&self.dir.join("session.json"))?;
+        if data["token"] != self.token || data["id"] != self.id || data["cwd"] != self.cwd {
+            return Err(io::Error::other("session reservation identity changed"));
+        }
+        if data["checkout"].is_null() {
+            return Ok(None);
+        }
+        if data["checkout"]["path"].as_str().map(Path::new) != Some(&self.effective) {
+            return Err(io::Error::other("session checkout identity changed"));
+        }
+        Ok(Some((PathBuf::from(&self.cwd), data["checkout"].clone())))
+    }
+
     pub(super) fn set_label(&self, key: &str, input: &str) -> io::Result<bool> {
         let mut labels = self.labels.lock().unwrap();
         let mut value = sanitize_name(input);
@@ -791,10 +1089,16 @@ impl Session {
             meta["name_set_at"] = json!(now());
         }
         meta[key] = json!(value);
+        if key == "tag" && value != "automation" {
+            meta["scheduled_completed"] = json!(false);
+        }
         runtime::write_json(&path, &meta)?;
         if key == "name" {
             labels.name = value;
         } else {
+            if value != "automation" {
+                labels.scheduled_completed = false;
+            }
             labels.tag = value;
         }
         Ok(true)
@@ -832,14 +1136,37 @@ impl Session {
             "group": group, "group_entered_at": state.1, "last_activity": state.1,
             "created_at": self.created, "summary": "",
         });
+        if let Some(lineage) = self.lineage.as_object() {
+            for key in ["spawned_from", "spawn_intent", "supervision"] {
+                if let Some(value) = lineage.get(key) {
+                    view[key] = value.clone();
+                }
+            }
+        }
+        if self
+            .supervision_pending
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            view["supervision_pending"] = json!(true);
+        }
         if let Some(source) = &self.resumed_from {
             view["resumed_from"] = json!(source);
+        }
+        if labels.scheduled_completed && labels.tag == "automation" {
+            view["scheduled_completed"] = json!(true);
         }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
         }
         view
     }
+}
+
+fn unrestricted_owner(data: &Value) -> bool {
+    data["manager"].is_null()
+        && data["schedule"].is_null()
+        && data["worker_discussion"].is_null()
+        && field(data, "role").is_empty()
 }
 
 fn now() -> String {
@@ -890,5 +1217,42 @@ pub(super) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
             Ok(true)
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod schedule_custody_tests {
+    use super::*;
+
+    #[test]
+    fn lost_session_keeps_workspace_until_verified_exit() {
+        let id = runtime::random_id().unwrap();
+        let dir = std::env::temp_dir().join(&id);
+        runtime::private_dir(&dir).unwrap();
+        let token = runtime::random_id().unwrap();
+        runtime::write_json(
+            &dir.join("session.json"),
+            &json!({
+                "schema":1, "id":id, "token":token, "created_at":now(), "name":"fixture",
+                "cwd":dir, "provider":{"name":"codex","mode":"managed"},
+            }),
+        )
+        .unwrap();
+        let session = Session::load(dir.clone()).unwrap();
+        assert!(!session.is_live());
+        assert!(session.workspace_unconfirmed());
+        runtime::write_json(
+            &dir.join("exit.json"),
+            &json!({"token":"other","error":"refused"}),
+        )
+        .unwrap();
+        assert!(session.workspace_unconfirmed());
+        runtime::write_json(
+            &dir.join("exit.json"),
+            &json!({"token":token,"error":"refused"}),
+        )
+        .unwrap();
+        assert!(!session.workspace_unconfirmed());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

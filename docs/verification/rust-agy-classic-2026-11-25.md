@@ -34,3 +34,5 @@ The local fixture exercised the shipped Rust `spawn` launch, native registration
 ```sh
 python3 scripts/verification/rust_agy_native_input.py target/debug/swarm
 ```
+
+The separate retained Go `TestNativeAgyModalAdmission` passed with the installed 1.4.7 binary and the pinned arm64 helper under the no-egress scratch guard. The installed provider registered via its real tool context, acknowledged the native message, and supplied its marker to the synthetic model. The pending permission-probe command did not execute. This confirms the retained native interface independently of the Rust fixture.
