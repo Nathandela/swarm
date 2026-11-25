@@ -72,6 +72,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
 }
 
 struct State {
+    lock_identity: [u64; 2],
     root: PathBuf,
     endpoint: String,
     socket: PathBuf,
@@ -335,6 +336,8 @@ fn serve() -> io::Result<()> {
     let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
     // Alternate sockets and lock overrides cannot create two writers for one state root.
     let _lock = runtime::lock(&lock)?;
+    use std::os::unix::fs::MetadataExt;
+    let lock_meta = _lock.metadata()?;
     let ownership = root.join(".rust-state-writer.lock");
     let _state_lock = if lock == ownership {
         None
@@ -389,6 +392,7 @@ fn serve() -> io::Result<()> {
         })
         .ok();
     let state = Arc::new(State {
+        lock_identity: [lock_meta.dev(), lock_meta.ino()],
         handoff_wake,
         root: runtime_root,
         endpoint,
@@ -517,6 +521,14 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     &writer,
                     state,
                     json!({"op":"error","error":"idle restart requires the bound supervisor state directory and commit flag"}),
+                )?;
+                continue;
+            }
+            if request["lock_identity"] != json!(state.lock_identity) {
+                reply(
+                    &writer,
+                    state,
+                    json!({"op":op,"result":"deferred","reason":"configured lock is not the running supervisor lock"}),
                 )?;
                 continue;
             }
@@ -870,6 +882,7 @@ mod manager_reservation_tests {
 
     fn fixture(root: &std::path::Path, rows: BTreeMap<String, Arc<Session>>) -> State {
         State {
+            lock_identity: [0, 0],
             handoff_wake: mpsc::sync_channel(1).0,
             schedule_socket: None,
             root: root.to_owned(),

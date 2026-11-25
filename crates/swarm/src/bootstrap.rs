@@ -178,12 +178,12 @@ fn converge() -> io::Result<(u8, String)> {
     let root = ipc::state_path()?;
     let socket = ipc::socket_path()?;
     let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
-    if !runtime::lock_held(&lock)? {
+    let Some(lock_identity) = runtime::held_lock_identity(&lock)? else {
         return Ok((
             0,
             "converged: no daemon holds the lock, nothing to converge".into(),
         ));
-    }
+    };
     let mut client = match ipc::Client::dial(&socket, &[UNATTENDED]) {
         Ok(client) => client,
         Err(error) => {
@@ -216,7 +216,7 @@ fn converge() -> io::Result<(u8, String)> {
         ));
     }
     let response = client.request_body(
-        serde_json::json!({"op":"owner_idle_restart","state_dir":root,"commit":false}),
+        serde_json::json!({"op":"owner_idle_restart","state_dir":root,"lock_identity":lock_identity,"commit":false}),
         "owner_idle_restart",
     )?;
     match ipc::field(&response, "result") {
@@ -334,18 +334,20 @@ pub(crate) fn replace_idle(pid: u32, birth: u64) -> io::Result<bool> {
     {
         return Ok(false);
     }
+    let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
+    let Some(lock_identity) = runtime::held_lock_identity(&lock)? else {
+        return Ok(false);
+    };
     let reply = client.request_body(
-        serde_json::json!({"op":"owner_idle_restart","state_dir":root,"commit":true}),
+        serde_json::json!({"op":"owner_idle_restart","state_dir":root,"lock_identity":lock_identity,"commit":true}),
         "owner_idle_restart",
     )?;
     match ipc::field(&reply, "result") {
         "deferred" => Ok(false),
         "stopping" => {
             wait_for_exit(&mut client)?;
-            let lock =
-                ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
             let deadline = Instant::now() + Duration::from_secs(5);
-            while runtime::lock_held(&lock)? {
+            while runtime::held_lock_identity(&lock)?.is_some() {
                 if Instant::now() >= deadline {
                     return Err(io::Error::other("old daemon lock is still held"));
                 }

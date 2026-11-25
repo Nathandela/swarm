@@ -75,24 +75,25 @@ pub(crate) fn lock(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-pub(crate) fn lock_held(path: &Path) -> io::Result<bool> {
+pub(crate) fn held_lock_identity(path: &Path) -> io::Result<Option<[u64; 2]>> {
     let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
     {
         Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
     validate_file(&file)?;
     // SAFETY: the live descriptor is released at the end of this read-only probe.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     let error = io::Error::last_os_error();
     if error.kind() == io::ErrorKind::WouldBlock {
-        Ok(true)
+        let meta = file.metadata()?;
+        Ok(Some([meta.dev(), meta.ino()]))
     } else {
         Err(error)
     }

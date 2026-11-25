@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Drive unattended daemon replacement with two differently versioned Rust builds."""
 import argparse
+import fcntl
 import json
 from pathlib import Path
 import shutil
@@ -73,6 +74,13 @@ def exercise(root):
             birth = birth[0] * 1_000_000 + birth[1]
         run(after, ["daemon","--replace-idle",str(daemon.pid),str(birth)], timer, 2)
         assert daemon.poll() is None and saved.read_bytes() == original
+        unrelated = root / "unrelated.lock"
+        unrelated.touch(mode=0o600)
+        with unrelated.open("rb") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            wrong_lock = dict(timer, SWARM_DAEMON_LOCK=str(unrelated))
+            assert "not the running supervisor lock" in run(after, ["daemon","restart","--unattended"], wrong_lock, 2)
+            assert daemon.poll() is None
         unusable_log = dict(timer, SWARM_DAEMON_LOG=str(root / "work"))
         assert "failed" in run(after, ["daemon", "restart", "--unattended"], unusable_log, 1)
         assert daemon.poll() is None and run(before, ["ls","--json"], env)
