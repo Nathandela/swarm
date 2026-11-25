@@ -1,0 +1,38 @@
+reference_entry	disposition	slice	acceptance_anchor
+(no arguments)	keep	M2/M4	Board; headless refusal before daemon startup.
+-h, --help, help	keep	M4	Usage/aliases, stdout vs stderr and unknown-argument exit 2; remove retired help entries.
+--pilot	keep	M6	Private pilot context entry and initial roster.
+pilot	keep	M6	Caller-bound roster, view, await, send, launch, resume and context exit.
+daemon	keep	M3	Single local supervisor and explicit restart with saved environment.
+native-input	internal contract	M5	Native ingress, binding, role and exact receipt; provider-installed hooks must keep working.
+shim	internal contract	M2	Detached PTY owner; on-disk launch arguments and active process versions matter at cutover.
+internal	retire	M10	Managed login worker; prevent invocations through old units and hooks.
+hook	keep	M5	Authenticated hook delivery, sequence, fast path and bounded spooling.
+remote	retire	M10	Phone pairing, grants and remote gateway controls.
+schedule-agy-worker	internal contract	M7	Timer-executed agy worker; replace installed invocations atomically.
+schedule-receipt-bridge	internal contract	M7	Validate scheduled completion receipt and scope on stdin.
+schedule	keep	M7	Catalog, timers, fallback and workspace completion evidence.
+discord	keep plus call branch	M8/M9	Include installation, supervisor migration, directory, discussions, files, stop-call and current consent.
+setup-trust	keep	M5	Explicit trust for exact physical workspaces; prove refusals at execution.
+dispatcher-guide	keep	M6/M8	Current dispatcher delegation instructions and embedded skill assets.
+teammate	keep	M6/M8	Worker-to-manager note source, durable receipt and correct parent.
+voice	split	M9/M10	Preserve configured speech needed for Discord calls. Retire independent voice device, panel, streaming and SSH control surfaces.
+relay	retire	M10	Mobile relay lifecycle, purge and operator commands.
+spawn	keep	M6	Prompt, handoff or delegate; worktree, exact operation ID and native identity.
+handoff	keep	M6	Cross-CLI context and passive/manual supervision.
+reattach	keep	M6	External conversation import, dry run, explicit take-over and contention.
+ls	keep	M4	Roster including flags, exact JSON semantics and stable identities.
+checkout	keep	M6	Checkout inventory, partial evidence and read-only behavior.
+clean	keep	M7	Preview or explicitly apply only certified safe cleanup.
+doctor	split	M7/M10	Offline lifecycle and storage diagnostics; remove phone/account-management sections.
+refresh	keep	M7	Installation refresh reconciles an existing replacement without duplication.
+relogin	split	M7/M10	Recover native sessions after user-initiated provider sign-in, automatically on a changed identity stamp or explicitly with --force after same-account sign-in; preserve dry-run; exclude managed account switches.
+upgrade	split	M10	Verify signed upgrade, defer, activate or rollback; retire dependency on mobile gateway.
+watch	keep	M4/M5	Wait for accurate change or attention with bounded timeout.
+kill	keep	M3/M5	Terminate only proven process/owner; shared native jobs require distinct confirmation.
+send	keep	M3/M5	Raw text/key/submit and exact framing under attach contention.
+message	keep	M5	Semantic message operation, retry and uncertain receipt.
+requests	keep	M5	List and inspect native requests with exact identity.
+decide	keep	M5	Validate hash, audience and native request before decision; preserve receipt lookup.
+peek	keep	M2	Bounded current terminal screen without taking control.
+version, --version	keep	M10	Build/version handshake and truthful Rust toolchain identity.

@@ -1,5 +1,7 @@
 # Documentation Index
 
+- [Rust migration roadmap](specifications/rust-migration/README.md) — parallel-branch design, two pinned Go references, retained workflows, Discord calls, local parity qualification and cutover.
+
 ## Current architecture and boundaries
 
 The terminal product is a Go + Bubble Tea client → per-user supervisor daemon → per-session PTY-owning shim → agent CLI. The daemon owns session metadata, orchestration, adapter coordination, and client protocol; shims own live PTYs and VT grids. The production adapter set is Claude Code, Codex, agy, Hermes Agent, and OpenCode, with capability differences recorded in adapter docs and verification. [OpenCode v0.19.0](verification/opencode-v0190-deployment.md) includes native worker lifecycle and controls; reliable unattended turn/attention status and full sustained qualification remain open ([parity evidence](verification/opencode-parity-2026-10-18.md), [qualification status](verification/opencode-minimum-version-2026-10-19.md)).
