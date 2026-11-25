@@ -8,6 +8,42 @@ use std::{
 };
 
 const BRIDGE: &str = include_str!("../../../../internal/opencodebridge/tui.mjs");
+// Extend the pinned provider asset only in the Rust artifact; Go reference builds keep it verbatim.
+fn bridge_source() -> io::Result<String> {
+    let mut source = BRIDGE.to_owned();
+    for (original, replacement) in [
+        (
+            r#"return digest(JSON.stringify([body.version, body.sessionInstance, body.backendGeneration, body.rootID, body.kind, body.targetID, body.messageID ?? null, body.text ?? null, body.requestID ?? null, body.reply ?? null, body.answers ?? null, body.expectedRequest === undefined ? null : canonical(body.expectedRequest), body.requestExpiresAtMS ?? null]))"#,
+            "return digest(canonical(body))",
+        ),
+        (
+            r#"!["/ack", "/initial", "/dispatch"].includes(url.pathname)"#,
+            r#"!["/ack", "/initial", "/dispatchDigest", "/dispatch"].includes(url.pathname)"#,
+        ),
+        (
+            r#"      if (url.pathname === "/dispatch") { scoped(body); if (string(body.operationID)) operationBody = body }"#,
+            r#"      if (url.pathname === "/dispatchDigest") {
+        scoped(body); view(); check()
+        if (!string(body.operationID)) throw fault("bad_envelope")
+        return response(res, 200, { ...identity(), operationID: body.operationID, requestHash: operationHash(body) })
+      }
+      if (url.pathname === "/dispatch") { scoped(body); if (string(body.operationID)) operationBody = body }"#,
+        ),
+        (
+            r#"requestID: body.requestID, status: "rejected", reason, inFlight:"#,
+            r#"requestID: body.requestID, requestHash: operationHash(body), status: "rejected", reason, inFlight:"#,
+        ),
+    ] {
+        if source.matches(original).count() != 1 {
+            return Err(io::Error::other(
+                "pinned OpenCode bridge extension anchor changed",
+            ));
+        }
+        source = source.replacen(original, replacement, 1);
+    }
+    Ok(source)
+}
+
 const PROFILE: &[&str] = &[
     "HOME",
     "XDG_CONFIG_HOME",
@@ -217,8 +253,9 @@ pub(crate) fn artifact(
     let file = dir.join("opencode-binding.json");
     let plugin = dir.join("opencode-tui.mjs");
     runtime::write_json(&file, &binding)?;
+    let source = bridge_source()?;
     runtime::write_atomic(&plugin, |out| {
-        std::io::Write::write_all(out, BRIDGE.as_bytes())
+        std::io::Write::write_all(out, source.as_bytes())
     })?;
     let url = format!("file://{}", percent_path(&plugin)?);
     runtime::write_json(

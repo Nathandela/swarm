@@ -13,6 +13,8 @@ use crate::{
 use serde_json::{Value, json};
 use std::io;
 
+const CARD_TTL_MS: u64 = 5 * 60 * 1000;
+
 impl Backend {
     pub(in crate::shim) fn operation(
         &self,
@@ -134,24 +136,18 @@ impl Backend {
             receipt["request_id"] = json!(request_id);
             receipt["native_effect"] = json!(expected_effect);
         }
-        let request_hash = intent(&json!([
-            body["version"],
-            body["sessionInstance"],
-            body["backendGeneration"],
-            body["rootID"],
-            body["kind"],
-            body["targetID"],
-            body["messageID"],
-            body["text"],
-            body["requestID"],
-            body["reply"],
-            body["answers"],
-            (!body["expectedRequest"].is_null()).then(|| canonical(&body["expectedRequest"])),
-            body["requestExpiresAtMS"],
-        ]));
+        // Use the provider bridge's canonical encoding for exact native request metadata.
+        let digest = self.http("/dispatchDigest", Some(&body))?;
+        let request_hash = field(&digest, "requestHash");
+        if !self.matches(&digest, created)
+            || digest["operationID"] != operation
+            || !opencode::hex_hash(request_hash)
+        {
+            return Err(io::Error::other("OpenCode dispatch digest is uncorrelated"));
+        }
         let mut record = json!({"token":self.token,"kind":kind,"intent":intent(request),"receipt":receipt,
             "target":body["targetID"],"dispatch_kind":body["kind"],"expected_effect":expected_effect,
-            "request_id":body["requestID"],"message_id":body["messageID"],"request_hash":request_hash,
+            "request_id":body["requestID"],"message_id":body["messageID"],"request_hash":request_hash,"decision_reply":body["reply"],
             "issued_ms":crate::ipc::spawn::now_ms(),"text_hash":codex_receipt::hash(field(&body,"text"))});
         receipts::save(&self.dir, operation, &record)?;
         if kind == "prompt" {
@@ -201,25 +197,11 @@ impl Backend {
             .ok()
         });
         let Some(native) = native else { return Ok(()) };
-        if !self.matches(&native, created)
-            || native["operationID"] != operation
-            || native["kind"] != record["dispatch_kind"]
-            || native["targetID"] != record["target"]
-            || native["messageID"] != record["message_id"]
-            || native["requestID"] != record["request_id"]
-        {
-            return Ok(());
-        }
-        // The bridge validates decision metadata using JavaScript's native JSON encoding.
-        // The resulting private receipt is correlated by operation and the complete native identity.
-        if native["status"] != "rejected"
-            && (prompt && native["requestHash"] != record["request_hash"]
-                || !opencode::hex_hash(field(&native, "requestHash")))
-        {
+        if !self.matches(&native, created) || !receipts::bridge_matches(record, &native) {
             return Ok(());
         }
         match field(&native, "status") {
-            "rejected" => {
+            "rejected" if !field(&native, "reason").is_empty() => {
                 record["receipt"]["state"] = json!("rejected");
                 record["receipt"]["reason"] = native["reason"].clone();
                 if !prompt {
@@ -251,6 +233,7 @@ impl Backend {
             }
             _ => return Ok(()),
         }
+        record["bridge_receipt"] = native;
         receipts::save(&self.dir, operation, record)
     }
     fn reconcile_prompt(
@@ -313,15 +296,21 @@ impl Backend {
             receipt["selection_basis"] = json!("native_message_receipt");
             receipt["selection_message_id"] = json!(input);
         }
+        let native_input = json!({
+            "id":input,"session":root,"created_ms":at,"agent":info["agent"],
+            "model":receipt["model"],"text_hash":record["text_hash"],
+        });
         if let Ok(snapshot) = self.snapshot(created, 50, "")
             && let Some((state, native_message)) = terminal(&snapshot, root, input, at)
         {
             receipt["state"] = json!(state);
             receipt["native_turn_id"] = json!(native_message);
             receipt["outcome_source"] = json!("reconciled_snapshot");
+            record["terminal_proof"] = json!({"state":state,"assistant":native_message,"parent":row["info"]["id"],"session":row["info"]["sessionID"]});
         }
         if record["receipt"] != receipt {
             record["receipt"] = receipt;
+            record["native_input"] = native_input;
             receipts::save(&self.dir, operation, record)?;
         }
         Ok(())
@@ -388,6 +377,10 @@ fn terminal<'a>(
         .collect::<Vec<_>>();
     results.sort_unstable();
     results.last().map(|(_, _, state, id)| (*state, *id))
+}
+
+fn unexpired(record: &Value, now: u64) -> Option<u64> {
+    record["expiry_ms"].as_u64().filter(|ms| *ms > now)
 }
 
 fn pending<'a>(
@@ -488,9 +481,7 @@ impl Backend {
         let path = dir.join(format!("{key}.json"));
         let now = crate::ipc::spawn::now_ms();
         let old = match runtime::read_json(&path) {
-            Ok(record) if record["content"] == content => {
-                record["expiry_ms"].as_u64().filter(|ms| *ms > now)
-            }
+            Ok(record) if record["content"] == content => unexpired(&record, now),
             Ok(_) => None,
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
             Err(err) => return Err(err),
@@ -498,7 +489,7 @@ impl Backend {
         let expiry = match old {
             Some(expiry) => expiry,
             None if issue => {
-                let expiry = now + 120_000;
+                let expiry = now + CARD_TTL_MS;
                 runtime::private_dir(&dir)?;
                 std::fs::File::open(&self.dir)?.sync_all()?;
                 runtime::write_json(&path, &json!({"content":content,"expiry_ms":expiry}))?;
@@ -580,5 +571,12 @@ mod tests {
         assert!(terminal(&snapshot, root, "msg_012345678902", 1).is_none());
         snapshot["messages"][0]["info"]["summary"] = json!(true);
         assert!(terminal(&snapshot, root, input, 1).is_none());
+    }
+    #[test]
+    fn request_card_still_authorizes_after_two_minutes_and_expires_at_five() {
+        let issued = 1_000;
+        let record = json!({"expiry_ms":issued + CARD_TTL_MS});
+        assert!(unexpired(&record, issued + 180_000).is_some());
+        assert!(unexpired(&record, issued + 300_000).is_none());
     }
 }

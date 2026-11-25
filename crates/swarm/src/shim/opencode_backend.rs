@@ -60,11 +60,13 @@ impl Backend {
     }
 
     fn http(&self, route: &str, body: Option<&Value>) -> io::Result<Value> {
-        let agent = self.socket.agent(if matches!(route, "/ready" | "/ack") {
-            3
-        } else {
-            13
-        });
+        let agent = self
+            .socket
+            .agent(if matches!(route, "/ready" | "/ack" | "/dispatchDigest") {
+                3
+            } else {
+                13
+            });
         let url = format!("{URL}{route}");
         let authorization = format!("Bearer {}", field(&self.binding, "token"));
         let response = match body {
@@ -159,6 +161,7 @@ impl Backend {
             &self.dir.join("opencode-native.json"),
             &json!({
                 "token":self.token,"rootID":self.binding["rootID"],"nativeCreatedAtMS":created,
+            "workerID":self.binding["workerID"],
                 "sessionInstance":self.binding["sessionInstance"],
                 "backendGeneration":self.binding["backendGeneration"],
                 "directory":self.binding["directory"],
@@ -344,7 +347,7 @@ impl Backend {
         let snapshot = self.http(&format!("/snapshot?limit={limit}&before={before}"), None)?;
         if !self.matches(&snapshot, created)
             || snapshot["hierarchyComplete"] != true
-            || !snapshot["statuses"].is_object()
+            || !valid_statuses(&snapshot["statuses"])
             || !snapshot["permissions"].is_array()
             || !snapshot["questions"].is_array()
             || !snapshot["descendants"].is_array()
@@ -401,6 +404,15 @@ pub(super) fn in_scope(snapshot: &Value, root: &str, target: &str) -> bool {
                 .is_some_and(|rows| rows.iter().any(|row| row["id"] == target)))
 }
 
+fn valid_statuses(statuses: &Value) -> bool {
+    statuses.as_object().is_some_and(|all| {
+        all.iter().all(|(id, status)| {
+            opencode::valid_id(id, "ses_")
+                && matches!(field(status, "type"), "idle" | "busy" | "retry")
+        })
+    })
+}
+
 fn status(snapshot: &Value, root: &str) -> Value {
     let related = |id: &str| in_scope(snapshot, root, id);
     let busy = snapshot["statuses"]
@@ -452,5 +464,22 @@ impl Backend {
             "session_instance":native["sessionInstance"],"history":snapshot["messages"],"next_cursor":snapshot["nextCursor"],
             "descendants":snapshot["descendants"],"hierarchy_scope":snapshot["hierarchyScope"],
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_native_status_is_idle_but_malformed_status_is_unqualified() {
+        let root = "ses_0011223344";
+        let mut snapshot = json!({"statuses":{},"permissions":[],"questions":[],"descendants":[]});
+        assert!(valid_statuses(&snapshot["statuses"]));
+        assert_eq!(status(&snapshot, root)["Turn"], "idle");
+        snapshot["statuses"][root] = json!({"type":"unexpected"});
+        assert!(!valid_statuses(&snapshot["statuses"]));
+        snapshot["statuses"][root] = Value::Null;
+        assert!(!valid_statuses(&snapshot["statuses"]));
     }
 }
