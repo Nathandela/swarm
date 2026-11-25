@@ -134,6 +134,9 @@ impl State {
         {
             return Err(io::Error::other("session limit reached"));
         }
+        if let Some(source) = &source {
+            source.hermes_check_successor()?;
+        }
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
         if let Some(source) = source {
             source.hermes_mark_successor(&session.id)?;

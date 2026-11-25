@@ -95,11 +95,7 @@ impl Session {
         }
         launch["options"]["profile"] = json!(profile);
         if self.hermes_native {
-            if self.dir.join("hermes-successor.json").try_exists()? {
-                return Err(io::Error::other(
-                    "Hermes native session already has a retained successor",
-                ));
-            }
+            self.hermes_check_successor()?;
             if launch["worktree"] == true
                 || (*cwd != Path::new(&self.cwd) && *cwd != self.effective)
             {
@@ -293,12 +289,13 @@ impl Session {
             descriptor.instance(),
             field(&record, "intent"),
         )?;
-        if record["receipt"]["state"] == "uncertain" && self.dial().is_ok() {
-            if let Ok(Some(admission)) = descriptor.binding.pending(operation) {
-                record["receipt"] =
-                    descriptor.receipt(session, operation, "submitted", Some(admission));
-                runtime::write_json(&path, &record)?;
-            }
+        if record["receipt"]["state"] == "uncertain"
+            && self.dial().is_ok()
+            && let Ok(Some(admission)) = descriptor.binding.pending(operation)
+        {
+            record["receipt"] =
+                descriptor.receipt(session, operation, "submitted", Some(admission));
+            runtime::write_json(&path, &record)?;
         }
         Ok(Some(record["receipt"].clone()))
     }

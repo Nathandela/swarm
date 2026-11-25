@@ -12,6 +12,14 @@ Explicit stop records the exact intent, cancels observed native queue admissions
 
 Run `cargo test --locked hermes` from the workspace on an available target host. On an execution-only Linux x86_64 host, build and transport the Rust test binaries with the workspace's `scripts/verification/rust_linux_tests.py` runner. The fixture starts a private daemon, a shell-backed viewer and an in-process Unix control and loopback WebSocket owner. It uses synthetic provider identities and local sockets.
 
-The tests check version admission, the literal classic command, calendar validation, corroborated classic chrome, saved-profile resume, classic stop/delete, native epoch and canonical identity binding, restart, durable replay, lost admissions, provider-owned approval, typed scoped stop, workspace retention and scoped resume. The fixture checks for any unexpected provider RPC, including session close or approval response.
+The tests check version admission, the literal classic command, calendar validation, corroborated classic chrome, saved-profile resume, classic stop/delete, native epoch and canonical identity binding, epoch replacement refusal, restart, durable replay, lost admissions, provider-owned approval, typed scoped stop, workspace retention and scoped resume after the activation switch is disabled. The fixture checks for any unexpected provider RPC, including session close or approval response.
 
-The installed Hermes and published artifact gates remain open. Neither fixture uses a real Hermes model, production credentials, a real shared gateway or external service.
+## Results
+
+| Environment | Result |
+| --- | --- |
+| macOS arm64 | Locked workspace suite passed on the first lane slice. The follow-up passed both Hermes unit tests and both daemon integration tests in the locked Hermes filter. |
+| Linux x86_64 | The two cross-built integration tests executed and passed on a Linux host using a private tmpfs namespace. |
+| Rust formatting and Clippy | `cargo fmt --all --check` and `cargo clippy --locked --workspace --all-targets -- -D warnings` passed on macOS. |
+
+Installed Hermes, Linux arm64 execution, and published artifact qualification remain open. The two-host checks use synthetic credentials and a fixture gateway.

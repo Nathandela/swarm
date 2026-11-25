@@ -8,6 +8,7 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -299,6 +300,8 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
         }
     });
     let control_home = home.clone();
+    let owner_changed = Arc::new(AtomicBool::new(false));
+    let owner_changed_in_server = owner_changed.clone();
     let server = thread::spawn(move || {
         for conn in control.incoming() {
             let mut conn = conn.unwrap();
@@ -310,7 +313,13 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
                 continue;
             };
             let result = match req["verb"].as_str().unwrap() {
-                "identify" => identify.clone(),
+                "identify" => {
+                    let mut endpoint = identify.clone();
+                    if owner_changed_in_server.load(Ordering::Relaxed) {
+                        endpoint["authority_epoch"] = json!(5);
+                    }
+                    endpoint
+                }
                 "session-ticket" => {
                     assert_eq!(req["params"]["profile_id"], json!(control_home));
                     json!({"runtime_protocol":1,"profile_id":control_home,"instance_id":"test-owner","ticket":"fixture-ticket"})
@@ -333,7 +342,7 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
         .to_string(),
     )
     .unwrap();
-    fs::set_permissions(config, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
 
     let mut peer = fixture.start();
     let launched = fixture.launch(&mut peer, json!({}));
@@ -405,6 +414,9 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
             .join(id.split_once('/').unwrap().1)
             .exists()
     );
+    let mut disabled: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    disabled["enabled"] = json!(false);
+    fs::write(&config, disabled.to_string()).unwrap();
     let resumed = fixture.launch(&mut peer, json!({"resume_from":id}));
     assert_eq!(resumed["session"]["conversation_id"], NATIVE, "{resumed}");
     let successor = resumed["session"]["id"].as_str().unwrap();
@@ -414,6 +426,17 @@ fn hermes_shared_owner_submission_restart_viewer_loss_and_scoped_stop() {
             .as_str()
             .is_some_and(|text| text.contains("successor")),
         "{scoped}"
+    );
+    owner_changed.store(true, Ordering::Relaxed);
+    eventually(|| {
+        let row = peer.view(successor);
+        (row["status"]["Interaction"] == "error"
+            && row["capabilities"]["native_owner_input"].is_null())
+        .then_some(())
+    });
+    assert_eq!(
+        peer.query(json!({"op":"semantic_target","session_id":successor}))["op"],
+        "error"
     );
     assert_eq!(
         peer.query(json!({"op":"kill","session_id":successor}))["error_code"],
