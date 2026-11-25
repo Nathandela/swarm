@@ -1,0 +1,341 @@
+#!/usr/bin/python3 -I
+"""Host-side executable for a ticket-only Swarm supervisor. Configuration lives next to this file."""
+
+import json
+import secrets
+import signal
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = Path(__file__).resolve().parent
+SAFE = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+BASE = [
+    "/usr/bin/bwrap",
+    "--unshare-all",
+    "--cap-drop",
+    "ALL",
+    "--die-with-parent",
+    "--new-session",
+    "--clearenv",
+    "--ro-bind",
+    "/usr/bin",
+    "/usr/bin",
+    "--ro-bind",
+    "/usr/lib",
+    "/usr/lib",
+    "--ro-bind",
+    "/usr/share",
+    "/usr/share",
+    "--symlink",
+    "usr/bin",
+    "/bin",
+    "--ro-bind",
+    "/lib",
+    "/lib",
+    "--ro-bind",
+    "/lib64",
+    "/lib64",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp",
+    "--tmpfs",
+    "/run",
+    "--setenv",
+    "HOME",
+    "/agent",
+    "--setenv",
+    "PATH",
+    "/usr/bin:/bin",
+    "--setenv",
+    "SHELL",
+    "/bin/bash",
+    "--setenv",
+    "LANG",
+    "C.UTF-8",
+    "--setenv",
+    "TERM",
+    "xterm-256color",
+]
+
+sys.path.insert(0, str(HERE))
+from binding import owned, require, session_binding  # noqa: E402
+from bridge import RoleServer  # noqa: E402
+
+
+def parse_mode(argv):
+    if argv[:2] == ["app-server", "--listen"] and len(argv) >= 3:
+        return "backend", argv[2], argv[3:]
+    if len(argv) >= 2 and argv[-2] == "--remote":
+        return "frontend", argv[-1], argv[:-2]
+    raise ValueError(
+        "ticket sessions require a managed native backend; standalone execution denied"
+    )
+
+
+def tui_args(args, role, mode, work, model):
+    # Native settings come exclusively from the immutable role config.
+    out = []
+    i = 0
+    if args[:1] == ["resume"]:
+        require(
+            mode == "frontend"
+            and len(args) >= 2
+            and re.fullmatch(r"[0-9a-f-]{36}", args[1]),
+            "unsupported resume",
+        )
+        out = ["resume", args[1]]
+        i = 2
+    while i < len(args):
+        key = args[i]
+        if key in ("-c", "--sandbox", "--model", "--cd"):
+            require(i + 1 < len(args), "missing option value")
+            val = args[i + 1]
+            i += 2
+            if key == "-c":
+                allowed = val in (
+                    "sandbox_workspace_write.network_access=true",
+                    "check_for_update_on_startup=false",
+                    'approval_policy="never"',
+                    'sandbox_mode="danger-full-access"',
+                    "sandbox_mode=workspace-write",
+                    "sandbox_mode=danger-full-access",
+                    "sandbox_mode=read-only",
+                ) or (
+                    role == "dispatcher" and val.startswith("mcp_servers.swarm_voice=")
+                )
+                require(allowed, "unsupported native override")
+            elif key == "--cd":
+                require(val == str(work), "different working directory")
+            elif key == "--model":
+                require(val == model, "different model")
+            else:
+                require(
+                    val in ("read-only", "workspace-write", "danger-full-access"),
+                    "unsupported sandbox",
+                )
+        else:
+            require(
+                mode == "frontend" and not key.startswith("-") and i == len(args) - 1,
+                "unexpected native argument",
+            )
+            out.append(key)
+            i += 1
+    return out
+
+
+def main():
+    owned(HERE, stat.S_ISDIR)
+    cfg = json.loads(owned(HERE / "launcher.json", stat.S_ISREG).read_text())
+    native = owned(Path(cfg["native"]), stat.S_ISREG, False)
+    require(os.access(native, os.X_OK), "native executable unavailable")
+    hasher = hashlib.sha256()
+    with native.open("rb") as f:
+        for chunk in iter(lambda: f.read(1048576), b""):
+            hasher.update(chunk)
+    require(hasher.hexdigest() == cfg["native_sha256"], "unreviewed native binary")
+    base = BASE + ["--ro-bind", str(native), "/native/codex"]
+    if sys.argv[1:] == ["--version"]:
+        os.execve(
+            base[0],
+            base + ["--tmpfs", "/agent", "--", "/native/codex", "--version"],
+            SAFE,
+        )
+    mode, uri, rest = parse_mode(sys.argv[1:])
+    require(uri.startswith("unix:///"), "non-Unix native transport")
+    public = Path(uri[7:])
+    sessions = owned(Path(cfg["sessions"]), stat.S_ISDIR)
+    sid = public.parent.name
+    require(
+        re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", sid)
+        and public == sessions / sid / "codex.sock",
+        "unexpected supervisor or socket",
+    )
+    owned(public.parent, stat.S_ISDIR)
+    workspace = owned(Path.cwd(), stat.S_ISDIR, False)
+    active, role, token = session_binding(cfg, HERE, sessions, sid, workspace)
+
+    def current():
+        record = session_binding(cfg, HERE, sessions, sid, workspace)
+        require(record == (active, role, token), "active assignment changed")
+        return record
+
+    tui = tui_args(rest, role, mode, workspace, cfg["model"])
+    # State is specific to one role and launch. The public UDS and all controller state stay outside.
+    cap = public.parent / ".ticket-runtime"
+    if mode == "backend":
+        cap.mkdir(mode=0o700, exist_ok=True)
+        owned(cap, stat.S_ISDIR)
+        (cap / "home").mkdir(mode=0o700, exist_ok=True)
+    home = owned(cap / "home", stat.S_ISDIR)
+    provider = owned(Path(active["provider_sockets"][role]), stat.S_ISSOCK)
+    swarm = owned(Path(cfg["swarm"]), stat.S_ISREG, False)
+    broker = cap / "role.sock"
+    nativeconfig = cap / "native.toml"
+    if mode == "backend":
+        local_token = secrets.token_hex(32)
+        settings = (
+            'model_provider="ticket"\nmodel='
+            + json.dumps(cfg["model"])
+            + '\napproval_policy="never"\nsandbox_mode="danger-full-access"\ncheck_for_update_on_startup=false\n'
+        )
+        settings += '[model_providers.ticket]\nname="ticket"\nbase_url="http://127.0.0.1:29992/v1"\nwire_api="responses"\nrequest_max_retries=0\nstream_max_retries=0\n'
+        # /usr/bin/socat is a fixed pipe to the private host-side MCP transport; the manager never receives its credential.
+        if role == "dispatcher":
+            settings += '[mcp_servers.swarm_voice]\ncommand="/usr/bin/socat"\nargs=["STDIO","UNIX-CONNECT:/caps/role.sock"]\nrequired=true\n'
+        settings += (
+            "[projects." + json.dumps(str(workspace)) + ']\ntrust_level="trusted"\n'
+        )
+        nativeconfig.write_text(settings)
+        if broker.exists():
+            require(
+                stat.S_ISSOCK(broker.lstat().st_mode), "unexpected stale role endpoint"
+            )
+            broker.unlink()
+        service = RoleServer(broker, role, current, swarm, sid, local_token)
+        service.start()
+    else:
+        owned(broker, stat.S_ISSOCK)
+        local_token = ""
+    cmd = base + [
+        "--bind",
+        str(workspace),
+        str(workspace),
+        "--chdir",
+        str(workspace),
+        "--bind",
+        str(home),
+        "/agent",
+        "--ro-bind",
+        str(nativeconfig),
+        "/agent/.codex/config.toml",
+        "--perms",
+        "0700",
+        "--dir",
+        "/caps",
+        "--ro-bind",
+        str(broker),
+        "/caps/role.sock",
+        "--ro-bind",
+        str(provider),
+        "/caps/provider.sock",
+        "--ro-bind",
+        str(HERE / "enter.py"),
+        "/enter.py",
+    ]
+    if role == "worker" and mode == "backend":
+        cmd += [
+            "--ro-bind",
+            str(swarm),
+            "/tools/swarm",
+            "--setenv",
+            "PATH",
+            "/tools:/usr/bin:/bin",
+            "--setenv",
+            "SWARM_SESSION_ID",
+            sid,
+            "--setenv",
+            "SWARM_TEAMMATE_WORKER_BRIDGE",
+            "/caps/role.sock:" + local_token,
+        ]
+    if mode == "frontend":
+        owned(public, stat.S_ISSOCK)
+        args = cmd + [
+            "--ro-bind",
+            str(public),
+            "/native-rpc/codex.sock",
+            "--",
+            "/usr/bin/python3",
+            "-I",
+            "/enter.py",
+            "frontend",
+            *tui,
+        ]
+        os.execve(args[0], args, SAFE)
+    with tempfile.TemporaryDirectory(dir=public.parent, prefix=".native-") as tmp:
+        ipc = Path(tmp)
+        private_tmp = "/tmp/codex-daemon-" + str(os.getuid())
+        child = subprocess.Popen(
+            cmd
+            + [
+                "--bind",
+                str(ipc),
+                "/native-rpc",
+                "--bind",
+                str(ipc),
+                private_tmp,
+                "--",
+                "/usr/bin/python3",
+                "-I",
+                "/enter.py",
+                "backend",
+            ],
+            env=SAFE,
+        )
+        try:
+            private = ipc / "codex.sock"
+            deadline = min(
+                time.monotonic() + 12,
+                time.monotonic() + max(0, active["expires_at"] - time.time()),
+            )
+            while child.poll() is None and time.monotonic() < deadline:
+                if private.is_symlink():
+                    # Codex 0.172 stores its actual socket under its PRIVATE /tmp and creates a stable alias.
+                    alias = Path(os.readlink(private))
+                    require(
+                        alias.parent == Path(private_tmp)
+                        and re.fullmatch("[0-9a-f]{64}", alias.name),
+                        "unsupported native socket alias",
+                    )
+                    private = ipc / alias.name
+                if private.exists() and stat.S_ISSOCK(private.lstat().st_mode):
+                    break
+                time.sleep(0.02)
+            require(
+                child.poll() is None and private.is_socket(),
+                "confined app-server failed to bind its own socket",
+            )
+            # link without following symlinks, inspect a trusted temporary name, then atomically
+            # create the trusted public name. Do not expose a model-writable directory to the supervisor.
+            with tempfile.TemporaryDirectory(
+                dir=public.parent, prefix=".export-"
+            ) as out:
+                pinned = Path(out) / "rpc"
+                os.link(private, pinned, follow_symlinks=False)
+                entry = pinned.lstat()
+                require(stat.S_ISSOCK(entry.st_mode), "unexpected native socket inode")
+                os.link(pinned, public, follow_symlinks=False)
+            try:
+                while child.poll() is None:
+                    current()
+                    try:
+                        return child.wait(timeout=0.25)
+                    except subprocess.TimeoutExpired:
+                        pass
+                return child.returncode
+            finally:
+                if public.exists() and public.lstat().st_ino == entry.st_ino:
+                    public.unlink()
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=4)
+
+
+if __name__ == "__main__":
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+        os.umask(0o077)
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        print("ticket launcher refused: " + str(exc), file=sys.stderr)
+        sys.exit(126)
