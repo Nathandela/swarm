@@ -1,5 +1,6 @@
 mod handoff;
 pub(crate) mod manager;
+mod pilot_journal;
 mod reliable;
 mod removal;
 pub(crate) mod runtime;
@@ -56,6 +57,7 @@ struct State {
     socket: PathBuf,
     sessions: RwLock<BTreeMap<String, Arc<Session>>>,
     subscribers: Mutex<Vec<Weak<Subscriber>>>,
+    pilot_journal: pilot_journal::Journal,
     launch_gate: Mutex<()>,
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
@@ -90,6 +92,7 @@ impl State {
     }
 
     fn publish(&self, session: &Session) {
+        self.pilot_refresh(session);
         let _ = self.handoff_wake.try_send(());
         let event = json!({
             "op": "event", "endpoint_id": self.endpoint, "session": session.view(&self.endpoint)
@@ -104,6 +107,16 @@ impl State {
             let _ = subscriber.conn.shutdown(Shutdown::Both);
             false
         });
+    }
+
+    fn pilot_refresh(&self, session: &Session) {
+        let rows = self.sessions.read().unwrap();
+        if rows
+            .get(&session.id)
+            .is_some_and(|row| std::ptr::eq(row.as_ref(), session))
+        {
+            pilot_journal::refresh(&self.pilot_journal, session, &self.endpoint);
+        }
     }
 
     fn reserve(
@@ -366,8 +379,13 @@ fn serve() -> io::Result<()> {
             e
         })
         .ok();
+    let pilot_journal = pilot_journal::Journal::load(
+        &runtime_root,
+        sessions.values().map(|session| session.view(&endpoint)),
+    );
     let state = Arc::new(State {
         handoff_wake,
+        pilot_journal,
         root: runtime_root,
         endpoint,
         socket,
@@ -394,6 +412,8 @@ fn serve() -> io::Result<()> {
             for session in sessions {
                 if session.reconcile() {
                     monitor.publish(&session);
+                } else {
+                    monitor.pilot_refresh(&session);
                 }
             }
         }
@@ -455,6 +475,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"
+                        | "journal"
+                        | "journal-subscribe-from"
                         | "semantic-target"
                         | "opencode-history-v1"
                         | "native-requests-v1"
@@ -579,6 +601,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 )
             }),
             "delete" => removal::delete(state, &request).and_then(|()| {
+                if let Some((_,local))=field(&request,"session_id").split_once('/') {
+                    state.pilot_journal.deleted(local);
+                }
                 reply(
                     &writer,
                     state,
@@ -610,6 +635,18 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 let result=session.native_requests(id,body)?;
                 reply(&writer,state,json!({"op":"native_requests","session_id":id,"native_requests_result":result}))
             }),
+            "interaction_history" if caps.contains(&"journal") => state.session(&request).and_then(|session| {
+                state.pilot_refresh(&session);
+                let result=state.pilot_journal.history(&session.id,request["history"]["limit"].as_u64().unwrap_or(20))?;
+                reply(&writer,state,json!({"op":"interaction_history","journal":result}))
+            }),
+            "journal_subscribe_from" if caps.contains(&"journal") && caps.contains(&"journal-subscribe-from") => {
+                let rows:Vec<_>=state.sessions.read().unwrap().values().cloned().collect();
+                for session in rows{state.pilot_refresh(&session)}
+                let from=request["cursor"].as_u64().unwrap_or_default();
+                let bytes=request["journal_max_bytes"].as_u64().unwrap_or_default();
+                return state.pilot_journal.stream(stream,&state.endpoint,from,bytes);
+            },
             "opencode_history" if caps.contains(&"opencode-history-v1") => state.session(&request).and_then(|session| {
                 let page = session.opencode_history(request["limit"].as_u64().unwrap_or(50),field(&request,"before"))?;
                 reply(&writer,state,json!({"op":"opencode_history","session_id":request["session_id"],"history_result":page}))
@@ -842,6 +879,10 @@ mod manager_reservation_tests {
         State {
             handoff_wake: mpsc::sync_channel(1).0,
             schedule_socket: None,
+            pilot_journal: pilot_journal::Journal::load(
+                root,
+                rows.values().map(|session| session.view("fixture")),
+            ),
             root: root.to_owned(),
             endpoint: "fixture".into(),
             socket: root.join("socket"),

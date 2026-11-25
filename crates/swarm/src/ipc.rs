@@ -1,3 +1,4 @@
+pub(crate) mod pilot;
 use crate::flags::options;
 mod actions;
 mod duration;

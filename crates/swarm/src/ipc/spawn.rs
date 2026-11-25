@@ -43,7 +43,7 @@ fn nonce() -> io::Result<String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn new_id() -> io::Result<String> {
+pub(super) fn new_id() -> io::Result<String> {
     Ok(format!("launch:{}:{}", now_ms(), nonce()?))
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn replayable(id: &str, now: u64) -> bool {
         && now.saturating_sub(issued) <= 3_600_000
 }
 
-fn absolute(path: &Path) -> io::Result<PathBuf> {
+pub(super) fn absolute(path: &Path) -> io::Result<PathBuf> {
     use std::path::Component;
     let source = if path.is_absolute() {
         path.to_owned()
