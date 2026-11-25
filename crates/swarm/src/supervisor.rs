@@ -257,7 +257,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .filter(|cap| {
             matches!(
                 *cap,
-                "attach" | "subscribe" | "owner-launch" | crate::bootstrap::RESTART
+                "attach"
+                    | "subscribe"
+                    | "owner-launch"
+                    | "semantic-send"
+                    | "semantic-target"
+                    | "native-requests-v1"
+                    | crate::bootstrap::RESTART
             )
         })
         .collect();
@@ -383,6 +389,37 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     state,
                     json!({"op": "ok", "session_id": request["session_id"]}),
                 )
+            }),
+            "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
+                let body = &request["native_requests"];
+                let id = field(&request,"session_id");
+                if body["session"] != id || !["request_id","native_session_id"].into_iter()
+                    .all(|key|body[key].is_null() || body[key] == "") {
+                    return Err(io::Error::other("only native request summary reads are supported"));
+                }
+                let result=session.native_requests(id)?;
+                reply(&writer,state,json!({"op":"native_requests","session_id":id,"native_requests_result":result}))
+            }),
+            "semantic_target" if caps.contains(&"semantic-target") => state.session(&request).and_then(|session| {
+                let instance = session.semantic_target()?;
+                reply(&writer,state,json!({"op":"semantic_target","session_id":request["session_id"],"semantic_target_instance":instance}))
+            }),
+            "semantic_status" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
+                let operation = field(&request,"operation_id");
+                let receipt = session.semantic_status(operation,field(&request,"session_id"),&state.root)?.unwrap_or_else(|| json!({
+                    "state":"unknown_operation", "session":request["session_id"],"operation_id":operation,
+                }));
+                reply(&writer,state,json!({"op":"semantic_status","operation_id":operation,"semantic_receipt":receipt}))
+            }),
+            "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
+                let operation = field(&request,"operation_id");
+                let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
+                let response = match field(&receipt,"state") {
+                    "native_accepted" => json!({"op":"ok","operation_id":operation}),
+                    "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Codex app-server rejected semantic input"}),
+                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Codex semantic submission outcome is unknown; inspect --status"}),
+                };
+                reply(&writer,state,response)
             }),
             "terminal_subscribe" => state.session(&request).and_then(|session| {
                 let mut terminal = session.status_exchange(&json!({"type": "snapshot_req"}))?;

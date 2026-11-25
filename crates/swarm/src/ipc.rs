@@ -1,6 +1,7 @@
 use crate::flags::options;
 mod actions;
 mod duration;
+mod message;
 pub(crate) mod spawn;
 pub(crate) mod wire;
 
@@ -32,6 +33,8 @@ pub fn run(args: &[String]) -> i32 {
     }
     let caps = match verb {
         "spawn" => spawn::CAPS,
+        "message" => message::CAPS,
+        "requests" => &["native-requests-v1"],
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
         "send" | "kill" | "peek" => &[],
@@ -58,6 +61,8 @@ pub fn run(args: &[String]) -> i32 {
     };
     let result = match verb {
         "spawn" => spawn::run(&mut client, &args[1..]),
+        "message" => message::run(&mut client, &args[1..]),
+        "requests" => message::requests(&mut client, &args[1..]),
         "send" => actions::send(&mut client, &args[1..]),
         "kill" => actions::kill(&mut client, &args[1..]),
         "ls" => list(&mut client, &args[1..]),
