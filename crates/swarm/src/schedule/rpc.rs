@@ -28,12 +28,9 @@ fn missing(e: &io::Error) -> bool {
 pub(super) fn owner(from_timer: bool) -> Result<Client> {
     let client = match dial() {
         Ok(client) => client,
-        Err(e) if missing(&e) && !from_timer => {
-            crate::bootstrap::ensure_daemon()?;
+        Err(e) if missing(&e) => {
+            crate::bootstrap::ensure(from_timer)?;
             dial()?
-        }
-        Err(e) if missing(&e) && from_timer => {
-            return Err("scheduled launch has no running supervisor with a saved agent environment; open Swarm interactively on this host first".into());
         }
         Err(e) => return Err(e.into()),
     };

@@ -1,4 +1,5 @@
 mod reliable;
+mod removal;
 pub(crate) mod runtime;
 mod session;
 
@@ -53,6 +54,7 @@ struct State {
     launch_gate: Mutex<()>,
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
+    deletion_gate: Mutex<()>,
     generation: AtomicU64,
 }
 
@@ -160,6 +162,7 @@ fn serve() -> io::Result<()> {
     let runtime_root = root.join("rust-v1");
     runtime::private_dir(&runtime_root)?;
     runtime::private_dir(&runtime_root.join("operations"))?;
+    removal::recover(&runtime_root)?;
     let mut sessions = BTreeMap::new();
     for entry in fs::read_dir(&runtime_root)? {
         let entry = entry?;
@@ -186,6 +189,7 @@ fn serve() -> io::Result<()> {
     unsafe { libc::umask(0o077) };
     runtime::reclaim_socket(&socket)?;
     let listener = runtime::bind(&socket)?;
+    crate::environment::save(&root)?;
     let state = Arc::new(State {
         root: runtime_root,
         endpoint,
@@ -194,6 +198,7 @@ fn serve() -> io::Result<()> {
         launch_gate: Mutex::new(()),
         operation_locks: std::array::from_fn(|_| Mutex::new(())),
         transactions: RwLock::new(()),
+        deletion_gate: Mutex::new(()),
         generation: AtomicU64::new(1),
     });
     let monitor = state.clone();
@@ -348,6 +353,29 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 };
                 reply(&writer, state, message)
             }
+            "rename" | "set_tag" => state.session(&request).and_then(|session| {
+                let key = if op == "rename" { "name" } else { "tag" };
+                let value = match request.get(key) {
+                    None | Some(Value::Null) => "",
+                    Some(Value::String(s)) => s,
+                    _ => return Err(io::Error::other("invalid session label type")),
+                };
+                if session.set_label(key, value)? {
+                    state.publish(&session);
+                }
+                reply(
+                    &writer,
+                    state,
+                    json!({"op":"ok","session_id":request["session_id"]}),
+                )
+            }),
+            "delete" => removal::delete(state, &request).and_then(|()| {
+                reply(
+                    &writer,
+                    state,
+                    json!({"op":"ok","session_id":request["session_id"]}),
+                )
+            }),
             "kill" => state.session(&request).and_then(|session| {
                 session.kill()?;
                 reply(

@@ -82,6 +82,10 @@ Run latency separately from sanitizers, screenshots, compiler workloads and inst
 
 For a proposed release minimum, run a 24-hour mixed local soak on each OS family with idle, busy, disconnected and resumed workers, and a complete day of schedule ticks. Track samples by process role, investigate growth slope after warmup and assert cleanup returns to baseline. Run timing-sensitive lifecycle seeds at least 100 times per OS, scrambled order, recording each run. Select a longer soak when a retained operation spans the trial. Report skipped, blocked, failed and passed separately along with the preceding run history. A hundred passes have limited power against rare failures; forced interleavings and negative controls carry distinct evidence.
 
+### Approved combining-character correction
+
+On 25 November 2026 the owner selected preservation of the acute accent in `é` after reattach. The strict fixture compares the full Go **live** grid with both Rust captures and checks the single known Go-restart difference at zero-based cell (4,1). It records the original Go and Rust data. Any other cell, attribute, width, color, cursor or observed mode difference fails. This exception applies to the pinned Go fixture and the Rust reattach contract.
+
 ## Local commands and release record
 
 From a clean checkout of the pinned Go reference on a disposable local host with a working shared Go cache, the following are **existing** targeted probes. Run timing probes separately.

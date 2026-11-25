@@ -97,6 +97,15 @@ def drive(root, guard):
             assert result.returncode == expected, (args, result.returncode, result.stderr)
             return result.stdout
 
+        def delete(identity):
+            with socket.socket(socket.AF_UNIX) as connection:
+                connection.settimeout(8)
+                connection.connect(str(address))
+                control(connection, "hello", endpoint_id="", protocol_version=1)
+                endpoint = read_control(connection)["endpoint_id"]
+                control(connection, "delete", endpoint_id=endpoint, session_id=identity)
+                return read_control(connection)
+
         def launch_daemon(log):
             return subprocess.Popen([*command, "daemon"], env=env, cwd=root / "work",
                                     stdout=log, stderr=log)
@@ -237,10 +246,23 @@ def drive(root, guard):
                     assert read_control(successor)["op"] == "detach"
             print("leases superseded and detached, peek preserved attachment, resize and input reached the PTY")
 
+            with socket.socket(socket.AF_UNIX) as edit:
+                edit.settimeout(4)
+                edit.connect(str(address))
+                control(edit, "hello", endpoint_id="", protocol_version=1)
+                endpoint = read_control(edit)["endpoint_id"]
+                for op, changes in [("rename", {"name": "fixture\x07 renamed"}), ("set_tag", {"tag": "  retained  "})]:
+                    control(edit, op, endpoint_id=endpoint, session_id=identity, **changes)
+                    assert read_control(edit)["op"] == "ok"
+            labels = json.loads(invoke("ls","--json"))[0]
+            assert labels["name"] == "fixture renamed" and labels["tag"] == "retained"
             daemon.kill()
             daemon.wait(timeout=4)
             assert worker in fixtures.table()
             assert owner["pid"] in fixtures.table()
+            corrupt = state.parent / (".deleting-" + "0"*24)
+            corrupt.mkdir()
+            (corrupt / "session.json").write_bytes(b"incomplete fixture")
             owner_path = state / "owner.json"
             try:
                 owner_path.write_text(json.dumps({**owner, "birth": owner["birth"] + 1}))
@@ -248,6 +270,7 @@ def drive(root, guard):
                 fixtures.wait_for(ready, "replacement rejecting mismatched shim")
                 invoke("peek", identity, expected=1)
                 invoke("kill", identity, expected=1)
+                assert delete(identity)["op"] == "error" and state.is_dir()
                 assert json.loads(invoke("ls", "--json"))[0]["status"]["Process"] == "lost"
                 assert worker in fixtures.table()
                 daemon.kill()
@@ -257,8 +280,11 @@ def drive(root, guard):
             print("mismatched birth token refused without signaling the worker")
             daemon = launch_daemon(log)
             fixtures.wait_for(ready, "replacement Rust daemon")
+            assert (corrupt / "session.json").read_bytes() == b"incomplete fixture"
             assert json.loads((state / "owner.json").read_text()) == owner
             assert invoke("spawn", "--status", operation) == operation_status
+            row = json.loads(invoke("ls","--json"))[0]
+            assert row["name"] == labels["name"] and row["tag"] == labels["tag"]
             assert invoke(*launch_args) == receipt
             assert worker_path.read_text() == str(worker) + "\n"
             assert [row["id"] for row in json.loads(invoke("ls", "--json"))] == [identity]
@@ -281,6 +307,20 @@ def drive(root, guard):
             fixtures.wait_for(child_released, "TERM-resistant child containment")
             invoke("kill", identity)
             print("explicit termination contained a TERM-resistant descendant before completion")
+            # Crash after the namespace rename, before the deletion receipt was written.
+            state.rename(state.with_name(".deleting-" + state.name))
+            assert delete(identity)["op"] == "ok"
+            assert delete(identity)["op"] == "ok"
+            assert not state.exists() and json.loads(invoke("ls", "--json")) == []
+            assert invoke("spawn", "--status", operation) == operation_status
+            invoke(*launch_args, expected=1)
+            assert json.loads(invoke("ls", "--json")) == []
+            state.mkdir()
+            try:
+                assert delete(identity)["op"] == "error" and state.is_dir()
+            finally:
+                state.rmdir()
+            print("confirmed deletion was repeatable; consumed operation could not recreate worker")
 
     finally:
         if daemon and daemon.poll() is None:
