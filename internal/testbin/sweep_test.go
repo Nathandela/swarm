@@ -242,3 +242,25 @@ func TestSweepReadableMatchStillStopsRegardlessOfAge(t *testing.T) {
 		t.Fatal("readable matching process survived solely because it was older")
 	}
 }
+
+func TestSweepDistinguishesReapedDarwinPIDFromUnreadableLivePID(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("kern.proc.pid disappearance")
+	}
+	child := exec.Command("/usr/bin/true")
+	if err := child.Run(); err != nil {
+		t.Fatal(err)
+	}
+	pid := child.Process.Pid
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("reaped child PID changed before observation: %v", err)
+	}
+	_, err := procstart.StartTime(pid)
+	t.Logf("raw Darwin lookup after Wait: %v", err)
+	if _, lookupErr := sweepStartTime(pid); !gone(lookupErr) {
+		t.Fatalf("reaped child left a cleanup error: %v", lookupErr)
+	}
+	if err := sweepLookupError(os.Getpid(), syscall.EIO); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("unreadable live PID lost error: %v", err)
+	}
+}

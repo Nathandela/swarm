@@ -36,7 +36,7 @@ func KillProcessesOf(exes ...string) error {
 }
 
 func killCanonicalProcesses(exes ...string) error {
-	return sweepProcesses(exes, processIDs, processExecutable, procstart.StartTime, syscall.Kill)
+	return sweepProcesses(exes, processIDs, processExecutable, sweepStartTime, syscall.Kill)
 }
 
 func sweepProcesses(exes []string, enumerate func() ([]int, error), executable func(int) (string, error), startTime func(int) (int64, error), kill func(int, syscall.Signal) error) error {
@@ -117,20 +117,34 @@ func sweepProcesses(exes []string, enumerate func() ([]int, error), executable f
 
 func gone(err error) bool { return errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrNotExist) }
 
+// Darwin may return a zero-length kern.proc.pid record (EIO) for a reaped child.
+// A second kernel lookup must prove disappearance before the sweep ignores it.
+func sweepStartTime(pid int) (int64, error) {
+	start, err := procstart.StartTime(pid)
+	return start, sweepLookupError(pid, err)
+}
+
+func sweepLookupError(pid int, err error) error {
+	if runtime.GOOS == "darwin" && errors.Is(err, syscall.EIO) && errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return syscall.ESRCH
+	}
+	return err
+}
+
 func signalOwned(process ownedProcess, startTime func(int) (int64, error), executable func(int) (string, error), kill func(int, syscall.Signal) error) error {
 	start, err := startTime(process.pid)
 	if gone(err) {
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("recheck start time for pid %d: %w", process.pid, err)
 	}
 	exe, err := executable(process.pid)
 	if gone(err) {
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("recheck executable for pid %d: %w", process.pid, err)
 	}
 	if start != process.start || exe != process.executable {
 		return nil
