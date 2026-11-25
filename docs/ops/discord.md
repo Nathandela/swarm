@@ -139,8 +139,10 @@ native admission and before worker effects.
 The relay posts an immutable assignment to `/ticket-admission` over the
 connector's private Unix socket, using its dedicated bearer. It can recover
 the receipt with `GET /ticket-admission?event_id=...`. A `native_cutover`
-receipt confirms native input admission. Worker completion and Discord
-publication continue to have their own receipts. Ticket threads open from
+receipt confirms native input admission. Its optional `completion` names the
+original dispatcher, exact worker instance, and completed native action.
+This receipt carries no tests, patch, or approval. Discord publication
+continues to have its own receipt. Ticket threads open from
 the verified webhook announcement. Human follow-ups use that existing
 discussion and its pinned project. Other enrolled channels retain their
 usual routing.

@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
@@ -224,6 +226,41 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	if publicationPosts != 1 {
 		t.Fatalf("duplicate or missing publication to the original thread: %d", publicationPosts)
 	}
+	checkout := &ticketCheckoutFixture{teammateTestManager: manager, err: ErrConflict}
+	bridge.service.teammateManager = checkout
+	read := func() []byte {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/ticket-admission?event_id="+event.EventID, nil)
+		req.Header.Set("Authorization", bridge.service.ticketBearer)
+		out := httptest.NewRecorder()
+		bridge.service.localHandler(out, req)
+		if out.Code != http.StatusOK {
+			t.Fatalf("completion lookup affected intake status: %d %s", out.Code, out.Body)
+		}
+		return out.Body.Bytes()
+	}
+	if raw := read(); bytes.Contains(raw, []byte("completion")) || !bytes.Contains(raw, []byte(ticketNativeCutover)) {
+		t.Fatalf("checkout error corrupted the existing receipt: %s", raw)
+	}
+	checkout.err = nil
+	checkout.proof = &schema.TicketWorkerCompletion{AdmissionID: "foreign", WorkerSession: "place/worker", WorkerInstance: "instance"}
+	if raw := read(); bytes.Contains(raw, []byte("completion")) {
+		t.Fatalf("cross-ticket proof leaked: %s", raw)
+	}
+	checkout.proof.AdmissionID = original.OperationID
+	if raw := read(); !bytes.Contains(raw, []byte(`"worker_session":"place/worker"`)) {
+		t.Fatalf("exact completion was omitted: %s", raw)
+	}
+}
+
+type ticketCheckoutFixture struct {
+	*teammateTestManager
+	proof *schema.TicketWorkerCompletion
+	err   error
+}
+
+func (m *ticketCheckoutFixture) CheckoutStatus(TeammateDiscussion) (TeammateNativeStatus, error) {
+	return TeammateNativeStatus{TicketCompletion: m.proof}, m.err
 }
 
 func ticketFixture() (TicketIntake, ticketEvent) {

@@ -35,6 +35,8 @@ const (
 )
 
 type TeammateNativeStatus struct {
+	TicketCompletion *schema.TicketWorkerCompletion `json:"-"`
+
 	CheckoutEvidence    string                  `json:"checkout_evidence,omitempty"`
 	ReplyReceipts       [][]PublicationProof    `json:"-"`
 	UnconfirmedReplies  int                     `json:"unconfirmed_replies,omitempty"`

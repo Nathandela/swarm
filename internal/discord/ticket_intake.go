@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -50,11 +52,12 @@ type ticketEvent struct {
 }
 
 type ticketReceipt struct {
-	EventID      string `json:"event_id"`
-	State        string `json:"state"`
-	DiscussionID string `json:"discussion_id,omitempty"`
-	ThreadID     string `json:"thread_id,omitempty"`
-	Detail       string `json:"detail,omitempty"`
+	Completion   *schema.TicketWorkerCompletion `json:"completion,omitempty"`
+	EventID      string                         `json:"event_id"`
+	State        string                         `json:"state"`
+	DiscussionID string                         `json:"discussion_id,omitempty"`
+	ThreadID     string                         `json:"thread_id,omitempty"`
+	Detail       string                         `json:"detail,omitempty"`
 }
 
 type ticketRecord struct {
@@ -123,6 +126,9 @@ func (s *Service) handleTicket(w http.ResponseWriter, r *http.Request) (any, err
 			return nil, ErrInvalid
 		}
 		record, err := s.Store.getTicket(s.Config.InstallationID, eventID)
+		if err == nil && record.Receipt.State == ticketNativeCutover {
+			record.Receipt.Completion = s.ticketWorkerCompletion(record)
+		}
 		return record.Receipt, err
 	}
 	var event ticketEvent
@@ -133,6 +139,26 @@ func (s *Service) handleTicket(w http.ResponseWriter, r *http.Request) (any, err
 		return nil, err
 	}
 	return s.Store.queueTicket(s.Config.InstallationID, event, s.Config.EffectiveTicketManagerCLI())
+}
+
+func (s *Service) ticketWorkerCompletion(record ticketRecord) *schema.TicketWorkerCompletion {
+	reader, ok := s.teammateManager.(interface {
+		CheckoutStatus(TeammateDiscussion) (TeammateNativeStatus, error)
+	})
+	if !ok {
+		return nil
+	}
+	install := s.Config.InstallationID
+	binding, err := s.Store.teammateBindingByID(install, record.Receipt.DiscussionID)
+	if err != nil || binding.Route.ChannelID != record.Receipt.ThreadID || binding.TicketEventID != record.Event.EventID ||
+		binding.Starter.MessageID != record.Event.AnnouncementMessageID {
+		return nil
+	}
+	status, err := reader.CheckoutStatus(binding.TeammateDiscussion)
+	if err != nil || status.TicketCompletion == nil || status.TicketCompletion.AdmissionID != TicketAdmissionOperation(install, record.Event.EventID) {
+		return nil
+	}
+	return status.TicketCompletion
 }
 
 func (s *Store) getTicket(installation, eventID string) (record ticketRecord, err error) {

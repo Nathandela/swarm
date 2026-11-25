@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 type DiscussionNativeStatus struct {
+	TicketCompletion *schema.TicketWorkerCompletion `json:"-"`
+
 	UnconfirmedOutputs                                                    [][]DiscussionOutput
 	PendingAdmissions, PendingActions, PendingReplies, UnconfirmedReplies int
 	State, ManagerSession, ManagerInstance, Project, Diagnostic           string
@@ -175,6 +178,9 @@ func (d *DiscussionController) statusFromState(st State, includeMailbox bool) (D
 		}
 		return a.AttemptID < b.AttemptID
 	})
+	if !includeMailbox {
+		result.TicketCompletion = d.ticketWorkerCompletion(st)
+	}
 	if err := d.noteStatus(st, &result, includeMailbox); err != nil {
 		return result, err
 	}

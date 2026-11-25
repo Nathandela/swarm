@@ -454,6 +454,7 @@ func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNati
 
 func CheckoutStatusProjection(status voice.DiscussionNativeStatus) discord.TeammateNativeStatus {
 	result := discord.TeammateNativeStatus{
+		TicketCompletion:   status.TicketCompletion,
 		UnconfirmedReplies: status.UnconfirmedReplies, PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, PendingActions: status.PendingActions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
