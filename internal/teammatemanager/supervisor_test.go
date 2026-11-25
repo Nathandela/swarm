@@ -37,8 +37,15 @@ func TestDiscussionSupervisorIsPinnedAcrossCutover(t *testing.T) {
 }
 
 func TestVMProjectAccessRequiresExistingCanonicalDirectory(t *testing.T) {
-	work := t.TempDir()
-	other := t.TempDir()
+	// macOS can expose the temporary root through /var or /tmp symlinks.
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := Runtime{cfg: voice.Config{WorkDir: work}, projects: map[string]string{"work": work}}
 	if r.projectEnrolled(other) {
 		t.Fatal("enrolled grant escaped")

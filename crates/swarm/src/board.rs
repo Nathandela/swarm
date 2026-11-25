@@ -551,7 +551,11 @@ impl Board {
                 Action::None
             }
         };
-        self.modal = Some(modal);
+        if matches!(action, Action::None) {
+            self.modal = Some(modal);
+        } else {
+            self.notice.clear();
+        }
         action
     }
 
