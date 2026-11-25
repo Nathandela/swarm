@@ -46,10 +46,11 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
         );
     }
     loop {
-        if bridge.serve(cfg, &inbox, cursor.sequence(), dispatcher.is_some())? {
+        if bridge.serve(cfg, &mut inbox, cursor.sequence(), dispatcher.is_some())? {
             let _ = gateway_socket.close(None);
             return Ok(());
         }
+        super::worker::tick(cfg, &mut inbox, &api)?;
         if let Some(dispatcher) = &dispatcher {
             dispatcher.tick(cfg, &mut inbox, &api)?;
         }
@@ -199,7 +200,13 @@ impl Bridge {
         Ok(this)
     }
 
-    fn serve(&self, cfg: &Config, inbox: &Inbox, sequence: u64, native: bool) -> io::Result<bool> {
+    fn serve(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        sequence: u64,
+        native: bool,
+    ) -> io::Result<bool> {
         let (mut client, _) = match self.listener.accept() {
             Ok(pair) => pair,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(false),
@@ -225,7 +232,7 @@ impl Drop for Bridge {
 fn request(
     stream: &mut UnixStream,
     cfg: &Config,
-    inbox: &Inbox,
+    inbox: &mut Inbox,
     sequence: u64,
     native: bool,
 ) -> io::Result<bool> {
@@ -285,8 +292,26 @@ fn request(
             });
             status["connector"] = json!({
                 "state": if native { "scoped_dispatcher" } else { "receipt_only" },
-                "pending_admissions": inbox.pending_count()
+                "pending_admissions": inbox.pending_count(),
+                "worker_deliveries":inbox.worker_status()
             });
+            respond(stream, "200 OK", status)?;
+        } else if method == "POST"
+            && [
+                format!("/installation-v1/{identity:x}/exclude"),
+                format!("/installation-v1/{identity:x}/include"),
+            ]
+            .iter()
+            .any(|route| route == path)
+        {
+            let target: Value = serde_json::from_slice(&body)?;
+            let target = target["target_id"]
+                .as_str()
+                .ok_or_else(|| invalid("missing worker session ID"))?;
+            inbox.set_worker_excluded(target, path.ends_with("/exclude"))?;
+            let mut status = cfg.status();
+            status["connected"] = json!(true);
+            status["connector"] = json!({"worker_deliveries":inbox.worker_status()});
             respond(stream, "200 OK", status)?;
         } else if stop {
             respond(stream, "200 OK", json!({"stopped":true}))?;
@@ -499,14 +524,14 @@ mod tests {
     fn private_runtime_reports_queue_and_accepts_only_bound_shutdown() {
         let dir = fixture_dir();
         let cfg = config();
-        let inbox = Inbox::open(&dir, &cfg).unwrap();
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         let socket = dir.join("bridge.sock");
         let listener = runtime::bind(&socket).unwrap();
         let bridge = Bridge::new(socket.clone(), listener).unwrap();
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(3);
             while Instant::now() < deadline {
-                if bridge.serve(&cfg, &inbox, 12, false).unwrap() {
+                if bridge.serve(&cfg, &mut inbox, 12, false).unwrap() {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(5));

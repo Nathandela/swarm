@@ -129,6 +129,10 @@ impl Inbox {
         if old["state"] == "withdrawn" || old == &receipt {
             return Ok((old == &receipt).then(|| old.clone()));
         }
+        if !old["worker_operation"].is_null() && old["revision"] != receipt["revision"] {
+            self.withdraw(id)?;
+            return Ok(None);
+        }
         if matches!(old["state"].as_str(), Some("sending" | "accepted"))
             && old["revision"] == receipt["revision"]
         {
@@ -331,11 +335,119 @@ impl Inbox {
         self.save(next)
     }
 
-    pub(super) fn next_prepared(&self) -> Option<Value> {
+    fn next_source(&self, worker: bool) -> Option<Value> {
         self.pending_ids()
             .into_iter()
-            .min()
-            .map(|id| self.data["messages"][id.to_string()].clone())
+            .map(|id| (id, &self.data["messages"][id.to_string()]))
+            .filter(|(_, row)| {
+                super::worker::target_text(row["text"].as_str().unwrap_or_default()).is_some()
+                    == worker
+            })
+            .min_by_key(|(id, _)| *id)
+            .map(|(_, row)| row.clone())
+    }
+
+    pub(super) fn next_prepared(&self) -> Option<Value> {
+        self.next_source(false)
+    }
+
+    pub(super) fn next_worker(&self) -> Option<Value> {
+        self.next_source(true)
+    }
+
+    pub(super) fn has_worker_work(&self) -> bool {
+        self.next_worker().is_some() || !self.unsettled_workers().is_empty()
+    }
+
+    pub(super) fn worker_status(&self) -> Value {
+        let delivered = &self.data["worker_delivery"];
+        let states: Vec<_> = self.data["worker_inputs"].as_object().into_iter().flatten().map(|(key,request)| {
+            let outcome = &delivered[key];
+            json!({"operation_id":key,"source_id":request["source_id"],"session_id":request["composer"]["session"],
+                "state":outcome["state"].as_str().unwrap_or("unconfirmed")})
+        }).collect();
+        json!(states)
+    }
+
+    pub(super) fn worker_excluded(&self, target: &str) -> bool {
+        self.data["worker_excluded"][target] == true
+    }
+
+    pub(super) fn set_worker_excluded(&mut self, target: &str, excluded: bool) -> io::Result<()> {
+        if !super::worker::target_id(target) {
+            return Err(invalid("worker exclusion requires a stable session ID"));
+        }
+        let mut next = self.data.clone();
+        if excluded {
+            next["worker_excluded"][target] = json!(true);
+        } else if let Some(rows) = next["worker_excluded"].as_object_mut() {
+            rows.shift_remove(target);
+        }
+        self.save(next)
+    }
+
+    pub(super) fn cutover_worker(
+        &mut self,
+        operation: &str,
+        source: &str,
+        provider: &str,
+        composer: &Value,
+    ) -> io::Result<()> {
+        let row = &self.data["messages"][source];
+        let origin = &composer["origin"];
+        let target = composer["session"].as_str().unwrap_or_default();
+        if row["state"] != "prepared"
+            || !row["native_binding"].is_null()
+            || !self.data["worker_inputs"][operation].is_null()
+            || self.worker_excluded(target)
+            || origin["revision"] != row["revision"]
+            || origin["request_id"] != row["operation_id"]
+            || origin["actor_id"] != row["author"]["id"]
+            || origin["message_id"] != source
+            || origin["channel_id"] != row["route"]["channel_id"]
+            || super::worker::target_text(row["text"].as_str().unwrap_or_default())
+                .is_none_or(|(id, text)| id != target || composer["text"] != text)
+        {
+            return Err(invalid(
+                "worker input differs from the current Discord source and target",
+            ));
+        }
+        let mut next = self.data.clone();
+        next["messages"][source]["worker_operation"] = json!(operation);
+        next["messages"][source]["state"] = json!("sending");
+        next["worker_inputs"][operation] =
+            json!({"source_id":source,"provider":provider,"composer":composer});
+        self.save(next)
+    }
+
+    pub(super) fn unsettled_workers(&self) -> Vec<(String, Value)> {
+        self.data["worker_inputs"]
+            .as_object()
+            .into_iter()
+            .flat_map(|rows| rows.iter())
+            .filter(|(op, _)| self.data["worker_delivery"][*op].is_null())
+            .take(4)
+            .map(|(op, row)| (op.clone(), row["composer"].clone()))
+            .collect()
+    }
+
+    pub(super) fn settle_worker(&mut self, operation: &str, receipt: &Value) -> io::Result<()> {
+        let source = self.data["worker_inputs"][operation]["source_id"]
+            .as_str()
+            .ok_or_else(|| invalid("worker receipt has no source"))?;
+        let mut next = self.data.clone();
+        next["worker_delivery"][operation] = json!({"state":receipt["state"],
+            "native_session_id":receipt["native_session_id"],"native_turn_id":receipt["native_turn_id"]});
+        if next["messages"][source]["worker_operation"] == operation
+            && next["messages"][source]["state"] == "sending"
+        {
+            next["messages"][source]["state"] = json!(if receipt["state"] == "rejected" {
+                "withdrawn"
+            } else {
+                "accepted"
+            });
+        }
+        self.save(next)
     }
 
     pub(super) fn pending_publications(&self) -> Vec<String> {

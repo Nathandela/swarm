@@ -7,6 +7,7 @@ pub(crate) mod provenance;
 mod receipt;
 mod rest;
 mod service;
+mod worker;
 
 use crate::ipc;
 use config::{Config, Place, invalid};
