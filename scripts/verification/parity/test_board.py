@@ -25,7 +25,7 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
-def witness(root, tmux=None, cycle=False):
+def witness(root, tmux=None, cycle=False, automations=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -44,6 +44,52 @@ def witness(root, tmux=None, cycle=False):
                                       stdin=subprocess.DEVNULL, stdout=log, stderr=log)
         p.wait_for(roster, "public owner socket")
         return result
+
+    if automations:
+        daemon = start()
+        listing = cli("schedule", "list", "--json")
+        assert listing.returncode == 0 and json.loads(listing.stdout) is None, listing.stderr
+        assert not (root / "state/schedules").exists()
+        spec = root / "automation.json"
+        spec.write_text(json.dumps({
+            "name": "Fixture automation", "prompt": "Wait for synthetic instructions",
+            "directory": str(cwd), "authority": "agent-default", "workspace": "directory",
+            "agents": ["claude"], "calendar": {"kind":"once", "time_zone":"UTC",
+                                               "time":"01:00", "date":"2099-01-01"},
+        }))
+        schedule = cli("schedule", "create", "--spec-file", spec)
+        assert schedule.returncode == 0, schedule.stderr
+        job = json.loads(schedule.stdout)["id"]
+        listing = cli("schedule", "list", "--json")
+        assert listing.returncode == 0 and [row["id"] for row in json.loads(listing.stdout)] == [job]
+        assert json.loads(cli("schedule", "show", job).stdout)["id"] == job
+        assert json.loads(cli("schedule", "history", job).stdout) is None
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"swarm")
+            board.send(b"m")
+            board.wait_bytes(b"More")
+            board.send(b"a")
+            board.wait_bytes(b"Fixture automation")
+            board.send(b"\r")
+            board.wait_bytes(b"Status")
+            board.send(b"h")
+            board.wait_bytes(b"No runs for this automation")
+            daemon.terminate()
+            daemon.wait(timeout=5)
+            assert cli("schedule", "list").returncode != 0
+            board.wait_bytes(b"daemon connection lost")
+            board.send(b"u")
+            board.wait_bytes(b"daemon disconnected")
+            board.send(b"\x1b[27u\x1b[27u")
+            def quit_catalog():
+                board.drain()
+                return board.child.poll() is not None
+            p.wait_for(quit_catalog, "automation board quit")
+            assert board.child.returncode == 0
+        finally:
+            board.close()
+        return
 
     def terminal(payload, fresh):
         board = p.Board([str(root / "bin/board")], root, env)
@@ -362,7 +408,7 @@ def grid_witness(root, cli, roster, start, tmux):
     daemon.wait(timeout=5)
 
 
-def run(supervisor, client, tmux=None, evidence=None, cycle=False):
+def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False):
     root = Path(tempfile.mkdtemp(prefix="pb-", dir=Path("/tmp").resolve()))
     child = driver = None
     previous = {}
@@ -377,7 +423,9 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False):
             dest.chmod(0o700)
         p.table()
         command = [*p.guard(root), sys.executable, root / "bin/test_board.py", "_inside", root]
-        if cycle:
+        if automations:
+            command.append("--automations")
+        elif cycle:
             command.append("--cycle")
         elif tmux is not None:
             command.append(tmux)
@@ -408,7 +456,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False):
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = "running-session cycling" if cycle else "board launch, attach and live reattach"
+    exercise = ("owner automation list, detail, history and disconnect" if automations else
+                "running-session cycling" if cycle else "board launch, attach and live reattach")
     print(f"{exercise} passed; cleanup {cleanup}")
 
 
@@ -417,16 +466,18 @@ if __name__ == "__main__":
         compare_grid_receipts(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (3, 4) and sys.argv[1] == "_inside":
         mode = sys.argv[3] if len(sys.argv) == 4 else None
-        witness(Path(sys.argv[2]), Path(mode) if mode and mode != "--cycle" else None, mode == "--cycle")
+        witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
+                mode == "--cycle", mode == "--automations")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
         parser.add_argument("--board", required=True, type=p.binary_path)
         modes = parser.add_mutually_exclusive_group()
         modes.add_argument("--tmux", type=p.binary_path)
+        modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle)
+        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations)

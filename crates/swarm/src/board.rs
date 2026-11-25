@@ -1,4 +1,5 @@
 mod attach;
+mod automation;
 mod keys;
 mod launch;
 mod navigation;
@@ -6,6 +7,8 @@ mod preferences;
 mod term;
 
 use crate::ipc::{self, Client, field};
+use crate::schedule::catalog::{CAP as CATALOG_CAP, Read as CatalogRead};
+use automation::Automation;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
 use navigation::{Focus, GROUPS, ORDERS, Row, capacity, truncation, usable};
@@ -21,7 +24,12 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
 const POLL: Duration = Duration::from_millis(40);
-const ROSTER_CAPS: &[&str] = &["subscribe", "opencode-observation", "resume-relocate"];
+const ROSTER_CAPS: &[&str] = &[
+    "subscribe",
+    "opencode-observation",
+    "resume-relocate",
+    CATALOG_CAP,
+];
 
 pub(crate) fn run() -> u8 {
     match crate::bootstrap::ensure_daemon()
@@ -137,6 +145,19 @@ fn board(path: &Path) -> io::Result<()> {
                     // Bytes from the initiating key batch belong to the board.
                     break;
                 }
+                Action::Catalog(query) => {
+                    let result = connection.as_mut().map_or_else(
+                        || {
+                            Err(io::Error::other(
+                                "daemon disconnected; reconnect and refresh",
+                            ))
+                        },
+                        |client| query.remote(client),
+                    );
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        view.receive(result);
+                    }
+                }
                 Action::Request(message, target) => {
                     let Some(client) = &mut connection else {
                         continue;
@@ -216,6 +237,7 @@ struct Press {
 
 enum Modal {
     Launch(Box<Launch>),
+    Automation(Automation),
     ResumeAgy {
         id: String,
         cwd: Editor,
@@ -249,6 +271,7 @@ enum Action {
     Attach { id: String, name: String },
     Retry,
     SaveLayout(Layout),
+    Catalog(CatalogRead),
     Request(Value, &'static str),
 }
 
@@ -407,6 +430,11 @@ impl Board {
                 });
                 self.notice.clear();
             }
+            Key::Text('a') => {
+                self.modal = Some(Modal::Automation(Automation::default()));
+                self.notice.clear();
+                return Action::Catalog(CatalogRead::List);
+            }
             Key::Text('g') => self.reveal_attention(geometry.1),
             _ if !online => {}
             Key::Enter => {
@@ -508,6 +536,11 @@ impl Board {
                     cwd.apply(key);
                 }
                 Action::None
+            }
+            Modal::Automation(view) => {
+                let action = view.update(key, geometry);
+                self.modal = Some(modal);
+                return action;
             }
             Modal::Options { draft, focus } => {
                 match key {
@@ -677,6 +710,7 @@ impl Board {
         entries.extend([
             ("New".into(), Some('n')),
             ("Options".into(), Some('o')),
+            ("Automations".into(), Some('a')),
             ("Attention".into(), Some('g')),
             ("Quit".into(), Some('q')),
         ]);
@@ -813,6 +847,7 @@ impl Board {
         }
         match &self.modal {
             Some(Modal::Launch(form)) => form.view(&mut screen, cols, rows),
+            Some(Modal::Automation(view)) => view.view(&mut screen, cols, rows),
             Some(Modal::ResumeAgy { cwd, .. }) => {
                 line(&mut screen, 1, cols, "\x1b[1m", "Relocate session");
                 line(

@@ -1,5 +1,6 @@
 pub(crate) mod agy;
 mod calendar;
+pub(crate) mod catalog;
 mod cli;
 mod engine;
 mod rpc;
@@ -65,13 +66,25 @@ struct Spec {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct Job {
-    id: String,
+pub(crate) struct Job {
+    pub(crate) id: String,
     revision_id: String,
     spec: Spec,
-    state: String,
+    pub(crate) state: String,
     created_at: Timestamp,
     updated_at: Timestamp,
+}
+
+impl Job {
+    pub(crate) fn name(&self) -> &str {
+        &self.spec.name
+    }
+    pub(crate) fn directory(&self) -> &str {
+        &self.spec.directory
+    }
+    pub(crate) fn agents(&self) -> &[String] {
+        &self.spec.agents
+    }
 }
 
 #[derive(Serialize, Deserialize)]

@@ -37,12 +37,12 @@ pub(super) struct Store {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct Occurrence {
+pub(crate) struct Occurrence {
     pub id: String,
     pub job_id: String,
     revision_id: String,
     request_hash: String,
-    pub spec: Spec,
+    pub(super) spec: Spec,
     pub due_at: String,
     claimed_at: Timestamp,
     pub manual: bool,
@@ -54,7 +54,7 @@ pub(super) struct Occurrence {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_directory: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attempts: Vec<Attempt>,
+    pub(super) attempts: Vec<Attempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<Completion>,
     #[serde(default = "zero_time")]
@@ -263,6 +263,28 @@ impl Store {
         }
         File::open(&store.dir)?.sync_all()?;
         Ok(store)
+    }
+
+    pub(super) fn existing(root: &Path, host: &Path) -> Result<Option<Self>> {
+        let store = Self {
+            dir: root.join("schedules"),
+            host: host.into(),
+        };
+        let meta = match std::fs::symlink_metadata(&store.dir) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        // SAFETY: geteuid has no arguments or side effects.
+        if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+            return Err("schedule catalog directory is not private and owned by this user".into());
+        }
+        if private_file(&store.dir.join("state.db"), false)?.is_none() {
+            return Ok(None);
+        }
+        private_file(&store.dir.join("state.lock"), false)?
+            .ok_or("missing schedule catalog lock")?;
+        Ok(Some(store))
     }
 
     pub fn dispatch_lock(&self) -> Result<File> {
