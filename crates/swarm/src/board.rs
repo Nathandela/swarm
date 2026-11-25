@@ -141,7 +141,13 @@ fn board(path: &Path) -> io::Result<()> {
                     } else {
                         None
                     };
-                    match client.request_body(message, target) {
+                    let response = if target == "launch" && message["launch"]["agent"] == "opencode"
+                    {
+                        client.exchange(message, target, Duration::from_secs(75))
+                    } else {
+                        client.request_body(message, target)
+                    };
+                    match response {
                         Ok(reply) => {
                             let id = field(&reply["session"], "id");
                             if label.is_some() && !id.is_empty() {
@@ -1156,7 +1162,7 @@ impl Launch {
                 let caller_env: Vec<_> = env::vars_os()
                     .filter_map(|(key, value)| {
                         let key = key.to_str()?;
-                        crate::environment::child_key(key)
+                        (*agent == "opencode" || crate::environment::child_key(key))
                             .then(|| format!("{key}={}", value.to_string_lossy()))
                     })
                     .collect();

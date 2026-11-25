@@ -1,6 +1,6 @@
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
-use crate::providers::{self, LaunchPlan, codex_receipt};
+use crate::providers::{self, LaunchPlan, codex_receipt, opencode};
 use serde_json::{Value, json};
 use std::env;
 use std::fs::{self, DirBuilder};
@@ -32,6 +32,7 @@ pub(super) struct Prepared {
     cols: u16,
     rows: u16,
     provider: LaunchPlan,
+    pub(super) resume: Value,
 }
 
 struct Labels {
@@ -84,6 +85,7 @@ impl Session {
             token: token.into(),
             agent: match field(&data["provider"], "name") {
                 "codex" => "codex",
+                "opencode" => "opencode",
                 _ => "claude",
             }
             .into(),
@@ -151,6 +153,7 @@ impl Session {
                     let agent = field(req, "agent");
                     let supported = key == "model"
                         || (agent == "codex" && key == "sandbox")
+                        || (agent == "opencode" && key == "agent")
                         || (matches!(agent, "claude" | "claude-code")
                             && key == "dangerously-skip-permissions");
                     !supported || !value.is_string()
@@ -189,7 +192,66 @@ impl Session {
             cols,
             rows,
             provider,
+            resume: Value::Null,
         })
+    }
+
+    pub(super) fn prepare_opencode_resume(&self, request: &Value) -> io::Result<Prepared> {
+        if self.agent != "opencode" || self.is_live() || !owner_gone(&self.dir, &self.token)? {
+            return Err(io::Error::other(
+                "OpenCode resume requires a confirmed stopped worker",
+            ));
+        }
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        if meta["token"] != self.token || !meta["checkout"].is_null() {
+            return Err(io::Error::other(
+                "OpenCode resume requires the original non-worktree checkout",
+            ));
+        }
+        let binding = runtime::read_json(&self.dir.join("opencode-binding.json"))?;
+        if binding["initialPrompt"] != false {
+            let record = runtime::read_json(&self.dir.join("opencode-initial.json"))?;
+            if record["token"] != self.token
+                || !matches!(field(&record, "state"), "native_accepted" | "rejected")
+            {
+                return Err(io::Error::other(
+                    "OpenCode prior initial input remains unresolved",
+                ));
+            }
+        }
+        let native = self.opencode_native()?;
+        let mut prepared = Self::prepare(&json!({"launch":{
+            "agent":"opencode","cwd":self.cwd,"env":request["env"],
+            "name":meta["name"],"tag":meta["tag"],"rows":meta["rows"],"cols":meta["cols"],
+        }}))?;
+        if opencode::profile(&prepared.provider.env) != meta["opencode_profile"]
+            || meta["provider"]["executable"].as_str().map(Path::new)
+                != Some(&prepared.provider.executable)
+            || meta["provider"]["identity"] != prepared.provider.identity
+            || meta["provider"]["version"] != prepared.provider.version
+            || prepared.cwd != self.effective
+        {
+            return Err(io::Error::other(
+                "OpenCode native profile, checkout or installed executable changed",
+            ));
+        }
+        prepared.resume =
+            json!({"rootID":native["rootID"],"nativeCreatedAtMS":native["nativeCreatedAtMS"]});
+        Ok(prepared)
+    }
+
+    pub(super) fn opencode_owns(&self, root: &Value) -> bool {
+        if self.agent != "opencode" {
+            return false;
+        }
+        let reserved = runtime::read_json(&self.dir.join("session.json")).is_ok_and(|meta| {
+            meta["token"] == self.token && meta["opencode_resume"]["rootID"] == *root
+        });
+        let bound = self
+            .opencode_native()
+            .is_ok_and(|native| native["rootID"] == *root);
+        (reserved || bound)
+            && (self.is_live() || !owner_gone(&self.dir, &self.token).unwrap_or(false))
     }
 
     pub(super) fn reserve(root: &Path, prepared: Prepared) -> io::Result<Self> {
@@ -201,6 +263,7 @@ impl Session {
             cols,
             rows,
             provider,
+            resume,
         } = prepared;
         let id = runtime::random_id()?;
         let checkout = if isolated {
@@ -209,10 +272,10 @@ impl Session {
             None
         };
         let label = if label.is_empty() {
-            if provider.agent == "codex" {
-                "Codex"
-            } else {
-                "Claude Code"
+            match provider.agent {
+                "codex" => "Codex",
+                "opencode" => "OpenCode",
+                _ => "Claude Code",
             }
         } else {
             &label
@@ -225,10 +288,12 @@ impl Session {
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label, "checkout":checkout,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
                 "provider": {"name": provider.agent, "version": provider.version,
-                    "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
+                    "mode": if provider.agent == "opencode" || provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
                     } else { "classic" },
                     "executable": provider.executable, "identity": provider.identity},
+                "opencode_profile": (provider.agent == "opencode").then(|| opencode::profile(&provider.env)),
+                "opencode_resume": resume,
 
             }),
         )?;
@@ -279,7 +344,10 @@ impl Session {
         thread::spawn(move || {
             let _ = child.wait();
         });
-        runtime::write_control(&mut bootstrap, &json!({"argv": provider.argv}))
+        runtime::write_control(
+            &mut bootstrap,
+            &json!({"argv": provider.argv, "native": provider.native}),
+        )
     }
 
     fn exit(&self) -> io::Result<Value> {
@@ -287,12 +355,32 @@ impl Session {
     }
 
     pub(super) fn await_ready(&self) -> io::Result<()> {
-        let deadline =
-            Instant::now() + Duration::from_secs(if self.agent == "codex" { 8 } else { 3 });
+        let deadline = Instant::now()
+            + Duration::from_secs(match self.agent.as_str() {
+                "opencode" => 45,
+                "codex" => 8,
+                _ => 3,
+            });
         loop {
             if self.dial().is_ok() {
-                self.transition(Phase::Running);
-                return Ok(());
+                if self.agent == "opencode" {
+                    if let Ok(launch) = runtime::read_json(&self.dir.join("opencode-launch.json"))
+                        && launch["token"] == self.token
+                    {
+                        self.transition(Phase::Running);
+                        if launch["ready"] == true {
+                            return Ok(());
+                        }
+                        return Err(io::Error::other(format!(
+                            "OpenCode launch unresolved (session {}): {}",
+                            self.id,
+                            field(&launch, "reason")
+                        )));
+                    }
+                } else {
+                    self.transition(Phase::Running);
+                    return Ok(());
+                }
             }
             if let Ok(exit) = self.exit() {
                 self.transition(Phase::Exited);
@@ -391,6 +479,15 @@ impl Session {
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
+        if self.agent == "opencode" {
+            self.dial()?;
+            let record = self.opencode_native()?;
+            let launch = runtime::read_json(&self.dir.join("opencode-launch.json"))?;
+            if launch["token"] != self.token || launch["ready"] != true {
+                return Err(io::Error::other("OpenCode native launch is unresolved"));
+            }
+            return Ok(field(&record, "sessionInstance").to_owned());
+        }
         if self.agent != "codex" || !self.is_live() {
             return Err(io::Error::other("session has no live Codex app-server"));
         }
@@ -407,7 +504,20 @@ impl Session {
         Ok(codex_receipt::instance(&self.token))
     }
 
-    pub(super) fn native_requests(&self, session: &str) -> io::Result<Value> {
+    pub(super) fn native_requests(&self, session: &str, body: &Value) -> io::Result<Value> {
+        if self.agent == "opencode" {
+            return self.opencode_exchange(&json!({
+                "type":"opencode_requests","session":session,"request_id":body["request_id"],"native_session_id":body["native_session_id"],
+            }));
+        }
+        if !["request_id", "native_session_id"]
+            .into_iter()
+            .all(|key| body[key].is_null() || body[key] == "")
+        {
+            return Err(io::Error::other(
+                "only native request summary reads are supported",
+            ));
+        }
         self.semantic_target()?;
         // Confirm continued private shim custody at query time.
         self.dial()?;
@@ -448,6 +558,9 @@ impl Session {
         session: &str,
         root: &Path,
     ) -> io::Result<Option<Value>> {
+        if self.agent == "opencode" {
+            return self.opencode_operation_status(session, operation, "prompt", root);
+        }
         let thread = self.semantic_thread()?;
         let record = codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?;
         if let Some(record) = record {
@@ -473,6 +586,22 @@ impl Session {
         let operation = field(request, "operation_id");
         let text = field(body, "text");
         let instance = field(body, "session_instance");
+        if self.agent == "opencode" {
+            if request["body_version"] != 1
+                || body["session"] != session
+                || body.as_object().is_none_or(|fields| {
+                    fields
+                        .keys()
+                        .any(|key| !matches!(key.as_str(), "session" | "session_instance" | "text"))
+                })
+                || text.is_empty()
+                || text.len() > 4096
+                || text.contains('\0')
+            {
+                return Err(io::Error::other("invalid OpenCode semantic request"));
+            }
+            return self.opencode_action(session, operation, "prompt", body, state);
+        }
         if request["body_version"] != 1
             || body["session"] != session
             || !codex_receipt::timely(operation)
@@ -537,6 +666,121 @@ impl Session {
             .ok_or_else(|| io::Error::other("semantic receipt is unavailable"))
     }
 
+    fn opencode_native(&self) -> io::Result<Value> {
+        let native = opencode::receipts::native(&self.dir, &self.token)?;
+        if native["directory"].as_str().map(Path::new) != Some(self.effective.as_path()) {
+            return Err(io::Error::other("OpenCode checkout identity changed"));
+        }
+        Ok(native)
+    }
+
+    fn opencode_exchange(&self, request: &Value) -> io::Result<Value> {
+        if self.agent != "opencode" {
+            return Err(io::Error::other("session has no managed OpenCode runtime"));
+        }
+        let mut stream = self.dial()?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+        runtime::write_control(&mut stream, request)?;
+        let response = runtime::read_control(&mut stream)?;
+        if response["type"] != "opencode_result" {
+            return Err(io::Error::other(field(&response, "error").to_owned()));
+        }
+        Ok(response["body"].clone())
+    }
+
+    pub(super) fn opencode_history(&self, limit: u64, before: &str) -> io::Result<Value> {
+        self.opencode_exchange(&json!({"type":"opencode_history","limit":limit,"before":before}))
+    }
+
+    pub(super) fn opencode_action(
+        &self,
+        session: &str,
+        operation: &str,
+        kind: &str,
+        body: &Value,
+        state: &super::State,
+    ) -> io::Result<Value> {
+        let native = self.opencode_native()?;
+        let instance = field(&native, "sessionInstance");
+        if body["session"] != session
+            || body["session_instance"] != instance
+            || !codex_receipt::timely(operation)
+        {
+            return Err(io::Error::other("invalid or stale OpenCode operation"));
+        }
+        {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(operation);
+            let _operation = state.operation_locks
+                [usize::from(digest[0]) % state.operation_locks.len()]
+            .lock()
+            .unwrap();
+            codex_receipt::bind(
+                &state.root,
+                operation,
+                session,
+                instance,
+                &opencode::receipts::intent(body),
+            )?;
+        }
+        if let Some(saved) =
+            self.opencode_operation_status(session, operation, kind, &state.root)?
+        {
+            return Ok(saved);
+        }
+        let sent = self.opencode_exchange(&json!({
+            "type":"opencode_operation","session":session,"operation_id":operation,"kind":kind,"body":body
+        }));
+        match self.opencode_operation_status(session, operation, kind, &state.root)? {
+            Some(saved) => Ok(saved),
+            None => match sent {
+                Ok(_) => Err(io::Error::other(
+                    "OpenCode operation outcome is unknown; inspect --status",
+                )),
+                Err(error) => Err(error),
+            },
+        }
+    }
+
+    pub(super) fn opencode_operation_status(
+        &self,
+        session: &str,
+        operation: &str,
+        kind: &str,
+        root: &Path,
+    ) -> io::Result<Option<Value>> {
+        let Some(mut record) =
+            opencode::receipts::read(&self.dir, &self.token, session, operation)?
+        else {
+            return Ok(None);
+        };
+        if record["kind"] != kind {
+            return Err(io::Error::other(
+                "operation belongs to a different OpenCode action",
+            ));
+        }
+        codex_receipt::verify_binding(
+            root,
+            operation,
+            session,
+            field(&record["receipt"], "session_instance"),
+            &codex_receipt::hash(field(&record, "intent")),
+        )?;
+        if matches!(
+            field(&record["receipt"], "state"),
+            "uncertain" | "outcome_unknown" | "native_accepted"
+        ) && self
+            .opencode_exchange(&json!({
+                "type":"opencode_operation","session":session,"operation_id":operation,"kind":kind,
+            }))
+            .is_ok()
+        {
+            record = opencode::receipts::read(&self.dir, &self.token, session, operation)?
+                .ok_or_else(|| io::Error::other("OpenCode operation receipt disappeared"))?;
+        }
+        Ok(Some(record["receipt"].clone()))
+    }
+
     pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {
         let mut shim = self.dial()?;
         runtime::write_control(&mut shim, request)?;
@@ -572,7 +816,16 @@ impl Session {
         let Ok(record) = runtime::read_json(&self.dir.join("observation.json")) else {
             return false;
         };
-        let status = &record["status"];
+        let stale_open_code = json!({"Process":"running","Turn":"unknown","Interaction":"none","ObservationGap":true});
+        let status = if self.agent == "opencode"
+            && record["observed_ms"]
+                .as_u64()
+                .is_none_or(|ms| crate::ipc::spawn::now_ms().saturating_sub(ms) > 15_000)
+        {
+            &stale_open_code
+        } else {
+            &record["status"]
+        };
         if field(&record, "token") != self.token
             || status["Process"] != "running"
             || !matches!(field(status, "Turn"), "active" | "idle" | "unknown")

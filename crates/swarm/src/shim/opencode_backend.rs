@@ -1,0 +1,449 @@
+mod http;
+mod operations;
+
+use crate::{
+    ipc::field,
+    providers::{codex_receipt, opencode},
+    supervisor::runtime,
+};
+use http::LocalSocket;
+use serde_json::{Value, json};
+use std::{
+    io::{self, BufRead, BufReader, Read},
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+const MAX_RESPONSE: u64 = 2 << 20;
+const URL: &str = "http://127.0.0.1";
+
+pub(super) struct Backend {
+    binding: Value,
+    cli_version: String,
+    socket: LocalSocket,
+    token: String,
+    dir: PathBuf,
+    pub ready: AtomicBool,
+    actions: Mutex<()>,
+}
+
+impl Backend {
+    pub(super) fn new(
+        binding: Value,
+        cli_version: &str,
+        worker: u32,
+        dir: &Path,
+        token: &str,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            socket: LocalSocket {
+                path: PathBuf::from(field(&binding, "socketPath")),
+                worker,
+                birth: runtime::birth(worker)?,
+            },
+            binding,
+            cli_version: cli_version.to_owned(),
+            token: token.to_owned(),
+            dir: dir.to_owned(),
+            ready: AtomicBool::new(false),
+            actions: Mutex::new(()),
+        })
+    }
+
+    fn http(&self, route: &str, body: Option<&Value>) -> io::Result<Value> {
+        let agent = self.socket.agent(if matches!(route, "/ready" | "/ack") {
+            3
+        } else {
+            13
+        });
+        let url = format!("{URL}{route}");
+        let authorization = format!("Bearer {}", field(&self.binding, "token"));
+        let response = match body {
+            Some(value) => {
+                if serde_json::to_vec(value)?.len() > 64 << 10 {
+                    return Err(io::Error::other("OpenCode bridge input exceeds size limit"));
+                }
+                agent
+                    .post(&url)
+                    .header("Authorization", &authorization)
+                    .send_json(value)
+            }
+            None => agent
+                .get(&url)
+                .header("Authorization", &authorization)
+                .call(),
+        }
+        .map_err(|_| io::Error::other("OpenCode bridge request failed"))?;
+        if !response.status().is_success() {
+            return Err(io::Error::other(format!(
+                "OpenCode bridge HTTP {}",
+                response.status()
+            )));
+        }
+        let mut bytes = Vec::new();
+        response
+            .into_body()
+            .into_reader()
+            .take(MAX_RESPONSE + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_RESPONSE {
+            return Err(io::Error::other(
+                "OpenCode bridge output exceeds size limit",
+            ));
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    fn matches(&self, value: &Value, created: u64) -> bool {
+        created > 0
+            && created <= 9_007_199_254_740_991
+            && [
+                "version",
+                "workerID",
+                "sessionInstance",
+                "backendGeneration",
+                "rootID",
+                "directory",
+            ]
+            .iter()
+            .all(|key| value[*key] == self.binding[*key])
+            && value["nativeCreatedAtMS"] == created
+    }
+
+    fn envelope(&self) -> Value {
+        json!({"version":1,"sessionInstance":self.binding["sessionInstance"],
+            "backendGeneration":self.binding["backendGeneration"],"rootID":self.binding["rootID"]})
+    }
+
+    fn bound(&self) -> io::Result<Value> {
+        let began = Instant::now();
+        while began.elapsed() < Duration::from_secs(22) {
+            if let Ok(ready) = self.http("/ready", None)
+                && ready["bound"] == true
+                && ready["ready"] == true
+            {
+                let created = ready["nativeCreatedAtMS"].as_u64().unwrap_or_default();
+                if self.matches(&ready, created)
+                    && (self.binding["mode"] != "resume"
+                        || self.binding["nativeCreatedAtMS"] == created)
+                    && ready["nativeVersion"] == self.cli_version
+                {
+                    return Ok(ready);
+                }
+                return Err(io::Error::other(
+                    "OpenCode native runtime did not prove the reserved binding",
+                ));
+            }
+            thread::sleep(Duration::from_millis(80));
+        }
+        Err(io::Error::other(
+            "OpenCode TUI did not acknowledge the reserved native session",
+        ))
+    }
+
+    pub(super) fn launch(&self, initial: &Value) -> io::Result<u64> {
+        let ready = self.bound()?;
+        let created = ready["nativeCreatedAtMS"].as_u64().unwrap_or_default();
+        let mut ack = self.envelope();
+        ack["nativeCreatedAtMS"] = json!(created);
+        runtime::write_json(
+            &self.dir.join("opencode-native.json"),
+            &json!({
+                "token":self.token,"rootID":self.binding["rootID"],"nativeCreatedAtMS":created,
+                "sessionInstance":self.binding["sessionInstance"],
+                "backendGeneration":self.binding["backendGeneration"],
+                "directory":self.binding["directory"],
+            }),
+        )?;
+        let ready = self.http("/ack", Some(&ack))?;
+        if !self.matches(&ready, created) || ready["ready"] != true || ready["acknowledged"] != true
+        {
+            return Err(io::Error::other(
+                "OpenCode TUI binding acknowledgement failed",
+            ));
+        }
+        if self.binding["initialPrompt"] == true {
+            let text = field(initial, "text");
+            let mut body = self.envelope();
+            let operation = opencode::nonce()?;
+            let hash = codex_receipt::hash(text);
+            body["operationID"] = json!(operation);
+            body["requestHash"] = json!(hash);
+            for key in ["text", "expectedModel", "expectedAgent"] {
+                body[key] = initial[key].clone();
+            }
+            let receipt_path = self.dir.join("opencode-initial.json");
+            let save = |state: &str, message: &Value| {
+                runtime::write_json(
+                    &receipt_path,
+                    &json!({
+                        "token":self.token,"operation_id":operation,"request_hash":hash,"state":state,"message_id":message,
+                    }),
+                )
+            };
+            save("outcome_unknown", &Value::Null)?;
+            // A lost POST reply is read back through the bridge receipt endpoint, never reposted.
+            let receipt = self.http("/initial", Some(&body)).ok();
+            let valid = |receipt: &Value| {
+                self.matches(receipt, created)
+                    && receipt["operationID"] == operation
+                    && receipt["requestHash"] == hash
+            };
+            let receipt = if receipt
+                .as_ref()
+                .is_some_and(|r| valid(r) && r["status"] != "uncertain")
+            {
+                receipt.unwrap()
+            } else {
+                self.http("/initial", None)?
+            };
+            if !valid(&receipt) {
+                return Err(io::Error::other(
+                    "OpenCode initial input receipt is uncorrelated",
+                ));
+            }
+            if receipt["status"] == "rejected" && receipt["nativeEffect"] == "none" {
+                save("rejected", &Value::Null)?;
+                return Err(io::Error::other(format!(
+                    "OpenCode initial input rejected ({})",
+                    field(&receipt, "reason")
+                )));
+            }
+            if receipt["status"] != "admitted"
+                || !opencode::valid_id(field(&receipt, "messageID"), "msg_")
+            {
+                return Err(io::Error::other(
+                    "OpenCode initial input outcome is unknown",
+                ));
+            }
+            save("native_accepted", &receipt["messageID"])?;
+        }
+        self.ready.store(true, Ordering::Release);
+        Ok(created)
+    }
+
+    pub(super) fn run(&self, initial: &Value) {
+        let launched = self.launch(initial);
+        if runtime::write_json(
+            &self.dir.join("opencode-launch.json"),
+            &match &launched {
+                Ok(_) => json!({"token":self.token,"ready":true}),
+                Err(error) => json!({"token":self.token,"ready":false,"reason":error.to_string()}),
+            },
+        )
+        .is_err()
+        {
+            self.ready.store(false, Ordering::Release);
+            return;
+        }
+        let Ok(created) = launched else { return };
+        let connected = AtomicBool::new(false);
+        thread::scope(|scope| {
+            let (updates, pending) = std::sync::mpsc::sync_channel(1);
+            let connected = &connected;
+            scope.spawn(move || {
+                loop {
+                    let outcome = self.observe(created, connected, &updates);
+                    connected.store(false, Ordering::Release);
+                    let _ = updates.try_send(());
+                    if let Err(error) = outcome {
+                        let _ = self.publish(None, Some(&error));
+                    }
+                    thread::sleep(Duration::from_millis(500));
+                }
+            });
+            loop {
+                if connected.load(Ordering::Acquire) {
+                    match self.snapshot(created, 1, "") {
+                        Ok(snapshot) if connected.load(Ordering::Acquire) => {
+                            let _ = self.publish(Some(&snapshot), None);
+                        }
+                        Err(error) => {
+                            let _ = self.publish(None, Some(&error));
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                let _ = pending.recv_timeout(Duration::from_secs(2));
+                thread::sleep(Duration::from_millis(80));
+            }
+        });
+    }
+
+    fn observe(
+        &self,
+        created: u64,
+        connected: &AtomicBool,
+        updates: &std::sync::mpsc::SyncSender<()>,
+    ) -> io::Result<()> {
+        let agent = self.socket.agent(90);
+        let stream = agent
+            .get(format!("{URL}/events"))
+            .header(
+                "Authorization",
+                format!("Bearer {}", field(&self.binding, "token")),
+            )
+            .call()
+            .map_err(|_| io::Error::other("OpenCode event stream unavailable"))?;
+        if !stream.status().is_success()
+            || !stream
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|content| content.split(';').next() == Some("text/event-stream"))
+        {
+            return Err(io::Error::other("invalid OpenCode event response"));
+        }
+        let mut reader = BufReader::new(stream.into_body().into_reader());
+        let first = event(&mut reader)?;
+        if first["type"] != "swarm.bridge.connected" || !self.matches(&first["properties"], created)
+        {
+            return Err(io::Error::other("OpenCode event stream identity mismatch"));
+        }
+        connected.store(true, Ordering::Release);
+        let _ = updates.try_send(());
+        loop {
+            let update = event(&mut reader)?;
+            if update["type"] == "swarm.bridge.gap"
+                || !update["type"].is_string()
+                || !update["properties"].is_object()
+            {
+                return Err(io::Error::other(
+                    "OpenCode event stream requires reconciliation",
+                ));
+            }
+            let _ = updates.try_send(());
+        }
+    }
+
+    pub(super) fn snapshot(&self, created: u64, limit: u64, before: &str) -> io::Result<Value> {
+        if !(1..=200).contains(&limit)
+            || before.len() > 4096
+            || before
+                .bytes()
+                .any(|ch| !(ch.is_ascii_alphanumeric() || b"-_.~+/=".contains(&ch)))
+        {
+            return Err(io::Error::other("invalid OpenCode history page"));
+        }
+        let before = before
+            .replace('+', "%2B")
+            .replace('/', "%2F")
+            .replace('=', "%3D");
+        let snapshot = self.http(&format!("/snapshot?limit={limit}&before={before}"), None)?;
+        if !self.matches(&snapshot, created)
+            || snapshot["hierarchyComplete"] != true
+            || !snapshot["statuses"].is_object()
+            || !snapshot["permissions"].is_array()
+            || !snapshot["questions"].is_array()
+            || !snapshot["descendants"].is_array()
+            || !snapshot["messages"].is_array()
+        {
+            return Err(io::Error::other("OpenCode snapshot is unqualified"));
+        }
+        Ok(snapshot)
+    }
+
+    fn publish(&self, snapshot: Option<&Value>, error: Option<&io::Error>) -> io::Result<()> {
+        let status = match snapshot {
+            Some(snapshot) => status(snapshot, field(&self.binding, "rootID")),
+            None => {
+                json!({"Process":"running","Turn":"unknown","Interaction":"none","ObservationGap":true})
+            }
+        };
+        runtime::write_json(
+            &self.dir.join("observation.json"),
+            &json!({"token":self.token,"status":status,"reason":error.map(ToString::to_string),"observed_ms":crate::ipc::spawn::now_ms()}),
+        )
+    }
+}
+
+fn event(reader: &mut impl BufRead) -> io::Result<Value> {
+    let mut data = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let remaining = (1 << 20) - data.len();
+        let count = reader
+            .take(remaining as u64 + 1)
+            .read_until(b'\n', &mut line)?;
+        if count == 0 || count > remaining || line.last() != Some(&b'\n') {
+            return Err(io::Error::other(
+                "OpenCode event stream ended or exceeded size limit",
+            ));
+        }
+        if line == b"\n" || line == b"\r\n" {
+            if !data.is_empty() {
+                return Ok(serde_json::from_slice(&data)?);
+            }
+        } else if let Some(value) = line.strip_prefix(b"data:") {
+            data.extend_from_slice(value);
+        }
+    }
+}
+
+pub(super) fn in_scope(snapshot: &Value, root: &str, target: &str) -> bool {
+    opencode::valid_id(target, "ses_")
+        && (target == root
+            || snapshot["descendants"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["id"] == target)))
+}
+
+fn status(snapshot: &Value, root: &str) -> Value {
+    let related = |id: &str| in_scope(snapshot, root, id);
+    let busy = snapshot["statuses"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .any(|(id, status)| related(id) && matches!(field(status, "type"), "busy" | "retry"));
+    let any = |name: &str| {
+        snapshot[name]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|req| related(field(req, "sessionID")))
+    };
+    let interaction = if any("permissions") {
+        "permission"
+    } else if any("questions") {
+        "prompt"
+    } else {
+        "none"
+    };
+    json!({"Process":"running","Turn":if busy { "active" } else {"idle"},
+        "Interaction":interaction, "Attention":interaction != "none"})
+}
+
+fn encode_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            use std::fmt::Write;
+            write!(out, "%{byte:02X}").expect("write to string");
+        }
+    }
+    out
+}
+
+impl Backend {
+    pub(super) fn history(&self, limit: u64, before: &str) -> io::Result<Value> {
+        let native = opencode::receipts::native(&self.dir, &self.token)?;
+        let snapshot = self.snapshot(
+            native["nativeCreatedAtMS"].as_u64().unwrap_or_default(),
+            limit,
+            before,
+        )?;
+        Ok(json!({
+            "native_session_id":native["rootID"],"native_created_at_ms":native["nativeCreatedAtMS"],
+            "session_instance":native["sessionInstance"],"history":snapshot["messages"],"next_cursor":snapshot["nextCursor"],
+            "descendants":snapshot["descendants"],"hierarchy_scope":snapshot["hierarchyScope"],
+        }))
+    }
+}

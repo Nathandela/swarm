@@ -1,6 +1,7 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod codex_receipt;
+pub(crate) mod opencode;
 
 use serde_json::{Value, json};
 use std::fs;
@@ -18,6 +19,7 @@ pub(crate) struct LaunchPlan {
     pub executable: PathBuf,
     pub identity: Value,
     pub version: String,
+    pub native: Value,
 }
 
 pub(crate) fn prepare(
@@ -30,18 +32,23 @@ pub(crate) fn prepare(
     let agent = match agent {
         "claude" | "claude-code" => "claude",
         "codex" => "codex",
+        "opencode" => "opencode",
         _ => return Err(io::Error::other("unsupported provider")),
     };
     if agent == "codex" {
         codex::refuse_unqualified_origin(&request["env"])?;
     }
-    environment.retain(|(name, _)| {
-        name != if agent == "codex" {
-            "ANTHROPIC_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
-        }
+    environment.retain(|(name, _)| match agent {
+        "codex" => name != "ANTHROPIC_API_KEY",
+        "opencode" => !matches!(
+            name.as_str(),
+            "HOME" | "OPENAI_API_KEY" | "ANTHROPIC_API_KEY"
+        ),
+        _ => name != "OPENAI_API_KEY",
     });
+    if agent == "opencode" {
+        environment.extend(opencode::environment(&request["env"])?);
+    }
     let path = environment
         .iter()
         .rev()
@@ -51,10 +58,10 @@ pub(crate) fn prepare(
     let executable = resolve(agent, cwd, path)?;
     let before = identity(&executable)?;
     let output = version_output(&executable, cwd, &environment)?;
-    let version = if agent == "codex" {
-        codex::version(&output)?
-    } else {
-        claude::version(&output)?
+    let version = match agent {
+        "codex" => codex::version(&output)?,
+        "opencode" => opencode::version(&output)?,
+        _ => claude::version(&output)?,
     }
     .to_owned();
     let after = identity(&executable)?;
@@ -63,10 +70,10 @@ pub(crate) fn prepare(
             "provider executable changed during admission",
         ));
     }
-    let argv = if agent == "codex" {
-        codex::argv(request)?
-    } else {
-        claude::argv(label, request)?
+    let (argv, native) = match agent {
+        "codex" => (codex::argv(request)?, Value::Null),
+        "opencode" => opencode::launch(request)?,
+        _ => (claude::argv(label, request)?, Value::Null),
     };
     Ok(LaunchPlan {
         agent,
@@ -75,6 +82,7 @@ pub(crate) fn prepare(
         executable,
         identity: after,
         version,
+        native,
     })
 }
 
