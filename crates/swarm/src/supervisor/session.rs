@@ -1,6 +1,6 @@
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
-use crate::providers::{self, LaunchPlan};
+use crate::providers::{self, LaunchPlan, codex_receipt};
 use serde_json::{Value, json};
 use std::env;
 use std::fs::{self, DirBuilder};
@@ -46,6 +46,7 @@ pub(super) struct Session {
     pub id: String,
     dir: PathBuf,
     token: String,
+    agent: String,
     cwd: String,
     labels: Mutex<Labels>,
     created: String,
@@ -79,6 +80,11 @@ impl Session {
             dir,
             id: id.into(),
             token: token.into(),
+            agent: match field(&data["provider"], "name") {
+                "codex" => "codex",
+                _ => "claude",
+            }
+            .into(),
             cwd: cwd.into(),
             labels: Mutex::new(Labels {
                 name: name.into(),
@@ -140,8 +146,12 @@ impl Session {
             })
             || req["options"].as_object().is_some_and(|options| {
                 options.iter().any(|(key, value)| {
-                    !matches!(key.as_str(), "model" | "dangerously-skip-permissions")
-                        || !value.is_string()
+                    let agent = field(req, "agent");
+                    let supported = key == "model"
+                        || (agent == "codex" && key == "sandbox")
+                        || (matches!(agent, "claude" | "claude-code")
+                            && key == "dangerously-skip-permissions");
+                    !supported || !value.is_string()
                 })
             })
         {
@@ -185,7 +195,11 @@ impl Session {
             provider,
         } = prepared;
         let label = if label.is_empty() {
-            "Claude Code"
+            if provider.agent == "codex" {
+                "Codex"
+            } else {
+                "Claude Code"
+            }
         } else {
             &label
         };
@@ -196,8 +210,11 @@ impl Session {
             &dir.join("session.json"),
             &json!({
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
-                "created_at": now(), "cols": cols, "rows": rows,"tag":tag,
-                "provider": {"name": "claude", "version": provider.version,
+                "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
+                "provider": {"name": provider.agent, "version": provider.version,
+                    "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
+                        "managed"
+                    } else { "classic" },
                     "executable": provider.executable, "identity": provider.identity},
 
             }),
@@ -247,7 +264,8 @@ impl Session {
     }
 
     pub(super) fn await_ready(&self) -> io::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline =
+            Instant::now() + Duration::from_secs(if self.agent == "codex" { 8 } else { 3 });
         loop {
             if self.dial().is_ok() {
                 self.transition(Phase::Running);
@@ -347,6 +365,153 @@ impl Session {
             }
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    pub(super) fn semantic_target(&self) -> io::Result<String> {
+        if self.agent != "codex" || !self.is_live() {
+            return Err(io::Error::other("session has no live Codex app-server"));
+        }
+        let observed = runtime::read_json(&self.dir.join("observation.json"))?;
+        if observed["backend_available"] != true
+            || observed["requests_available"] != true
+            || observed["token"] != self.token
+            || field(&observed, "conversation_id").is_empty()
+        {
+            return Err(io::Error::other(
+                "session has no confirmed Codex app-server thread",
+            ));
+        }
+        Ok(codex_receipt::instance(&self.token))
+    }
+
+    pub(super) fn native_requests(&self, session: &str) -> io::Result<Value> {
+        self.semantic_target()?;
+        // Confirm continued private shim custody at query time.
+        self.dial()?;
+        let observed = runtime::read_json(&self.dir.join("observation.json"))?;
+        if observed["token"] != self.token || observed["requests_available"] != true {
+            return Err(io::Error::other(
+                "bound Codex request stream is not available",
+            ));
+        }
+        let requests = observed["requests"]
+            .as_array()
+            .filter(|requests| requests.len() <= 128)
+            .ok_or_else(|| io::Error::other("invalid Codex request projection"))?;
+        Ok(if requests.is_empty() {
+            json!({"session":session})
+        } else {
+            json!({"session":session,"requests":requests})
+        })
+    }
+
+    fn semantic_thread(&self) -> io::Result<String> {
+        match runtime::read_json(&self.dir.join("observation.json")) {
+            Ok(record)
+                if record["token"] == self.token
+                    && codex_receipt::canonical_thread(field(&record, "conversation_id")) =>
+            {
+                Ok(field(&record, "conversation_id").to_owned())
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+            Err(err) => Err(err),
+            Ok(_) => Err(io::Error::other("unverified Codex thread identity")),
+        }
+    }
+
+    pub(super) fn semantic_status(
+        &self,
+        operation: &str,
+        session: &str,
+        root: &Path,
+    ) -> io::Result<Option<Value>> {
+        let thread = self.semantic_thread()?;
+        let record = codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?;
+        if let Some(record) = record {
+            codex_receipt::verify_binding(
+                root,
+                operation,
+                session,
+                &codex_receipt::instance(&self.token),
+                field(&record, "intent"),
+            )?;
+            return Ok(Some(record["receipt"].clone()));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn semantic_send(
+        &self,
+        request: &Value,
+        session: &str,
+        state: &super::State,
+    ) -> io::Result<Value> {
+        let body = &request["composer_send"];
+        let operation = field(request, "operation_id");
+        let text = field(body, "text");
+        let instance = field(body, "session_instance");
+        if request["body_version"] != 1
+            || body["session"] != session
+            || !codex_receipt::timely(operation)
+            || text.is_empty()
+            || text.len() > 4096
+            || body.as_object().is_none_or(|fields| {
+                fields.iter().any(|(key, value)| {
+                    !matches!(
+                        key.as_str(),
+                        "session" | "session_instance" | "text" | "expected_turn"
+                    ) && !value.is_null()
+                })
+            })
+            || !(body["expected_turn"].is_null() || body["expected_turn"] == "")
+            || instance != codex_receipt::instance(&self.token)
+            || self.agent != "codex"
+        {
+            return Err(io::Error::other("invalid or stale Codex semantic request"));
+        }
+        let thread = self.semantic_thread()?;
+        {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(operation);
+            let _operation = state.operation_locks
+                [usize::from(digest[0]) % state.operation_locks.len()]
+            .lock()
+            .unwrap();
+            codex_receipt::bind(&state.root, operation, session, instance, text)?;
+        }
+        if let Some(record) =
+            codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?
+        {
+            if record["intent"] != codex_receipt::hash(text)
+                || record["receipt"]["session"] != session
+            {
+                return Err(io::Error::other(
+                    "semantic operation is already bound to another request",
+                ));
+            }
+            return Ok(record["receipt"].clone());
+        }
+        self.semantic_target()?;
+        let mut shim = self.dial()?;
+        shim.set_read_timeout(Some(Duration::from_secs(7)))?;
+        runtime::write_control(
+            &mut shim,
+            &json!({
+                "type":"semantic","operation_id":operation,"session":session,
+                "session_instance":instance,"text":text,
+            }),
+        )?;
+        let reply = runtime::read_control(&mut shim)?;
+        if reply["type"] != "semantic_result" {
+            return Err(io::Error::other(field(&reply, "error").to_owned()));
+        }
+        if reply["receipt"]["operation_id"] != operation || reply["receipt"]["session"] != session {
+            return Err(io::Error::other(
+                "uncorrelated Codex semantic receipt; outcome unknown",
+            ));
+        }
+        self.semantic_status(operation, session, &state.root)?
+            .ok_or_else(|| io::Error::other("semantic receipt is unavailable"))
     }
 
     pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {
@@ -475,7 +640,7 @@ impl Session {
         let labels = self.labels.lock().unwrap();
         let mut view = json!({
             "endpoint_id": endpoint, "id": format!("{endpoint}/{}", self.id),
-            "agent": "claude", "name": labels.name, "cwd": self.cwd,
+            "agent": self.agent, "name": labels.name, "cwd": self.cwd,
             "status": status,
             "group": group, "group_entered_at": state.1, "last_activity": state.1,
             "created_at": self.created, "summary": "",

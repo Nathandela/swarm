@@ -41,6 +41,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: swarm-fake-codex app-server --listen unix://PATH | agent [args...]")
 		os.Exit(2)
 	}
+	if os.Args[1] == "--version" {
+		fmt.Println("codex-cli 0.160.0")
+		return
+	}
 	if os.Args[1] == "app-server" {
 		os.Exit(runAppServer(os.Args[2:]))
 	}
@@ -74,6 +78,7 @@ type fakeAppServer struct {
 	// turnStarts counts `turn/start` requests, which is how a test observes that the phone's
 	// words really crossed the socket as an RPC.
 	turnStarts int
+	lastText   string
 }
 
 func runAppServer(args []string) int {
@@ -88,10 +93,29 @@ func runAppServer(args []string) int {
 		fmt.Fprintln(os.Stderr, "swarm-fake-codex app-server: listen:", err)
 		return 1
 	}
-	s := &fakeAppServer{conns: map[*websocket.Conn]*sync.Mutex{}}
+	_, seedErr := os.Stat(".fixture-seeded-rollout")
+	s := &fakeAppServer{conns: map[*websocket.Conn]*sync.Mutex{}, rollout: seedErr == nil}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rpc", s.serveRPC)
 	mux.HandleFunc("/probe", s.probe)
+	mux.HandleFunc("POST /fixture/idle", func(w http.ResponseWriter, _ *http.Request) {
+		s.broadcast(map[string]any{
+			"jsonrpc": "2.0", "method": "thread/status/changed",
+			"params": map[string]any{"threadId": fakeThreadID, "status": map[string]string{"type": "idle"}},
+		})
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /fixture/request", func(w http.ResponseWriter, r *http.Request) {
+		thread := fakeThreadID
+		if r.URL.Query().Get("scope") == "other" {
+			thread = "01997f00-face-7000-8000-00000000cde1"
+		}
+		s.broadcast(map[string]any{
+			"jsonrpc": "2.0", "id": 29, "method": "item/commandExecution/requestApproval",
+			"params": map[string]any{"threadId": thread, "command": "synthetic approval"},
+		})
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/agent-attach", func(w http.ResponseWriter, _ *http.Request) {
 		s.broadcastThreadStarted()
 		w.WriteHeader(http.StatusOK)
@@ -133,6 +157,11 @@ func (s *fakeAppServer) serveRPC(w http.ResponseWriter, r *http.Request) {
 		var fr struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params struct {
+				Input []struct {
+					Text string `json:"text"`
+				} `json:"input"`
+			} `json:"params"`
 		}
 		if json.Unmarshal(data, &fr) != nil {
 			continue
@@ -141,6 +170,16 @@ func (s *fakeAppServer) serveRPC(w http.ResponseWriter, r *http.Request) {
 			continue // a notification (`initialized`) is answered with nothing
 		}
 		reply, err := json.Marshal(s.answer(fr.ID, fr.Method))
+		if fr.Method == "turn/start" {
+			if len(fr.Params.Input) > 0 {
+				s.mu.Lock()
+				s.lastText = fr.Params.Input[0].Text
+				s.mu.Unlock()
+			}
+			if _, err := os.Stat(".fixture-drop-turn-reply"); err == nil {
+				continue
+			}
+		}
 		if err != nil {
 			continue
 		}
@@ -172,7 +211,7 @@ func (s *fakeAppServer) answer(id json.RawMessage, method string) map[string]any
 			}
 			return out
 		}
-		out["result"] = map[string]any{"thread": map[string]any{"id": fakeThreadID}}
+		out["result"] = map[string]any{"thread": map[string]any{"id": fakeThreadID, "status": map[string]string{"type": "idle"}}}
 	case "turn/start":
 		s.rollout = true
 		s.turnStarts++
@@ -187,7 +226,8 @@ func (s *fakeAppServer) answer(id json.RawMessage, method string) map[string]any
 // outside the process that received them.
 func (s *fakeAppServer) probe(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
-	body := map[string]any{"turnStarts": s.turnStarts, "rollout": s.rollout}
+	body := map[string]any{"turnStarts": s.turnStarts, "rollout": s.rollout, "lastText": s.lastText,
+		"openai": os.Getenv("OPENAI_API_KEY") != "", "anthropic": os.Getenv("ANTHROPIC_API_KEY") != ""}
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
@@ -196,11 +236,15 @@ func (s *fakeAppServer) probe(w http.ResponseWriter, _ *http.Request) {
 // broadcastThreadStarted fires the recorded `thread/started` notification to every attached
 // client, which is what the real server does when the AGENT creates the session's thread.
 func (s *fakeAppServer) broadcastThreadStarted() {
-	frame, err := json.Marshal(map[string]any{
+	cwd, _ := os.Getwd()
+	s.broadcast(map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "thread/started",
-		"params":  map[string]any{"thread": map[string]any{"id": fakeThreadID}},
+		"params":  map[string]any{"thread": map[string]any{"id": fakeThreadID, "cwd": cwd, "status": map[string]string{"type": "idle"}}},
 	})
+}
+func (s *fakeAppServer) broadcast(message map[string]any) {
+	frame, err := json.Marshal(message)
 	if err != nil {
 		return
 	}
@@ -227,6 +271,8 @@ func (s *fakeAppServer) broadcastThreadStarted() {
 // pointed at one, and then idles until its stdin closes.
 func runAgent(args []string) int {
 	fmt.Printf("ARGV %s\n", strings.Join(args, " "))
+	fmt.Printf("VIEWER openai=%t anthropic=%t claude_hook=%t\n", os.Getenv("OPENAI_API_KEY") != "",
+		os.Getenv("ANTHROPIC_API_KEY") != "", os.Getenv("SWARM_HOOK_TOKEN") != "")
 	if path := endpointFor(args, "--remote"); path != "" {
 		if err := attach(path); err != nil {
 			fmt.Printf("ATTACH-FAILED %v\n", err)

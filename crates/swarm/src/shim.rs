@@ -1,8 +1,9 @@
+mod codex_backend;
 mod pty;
 mod screen;
 
 use crate::ipc::{field, wire};
-use crate::providers;
+use crate::providers::{self, codex_receipt};
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -13,9 +14,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,9 @@ pub(crate) fn run(args: &[String]) -> u8 {
 struct State {
     token: String,
     hook_token: String,
+    provider: String,
+    semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    terminal_input: AtomicBool,
     dir: PathBuf,
     working_dir: PathBuf,
     observations: Mutex<ProviderObservation>,
@@ -93,23 +97,50 @@ fn serve(dir: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("malformed transient launch arguments"))?;
     let working_dir = field(&config, "cwd");
     let mut command = Command::new(executable);
-    command.current_dir(working_dir).args(argv);
-    command.env_clear().envs(runtime::launch_env(&Value::Null));
-    let hook_token = runtime::random_id()?;
+    let environment = runtime::launch_env(&Value::Null);
+    command
+        .env_clear()
+        .envs(environment.iter().map(|(key, value)| (key, value)));
+    let hook_token = if provider["name"] == "claude" {
+        let hook_token = runtime::random_id()?;
+        command
+            .env("SWARM_RUST_HOOK_SOCKET", &socket)
+            .env("SWARM_HOOK_TOKEN", &hook_token);
+        hook_token
+    } else {
+        String::new()
+    };
     command
         .env("TERM", "xterm-256color")
-        .env("SWARM_RUST_HOOK_SOCKET", &socket)
-        .env("SWARM_HOOK_TOKEN", &hook_token)
         .env("SWARM_SESSION_ID", field(&config, "id"));
     let (cols, rows) = runtime::dims(&config);
     pty::arm_shutdown()?;
+    let mut backend = None;
+    let mut channel = None;
     let (mut child, master) = (|| {
-        if provider["name"] != "claude" || providers::identity(executable)? != provider["identity"]
+        if !matches!(field(provider, "name"), "claude" | "codex")
+            || providers::identity(executable)? != provider["identity"]
         {
             return Err(io::Error::other(
-                "Claude executable identity changed before exec",
+                "provider executable identity changed before exec",
             ));
         }
+        command.current_dir(working_dir);
+        if provider["name"] == "codex" && provider["mode"] == "managed" {
+            let (owner, connection) =
+                codex_backend::start(executable, Path::new(working_dir), dir, &environment)?;
+            backend = Some(owner);
+            command
+                .args(["--remote", &connection.endpoint])
+                .env_remove("OPENAI_API_KEY");
+            channel = Some(connection);
+            if providers::identity(executable)? != provider["identity"] {
+                return Err(io::Error::other(
+                    "provider executable changed before terminal exec",
+                ));
+            }
+        }
+        command.args(argv);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
@@ -134,9 +165,13 @@ fn serve(dir: &Path) -> io::Result<()> {
         let _ = fs::remove_file(&socket);
         return Err(err);
     }
+    let (action_sink, action_receiver) = mpsc::sync_channel(1);
     let state = Arc::new(State {
         token: token.into(),
         hook_token,
+        provider: field(provider, "name").to_owned(),
+        semantic: channel.is_some().then_some(action_sink),
+        terminal_input: AtomicBool::new(false),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
         observations: Mutex::new(ProviderObservation::default()),
@@ -151,7 +186,21 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let output = thread::spawn(move || drain(reader));
+    let pending = (state.provider == "codex" && channel.is_none())
+        .then(|| Arc::new((Mutex::new(None), Condvar::new())));
+    if let Some(pending) = pending.clone() {
+        let state = state.clone();
+        thread::spawn(move || codex_status_writer(&state, &pending));
+    }
+    if let Some(channel) = channel {
+        let (cwd, dir, token) = (
+            state.working_dir.clone(),
+            state.dir.clone(),
+            state.token.clone(),
+        );
+        thread::spawn(move || codex_backend::observe(channel, cwd, dir, token, action_receiver));
+    }
+    let output = thread::spawn(move || drain(reader, pending));
     let shared = state.clone();
     thread::spawn(move || accept(listener, shared));
     let status = loop {
@@ -177,6 +226,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         drop((active, terminate_at));
         thread::sleep(Duration::from_millis(40));
     };
+    drop(backend);
     runtime::write_json(
         &dir.join("exit.json"),
         &json!({
@@ -199,9 +249,29 @@ fn terminate(state: &State) -> io::Result<()> {
     Ok(())
 }
 
-fn drain(state: Arc<State>) {
+type PendingStatus = (Mutex<Option<Value>>, Condvar);
+
+fn codex_status_writer(state: &State, pending: &PendingStatus) {
+    loop {
+        let mut slot = pending.0.lock().unwrap();
+        while slot.is_none() {
+            slot = pending.1.wait(slot).unwrap();
+        }
+        let status = slot.take().expect("notification carries a status");
+        drop(slot);
+        let _ = runtime::write_json(
+            &state.dir.join("observation.json"),
+            &json!({
+                "token": state.token, "status": status,
+            }),
+        );
+    }
+}
+
+fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
     let mut bytes = [0; 8192];
     let mut master = &state.master;
+    let mut observed = None;
     loop {
         let n = match master.read(&mut bytes) {
             Ok(0) => break,
@@ -220,6 +290,17 @@ fn drain(state: Arc<State>) {
         {
             let _ = sub.conn.shutdown(Shutdown::Both);
             screen.subscriber = None;
+        }
+        let status = pending
+            .as_ref()
+            .and_then(|_| providers::codex::terminal_status(screen.parser.screen()));
+        drop(screen);
+        if let Some(pending) = &pending
+            && let Some(status) = status.filter(|status| observed.as_ref() != Some(status))
+        {
+            observed = Some(status.clone());
+            *pending.0.lock().unwrap() = Some(status);
+            pending.1.notify_one();
         }
     }
 }
@@ -264,12 +345,55 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
         }
+        "semantic" => {
+            let operation = field(&request, "operation_id");
+            let text = field(&request, "text");
+            let session = field(&request, "session");
+            let body = (|| {
+                if field(&request, "session_instance") != codex_receipt::instance(&state.token)
+                    || !codex_receipt::timely(operation)
+                    || session.is_empty()
+                    || text.is_empty()
+                    || text.len() > 4096
+                {
+                    return Err(io::Error::other("invalid or stale Codex semantic request"));
+                }
+                let _authority = state.control.lock().unwrap();
+                // shortcut: terminal edits make draft state uncertain until the native TUI exposes a verified empty composer.
+                if *_authority != 0 || state.terminal_input.load(Ordering::Acquire) {
+                    return Err(io::Error::other("Codex terminal draft is not proven empty"));
+                }
+                let sender = state
+                    .semantic
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
+                let (answer, response) = mpsc::sync_channel(1);
+                sender
+                    .try_send(codex_backend::SemanticAction {
+                        operation: operation.into(),
+                        session: session.into(),
+                        text: text.into(),
+                        answer,
+                        not_after: Instant::now() + Duration::from_secs(2),
+                    })
+                    .map_err(|_| io::Error::other("Codex native input lane is unavailable"))?;
+                response
+                    .recv_timeout(Duration::from_secs(6))
+                    .map_err(|_| io::Error::other("Codex semantic submission outcome is unknown"))?
+            })();
+            let response = match body {
+                Ok(body) => json!({"type":"semantic_result", "receipt":body}),
+                Err(err) => json!({"type":"error", "error":err.to_string()}),
+            };
+            runtime::write_control(&mut stream, &response)
+        }
         "input" => {
             let text = field(&request, "data");
             if text.is_empty() || text.len() > 4096 {
                 return Err(io::Error::other("invalid shim input payload"));
             }
             let _guard = state.control.lock().unwrap();
+            state.terminal_input.store(true, Ordering::Release);
             let bracketed = request["paste"] == true
                 && state
                     .screen
@@ -314,7 +438,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
     let event = field(request, "event");
     let payload = &request["payload"];
-    if field(request, "token") != state.hook_token
+    if state.provider != "claude"
+        || field(request, "token") != state.hook_token
         || !providers::claude::EVENTS.contains(&event)
         || !payload.is_object()
     {
@@ -395,7 +520,12 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 break;
             }
             match tag {
-                DATA_IN => pty::input(&state.master, &bytes)?,
+                DATA_IN => {
+                    if !bytes.is_empty() {
+                        state.terminal_input.store(true, Ordering::Release);
+                    }
+                    pty::input(&state.master, &bytes)?;
+                }
                 wire::CONTROL => {
                     let request: Value = serde_json::from_slice(&bytes)?;
                     if request["type"] != "resize" {
