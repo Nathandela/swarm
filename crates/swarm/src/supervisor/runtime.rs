@@ -55,6 +55,10 @@ pub(crate) fn reclaim_socket(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn lock(path: &Path) -> io::Result<File> {
+    lock_for(path, Duration::ZERO)
+}
+
+pub(crate) fn lock_for(path: &Path, timeout: Duration) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -63,16 +67,25 @@ pub(crate) fn lock(path: &Path) -> io::Result<File> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
     validate_file(&file)?;
-    // flock is tied to the lifetime of this owned file description.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == -1 {
-        let err = io::Error::last_os_error();
-        return Err(if err.kind() == io::ErrorKind::WouldBlock {
-            io::Error::other("daemon: another instance is already running")
-        } else {
-            err
-        });
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        // SAFETY: flock borrows this live descriptor and never blocks.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::WouldBlock {
+            return Err(error);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                error.kind(),
+                "daemon: another instance is already running",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10).min(remaining));
     }
-    Ok(file)
 }
 
 fn uid() -> u32 {

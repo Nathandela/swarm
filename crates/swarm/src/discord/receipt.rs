@@ -69,7 +69,7 @@ impl Inbox {
         if serde_json::to_vec(&next)?.len() >= MAX_STORE_BYTES {
             return Err(io::Error::other("Discord inbox reached its storage limit"));
         }
-        let _effect = super::worker_input::lock_ledger(
+        let _effect = super::worker_input::lock_ledger_writer(
             self.file
                 .parent()
                 .ok_or_else(|| invalid("missing connector ledger directory"))?,
