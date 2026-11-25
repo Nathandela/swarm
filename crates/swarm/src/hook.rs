@@ -134,6 +134,7 @@ fn post_agy(raw: &Value) -> io::Result<()> {
         .map_err(io::Error::other)?;
     let mut stream = UnixStream::connect(socket)?;
     stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
     let mut payload = json!({
         "agent_state":state.chars().take(32).collect::<String>(),
         "conversation_title":title.chars().take(128).collect::<String>(),
@@ -147,5 +148,9 @@ fn post_agy(raw: &Value) -> io::Result<()> {
         &json!({
             "type":"hook", "event":agy::EVENT, "token":token, "payload":payload,
         }),
-    )
+    )?;
+    if runtime::read_control(&mut stream)?["type"] != "ok" {
+        return Err(io::Error::other("shim refused Antigravity status line"));
+    }
+    Ok(())
 }
