@@ -52,14 +52,14 @@ impl Service {
                     let request = runtime::read_control(&mut DeadlineReader(&stream, deadline));
                     if let Ok(request) = request {
                         let result = authorize(&dir, &supervisor, &cfg, &request, &mut fetch);
-                        if result.is_ok()
+                        if let Ok(authorized) = result
                             && !running.load(Ordering::Acquire)
                             && Instant::now() < deadline
                         {
                             let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
                             let _ = runtime::write_control(
                                 &mut stream,
-                                &json!({"challenge":request["challenge"],"epoch":request["epoch"]}),
+                                &json!({"challenge":request["challenge"],"epoch":request["epoch"],"authorized":authorized}),
                             );
                         }
                     }
@@ -107,25 +107,120 @@ pub(super) fn invalidate(place: &Path, operation: Option<&str>) -> io::Result<()
     runtime::write_json(&path, &state)
 }
 
-pub(super) fn invalidates(event: &Value) -> bool {
-    matches!(
-        field(event, "t"),
-        "MESSAGE_UPDATE"
-            | "MESSAGE_DELETE"
-            | "MESSAGE_DELETE_BULK"
-            | "THREAD_UPDATE"
-            | "THREAD_DELETE"
-            | "THREAD_MEMBER_UPDATE"
-            | "THREAD_MEMBERS_UPDATE"
-            | "GUILD_MEMBER_UPDATE"
-            | "GUILD_MEMBER_REMOVE"
-            | "GUILD_ROLE_UPDATE"
-            | "GUILD_ROLE_DELETE"
-            | "CHANNEL_UPDATE"
-            | "CHANNEL_DELETE"
-            | "GUILD_UPDATE"
-            | "GUILD_DELETE"
-    )
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Invalidation {
+    None,
+    Refresh,
+    Cancel,
+}
+
+pub(super) fn invalidates(cfg: &Config, source: &Value, event: &Value) -> Invalidation {
+    use Invalidation::{Cancel, None, Refresh};
+    let route = &source["route"];
+    let guild = field(route, "guild_id");
+    let channel = field(route, "channel_id");
+    let parent = field(route, "parent_id");
+    let message = field(route, "message_id");
+    let body = &event["d"];
+    if guild.is_empty()
+        || channel.is_empty()
+        || message.is_empty()
+        || body["guild_id"]
+            .as_str()
+            .is_some_and(|actual| actual != guild)
+    {
+        return None;
+    }
+    let recipient = |id: &str| {
+        !id.is_empty() && (id == cfg.text("owner_id") || id == cfg.text("application_id"))
+    };
+    let channel_id = field(body, "channel_id");
+    let id = field(body, "id");
+    let affected_channel = || !id.is_empty() && (id == channel || id == parent);
+    match field(event, "t") {
+        "MESSAGE_UPDATE" if channel_id == channel && id == message => {
+            if body
+                .get("content")
+                .is_some_and(|text| text.is_string() && *text != source["text"])
+                || body
+                    .get("edited_timestamp")
+                    .is_some_and(|edited| !edited.is_null() && *edited != source["edited_at"])
+                || body["attachments"]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+            {
+                Cancel
+            } else {
+                Refresh
+            }
+        }
+        "MESSAGE_DELETE" if channel_id == channel && id == message => Cancel,
+        "MESSAGE_DELETE_BULK"
+            if channel_id == channel
+                && body["ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == message)) =>
+        {
+            Cancel
+        }
+        "CHANNEL_UPDATE" | "THREAD_UPDATE" if affected_channel() => Refresh,
+        "CHANNEL_DELETE" | "THREAD_DELETE" if affected_channel() => Cancel,
+        "GUILD_UPDATE" if id == guild => Refresh,
+        "GUILD_DELETE" if id == guild && body["unavailable"] == true => Refresh,
+        "GUILD_DELETE" if id == guild => Cancel,
+        "GUILD_MEMBER_UPDATE"
+            if body["guild_id"] == guild
+                && (recipient(field(&body["user"], "id"))
+                    || field(&body["user"], "id").is_empty()) =>
+        {
+            Refresh
+        }
+        "GUILD_MEMBER_REMOVE"
+            if body["guild_id"] == guild && recipient(field(&body["user"], "id")) =>
+        {
+            Cancel
+        }
+        "THREAD_MEMBER_UPDATE"
+            if id == channel
+                && (recipient(field(body, "user_id")) || field(body, "user_id").is_empty()) =>
+        {
+            Refresh
+        }
+        "THREAD_MEMBERS_UPDATE" if id == channel => {
+            if body["removed_member_ids"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().filter_map(Value::as_str).any(recipient))
+            {
+                Cancel
+            } else if body["added_members"]
+                .as_array()
+                .is_some_and(|members| members.iter().any(|item| recipient(field(item, "user_id"))))
+                || body["added_members"].is_null() && body["removed_member_ids"].is_null()
+            {
+                Refresh
+            } else {
+                None
+            }
+        }
+        "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" if body["guild_id"] == guild => {
+            let role = body["role"]["id"]
+                .as_str()
+                .or_else(|| body["role_id"].as_str())
+                .unwrap_or_default();
+            // An unclassified role event can invalidate a snapshot, never terminalize a source.
+            if role.is_empty()
+                || role == guild
+                || source["audience_roles"]
+                    .as_array()
+                    .is_none_or(|roles| roles.iter().any(|id| id == role))
+            {
+                Refresh
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn epoch(place: &Path, operation: &str) -> io::Result<Value> {
@@ -147,7 +242,7 @@ fn authorize(
     cfg: &Config,
     request: &Value,
     mut fetch: impl FnMut(&Config, &str, &str, &str) -> io::Result<Option<Value>>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let refused = || invalid("guild audience is no longer authorized");
     if request["epoch"] != epoch(place, field(request, "operation"))?
         || !request["challenge"].as_str().is_some_and(runtime::valid_id)
@@ -173,7 +268,14 @@ fn authorize(
     let guild = field(origin, "guild_id");
     let channel = field(origin, "channel_id");
     let prior = &ledger["messages"][id];
-    let seen = fetch(cfg, guild, channel, id)?.ok_or_else(refused)?;
+    let fetched = fetch(cfg, guild, channel, id)?;
+    if request["epoch"] != epoch(place, field(request, "operation"))? {
+        return Err(refused());
+    }
+    verify()?;
+    let Some(seen) = fetched else {
+        return Ok(false);
+    };
     if seen["id"] != id
         || seen["guild_id"] != guild
         || seen["channel_id"] != channel
@@ -193,20 +295,19 @@ fn authorize(
         || seen["edited_timestamp"] != prior["edited_at"]
         || field(&seen, "verified_parent_id") != field(&prior["route"], "parent_id")
         || guild::address(cfg, &seen).as_deref() != prior["addressed_text"].as_str()
-        || request["epoch"] != epoch(place, field(request, "operation"))?
     {
-        return Err(refused());
+        return Ok(false);
     }
-    verify()
+    Ok(true)
 }
 
-pub(super) fn recheck(
+fn recheck_response(
     place: &Place,
     installation: &str,
     provider: &str,
     operation: &str,
     composer: &Value,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let socket = place.dir.join(SOCKET);
     let meta = fs::symlink_metadata(&socket)?;
     // SAFETY: geteuid requires no arguments.
@@ -228,14 +329,37 @@ pub(super) fn recheck(
     )?;
     let reply =
         runtime::read_control(&mut DeadlineReader(&stream, Instant::now() + PROOF_TIMEOUT))?;
-    if reply != json!({"epoch":expected,"challenge":challenge})
+    if reply["epoch"] != expected
+        || reply["challenge"] != challenge
         || epoch(&place.dir, operation)? != expected
     {
         return Err(invalid(
-            "guild authority was cancelled before the native effect",
+            "guild authority was invalidated before the native effect",
         ));
     }
-    Ok(())
+    reply["authorized"]
+        .as_bool()
+        .ok_or_else(|| invalid("missing guild authority verdict"))
+}
+
+pub(super) fn recheck(
+    place: &Place,
+    installation: &str,
+    provider: &str,
+    operation: &str,
+    composer: &Value,
+) -> io::Result<()> {
+    match recheck_response(place, installation, provider, operation, composer) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "guild audience definitively refused the native effect",
+        )),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "guild authority check did not authorize the native effect",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +367,105 @@ mod tests {
     use super::*;
     use crate::discord::receipt::Inbox;
     use std::sync::atomic::AtomicU8;
+
+    #[test]
+    fn gateway_invalidation_is_bound_to_the_source_and_its_actual_audience() {
+        use Invalidation::{Cancel, None, Refresh};
+        let cfg = Config(json!({"application_id":"200","owner_id":"300"}));
+        let mut source = json!({"route":{"guild_id":"10","channel_id":"12","parent_id":"11","message_id":"90"},
+            "audience_roles":["10","210","310"]});
+        let decide =
+            |source: &Value, name, data| invalidates(&cfg, source, &json!({"t":name,"d":data}));
+        for (kind, data) in [
+            ("MESSAGE_UPDATE", json!({"channel_id":"80","id":"90"})),
+            (
+                "MESSAGE_UPDATE",
+                json!({"guild_id":"20","channel_id":"12","id":"90"}),
+            ),
+            (
+                "MESSAGE_UPDATE",
+                json!({"guild_id":"10","channel_id":"12","id":"91"}),
+            ),
+            (
+                "MESSAGE_DELETE_BULK",
+                json!({"guild_id":"10","channel_id":"12","ids":["91"]}),
+            ),
+            ("CHANNEL_DELETE", json!({"guild_id":"10","id":"13"})),
+            ("GUILD_DELETE", json!({"id":"20"})),
+            (
+                "GUILD_ROLE_UPDATE",
+                json!({"guild_id":"10","role":{"id":"299"}}),
+            ),
+            (
+                "GUILD_MEMBER_REMOVE",
+                json!({"guild_id":"10","user":{"id":"301"}}),
+            ),
+            (
+                "GUILD_MEMBER_REMOVE",
+                json!({"guild_id":"20","user":{"id":"300"}}),
+            ),
+            (
+                "THREAD_MEMBERS_UPDATE",
+                json!({"guild_id":"10","id":"12","removed_member_ids":["301"]}),
+            ),
+            (
+                "THREAD_MEMBERS_UPDATE",
+                json!({"guild_id":"10","id":"13","removed_member_ids":["300"]}),
+            ),
+        ] {
+            assert_eq!(decide(&source, kind, data), None, "{kind}");
+        }
+        for (kind, data) in [
+            (
+                "MESSAGE_UPDATE",
+                json!({"guild_id":"10","channel_id":"12","id":"90"}),
+            ),
+            ("CHANNEL_UPDATE", json!({"guild_id":"10","id":"11"})),
+            (
+                "GUILD_ROLE_UPDATE",
+                json!({"guild_id":"10","role":{"id":"210"}}),
+            ),
+            (
+                "GUILD_MEMBER_UPDATE",
+                json!({"guild_id":"10","user":{"id":"200"}}),
+            ),
+            ("THREAD_MEMBERS_UPDATE", json!({"guild_id":"10","id":"12"})),
+        ] {
+            assert_eq!(decide(&source, kind, data), Refresh, "{kind}");
+        }
+        for (kind, data) in [
+            (
+                "MESSAGE_UPDATE",
+                json!({"guild_id":"10","channel_id":"12","id":"90","content":"new body"}),
+            ),
+            (
+                "MESSAGE_DELETE",
+                json!({"guild_id":"10","channel_id":"12","id":"90"}),
+            ),
+            (
+                "GUILD_MEMBER_REMOVE",
+                json!({"guild_id":"10","user":{"id":"300"}}),
+            ),
+            (
+                "THREAD_MEMBERS_UPDATE",
+                json!({"guild_id":"10","id":"12","removed_member_ids":["200"]}),
+            ),
+        ] {
+            assert_eq!(decide(&source, kind, data), Cancel, "{kind}");
+        }
+        source
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("audience_roles");
+        assert_eq!(
+            decide(
+                &source,
+                "GUILD_ROLE_UPDATE",
+                json!({"guild_id":"10","role":{"id":"299"}})
+            ),
+            Refresh
+        );
+    }
 
     #[test]
     fn effect_socket_denies_revoked_membership_and_gateway_cancellation() {
@@ -304,9 +527,9 @@ mod tests {
                 &composer,
             )
         };
-        assert!(check().is_err());
+        assert_eq!(check().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
         mode.store(1, Ordering::Release);
-        assert!(check().is_err());
+        assert_eq!(check().unwrap_err().kind(), io::ErrorKind::Interrupted);
         mode.store(2, Ordering::Release);
         assert!(check().is_ok());
         invalidate(&place, Some(&operation)).unwrap();

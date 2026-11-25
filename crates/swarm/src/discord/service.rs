@@ -110,15 +110,26 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
         let Some(event) = cursor.event(&mut gateway_socket)? else {
             continue;
         };
-        if !personal
-            && super::worker_proof::invalidates(&event)
-            && let Some(flight) = &worker_send
-        {
-            super::worker_proof::invalidate(&place.dir, Some(&flight.operation))?;
+        if !personal && let Some(flight) = &worker_send {
+            use super::worker_proof::Invalidation;
+            match super::worker_proof::invalidates(
+                cfg,
+                inbox.worker_source(&flight.operation),
+                &event,
+            ) {
+                Invalidation::None => {}
+                Invalidation::Refresh => super::worker_proof::invalidate(&place.dir, None)?,
+                Invalidation::Cancel => {
+                    super::worker_proof::invalidate(&place.dir, Some(&flight.operation))?
+                }
+            }
         }
         if personal {
             ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
         } else if worker_send.is_some() {
+            if !super::guild::needs_ingest(cfg, &inbox, &event) {
+                continue;
+            }
             if guild_events.len() >= 128 {
                 return Err(invalid(
                     "guild event backlog exceeded its safe bound during a worker effect",

@@ -176,9 +176,20 @@ fn matching_provider_receipt(
                             && admission["input_id"] == operation
                             && admission["ref"]["session_id"] == native
                             && bounded(field(&admission["ref"], "profile_id"))
-                            && bounded(field(admission, "authority_epoch"))
+                            && admission["authority_epoch"]
+                                .as_u64()
+                                .is_some_and(|epoch| epoch > 0)
                             && bounded(field(admission, "admission_id"))
-                            && admission["execution_generation"].is_u64()
+                            && admission
+                                .get("execution_generation")
+                                .is_some_and(|generation| {
+                                    generation.is_u64()
+                                        || generation.is_null()
+                                            && matches!(
+                                                field(admission, "status"),
+                                                "queued" | "terminal"
+                                            )
+                                })
                             && matches!(
                                 field(admission, "status"),
                                 "queued" | "started" | "terminal"
@@ -431,17 +442,41 @@ mod tests {
         assert!(!matching_provider_receipt("hermes", "op", &composer, &agy));
         agy["native_turn_id"] = json!("foreign-proof");
         assert!(!matching_provider_receipt("agy", "op", &composer, &agy));
-        let mut hermes = agy;
-        hermes["agent"] = json!("hermes");
-        hermes["native_generation"] = json!("act");
-        hermes["native_turn_id"] = Value::Null;
-        assert!(!matching_provider_receipt(
-            "hermes", "op", &composer, &hermes
-        ));
-        hermes["native_admission"] = json!({"input_id":"op","admission_id":"native-admission","authority_epoch":"epoch",
-            "execution_generation":0,"status":"queued","ref":{"profile_id":"native-profile","session_id":hermes["native_session_id"]}});
+        let mut hermes: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/discord/hermes-0.22.5-queued.json"
+        ))
+        .unwrap();
+        let mut composer = composer;
+        composer["session_instance"] = hermes["session_instance"].clone();
+        let mut bare = hermes.clone();
+        bare.as_object_mut()
+            .unwrap()
+            .shift_remove("native_admission");
+        assert!(!matching_provider_receipt("hermes", "op", &composer, &bare));
         assert!(matching_provider_receipt(
             "hermes", "op", &composer, &hermes
+        ));
+        let mut missing = hermes.clone();
+        missing["native_admission"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("execution_generation");
+        assert!(!matching_provider_receipt(
+            "hermes", "op", &composer, &missing
+        ));
+        let mut started = hermes.clone();
+        started["native_admission"]["status"] = json!("started");
+        assert!(!matching_provider_receipt(
+            "hermes", "op", &composer, &started
+        ));
+        started["native_admission"]["execution_generation"] = json!(8);
+        assert!(matching_provider_receipt(
+            "hermes", "op", &composer, &started
+        ));
+        let mut uncertain = hermes.clone();
+        uncertain["state"] = json!("uncertain");
+        assert!(!matching_provider_receipt(
+            "hermes", "op", &composer, &uncertain
         ));
         hermes["native_admission"]["ref"]["session_id"] = json!("otherwise");
         assert!(!matching_provider_receipt(

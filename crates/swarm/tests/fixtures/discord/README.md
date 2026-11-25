@@ -33,3 +33,8 @@ The agy fixture also exercises the private guild effect gate. Run both arms with
 The guild arm simulates permission withdrawal at the effect check. It verifies the shim refuses before sending and the same operation stays refused.
 
 A guild worker uses connector-owned REST checks immediately before the native write. The connector seals the exact source and reviews current owner and bot grants, including private-thread membership. Relevant Gateway changes delivered during an in-flight operation cancel it locally. Discord and the provider have independent APIs. A remote permission change after the last REST response and before the native write can still race that write. A submitted or uncertain write retains its original operation ID for readback.
+
+`hermes-0.22.5-queued.json` preserves the relevant field types from a local
+Hermes v0.22.5 loopback probe of the pinned Rust lane. Session, profile,
+operation and admission identifiers are redacted. In particular the epoch is
+a positive number and the queued execution generation is explicitly null.
