@@ -1,4 +1,5 @@
 use super::{CliResult, Client, flag_error, options, report};
+use crate::flags::parse_bool;
 use serde_json::json;
 
 pub(super) fn kill(client: &mut Client, args: &[String]) -> CliResult {
@@ -11,16 +12,6 @@ pub(super) fn kill(client: &mut Client, args: &[String]) -> CliResult {
     client.request("kill", Some(id), "ok").map_err(report)?;
     println!("killed {id}");
     Ok(())
-}
-
-pub(super) fn parse_bool(name: &str, value: &str) -> Result<bool, String> {
-    match value {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
-        _ => Err(format!(
-            "invalid boolean value {value:?} for -{name}: parse error"
-        )),
-    }
 }
 
 pub(super) fn send(client: &mut Client, args: &[String]) -> CliResult {

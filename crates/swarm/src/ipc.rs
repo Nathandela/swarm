@@ -1,3 +1,4 @@
+use crate::flags::options;
 mod actions;
 mod duration;
 pub(crate) mod spawn;
@@ -112,6 +113,7 @@ impl std::error::Error for Refusal {}
 pub(crate) struct Client {
     stream: UnixStream,
     endpoint: String,
+    build_version: String,
     pushes: VecDeque<Value>,
     capabilities: Vec<String>,
 }
@@ -132,6 +134,7 @@ impl Client {
                 )
             })?,
             endpoint: String::new(),
+            build_version: String::new(),
             pushes: VecDeque::new(),
             capabilities: Vec::new(),
         };
@@ -167,6 +170,7 @@ impl Client {
             .filter(|id| !id.is_empty())
             .ok_or_else(|| io::Error::other("protocol: handshake reply has no endpoint id"))?
             .to_owned();
+        client.build_version = field(&reply, "build_version").to_owned();
         client.capabilities = reply["capabilities"]
             .as_array()
             .into_iter()
@@ -272,6 +276,10 @@ impl Client {
             Some(message) => Ok(message),
             None => self.receive(deadline),
         }
+    }
+
+    pub(crate) fn build_version(&self) -> &str {
+        &self.build_version
     }
 
     pub(crate) fn endpoint(&self) -> &str {
@@ -578,49 +586,4 @@ fn flag_error(verb: &str, status: i32, error: String) -> (i32, String) {
         }
     );
     (status, String::new())
-}
-
-fn options<'a>(
-    mut args: &'a [String],
-    names: &[&str],
-    boolean: &[&str],
-    mut set: impl FnMut(&str, &'a str) -> Result<(), String>,
-) -> Result<&'a [String], String> {
-    while let Some((arg, rest)) = args.split_first() {
-        if arg == "--" {
-            return Ok(rest);
-        }
-        let Some(flag) = arg.strip_prefix('-').filter(|flag| !flag.is_empty()) else {
-            break;
-        };
-        let flag = flag.strip_prefix('-').unwrap_or(flag);
-        if flag.starts_with(['-', '=']) {
-            return Err(format!("bad flag syntax: {arg}"));
-        }
-        let (name, value) = match flag.split_once('=') {
-            Some((name, value)) => (name, Some(value)),
-            None => (flag, None),
-        };
-        if !names.contains(&name) {
-            return Err(if matches!(name, "h" | "help") {
-                String::new()
-            } else {
-                format!("flag provided but not defined: -{name}")
-            });
-        }
-        args = rest;
-        let value = match value {
-            Some(value) => value,
-            None if boolean.contains(&name) => "true",
-            None => {
-                let (value, rest) = args
-                    .split_first()
-                    .ok_or_else(|| format!("flag needs an argument: -{name}"))?;
-                args = rest;
-                value
-            }
-        };
-        set(name, value)?;
-    }
-    Ok(args)
 }

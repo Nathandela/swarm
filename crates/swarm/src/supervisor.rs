@@ -189,6 +189,7 @@ fn serve() -> io::Result<()> {
     unsafe { libc::umask(0o077) };
     runtime::reclaim_socket(&socket)?;
     let listener = runtime::bind(&socket)?;
+    crate::environment::save(&root)?;
     let state = Arc::new(State {
         root: runtime_root,
         endpoint,
