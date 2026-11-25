@@ -509,7 +509,7 @@ impl Config {
                 match key.as_str() {
                     "version" => true,
                     "enabled" => value.is_boolean(),
-                    "projects" | "supervisor" | "previous_supervisor" => {
+                    "projects" | "supervisor" | "previous_supervisor" | "calls" => {
                         value.is_object() || value.is_null()
                     }
                     _ => false,
@@ -631,6 +631,9 @@ impl Config {
             } else {
                 "enrolled"
             });
+        }
+        if self.0["calls"].is_object() {
+            status["calls"] = json!("unavailable");
         }
         status
     }

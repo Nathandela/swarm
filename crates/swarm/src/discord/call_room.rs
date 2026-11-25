@@ -22,6 +22,7 @@ pub(super) struct Room {
     active: Option<Epoch>,
     attempted: bool,
     awaiting_leave: bool,
+    leave_sent: bool,
     suspended: bool,
 }
 
@@ -64,6 +65,7 @@ impl Room {
             active: None,
             attempted: false,
             awaiting_leave: false,
+            leave_sent: false,
             suspended: false,
         })
     }
@@ -164,13 +166,16 @@ impl Room {
 
     pub(super) fn leave(&mut self) -> Option<Value> {
         self.end();
-        self.awaiting_leave
-            .then(|| voice_state(&self.guild, Value::Null))
+        if self.awaiting_leave && !self.leave_sent {
+            self.leave_sent = true;
+            return Some(voice_state(&self.guild, Value::Null));
+        }
+        None
     }
 
-    pub(super) fn suspend(&mut self) -> Option<Value> {
+    pub(super) fn suspend(&mut self) {
         self.suspended = true;
-        self.leave()
+        self.end();
     }
 
     pub(super) fn event(&mut self, event: &Value) -> Change {
@@ -217,6 +222,7 @@ impl Room {
                 // Only a confirmed empty bot state clears a pending leave.
                 if self.anchor && self.bot_room.is_none() {
                     self.awaiting_leave = false;
+                    self.leave_sent = false;
                 }
                 self.attempted = matches!(ended, Change::End);
                 ended
@@ -300,6 +306,7 @@ impl Room {
                 self.bot_session = None;
                 let ended = self.end();
                 self.awaiting_leave = false;
+                self.leave_sent = false;
                 return ended;
             }
             let session = data["session_id"].as_str().filter(|id| !id.is_empty());
@@ -356,8 +363,9 @@ fn presence(data: &Value, fallback: Option<&Value>) -> Option<Presence> {
     let member = data.get("member").or(fallback);
     let human = member.is_some_and(|member| {
         member["user"]["id"] == user
-            && member["user"]["bot"] != true
-            && member["user"]["system"] != true
+            && ["bot", "system"]
+                .into_iter()
+                .all(|field| member["user"].get(field).is_none_or(|value| value == false))
     });
     let session = data["session_id"].as_str().filter(|id| !id.is_empty())?;
     Some(Presence {
@@ -435,7 +443,9 @@ mod tests {
             Change::End
         ));
         assert!(!room.forward(second, "4", false, now));
-        assert!(room.suspend().is_some());
+        room.suspend();
+        assert!(room.leave().is_some());
+        assert!(room.leave().is_none());
         room.event(&snapshot(14, 2));
         assert_eq!(room.begin(now), None);
     }

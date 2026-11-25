@@ -115,6 +115,12 @@ impl std::fmt::Display for Refusal {
 }
 impl std::error::Error for Refusal {}
 
+pub(crate) fn refused_with(err: &io::Error, detail: &str) -> bool {
+    err.get_ref()
+        .and_then(|err| err.downcast_ref::<Refusal>())
+        .is_some_and(|err| err.0 == detail)
+}
+
 pub(crate) struct Client {
     stream: UnixStream,
     endpoint: String,

@@ -38,25 +38,70 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
         inbox.checkpoint(baseline)?;
     }
     let dispatcher = super::dispatcher::Dispatcher::open(cfg, &place.dir)?;
-    let (mut gateway_socket, mut cursor) = gateway::open(cfg)?;
+    let (gateway_socket, cursor) = gateway::open(cfg)?;
     repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
+    let scope = dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg));
+    let driver =
+        super::call_runtime::Driver::start(gateway_socket, cursor, cfg, &place.dir, scope.clone());
+    driver.discussion_ready.store(
+        !inbox.manager()["binding"].is_null(),
+        std::sync::atomic::Ordering::Release,
+    );
     if dispatcher.is_none() {
         eprintln!(
             "discord: personal Gateway connected. Verified requests are queued locally pending native dispatcher support."
         );
     }
+    let mut next = Instant::now();
     loop {
-        if bridge.serve(cfg, &inbox, cursor.sequence(), dispatcher.is_some())? {
-            let _ = gateway_socket.close(None);
+        if bridge.serve(
+            cfg,
+            &inbox,
+            driver.sequence.load(std::sync::atomic::Ordering::Acquire),
+            dispatcher.is_some(),
+            driver.status(),
+        )? {
             return Ok(());
         }
-        if let Some(dispatcher) = &dispatcher {
-            dispatcher.tick(cfg, &mut inbox, &api)?;
+        let wait = next
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(200));
+        match driver.inbound.recv_timeout(wait) {
+            Ok(Ok(super::call_runtime::Ingress::Discord(event))) => {
+                ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+                // Drain the ordered Gateway feed before scheduling native work.
+                continue;
+            }
+            Ok(Ok(super::call_runtime::Ingress::Transcript(origin, text))) => {
+                if let Some(scope) = &scope
+                    && !inbox.manager()["binding"].is_null()
+                    && super::call_runtime::verify_live(&place.dir, &origin).is_ok()
+                {
+                    inbox.admit_voice(scope, origin, &text)?;
+                }
+                continue;
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(invalid("Discord Gateway owner exited"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
-        let Some(event) = cursor.event(&mut gateway_socket)? else {
-            continue;
-        };
-        ingest(cfg, &mut inbox, &event, |id| api.owner_message(cfg, id))?;
+        if Instant::now() >= next {
+            if let Some(dispatcher) = &dispatcher {
+                dispatcher.tick_calls(cfg, &mut inbox, &api, Some((&place.dir, &driver)))?;
+                driver.discussion_ready.store(
+                    !inbox.manager()["binding"].is_null(),
+                    std::sync::atomic::Ordering::Release,
+                );
+            }
+            next = Instant::now()
+                + if cfg.0["calls"].is_object() {
+                    Duration::from_millis(200)
+                } else {
+                    Duration::from_secs(1)
+                };
+        }
     }
 }
 
@@ -199,13 +244,20 @@ impl Bridge {
         Ok(this)
     }
 
-    fn serve(&self, cfg: &Config, inbox: &Inbox, sequence: u64, native: bool) -> io::Result<bool> {
+    fn serve(
+        &self,
+        cfg: &Config,
+        inbox: &Inbox,
+        sequence: u64,
+        native: bool,
+        calls: &str,
+    ) -> io::Result<bool> {
         let (mut client, _) = match self.listener.accept() {
             Ok(pair) => pair,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(err) => return Err(err),
         };
-        match request(&mut client, cfg, inbox, sequence, native) {
+        match request(&mut client, cfg, inbox, sequence, native, calls) {
             Ok(stop) => Ok(stop),
             Err(_) => Ok(false), // A bad local request must not stop Gateway.
         }
@@ -228,6 +280,7 @@ fn request(
     inbox: &Inbox,
     sequence: u64,
     native: bool,
+    calls: &str,
 ) -> io::Result<bool> {
     stream.set_write_timeout(Some(STOP_WAIT))?;
     let stop = {
@@ -277,6 +330,9 @@ fn request(
         if method == "GET" && path == "/status" && length == 0 {
             let mut status = cfg.status();
             status["connected"] = json!(true);
+            if cfg.0["calls"].is_object() {
+                status["calls"] = json!(calls);
+            }
             status["teammate"] = json!({
                 "pending": inbox.pending_count(),
                 "gateway_sequence": sequence,
@@ -506,7 +562,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(3);
             while Instant::now() < deadline {
-                if bridge.serve(&cfg, &inbox, 12, false).unwrap() {
+                if bridge.serve(&cfg, &inbox, 12, false, "inactive").unwrap() {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(5));

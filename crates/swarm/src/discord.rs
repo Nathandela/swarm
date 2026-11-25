@@ -1,6 +1,10 @@
-#[cfg(test)]
+mod call_runtime;
+mod call_speech;
+
+mod call_floor;
+
 mod call_media;
-#[cfg(test)]
+mod call_origin;
 mod call_room;
 
 mod config;
@@ -20,7 +24,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::Path;
 
-const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
+const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|stop-call|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
 
 pub(crate) fn manager_nonce(
     discussion: &str,
@@ -74,7 +78,7 @@ pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
         .ok_or_else(|| invalid("invalid connector custody directory"))?;
     let data = crate::supervisor::runtime::read_json(&place.join("rust-text-v1.json"))?;
     let identity = &data["identity"];
-    if data["version"] != 2
+    if !matches!(data["version"].as_u64(), Some(2 | 3))
         || identity[0] != scope["installation_id"]
         || identity[1] != scope["application_id"]
         || identity[2] != scope["owner_id"]
@@ -100,9 +104,17 @@ pub(crate) fn verify_connector_input(
     let input = &manager["input"];
     let id = input["source_id"]
         .as_str()
-        .filter(|id| config::snowflake(id))
+        .filter(|id| config::snowflake(id) || call_origin::key(id))
         .ok_or_else(|| invalid("connector has no persisted manager cutover"))?;
     let source = &data["messages"][id];
+    let origin = &composer["origin"];
+    let voice = call_origin::key(id);
+    if voice {
+        call_origin::validate(scope, origin, composer["text"].as_str().unwrap_or_default())?;
+        if source["voice_origin"] != *origin || origin["request_id"] != id {
+            return Err(invalid("voice origin does not match the persisted cutover"));
+        }
+    }
     if input["operation"] != operation
         || input["composer"] != *composer
         || manager["session"] != composer["session"]
@@ -110,14 +122,27 @@ pub(crate) fn verify_connector_input(
         || source["text"] != composer["text"]
         || source["revision"] != composer["origin"]["revision"]
         || source["operation_id"] != composer["origin"]["request_id"]
-        || source["route"]["message_id"] != id
-        || composer["origin"]["message_id"] != id
+        || !voice
+            && (!origin["voice"].is_null()
+                || source["route"]["message_id"] != id
+                || composer["origin"]["message_id"] != id)
         || source["native_input_id"] != composer["manager_admission"]["nonce"]
         || source["native_binding"] != composer["manager_admission"]["binding"]
     {
         return Err(invalid(
             "semantic request does not match the exact connector cutover",
         ));
+    }
+    if voice {
+        let place = Path::new(
+            scope["launch"]["manager"]["auth_file"]
+                .as_str()
+                .unwrap_or_default(),
+        )
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("invalid connector custody directory"))?;
+        call_runtime::verify_live(place, origin).map_err(|_| invalid(call_runtime::WITHDRAWN))?;
     }
     Ok(())
 }
@@ -186,7 +211,7 @@ impl<'a> Request<'a> {
                 flags = &["unattended"];
                 &[]
             }
-            "status" | "disconnect" | "include" | "exclude" => &[],
+            "status" | "stop-call" | "disconnect" | "include" | "exclude" => &[],
             "doctor" => &["channel"],
             "context" => &["offset"],
             "reply" => &["body-file", "publication-id"],
@@ -328,6 +353,10 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 .filter(|status| status["installation_id"] == cfg.text("installation_id"))
                 .unwrap_or_else(|| cfg.status());
             println!("{}", serde_json::to_string_pretty(&status)?);
+        }
+        "stop-call" => {
+            call_runtime::verify_live(&place.dir, &json!({"stop":cfg.text("installation_id")}))?;
+            println!("Discord calls suspended until restart.");
         }
         "doctor" => return doctor(&place, &cfg, req.get("channel")),
         _ => {

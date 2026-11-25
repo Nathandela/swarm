@@ -157,7 +157,7 @@ impl Session {
             || origin["actor_id"] != self.manager["owner_id"]
             || origin["requester_id"] != self.manager["owner_id"]
             || !field(origin, "guild_id").is_empty()
-            || field(origin, "message_id").is_empty()
+            || field(origin, "message_id").is_empty() && origin["voice"].is_null()
             || field(origin, "revision").is_empty()
             || field(origin, "request_id").is_empty()
         {

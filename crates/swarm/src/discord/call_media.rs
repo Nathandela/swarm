@@ -90,6 +90,17 @@ impl Media {
         }
     }
 
+    pub(super) fn play(&mut self, pcm: &str) -> io::Result<()> {
+        if !self.ready || pcm.len() != PCM_ENCODED {
+            return Err(invalid("call playback is outside the ready media session"));
+        }
+        self.send(json!({"type":"play", "pcm":pcm}))
+    }
+
+    pub(super) fn silence(&mut self) -> io::Result<()> {
+        self.send(json!({"type":"clear"}))
+    }
+
     pub(super) fn gateway(&mut self, event: &Value) -> io::Result<()> {
         let data = &event["d"];
         if !self.joined || data["guild_id"] != self.guild {

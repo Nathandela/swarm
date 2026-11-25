@@ -203,7 +203,7 @@ impl Manager {
             binding,
             &runtime["turn"]["external_input"],
         )?;
-        Ok(json!({
+        let mut composer = json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
             "text": input["text"],
             "manager_admission": {
@@ -216,7 +216,11 @@ impl Manager {
                 "channel_id":channel, "message_id":input["route"]["message_id"],
                 "discussion_id":self.discussion, "revision":input["revision"],
             }
-        }))
+        });
+        if input["voice_origin"].is_object() {
+            composer["origin"] = input["voice_origin"].clone();
+        }
+        Ok(composer)
     }
 
     pub(super) fn send(&self, operation: &str, composer: &Value) -> io::Result<()> {
