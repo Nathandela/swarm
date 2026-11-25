@@ -237,7 +237,11 @@ impl Calls {
         let owner = cfg.text("owner_id");
         let bot = cfg.text("application_id");
         let room = Room::new(guild, channel, owner, bot)?;
-        let helper = Helper::open(Path::new(get("helper_path")))?;
+        let helper = if get("helper_path").is_empty() {
+            Helper::bundled()?
+        } else {
+            Helper::open(Path::new(get("helper_path")))?
+        };
         let keys = Path::new(get("speech_state_dir"));
         if !keys.is_absolute() {
             return Err(invalid("configure an absolute speech credential directory"));

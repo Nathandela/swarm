@@ -33,6 +33,18 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::Path;
 
+pub(crate) const MEDIA_PROTOCOL: u64 = 1;
+
+pub(crate) fn check_packaged_media() -> u8 {
+    match call_helper::Helper::bundled().and_then(|helper| helper.check()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("swarm: packaged media: {error}");
+            1
+        }
+    }
+}
+
 const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|stop-call|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
 
 pub(crate) fn manager_nonce(
