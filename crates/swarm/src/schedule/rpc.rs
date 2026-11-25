@@ -1,4 +1,4 @@
-use super::{Calendar, Result};
+use super::{Calendar, Result, worker};
 use crate::ipc::{self, Client};
 use serde_json::{Value, json};
 use std::{env, io, time::Duration};
@@ -9,6 +9,7 @@ const CAPS: &[&str] = &[
     "schedule-workspace-check",
     "schedule-route-check",
     "schedule-host-time",
+    "schedule-native",
 ];
 const UNSUPPORTED: &str =
     "running daemon does not support scheduled jobs; upgrade and restart the Swarm daemon";
@@ -40,6 +41,13 @@ pub(super) fn owner(from_timer: bool) -> Result<Client> {
         return Err(UNSUPPORTED.into());
     }
     Ok(client)
+}
+
+pub(super) fn qualified_timer() -> Result<()> {
+    if !owner(false)?.supports("schedule-native") {
+        return Err("timer installation requires the native schedule supervisor with unattended startup support".into());
+    }
+    Ok(())
 }
 
 pub(super) fn host_calendar(calendar: &Calendar) -> Result<()> {
@@ -112,17 +120,24 @@ pub(super) fn complete(args: &[&str]) -> Result<()> {
     if summary.trim().is_empty() {
         return Err(usage.into());
     }
+    submit(
+        summary,
+        &links.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+    )
+}
+
+pub(super) fn submit(summary: &str, links: &[String]) -> Result<()> {
     let env = |name| {
         env::var(name)
             .ok()
             .filter(|s| !s.is_empty())
             .ok_or("complete must run inside the active scheduled worker session")
     };
-    let run_id = env("SWARM_SCHEDULE_RUN")?;
-    let attempt_id = env("SWARM_SCHEDULE_ATTEMPT")?;
-    let token = env("SWARM_SCHEDULE_PROOF")?;
-    let socket = env("SWARM_SCHEDULE_SOCKET")?;
-    let session = env("SWARM_SESSION_ID")?;
+    let run_id = env(worker::RUN)?;
+    let attempt_id = env(worker::ATTEMPT)?;
+    let token = env(worker::PROOF)?;
+    let socket = env(worker::SOCKET)?;
+    let session = env(worker::SESSION)?;
     let mut client = Client::dial(socket.as_ref(), &["schedule"])?;
     if !client.supports("schedule") {
         return Err(UNSUPPORTED.into());

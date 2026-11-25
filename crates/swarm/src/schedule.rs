@@ -4,6 +4,7 @@ mod engine;
 mod rpc;
 mod store;
 mod timer;
+pub(crate) mod worker;
 mod workspace;
 
 use jiff::Timestamp;

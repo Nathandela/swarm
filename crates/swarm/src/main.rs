@@ -57,6 +57,7 @@ fn main() -> ExitCode {
         Some("shim") => shim::run(&args[1..]),
         Some("discord") => discord::run(&args[1..]),
         Some("schedule") => schedule::run(&args[1..]),
+        Some("schedule-receipt-bridge") => schedule::worker::bridge(),
         Some("dispatcher-guide") => guide(&args[1..]),
         Some("ls" | "peek" | "watch" | "spawn" | "send" | "kill") => ipc::run(&args) as u8,
         None if !io::stdin().is_terminal() || !io::stdout().is_terminal() => {

@@ -103,15 +103,17 @@ pub(super) fn zero_time() -> Timestamp {
 }
 
 impl Occurrence {
-    fn new(job: &Job, due: String, now: Timestamp, invocation: Option<&str>) -> Result<Self> {
-        let scheduled = || -> Result<String> {
-            let utc: Timestamp = due.parse()?;
-            Ok(digest(format!("{}/{utc}", job.id)))
-        };
+    fn new(
+        job: &Job,
+        due: String,
+        instant: Timestamp,
+        now: Timestamp,
+        invocation: Option<&str>,
+    ) -> Result<Self> {
         let mut run = Self {
             id: match invocation {
                 Some(id) => id.into(),
-                None => scheduled()?,
+                None => digest(format!("{}/{instant}", job.id)),
             },
             job_id: job.id.clone(),
             revision_id: job.revision_id.clone(),
@@ -213,7 +215,7 @@ struct Evaluation {
     job_id: String,
     zone: Option<String>,
     wall: Option<String>,
-    run: Option<Occurrence>,
+    run: Option<(Timestamp, Occurrence)>,
 }
 
 impl Store {
@@ -533,7 +535,7 @@ impl Store {
             } else {
                 now.to_string()
             };
-            let mut run = Occurrence::new(&job, due, now, Some(invocation))?;
+            let mut run = Occurrence::new(&job, due, now, now, Some(invocation))?;
             check_overlap(tx, &mut run)?;
             put_run(tx, &run)?;
             Ok(run)
@@ -618,7 +620,7 @@ impl Store {
             } else {
                 at.to_string()
             };
-            run = Some(Occurrence::new(job, due, now, None)?);
+            run = Some((at, Occurrence::new(job, due, at, now, None)?));
         }
         Ok(cursor.map(|cursor| Evaluation {
             cursor,
@@ -631,11 +633,21 @@ impl Store {
 }
 
 fn go_wall(at: Timestamp, zone: &super::calendar::Zone) -> String {
-    if zone.tz.to_offset(at).seconds() == 0 {
+    let offset = zone.tz.to_offset(at).seconds();
+    if offset == 0 {
         return at.to_string();
     }
+    // Go retains the civil time, but RFC3339 marshaling truncates sub-minute offsets.
+    let minutes = offset / 60;
+    let absolute = minutes.abs();
+    let sign = if minutes < 0 { '-' } else { '+' };
     let local = at.to_zoned(zone.tz.clone());
-    local.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string()
+    format!(
+        "{}{sign}{:02}:{:02}",
+        local.strftime("%Y-%m-%dT%H:%M:%S%.f"),
+        absolute / 60,
+        absolute % 60
+    )
 }
 
 fn before(at: Timestamp) -> Result<Timestamp> {
@@ -657,13 +669,12 @@ fn save_evaluation(
         }
         tx.put_raw(EVALUATED, &wall, &[1])?;
     }
-    let Some(mut run) = item.run else {
+    let Some((due, mut run)) = item.run else {
         return Ok(None);
     };
     if tx.has_raw(RUNS, &run.id)? {
         return Ok(None);
     }
-    let due: Timestamp = run.due_at.parse()?;
     let age = run.claimed_at.as_nanosecond() - due.as_nanosecond();
     let grace = i128::from(run.spec.grace);
     let missed = skip.or_else(|| {
@@ -1018,6 +1029,24 @@ mod tests {
         assert_eq!(
             store.claim_due(ts("2026-01-02T12:00:00Z")).unwrap().len(),
             1
+        );
+    }
+
+    #[test]
+    fn historical_subminute_offset_keeps_exact_claim_identity() {
+        let at = ts("1900-01-01T00:00:00.000000003Z");
+        let zone = super::super::calendar::Zone {
+            id: Some("fixture".into()),
+            tz: jiff::tz::Offset::from_seconds(1172).unwrap().to_time_zone(),
+        };
+        assert_eq!(go_wall(at, &zone), "1900-01-01T00:19:32.000000003+00:19");
+        let dir = Temp::new();
+        let store = Store::open(&dir.0, Path::new("/etc/localtime")).unwrap();
+        let job = store.create(spec(&dir.0), at, true).unwrap();
+        let run = Occurrence::new(&job, go_wall(at, &zone), at, at, None).unwrap();
+        assert_eq!(
+            run.id,
+            digest(format!("{}/1900-01-01T00:00:00.000000003Z", job.id))
         );
     }
 

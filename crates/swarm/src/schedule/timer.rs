@@ -45,7 +45,7 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
     match verb {
         "status" => Ok(Some(manager.status()?)),
         "install" => {
-            super::rpc::owner(false)?;
+            super::rpc::qualified_timer()?;
             let exe = stable_executable()?;
             let state = crate::ipc::state_path()?;
             let bindings = [
@@ -96,6 +96,7 @@ struct State {
     active: String,
     enabled: String,
     path: PathBuf,
+    drops: bool,
 }
 
 impl Manager<'_> {
@@ -141,7 +142,7 @@ impl Manager<'_> {
         }
         let args = [
             "show",
-            "--property=LoadState,ActiveState,UnitFileState,FragmentPath",
+            "--property=LoadState,ActiveState,UnitFileState,FragmentPath,DropInPaths",
             TIMER,
         ];
         let (output, text) = self.raw(&args)?;
@@ -153,6 +154,7 @@ impl Manager<'_> {
                 "ActiveState" => state.active = value.into(),
                 "UnitFileState" => state.enabled = value.into(),
                 "FragmentPath" => state.path = value.into(),
+                "DropInPaths" => state.drops = !value.is_empty(),
                 _ => {}
             }
         }
@@ -195,6 +197,42 @@ impl Manager<'_> {
         Ok(format!("{installed}, {}", state.active))
     }
 
+    fn check_systemd_service(&self) -> Result<()> {
+        let args = [
+            "show",
+            "--property=LoadState,FragmentPath,DropInPaths",
+            SERVICE,
+        ];
+        let (output, text) = self.raw(&args)?;
+        let value = |field| {
+            text.lines()
+                .filter_map(|line| line.split_once('='))
+                .find_map(|(key, value)| (key == field).then_some(value))
+                .unwrap_or_default()
+        };
+        let origin = Path::new(value("FragmentPath"));
+        if !value("DropInPaths").is_empty() {
+            return Err("cannot replace Swarm timer with a systemd service override".into());
+        }
+        if value("LoadState") == "not-found"
+            && origin.as_os_str().is_empty()
+            && (output.status.success() || output.status.code() == Some(4))
+        {
+            return Ok(());
+        }
+        check(&output, &args, &text)?;
+        if value("LoadState") != "loaded"
+            || (origin != self.paths[0] && !same_file(origin, &self.paths[0]))
+        {
+            return Err(format!(
+                "timer manager uses another service definition at {}",
+                origin.display()
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     fn change(&self, rendered: Option<Vec<String>>) -> Result<()> {
         let install = rendered.is_some();
         let dir = self.paths[0].parent().ok_or("invalid timer path")?;
@@ -224,6 +262,12 @@ impl Manager<'_> {
             .map(|p| definition(p))
             .collect::<Result<Vec<_>>>()?;
         let state = self.inspect()?;
+        if self.platform == Platform::Systemd {
+            if state.drops {
+                return Err("cannot replace Swarm timer with a systemd timer override".into());
+            }
+            self.check_systemd_service()?;
+        }
         let old_path = self.paths.last().ok_or("no timer paths")?;
         let has_path = !state.path.as_os_str().is_empty();
         if has_path && state.path != *old_path && !same_file(&state.path, old_path) {
@@ -549,6 +593,13 @@ mod tests {
             assert_eq!(name, "systemctl");
             assert_eq!(args[0], "--user");
             match args[1] {
+                "show" if args.last() == Some(&SERVICE) => output(
+                    0,
+                    format!(
+                        "LoadState=loaded\nFragmentPath={}\nDropInPaths=\n",
+                        paths[0].display()
+                    ),
+                ),
                 "show" => output(
                     0,
                     format!(
@@ -600,6 +651,39 @@ mod tests {
             assert_eq!(fs::read(path).unwrap(), b"old definition\0");
             assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o640);
         }
+    }
+
+    #[test]
+    fn systemd_refuses_foreign_companion_before_mutation() {
+        let dir = Temp::new();
+        let paths = vec![dir.0.join(SERVICE), dir.0.join(TIMER)];
+        fs::write(&paths[0], b"previous service").unwrap();
+        fs::write(&paths[1], b"previous timer").unwrap();
+        let run = |_: &str, args: &[&str]| {
+            assert_eq!(args[1], "show");
+            if args.last() == Some(&SERVICE) {
+                return output(0, "LoadState=loaded\nFragmentPath=/elsewhere/swarm-schedule.service\nDropInPaths=\n".into());
+            }
+            output(
+                0,
+                format!(
+                    "LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nFragmentPath={}\n",
+                    paths[1].display()
+                ),
+            )
+        };
+        let manager = Manager {
+            platform: Platform::Systemd,
+            paths: paths.clone(),
+            run: &run,
+        };
+        assert!(
+            manager
+                .change(Some(render(Platform::Systemd, "/tmp/swarm", &[])))
+                .is_err()
+        );
+        assert_eq!(fs::read(&paths[0]).unwrap(), b"previous service");
+        assert_eq!(fs::read(&paths[1]).unwrap(), b"previous timer");
     }
 
     #[test]

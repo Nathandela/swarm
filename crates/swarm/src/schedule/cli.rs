@@ -196,29 +196,36 @@ fn write_list<T: Serialize>(out: &mut impl Write, values: Vec<T>) -> Result<()> 
 }
 
 fn parse_run<'a>(args: &'a [&'a str]) -> Result<(&'a str, Option<String>)> {
+    let usage = "usage: swarm schedule run JOB [--operation-id ULID]";
     let mut args = args.iter().copied().peekable();
     let first = args.next_if(|s| !s.starts_with('-'));
-    let op = match args.next_if(|s| s.starts_with('-')) {
-        None => None,
-        Some("--operation-id" | "-operation-id") => args.next(),
-        Some(s) => Some(
-            s.split_once('=')
-                .filter(|(k, _)| matches!(*k, "--operation-id" | "-operation-id"))
-                .map(|(_, v)| v)
-                .ok_or("usage: swarm schedule run JOB [--operation-id ULID]")?,
-        ),
-    };
-    if op == Some("") {
-        return Err("expected a non-empty operation ID".into());
+    let mut operation = None;
+    while let Some(flag) = args.next_if(|s| s.starts_with('-') && *s != "-") {
+        if flag == "--" {
+            break;
+        }
+        let (name, value) = flag
+            .split_once('=')
+            .map_or((flag, None), |(k, v)| (k, Some(v)));
+        if !matches!(name, "--operation-id" | "-operation-id") {
+            return Err(usage.into());
+        }
+        let value = value
+            .or_else(|| args.next())
+            .ok_or("flag needs an argument: -operation-id")?;
+        if value.is_empty() {
+            return Err("expected a non-empty operation ID".into());
+        }
+        operation = Some(value.to_owned());
     }
     let job = first
         .or_else(|| args.next())
         .filter(|s| !s.is_empty())
-        .ok_or("usage: swarm schedule run JOB [--operation-id ULID]")?;
+        .ok_or(usage)?;
     if args.next().is_some() {
-        return Err("usage: swarm schedule run JOB [--operation-id ULID]".into());
+        return Err(usage.into());
     }
-    Ok((job, op.map(str::to_owned)))
+    Ok((job, operation))
 }
 
 fn read_spec(args: &[&str]) -> Result<Spec> {
@@ -341,4 +348,25 @@ fn duration(input: &str) -> Result<i64> {
         text = rest;
     }
     i64::try_from(sign * ns).map_err(|_| invalid())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_requires_explicit_flag_value_and_retains_retry_identity() {
+        let operation = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        assert_eq!(
+            parse_run(&["job", "--operation-id", operation]).unwrap(),
+            ("job", Some(operation.into()))
+        );
+        assert_eq!(
+            parse_run(&[&format!("--operation-id={operation}"), "job"]).unwrap(),
+            ("job", Some(operation.into()))
+        );
+        assert!(parse_run(&["job", "--operation-id"]).is_err());
+        assert!(parse_run(&["job", "--operation-id="]).is_err());
+        assert_eq!(parse_run(&["--", "job"]).unwrap(), ("job", None));
+    }
 }
