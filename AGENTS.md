@@ -38,9 +38,9 @@ Use the test supervisor's per-run `TMPDIR` for scratch, keeping short socket roo
 
 ## CI policy
 
-GitHub Actions runs only for release tags (`v*`), at the owner's request to limit Actions usage.
-`release.yml` calls the reusable CI and container gates before publishing. Do not add branch,
-pull-request, scheduled, or manual triggers. The former nightly stress workflow is removed.
+Operative release builds and quality gates for the Rust candidate run locally. The branch
+has no GitHub Actions workflows. Follow the [manual Rust preview release runbook](docs/operations/rust-preview-release.md)
+for the freeze, build, verification and distribution steps. Historical Go workflows remain in their pinned references.
 
 ## Beads workflow
 

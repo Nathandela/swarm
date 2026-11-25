@@ -16,6 +16,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
+- [Manual Rust preview release](operations/rust-preview-release.md) — isolated preview installation, reproducible packaging, Ed25519 verification and required qualification gates
 - [Scheduled agents](operations/scheduled-agents.md) — local per-user timer setup, verified adapter/authority routes, missed runs, workspace and completion review, diagnostics, and rollback
 - [Checkout ownership inventory](ops/checkout-inventory.md) — local Git worktrees, session lineage and unresolved retention evidence.
 - [Discord whole-swarm connection](ops/discord.md) — independent per-place bot setup, attributed teammate conversations, owner controls and deliberate replies; [decision](adr/ADR-036-whole-swarm-discord.md), [implementation and v0.24.0 deployment evidence](verification/discord-integration.md)

@@ -189,7 +189,7 @@ def build(args):
         bins["darwin_all"] = scratch / "swarm"
         run("lipo", "-create", *(args.target_dir / TARGETS[p] / "release/swarm"
                                 for p in GROUPS["darwin_all"]), "-output", bins["darwin_all"])
-        run("lipo", "-verify_arch", "arm64", "x86_64", bins["darwin_all"])
+        run("lipo", bins["darwin_all"], "-verify_arch", "arm64", "x86_64")
         # The resulting universal CLI must have a valid ad hoc Mach-O signature.
         run("codesign", "--force", "--timestamp=none", "--sign", "-", bins["darwin_all"])
         check_source(source)

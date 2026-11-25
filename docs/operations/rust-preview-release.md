@@ -4,13 +4,14 @@ The Rust preview uses separate `swarm-rust_…` archive names. The Go release ch
 
 ## Freeze and build
 
-Use a clean, exact source commit, Cargo's locked dependency graph, and the compiler build pinned by `scripts/release-rust.py`. Have Python 3.11+, Xcode with a Darwin SDK, both Darwin Rust targets, and both Linux musl Rust targets and their C compilers/linkers available. Record `rustc --version --verbose`, `xcodebuild -version`, `xcrun --show-sdk-version`, the linker versions, operating system versions, and the dependency/license review in the release evidence. Fetch Cargo dependencies before the frozen build.
+Use a clean, exact source commit, Cargo's locked dependency graph, and the compiler build pinned by `scripts/release-rust.py`. Have Python 3.11+, the Xcode command line tools with a Darwin SDK, both Darwin Rust targets, and both Linux musl Rust targets and their C compilers/linkers available. Record `rustc --version --verbose`, `xcodebuild -version` or the Command Line Tools and Apple Clang versions, `xcrun --show-sdk-version`, the linker versions, operating system versions, and the dependency/license review in the release evidence. Fetch Cargo dependencies before the frozen build.
 
 Obtain the four official Node 24.17.0 archives for Darwin and Linux arm64 and x64 as `.tar.xz` files. Verify their upstream signed checksum list in the Node release channel independently. The builder compares each archive to the pinned digest. The extracted Node and its license ship with each target's lock-resolved npm dependencies. npm installation takes place in scratch with lifecycle scripts and binary links disabled. The application embeds the resulting media digests. The Linux application is built for musl, while the bundled Node and DAVE addon require a glibc-based system.
 
 Run these gates locally:
 
 ```sh
+python3 scripts/verification/test_release_rust.py
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
