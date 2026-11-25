@@ -23,6 +23,7 @@ pub(crate) struct Launch<'a> {
     pub authority: &'a str,
     pub name: &'a str,
     pub workspace: &'a str,
+    pub prompt: &'a str,
 }
 
 pub(crate) enum LaunchOutcome {
@@ -405,6 +406,7 @@ impl<B: Backend> Engine<B> {
                 current.attempts.push(attempt.clone());
                 Ok(())
             })?;
+            let prompt = worker_prompt(&run, &self.backend);
             let outcome = self.backend.launch(Launch {
                 run_id: &run.id,
                 attempt_id: &attempt.id,
@@ -414,6 +416,7 @@ impl<B: Backend> Engine<B> {
                 authority: &run.spec.authority,
                 name: &run.spec.name,
                 workspace: &run.workspace,
+                prompt: &prompt,
             });
             let redact = |error: String| scrub(error, &[&token, &run.spec.prompt]);
             match outcome {

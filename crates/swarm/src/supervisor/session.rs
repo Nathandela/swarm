@@ -339,6 +339,9 @@ impl Session {
         socket: &Path,
     ) -> ScheduleResult<Prepared> {
         let binding = worker::Binding::new(launch)?;
+        if launch.agent == "claude" && !providers::claude::scheduled_text(launch.prompt) {
+            return Err("scheduled Claude cannot preserve tabs, carriage returns, or other terminal control characters".into());
+        }
         let mut plan = Self::prepare(&json!({"launch":{
             "agent":launch.agent,"cwd":launch.workspace,"name":launch.name,"cols":100,"rows":32,
         }}))?;

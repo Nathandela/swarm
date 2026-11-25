@@ -73,6 +73,7 @@ struct ProviderObservation {
     agy_hook_at: Option<Instant>,
     agy_title: Option<Value>,
     agy_latest: u64,
+    claude_paste_attempted: bool,
     claude_dispatch: Option<(String, String)>,
     claude_prompt: Option<String>,
 }
@@ -1130,7 +1131,7 @@ fn agy_send(state: &State, request: &Value) -> io::Result<Value> {
 
 fn claude_composer(state: &State) -> bool {
     let observed = state.observations.lock().unwrap();
-    observed.claude_dispatch.is_none()
+    !observed.claude_paste_attempted
         && observed.state.status()["Interaction"] == "none"
         && providers::claude::empty_composer(state.screen.lock().unwrap().parser.screen())
 }
@@ -1143,7 +1144,8 @@ fn queue_claude_prompt(state: &State, request: &Value) -> io::Result<()> {
     let Some(conversation) = state.claude_schedule.as_deref() else {
         return Err(io::Error::other("Claude schedule binding is unavailable"));
     };
-    let record = runtime::read_json(&state.dir.join("schedule-prompt.json"))?;
+    let path = state.dir.join("schedule-prompt.json");
+    let record = runtime::read_json(&path)?;
     let hash = providers::claude::text_hash(text);
     if *guard != 0
         || state.terminal_input.load(Ordering::Acquire)
@@ -1159,12 +1161,56 @@ fn queue_claude_prompt(state: &State, request: &Value) -> io::Result<()> {
         || record["text_hash"] != hash
         || !worker::prompt_fits(text, true)
         || !providers::claude::scheduled_text(text)
-        || !claude_composer(state)
     {
         return Err(io::Error::other("Claude opening prompt custody changed"));
     }
-    state.observations.lock().unwrap().claude_dispatch = Some((operation.into(), hash));
-    write_input(state, text, true, true)
+    let mut paste = Vec::with_capacity(text.len() + 12);
+    paste.extend_from_slice(b"\x1b[200~");
+    paste.extend_from_slice(text.as_bytes());
+    paste.extend_from_slice(b"\x1b[201~");
+    {
+        let mut observed = state.observations.lock().unwrap();
+        let screen = state.screen.lock().unwrap();
+        if observed.claude_paste_attempted
+            || observed.state.status()["Interaction"] != "none"
+            || !providers::claude::empty_composer(screen.parser.screen())
+        {
+            return Err(io::Error::other("Claude opening prompt custody changed"));
+        }
+        observed.claude_paste_attempted = true;
+        pty::input(&state.master, &paste)?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if runtime::read_json(&path)? != record {
+            return Err(io::Error::other(
+                "Claude opening prompt reservation changed after paste",
+            ));
+        }
+        {
+            let mut observed = state.observations.lock().unwrap();
+            let screen = state.screen.lock().unwrap();
+            let screen = screen.parser.screen();
+            if observed.state.status()["Interaction"] != "none"
+                || providers::claude::startup_attention(screen)
+                || !screen.bracketed_paste()
+            {
+                break;
+            }
+            if providers::claude::rendered_paste(screen, text) {
+                pty::input(&state.master, b"\r")?;
+                observed.claude_dispatch = Some((operation.into(), hash));
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
+    Err(io::Error::other(
+        "Claude opening prompt draft could not be verified after paste",
+    ))
 }
 
 fn observe_claude_schedule(

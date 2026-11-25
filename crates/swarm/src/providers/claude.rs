@@ -269,13 +269,26 @@ pub(crate) fn scheduled_paste(prompt: &str) -> Option<&str> {
 }
 
 pub(crate) fn empty_composer(screen: &vt100::Screen) -> bool {
+    composer(screen, "", "")
+}
+
+pub(crate) fn rendered_paste(screen: &vt100::Screen, text: &str) -> bool {
+    let newlines = text.bytes().filter(|&byte| byte == b'\n').count();
+    composer(
+        screen,
+        &format!("[Pasted text #1 +{newlines} lines]"),
+        "paste again to expand",
+    )
+}
+
+fn composer(screen: &vt100::Screen, draft: &str, footer: &str) -> bool {
     if !screen.bracketed_paste() || !screen.alternate_screen() {
         return false;
     }
     let (rows, cols) = screen.size();
     let (rows, cols) = (rows.get(), cols.get());
     let (row, col) = screen.cursor_position();
-    if col != 2 || row < 1 || row.checked_add(3) != Some(rows) {
+    if usize::from(col) != draft.len() + 2 || row < 1 || row.checked_add(3) != Some(rows) {
         return false;
     }
     let mut lines = screen.rows(0, cols).skip(usize::from(row - 1));
@@ -284,8 +297,14 @@ pub(crate) fn empty_composer(screen: &vt100::Screen) -> bool {
     // The upper divider may include Claude's session name on the right.
     lines.next().is_some_and(|line| {
         line.ends_with('─') && line.chars().take_while(|c| *c == '─').count() >= 8
-    }) && lines.next().is_some_and(|line| line.trim_end() == "❯")
-        && lines.next().is_some_and(separator)
+    }) && lines.next().is_some_and(|line| {
+        line.strip_prefix('❯')
+            .is_some_and(|body| body.trim() == draft)
+    }) && lines.next().is_some_and(separator)
+        && (footer.is_empty()
+            || lines
+                .next()
+                .is_some_and(|line| line.trim_start().starts_with(footer)))
 }
 
 pub(crate) fn startup_attention(screen: &vt100::Screen) -> bool {

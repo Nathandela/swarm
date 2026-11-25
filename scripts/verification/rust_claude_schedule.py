@@ -16,6 +16,39 @@ from native_fixture_sandbox import guarded, check_guards
 SUMMARY = "Synthetic scheduled Claude completed."
 MARKER = "SCHEDULE_CLAUDE_OPENING_WITNESS"
 COMMAND = '"$SWARM_SCHEDULE_BIN" schedule complete --summary "' + SUMMARY + '"'
+# This executable paints a modal immediately after it receives the bracketed paste.
+# Receipt of any subsequent Enter is an exact, independently recorded failure.
+LATE_MODAL = r"""
+import os
+from pathlib import Path
+import sys
+import tty
+if "--version" in sys.argv:
+    print("2.1.329 (Claude Code)")
+    sys.exit(0)
+tty.setraw(0)
+cols, rows = os.get_terminal_size(0)
+rule = "─" * cols
+os.write(1, f"\x1b[?1049h\x1b[?2004h\x1b[{rows-3};1H{rule}\x1b[{rows-2};1H❯  \x1b[{rows-1};1H{rule}\x1b[{rows-2};3H".encode())
+data = b""
+while b"\x1b[201~" not in data:
+    chunk = os.read(0, 4096)
+    if not chunk:
+        sys.exit(1)
+    data += chunk
+    if len(data) > 1 << 20:
+        sys.exit(1)
+assert data.startswith(b"\x1b[200~")
+os.write(1, "\x1b[2J\x1b[5;1HYes, I trust this folder\x1b[6;1H❯ No, exit".encode())
+Path("late-modal-painted").touch()
+while True:
+    received = os.read(0, 4096)
+    if not received:
+        sys.exit(0)
+    if b"\r" in received:
+        Path("late-modal-received-enter").touch()
+"""
+
 
 
 class Model(http.server.BaseHTTPRequestHandler):
@@ -181,10 +214,55 @@ def verify(swarm, installed, root):
                     waiting_gate = until(refused_gate)
                     assert not waiting_gate["attempts"][0].get("prompt_started")
                     assert model.turns == ["tool", "answer"], model.turns
+                    unusable = root / "unrepresentable"
+                    unusable.mkdir(mode=0o700)
+                    for control in ("\t", "\r"):
+                        rejected = json.loads(run(
+                            "schedule", "create", "--name", "Unrepresentable prompt", "--dir", str(unusable),
+                            "--workspace", "directory", "--authority", "agent-default", "--agents",
+                            "claude,agy", "--weekly", "Monday", "--time", "09:00", "--prompt-file", "-",
+                            stdin="before" + control + "after").stdout)["id"]
+                        run("schedule", "run", rejected)
+                        refused = json.loads(run("schedule", "history", rejected).stdout)[0]
+                        failure = refused["attempts"][0]
+                        assert refused["state"] == "exhausted" and failure["state"] == "rejected", refused
+                        assert "cannot preserve tabs, carriage returns" in failure["detail"], failure
+                        assert not failure.get("session_id") and not failure.get("prompt_started"), failure
+                        assert [attempt["agent"] for attempt in refused["attempts"]] == ["claude", "agy"]
+
+                    # Existing workers own copied binaries and are stopped before replacing
+                    # the scratch executor path with the deterministic modal fixture.
+                    for row in json.loads(run("ls", "--json").stdout):
+                        run("kill", row["id"])
+                    until(lambda: all(row["status"]["Process"] == "exited"
+                                      for row in json.loads(run("ls", "--json").stdout)))
+                    claude.rename(claude.with_name("claude-installed"))
+                    claude.write_text(f"#!{sys.executable}\n" + LATE_MODAL)
+                    claude.chmod(0o700)
+                    late = root / "late"
+                    late.mkdir(mode=0o700)
+                    late_job = json.loads(run(
+                        "schedule", "create", "--name", "Late modal", "--dir", str(late),
+                        "--workspace", "directory", "--authority", "agent-default", "--agents",
+                        "claude", "--weekly", "Monday", "--time", "09:00", "--prompt-file", "-",
+                        stdin=MARKER).stdout)["id"]
+                    run("schedule", "run", late_job)
+
+                    def late_modal():
+                        run("schedule", "tick")
+                        row = json.loads(run("schedule", "history", late_job).stdout)[0]
+                        return row if row["state"] == "attention" else None
+
+                    closed = until(late_modal)
+                    assert closed["attempts"][0]["prompt_started"]
+                    assert not closed["attempts"][0].get("prompt_delivered")
+                    assert (late / "late-modal-painted").exists()
+                    assert not (late / "late-modal-received-enter").exists()
                     print(json.dumps(dict(version=version, synthetic_inference=True,
                                            completed=True, native_closing_message=True,
                                            replayed_one_occurrence=True, trust_gate_left_untouched=True,
-                                           receipt_alone_was_working=True, model_requests=model.turns)))
+                                           receipt_alone_was_working=True, control_prompt_refused=True,
+                                           injected_late_modal_untouched=True, model_requests=model.turns)))
                 except Exception:
                     log.flush()
                     log.seek(0)
