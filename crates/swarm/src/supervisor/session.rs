@@ -82,7 +82,7 @@ struct Labels {
     scheduled_completed: bool,
 }
 
-fn sanitize_name(text: &str) -> String {
+pub(super) fn sanitize_name(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(64).collect()
 }
 
