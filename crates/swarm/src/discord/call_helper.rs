@@ -1,5 +1,7 @@
 //! Resolve the pinned media bundle before the connector trusts a media process.
 use super::config::invalid;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
@@ -74,6 +76,67 @@ impl Helper {
             .find_map(|path| fs::canonicalize(path).ok())
             .ok_or_else(|| invalid("Node 24.17+ was not found on the call helper PATH"))?;
         Self::pinned(path, node)
+    }
+
+    pub(super) fn bundled() -> io::Result<Self> {
+        let exe = fs::canonicalize(std::env::current_exe()?)?;
+        let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        let pins: BTreeMap<String, BTreeMap<String, String>> =
+            serde_json::from_slice(crate::release::MEDIA)?;
+        let expected = pins
+            .get(&platform)
+            .ok_or_else(|| invalid("no pinned media for this build"))?;
+        let root = exe.parent().unwrap().join("media").join(platform);
+        let node = root.join("node");
+        let helper = Self::pinned(&root.join(ENTRY), node.clone())?;
+        let pinned = match &helper {
+            Self::Pinned(pinned) => pinned,
+            #[cfg(test)]
+            Self::Fixture(_) => unreachable!(),
+        };
+        let extra_files = ARTIFACTS
+            .into_iter()
+            .map(|(name, _)| root.join(name))
+            .chain([node, root.join("NODE-LICENSE")]);
+        let mut actual = BTreeMap::new();
+        for file in pinned
+            .modules
+            .iter()
+            .map(|(path, _)| path.clone())
+            .chain(extra_files)
+        {
+            if file.is_dir() {
+                continue;
+            }
+            let mut hash = Sha256::new();
+            io::copy(&mut trusted_file(&file)?, &mut hash)?;
+            let relative = file
+                .strip_prefix(&root)
+                .map_err(|_| invalid("invalid media path"))?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| invalid("invalid media path"))?;
+            actual.insert(relative.to_owned(), format!("{:x}", hash.finalize()));
+        }
+        if &actual != expected {
+            return Err(invalid("packaged media differs from the release pins"));
+        }
+        // Recheck the identities used to hash the dependency tree before giving it to the caller.
+        helper.command()?;
+        Ok(helper)
+    }
+
+    pub(super) fn check(&self) -> io::Result<()> {
+        let status = self
+            .command()?
+            .env_clear()
+            .args(["--", ENTRY, "--check"])
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(invalid("codec, cipher or DAVE self-check failed"))
+        }
     }
 
     pub(super) fn pinned(path: &Path, node: PathBuf) -> io::Result<Self> {

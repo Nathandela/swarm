@@ -8,6 +8,7 @@ mod hook;
 mod ipc;
 mod manager_mcp;
 mod providers;
+mod release;
 mod schedule;
 mod setup_trust;
 mod shim;
@@ -61,6 +62,11 @@ fn main() -> ExitCode {
         Some("native-input") => providers::agy_input::cli(&args[1..]),
         Some("shim") => shim::run(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
+        Some("release-info") if args.len() == 1 => {
+            println!("{}", release::info());
+            0
+        }
+        Some("release-check-media") if args.len() == 1 => discord::check_packaged_media(),
         Some("discord") => discord::run(&args[1..]),
         Some("schedule") => schedule::run(&args[1..]),
         Some("schedule-receipt-bridge") => schedule::worker::bridge(),
