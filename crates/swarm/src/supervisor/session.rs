@@ -96,7 +96,7 @@ pub(super) struct Session {
     manager: Value,
     agent: String,
     resumed_from: Option<String>,
-    agy_native_installation: Option<String>,
+    worker_native_installation: Option<String>,
     hermes_native: bool,
     hermes_authority: Mutex<()>,
     cwd: String,
@@ -154,9 +154,13 @@ impl Session {
                 .as_str()
                 .or_else(|| data["opencode_resume"]["resumed_from"].as_str())
                 .map(str::to_owned),
-            agy_native_installation: data["provider"]["agy_native_installation"]
-                .as_str()
-                .map(str::to_owned),
+            worker_native_installation: data["provider"][if data["provider"]["name"] == "claude" {
+                "claude_native_installation"
+            } else {
+                "agy_native_installation"
+            }]
+            .as_str()
+            .map(str::to_owned),
             hermes_native,
             hermes_authority: Mutex::new(()),
             cwd: cwd.into(),
@@ -519,10 +523,13 @@ impl Session {
         } else {
             None
         };
-        let agy_native_installation = if scheduled.is_none()
-            && provider.agent == "agy"
-            && providers::agy_input::qualified(&provider.version)
-        {
+        let worker_native_installation = if scheduled.is_none()
+            && manager.is_null()
+            && match provider.agent {
+                "agy" => providers::agy_input::qualified(&provider.version),
+                "claude" => providers::claude_input::qualified(&provider.version),
+                _ => false,
+            } {
             root.parent().and_then(|supervisor| {
                 let socket = crate::ipc::socket_path().ok()?;
                 crate::discord::worker_input_installation(supervisor, socket.to_str()?)
@@ -543,7 +550,8 @@ impl Session {
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "schedule_claude_conversation":claude_conversation,
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
-                    "agy_native_installation":agy_native_installation,
+                    "agy_native_installation":(provider.agent == "agy").then_some(worker_native_installation.as_deref()).flatten(),
+                    "claude_native_installation":(provider.agent == "claude").then_some(worker_native_installation.as_deref()).flatten(),
                     "mode": if !provider.hermes.is_null() {
                         "shared-native"
                     } else if provider.agent == "opencode" || provider.agent == "codex" && providers::codex::managed(&provider.version) {
@@ -755,13 +763,22 @@ impl Session {
     }
 
     pub(super) fn requires_worker_origin_cap(&self) -> bool {
-        self.agent == "agy" || self.hermes_native
+        matches!(self.agent.as_str(), "agy" | "claude") || self.hermes_native
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
         if self.hermes_native {
             self.dial()?;
             return self.hermes_descriptor()?.validate_target();
+        }
+        if self.agent == "claude" {
+            let ready = self.status_exchange(&json!({"type":"claude_ready"}))?;
+            if ready["type"] != "ok" || ready["conversation_id"] != self.semantic_thread()? {
+                return Err(io::Error::other(
+                    "Claude native input is unproven; explicitly refresh this session",
+                ));
+            }
+            return Ok(codex_receipt::provider_instance("claude", &self.token));
         }
         if self.agent == "agy" {
             if !self.is_live() {
@@ -843,7 +860,12 @@ impl Session {
     }
 
     fn semantic_thread(&self) -> io::Result<String> {
-        match runtime::read_json(&self.dir.join("observation.json")) {
+        let path = if self.agent == "claude" {
+            "claude-native.json"
+        } else {
+            "observation.json"
+        };
+        match runtime::read_json(&self.dir.join(path)) {
             Ok(record)
                 if record["token"] == self.token
                     && codex_receipt::canonical_thread(field(&record, "conversation_id")) =>
@@ -950,26 +972,27 @@ impl Session {
             })
             || !(body["expected_turn"].is_null() || body["expected_turn"] == "")
             || instance != codex_receipt::provider_instance(&self.agent, &self.token)
-            || !matches!(self.agent.as_str(), "codex" | "agy")
+            || !matches!(self.agent.as_str(), "codex" | "agy" | "claude")
             || text.contains('\0')
         {
             return Err(io::Error::other(
                 "invalid or stale provider semantic request",
             ));
         }
-        if self.agent != "agy" {
+        if self.agent == "codex" {
             self.check_manager_input(session, operation, body)?;
         } else if !self.manager.is_null() || !body["manager_admission"].is_null() {
             return Err(io::Error::other(
-                "ordinary Antigravity worker cannot receive manager authority",
+                "ordinary worker cannot receive manager authority",
             ));
         }
         let thread = self.semantic_thread()?;
-        let origin = if self.agent == "agy" {
+        let worker_origin = matches!(self.agent.as_str(), "agy" | "claude");
+        let origin = if worker_origin {
             let origin = providers::agy_input::origin(&body["origin"])?;
-            if self.agy_native_installation.as_deref() != origin["installation_id"].as_str() {
+            if self.worker_native_installation.as_deref() != origin["installation_id"].as_str() {
                 return Err(io::Error::other(
-                    "Antigravity worker was not launched for this installation",
+                    "worker was not launched for this installation",
                 ));
             }
             let args =
@@ -982,7 +1005,7 @@ impl Session {
                 supervisor,
                 state.socket.to_str().unwrap_or_default(),
                 origin["installation_id"].as_str().unwrap_or_default(),
-                "agy",
+                &self.agent,
                 operation,
                 &args,
             )?;
@@ -990,7 +1013,7 @@ impl Session {
         } else {
             Value::Null
         };
-        let intent = if self.agent == "agy" {
+        let intent = if worker_origin {
             providers::agy_input::intent(text, &origin)?
         } else {
             codex_receipt::hash(text)
@@ -1002,7 +1025,7 @@ impl Session {
                 [usize::from(digest[0]) % state.operation_locks.len()]
             .lock()
             .unwrap();
-            if self.agent == "agy" {
+            if worker_origin {
                 codex_receipt::bind_intent(&state.root, operation, session, instance, &intent)?;
             } else {
                 codex_receipt::bind(&state.root, operation, session, instance, text)?;

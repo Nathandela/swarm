@@ -214,7 +214,7 @@ fn valid(
     agent: &str,
 ) -> bool {
     let receipt = &record["receipt"];
-    matches!(agent, "agy" | "codex")
+    matches!(agent, "agy" | "codex" | "claude")
         && receipt["operation_id"] == operation
         && receipt["session"] == session
         && receipt["session_instance"] == provider_instance(agent, token)
@@ -224,13 +224,19 @@ fn valid(
         && record["intent"]
             .as_str()
             .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(hex))
-        && (agent != "agy" || super::agy_input::origin(&receipt["origin"]).is_ok())
-        && (agent != "agy"
-            || receipt["native_generation"]
-                .as_str()
-                .is_some_and(runtime::valid_id))
+        && (agent == "codex" || super::agy_input::origin(&receipt["origin"]).is_ok())
+        && (agent == "codex"
+            || receipt["native_generation"].as_str().is_some_and(|id| {
+                if agent == "agy" {
+                    runtime::valid_id(id)
+                } else {
+                    id.len() == 32 && id.bytes().all(hex)
+                }
+            }))
         && match receipt["state"].as_str() {
-            Some("submitted") if agent == "agy" => receipt["native_turn_id"].is_null(),
+            Some("submitted") if matches!(agent, "agy" | "claude") => {
+                receipt["native_turn_id"].is_null()
+            }
             Some("native_accepted") if agent == "codex" => {
                 receipt["native_turn_id"].as_str().is_some_and(|id| {
                     !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
