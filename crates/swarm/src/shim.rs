@@ -48,6 +48,7 @@ struct State {
     provider: String,
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
     agy_broker: Option<agy_input::Broker>,
+    claude_broker: Option<Arc<providers::claude_input::Broker>>,
     schedule: Option<worker::Binding>,
     claude_schedule: Option<String>,
     manager: bool,
@@ -207,6 +208,20 @@ fn serve(dir: &Path) -> io::Result<()> {
             field(&bootstrap, "owner_socket"),
         )?;
         broker.launch_args(&mut argv);
+        Some(broker)
+    } else {
+        None
+    };
+    let claude_broker = if schedule.is_none() && provider["claude_native_installation"].is_string()
+    {
+        let mut flags = Vec::new();
+        let broker = providers::claude_input::Broker::prepare(
+            dir,
+            &config,
+            field(&bootstrap, "owner_socket"),
+            &mut flags,
+        )?;
+        argv.splice(..0, flags);
         Some(broker)
     } else {
         None
@@ -448,6 +463,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         provider: field(provider, "name").to_owned(),
         semantic: channel.is_some().then_some(action_sink),
         agy_broker,
+        claude_broker,
         schedule: schedule.clone(),
         claude_schedule,
         manager: !scope.is_null(),
@@ -804,6 +820,33 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 Err(e) => json!({"type":"error", "error":e.to_string()}),
             };
             runtime::write_control(&mut stream, &reply)
+        }
+        "claude_ready" => {
+            let ready = state
+                .claude_broker
+                .as_ref()
+                .and_then(|broker| broker.ready().ok());
+            runtime::write_control(
+                &mut stream,
+                &ready.map_or_else(
+                    || json!({"type":"error"}),
+                    |conversation| json!({"type":"ok","conversation_id":conversation}),
+                ),
+            )
+        }
+        "semantic" if state.provider == "claude" => {
+            let result = state
+                .claude_broker
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Claude native input broker is unavailable"))
+                .and_then(|broker| broker.submit(&request));
+            runtime::write_control(
+                &mut stream,
+                &result.map_or_else(
+                    |error| json!({"type":"error","error":error.to_string()}),
+                    |receipt| json!({"type":"semantic_result","receipt":receipt}),
+                ),
+            )
         }
         "schedule_agy_prompt" => {
             let result = queue_agy_prompt(state, &request);

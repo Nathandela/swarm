@@ -41,7 +41,7 @@ pub(crate) fn origin(input: &Value) -> io::Result<Value> {
     ];
     let mut normalized = input.clone();
     let fields = normalized.as_object_mut();
-    let refusal = || io::Error::other("Antigravity native input requires a valid message origin");
+    let refusal = || io::Error::other("native worker input requires a valid message origin");
     let Some(fields) = fields else {
         return Err(refusal());
     };
