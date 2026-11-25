@@ -94,25 +94,39 @@ pub(super) fn start(
 }
 
 fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel> {
-    let deadline = Instant::now() + Duration::from_secs(4);
+    // The reference allows cold native startup to take a full minute under host I/O pressure.
+    let deadline = Instant::now() + Duration::from_secs(60);
     let stream = loop {
-        if let Ok(stream) = UnixStream::connect(socket) {
-            if runtime::peer_pid(&stream)? != child.id() {
-                return Err(io::Error::other(
-                    "Codex app-server peer does not match owned child",
-                ));
+        match UnixStream::connect(socket) {
+            Ok(stream) => {
+                if runtime::peer_pid(&stream)? != child.id() {
+                    return Err(io::Error::other(
+                        "Codex app-server peer does not match owned child",
+                    ));
+                }
+                break stream;
             }
-            break stream;
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) => {}
+            Err(error) => return Err(error),
         }
-        if Instant::now() >= deadline || pty::child_exited(child)? {
+        if pty::child_exited(child)? {
             return Err(io::Error::other(
-                "Codex app-server did not bind its private socket",
+                "Codex app-server exited before binding its private socket",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(
+                "Codex app-server private socket startup timed out",
             ));
         }
         thread::sleep(Duration::from_millis(20));
     };
-    stream.set_read_timeout(Some(Duration::from_millis(400)))?;
-    stream.set_write_timeout(Some(Duration::from_millis(400)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let bounded = WebSocketConfig::default()
         .max_message_size(Some(1024 * 1024))
         .max_frame_size(Some(1024 * 1024));
@@ -125,7 +139,7 @@ fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel
             "capabilities":{"experimentalApi":true,"requestAttestation":false}}
         }),
     )?;
-    let deadline = Instant::now() + Duration::from_secs(4);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(message) = read(&mut connection)?
             && message["id"] == 1
@@ -142,6 +156,12 @@ fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel
         }
     }
     send(&mut connection, json!({"method":"initialized","params":{}}))?;
+    connection
+        .get_mut()
+        .set_read_timeout(Some(Duration::from_millis(400)))?;
+    connection
+        .get_mut()
+        .set_write_timeout(Some(Duration::from_millis(400)))?;
     let pid = child.id();
     let birth = runtime::birth(pid)?;
     Ok(Channel {

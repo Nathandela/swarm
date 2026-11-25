@@ -563,7 +563,7 @@ impl Session {
         let deadline = Instant::now()
             + Duration::from_secs(match self.agent.as_str() {
                 "opencode" => 45,
-                "codex" => 8,
+                "codex" => 85,
                 _ => 3,
             });
         loop {

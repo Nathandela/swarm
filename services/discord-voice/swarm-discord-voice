@@ -1,0 +1,295 @@
+#!/usr/bin/env node
+import { randomBytes } from 'node:crypto';
+import { NetworkingStatusCode, VoiceConnectionStatus, joinVoiceChannel, version } from '@discordjs/voice';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { DAVESession } from '@snazzah/davey';
+import OpusScript from 'opusscript';
+import { daveState, frameBytes, frameMS, frameSamples, guardReceiver, maxLine, pcmFrame } from './media.mjs';
+
+const codec = () => new OpusScript(24000, 1, OpusScript.Application.VOIP);
+const id = (value) => typeof value === 'string' && /^\d{1,20}$/.test(value);
+const endpoint = (value) => typeof value === 'string' && /^[a-z0-9.-]{1,253}(?::443)?$/i.test(value);
+const maxSpeakers = 16;
+const maxPlayback = 6;
+const maxReceive = 3;
+const maxFrameAge = 120;
+
+if (version !== '1.0.0-dev.1795176133-cd7400323' || process.versions.node.split('.')[0] !== '24' ||
+    Number(process.versions.node.split('.')[1]) < 17) {
+  process.stderr.write('swarm-discord-voice requires Node 24.17+ within Node 24 and the pinned dependencies\n');
+  process.exit(1);
+}
+
+if (process.argv[2] === '--check') {
+  const testCodec = codec();
+  const pcm = Buffer.alloc(frameBytes);
+  const dave = new DAVESession(1, '1', '2');
+  const cipher = xchacha20poly1305(randomBytes(32), randomBytes(24));
+  if (testCodec.decode(testCodec.encode(pcm, frameSamples)).length !== frameBytes ||
+      !dave.getSerializedKeyPackage().length || !Buffer.from(cipher.decrypt(cipher.encrypt(pcm))).equals(pcm)) process.exit(1);
+  testCodec.delete();
+  process.exit(0);
+}
+
+let closing = false;
+let config;
+let adapter;
+let connection;
+let transport;
+let state;
+let server;
+let forwarded = false;
+let gatewayJoin = false;
+let pinnedDave;
+let pinnedEpoch;
+let encoder;
+let speaking = false;
+let written = false;
+let ticker;
+let nextFrameAt = 0;
+const speakers = new Map();
+const playback = [];
+
+function send(message) {
+  if (written) return false;
+  written = !process.stdout.write(JSON.stringify(message) + '\n');
+  return true;
+}
+
+function clearPlayback() {
+  playback.length = 0;
+  if (speaking) connection?.setSpeaking(false);
+  speaking = false;
+}
+
+function stop(code) {
+  if (closing) return;
+  closing = true;
+  clearTimeout(deadline);
+  clearTimeout(ticker);
+  process.stdin.pause();
+  playback.length = 0;
+  // The parent owns the final voice-state leave, including forced child exit.
+  if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy(false);
+  for (const speaker of speakers.values()) speaker.decoder.delete();
+  encoder?.delete();
+  const exitCode = code ? 1 : 0;
+  if (code) {
+    process.stdout.write(JSON.stringify({type: 'fault', code}) + '\n', () => process.exit(exitCode));
+    setTimeout(() => process.exit(exitCode), 100).unref();
+  } else {
+    process.exit(exitCode);
+  }
+}
+
+function gate() {
+  if (closing) return;
+  const dave = daveState(connection);
+  if (pinnedDave && (dave !== pinnedDave || dave.session.epoch !== pinnedEpoch)) {
+    stop('dave_changed');
+    return;
+  }
+  return pinnedDave && dave;
+}
+
+function checkReady() {
+  if (closing) return;
+  if (pinnedDave) {
+    gate();
+    return;
+  }
+  const network = connection?.state.networking?.state;
+  if (network?.code === NetworkingStatusCode.Ready &&
+      (!network.dave || network.dave.protocolVersion !== 1)) {
+    stop('dave_required');
+    return;
+  }
+  const dave = daveState(connection);
+  if (!dave) return;
+  const members = new Set(dave.session.getUserIds());
+  if (members.size !== speakers.size + 1 || !members.delete(config.botId) ||
+      [...members].some((userId) => !speakers.has(userId))) {
+    stop('dave_roster_mismatch');
+    return;
+  }
+  pinnedDave = dave;
+  pinnedEpoch = dave.session.epoch;
+  clearTimeout(deadline);
+  if (!send({type: 'ready'})) stop('pipe_blocked');
+}
+
+function start(message) {
+  const {guildId, channelId, botId, speakers: allowed} = message;
+  if (config || !id(guildId) || !id(channelId) || !id(botId) ||
+      !Array.isArray(allowed) || !allowed.length || allowed.length > maxSpeakers ||
+      allowed.some((userId) => !id(userId) || userId === botId) || new Set(allowed).size !== allowed.length) {
+    return stop('invalid_start');
+  }
+  config = {guildId, channelId, botId};
+  encoder = codec();
+  connection = joinVoiceChannel({
+    guildId, channelId, selfDeaf: false, selfMute: false, daveEncryption: true,
+    adapterCreator(methods) {
+      adapter = methods;
+      return {
+        destroy() { adapter = undefined; },
+        sendPayload(data) {
+          if (closing || gatewayJoin) return false;
+          gatewayJoin = send({type: 'gateway', data});
+          return gatewayJoin;
+        },
+      };
+    },
+  });
+  if (!gatewayJoin) return stop('pipe_blocked');
+  connection.on('error', () => stop('voice_error'));
+  connection.on('stateChange', (_, next) => {
+    if (closing) return;
+    if (next.status === VoiceConnectionStatus.Disconnected || next.status === VoiceConnectionStatus.Signalling) {
+      stop('voice_disconnected');
+      return;
+    }
+    const ws = next.networking?.state.ws;
+    if (ws && ws !== transport) {
+      transport = ws;
+      ws.on('packet', checkReady);
+      ws.on('binary', checkReady);
+    }
+    checkReady();
+  });
+  connection.on('transitioned', checkReady);
+  const receiver = connection.receiver;
+  // shortcut: RTP loss ends this generation until the parent protocol can carry a turn discontinuity.
+  // Personal callers can leave and rejoin. Team callers can send @Bot voice join with current consent.
+  // Wait for the ready tone and repeat the full request, or continue in the linked text discussion.
+  guardReceiver(receiver, gate, speakers, stop);
+  for (const userId of allowed) {
+    const decoder = codec();
+    const speaker = {decoder, frames: []};
+    speakers.set(userId, speaker);
+    const stream = receiver.subscribe(userId);
+    stream.on('error', () => stop('receive_error'));
+    stream.on('data', ({payload: opus}) => {
+      if (!gate()) return;
+      if (opus.length > OpusScript.MAX_PACKET_SIZE) return stop('invalid_opus');
+      let pcm;
+      try {
+        pcm = decoder.decode(opus);
+      } catch {
+        return stop('invalid_opus');
+      }
+      if (pcm.length !== frameBytes) return stop('invalid_opus');
+      if (speaker.frames.length === maxReceive) return stop('receive_backlog');
+      speaker.frames.push({pcm, receivedAt: performance.now()});
+      scheduleTick();
+    });
+  }
+}
+
+function handoff() {
+  if (!state || !server || forwarded) return;
+  forwarded = true;
+  // The pinned adapter configures networking only when the server half arrives.
+  adapter.onVoiceStateUpdate(state);
+  adapter.onVoiceServerUpdate(server);
+}
+
+function command(message) {
+  if (closing) return;
+  if (message?.type === 'start') return start(message);
+  if (message?.type === 'stop') return stop();
+  if (!config) return stop('missing_start');
+  const {type, data} = message;
+  switch (type) {
+    case 'voice_state':
+      if (data?.guild_id !== config.guildId || data.user_id !== config.botId ||
+          data.channel_id !== config.channelId || data.self_deaf || data.self_mute || data.deaf || data.mute ||
+          typeof data.session_id !== 'string' || !data.session_id) return stop('invalid_voice_state');
+      if (state && state.session_id !== data.session_id) return stop('conflicting_voice_state');
+      if (state) return;
+      state = data;
+      return handoff();
+    case 'voice_server':
+      if (data?.guild_id !== config.guildId || !endpoint(data.endpoint) ||
+          typeof data.token !== 'string' || !data.token) return stop('invalid_voice_server');
+      if (server && (server.token !== data.token || server.endpoint !== data.endpoint)) return stop('conflicting_voice_server');
+      if (server) return;
+      server = data;
+      return handoff();
+    case 'clear':
+      return clearPlayback();
+    case 'play': {
+      const pcm = pcmFrame(message.pcm);
+      if (!pcm) return stop('invalid_pcm');
+      if (!gate()) return;
+      if (playback.length === maxPlayback) return stop('playback_backlog');
+      playback.push({pcm, receivedAt: performance.now()});
+      scheduleTick();
+      return;
+    }
+    default:
+      return stop('unknown_command');
+  }
+}
+
+let line = Buffer.alloc(0);
+process.stdout.on('drain', () => { written = false; });
+process.stdout.on('error', () => stop());
+process.stdin.on('error', () => stop('pipe_error'));
+process.stdin.on('end', () => stop(line.length ? 'truncated_command' : undefined));
+process.on('SIGTERM', () => stop());
+process.on('SIGINT', () => stop());
+process.on('uncaughtException', () => stop('helper_error'));
+process.on('unhandledRejection', () => stop('helper_error'));
+
+const deadline = setTimeout(() => stop('voice_timeout'), 15000);
+function scheduleTick() {
+  if (ticker) return;
+  const now = performance.now();
+  if (nextFrameAt < now - frameMS) nextFrameAt = now + frameMS;
+  ticker = setTimeout(tick, Math.max(1, nextFrameAt - now));
+}
+
+function tick() {
+  ticker = undefined;
+  nextFrameAt += frameMS;
+  if (!gate()) return;
+  const now = performance.now();
+  let pending = false;
+  for (const [userId, speaker] of speakers) {
+    const frame = speaker.frames.shift();
+    if (frame && now - frame.receivedAt > maxFrameAge) return stop('receive_stale');
+    if (frame && !send({type: 'audio', userId, pcm: frame.pcm.toString('base64')})) return stop('pipe_blocked');
+    pending ||= speaker.frames.length > 0;
+  }
+  while (playback.length && now - playback[0].receivedAt > maxFrameAge) playback.shift();
+  const frame = playback.shift();
+  if (frame) {
+    connection.playOpusPacket(encoder.encode(frame.pcm, frameSamples));
+    speaking = true;
+  } else if (speaking) {
+    clearPlayback();
+  }
+  if (pending || speaking) scheduleTick();
+  else nextFrameAt = 0;
+}
+
+process.stdin.on('data', (chunk) => {
+  let start = 0;
+  while (start < chunk.length && !closing) {
+    const end = chunk.indexOf(10, start);
+    const part = chunk.subarray(start, end < 0 ? undefined : end);
+    if (line.length + part.length > maxLine) return stop('oversized_command');
+    line = Buffer.concat([line, part]);
+    if (end < 0) return;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return stop('invalid_json');
+    }
+    line = Buffer.alloc(0);
+    command(message);
+    start = end + 1;
+  }
+});

@@ -16,6 +16,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub(crate) const VERSION: u64 = 1;
+pub(crate) fn launch_timeout(agent: &str) -> Duration {
+    match agent {
+        "hermes" | "codex" => Duration::from_secs(100),
+        "opencode" => Duration::from_secs(75),
+        _ => REQUEST_TIMEOUT,
+    }
+}
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const WATCH_TIMEOUT: Duration = Duration::from_secs(600);
 const EVENT_LIMIT: usize = 256;
@@ -117,6 +125,12 @@ impl std::fmt::Display for Refusal {
     }
 }
 impl std::error::Error for Refusal {}
+
+pub(crate) fn refused_with(err: &io::Error, detail: &str) -> bool {
+    err.get_ref()
+        .and_then(|err| err.downcast_ref::<Refusal>())
+        .is_some_and(|err| err.0 == detail)
+}
 
 pub(crate) struct Client {
     stream: UnixStream,

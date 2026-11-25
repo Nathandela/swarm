@@ -73,11 +73,28 @@ impl Dispatcher {
         Ok(Some(this))
     }
 
+    pub(super) fn scope(&self, cfg: &Config) -> Value {
+        json!({"launch":self.launch,"installation_id":cfg.text("installation_id"),
+            "application_id":cfg.text("application_id"),"owner_id":cfg.text("owner_id"),
+            "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")})
+    }
+
+    #[cfg(test)]
     pub(super) fn tick(
         &self,
         cfg: &Config,
         inbox: &mut Inbox,
         api: &impl Audience,
+    ) -> io::Result<()> {
+        self.tick_calls(cfg, inbox, api, None)
+    }
+
+    pub(super) fn tick_calls(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        calls: Option<(&Path, &super::call_runtime::Driver)>,
     ) -> io::Result<()> {
         self.serve_tool(inbox)?;
         let mut state = inbox.manager().clone();
@@ -136,18 +153,45 @@ impl Dispatcher {
             return Err(invalid("native manager requires owner reconciliation"));
         }
         if !state["input"].is_null() {
+            let had_turn = !state["input"]["turn_id"].is_null();
             let phase = self.reconcile_input(inbox, &mut state)?;
+            if let Some((_, driver)) = calls
+                && !had_turn
+                && !state["input"]["turn_id"].is_null()
+                && state["input"]["composer"]["origin"]["voice"].is_object()
+            {
+                let origin = state["input"]["composer"]["origin"].clone();
+                let _ = driver
+                    .readout
+                    .try_send(super::call_runtime::Readout::Acknowledge(origin));
+            }
             self.deliver(cfg, inbox, api, &state, millis()?)?;
             if phase == "completed" {
                 let nonce = field(&state["input"], "final_nonce");
                 if !nonce.is_empty() && inbox.publication(nonce)["state"] == "sent" {
+                    let origin = &state["input"]["composer"]["origin"];
+                    if let Some((_, driver)) = calls
+                        && origin["voice"].is_object()
+                    {
+                        let entry = inbox.publication(nonce);
+                        let _ = driver
+                            .readout
+                            .try_send(super::call_runtime::Readout::Publication(
+                                nonce.into(),
+                                origin.clone(),
+                                field(&entry, "body").into(),
+                            ));
+                    }
                     state["input"] = Value::Null;
                     inbox.set_manager(state)?;
                 }
             }
             return Ok(());
         }
-        let Some(input) = inbox.next_prepared() else {
+        let Some(input) = inbox
+            .next_prepared()
+            .or_else(|| calls.and_then(|_| inbox.prepared_voice()))
+        else {
             return Ok(());
         };
         if status["ready_for_input"] != true
@@ -155,19 +199,44 @@ impl Dispatcher {
         {
             return Ok(());
         }
-        let id = field(&input["route"], "message_id");
-        let Some(source) = api.current(cfg, id)? else {
-            return inbox.withdraw(id);
-        };
-        let Some(current) = inbox.admit(&source)? else {
-            return inbox.withdraw(id);
+        let voice = input["voice_origin"].is_object();
+        let (id, current) = if voice {
+            let id = field(&input, "operation_id").to_owned();
+            let Some((place, _)) = calls else {
+                return Ok(());
+            };
+            if super::call_runtime::verify_live(place, &input["voice_origin"]).is_err() {
+                return inbox.withdraw(&id);
+            }
+            api.verify(cfg)?;
+            (id, input)
+        } else {
+            let id = field(&input["route"], "message_id").to_owned();
+            let Some(source) = api.current(cfg, &id)? else {
+                return inbox.withdraw(&id);
+            };
+            let Some(current) = inbox.admit(&source)? else {
+                return inbox.withdraw(&id);
+            };
+            (id, current)
         };
         let composer = self.owner.composer(&current, &status)?;
         let semantic = operation("semantic")?;
-        state["input"] = json!({"operation":semantic, "composer":composer, "source_id":id});
-        inbox.cutover(id, field(&current, "revision"), state)?;
-        // An error here may have crossed the native boundary. Reconcile by nonce, never resend.
-        self.owner.send(&semantic, &composer)
+        state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id});
+        inbox.cutover(&id, field(&current, "revision"), state)?;
+        // Ambiguous sends are never retried. Only the native pre-effect authority refusal is safe.
+        match self.owner.send(&semantic, &composer) {
+            Err(err) if voice && crate::ipc::refused_with(&err, super::call_runtime::WITHDRAWN) => {
+                inbox.abort_voice(&id)
+            }
+            Err(_) if voice => {
+                eprintln!(
+                    "discord: voice admission is unconfirmed; reconciling its original native nonce"
+                );
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     fn reconcile_input(&self, inbox: &mut Inbox, state: &mut Value) -> io::Result<String> {
@@ -229,18 +298,29 @@ impl Dispatcher {
             }
             api.verify(cfg)?;
             let source_id = field(input, "source_id");
-            let source = api
-                .current(cfg, source_id)?
-                .filter(|source| source["id"] == source_id)
-                .ok_or_else(|| {
-                    invalid("publication requires the original visible Discord source")
-                })?;
-            let current = inbox
-                .admit(&source)?
-                .filter(|receipt| receipt["state"] == "accepted")
-                .ok_or_else(|| invalid("publication source no longer proves native admission"))?;
-            if current["revision"] != input["composer"]["origin"]["revision"] {
-                return Err(invalid("publication source changed after native admission"));
+            let origin = &input["composer"]["origin"];
+            if super::call_origin::key(source_id) {
+                if !inbox.accepted_voice(source_id, origin) {
+                    return Err(invalid(
+                        "publication requires the original accepted voice admission",
+                    ));
+                }
+            } else {
+                let source = api
+                    .current(cfg, source_id)?
+                    .filter(|source| source["id"] == source_id)
+                    .ok_or_else(|| {
+                        invalid("publication requires the original visible Discord source")
+                    })?;
+                let current = inbox
+                    .admit(&source)?
+                    .filter(|receipt| receipt["state"] == "accepted")
+                    .ok_or_else(|| {
+                        invalid("publication source no longer proves native admission")
+                    })?;
+                if current["revision"] != origin["revision"] {
+                    return Err(invalid("publication source changed after native admission"));
+                }
             }
             let evidence = self.owner.input_status(&input["composer"])?;
             if evidence["native_turn_id"] != input["turn_id"]

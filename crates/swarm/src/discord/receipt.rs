@@ -1,4 +1,4 @@
-//! Durable text-only inbox for one enrolled personal installation.
+//! Durable connector inbox for one enrolled personal installation.
 use super::config::{Config, invalid, snowflake};
 use crate::supervisor::runtime;
 use serde_json::{Value, json};
@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 const VERSION: u64 = 2;
+const VOICE_VERSION: u64 = 3;
 const MAX_RECORDS: usize = 2048;
 const MAX_STORE_BYTES: usize = 1 << 20;
 
@@ -39,7 +40,7 @@ impl Inbox {
             }
             Err(e) => return Err(e),
         };
-        if data["version"] != VERSION
+        if !matches!(data["version"].as_u64(), Some(VERSION | VOICE_VERSION))
             || data["identity"] != identity
             || !data["messages"].is_object()
             || !data["outbox"].is_object()
@@ -243,6 +244,80 @@ impl Inbox {
         Ok(Some(receipt))
     }
 
+    pub(super) fn admit_voice(
+        &mut self,
+        scope: &Value,
+        origin: Value,
+        text: &str,
+    ) -> io::Result<Value> {
+        super::call_origin::validate(scope, &origin, text)?;
+        let [installation, app, owner, channel, supervisor] = self.identity();
+        if scope["installation_id"] != installation
+            || scope["application_id"] != app
+            || scope["owner_id"] != owner
+            || scope["channel_id"] != channel
+            || scope["supervisor_socket"] != supervisor
+            || self.cursor().is_none()
+        {
+            return Err(invalid(
+                "voice admission is outside the repaired discussion",
+            ));
+        }
+        let id = origin["request_id"].as_str().unwrap();
+        let old = &self.data["messages"][id];
+        if !old.is_null() {
+            if old["voice_origin"] != origin || old["state"] != "withdrawn" && old["text"] != text {
+                return Err(invalid("voice admission conflicts with the original turn"));
+            }
+            return Ok(old.clone());
+        }
+        if self.data["messages"].as_object().unwrap().len() >= MAX_RECORDS {
+            return Err(invalid("Discord inbox reached its admission limit"));
+        }
+        let receipt = json!({
+            "operation_id":id, "revision":origin["revision"], "text":text,
+            "route":{"guild_id":"","channel_id":channel},
+            "author":{"id":owner}, "authority":"owner_direct", "supervisor_socket":supervisor,
+            "state":"prepared", "voice_origin":origin,
+        });
+        let mut next = self.data.clone();
+        next["version"] = json!(VOICE_VERSION);
+        next["messages"][id] = receipt.clone();
+        self.save(next)?;
+        Ok(receipt)
+    }
+
+    pub(super) fn abort_voice(&mut self, id: &str) -> io::Result<()> {
+        if !super::call_origin::key(id)
+            || self.data["manager"]["input"]["source_id"] != id
+            || self.data["messages"][id]["state"] != "sending"
+        {
+            return Err(invalid("no matching voice cutover to withdraw"));
+        }
+        let mut next = self.data.clone();
+        next["messages"][id]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("text");
+        next["messages"][id]["state"] = json!("withdrawn");
+        next["manager"]["input"] = Value::Null;
+        self.save(next)
+    }
+
+    pub(super) fn accepted_voice(&self, id: &str, origin: &Value) -> bool {
+        let row = &self.data["messages"][id];
+        super::call_origin::key(id) && row["state"] == "accepted" && row["voice_origin"] == *origin
+    }
+
+    pub(super) fn prepared_voice(&self) -> Option<Value> {
+        self.data["messages"]
+            .as_object()
+            .unwrap()
+            .values()
+            .find(|row| row["state"] == "prepared" && row["voice_origin"].is_object())
+            .cloned()
+    }
+
     pub(super) fn withdraw(&mut self, id: &str) -> io::Result<()> {
         if !self.data["messages"][id].is_null() && self.data["messages"][id]["state"] != "withdrawn"
         {
@@ -382,7 +457,9 @@ pub(super) fn verify_publication(nonce: &str, entry: &Value) -> io::Result<()> {
         || args["output_id"] != proof["output_id"]
         || args["text"] != proof["body"]
         || proof["arguments_hash"] != hash(&canonical)?
-        || !proof["source_id"].as_str().is_some_and(snowflake)
+        || !proof["source_id"]
+            .as_str()
+            .is_some_and(|id| snowflake(id) || super::call_origin::key(id))
         || native["main"] != true
         || native["native_turn_id"] != proof["turn_id"]
         || native["native_call_id"] != proof["native_call_id"]
