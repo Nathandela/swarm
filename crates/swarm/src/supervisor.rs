@@ -436,17 +436,22 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     }
     let manager_available = crate::discord::native_manager_enrollment()
         .is_ok_and(|scope| scope["supervisor_socket"] == state.socket.to_string_lossy().as_ref());
+    let worker_origin_available = state.root.parent().is_some_and(|root| {
+        crate::discord::worker_input_installation(root, state.socket.to_string_lossy().as_ref())
+            .is_some()
+    });
     let caps: Vec<_> = hello["capabilities"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
-            manager_available
-                && matches!(
-                    *cap,
-                    "manager-launch" | "manager-provenance" | "message-origin"
-                )
+            worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
+                || manager_available
+                    && matches!(
+                        *cap,
+                        "manager-launch" | "manager-provenance" | "message-origin"
+                    )
                 || matches!(
                     *cap,
                     "attach"
@@ -644,13 +649,21 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "semantic_send" if caps.contains(&"semantic-send") => state.session(&request).and_then(|session| {
                 let operation = field(&request,"operation_id");
+                if session.requires_worker_origin_cap()
+                    && !request["composer_send"]["origin"].is_null()
+                    && !caps.contains(&"worker-discord-origin-v1") {
+                    return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"worker Discord origin was not negotiated"}));
+                }
+                if !request["composer_send"]["origin"].is_null() && !caps.contains(&"message-origin") {
+                    return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"capability_refused","error":"message origin was not negotiated"}));
+                }
                 if !request["composer_send"]["manager_admission"].is_null()
                     && !(caps.contains(&"manager-provenance") && caps.contains(&"message-origin")) {
                     return reply(&writer,state,json!({"op":"error","error_code":"op_not_implemented","error":"requires manager provenance and message origin"}));
                 }
                 let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
-                    "native_accepted" | "completed" | "failed" | "cancelled" | "declined" => json!({"op":"ok","operation_id":operation}),
+                    "native_accepted" | "submitted" | "completed" | "failed" | "cancelled" | "declined" => json!({"op":"ok","operation_id":operation}),
                     "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Native provider rejected semantic input"}),
                     _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Native semantic submission outcome is unknown; inspect --status"}),
                 };

@@ -1,3 +1,7 @@
+mod worker_input;
+pub(crate) use worker_input::{
+    lock_connector_worker_input, verify_connector_worker_input, worker_input_installation,
+};
 mod config;
 mod dispatcher;
 mod gateway;

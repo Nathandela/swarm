@@ -5,7 +5,7 @@ mod screen;
 mod supervision;
 
 use crate::ipc::{field, wire};
-use crate::providers::{self, agy, codex_receipt};
+use crate::providers::{self, agy, agy_input, codex_receipt};
 use crate::schedule::worker;
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
@@ -44,6 +44,7 @@ struct State {
     hook_token: String,
     provider: String,
     semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    agy_broker: Option<agy_input::Broker>,
     schedule: Option<worker::Binding>,
     manager: bool,
     terminal_input: AtomicBool,
@@ -120,9 +121,13 @@ fn serve(dir: &Path) -> io::Result<()> {
     };
     let provider = &config["provider"];
     let executable = Path::new(field(provider, "executable"));
-    let argv: Vec<_> = bootstrap["argv"]
+    let mut argv: Vec<_> = bootstrap["argv"]
         .as_array()
-        .and_then(|args| args.iter().map(Value::as_str).collect::<Option<_>>())
+        .and_then(|args| {
+            args.iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<_>>()
+        })
         .ok_or_else(|| io::Error::other("malformed transient launch arguments"))?;
     let working_dir = if config["checkout"].is_null() {
         field(&config, "cwd")
@@ -137,7 +142,14 @@ fn serve(dir: &Path) -> io::Result<()> {
         )?;
         path
     };
-    let mut command = Command::new(executable);
+    let agy_acp = provider["name"] == "agy" && provider["mode"] == "acp" && schedule.is_some();
+    let mut command = if agy_acp {
+        let mut relay = Command::new(std::env::current_exe()?);
+        relay.arg("schedule-agy-worker").arg(dir);
+        relay
+    } else {
+        Command::new(executable)
+    };
     let mut environment = runtime::launch_env(&Value::Null);
     let mut app_args = vec![
         "-c".into(),
@@ -157,13 +169,28 @@ fn serve(dir: &Path) -> io::Result<()> {
                 )
                 .map_err(|e| io::Error::other(e.to_string()))?,
         );
-        app_args = worker::codex_policy(&binding.authority, executable, true)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        if provider["name"] == "codex" {
+            app_args = worker::codex_policy(&binding.authority, executable, true)
+                .map_err(|e| io::Error::other(e.to_string()))?;
+        }
     }
+    let agy_broker = if schedule.is_none() && provider["agy_native_installation"].is_string() {
+        let broker = agy_input::Broker::prepare(
+            dir,
+            &config,
+            Path::new(working_dir),
+            &environment,
+            field(&bootstrap, "owner_socket"),
+        )?;
+        broker.launch_args(&mut argv);
+        Some(broker)
+    } else {
+        None
+    };
     command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)));
-    let agy_args = if provider["name"] == "agy" && provider["agy_status_line"] == true {
+    let agy_args = if !agy_acp && provider["name"] == "agy" && provider["agy_status_line"] == true {
         agy::status_line_args(
             std::env::var_os("HOME").as_deref().map(Path::new),
             &std::env::current_exe()?,
@@ -344,6 +371,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         opencode: opencode.clone(),
         provider: field(provider, "name").to_owned(),
         semantic: channel.is_some().then_some(action_sink),
+        agy_broker,
         schedule: schedule.clone(),
         manager: !scope.is_null(),
         terminal_input: AtomicBool::new(false),
@@ -366,8 +394,9 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let pending = (matches!(state.provider.as_str(), "agy" | "codex") && channel.is_none())
-        .then(|| Arc::new((Mutex::new(None), Condvar::new())));
+    let pending =
+        (!agy_acp && matches!(state.provider.as_str(), "agy" | "codex") && channel.is_none())
+            .then(|| Arc::new((Mutex::new(None), Condvar::new())));
     if let Some(pending) = pending.clone() {
         let state = state.clone();
         thread::spawn(move || terminal_status_writer(&state, &pending));
@@ -411,6 +440,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         if pty::SHUTDOWN_SIGNAL.load(Ordering::Relaxed) {
             terminate(&state).map_err(|e| io::Error::other(format!("terminate provider: {e}")))?;
         }
+        let _native = state
+            .agy_broker
+            .as_ref()
+            .map(|broker| broker.joined.lock().unwrap());
         let mut active = state.child.lock().unwrap();
         let terminate_at = state.terminate_at.lock().unwrap();
         let child = active.as_mut().expect("worker owned while serving");
@@ -430,7 +463,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                 .wait()
                 .map_err(|e| io::Error::other(format!("join provider process: {e}")))?;
         }
-        drop((active, terminate_at));
+        drop((active, terminate_at, _native));
         thread::sleep(Duration::from_millis(40));
     };
     if let Some(mut owned) = backend {
@@ -455,6 +488,10 @@ fn serve(dir: &Path) -> io::Result<()> {
 }
 
 fn terminate(state: &State) -> io::Result<()> {
+    let _native = state
+        .agy_broker
+        .as_ref()
+        .map(|broker| broker.joined.lock().unwrap());
     let active = state.child.lock().unwrap();
     let mut deadline = state.terminate_at.lock().unwrap();
     if let Some(child) = active.as_ref().filter(|_| deadline.is_none()) {
@@ -517,7 +554,7 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        if state.provider == "agy" {
+        if state.provider == "agy" && state.schedule.is_none() {
             const TAIL: usize = 16 * 1024;
             agy_tail.extend_from_slice(&bytes[..n]);
             if agy_tail.len() > TAIL {
@@ -552,7 +589,7 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             pending.1.notify_one();
         }
     }
-    if state.provider == "agy" {
+    if state.provider == "agy" && state.schedule.is_none() {
         let grid = state.screen.lock().unwrap().parser.screen().contents() + "\n";
         if let Some(id) =
             agy::exit_conversation(&agy_tail).or_else(|| agy::exit_conversation(grid.as_bytes()))
@@ -580,6 +617,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     stream.set_read_timeout(Some(runtime::IO_TIMEOUT))?;
     stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
     let hello = runtime::read_control(&mut stream)?;
+    if hello["type"] == "agy_register" {
+        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        return register_agy(&mut stream, state, &hello);
+    }
     if hello["type"] == "hook" {
         return hook_observation(&mut stream, state, &hello);
     }
@@ -608,6 +649,31 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         "signal" if request["sig"] == "term" => {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
+        }
+        "agy_ready" => {
+            let result = agy_ready(state);
+            runtime::write_control(
+                &mut stream,
+                &result.unwrap_or_else(|e| json!({"type":"error", "error":e.to_string()})),
+            )
+        }
+        "semantic" if state.provider == "agy" => {
+            let result = agy_send(state, &request);
+            let reply = match result {
+                Ok(receipt) => json!({"type":"semantic_result", "receipt":receipt}),
+                Err(e) => json!({"type":"error", "error":e.to_string()}),
+            };
+            runtime::write_control(&mut stream, &reply)
+        }
+        "schedule_agy_prompt" => {
+            let result = queue_agy_prompt(state, &request);
+            runtime::write_control(
+                &mut stream,
+                &result.map_or_else(
+                    |err| json!({"type":"error","error":err.to_string()}),
+                    |()| json!({"type":"ok"}),
+                ),
+            )
         }
         "schedule_ready" => {
             let authority = state.control.lock().unwrap();
@@ -774,6 +840,131 @@ fn opencode_terminal_ready(state: &State) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn queue_agy_prompt(state: &State, request: &Value) -> io::Result<()> {
+    let authority = state.control.lock().unwrap();
+    let attempt = field(request, "attempt");
+    let conversation = field(request, "conversation_id");
+    let operation = field(request, "operation");
+    let text = field(request, "text");
+    if state.provider != "agy"
+        || state
+            .schedule
+            .as_ref()
+            .is_none_or(|binding| binding.attempt_id != attempt)
+        || *authority != 0
+        || state.terminal_input.load(Ordering::Acquire)
+        || !codex_receipt::canonical_thread(conversation)
+        || !codex_receipt::timely(operation)
+        || text.is_empty()
+        || !worker::prompt_fits(text, true)
+    {
+        return Err(io::Error::other(
+            "Antigravity scheduled prompt is not authorized",
+        ));
+    }
+    agy_worker_live(state)?;
+    let observation = runtime::read_json(&state.dir.join("observation.json"))?;
+    let prompt = runtime::read_json(&state.dir.join("schedule-prompt.json"))?;
+    let path = state.dir.join("agy-prompt.json");
+    if observation["token"] != state.token
+        || observation["attempt"] != attempt
+        || observation["phase"] != "ready"
+        || observation["conversation_id"] != conversation
+        || prompt["operation"] != operation
+        || prompt["attempt"] != attempt
+        || prompt["conversation_id"] != conversation
+        || path.try_exists()?
+    {
+        return Err(io::Error::other(
+            "Antigravity scheduled worker is no longer ready",
+        ));
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(state.dir.join("agy-prompt-claimed"))?
+        .sync_all()?;
+    File::open(&state.dir)?.sync_all()?;
+    runtime::write_json(
+        &path,
+        &json!({
+            "token":state.token,"attempt":attempt,"operation":operation,
+            "conversation_id":conversation,"text":text,
+        }),
+    )
+}
+
+fn agy_worker_live(state: &State) -> io::Result<()> {
+    let worker = state.child.lock().unwrap();
+    if let Some(worker) = worker.as_ref()
+        && state.terminate_at.lock().unwrap().is_none()
+        && !pty::child_exited(worker)?
+    {
+        return Ok(());
+    }
+    Err(io::Error::other("Antigravity worker is stopping"))
+}
+
+fn register_agy(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
+    let broker = state
+        .agy_broker
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Antigravity native input is disabled"))?;
+    let mut joined = broker.joined.lock().unwrap();
+    agy_worker_live(state)?;
+    let source = broker.validate_registration(request)?;
+    agy_worker_live(state)?;
+    if joined.as_ref().is_some_and(|current| current != &source) {
+        return Err(io::Error::other(
+            "Antigravity registration changed after joining",
+        ));
+    }
+    let mut observed = state.observations.lock().unwrap();
+    let id = source.conversation();
+    if observed
+        .conversation
+        .as_deref()
+        .is_some_and(|current| current != id)
+    {
+        return Err(io::Error::other(
+            "Antigravity registration does not match the observed conversation",
+        ));
+    }
+    observed.conversation = Some(id.to_owned());
+    write_agy_observation(state, &observed)?;
+    *joined = Some(source);
+    runtime::write_control(stream, &json!({"type":"ok"}))
+}
+
+fn agy_ready(state: &State) -> io::Result<Value> {
+    let broker = state
+        .agy_broker
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Antigravity native input is disabled"))?;
+    let joined = broker.joined.lock().unwrap();
+    let source = joined.as_ref().ok_or_else(|| {
+        io::Error::other("Antigravity has no qualified native input registration")
+    })?;
+    agy_worker_live(state)?;
+    broker.verify(source)?;
+    agy_worker_live(state)?;
+    Ok(json!({"type":"ok", "conversation_id":source.conversation()}))
+}
+
+fn agy_send(state: &State, request: &Value) -> io::Result<Value> {
+    let broker = state
+        .agy_broker
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Antigravity native input is disabled"))?;
+    let joined = broker.joined.lock().unwrap();
+    let source = joined.as_ref().ok_or_else(|| {
+        io::Error::other("Antigravity has no qualified native input registration")
+    })?;
+    agy_worker_live(state)?;
+    broker.send(source, &state.token, request, || agy_worker_live(state))
 }
 
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {

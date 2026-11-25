@@ -1,4 +1,5 @@
 pub(crate) mod agy;
+pub(crate) mod agy_input;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod codex_proof;
@@ -24,6 +25,7 @@ pub(crate) struct LaunchPlan {
     pub version: String,
     pub agy_status_line: bool,
     pub native: Value,
+    pub agy_acp: bool,
 }
 
 pub(crate) fn prepare(
@@ -60,7 +62,7 @@ pub(crate) fn prepare(
         .ok_or_else(|| io::Error::other("provider launch requires PATH"))?;
     let executable = resolve(agent, cwd, path)?;
     let before = identity(&executable)?;
-    let output = probe_output(&executable, cwd, &environment, "--version")?;
+    let output = probe_output(&executable, cwd, &environment, &["--version"])?;
     let version = match agent {
         "agy" => agy::version(&output)?,
         "codex" => codex::version(&output)?,
@@ -70,8 +72,11 @@ pub(crate) fn prepare(
     .to_owned();
     let agy_status_line = agent == "agy"
         && agy::status_line(&version)
-        && probe_output(&executable, cwd, &environment, "--help")
+        && probe_output(&executable, cwd, &environment, &["--help"])
             .is_ok_and(|help| agy::advertises_settings(&help));
+    let agy_acp = agent == "agy"
+        && agy::supports_acp(&version)
+        && output.lines().any(|line| line.trim() == version);
     let after = identity(&executable)?;
     if before != after {
         return Err(io::Error::other(
@@ -93,6 +98,7 @@ pub(crate) fn prepare(
         version,
         agy_status_line,
         native,
+        agy_acp,
     })
 }
 
@@ -129,17 +135,17 @@ fn probe_output(
     executable: &Path,
     cwd: &Path,
     env: &[(String, String)],
-    flag: &str,
+    args: &[&str],
 ) -> io::Result<String> {
     let (mut output_socket, writer) = UnixStream::pair()?;
     output_socket.set_nonblocking(true)?;
-    let stderr = if flag == "--help" {
+    let stderr = if args == ["--help"] {
         Stdio::from(OwnedFd::from(writer.try_clone()?))
     } else {
         Stdio::null()
     };
     let mut child = Command::new(executable)
-        .arg(flag)
+        .args(args)
         .current_dir(cwd)
         .env_clear()
         .envs(
@@ -157,13 +163,18 @@ fn probe_output(
         // Nonblocking reads bound the probe even if a descendant inherits the output.
         let mut buffer = [0; 1024];
         let mut output = Vec::new();
+        let limit = if args.first() == Some(&"agentapi") {
+            64 * 1024
+        } else {
+            16 * 1024
+        };
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let idle = match output_socket.read(&mut buffer) {
                 Ok(0) => true,
                 Ok(n) => {
                     output.extend_from_slice(&buffer[..n]);
-                    if output.len() > 16 * 1024 {
+                    if output.len() > limit {
                         return Err(io::Error::other("provider probe output exceeds limit"));
                     }
                     false

@@ -43,6 +43,11 @@ pub(crate) fn status_line(version: &str) -> bool {
     components(version).is_some_and(|(major, minor, _)| (major, minor) >= (1, 4))
 }
 
+pub(crate) fn supports_acp(version: &str) -> bool {
+    version.bytes().filter(|&ch| ch == b'.').count() == 2
+        && components(version).is_some_and(|version| version >= (1, 5, 12))
+}
+
 pub(crate) fn advertises_settings(help: &str) -> bool {
     help.lines()
         .any(|line| line.split_whitespace().next() == Some("--settings"))

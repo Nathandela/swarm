@@ -95,6 +95,7 @@ pub(super) struct Session {
     manager: Value,
     agent: String,
     resumed_from: Option<String>,
+    agy_native_installation: Option<String>,
     cwd: String,
     effective: PathBuf,
     pub(super) lineage: Value,
@@ -146,6 +147,9 @@ impl Session {
             resumed_from: data["agy_launch"]["resumed_from"]
                 .as_str()
                 .or_else(|| data["opencode_resume"]["resumed_from"].as_str())
+                .map(str::to_owned),
+            agy_native_installation: data["provider"]["agy_native_installation"]
+                .as_str()
                 .map(str::to_owned),
             cwd: cwd.into(),
             lineage: data["lineage"].clone(),
@@ -278,12 +282,21 @@ impl Session {
         })
     }
 
-    pub(super) fn scheduled_codex_available(cwd: &Path) -> ScheduleResult<()> {
-        let plan = Self::prepare(&json!({"launch":{"agent":"codex","cwd":cwd}}))?;
-        if !providers::codex::managed(&plan.provider.version) {
-            return Err("scheduled Codex requires its managed App Server".into());
+    pub(super) fn scheduled_provider_available(agent: &str, cwd: &Path) -> ScheduleResult<()> {
+        let plan = Self::prepare(&json!({"launch":{"agent":agent,"cwd":cwd}}))?;
+        Self::qualify_scheduled(&plan.provider)
+    }
+
+    fn qualify_scheduled(provider: &LaunchPlan) -> ScheduleResult<()> {
+        match provider.agent {
+            "codex" if providers::codex::managed(&provider.version) => Ok(()),
+            "codex" => Err("scheduled Codex requires its managed App Server".into()),
+            "agy" if provider.agy_acp => Ok(()),
+            "agy" => Err(
+                "scheduled agy runs require Antigravity CLI 1.5.12 or newer on the executor".into(),
+            ),
+            _ => Err("provider has no qualified schedule runtime".into()),
         }
-        Ok(())
     }
 
     pub(super) fn prepare_scheduled(
@@ -294,14 +307,12 @@ impl Session {
         let mut plan = Self::prepare(&json!({"launch":{
             "agent":launch.agent,"cwd":launch.workspace,"name":launch.name,"cols":100,"rows":32,
         }}))?;
-        if plan.provider.agent != "codex"
-            || !providers::codex::managed(&plan.provider.version)
-            || plan.cwd != Path::new(launch.workspace)
-        {
-            return Err(
-                "scheduled Codex requires a managed App Server in the exact occurrence workspace"
-                    .into(),
-            );
+        Self::qualify_scheduled(&plan.provider)?;
+        if plan.cwd != Path::new(launch.workspace) {
+            return Err("scheduled provider must launch in the exact occurrence workspace".into());
+        }
+        if launch.agent == "agy" && binding.authority != "agent-default" {
+            return Err("agy requires configured agent permissions for scheduled runs".into());
         }
         let binary = env::current_exe()?;
         // The remote TUI inherits App Server authority and rejects local overrides.
@@ -455,6 +466,17 @@ impl Session {
         } else {
             Value::Null
         };
+        let agy_native_installation = if scheduled.is_none()
+            && provider.agent == "agy"
+            && providers::agy_input::qualified(&provider.version)
+        {
+            root.parent().and_then(|supervisor| {
+                let socket = crate::ipc::socket_path().ok()?;
+                crate::discord::worker_input_installation(supervisor, socket.to_str()?)
+            })
+        } else {
+            None
+        };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -464,8 +486,11 @@ impl Session {
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
+                    "agy_native_installation":agy_native_installation,
                     "mode": if provider.agent == "opencode" || provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
+                    } else if provider.agent == "agy" && scheduled.is_some() {
+                        "acp"
                     } else { "classic" },
                     "executable": provider.executable, "identity": provider.identity},
                 "opencode_profile": (provider.agent == "opencode").then(|| opencode::profile(&provider.env)),
@@ -658,11 +683,25 @@ impl Session {
         }
     }
 
+    pub(super) fn requires_worker_origin_cap(&self) -> bool {
+        self.agent == "agy"
+    }
+
     pub(super) fn semantic_target(&self) -> io::Result<String> {
         if self.agent == "agy" {
-            return Err(io::Error::other(
-                "Antigravity has no qualified native input registration",
-            ));
+            if !self.is_live() {
+                return Err(io::Error::other("Antigravity session is no longer live"));
+            }
+            let mut peer = self.dial()?;
+            peer.set_read_timeout(Some(Duration::from_secs(7)))?;
+            runtime::write_control(&mut peer, &json!({"type":"agy_ready"}))?;
+            let ready = runtime::read_control(&mut peer)?;
+            if ready["type"] != "ok" || ready["conversation_id"] != self.semantic_thread()? {
+                return Err(io::Error::other(
+                    "Antigravity has no qualified native input registration",
+                ));
+            }
+            return Ok(codex_receipt::provider_instance("agy", &self.token));
         }
         if self.agent == "opencode" {
             self.dial()?;
@@ -747,13 +786,20 @@ impl Session {
             return self.opencode_operation_status(session, operation, "prompt", root);
         }
         let thread = self.semantic_thread()?;
-        let record = codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?;
+        let record = codex_receipt::load_for(
+            &self.dir,
+            operation,
+            session,
+            &self.token,
+            &thread,
+            &self.agent,
+        )?;
         if let Some(record) = record {
             codex_receipt::verify_binding(
                 root,
                 operation,
                 session,
-                &codex_receipt::instance(&self.token),
+                &codex_receipt::provider_instance(&self.agent, &self.token),
                 field(&record, "intent"),
             )?;
             return Ok(Some(record["receipt"].clone()));
@@ -816,13 +862,52 @@ impl Session {
                 })
             })
             || !(body["expected_turn"].is_null() || body["expected_turn"] == "")
-            || instance != codex_receipt::instance(&self.token)
-            || self.agent != "codex"
+            || instance != codex_receipt::provider_instance(&self.agent, &self.token)
+            || !matches!(self.agent.as_str(), "codex" | "agy")
+            || text.contains('\0')
         {
-            return Err(io::Error::other("invalid or stale Codex semantic request"));
+            return Err(io::Error::other(
+                "invalid or stale provider semantic request",
+            ));
         }
-        self.check_manager_input(session, operation, body)?;
+        if self.agent != "agy" {
+            self.check_manager_input(session, operation, body)?;
+        } else if !self.manager.is_null() || !body["manager_admission"].is_null() {
+            return Err(io::Error::other(
+                "ordinary Antigravity worker cannot receive manager authority",
+            ));
+        }
         let thread = self.semantic_thread()?;
+        let origin = if self.agent == "agy" {
+            let origin = providers::agy_input::origin(&body["origin"])?;
+            if self.agy_native_installation.as_deref() != origin["installation_id"].as_str() {
+                return Err(io::Error::other(
+                    "Antigravity worker was not launched for this installation",
+                ));
+            }
+            let args =
+                json!({"session":session,"session_instance":instance,"text":text,"origin":origin});
+            let supervisor = state
+                .root
+                .parent()
+                .ok_or_else(|| io::Error::other("missing supervisor root"))?;
+            crate::discord::verify_connector_worker_input(
+                supervisor,
+                state.socket.to_str().unwrap_or_default(),
+                origin["installation_id"].as_str().unwrap_or_default(),
+                "agy",
+                operation,
+                &args,
+            )?;
+            origin
+        } else {
+            Value::Null
+        };
+        let intent = if self.agent == "agy" {
+            providers::agy_input::intent(text, &origin)?
+        } else {
+            codex_receipt::hash(text)
+        };
         {
             use sha2::{Digest, Sha256};
             let digest = Sha256::digest(operation);
@@ -830,14 +915,21 @@ impl Session {
                 [usize::from(digest[0]) % state.operation_locks.len()]
             .lock()
             .unwrap();
-            codex_receipt::bind(&state.root, operation, session, instance, text)?;
+            if self.agent == "agy" {
+                codex_receipt::bind_intent(&state.root, operation, session, instance, &intent)?;
+            } else {
+                codex_receipt::bind(&state.root, operation, session, instance, text)?;
+            }
         }
-        if let Some(record) =
-            codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?
-        {
-            if record["intent"] != codex_receipt::hash(text)
-                || record["receipt"]["session"] != session
-            {
+        if let Some(record) = codex_receipt::load_for(
+            &self.dir,
+            operation,
+            session,
+            &self.token,
+            &thread,
+            &self.agent,
+        )? {
+            if record["intent"] != intent || record["receipt"]["session"] != session {
                 return Err(io::Error::other(
                     "semantic operation is already bound to another request",
                 ));
@@ -848,13 +940,17 @@ impl Session {
             self.semantic_target()?;
         }
         let mut shim = self.dial()?;
-        shim.set_read_timeout(Some(Duration::from_secs(7)))?;
+        shim.set_read_timeout(Some(Duration::from_secs(if self.agent == "agy" {
+            12
+        } else {
+            7
+        })))?;
         runtime::write_control(
             &mut shim,
             &json!({
                 "type":"semantic","operation_id":operation,"session":session,
-                "session_instance":instance,"text":text,"schedule_attempt":scheduled,
-                    "manager_admission":body["manager_admission"],"composer_send":body
+                "session_instance":instance,"text":text,"origin":origin,"schedule_attempt":scheduled,
+                "manager_admission":body["manager_admission"],"composer_send":body
             }),
         )?;
         let reply = runtime::read_control(&mut shim)?;
@@ -863,7 +959,7 @@ impl Session {
         }
         if reply["receipt"]["operation_id"] != operation || reply["receipt"]["session"] != session {
             return Err(io::Error::other(
-                "uncorrelated Codex semantic receipt; outcome unknown",
+                "uncorrelated provider semantic receipt; outcome unknown",
             ));
         }
         self.semantic_status(operation, session, &state.root)?
@@ -886,7 +982,15 @@ impl Session {
 
     pub(super) fn scheduled_state(&self) -> WorkerState {
         let exit = self.verified_exit();
-        if exit.as_ref().is_some_and(|row| row["error"].is_string()) {
+        if exit.as_ref().is_some_and(|row| row["error"].is_string())
+            || exit.is_some()
+                && self.agent == "agy"
+                && self
+                    .schedule
+                    .as_ref()
+                    .and_then(|binding| self.agy_schedule_observation(&binding.attempt_id))
+                    .is_some_and(|row| row["phase"] == "startup_refused")
+        {
             return WorkerState::StartupRefused;
         }
         if self.schedule.as_ref().is_some_and(|b| {
@@ -903,6 +1007,15 @@ impl Session {
             return WorkerState::Stopped;
         }
         if self.is_live() {
+            if self.agent == "agy"
+                && self
+                    .schedule
+                    .as_ref()
+                    .and_then(|binding| self.agy_schedule_observation(&binding.attempt_id))
+                    .is_some_and(|record| record["phase"] == "permission")
+            {
+                return WorkerState::NeedsInput;
+            }
             let status = self.observed_status.lock().unwrap();
             return if status.as_ref().is_some_and(|s| s["Interaction"] != "none") {
                 WorkerState::NeedsInput
@@ -924,7 +1037,11 @@ impl Session {
         if !worker::prompt_fits(text, true) {
             return Err("scheduled opening prompt exceeds the native frame limit".into());
         }
-        let observation = runtime::read_json(&self.dir.join("observation.json"))?;
+        let observation = match runtime::read_json(&self.dir.join("observation.json")) {
+            Ok(value) => value,
+            Err(e) if self.agent == "agy" && e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
         if observation["token"] != self.token
             || observation["schedule_ready"] != true
             || self.status_exchange(&json!({"type":"schedule_ready","attempt":attempt}))?["type"]
@@ -938,8 +1055,20 @@ impl Session {
             &self.dir.join("schedule-prompt.json"),
             &json!({
                 "operation":operation,"session":session,"attempt":attempt,
+                "conversation_id":observation["conversation_id"],
             }),
         )?;
+        if self.agent == "agy" {
+            let reply = self.status_exchange(&json!({
+                "type":"schedule_agy_prompt","attempt":attempt,"operation":operation,
+                "conversation_id":observation["conversation_id"], "text":text,
+            }))?;
+            return if reply["type"] == "ok" {
+                Ok(())
+            } else {
+                Err("Antigravity opening prompt outcome is uncertain".into())
+            };
+        }
         let reply = self.semantic_send_inner(&json!({
             "operation_id":operation,"body_version":1,"composer_send":{
                 "session":session,"session_instance":codex_receipt::instance(&self.token),"text":text,
@@ -951,7 +1080,29 @@ impl Session {
         Ok(())
     }
 
+    fn agy_schedule_observation(&self, attempt: &str) -> Option<Value> {
+        let record = runtime::read_json(&self.dir.join("observation.json")).ok()?;
+        (record["token"] == self.token && record["attempt"] == attempt).then_some(record)
+    }
+
     fn scheduled_proof(&self, attempt: &str) -> Option<Value> {
+        if self.agent == "agy" {
+            let proof = self.agy_schedule_observation(attempt)?;
+            let prompt = runtime::read_json(&self.dir.join("schedule-prompt.json")).ok()?;
+            if proof["phase"] != "finished"
+                || prompt["attempt"] != attempt
+                || prompt["session"].as_str()?.split_once('/')?.1 != self.id
+                || field(&prompt, "operation").is_empty()
+                || proof["conversation_id"] != prompt["conversation_id"]
+                || proof["operation"] != prompt["operation"]
+                || !codex_receipt::canonical_thread(field(&proof, "conversation_id"))
+            {
+                return None;
+            }
+            return Some(
+                json!({"outcome":"completed","item":"final-assistant","text":proof["text"]}),
+            );
+        }
         let proof = runtime::read_json(&self.dir.join("schedule-finish.json")).ok()?;
         let prompt = runtime::read_json(&self.dir.join("schedule-prompt.json")).ok()?;
         let session = prompt["session"].as_str()?;
