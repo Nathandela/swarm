@@ -42,3 +42,15 @@ For an independent cell-grid observer, pass `--tmux /absolute/path/to/tmux --gri
 The pinned Go oracle preserves the live acute accent in `é` but loses it in the pre-restart shim projection and on reattach. Its cell difference remains in the receipt and the continuity check exits nonzero. The Rust snapshot preserves the combining cluster; compare its cells and modes with the Go live projection. Tmux capture does not expose every terminal state, including focus and alternate-scroll reporting.
 
 The owner-approved reattach behavior retains U+0301 exactly. Run `python3 test_board.py --compare-grids GO_CAPTURE.json RUST_CAPTURE.json` to check all fixture cells and modes, including the one known difference in the pinned Go reattach grid.
+
+To capture the launch form's directory and agent focus in a real tmux PTY, add
+`--form-grid` to the tmux witness. Run it for the Go reference and a frozen Rust
+build. The receipts retain styled cells and raw terminal captures at 80×24, 40×8
+and 24×4. The third case verifies that Enter in the unreadable form leaves the
+roster empty.
+
+The `--automations` witness uses a Rust supervisor and board. It verifies a
+read-only empty catalog, seeds a far-future fixture through `schedule create`,
+and reads its list, detail and empty run history through both the CLI and the
+board. It then stops the supervisor and verifies the board and CLI report the
+disconnection. It never starts a scheduled worker.

@@ -226,12 +226,24 @@ struct Board {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Hit {
-    Row(Focus),
-    Button(char),
+    Row(Focus, bool),
+    Button {
+        key: char,
+        target: String,
+        running: bool,
+    },
+    Menu {
+        index: usize,
+        key: char,
+        target: String,
+        running: bool,
+    },
+    Attention,
 }
 
 struct Press {
     hit: Hit,
+    y: u16,
     invoke_on_release: bool,
 }
 
@@ -346,7 +358,11 @@ impl Board {
         }
         self.press = None;
         if let Some(modal) = self.modal.take() {
-            if matches!(key, Key::Escape) {
+            if matches!(key, Key::Escape)
+                || (matches!(modal, Modal::Launch(_))
+                    && !Launch::readable(geometry)
+                    && key == Key::Text('n'))
+            {
                 self.notice.clear();
                 return Action::None;
             }
@@ -510,7 +526,7 @@ impl Board {
         let (_, rows) = geometry;
         let action = match &mut modal {
             Modal::Launch(form) => {
-                if matches!(key, Key::Enter) && (!online || !usable(geometry)) {
+                if matches!(key, Key::Enter) && (!online || !Launch::readable(geometry)) {
                     Action::None
                 } else {
                     match form.update(key, geometry) {
@@ -758,23 +774,59 @@ impl Board {
 
     fn hit(&self, event: Mouse, geometry: (u16, u16)) -> Option<Hit> {
         let (cols, rows) = geometry;
-        if event.x > cols || event.y < 2 || event.y > rows {
+        if event.x == 0 || event.x > cols || event.y == 0 || event.y > rows {
             return None;
+        }
+        if let Some(Modal::More {
+            target,
+            running: was_running,
+            top,
+            ..
+        }) = &self.modal
+        {
+            if !(2..rows).contains(&event.y) {
+                return None;
+            }
+            let index = *top + usize::from(event.y - 2);
+            let key = self.menu(target, *was_running).get(index)?.1?;
+            return Some(Hit::Menu {
+                index,
+                key,
+                target: target.clone(),
+                running: self.by_id(target).is_some_and(running),
+            });
+        }
+        if event.y == 1 {
+            return Some(Hit::Attention);
         }
         if event.y == rows {
             return self
                 .button_view(cols)
                 .into_iter()
                 .find(|(_, _, left, right)| (*left..=*right).contains(&event.x))
-                .map(|(_, button, _, _)| Hit::Button(button));
+                .map(|(_, key, _, _)| Hit::Button {
+                    key,
+                    target: self.selected.clone(),
+                    running: self.row().is_some_and(running),
+                });
         }
         self.display_rows()
             .get(self.top + usize::from(event.y - 2))
-            .map(|row| Hit::Row(row.focus()))
+            .map(|row| {
+                Hit::Row(
+                    row.focus(),
+                    matches!(row, Row::Session(row) if running(row)),
+                )
+            })
     }
 
     fn mouse(&mut self, event: Mouse, geometry: (u16, u16), online: bool) -> Action {
-        if self.modal.is_some() || !usable(geometry) {
+        if self
+            .modal
+            .as_ref()
+            .is_some_and(|modal| !matches!(modal, Modal::More { .. }))
+            || !usable(geometry)
+        {
             self.press = None;
             return Action::None;
         }
@@ -784,18 +836,28 @@ impl Board {
             MouseAction::WheelUp | MouseAction::WheelDown => {
                 self.press = None;
                 if (2..geometry.1).contains(&event.y) {
-                    self.top = if event.action == MouseAction::WheelUp {
-                        self.top.saturating_sub(3)
+                    let down = event.action == MouseAction::WheelDown;
+                    if let Some(Modal::More {
+                        target, running, ..
+                    }) = &self.modal
+                    {
+                        let max = self
+                            .menu(target, *running)
+                            .len()
+                            .saturating_sub(capacity(geometry.1));
+                        if let Some(Modal::More { top, .. }) = &mut self.modal {
+                            *top = scroll(*top, down).min(max);
+                        }
                     } else {
-                        self.top + 3
-                    };
-                    self.clamp_top(geometry.1);
+                        self.top = scroll(self.top, down);
+                        self.clamp_top(geometry.1);
+                    }
                 }
             }
             MouseAction::Press => {
                 if let Some(hit) = hit {
                     let invoke_on_release = match &hit {
-                        Hit::Row(focus @ Focus::Session(_)) => {
+                        Hit::Row(focus @ Focus::Session(_), _) => {
                             let already = self.current_focus().as_ref() == Some(focus);
                             self.set_focus(focus.clone());
                             already
@@ -804,6 +866,7 @@ impl Board {
                     };
                     self.press = Some(Press {
                         hit,
+                        y: event.y,
                         invoke_on_release,
                     });
                 } else {
@@ -813,18 +876,19 @@ impl Board {
             MouseAction::Release => {
                 if let Some(press) = self.press.take()
                     && press.invoke_on_release
+                    && press.y == event.y
                     && hit == Some(press.hit.clone())
                 {
                     match press.hit {
-                        Hit::Row(Focus::Session(id)) => {
+                        Hit::Row(Focus::Session(id), _) => {
                             return self.command(Key::Enter, &id, geometry, online);
                         }
-                        Hit::Row(Focus::Section(section)) => {
+                        Hit::Row(Focus::Section(section), _) => {
                             let collapse =
                                 !self.folded.contains(&(self.layout.group, section.clone()));
                             self.fold(Some(section), collapse, geometry.1);
                         }
-                        Hit::Button(button) => {
+                        Hit::Button { key: button, .. } => {
                             let key = match button {
                                 '⏎' => Key::Enter,
                                 'x' => Key::CtrlX,
@@ -832,6 +896,13 @@ impl Board {
                             };
                             return self.update(key, geometry, online);
                         }
+                        Hit::Menu { index, .. } => {
+                            if let Some(Modal::More { selected, .. }) = &mut self.modal {
+                                *selected = index;
+                            }
+                            return self.update(Key::Enter, geometry, online);
+                        }
+                        Hit::Attention => self.reveal_attention(geometry.1),
                     }
                 }
             }
@@ -1059,6 +1130,14 @@ fn form_header(output: &mut String, cols: u16, title: &str) {
     line(output, 1, cols, "\x1b[38;2;142;180;230;1m", title);
 }
 
+fn scroll(offset: usize, down: bool) -> usize {
+    if down {
+        offset.saturating_add(1)
+    } else {
+        offset.saturating_sub(1)
+    }
+}
+
 fn running(row: &Value) -> bool {
     field(&row["status"], "Process") == "running"
 }
@@ -1268,6 +1347,42 @@ mod tests {
             panic!("confirmation did not submit");
         };
         assert_eq!(request["session_id"], "id-a");
+    }
+
+    #[test]
+    fn mouse_release_cannot_redirect_open_after_selection_changes() {
+        let mut board = Board {
+            rows: vec![
+                json!({"id":"a","name":"amber","group":"working","status":{"Process":"running"}}),
+                json!({"id":"b","name":"violet","group":"working","status":{"Process":"running"}}),
+            ],
+            ..Board::default()
+        };
+        board.rebuild_sections();
+        let geometry = (80, 24);
+        let (_, _, x, _) = board
+            .button_view(80)
+            .into_iter()
+            .find(|(_, key, ..)| *key == '⏎')
+            .unwrap();
+        let event = Mouse {
+            x,
+            y: 24,
+            action: MouseAction::Press,
+        };
+        board.update(Key::Mouse(event), geometry, true);
+        board.set_focus(Focus::Session("b".into()));
+        let release = Mouse {
+            action: MouseAction::Release,
+            ..event
+        };
+        assert!(matches!(
+            board.update(Key::Mouse(release), geometry, true),
+            Action::None
+        ));
+        board.update(Key::Mouse(event), geometry, true);
+        assert!(matches!(board.update(Key::Mouse(release), geometry, true),
+            Action::Attach { id, .. } if id == "b"));
     }
 
     #[test]

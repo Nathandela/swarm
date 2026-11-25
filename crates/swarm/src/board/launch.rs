@@ -15,10 +15,35 @@ enum Detection {
     Disabled(String),
 }
 
+#[derive(Default)]
 struct Completion {
-    seed: String,
     choices: Vec<String>,
-    next: usize,
+    ghost: String,
+}
+
+impl Completion {
+    fn from_prefix(prefix: &str) -> Self {
+        let choices = directories(prefix);
+        let ghost = longest_common_path(&choices)
+            .strip_prefix(prefix)
+            .unwrap_or("")
+            .to_owned();
+        Self { choices, ghost }
+    }
+}
+
+fn longest_common_path(paths: &[String]) -> &str {
+    let Some(first) = paths.first() else {
+        return "";
+    };
+    let Some(last) = paths.last() else { return "" };
+    let bytes = first
+        .chars()
+        .zip(last.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum();
+    &first[..bytes]
 }
 
 pub(super) struct Launch {
@@ -102,15 +127,16 @@ impl Launch {
         }
     }
 
+    pub(super) fn readable((cols, rows): (u16, u16)) -> bool {
+        cols >= 32 && rows >= 8
+    }
+
     pub(super) fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> io::Result<Action> {
         self.update_detection();
         let extras = self.extra_fields();
         let count = 6 + extras;
         let directory_completion =
             self.focus == 0 && matches!(key, Key::Left | Key::Right | Key::Tab);
-        if !directory_completion {
-            self.completion = None;
-        }
         if !matches!(key, Key::Enter) {
             self.create_cwd = None;
         }
@@ -137,7 +163,13 @@ impl Launch {
                 self.worktree = !self.worktree;
             }
             key => match self.focus {
-                0 => self.cwd.apply(key),
+                0 => {
+                    let current = self.cwd.text.clone();
+                    self.cwd.apply(key);
+                    if self.cwd.text != current {
+                        self.completion = Some(Completion::from_prefix(&self.cwd.text));
+                    }
+                }
                 1 => self.name.apply(key),
                 2 => self.tag.apply(key),
                 4 => self.model.apply(key),
@@ -164,23 +196,27 @@ impl Launch {
     }
 
     fn complete(&mut self, forward: bool) {
-        let completion = self.completion.get_or_insert_with(|| Completion {
-            seed: self.cwd.text.clone(),
-            choices: directories(&self.cwd.text),
-            next: 0,
-        });
-        let len = completion.choices.len();
-        if len == 0 {
+        let completion = self
+            .completion
+            .get_or_insert_with(|| Completion::from_prefix(&self.cwd.text));
+        if forward && !completion.ghost.is_empty() {
+            self.cwd = Editor::new(&format!("{}{}", self.cwd.text, completion.ghost));
+            self.completion = Some(Completion::from_prefix(&self.cwd.text));
             return;
         }
-        // A cycle includes the user's original prefix.
-        let count = len + 1;
-        completion.next = (completion.next + if forward { 1 } else { count - 1 }) % count;
-        self.cwd = Editor::new(if completion.next == 0 {
-            &completion.seed
-        } else {
-            &completion.choices[completion.next - 1]
-        });
+        let len = completion.choices.len();
+        if len < 2 {
+            return;
+        }
+        let index = completion
+            .choices
+            .iter()
+            .position(|path| path == &self.cwd.text)
+            .map_or_else(
+                || if forward { 0 } else { len - 1 },
+                |index| (index + if forward { 1 } else { len - 1 }) % len,
+            );
+        self.cwd = Editor::new(&completion.choices[index]);
     }
 
     fn submit(&mut self, cols: u16, rows: u16) -> io::Result<Action> {
@@ -251,15 +287,55 @@ impl Launch {
     }
 
     pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
-        form_header(output, cols, "New session");
         let agent = PROVIDERS[self.agent];
-        let state = match &self.detected[self.agent] {
-            Detection::Checking => "checking",
-            Detection::Ready(version) => version,
-            Detection::Disabled(reason) => reason,
+        let compact = rows < 12 || cols < 60;
+        let blocked = !Self::readable((cols, rows));
+        let issue = match &self.detected[self.agent] {
+            Detection::Checking => Some("checking native executable"),
+            Detection::Disabled(reason) => Some(reason.as_str()),
+            Detection::Ready(_) => None,
         };
-        let agent_label = format!("‹ {agent} › · {state}");
-        let on = |value| if value { "Yes" } else { "No" };
+        if blocked {
+            form_header(output, cols, "Resize to 32×8");
+            let label = match self.focus {
+                0 => format!(
+                    "▌ directory   {}",
+                    self.cwd.visible(cols.saturating_sub(14).max(1)).0
+                ),
+                1 => format!("▌ name        {}", self.name.text),
+                2 => format!("▌ tag         {}", self.tag.text),
+                _ => format!("▌ agent       ◂ {agent} ▸"),
+            };
+            line(output, 2, cols, "", &label);
+            line(output, 3, cols, "", "Esc back / n deny");
+            line(output, rows, cols, "\x1b[2m", "esc back");
+            return;
+        }
+        let title = if compact {
+            format!("New session · {agent}")
+        } else {
+            "swarm · new session".into()
+        };
+        form_header(output, cols, &title);
+        let picker = if compact {
+            format!("◂ {agent} ▸")
+        } else {
+            let entries = PROVIDERS
+                .iter()
+                .zip(&self.detected)
+                .map(|(name, state)| {
+                    let marker = match state {
+                        Detection::Ready(_) => "●",
+                        Detection::Checking => "…",
+                        Detection::Disabled(_) => "✕",
+                    };
+                    format!("{marker} {name}")
+                })
+                .collect::<Vec<_>>()
+                .join("   ");
+            format!("◂ {entries} ▸")
+        };
+        let on = |value| if value { "[x] space" } else { "[ ] space" };
         let mode = if agent == "codex" {
             [
                 "Default",
@@ -271,12 +347,33 @@ impl Launch {
             ["Default", "accept-edits", "auto", "plan"][self.execution]
         };
         let permission = ("Skip permission prompts", on(self.skip_permissions));
+        let available_completion = self
+            .completion
+            .as_ref()
+            .is_some_and(|c| !c.ghost.is_empty() || c.choices.len() > 1);
+        let directory = if self.focus == 0 {
+            self.cwd.visible(cols.saturating_sub(14).max(1)).0
+        } else {
+            self.cwd.text.clone()
+        };
+        let default = |value: &str, fallback: &'static str| {
+            if value.is_empty() {
+                fallback.to_owned()
+            } else {
+                value.to_owned()
+            }
+        };
+        let name = default(&self.name.text, "(optional · defaults to agent-dir)");
+        let tag = default(&self.tag.text, "(optional · groups the board under o)");
+        let model = default(&self.model.text, "(default)");
+        let prompt = default(&self.prompt.text, "(optional)");
+        let worktree = format!("{} · isolate in a git worktree", on(self.worktree));
         let mut fields = vec![
-            ("Directory", self.cwd.text.as_str()),
-            ("Name", self.name.text.as_str()),
-            ("Tag", self.tag.text.as_str()),
-            ("Agent", agent_label.as_str()),
-            ("Model", self.model.text.as_str()),
+            ("directory", directory.as_str()),
+            ("name", name.as_str()),
+            ("tag", tag.as_str()),
+            ("agent", picker.as_str()),
+            ("Model", model.as_str()),
         ];
         match agent {
             "codex" => fields.push(("Sandbox", mode)),
@@ -284,27 +381,50 @@ impl Launch {
             "opencode" => fields.push(("OpenCode agent", &self.opencode_agent.text)),
             _ => fields.push(permission),
         }
-        fields.extend([
-            ("Prompt", self.prompt.text.as_str()),
-            ("Worktree", on(self.worktree)),
-        ]);
-        let capacity = usize::from(rows.saturating_sub(2));
-        let start = (self.focus + 1).saturating_sub(capacity);
-        for (index, (label, value)) in fields.iter().enumerate().skip(start).take(capacity) {
-            let active = index == self.focus;
-            let mark = if active { "▌" } else { " " };
+        fields.extend([("prompt", prompt.as_str()), ("worktree", worktree.as_str())]);
+        let mut order: Vec<usize> = (0..fields.len()).collect();
+        let first_row = if compact { 2 } else { 3 };
+        if compact && self.focus < order.len() {
+            order.remove(self.focus);
+            order.insert(0, self.focus);
+        }
+        let capacity = usize::from(rows.saturating_sub(first_row));
+        let focused_line = order
+            .iter()
+            .position(|&index| index == self.focus)
+            .unwrap_or(0);
+        let start = (focused_line + 1).saturating_sub(capacity);
+        for (offset, &index) in order.iter().skip(start).take(capacity).enumerate() {
+            let (label, value) = fields[index];
+            let mark = if index == self.focus { "▌" } else { " " };
             line(
                 output,
-                (index - start) as u16 + 2,
+                offset as u16 + first_row,
                 cols,
-                if active { "\x1b[1m" } else { "" },
-                &format!("{mark} {label}  {value}"),
+                "",
+                &format!("{mark} {label:<12}{value}"),
             );
         }
-        let hint = if self.focus == 0 {
-            "↑↓ field · tab/←→ complete path · enter launch · esc cancel"
+        if self.focus == 3 || !compact {
+            let status = match &self.detected[self.agent] {
+                Detection::Ready(version) if !compact => Some(format!("{agent} {version}")),
+                _ => issue.map(|reason| format!("{agent} · {reason}")),
+            };
+            if let Some(status) = status {
+                let bottom = first_row + order.len().saturating_sub(start) as u16;
+                if bottom < rows {
+                    line(output, bottom, cols, "\x1b[2m", &status);
+                }
+            }
+        }
+        let hint = if compact {
+            "esc cancel · enter launch · ↑↓ next"
+        } else if self.focus == 0 && available_completion {
+            "tab/←→ complete · ↑↓ next · enter launch · esc cancel"
+        } else if self.focus == 3 {
+            "arrows change · ↑↓ next · enter launch · esc cancel"
         } else {
-            "↑↓ field · ←→ change · enter launch · esc cancel"
+            "↑↓ next · enter launch · esc cancel"
         };
         line(output, rows, cols, "\x1b[2m", hint);
     }
@@ -353,4 +473,17 @@ fn directories(raw: &str) -> Vec<String> {
         .collect();
     matches.sort_unstable();
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_prefix_stops_on_a_rune_boundary() {
+        let choices = ["/work/αα/".to_owned(), "/work/αβ/".to_owned()];
+        assert_eq!(longest_common_path(&choices), "/work/α");
+        assert_eq!(longest_common_path(&[]), "");
+        assert_eq!(longest_common_path(&choices[..1]), "/work/αα/");
+    }
 }

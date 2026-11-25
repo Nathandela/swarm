@@ -25,7 +25,7 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
-def witness(root, tmux=None, cycle=False, automations=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -97,7 +97,7 @@ def witness(root, tmux=None, cycle=False, automations=False):
             if fresh:
                 board.wait_bytes(b"swarm")
                 board.send(b"n")
-                board.wait_bytes(b"New session")
+                board.wait_bytes(b"new session")
                 board.wait_bytes(b"2.1.100")
                 board.send(b"\x15" + os.fsencode(cwd / "qual") + b"\t")
                 board.wait_bytes(b"/qualified/")
@@ -193,7 +193,10 @@ def witness(root, tmux=None, cycle=False, automations=False):
         return
 
     if tmux is not None:
-        grid_witness(root, cli, roster, start, tmux)
+        if form_grid:
+            launch_grid_witness(root, roster, start, tmux)
+        else:
+            grid_witness(root, cli, roster, start, tmux)
         return
 
     (cwd / "qualified").mkdir()
@@ -408,7 +411,51 @@ def grid_witness(root, cli, roster, start, tmux):
     daemon.wait(timeout=5)
 
 
-def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False):
+def launch_grid_witness(root, roster, start, tmux):
+    """Resolve launch layout in a real outer terminal at the reference breakpoints."""
+    command = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
+    def run(*argv):
+        proc = subprocess.run([*command, *argv], env=p.environment(root), cwd=root / "work",
+                              capture_output=True, timeout=4)
+        assert proc.returncode == 0, (argv, proc.stderr)
+        return proc.stdout
+
+    def frame(cols, rows):
+        raw = run("capture-pane", "-pe", "-S", "0", "-E", str(rows - 1), "-t", "form:0.0")
+        return {"ansi_base64": base64.b64encode(raw).decode(),
+                "cells": resolve_cells(raw, cols, rows)}
+
+    def landmark(fragments, cols, rows, *, settled=False):
+        def observed():
+            snapshot = frame(cols, rows)
+            text = "\n".join("".join(cell[0] for cell in row) for row in snapshot["cells"]).lower()
+            return snapshot if (any(fragment in text for fragment in fragments)
+                                and (not settled or "claude" in text)) else None
+        return p.wait_for(observed, f"{cols}x{rows} {fragments!r}")
+
+    daemon = start()
+    frames = []
+    for cols, rows in ((80, 24), (40, 8), (24, 4)):
+        run("new-session", "-d", "-s", "form", "-x", str(cols), "-y", str(rows),
+            "-c", root / "work", root / "bin/board")
+        landmark(("swarm", "(n)", "no sessions"), cols, rows)
+        run("send-keys", "-t", "form:0.0", "n")
+        compact_block = cols < 32 or rows < 8
+        directory = landmark(("resize to 32",) if compact_block else ("▌ directory",), cols, rows)
+        run("send-keys", "-t", "form:0.0", "Down", "Down", "Down")
+        agent = landmark(("▌ agent",), cols, rows, settled=True)
+        if compact_block:
+            run("send-keys", "-t", "form:0.0", "Enter")
+            landmark(("resize to 32",), cols, rows)
+            assert roster() == ([],), "compact launch unexpectedly created a session"
+        frames.append({"cols": cols, "rows": rows, "directory": directory, "agent": agent})
+        run("kill-session", "-t", "form")
+    daemon.terminate()
+    daemon.wait(timeout=5)
+    p.write_json(root / "grid.json", {"form_frames": frames, "first_divergence": None})
+
+
+def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False):
     root = Path(tempfile.mkdtemp(prefix="pb-", dir=Path("/tmp").resolve()))
     child = driver = None
     previous = {}
@@ -429,6 +476,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--cycle")
         elif tmux is not None:
             command.append(tmux)
+            if form_grid:
+                command.append("--form-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
@@ -456,18 +505,19 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("owner automation list, detail, history and disconnect" if automations else
+    exercise = ("comparative launch-form grids" if form_grid else
+                "owner automation list, detail, history and disconnect" if automations else
                 "running-session cycling" if cycle else "board launch, attach and live reattach")
-    print(f"{exercise} passed; cleanup {cleanup}")
+    print(f"{exercise} {'captured' if form_grid else 'passed'}; cleanup {cleanup}")
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
         compare_grid_receipts(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) in (3, 4) and sys.argv[1] == "_inside":
-        mode = sys.argv[3] if len(sys.argv) == 4 else None
+    elif len(sys.argv) in (3, 4, 5) and sys.argv[1] == "_inside":
+        mode = sys.argv[3] if len(sys.argv) >= 4 else None
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
-                mode == "--cycle", mode == "--automations")
+                mode == "--cycle", mode == "--automations", len(sys.argv) == 5)
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -477,7 +527,11 @@ if __name__ == "__main__":
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
+        parser.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations)
+        if args.form_grid and not args.tmux:
+            parser.error("--form-grid requires --tmux")
+        run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
+            args.form_grid)
