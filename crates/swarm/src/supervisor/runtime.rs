@@ -75,6 +75,29 @@ pub(crate) fn lock(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+pub(crate) fn lock_held(path: &Path) -> io::Result<bool> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    validate_file(&file)?;
+    // SAFETY: the live descriptor is released at the end of this read-only probe.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(false);
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::WouldBlock {
+        Ok(true)
+    } else {
+        Err(error)
+    }
+}
+
 fn uid() -> u32 {
     // geteuid requires no pointers and has no process side effects.
     unsafe { libc::geteuid() }

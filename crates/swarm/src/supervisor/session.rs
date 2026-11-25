@@ -699,6 +699,21 @@ impl Session {
             .filter(|_| owner_gone(&self.dir, &self.token).unwrap_or(false))
     }
 
+    pub(super) fn confirm_idle_observation(&self) -> io::Result<bool> {
+        let _live = self.dial()?;
+        let record = runtime::read_json(&self.dir.join("observation.json"))?;
+        let status = &record["status"];
+        Ok(record["token"] == self.token
+            && status["Process"] == "running"
+            && status["Turn"] == "idle"
+            && status["Interaction"] == "none"
+            && !status.get("Attention").is_some_and(|value| value != false)
+            && !status
+                .get("ObservationGap")
+                .is_some_and(|value| value != false)
+            && self.observed_status.lock().unwrap().as_ref() == Some(status))
+    }
+
     pub(super) fn workspace_unconfirmed(&self) -> bool {
         self.verified_exit().is_none()
     }

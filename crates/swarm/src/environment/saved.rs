@@ -170,7 +170,16 @@ pub(crate) fn save(root: &std::path::Path) -> std::io::Result<()> {
 
 pub(crate) fn restore(root: &std::path::Path) -> std::io::Result<Vec<String>> {
     use std::{collections::BTreeMap, io};
-    let text=private_text(&root.join("daemon.env")).map_err(|_|io::Error::other("scheduled launch has no saved agent environment; open Swarm interactively on this host first"))?;
+    let text = private_text(&root.join("daemon.env")).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            io::Error::new(
+                error.kind(),
+                "no saved daemon environment; open Swarm interactively on this host first",
+            )
+        } else {
+            error
+        }
+    })?;
     let mut unique = BTreeMap::new();
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
@@ -215,8 +224,9 @@ pub(crate) fn restore(root: &std::path::Path) -> std::io::Result<Vec<String>> {
         }
     }
     if unique.is_empty() {
-        return Err(io::Error::other(
-            "scheduled launch has no saved agent environment; open Swarm interactively on this host first",
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "the saved daemon environment is empty; open Swarm interactively on this host first",
         ));
     }
     Ok(unique
