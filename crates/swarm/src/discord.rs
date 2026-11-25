@@ -17,6 +17,12 @@ use std::path::Path;
 
 const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
 
+pub(crate) fn native_input_enabled() -> bool {
+    Place::resolve(None)
+        .and_then(|place| place.load())
+        .is_ok_and(|config| config.enabled())
+}
+
 pub(crate) fn run(args: &[String]) -> u8 {
     if args
         .first()

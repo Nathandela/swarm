@@ -131,10 +131,31 @@ pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
     if unsafe { libc::kill(-(child.id() as i32), signal) } == -1 {
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::ESRCH) {
+            #[cfg(target_os = "macos")]
+            if err.raw_os_error() == Some(libc::EPERM) && zombie_only_group(child)? {
+                return Ok(());
+            }
             return Err(err);
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn zombie_only_group(child: &Child) -> io::Result<bool> {
+    if !child_exited(child)? {
+        return Ok(false);
+    }
+    // Darwin returns EPERM when the only group member is the unreaped leader.
+    let mut members = [0; 2];
+    let count = unsafe {
+        libc::proc_listpgrppids(
+            child.id() as libc::pid_t,
+            members.as_mut_ptr().cast(),
+            std::mem::size_of_val(&members) as libc::c_int,
+        )
+    };
+    Ok(count == 1 && members[0] == child.id() as libc::pid_t)
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};

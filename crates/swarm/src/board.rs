@@ -377,9 +377,34 @@ impl Board {
                     }
                     self.notice = if linked_dispatcher(row) {
                         "Continue this dispatcher in its Discord thread".into()
+                    } else if field(row, "agent") == "hermes"
+                        && !field(row, "conversation_id").is_empty()
+                    {
+                        if row["status"]["NativeWorkUnknown"] == true {
+                            "Hermes viewer ended · r resume".into()
+                        } else {
+                            "Session ended · r resume · ctrl+x delete".into()
+                        }
                     } else {
                         "Session ended · ctrl+x delete".into()
                     };
+                }
+            }
+            Key::Text('r') => {
+                if let Some(row) = self.by_id(id).filter(|row| {
+                    field(row, "agent") == "hermes"
+                        && !running(row)
+                        && !field(row, "conversation_id").is_empty()
+                }) {
+                    let env: Vec<_> = std::env::vars_os()
+                        .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
+                        .collect();
+                    return Action::Request(
+                        json!({"op":"launch","launch":{
+                            "agent":"hermes","cwd":row["cwd"],"name":name(row),"env":env,"options":{"resume_from":id}
+                        }}),
+                        "launch",
+                    );
                 }
             }
             Key::Text('e' | 't') => {

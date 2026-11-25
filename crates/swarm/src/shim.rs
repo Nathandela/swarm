@@ -3,7 +3,7 @@ mod pty;
 mod screen;
 
 use crate::ipc::{field, wire};
-use crate::providers::{self, codex_receipt};
+use crate::providers::{self, codex_receipt, hermes::native};
 use crate::supervisor::runtime::{self, DATA_IN, DATA_OUT, SHIM_VERSION, SNAPSHOT};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -75,7 +75,9 @@ fn serve(dir: &Path) -> io::Result<()> {
     let config_file = dir.join("session.json");
     let config = runtime::read_json(&config_file)?;
     let token = field(&config, "token");
-    if config["schema"] != 1 || !runtime::valid_id(token) {
+    let hermes_native =
+        config["provider"]["name"] == "hermes" && config["provider"]["mode"] == "shared-native";
+    if config["schema"] != (if hermes_native { 2 } else { 1 }) || !runtime::valid_id(token) {
         return Err(io::Error::other("incompatible session reservation"));
     }
     let bootstrap = runtime::read_control(&mut io::stdin().lock())?;
@@ -91,7 +93,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     let listener = runtime::bind(&socket)?;
     let provider = &config["provider"];
     let executable = Path::new(field(provider, "executable"));
-    let argv: Vec<_> = bootstrap["argv"]
+    let mut argv: Vec<_> = bootstrap["argv"]
         .as_array()
         .and_then(|args| args.iter().map(Value::as_str).collect::<Option<_>>())
         .ok_or_else(|| io::Error::other("malformed transient launch arguments"))?;
@@ -109,7 +111,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         path
     };
     let mut command = Command::new(executable);
-    let environment = runtime::launch_env(&Value::Null);
+    let mut environment = runtime::launch_env(&Value::Null);
+    if provider["name"] == "hermes" {
+        environment.extend(native::origins(&Value::Null, hermes_native)?);
+    }
     command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)));
@@ -129,8 +134,11 @@ fn serve(dir: &Path) -> io::Result<()> {
     pty::arm_shutdown()?;
     let mut backend = None;
     let mut channel = None;
+    let mut hermes = None;
+    let pid = std::process::id();
+    let mut viewer = Vec::<String>::new();
     let (mut child, master) = (|| {
-        if !matches!(field(provider, "name"), "claude" | "codex")
+        if !matches!(field(provider, "name"), "claude" | "codex" | "hermes")
             || providers::identity(executable)? != provider["identity"]
         {
             return Err(io::Error::other(
@@ -152,7 +160,47 @@ fn serve(dir: &Path) -> io::Result<()> {
                 ));
             }
         }
-        command.args(argv);
+        if hermes_native {
+            if bootstrap["hermes"].is_null()
+                || !providers::hermes::native_version(field(provider, "version"))
+            {
+                return Err(io::Error::other("invalid Hermes shared-native launch plan"));
+            }
+            let plan = &bootstrap["hermes"];
+            let cwd = Path::new(working_dir).canonicalize()?;
+            let binding = native::prepare(
+                executable,
+                &cwd,
+                field(&config, "id"),
+                &plan["options"],
+                &environment,
+                &plan["retained"],
+            )?;
+            let origins: std::collections::BTreeMap<_,_> = environment.iter().filter(|(key,_)|
+                native::NORMAL_ORIGINS.contains(&key.as_str())).map(|(key,value)| (key,value)).collect();
+            let descriptor = json!({"worker_id":config["id"],"token":token,"shim_pid":pid,"origins":origins,
+                "shim_birth":runtime::birth(pid)?,"generation":runtime::random_id()?,
+                "provider_version":provider["version"],"binding":binding.0});
+            runtime::write_json(&dir.join(native::DESCRIPTOR), &descriptor)?;
+            viewer.extend([
+                "chat".into(),
+                "--tui".into(),
+                "--resume".into(),
+                binding.id().into(),
+            ]);
+            if !field(plan, "initial_prompt").is_empty() {
+                viewer.extend(["-q".into(), field(plan, "initial_prompt").into()]);
+            }
+            command.env("HERMES_HOME", field(&binding.0, "home"));
+            if providers::identity(executable)? != provider["identity"] {
+                return Err(io::Error::other(
+                    "Hermes executable changed before viewer exec",
+                ));
+            }
+            hermes = Some((binding, descriptor));
+            argv.clear();
+        }
+        command.args(argv).args(&viewer);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
@@ -162,7 +210,6 @@ fn serve(dir: &Path) -> io::Result<()> {
         );
         let _ = fs::remove_file(&socket);
     })?;
-    let pid = std::process::id();
     if let Err(err) = (|| {
         runtime::write_json(
             &dir.join("owner.json"),
@@ -198,11 +245,35 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let pending = (state.provider == "codex" && channel.is_none())
+    let pending = (matches!(state.provider.as_str(), "codex" | "hermes")
+        && channel.is_none()
+        && !hermes_native)
         .then(|| Arc::new((Mutex::new(None), Condvar::new())));
     if let Some(pending) = pending.clone() {
         let state = state.clone();
-        thread::spawn(move || codex_status_writer(&state, &pending));
+        thread::spawn(move || classic_status_writer(&state, &pending));
+    }
+    if let Some((binding, _)) = &hermes {
+        let state = state.clone();
+        let binding = binding.clone();
+        thread::spawn(move || {
+            let mut last = Value::Null;
+            loop {
+                let status = binding.inspect().unwrap_or_else(|_| json!({"Process":"running","Turn":"unknown","Interaction":"error","Attention":true}));
+                if status != last
+                    && runtime::write_json(
+                        &state.dir.join("observation.json"),
+                        &json!({
+                            "token":state.token,"conversation_id":binding.id(),"status":status
+                        }),
+                    )
+                    .is_ok()
+                {
+                    last = status;
+                }
+                thread::sleep(Duration::from_secs(2));
+            }
+        });
     }
     if let Some(channel) = channel {
         let (cwd, dir, token) = (
@@ -239,6 +310,12 @@ fn serve(dir: &Path) -> io::Result<()> {
         thread::sleep(Duration::from_millis(40));
     };
     drop(backend);
+    if let Some((binding, descriptor)) = hermes {
+        let stopped = runtime::read_json(&dir.join("hermes-stop.json"))
+            .is_ok_and(|record| record == descriptor)
+            && binding.stop().is_ok();
+        let _ = binding.detach(stopped);
+    }
     runtime::write_json(
         &dir.join("exit.json"),
         &json!({
@@ -263,7 +340,7 @@ fn terminate(state: &State) -> io::Result<()> {
 
 type PendingStatus = (Mutex<Option<Value>>, Condvar);
 
-fn codex_status_writer(state: &State, pending: &PendingStatus) {
+fn classic_status_writer(state: &State, pending: &PendingStatus) {
     loop {
         let mut slot = pending.0.lock().unwrap();
         while slot.is_none() {
@@ -275,6 +352,7 @@ fn codex_status_writer(state: &State, pending: &PendingStatus) {
             &state.dir.join("observation.json"),
             &json!({
                 "token": state.token, "status": status,
+                "conversation_id": state.observations.lock().unwrap().conversation,
             }),
         );
     }
@@ -284,6 +362,7 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
     let mut bytes = [0; 8192];
     let mut master = &state.master;
     let mut observed = None;
+    let mut classic_tail = Vec::new();
     loop {
         let n = match master.read(&mut bytes) {
             Ok(0) => break,
@@ -303,12 +382,39 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
             let _ = sub.conn.shutdown(Shutdown::Both);
             screen.subscriber = None;
         }
-        let status = pending
-            .as_ref()
-            .and_then(|_| providers::codex::terminal_status(screen.parser.screen()));
+        let mut identity_changed = false;
+        let status = pending.as_ref().and_then(|_| {
+            let screen = screen.parser.screen();
+            if state.provider != "hermes" {
+                return providers::codex::terminal_status(screen);
+            }
+            let (_, width) = screen.size();
+            let width = width.get();
+            let rows: Vec<_> = screen.rows(0, width).collect();
+            let mut observation = state.observations.lock().unwrap();
+            if observation.conversation.is_none() {
+                let bytes = &bytes[..n];
+                let remove = (classic_tail.len() + bytes.len()).saturating_sub(64 * 1024);
+                classic_tail.drain(..remove);
+                classic_tail.extend_from_slice(bytes);
+                observation.conversation =
+                    providers::hermes::classic_observation(&classic_tail, &rows);
+                identity_changed = observation.conversation.is_some();
+                if identity_changed {
+                    classic_tail = Vec::new();
+                }
+            }
+            providers::hermes::grid(&rows, width)
+        });
         drop(screen);
         if let Some(pending) = &pending
-            && let Some(status) = status.filter(|status| observed.as_ref() != Some(status))
+            && let Some(status) = if identity_changed {
+                status.or_else(|| observed.clone()).or_else(|| {
+                    Some(json!({"Process":"running", "Turn":"unknown","Interaction":"none"}))
+                })
+            } else {
+                status.filter(|status| observed.as_ref() != Some(status))
+            }
         {
             observed = Some(status.clone());
             *pending.0.lock().unwrap() = Some(status);

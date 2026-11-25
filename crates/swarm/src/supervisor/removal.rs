@@ -47,6 +47,11 @@ fn resume(root: &Path, id: &str) -> io::Result<bool> {
         }
     } else {
         let meta = runtime::read_json(&path.join("session.json"))?;
+        if meta["provider"]["mode"] == "shared-native" || meta["schema"] != 1 {
+            return Err(io::Error::other(
+                "retained native-session deletion is unproven",
+            ));
+        }
         let token = field(&meta, "token");
         super::session::exit_report(&path, token)?;
         if meta["id"] != id

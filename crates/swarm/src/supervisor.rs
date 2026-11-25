@@ -99,8 +99,30 @@ impl State {
     }
 
     fn reserve(&self, request: &Value) -> io::Result<Arc<Session>> {
-        let prepared = Session::prepare(request)?;
+        let source = match request["launch"]["options"]["resume_from"].as_str() {
+            Some(source) if !source.is_empty() => {
+                let qualified = if source.contains('/') {
+                    source.to_owned()
+                } else {
+                    format!("{}/{}", self.endpoint, source)
+                };
+                Some(self.session(&json!({"session_id":qualified}))?)
+            }
+            Some(_) => return Err(io::Error::other("resume_from requires a saved session")),
+            None => None,
+        };
+        let prepared = Session::prepare(request, source.as_deref())?;
         let _reservation = self.launch_gate.lock().unwrap();
+        if source.as_ref().is_some_and(|source| {
+            !self
+                .sessions
+                .read()
+                .unwrap()
+                .get(&source.id)
+                .is_some_and(|stored| Arc::ptr_eq(stored, source))
+        }) {
+            return Err(io::Error::other("resume source is no longer retained"));
+        }
         if self
             .sessions
             .read()
@@ -113,6 +135,9 @@ impl State {
             return Err(io::Error::other("session limit reached"));
         }
         let session = Arc::new(Session::reserve(&self.root, prepared)?);
+        if let Some(source) = source {
+            source.hermes_mark_successor(&session.id)?;
+        }
         self.sessions
             .write()
             .unwrap()
@@ -383,7 +408,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 )
             }),
             "kill" => state.session(&request).and_then(|session| {
-                session.kill()?;
+                if let Err(err) = session.kill() {
+                    return if session.is_shared_hermes() {
+                        reply(&writer,state,json!({"op":"error","error_code":"outcome_unknown","error":err.to_string()}))
+                    } else {
+                        Err(err)
+                    };
+                }
                 reply(
                     &writer,
                     state,
@@ -415,9 +446,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 let operation = field(&request,"operation_id");
                 let receipt = session.semantic_send(&request,field(&request,"session_id"),state)?;
                 let response = match field(&receipt,"state") {
-                    "native_accepted" => json!({"op":"ok","operation_id":operation}),
-                    "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Codex app-server rejected semantic input"}),
-                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Codex semantic submission outcome is unknown; inspect --status"}),
+                    "native_accepted" | "submitted" => json!({"op":"ok","operation_id":operation}),
+                    "rejected" => json!({"op":"error","operation_id":operation,"error_code":"structured_unsupported","error":"Provider rejected semantic input"}),
+                    _ => json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Semantic submission outcome is unknown; inspect --status"}),
                 };
                 reply(&writer,state,response)
             }),

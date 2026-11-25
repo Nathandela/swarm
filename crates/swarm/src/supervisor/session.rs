@@ -1,3 +1,5 @@
+mod hermes;
+
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;
 use crate::providers::{self, LaunchPlan, codex_receipt};
@@ -48,6 +50,8 @@ pub(super) struct Session {
     dir: PathBuf,
     token: String,
     agent: String,
+    hermes_native: bool,
+    hermes_authority: Mutex<()>,
     cwd: String,
     effective: PathBuf,
     labels: Mutex<Labels>,
@@ -68,7 +72,9 @@ impl Session {
         let created = field(&data, "created_at");
         let name = field(&data, "name");
         let cwd = field(&data, "cwd");
-        if data["schema"] != 1
+        let hermes_native =
+            data["provider"]["name"] == "hermes" && data["provider"]["mode"] == "shared-native";
+        if data["schema"] != (if hermes_native { 2 } else { 1 })
             || !runtime::valid_id(id)
             || dir.file_name().and_then(|name| name.to_str()) != Some(id)
             || !runtime::valid_id(token)
@@ -84,9 +90,12 @@ impl Session {
             token: token.into(),
             agent: match field(&data["provider"], "name") {
                 "codex" => "codex",
+                "hermes" => "hermes",
                 _ => "claude",
             }
             .into(),
+            hermes_native,
+            hermes_authority: Mutex::new(()),
             cwd: cwd.into(),
             effective: PathBuf::from(data["checkout"]["path"].as_str().unwrap_or(cwd)),
             labels: Mutex::new(Labels {
@@ -102,16 +111,23 @@ impl Session {
         })
     }
 
-    pub(super) fn prepare(request: &Value) -> io::Result<Prepared> {
+    pub(super) fn prepare(request: &Value, source: Option<&Self>) -> io::Result<Prepared> {
         let req = &request["launch"];
         if !req.is_object() {
             return Err(io::Error::other("missing request"));
         }
         let valid_optional =
             |key, valid: fn(&Value) -> bool| req[key].is_null() || valid(&req[key]);
-        if !["agent", "cwd", "name", "tag", "initial_prompt"]
-            .into_iter()
-            .all(|key| valid_optional(key, Value::is_string))
+        if ![
+            "agent",
+            "cwd",
+            "name",
+            "tag",
+            "initial_prompt",
+            "resume_from",
+        ]
+        .into_iter()
+        .all(|key| valid_optional(key, Value::is_string))
             || !valid_optional("worktree", Value::is_boolean)
             || !valid_optional("env", |value| {
                 value
@@ -151,6 +167,9 @@ impl Session {
                     let agent = field(req, "agent");
                     let supported = key == "model"
                         || (agent == "codex" && key == "sandbox")
+                        || (agent == "hermes"
+                            && (providers::hermes::OPTIONS.contains(&key.as_str())
+                                || key == "resume_from"))
                         || (matches!(agent, "claude" | "claude-code")
                             && key == "dangerously-skip-permissions");
                     !supported || !value.is_string()
@@ -163,16 +182,25 @@ impl Session {
         if raw_cwd.is_empty() || !Path::new(raw_cwd).is_dir() {
             return Err(io::Error::other("cwd is not an existing directory"));
         }
-        let cwd = fs::canonicalize(raw_cwd)?;
+        let mut cwd = fs::canonicalize(raw_cwd)?;
         if cwd.to_str().is_none() {
             return Err(io::Error::other("cwd is not representable as UTF-8"));
         }
         let label = sanitize_name(field(req, "name"));
+        let mut launch = req.clone();
+        if let Some(source) = source {
+            if field(req, "agent") != "hermes" || source.agent != "hermes" {
+                return Err(io::Error::other(
+                    "unsupported saved-session resume provider",
+                ));
+            }
+            source.hermes_resume(&mut launch, &mut cwd)?;
+        }
         let provider = providers::prepare(
             field(req, "agent"),
             &cwd,
             &label,
-            req,
+            &launch,
             runtime::launch_env(&req["env"]),
         )?;
         let (cols, rows) = runtime::dims(req);
@@ -209,10 +237,10 @@ impl Session {
             None
         };
         let label = if label.is_empty() {
-            if provider.agent == "codex" {
-                "Codex"
-            } else {
-                "Claude Code"
+            match provider.agent {
+                "codex" => "Codex",
+                "hermes" => "Hermes",
+                _ => "Claude Code",
             }
         } else {
             &label
@@ -222,13 +250,15 @@ impl Session {
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label, "checkout":checkout,
+                "schema": if provider.hermes.is_null() { 1 } else { 2 }, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label, "checkout":checkout,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag,
                 "provider": {"name": provider.agent, "version": provider.version,
-                    "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
+                    "mode": if !provider.hermes.is_null() {
+                        "shared-native"
+                    } else if provider.agent == "codex" && providers::codex::managed(&provider.version) {
                         "managed"
                     } else { "classic" },
-                    "executable": provider.executable, "identity": provider.identity},
+                    "executable": provider.executable, "identity": provider.identity, "hermes_profile":provider.hermes_profile},
 
             }),
         )?;
@@ -279,7 +309,10 @@ impl Session {
         thread::spawn(move || {
             let _ = child.wait();
         });
-        runtime::write_control(&mut bootstrap, &json!({"argv": provider.argv}))
+        runtime::write_control(
+            &mut bootstrap,
+            &json!({"argv": provider.argv, "hermes":provider.hermes}),
+        )
     }
 
     fn exit(&self) -> io::Result<Value> {
@@ -287,8 +320,14 @@ impl Session {
     }
 
     pub(super) fn await_ready(&self) -> io::Result<()> {
-        let deadline =
-            Instant::now() + Duration::from_secs(if self.agent == "codex" { 8 } else { 3 });
+        let deadline = Instant::now()
+            + Duration::from_secs(if self.hermes_native {
+                75
+            } else if self.agent == "codex" {
+                8
+            } else {
+                3
+            });
         loop {
             if self.dial().is_ok() {
                 self.transition(Phase::Running);
@@ -354,7 +393,27 @@ impl Session {
         Ok(stream)
     }
 
+    pub(super) fn is_shared_hermes(&self) -> bool {
+        self.hermes_native
+    }
+
+    pub(super) fn hermes_mark_successor(&self, id: &str) -> io::Result<()> {
+        if !self.hermes_native {
+            return Ok(());
+        }
+        let _authority = self.hermes_authority.lock().unwrap();
+        if self.dir.join("hermes-successor.json").try_exists()? {
+            return Err(io::Error::other(
+                "Hermes native session already has a retained successor",
+            ));
+        }
+        runtime::write_json(&self.dir.join("hermes-successor.json"), &json!(id))
+    }
+
     pub(super) fn kill(&self) -> io::Result<()> {
+        if self.hermes_native {
+            return self.hermes_kill();
+        }
         if self.exit().is_ok() {
             return Ok(());
         }
@@ -368,6 +427,11 @@ impl Session {
     }
 
     pub(super) fn confirm_exit(&self) -> io::Result<()> {
+        if self.hermes_native {
+            return Err(io::Error::other(
+                "Hermes native work completion is unproven; session and workspace retained",
+            ));
+        }
         match self.exit() {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => self.kill()?,
@@ -391,6 +455,10 @@ impl Session {
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
+        if self.hermes_native {
+            self.dial()?;
+            return self.hermes_descriptor()?.validate_target();
+        }
         if self.agent != "codex" || !self.is_live() {
             return Err(io::Error::other("session has no live Codex app-server"));
         }
@@ -408,6 +476,11 @@ impl Session {
     }
 
     pub(super) fn native_requests(&self, session: &str) -> io::Result<Value> {
+        if self.agent == "hermes" {
+            return Err(io::Error::other(
+                "Hermes approvals and questions are controlled in the native viewer",
+            ));
+        }
         self.semantic_target()?;
         // Confirm continued private shim custody at query time.
         self.dial()?;
@@ -448,6 +521,10 @@ impl Session {
         session: &str,
         root: &Path,
     ) -> io::Result<Option<Value>> {
+        if self.hermes_native {
+            let _authority = self.hermes_authority.lock().unwrap();
+            return self.hermes_semantic_status(operation, session, root);
+        }
         let thread = self.semantic_thread()?;
         let record = codex_receipt::load(&self.dir, operation, session, &self.token, &thread)?;
         if let Some(record) = record {
@@ -469,6 +546,9 @@ impl Session {
         session: &str,
         state: &super::State,
     ) -> io::Result<Value> {
+        if self.hermes_native {
+            return self.hermes_semantic_send(request, session, state);
+        }
         let body = &request["composer_send"];
         let operation = field(request, "operation_id");
         let text = field(body, "text");
@@ -578,7 +658,7 @@ impl Session {
             || !matches!(field(status, "Turn"), "active" | "idle" | "unknown")
             || !matches!(
                 field(status, "Interaction"),
-                "none" | "permission" | "prompt"
+                "none" | "permission" | "prompt" | "error"
             )
         {
             return false;
@@ -670,7 +750,12 @@ impl Session {
         {
             status = observed.clone();
         }
-        let group = if process != "running" {
+        if self.hermes_native && process != "running" {
+            status = hermes::unknown_native_status();
+        }
+        let group = if status["NativeWorkUnknown"] == true {
+            "needs_input"
+        } else if process != "running" {
             "completed"
         } else if status["Attention"] == true {
             "needs_input"
@@ -689,6 +774,9 @@ impl Session {
             "group": group, "group_entered_at": state.1, "last_activity": state.1,
             "created_at": self.created, "summary": "",
         });
+        if self.agent == "hermes" {
+            self.hermes_view_fields(&mut view);
+        }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
         }
