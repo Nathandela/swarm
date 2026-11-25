@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Rust's native Claude worker input with a real parked permission dialog."""
+import argparse
 import hashlib
 import http.server
 import json
@@ -78,7 +79,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             self.wfile.write(f"event: {event}\ndata: {json.dumps(dict(type=event, **fields))}\n\n".encode())
 
 
-def verify(swarm, installed, root, model, producer_test):
+def verify(swarm, installed, root, model, producer_test, guild):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     place = state / "discord"
     for path in (home, work, state, tools, place, home / ".claude"):
@@ -92,12 +93,13 @@ def verify(swarm, installed, root, model, producer_test):
     credential = root / "synthetic-discord"
     credential.write_text("unused synthetic Discord token")
     credential.chmod(0o600)
-    save(place / "config.json", dict(version=1, enabled=True, mode="personal",
+    route = dict(guild_ids=["301"], channel_ids=["455"]) if guild else dict(dm_channel_id="456")
+    save(place / "config.json", dict(version=1, enabled=True, mode="teammate" if guild else "personal",
          installation_id="fixture-only", name="Private fixture", application_id="234", owner_id="123",
-         dm_channel_id="456", token_file=str(credential), daemon_socket=daemon_socket,
+         **route, token_file=str(credential), daemon_socket=daemon_socket,
          work_dir=str(work), manager_cli="codex"))
     save(place / ".rust-offline-owner.json", "fixture-only")
-    ledger = dict(version=2, identity=["fixture-only", "234", "123", "456", daemon_socket],
+    ledger = dict(version=2, identity=["fixture-only", "234", "123", "" if guild else "456", daemon_socket],
                   consent_floor="400", history_cursor="420", messages={}, outbox={}, worker_inputs={})
     ledger_path = place / "rust-text-v1.json"
     save(ledger_path, ledger)
@@ -114,6 +116,9 @@ def verify(swarm, installed, root, model, producer_test):
                  CLAUDE_CODE_TMPDIR=str(root), CLAUDE_CODE_MAX_RETRIES="0"),
         permissions=dict(disableAutoMode="disable", ask=["Bash"])))
     caps = ["semantic-target", "semantic-send", "message-origin", "worker-discord-origin-v1"]
+
+    if guild:
+        caps.append("worker-discord-guild-origin-v1")
 
     def wire(body):
         with socket.socket(socket.AF_UNIX) as conn:
@@ -189,7 +194,7 @@ def verify(swarm, installed, root, model, producer_test):
                              "discord::worker::tests::installed_claude_producer", "--nocapture"],
                             root, [model.server_port]),
                     env=env | dict(SWARM_CLAUDE_WORKER_STATE=str(state), SWARM_CLAUDE_WORKER_TARGET=sid,
-                                   SWARM_CLAUDE_WORKER_MESSAGE=MESSAGE),
+                                   SWARM_CLAUDE_WORKER_MESSAGE=MESSAGE) | ({"SWARM_CLAUDE_WORKER_REVOKED": "1"} if guild == "revoked" else {}),
                     text=True, capture_output=True, timeout=15)
                 assert witness.returncode == 0, (witness.stdout, witness.stderr)
                 operation = next(row.split()[1] for row in witness.stdout.splitlines()
@@ -199,23 +204,32 @@ def verify(swarm, installed, root, model, producer_test):
                 assert cutover["provider"] == "claude"
                 origin = cutover["composer"]["origin"]
                 assert origin["actor_id"] == "123" and origin["requester_id"] == "123"
+                if guild:
+                    assert origin["guild_id"] == "301" and origin["channel_id"] == "456"
             time.sleep(0.4)
             assert "Do you want to proceed?" in run("peek", sid)
             assert not model.sentinel.exists()
             assert all(MESSAGE not in req for req in model.observed)
             run("send", sid, "--key", "down")
             run("send", sid, "--key", "enter")
-            until(lambda: any(MESSAGE in request for request in model.observed), "native message context")
+            if guild == "revoked":
+                until(lambda: "Do you want to proceed?" not in run("peek", sid), "local denial closed the permission prompt")
+                marker = "LOCAL_OPERATOR_AFTER_GUILD_REVOCATION"
+                run("send", sid, "--text", marker)
+                until(lambda: any(marker in request for request in model.observed), "next actual model turn after revocation")
+            else:
+                until(lambda: any(MESSAGE in request for request in model.observed), "native message context")
             assert not model.sentinel.exists()
             receipt = json.loads(run("message", sid, "--status", "--operation-id", operation))
-            assert receipt["state"] == "submitted" and receipt["origin"] == origin
+            assert receipt["state"] == ("rejected" if guild == "revoked" else "submitted") and receipt["origin"] == origin
             assert receipt["agent"] == "claude" and receipt["native_session_id"]
             run("send", sid, "--text", "/clear")
             until(lambda: not target(), "native readiness revoked on /clear")
             assert json.loads(run("message", sid, "--status", "--operation-id", operation)) == receipt
-            assert sum(MESSAGE in request for request in model.observed) == 1
+            assert sum(MESSAGE in request for request in model.observed) == (0 if guild == "revoked" else 1)
             print(json.dumps(dict(version=version, isolated_synthetic_inference=True,
-                                  permission_dialog_preserved=True, native_delivery=True,
+                                  permission_dialog_preserved=True, native_delivery=guild != "revoked",
+                                  guild_audience=guild,
                                   exact_replay=True, missing_cutover_refused=True,
                                   revoked_on_clear=True, production_worker_producer=producer_test is not None)))
         except Exception:
@@ -239,9 +253,15 @@ def verify(swarm, installed, root, model, producer_test):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 4):
-        sys.exit("usage: rust_claude_worker_input.py /path/to/rust/swarm /path/to/installed/claude [rust-test-executable]")
-    producer_test = str(Path(sys.argv[3]).resolve()) if len(sys.argv) == 4 else None
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("swarm", type=Path)
+    parser.add_argument("claude", type=Path)
+    parser.add_argument("producer", type=Path, nargs="?")
+    parser.add_argument("--guild", choices=("accepted", "revoked"))
+    args = parser.parse_args()
+    if args.guild and not args.producer:
+        parser.error("guild tests require the native worker producer test executable")
+    producer_test = str(args.producer.resolve()) if args.producer else None
     with tempfile.TemporaryDirectory(prefix="clwi-", dir="/tmp") as tmp, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider) as server:
         root = Path(tmp).resolve()
@@ -251,6 +271,6 @@ if __name__ == "__main__":
         thread.start()
         try:
             check_guards(root, [server.server_port])
-            verify(str(Path(sys.argv[1]).resolve()), Path(sys.argv[2]).resolve(), root, server, producer_test)
+            verify(str(args.swarm.resolve()), args.claude.resolve(), root, server, producer_test, args.guild)
         finally:
             server.shutdown()

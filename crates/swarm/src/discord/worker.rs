@@ -446,17 +446,47 @@ mod tests {
         let mut inbox = Inbox::open(&place.dir, &cfg).unwrap();
         let now = spawn::now_ms();
         let source_id = format!("{}", ((now - DISCORD_EPOCH_MS) << 22) + 1);
-        let source = json!({
-            "id":source_id, "channel_id": cfg.text("dm_channel_id"),
-            "author":{"id":cfg.text("owner_id")}, "content":format!("{target} {text}"),
-            "type":0,"attachments":[],
+        let guild = cfg.text("mode") == "teammate";
+        let revoked = std::env::var_os("SWARM_CLAUDE_WORKER_REVOKED").is_some();
+        let mut source = json!({
+            "id":source_id, "channel_id":"456", "author":{"id":cfg.text("owner_id")},
+            "content":format!("{target} {text}"), "type":0, "attachments":[],
         });
-        inbox.admit(&source).unwrap();
+        let mut caps = CAPS.to_vec();
+        let rechecks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let _proof = if guild {
+            let bot = cfg.text("application_id");
+            source["guild_id"] = json!("301");
+            source["verified_parent_id"] = json!("455");
+            source["mentions"] = json!([{"id":bot}]);
+            source["content"] = json!(format!("<@{bot}> {target} {text}"));
+            source["audience_verified_at_ms"] = json!(now);
+            inbox.admit_guild(&cfg, &source).unwrap().unwrap();
+            caps.push("worker-discord-guild-origin-v1");
+            let seen = source.clone();
+            let checks = rechecks.clone();
+            Some(
+                super::super::worker_proof::Service::bind(
+                    &place.dir,
+                    root,
+                    cfg.clone(),
+                    move |_, guild, channel, id| {
+                        assert_eq!((guild, channel, id), ("301", "456", field(&seen, "id")));
+                        checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        Ok((!revoked).then(|| seen.clone()))
+                    },
+                )
+                .unwrap(),
+            )
+        } else {
+            inbox.admit(&source).unwrap().unwrap();
+            None
+        };
         assert!(
             inbox.next_prepared().is_none(),
             "explicit worker input crossed into the manager"
         );
-        let mut client = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS).unwrap();
+        let mut client = Client::dial(Path::new(cfg.text("daemon_socket")), &caps).unwrap();
         let mut read_after = None;
         dispatch(
             &cfg,
@@ -480,7 +510,11 @@ mod tests {
                 |_, _| panic!("a durable worker cutover was redriven"),
             )
             .unwrap();
-            if inbox.worker_status()[0]["state"] == "submitted" {
+            let expected = if revoked { "rejected" } else { "submitted" };
+            if inbox.worker_status()[0]["state"] == expected {
+                if guild {
+                    assert!(rechecks.load(std::sync::atomic::Ordering::Relaxed) > 0);
+                }
                 let status = inbox.worker_status();
                 assert_eq!(status.as_array().unwrap().len(), 1);
                 println!(
