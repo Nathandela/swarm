@@ -23,6 +23,39 @@ pub(super) struct Store {
 struct Entry {
     dir: File,
     meta: Value,
+    needs_sync: bool,
+}
+
+impl Entry {
+    fn set_label(
+        &mut self,
+        key: &str,
+        value: String,
+        sync: impl FnOnce(&File) -> io::Result<()>,
+    ) -> io::Result<bool> {
+        if self.meta[key] != value {
+            let mut revised = self.meta.clone();
+            revised[key] = json!(value);
+            if key == "name" {
+                revised["name_set_at"] = json!(
+                    OffsetDateTime::now_utc()
+                        .format(&Rfc3339)
+                        .expect("UTC timestamp")
+                );
+            }
+            replace_meta(&self.dir, &revised, || {})?;
+            // renameat committed the new name. Keep the cache aligned even if
+            // directory sync fails, and require a successful sync to acknowledge a retry.
+            self.meta = revised;
+            self.needs_sync = true;
+        }
+        if self.needs_sync {
+            sync(&self.dir)?;
+            self.needs_sync = false;
+            return Ok(true);
+        }
+        Ok(false)
+    }
 }
 
 fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> io::Result<File> {
@@ -312,7 +345,14 @@ impl Store {
                 }
             };
             exited(&file, &meta).map_err(|e| io::Error::other(format!("Go session {id}: {e}")))?;
-            rows.insert(id.to_owned(), Entry { dir: file, meta });
+            rows.insert(
+                id.to_owned(),
+                Entry {
+                    dir: file,
+                    meta,
+                    needs_sync: false,
+                },
+            );
         }
         if opted_in {
             if rows.is_empty() {
@@ -367,30 +407,19 @@ impl Store {
             ));
         }
         exited(&entry.dir, &entry.meta)?;
-        if entry.meta[key] == value {
-            return Ok(None);
-        }
-        let mut revised = entry.meta.clone();
-        revised[key] = json!(value);
-        if key == "name" {
-            revised["name_set_at"] = json!(
-                OffsetDateTime::now_utc()
-                    .format(&Rfc3339)
-                    .expect("UTC timestamp")
-            );
-        }
-        write_meta(&entry.dir, &revised, || {})?;
-        entry.meta = revised;
-        if !same_file(&entry.dir.metadata()?, &fs::symlink_metadata(&path)?) {
-            return Err(io::Error::other(
-                "stopped Go directory changed during commit",
-            ));
-        }
-        Ok(Some(view(&entry.meta, endpoint)))
+        let updated = entry.set_label(key, value, |dir| {
+            if !same_file(&dir.metadata()?, &fs::symlink_metadata(&path)?) {
+                return Err(io::Error::other(
+                    "stopped Go directory changed during commit",
+                ));
+            }
+            dir.sync_all()
+        })?;
+        Ok(updated.then(|| view(&entry.meta, endpoint)))
     }
 }
 
-fn write_meta(dir: &File, meta: &Value, before_replace: impl FnOnce()) -> io::Result<()> {
+fn replace_meta(dir: &File, meta: &Value, before_replace: impl FnOnce()) -> io::Result<()> {
     use std::io::Write;
     let temporary =
         std::ffi::CString::new(format!("meta.json.tmp{}", runtime::random_id()?)).unwrap();
@@ -409,7 +438,7 @@ fn write_meta(dir: &File, meta: &Value, before_replace: impl FnOnce()) -> io::Re
         if unsafe { libc::renameat(fd, temporary.as_ptr(), fd, c"meta.json".as_ptr()) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        dir.sync_all()
+        Ok(())
     })();
     if result.is_err() {
         unsafe { libc::unlinkat(dir.as_raw_fd(), temporary.as_ptr(), 0) };
@@ -485,17 +514,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn label_retry_syncs_after_rename_and_preserves_opaque_numbers() {
+        const OPAQUE: &str = "12345678901234567890.98765432101234567890123";
+        let dir = std::env::temp_dir().join(runtime::random_id().unwrap());
+        runtime::private_dir(&dir).unwrap();
+        let mut entry = Entry {
+            dir: File::open(&dir).unwrap(),
+            meta: serde_json::from_str(&format!(r#"{{"tag":"old","opaque":{OPAQUE}}}"#)).unwrap(),
+            needs_sync: false,
+        };
+        replace_meta(&entry.dir, &entry.meta, || {}).unwrap();
+        let error = entry.set_label("tag", "new".into(), |_| {
+            Err(io::Error::other("sync failed"))
+        });
+        assert_eq!(error.unwrap_err().to_string(), "sync failed");
+        assert_eq!(entry.meta["tag"], "new");
+        assert_eq!(read_at(&entry.dir, c"meta.json").unwrap(), entry.meta);
+        let raw = fs::read_to_string(dir.join("meta.json")).unwrap();
+        assert!(raw.contains(OPAQUE), "{raw}");
+        assert!(
+            entry
+                .set_label("tag", "new".into(), File::sync_all)
+                .unwrap()
+        );
+        assert!(
+            !entry
+                .set_label("tag", "new".into(), |_| panic!("unnecessary sync"))
+                .unwrap()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn process_crash_after_temp_sync_keeps_the_go_record() {
         const CHILD: &str = "SWARM_TEST_STOPPED_GO_PRE_REPLACE";
         if let Some(path) = std::env::var_os(CHILD) {
             let file = File::open(path).unwrap();
-            write_meta(&file, &json!({"name":"new"}), || std::process::exit(97)).unwrap();
+            replace_meta(&file, &json!({"name":"new"}), || std::process::exit(97)).unwrap();
             panic!("crash injection did not fire");
         }
         let dir = std::env::temp_dir().join(runtime::random_id().unwrap());
         runtime::private_dir(&dir).unwrap();
         let file = File::open(&dir).unwrap();
-        write_meta(&file, &json!({"name":"old"}), || {}).unwrap();
+        replace_meta(&file, &json!({"name":"old"}), || {}).unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -507,7 +568,7 @@ mod tests {
         assert_eq!(child.code(), Some(97));
         assert_eq!(read_at(&file, c"meta.json").unwrap()["name"], "old");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
-        write_meta(&file, &json!({"name":"new"}), || {}).unwrap();
+        replace_meta(&file, &json!({"name":"new"}), || {}).unwrap();
         assert_eq!(read_at(&file, c"meta.json").unwrap()["name"], "new");
         fs::remove_dir_all(dir).unwrap();
     }
