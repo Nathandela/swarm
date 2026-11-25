@@ -36,6 +36,7 @@ pub(super) struct Session {
     pub id: String,
     dir: PathBuf,
     token: String,
+    agent: String,
     cwd: String,
     name: String,
     created: String,
@@ -69,6 +70,11 @@ impl Session {
             dir,
             id: id.into(),
             token: token.into(),
+            agent: match field(&data["provider"], "name") {
+                "codex" => "codex",
+                _ => "claude",
+            }
+            .into(),
             cwd: cwd.into(),
             name: name.into(),
             created: created.into(),
@@ -126,8 +132,12 @@ impl Session {
             })
             || req["options"].as_object().is_some_and(|options| {
                 options.iter().any(|(key, value)| {
-                    !matches!(key.as_str(), "model" | "dangerously-skip-permissions")
-                        || !value.is_string()
+                    let agent = field(req, "agent");
+                    let supported = key == "model"
+                        || (agent == "codex" && key == "sandbox")
+                        || (matches!(agent, "claude" | "claude-code")
+                            && key == "dangerously-skip-permissions");
+                    !supported || !value.is_string()
                 })
             })
         {
@@ -173,7 +183,11 @@ impl Session {
             provider,
         } = prepared;
         let label = if label.is_empty() {
-            "Claude Code"
+            if provider.agent == "codex" {
+                "Codex"
+            } else {
+                "Claude Code"
+            }
         } else {
             &label
         };
@@ -185,7 +199,10 @@ impl Session {
             &json!({
                 "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd, "name": label,
                 "created_at": now(), "cols": cols, "rows": rows,
-                "provider": {"name": "claude", "version": provider.version,
+                "provider": {"name": provider.agent, "version": provider.version,
+                    "mode": if provider.agent == "codex" && providers::codex::managed(&provider.version) {
+                        "managed"
+                    } else { "classic" },
                     "executable": provider.executable, "identity": provider.identity},
 
             }),
@@ -239,7 +256,8 @@ impl Session {
     }
 
     pub(super) fn await_ready(&self) -> io::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline =
+            Instant::now() + Duration::from_secs(if self.agent == "codex" { 8 } else { 3 });
         loop {
             if self.dial().is_ok() {
                 self.transition(Phase::Running);
@@ -416,7 +434,7 @@ impl Session {
         };
         json!({
             "endpoint_id": endpoint, "id": format!("{endpoint}/{}", self.id),
-            "agent": "claude", "name": self.name, "cwd": self.cwd,
+            "agent": self.agent, "name": self.name, "cwd": self.cwd,
             "status": status,
             "group": group, "group_entered_at": state.1, "last_activity": state.1,
             "created_at": self.created, "summary": "",

@@ -41,6 +41,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: swarm-fake-codex app-server --listen unix://PATH | agent [args...]")
 		os.Exit(2)
 	}
+	if os.Args[1] == "--version" {
+		fmt.Println("codex-cli 0.160.0")
+		return
+	}
 	if os.Args[1] == "app-server" {
 		os.Exit(runAppServer(os.Args[2:]))
 	}
@@ -196,10 +200,11 @@ func (s *fakeAppServer) probe(w http.ResponseWriter, _ *http.Request) {
 // broadcastThreadStarted fires the recorded `thread/started` notification to every attached
 // client, which is what the real server does when the AGENT creates the session's thread.
 func (s *fakeAppServer) broadcastThreadStarted() {
+	cwd, _ := os.Getwd()
 	frame, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "thread/started",
-		"params":  map[string]any{"thread": map[string]any{"id": fakeThreadID}},
+		"params":  map[string]any{"thread": map[string]any{"id": fakeThreadID, "cwd": cwd, "status": map[string]string{"type": "idle"}}},
 	})
 	if err != nil {
 		return

@@ -1,3 +1,4 @@
+mod codex_backend;
 mod pty;
 mod screen;
 
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
 struct State {
     token: String,
     hook_token: String,
+    provider: String,
     dir: PathBuf,
     working_dir: PathBuf,
     observations: Mutex<ProviderObservation>,
@@ -93,8 +95,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("malformed transient launch arguments"))?;
     let working_dir = field(&config, "cwd");
     let mut command = Command::new(executable);
-    command.current_dir(working_dir).args(argv);
-    command.env_clear().envs(runtime::launch_env(&Value::Null));
+    let environment = runtime::launch_env(&Value::Null);
+    command
+        .env_clear()
+        .envs(environment.iter().map(|(key, value)| (key, value)));
     let hook_token = runtime::random_id()?;
     command
         .env("TERM", "xterm-256color")
@@ -103,13 +107,30 @@ fn serve(dir: &Path) -> io::Result<()> {
         .env("SWARM_SESSION_ID", field(&config, "id"));
     let (cols, rows) = runtime::dims(&config);
     pty::arm_shutdown()?;
+    let mut backend = None;
+    let mut channel = None;
     let (mut child, master) = (|| {
-        if provider["name"] != "claude" || providers::identity(executable)? != provider["identity"]
+        if !matches!(field(provider, "name"), "claude" | "codex")
+            || providers::identity(executable)? != provider["identity"]
         {
             return Err(io::Error::other(
-                "Claude executable identity changed before exec",
+                "provider executable identity changed before exec",
             ));
         }
+        command.current_dir(working_dir);
+        if provider["name"] == "codex" && provider["mode"] == "managed" {
+            let (owner, connection) =
+                codex_backend::start(executable, Path::new(working_dir), dir, &environment)?;
+            backend = Some(owner);
+            command.args(["--remote", &connection.endpoint]);
+            channel = Some(connection);
+            if providers::identity(executable)? != provider["identity"] {
+                return Err(io::Error::other(
+                    "provider executable changed before terminal exec",
+                ));
+            }
+        }
+        command.args(argv);
         pty::start(command, cols, rows)
     })()
     .inspect_err(|err| {
@@ -137,6 +158,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     let state = Arc::new(State {
         token: token.into(),
         hook_token,
+        provider: field(provider, "name").to_owned(),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
         observations: Mutex::new(ProviderObservation::default()),
@@ -151,7 +173,21 @@ fn serve(dir: &Path) -> io::Result<()> {
         terminate_at: Mutex::new(None),
     });
     let reader = state.clone();
-    let output = thread::spawn(move || drain(reader));
+    let pending = (state.provider == "codex" && channel.is_none())
+        .then(|| Arc::new((Mutex::new(None), Condvar::new())));
+    if let Some(pending) = pending.clone() {
+        let state = state.clone();
+        thread::spawn(move || codex_status_writer(&state, &pending));
+    }
+    if let Some(channel) = channel {
+        let (cwd, dir, token) = (
+            state.working_dir.clone(),
+            state.dir.clone(),
+            state.token.clone(),
+        );
+        thread::spawn(move || codex_backend::observe(channel, cwd, dir, token));
+    }
+    let output = thread::spawn(move || drain(reader, pending));
     let shared = state.clone();
     thread::spawn(move || accept(listener, shared));
     let status = loop {
@@ -177,6 +213,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         drop((active, terminate_at));
         thread::sleep(Duration::from_millis(40));
     };
+    drop(backend);
     runtime::write_json(
         &dir.join("exit.json"),
         &json!({
@@ -199,9 +236,29 @@ fn terminate(state: &State) -> io::Result<()> {
     Ok(())
 }
 
-fn drain(state: Arc<State>) {
+type PendingStatus = (Mutex<Option<Value>>, Condvar);
+
+fn codex_status_writer(state: &State, pending: &PendingStatus) {
+    loop {
+        let mut slot = pending.0.lock().unwrap();
+        while slot.is_none() {
+            slot = pending.1.wait(slot).unwrap();
+        }
+        let status = slot.take().expect("notification carries a status");
+        drop(slot);
+        let _ = runtime::write_json(
+            &state.dir.join("observation.json"),
+            &json!({
+                "token": state.token, "status": status,
+            }),
+        );
+    }
+}
+
+fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
     let mut bytes = [0; 8192];
     let mut master = &state.master;
+    let mut observed = None;
     loop {
         let n = match master.read(&mut bytes) {
             Ok(0) => break,
@@ -220,6 +277,17 @@ fn drain(state: Arc<State>) {
         {
             let _ = sub.conn.shutdown(Shutdown::Both);
             screen.subscriber = None;
+        }
+        let status = pending
+            .as_ref()
+            .and_then(|_| providers::codex::terminal_status(screen.parser.screen()));
+        drop(screen);
+        if let Some(pending) = &pending
+            && let Some(status) = status.filter(|status| observed.as_ref() != Some(status))
+        {
+            observed = Some(status.clone());
+            *pending.0.lock().unwrap() = Some(status);
+            pending.1.notify_one();
         }
     }
 }
@@ -314,7 +382,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
 fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> io::Result<()> {
     let event = field(request, "event");
     let payload = &request["payload"];
-    if field(request, "token") != state.hook_token
+    if state.provider != "claude"
+        || field(request, "token") != state.hook_token
         || !providers::claude::EVENTS.contains(&event)
         || !payload.is_object()
     {

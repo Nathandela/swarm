@@ -1,4 +1,5 @@
 pub(crate) mod claude;
+pub(crate) mod codex;
 
 use serde_json::{Value, json};
 use std::fs;
@@ -10,6 +11,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub(crate) struct LaunchPlan {
+    pub agent: &'static str,
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
     pub executable: PathBuf,
@@ -24,29 +26,39 @@ pub(crate) fn prepare(
     request: &Value,
     environment: Vec<(String, String)>,
 ) -> io::Result<LaunchPlan> {
-    if !matches!(agent, "claude" | "claude-code") {
-        return Err(io::Error::other(
-            "invalid agent (this runtime supports ordinary Claude sessions)",
-        ));
-    }
+    let agent = match agent {
+        "claude" | "claude-code" => "claude",
+        "codex" => "codex",
+        _ => return Err(io::Error::other("unsupported provider")),
+    };
     let path = environment
         .iter()
         .rev()
         .find(|(name, _)| name == "PATH")
         .map(|(_, value)| value)
         .ok_or_else(|| io::Error::other("provider launch requires PATH"))?;
-    let executable = resolve("claude", cwd, path)?;
+    let executable = resolve(agent, cwd, path)?;
     let before = identity(&executable)?;
     let output = version_output(&executable, cwd, &environment)?;
-    let version = claude::version(&output)?.to_owned();
+    let version = if agent == "codex" {
+        codex::version(&output)?
+    } else {
+        claude::version(&output)?
+    }
+    .to_owned();
     let after = identity(&executable)?;
     if before != after {
         return Err(io::Error::other(
-            "Claude executable changed during admission",
+            "provider executable changed during admission",
         ));
     }
-    let argv = claude::argv(label, request)?;
+    let argv = if agent == "codex" {
+        codex::argv(request)?
+    } else {
+        claude::argv(label, request)?
+    };
     Ok(LaunchPlan {
+        agent,
         argv,
         env: environment,
         executable,
@@ -108,7 +120,7 @@ fn version_output(executable: &Path, cwd: &Path, env: &[(String, String)]) -> io
         }
         let mut buffer = [0; 1024];
         let mut output = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let idle = match stdout.read(&mut buffer) {
                 Ok(0) => true,
