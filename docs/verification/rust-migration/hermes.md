@@ -60,3 +60,19 @@ python3 scripts/verification/live_go_hermes.py \
 Hermes 0.22.5 uses its own gateway behind the classic UI. Pass `--gateway-backed` and the 0.22.5 console from the pinned Hermes release above to test this path with a private prestarted gateway. The fixture launches Go with Discord disabled and checks that the original Hermes gateway and native SQLite conversation survive supervisor handoffs, viewer exit, and rejected stopped-state export. The only provider-side action Rust takes is terminal input through the original shim.
 
 On macOS the harness uses `sandbox-exec`. On Linux run the command in the existing native fixture boundary with a fresh network and PID namespace, an enabled loopback interface, a read-only host mount, and only the fixture root writable. The harness tests both the network and write guards before launching a provider.
+
+## Original Go shared-native viewer
+
+A live Go schema-5 Hermes 0.22.5 session can be inspected in Rust with the same two compatibility switches. This lane qualifies fresh, ordinary Go launches on the default Hermes profile with an explicit local provider home. Rust cross-checks the original Go metadata, launch plan, descriptor, canonical conversation, physical private session directory, Go shim and PTY identities, and Hermes gateway identity before giving the client the terminal stream. The roster describes the session as a read-only Hermes viewer. Rust discards keyboard input and resize requests. The original Go supervisor owns native input receipts and lifecycle controls, and both supervisors leave the gateway process in place.
+
+The witness passed on macOS arm64 and Linux x86_64 with the actual pinned Go binary and Hermes 0.22.5 using the loopback model. A private synthetic configuration enabled Go's native adapter while no connector ran. Two Go viewers joined distinct native conversations on the same gateway. Substituting the sibling's genuine native binding into the first viewer's descriptor prevented Rust startup. Rust then viewed the restored original terminal and withheld raw terminal input, resize, semantic input, stop and delete. Original Go recovered its exact native receipt without duplicate model work, and a second Go turn continued the same native SQLite conversation. Neither the conversation descriptor nor the original shim socket changed across supervisors.
+
+Run the [shared-native witness](../../../scripts/verification/live_go_hermes_shared.py) with the same guarded installer and pinned release used above.
+
+```sh
+python scripts/verification/hermes_native_admission.py \
+  --root "$fixture_root" --source "$pinned_source" \
+  --hermes "$pinned_console" --node "$pinned_node" \
+  --swarm "$pinned_go_swarm" --candidate "$rust_swarm" \
+  --probe "$PWD/scripts/verification/live_go_hermes_shared.py"
+```

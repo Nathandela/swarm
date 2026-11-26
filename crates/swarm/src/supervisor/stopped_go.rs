@@ -285,7 +285,8 @@ fn inactive(pid: u32, birth: u64) -> io::Result<()> {
 
 fn qualified_role(meta: &Value) -> io::Result<()> {
     let schema = meta["schema_version"].as_u64();
-    if schema != Some(1) {
+    let managed_hermes = live::hermes::managed(meta);
+    if schema != Some(1) && !managed_hermes {
         return Err(io::Error::other(format!(
             "Go schema {schema:?} requires offline qualification"
         )));
@@ -297,9 +298,11 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
         .iter()
         .any(|key| !meta[*key].is_null() && meta[*key] != "")
         || ROLE_OBJECT_FIELDS.iter().any(|key| !meta[*key].is_null())
-        || ROLE_BOOL_FIELDS
-            .iter()
-            .any(|key| !meta[*key].is_null() && meta[*key] != false)
+        || ROLE_BOOL_FIELDS.iter().any(|key| {
+            !(managed_hermes && *key == "hermes_native")
+                && !meta[*key].is_null()
+                && meta[*key] != false
+        })
         || meta["agent_cwd"]
             .as_str()
             .is_some_and(|p| !p.is_empty() && meta["cwd"] != p)
@@ -353,7 +356,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         if !exit["backend_exit"].is_null() {
             return Err(io::Error::other("unqualified Go classic backend exit"));
         }
-        if meta["agent_type"] == "hermes" {
+        if meta["agent_type"] == "hermes" && !live::hermes::managed(meta) {
             absent_hermes_sidefiles(file)?;
         }
         if meta["agent_type"] == "opencode" {
@@ -484,6 +487,7 @@ fn read_launch(file: &File) -> io::Result<Value> {
 
 fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
     let launch = read_launch(file)?;
+    let managed_hermes = live::hermes::managed(meta);
 
     // The original directory can differ on an offline copy, but the durable
     // ID and config's two physical path components must all identify the same session.
@@ -495,7 +499,12 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || Path::new(field(&launch, "socket_path")) != launch_dir.join("shim.sock")
         || (meta["agent_type"] == "claude" && launch["native_provider"] != "claude")
         || (meta["agent_type"] == "agy" && !classic_agy(meta, &launch))
-        || (meta["agent_type"] == "hermes" && !classic_hermes(meta, &launch))
+        || (meta["agent_type"] == "hermes"
+            && if managed_hermes {
+                !live::hermes::qualified_launch(meta, &launch)
+            } else {
+                !classic_hermes(meta, &launch)
+            })
         || (meta["agent_type"] == "codex" && !classic_codex(meta, &launch))
         || (meta["agent_type"] == "opencode" && !classic_opencode(meta, &launch))
         || [
@@ -514,7 +523,7 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
             "account_binding",
         ]
         .iter()
-        .any(|key| !launch[*key].is_null())
+        .any(|key| !(managed_hermes && *key == "hermes_input") && !launch[*key].is_null())
         || (meta["agent_type"] != "codex" && backend_declared(&launch))
         || [
             "manager_replay_id",
@@ -842,6 +851,7 @@ impl Store {
                 let meta = raw.parsed()?;
                 if meta["schema_version"] != 1
                     && !live::open_code::managed(&meta)
+                    && !live::hermes::managed(&meta)
                     && meta["schema_version"].is_u64()
                 {
                     return Ok((file, meta, raw));
@@ -1133,6 +1143,15 @@ fn view(meta: &Value, endpoint: &str) -> Value {
         if !field(meta, key).is_empty() {
             row[key] = meta[key].clone();
         }
+    }
+    if live::hermes::managed(meta)
+        && !hermes_viewer_ended
+        && crate::providers::hermes::native_id(field(meta, "conversation_id"))
+    {
+        row["conversation_id"] = meta["conversation_id"].clone();
+        row["provider_mode"] = json!("shared-native");
+        row["summary"] =
+            json!("Read-only Hermes viewer. Restore the original Go supervisor for input.");
     }
     if hermes_viewer_ended {
         row["resume_error"] = json!(HERMES_VIEWER_ONLY);

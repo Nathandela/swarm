@@ -191,10 +191,12 @@ def run(args):
         assert descriptor['pid'] == owner.pid, descriptor
         api_port = int(descriptor['api_origin'].rsplit(':', 1)[1])
         check_guards(root, [port, api_port])
+        probe_args = [str(Path(args.probe).resolve()), '--root', str(root),
+                      '--swarm', str(Path(args.swarm).resolve()), '--stats', f'http://127.0.0.1:{port}/fixture/stats']
+        if args.candidate:
+            probe_args.extend(['--candidate', str(Path(args.candidate).resolve())])
         with (root / 'probe.log').open('w') as log:
-            probe = subprocess.Popen(guarded([str(Path(args.probe).resolve()), '--root', str(root),
-                '--swarm', str(Path(args.swarm).resolve()), '--stats', f'http://127.0.0.1:{port}/fixture/stats'],
-                root, [port, api_port]), cwd=root, env=env, stdin=subprocess.DEVNULL,
+            probe = subprocess.Popen(guarded(probe_args, root, [port, api_port]), cwd=root, env=env, stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             deadline = time.monotonic() + 180
             while probe.poll() is None and time.monotonic() < deadline:
@@ -241,4 +243,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     for name in ('root', 'source', 'hermes', 'node', 'swarm', 'probe'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--candidate')
     run(parser.parse_args())

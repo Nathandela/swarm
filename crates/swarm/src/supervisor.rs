@@ -1684,10 +1684,14 @@ fn attachment(
             let _ = pump_writer.lock().unwrap().shutdown(Shutdown::Read);
         }
     });
+    let read_only = owner.is_some_and(stopped_go::live::Owner::read_only);
     let handoff = (|| {
         loop {
             let (tag, bytes) = wire::read_frame(client)?;
             if tag == DATA_IN {
+                if read_only {
+                    continue;
+                }
                 with_live_lease(lease.as_ref(), || {
                     wire::write_frame(&mut shim, DATA_IN, &bytes)
                 })?;
@@ -1700,7 +1704,7 @@ fn attachment(
                     continue;
                 }
                 match field(&control, "op") {
-                    "resize" => with_live_lease(lease.as_ref(), || {
+                    "resize" if !read_only => with_live_lease(lease.as_ref(), || {
                         runtime::write_control(
                             &mut shim,
                             &json!({
