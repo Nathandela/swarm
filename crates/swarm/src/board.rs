@@ -1224,7 +1224,7 @@ fn running(row: &Value) -> bool {
 }
 
 fn resumable(row: &Value) -> bool {
-    matches!(field(row, "agent"), "agy" | "claude" | "opencode")
+    matches!(field(row, "agent"), "agy" | "claude" | "codex" | "opencode")
         || field(row, "agent") == "hermes" && !field(row, "conversation_id").is_empty()
 }
 

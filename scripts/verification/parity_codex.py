@@ -392,7 +392,20 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
                         assert "origin or authority changed" in launch(identity,"error")["error"]
                     finally:
                         (native_home/"auth.json").write_text(json.dumps(ordinary_auth))
-                resumed=launch(identity)
+                shutil.copyfile(root/"bin/parity/swarm-parity",root/"bin/driver")
+                board = fixtures.Board([*guard,str(root/"bin/swarm")], root, env)
+                try:
+                    board.wait_bytes(b"codex fixture")
+                    first_frame=len(board.capture)
+                    board.send(b"r")
+                    def new_viewer():
+                        return next((row["id"] for row in json.loads(invoke("ls","--json"))
+                                     if row.get("resumed_from")==identity), None)
+                    resumed=fixtures.wait_for(new_viewer,"keyboard board resume",timeout=18)
+                    board.wait_bytes(b"OpenAI Codex",start=first_frame)
+                finally:
+                    (root/"effects/board-resume.capture").write_bytes(board.capture)
+                    board.close()
                 resumed_state=root/"state/rust-v1"/resumed.split("/")[1]
                 assert json.loads((resumed_state/"observation.json").read_text())["conversation_id"]==thread
                 assert any(row["id"]==resumed and row["resumed_from"]==identity for row in json.loads(invoke("ls","--json")))
