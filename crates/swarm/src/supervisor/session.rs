@@ -465,11 +465,11 @@ impl Session {
                 "installed Claude CLI is older than the source runtime",
             ));
         }
-        let (_, transcript) =
-            providers::claude::transcript(Path::new(field(info, "home")), &cwd, &id)?;
+        let home = Path::new(field(info, "home"));
+        let authority = self.claude_project_authority(home, &cwd)?;
+        let (_, transcript) = providers::claude::transcript(home, &cwd, &id)?;
         prepared.tag = self.labels.lock().unwrap().tag.clone();
-        prepared.claude_resume =
-            json!({"conversation_id":id,"resumed_from":source,"transcript":transcript});
+        prepared.claude_resume = json!({"conversation_id":id,"resumed_from":source,"transcript":transcript,"project_authority":authority});
         Ok(prepared)
     }
 
@@ -512,12 +512,27 @@ impl Session {
             return Err(io::Error::other("Claude source profile or account changed"));
         }
         let id = self.claude_conversation()?;
+        let authority = self.claude_project_authority(&home, &cwd)?;
         let (transcript, identity) = providers::claude::transcript(&home, &cwd, &id)?;
         use std::os::unix::fs::MetadataExt;
         let dir = cwd.metadata()?;
         let proof = json!({"conversation":id,"transcript":transcript,"identity":identity,
-            "cwd":cwd,"cwd_identity":[dir.dev(),dir.ino()],"home":home});
+            "cwd":cwd,"cwd_identity":[dir.dev(),dir.ino()],"home":home,"project_authority":authority});
         Ok((cwd, transcript, id, proof))
+    }
+
+    fn claude_project_authority(&self, home: &Path, cwd: &Path) -> io::Result<Value> {
+        let proof = runtime::read_json(&self.dir.join("claude-authority.json"))?;
+        if proof["token"] != self.token
+            || Path::new(field(&proof, "home")) != home
+            || Path::new(field(&proof, "cwd")) != cwd
+        {
+            return Err(io::Error::other(
+                "Claude project authority provenance is unproved",
+            ));
+        }
+        providers::claude::verify_project_authority(home, cwd, &proof["authority"])?;
+        Ok(proof["authority"].clone())
     }
 
     pub(super) fn owns_claude_conversation(&self, id: &str) -> bool {

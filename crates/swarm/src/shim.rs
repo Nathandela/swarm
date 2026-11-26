@@ -302,7 +302,10 @@ fn serve(dir: &Path) -> io::Result<()> {
             let saved=&config["claude_profile"];
             let live=providers::claude::profile(&environment,&Value::Null,&saved["options"])?;
             let id=field(&config["claude_resume"],"conversation_id");
-            let (_,transcript)=providers::claude::transcript(Path::new(field(saved,"home")),Path::new(working_dir),id)?;
+            let home=Path::new(field(saved,"home"));
+            let cwd=Path::new(working_dir);
+            providers::claude::verify_project_authority(home,cwd,&config["claude_resume"]["project_authority"])?;
+            let (_,transcript)=providers::claude::transcript(home,cwd,id)?;
             if &live!=saved || transcript!=config["claude_resume"]["transcript"]
                 || argv.iter().filter(|arg|arg.as_str()=="--resume").count()!=1
                 || !argv.ends_with(&["--resume".to_owned(),id.to_owned()])
@@ -314,13 +317,27 @@ fn serve(dir: &Path) -> io::Result<()> {
             use std::os::unix::fs::MetadataExt;
             let get=|key|proof.get(key).and_then(Value::as_str).unwrap_or_default();
             let cwd=Path::new(get("cwd"));
-            let (transcript,identity)=providers::claude::transcript(Path::new(get("home")),cwd,get("conversation"))?;
+            let home=Path::new(get("home"));
+            let authority=proof.get("project_authority").unwrap_or(&Value::Null);
+            providers::claude::verify_project_authority(home,cwd,authority)?;
+            let (transcript,identity)=providers::claude::transcript(home,cwd,get("conversation"))?;
             let status=cwd.metadata()?;
             if proof.get("identity")!=Some(&identity)
                 || transcript!=Path::new(get("transcript"))
                 || proof.get("cwd_identity")!=Some(&json!([status.dev(),status.ino()]))
             {
                 return Err(io::Error::other("hands-off source custody changed before launch"));
+            }
+        }
+        if provider["name"]=="claude" {
+            let cwd=Path::new(working_dir);
+            let profile=&config["claude_profile"];
+            let home=Path::new(field(profile,"home"));
+            if let Ok(authority)=providers::claude::project_authority(home,cwd) {
+                runtime::write_json(&dir.join("claude-authority.json"),
+                    &json!({"token":token,"home":home,"cwd":cwd,"authority":authority}))?;
+            } else if config["claude_resume"].is_object() || config["lineage"]["hands_off"].is_object() {
+                return Err(io::Error::other("Claude project authority cannot be proved before exec"));
             }
         }
         if provider["name"] == "codex" && provider["mode"] == "managed" {

@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
@@ -118,6 +119,21 @@ def verify(swarm, installed, root, server, worktree=False):
             eventually(reaped,"shim reaped")
             changed=launch | {"env":[f"{key}={value}" for key,value in (env | {"ANTHROPIC_API_KEY":"unauthorized-other"}).items()]}
             assert wire(changed)["op"]=="error"
+            for base,name in [(effective,"settings.local.json"),(root,"settings.json")]:
+                directory=base/".claude"
+                existed=directory.exists()
+                directory.mkdir(mode=0o700,exist_ok=True)
+                config=directory/name
+                assert not config.exists()
+                save(config,{"env":{"ANTHROPIC_BASE_URL":"https://unqualified.invalid"}})
+                try:
+                    original_ids={path.name for path in source.parent.iterdir() if len(path.name)==24}
+                    refused=wire(launch)
+                    assert refused["op"]=="error" and refused.get("error_code")=="invalid_field",refused
+                    assert {path.name for path in source.parent.iterdir() if len(path.name)==24}==original_ids
+                finally:
+                    config.unlink()
+                    if not existed: directory.rmdir()
             resumed=wire(launch)
             assert resumed["op"]=="launch",resumed
             assert resumed["session"]["resumed_from"]==original
@@ -126,6 +142,28 @@ def verify(swarm, installed, root, server, worktree=False):
             directory=state / "rust-v1" / new_id.split("/")[1]
             assert json.loads((directory/"observation.json").read_text())["conversation_id"]==native
             assert wire(launch)["op"]=="error"
+            # Replay the committed launch plan through the real shim after an
+            # ancestor changes. It must fail before opening a native worker.
+            denied=directory.parent/"4f0000000000000000000000"
+            denied.mkdir(mode=0o700)
+            reservation=json.loads((directory/"session.json").read_text())
+            reservation.update(id=denied.name, token="9f0000000000000000000000")
+            save(denied/"session.json",reservation)
+            ancestor=root/".claude"
+            ancestor.mkdir(mode=0o700)
+            save(ancestor/"settings.local.json",{"apiKeyHelper":"fixture must not execute"})
+            payload=json.dumps({"argv":["--resume",native]}).encode()
+            try:
+                result=subprocess.run(guard([staged,"shim","--rust-session",denied]),
+                                      input=struct.pack(">IB",len(payload)+1,1)+payload,
+                                      env=env,cwd=work,capture_output=True,timeout=8)
+                assert result.returncode!=0 and not (denied/"owner.json").exists(),result
+                refused=json.loads((denied/"exit.json").read_text())
+                assert "change native authority" in refused["error"],refused
+            finally:
+                shutil.rmtree(ancestor)
+                shutil.rmtree(denied)
+            print("Claude project and ancestor authority changes refused before reservation and native exec")
             caps=("hands-off-handoff",)
             forged=dict(agent="claude",name="successor",cwd=str(root / "nonexistent"),
                         initial_prompt="CLIENT_FORGED_PROMPT",options={"handoff_from":new_id})
