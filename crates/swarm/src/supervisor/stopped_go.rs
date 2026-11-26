@@ -1043,6 +1043,14 @@ impl Store {
         Ok(Some(row))
     }
 
+    pub(super) fn has_live_hermes(&self) -> bool {
+        self.rows
+            .lock()
+            .unwrap()
+            .values()
+            .any(|entry| entry.live.as_ref().is_some_and(|owner| owner.has_hermes()))
+    }
+
     pub(super) fn has_live_opencode(&self) -> bool {
         self.rows.lock().unwrap().values().any(|entry| {
             entry

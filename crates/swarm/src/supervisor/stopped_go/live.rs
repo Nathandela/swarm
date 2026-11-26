@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 pub(super) mod codex;
 pub(super) mod hermes;
+pub(in crate::supervisor) mod hermes_ledger;
 pub(super) mod open_code;
 mod pty;
 
@@ -259,6 +260,30 @@ impl Owner {
 
     pub(in crate::supervisor) fn read_only(&self) -> bool {
         self.hermes.is_some()
+    }
+
+    pub(super) fn has_hermes(&self) -> bool {
+        self.hermes.is_some()
+    }
+
+    pub(in crate::supervisor) fn hermes_semantic(
+        &self,
+        ledger: &mut hermes_ledger::Ledger,
+        request: &Value,
+    ) -> io::Result<Value> {
+        let viewer = self
+            .hermes
+            .as_ref()
+            .ok_or_else(|| io::Error::other("session has no qualified Go Hermes owner"))?;
+        self.dial()?;
+        let instance = viewer.instance(&self.directory)?;
+        ledger.request(viewer, &instance, request, || {
+            self.dial()?;
+            if viewer.instance(&self.directory)? != instance {
+                return Err(io::Error::other("Go Hermes semantic instance changed"));
+            }
+            Ok(())
+        })
     }
 
     pub(super) fn has_opencode(&self) -> bool {

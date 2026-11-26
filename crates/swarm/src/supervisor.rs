@@ -100,6 +100,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
 struct State {
     lock_identity: [u64; 2],
     stopped_go: Option<stopped_go::Store>,
+    go_hermes: Option<Mutex<stopped_go::live::hermes_ledger::Ledger>>,
     root: PathBuf,
     endpoint: String,
     socket: PathBuf,
@@ -154,7 +155,13 @@ impl State {
         let sessions = self.sessions.read().unwrap();
         let mut rows: Vec<_> = sessions.values().map(|s| s.view(&self.endpoint)).collect();
         if let Some(store) = &self.stopped_go {
-            rows.extend(store.rows(&self.endpoint));
+            rows.extend(store.rows(&self.endpoint).into_iter().map(|mut row| {
+                if self.go_hermes.is_some() && row["provider_mode"] == "shared-native" {
+                    row["summary"] =
+                        json!("Read-only Hermes terminal. Use swarm message for native input.");
+                }
+                row
+            }));
             rows.sort_by_key(|row| std::cmp::Reverse(stopped_go::timestamp(&row["created_at"])));
         } else {
             rows.sort_by(|a, b| field(b, "created_at").cmp(field(a, "created_at")));
@@ -794,6 +801,22 @@ fn serve(configured: PathBuf) -> io::Result<()> {
         stopped_go::verify_daemon_stopped(&root, &socket)?;
     }
     let stopped_go = stopped_go::Store::open(&root, opted_in, adopt_live)?;
+    let go_hermes = if std::env::var(stopped_go::live::hermes_ledger::OPT_IN).as_deref() == Ok("1")
+    {
+        if !stopped_go
+            .as_ref()
+            .is_some_and(stopped_go::Store::has_live_hermes)
+        {
+            return Err(io::Error::other(
+                "Go Hermes semantic compatibility requires a qualified live Go Hermes viewer",
+            ));
+        }
+        Some(Mutex::new(stopped_go::live::hermes_ledger::Ledger::open(
+            &root,
+        )?))
+    } else {
+        None
+    };
     let ownership = root.join(".rust-state-writer.lock");
     let _state_lock = if lock == ownership || opted_in {
         None
@@ -875,6 +898,7 @@ fn serve(configured: PathBuf) -> io::Result<()> {
         lock_identity: [lock_meta.dev(), lock_meta.ino()],
         context_guard: context_guard::Store::open(&root),
         stopped_go,
+        go_hermes,
         handoff_wake,
         pilot_journal,
         root: runtime_root,
@@ -995,7 +1019,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }
             if let Some(legacy) = &state.stopped_go {
                 return matches!(*cap, "subscribe" | "attach")
-                    || *cap == "opencode-history-v1" && legacy.has_live_opencode();
+                    || *cap == "opencode-history-v1" && legacy.has_live_opencode()
+                    || state.go_hermes.is_some()
+                        && matches!(*cap, "semantic-send" | "semantic-target");
             }
             matches!(*cap, crate::teammate::MAIL_CAP | crate::teammate::FILE_CAP)
                 || worker_origin_available
@@ -1065,6 +1091,23 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             continue;
         }
         let op = field(&request, "op");
+        if let Some(ledger) = &state.go_hermes
+            && (matches!(op, "semantic_send" | "semantic_status")
+                && caps.contains(&"semantic-send")
+                || op == "semantic_target" && caps.contains(&"semantic-target"))
+        {
+            let result = state
+                .live_go(&request)
+                .ok_or_else(|| io::Error::other("Go Hermes viewer is unavailable"))
+                .and_then(|owner| owner.hermes_semantic(&mut ledger.lock().unwrap(), &request));
+            let message = result.unwrap_or_else(|err| {
+                json!({
+                    "op":"error","operation_id":request["operation_id"],"error":err.to_string(),
+                })
+            });
+            reply(&writer, state, message)?;
+            continue;
+        }
         if state.stopped_go.is_some()
             && !matches!(
                 op,
@@ -1766,6 +1809,7 @@ mod manager_reservation_tests {
             lock_identity: [0, 0],
             context_guard: context_guard::Store::open(root),
             stopped_go: None,
+            go_hermes: None,
             handoff_wake: mpsc::sync_channel(1).0,
             schedule_socket: None,
             pilot_journal: Some(pilot_journal::Journal::load(

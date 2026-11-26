@@ -35,9 +35,16 @@ pub(in crate::supervisor::stopped_go) fn qualified_launch(meta: &Value, launch: 
     launch["argv"] == json!(expected)
 }
 
+pub(super) fn hex(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
 pub(super) struct Viewer {
-    descriptor: Value,
-    binding: native::Binding,
+    pub(super) descriptor: Value,
+    pub(super) binding: native::Binding,
 }
 
 impl Viewer {
@@ -62,8 +69,7 @@ impl Viewer {
             || descriptor["provider_version"] != VERIFIED_VERSION
             || descriptor["shim_pid"] != meta["shim_pid"]
             || descriptor["shim_start_time"] != meta["shim_start_time"]
-            || generation.len() != 32
-            || !generation.bytes().all(|c| c.is_ascii_hexdigit())
+            || !hex(generation, 32)
             || binding["session_id"] != meta["conversation_id"]
             || binding["directory"] != meta["cwd"]
             || home != binding["home"].as_str()
@@ -82,6 +88,32 @@ impl Viewer {
             descriptor,
             binding,
         })
+    }
+
+    pub(super) fn instance(&self, directory: &File) -> io::Result<String> {
+        let raw = super::runtime::read_private_file(
+            super::super::open_at(directory, c"session-instance", libc::O_RDONLY)?,
+            128,
+        )?;
+        let raw = std::str::from_utf8(&raw).map_err(io::Error::other)?;
+        let mut fields = raw.split_ascii_whitespace();
+        let instance = fields.next().unwrap_or_default();
+        let caps = read_at(directory, c"capabilities.json")?;
+        if !hex(instance, 32)
+            || fields.next().and_then(|s| s.parse::<u64>().ok())
+                != self.descriptor["shim_pid"].as_u64()
+            || fields.next().and_then(|s| s.parse::<u64>().ok())
+                != self.descriptor["shim_start_time"].as_u64()
+            || fields.next().is_some()
+            || caps["provider"] != "hermes"
+            || caps["provider_version"] != VERIFIED_VERSION
+            || caps["session_instance"] != instance
+        {
+            return Err(io::Error::other(
+                "Go Hermes semantic instance disagrees with its viewer",
+            ));
+        }
+        Ok(instance.to_owned())
     }
 
     pub(super) fn validate(&self, directory: &File) -> io::Result<()> {

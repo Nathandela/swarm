@@ -2,9 +2,11 @@
 """Qualify original Go's shared-native Hermes viewer in the guarded native harness."""
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 from urllib.request import urlopen
@@ -22,6 +24,7 @@ def rehearse(root, go, rust, stats):
     # Keep the harness's disposable user home rather than the Hermes profile path.
     go_env["HOME"] = os.environ["HOME"]
     rust_env = go_env | {"SWARM_DAEMON_STOPPED_GO_COMPAT": "1", LIVE: "1"}
+    writer_env = rust_env | {"SWARM_DAEMON_GO_HERMES_SEMANTIC_COMPAT": "1"}
     discord = state / "discord"
     discord.mkdir(mode=0o700)
     install = "local-hermes-native-witness"
@@ -58,15 +61,18 @@ def rehearse(root, go, rust, stats):
         workers.append(worker)
         return worker, state / worker.split("/")[-1]
 
-    def send_go(text, thread):
+    def request_for(text):
         operation = f"semantic:{time.time_ns() // 1000000}:{uuid4().hex}"
-        options = {"caps":("semantic-send",), "timeout":35}
-        send = {"op":"semantic_send", "operation_id":operation, "session_id":active, "body_version":1,
+        return {"op":"semantic_send", "operation_id":operation, "session_id":active, "body_version":1,
                 "composer_send":{"session":active, "session_instance":disk(session / "capabilities.json")["session_instance"],
                                  "text":text}}
+
+    def send_semantic(text, thread):
+        send = request_for(text)
+        options = {"caps":("semantic-send",), "timeout":35}
         reply = owner(go_env, send, **options)
         assert reply["op"] == "ok", reply
-        reply = owner(go_env, {"op":"semantic_status", "session_id":active, "operation_id":operation}, **options)
+        reply = owner(go_env, {"op":"semantic_status", "session_id":active, "operation_id":send["operation_id"]}, **options)
         receipt = reply["semantic_receipt"]
         assert receipt["state"] == "submitted" and receipt["native_session_id"] == thread, receipt
         return send, receipt
@@ -116,7 +122,7 @@ def rehearse(root, go, rust, stats):
             assert {k:v for k,v in other.items() if k != "session_id"} == {
                 k:v for k,v in original[2]["binding"].items() if k != "session_id"}
             view(go_env)
-            first, receipt = send_go("GO_SHARED_BEFORE_RUST", thread)
+            first, receipt = send_semantic("GO_SHARED_BEFORE_RUST", thread)
             await_value(lambda: (thread, "assistant", "SYNTHETIC_NATIVE_ACK") in native_turns())
             print("original Go mounted actual shared-native Hermes viewer and sent a proved turn", flush=True)
         descriptor = session / "hermes-input.json"
@@ -127,6 +133,8 @@ def rehearse(root, go, rust, stats):
         finally:
             descriptor.write_bytes(original[0])
 
+        files = ("meta.json", "shim-launch.json", "session-instance", "capabilities.json", "hermes-input.json")
+        source_evidence = {name: (session / name).read_bytes() for name in files}
         with daemon(rust, rust_env, root / "rust-viewer.log"):
             view(rust_env, read_only=True)
             assert proof() == original
@@ -137,6 +145,34 @@ def rehearse(root, go, rust, stats):
                 assert refused_action["op"] == "error", refused_action
             assert proof() == original
             assert not any("RUST_SHARED_VIEW_MUST_NOT_SEND" in str(row) for row in native_turns())
+        status_request = {"op":"semantic_status", "session_id":active, "operation_id":first["operation_id"]}
+        semantic_caps = ("semantic-send", "semantic-target")
+        with daemon(rust, writer_env, root / "rust-writer.log"):
+            view(writer_env, read_only=True)
+            recovered = owner(writer_env, status_request, caps=semantic_caps)
+            assert recovered["semantic_receipt"] == receipt, recovered
+            target = owner(writer_env, {"op":"semantic_target","session_id":active}, caps=semantic_caps)
+            assert target["semantic_target_instance"] == first["composer_send"]["session_instance"], target
+            rust_send = request_for("RUST_SHARED_DURING_HANDOFF")
+            wrong_instance = rust_send | {"composer_send":rust_send["composer_send"] | {"session_instance":"1" * 32}}
+            assert owner(writer_env, wrong_instance, caps=semantic_caps)["op"] == "error"
+            rust_receipt = json.loads(subprocess.check_output([
+                rust, "message", active, "--text", rust_send["composer_send"]["text"],
+                "--operation-id", rust_send["operation_id"],
+            ], env=writer_env, timeout=50))
+            assert rust_receipt["state"] == "submitted" and rust_receipt["native_session_id"] == thread, rust_receipt
+            assert owner(writer_env, rust_send, caps=semantic_caps)["op"] == "ok"
+            different = rust_send | {"composer_send":rust_send["composer_send"] | {"text":"DO_NOT_RESEND"}}
+            assert owner(writer_env, different, caps=semantic_caps)["op"] == "error"
+            await_value(lambda: native_turns().count((thread, "assistant", "SYNTHETIC_NATIVE_ACK")) == 2)
+            assert proof() == original
+        log = state / "idempotency" / "idempotency.log"
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        executing = next(row for row in rows if row["operation_id"] == rust_send["operation_id"]
+                         and row["phase"] == "executing")
+        with daemon(rust, writer_env, root / "rust-restarted.log"):
+            assert owner(writer_env, rust_send, caps=semantic_caps)["op"] == "ok"
+        assert all((session / name).read_bytes() == data for name, data in source_evidence.items())
         with daemon(go, go_env, root / "go-restored.log"):
             view(go_env)
             assert proof() == original
@@ -145,16 +181,40 @@ def rehearse(root, go, rust, stats):
             reread = owner(go_env, {"op":"semantic_status", "session_id":active,
                                    "operation_id":first["operation_id"]}, caps=("semantic-send",), timeout=35)
             assert reread["semantic_receipt"] == receipt, reread
-            send_go("GO_SHARED_AFTER_RUST", thread)
-            await_value(lambda: native_turns().count((thread, "assistant", "SYNTHETIC_NATIVE_ACK")) == 2)
+            assert owner(go_env, rust_send, caps=semantic_caps)["op"] == "ok"
+            reread_rust = owner(go_env, status_request | {"operation_id":rust_send["operation_id"]}, caps=semantic_caps)
+            assert reread_rust["semantic_receipt"] == rust_receipt, reread_rust
+            assert owner(go_env, different, caps=semantic_caps)["op"] == "error"
+            send_semantic("GO_SHARED_AFTER_RUST", thread)
+            await_value(lambda: native_turns().count((thread, "assistant", "SYNTHETIC_NATIVE_ACK")) == 3)
             assert [row for row in native_turns() if row[1] == "user"] == [
-                (thread, "user", "GO_SHARED_BEFORE_RUST"), (thread, "user", "GO_SHARED_AFTER_RUST")]
+                (thread, "user", "GO_SHARED_BEFORE_RUST"), (thread, "user", "RUST_SHARED_DURING_HANDOFF"),
+                (thread, "user", "GO_SHARED_AFTER_RUST")]
+        # Reuse the on-disk intent shape while reserving an operation that never reached Hermes.
+        abandoned = request_for("RUST_SHARED_ABANDONED")
+        abandoned_body = abandoned["composer_send"]
+        fields = [active, abandoned_body["session_instance"], "", abandoned_body["text"]]
+        hashed = b"".join(len(field.encode()).to_bytes(4, "big") + field.encode() for field in fields)
+        executing["operation_id"] = abandoned["operation_id"]
+        executing["request_hash"] = hashlib.sha256(hashed).hexdigest()
+        executing["request"]["hermes_input"]["hash"] = hashlib.sha256(abandoned_body["text"].encode()).hexdigest()
+        with log.open("a") as stream:
+            stream.write(json.dumps(executing) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        for binary, env, name in ((rust, writer_env, "rust-uncertain"), (go, go_env, "go-uncertain")):
+            with daemon(binary, env, root / (name + ".log")):
+                followup = request_for("MUST_NOT_CROSS_UNKNOWN_ADMISSION")
+                for send in (abandoned, followup):
+                    result = owner(env, send, caps=semantic_caps, timeout=35)
+                    assert result["op"] == "error" and result["error_code"] == "outcome_unknown", result
         calls = json.load(urlopen(stats, timeout=5))["main_calls"]
-        assert calls == 2, calls
+        assert calls == 3, calls
         result = {"go_shared_native": True, "original_go_to_rust_to_go": True,
                   "native_thread_and_custody_retained": True,
                   "same_scope_forged_thread_refused": True, "rust_input_withheld": True,
-                  "rust_lifecycle_withheld": True, "go_receipt_replayed": True, "model_calls": calls}
+                  "rust_lifecycle_withheld": True, "go_receipt_replayed": True, "rust_receipt_replayed_in_go": True, "unknown_admission_fenced_on_both_owners": True,
+                  "model_calls": calls}
         (root / "result.json").write_text(json.dumps(result))
     finally:
         if workers:
