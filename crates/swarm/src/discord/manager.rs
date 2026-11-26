@@ -54,7 +54,7 @@ impl Manager {
         self.route.as_ref().map_or("", |route| &route.guild)
     }
 
-    pub(super) fn mail_root(&self) -> io::Result<std::path::PathBuf> {
+    pub(super) fn supervisor_root(&self) -> io::Result<std::path::PathBuf> {
         let _ = self.dial()?;
         match self.cfg.0["supervisor"]["state_dir"].as_str() {
             Some(root) => std::fs::canonicalize(root),
@@ -242,7 +242,12 @@ impl Manager {
         Ok(status.clone())
     }
 
-    pub(super) fn composer(&self, input: &Value, runtime: &Value) -> io::Result<Value> {
+    pub(super) fn composer(
+        &self,
+        input: &Value,
+        runtime: &Value,
+        starting_prompt: &str,
+    ) -> io::Result<Value> {
         let binding = &runtime["binding"];
         let actor = field(&input["author"], "id");
         let channel = field(&input["route"], "channel_id");
@@ -271,9 +276,10 @@ impl Manager {
             binding,
             &runtime["turn"]["external_input"],
         )?;
+        let text = crate::manager_prompt::render(starting_prompt, field(input, "text"))?;
         let mut composer = json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
-            "text": input["text"],
+            "text": text,
             "manager_admission": {
                 "binding": binding, "expected_external_input": runtime["turn"]["external_input"],
                 "nonce":nonce,
@@ -640,7 +646,18 @@ mod tests {
             let mut inbox = super::super::receipt::Inbox::open(&enrollment, &cfg).unwrap();
             inbox.checkpoint("400").unwrap();
             let admitted = inbox.admit(&source).unwrap().unwrap();
-            let composer = manager.composer(&admitted, &native).unwrap();
+            let setting = "Check the real output.";
+            crate::manager_prompt::save(&state, setting).unwrap();
+            let starting_prompt =
+                crate::manager_prompt::load(&manager.supervisor_root().unwrap()).unwrap();
+            let composer = manager
+                .composer(&admitted, &native, &starting_prompt)
+                .unwrap();
+            assert_eq!(starting_prompt, setting);
+            assert_eq!(
+                composer["text"],
+                crate::manager_prompt::render(setting, field(&admitted, "text")).unwrap()
+            );
             let launch_operation = operation.clone();
             let operation = format!(
                 "semantic:{}:{:032x}",
@@ -653,10 +670,11 @@ mod tests {
             if rust.is_some() {
                 inbox.cutover("401",field(&admitted,"revision"),json!({
                     "generation":1,"launch":request,"launch_operation":launch_operation,"session":id,"binding":native["binding"],
-                    "input":{"operation":operation,"source_id":"401","composer":composer}
+                    "input":{"operation":operation,"source_id":"401","composer":composer,"starting_prompt":starting_prompt}
                 })).unwrap();
             }
             if rust.is_some() {
+                crate::manager_prompt::save(&state, "Inspect the next worker reply.").unwrap();
                 let mut forged = composer.clone();
                 forged["text"] = json!("fabricated Discord text");
                 let err = manager.send(&operation, &forged).unwrap_err();
@@ -1199,6 +1217,8 @@ mod tests {
                         };
                         assert_ne!(wake["turn_id"], turn["native_turn_id"]);
                         assert_eq!(wake["source_id"], "401");
+                        assert_eq!(wake["starting_prompt"], "Inspect the next worker reply.");
+                        assert!(field(&wake["composer"], "text").starts_with("Current owner settings (supersede earlier settings)\nInspect the next worker reply.\n\nCurrent input\n"));
                         let expected = if publish_files_fixture {
                             "Worker attached files"
                         } else {

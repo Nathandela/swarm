@@ -265,7 +265,7 @@ impl EditorFrame {
     }
 }
 
-fn word_wrap(text: &str, cols: u16) -> Vec<String> {
+pub(super) fn word_wrap(text: &str, cols: u16) -> Vec<String> {
     let text = clip(text, u16::MAX);
     let mut rows = Vec::new();
     let mut line = String::new();

@@ -168,7 +168,7 @@ pub(crate) fn verify_connector_input(
     let origin = &composer["origin"];
     let voice = call_origin::key(id);
     if voice {
-        call_origin::validate(scope, origin, composer["text"].as_str().unwrap_or_default())?;
+        call_origin::validate(scope, origin, ipc::field(source, "text"))?;
         if source["voice_origin"] != *origin || origin["request_id"] != id {
             return Err(invalid("voice origin does not match the persisted cutover"));
         }
@@ -182,7 +182,8 @@ pub(crate) fn verify_connector_input(
                 || source["route"]["channel_id"] != scope["channel_id"]
                 || source["author"]["id"] != origin["actor_id"]
                 || source["authority"] != origin["kind"])
-        || source["text"] != composer["text"]
+        || composer["text"]
+            != crate::manager_prompt::saved_input(input, ipc::field(source, "text"))?
         || source["revision"] != composer["origin"]["revision"]
         || source["operation_id"] != composer["origin"]["request_id"]
         || !voice

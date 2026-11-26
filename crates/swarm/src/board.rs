@@ -84,6 +84,7 @@ fn board(path: &Path) -> io::Result<()> {
     let mut mouse_enabled = true;
     let mut previous_menu = None;
     let mut previous_editor = None;
+    let mut previous_options: Option<((u16, u16), String)> = None;
     let mut retry = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
@@ -130,9 +131,19 @@ fn board(path: &Path) -> io::Result<()> {
             }
             let menu = board.menu_frame(geometry);
             let editor = board.editor_frame(geometry);
+            let tiny_options = board
+                .tiny_options_field(geometry)
+                .map(|field| (geometry, field));
             let mut display = String::new();
             if let Some(frame) = &menu {
                 frame.paint(&mut display, previous_menu.as_ref());
+            } else if let (Some((next_size, next)), Some((previous_size, previous))) =
+                (&tiny_options, &previous_options)
+                && next_size == previous_size
+            {
+                if next != previous {
+                    display.push_str(next);
+                }
             } else if !editor
                 .as_ref()
                 .is_some_and(|frame| frame.paint_change(previous_editor.as_ref(), &mut display))
@@ -142,6 +153,7 @@ fn board(path: &Path) -> io::Result<()> {
             output.write_all(display.as_bytes())?;
             previous_menu = menu;
             previous_editor = editor;
+            previous_options = tiny_options;
             output.flush()?;
         }
         needs_paint = false;
@@ -211,6 +223,7 @@ fn board(path: &Path) -> io::Result<()> {
                         board.attach(path, &id, &name, &mut output)?;
                         previous_menu = None;
                         previous_editor = None;
+                        previous_options = None;
                     }
                     // Bytes from the initiating key batch belong to the board.
                     break;
@@ -368,6 +381,7 @@ enum Modal {
     Options {
         draft: Layout,
         focus: usize,
+        manager: Option<options::Manager>,
     },
     More {
         target: String,
@@ -573,6 +587,7 @@ impl Board {
                 self.modal = Some(Modal::Options {
                     draft: self.layout,
                     focus: 0,
+                    manager: options::Manager::open(),
                 });
                 self.notice.clear();
             }
@@ -715,10 +730,20 @@ impl Board {
                 self.modal = Some(modal);
                 return action;
             }
-            Modal::Options { draft, focus } => {
+            Modal::Options {
+                draft,
+                focus,
+                manager,
+            } => {
+                let fields = if manager.is_some() { 4 } else { 3 };
                 match key {
-                    Key::Up => *focus = (*focus + 2) % 3,
-                    Key::Down | Key::Tab => *focus = (*focus + 1) % 3,
+                    Key::Up => *focus = (*focus + fields - 1) % fields,
+                    Key::Down | Key::Tab => *focus = (*focus + 1) % fields,
+                    other if *focus == 3 => {
+                        if let Some(manager) = manager {
+                            manager.update(other, geometry);
+                        }
+                    }
                     Key::Left | Key::Right if *focus == 2 => {
                         draft.touch_back = !draft.touch_back;
                     }
@@ -1263,6 +1288,31 @@ impl Board {
         self.inline_session_row(target, geometry).is_some()
     }
 
+    fn tiny_options_field(&self, geometry: (u16, u16)) -> Option<String> {
+        let Some(Modal::Options {
+            draft,
+            focus,
+            manager,
+        }) = &self.modal
+        else {
+            return None;
+        };
+        if !self.notice.is_empty() || !usable(geometry) || options::fits(geometry) {
+            return None;
+        }
+        let mut field = String::new();
+        options::view(
+            &mut field,
+            geometry.0,
+            geometry.1,
+            *draft,
+            *focus,
+            manager.as_ref(),
+            true,
+        );
+        Some(field)
+    }
+
     fn editor_frame(&self, geometry: (u16, u16)) -> Option<session_form::EditorFrame> {
         let Some(Modal::Edit {
             id,
@@ -1336,8 +1386,20 @@ impl Board {
                     "enter relocate · esc cancel",
                 );
             }
-            Some(Modal::Options { draft, focus }) => {
-                options::view(&mut screen, cols, rows, *draft, *focus);
+            Some(Modal::Options {
+                draft,
+                focus,
+                manager,
+            }) => {
+                options::view(
+                    &mut screen,
+                    cols,
+                    rows,
+                    *draft,
+                    *focus,
+                    manager.as_ref(),
+                    false,
+                );
             }
             Some(Modal::More { .. }) => {
                 self.build_menu_frame((cols, rows))

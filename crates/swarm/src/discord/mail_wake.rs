@@ -126,7 +126,7 @@ pub(super) fn verify(data: &Value, scope: &Value, root: &Path, composer: &Value)
         || row["route"]["channel_id"] != scope["channel_id"]
         || field(&row["route"], "guild_id") != field(scope, "guild_id")
         || !origin["voice"].is_null()
-        || composer["text"] != text(&note)
+        || composer["text"] != crate::manager_prompt::saved_input(input, &text(&note))?
         || composer["manager_admission"]["binding"] != *binding
     {
         return Err(invalid(

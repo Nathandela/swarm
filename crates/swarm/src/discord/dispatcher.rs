@@ -248,7 +248,7 @@ impl Dispatcher {
                     let publication = inbox.publication(nonce);
                     if !publication["proof"]["file_source"].is_null() {
                         mail_store::release_publication(
-                            &self.owner.mail_root()?,
+                            &self.owner.supervisor_root()?,
                             &publication["proof"]["file_source"],
                             nonce,
                         )?;
@@ -296,9 +296,10 @@ impl Dispatcher {
             };
             (id, current)
         };
-        let composer = self.owner.composer(&current, &status)?;
+        let starting_prompt = crate::manager_prompt::load(&self.owner.supervisor_root()?)?;
+        let composer = self.owner.composer(&current, &status, &starting_prompt)?;
         let semantic = operation("semantic")?;
-        state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id});
+        state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id,"starting_prompt":starting_prompt});
         inbox.cutover(&id, field(&current, "revision"), state)?;
         // Ambiguous sends are never retried. Only the native pre-effect authority refusal is safe.
         match self.owner.send(&semantic, &composer) {
@@ -365,7 +366,7 @@ impl Dispatcher {
             return Ok(());
         }
         let binding = &state["binding"];
-        let root = self.owner.mail_root()?;
+        let root = self.owner.supervisor_root()?;
         let queued = inbox.next_prepared().is_some()
             || voice && inbox.prepared_voice().is_some()
             || !mail_store::pending(&root, field(binding, "conversation_id"), 0, |note| {
@@ -467,7 +468,7 @@ impl Dispatcher {
         {
             return Ok(());
         }
-        let root = self.owner.mail_root()?;
+        let root = self.owner.supervisor_root()?;
         let binding = &state["binding"];
         let notes = crate::supervisor::mail_store::pending(
             &root,
@@ -509,7 +510,8 @@ impl Dispatcher {
             wake_input["operation_id"] = json!(format!("mail_{key}"));
             wake_input["revision"] = json!(key);
             wake_input["text"] = json!(mail_wake::text(&note));
-            let mut composer = self.owner.composer(&wake_input, status)?;
+            let starting_prompt = crate::manager_prompt::load(&root)?;
+            let mut composer = self.owner.composer(&wake_input, status, &starting_prompt)?;
             let semantic = operation("semantic")?;
             let mut wake = json!({"key":key,"binding":mail_wake::identity(&note),"id":note["ID"],"owner_revision":accepted_revision});
             if voice.is_object() {
@@ -517,8 +519,7 @@ impl Dispatcher {
                 wake["voice_origin"] = voice;
                 wake["note_digest"] = json!(mail_wake::note_digest(&note)?);
             }
-            state["input"] =
-                json!({"operation":semantic,"composer":composer,"source_id":id,"worker_wake":wake});
+            state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id,"worker_wake":wake,"starting_prompt":starting_prompt});
             state["worker_wakes"][&key] = json!(true);
             inbox.set_manager(state)?;
             if self.owner.send(&semantic, &composer).is_err() {
@@ -657,7 +658,7 @@ impl Dispatcher {
                         "queued publication no longer matches the selected worker note",
                     ));
                 }
-                mail_store::pin_publication(&self.owner.mail_root()?, file_source, &nonce)?
+                mail_store::pin_publication(&self.owner.supervisor_root()?, file_source, &nonce)?
             };
             inbox.publication_state(&nonce, "sending", None)?;
             match api.post(cfg, &nonce, body, &files) {
@@ -756,7 +757,7 @@ impl Dispatcher {
             if proof["native_turn_id"] != input["turn_id"] {
                 return Err(invalid("native mailbox tool belongs to another turn"));
             }
-            let scope = self.owner.mail_root()?;
+            let scope = self.owner.supervisor_root()?;
             let session = if input["worker_wake"].is_null() {
                 field(&state, "session")
                     .rsplit('/')

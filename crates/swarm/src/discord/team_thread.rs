@@ -369,6 +369,7 @@ mod tests {
                 &first,
                 &json!({"ready_for_input":true,"binding":binding,
             "turn":{"state":"idle","external_input":0}}),
+                "",
             )
             .unwrap();
         assert_eq!(composer["origin"]["guild_id"], "1");
