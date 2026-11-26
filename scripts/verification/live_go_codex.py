@@ -60,6 +60,7 @@ def rehearse(go, rust, root, version, cold=False):
     assert subprocess.check_output([vendor, "--version"], env=go_env).strip() == f"codex-cli {version}".encode()
     active = None
     rust_held = None
+    go_held = None
 
     def until(test, message):
         try:
@@ -120,6 +121,7 @@ def rehearse(go, rust, root, version, cold=False):
             result = owner(go_env, {"op":"launch", "launch":launch}, timeout=55)
             assert result["op"] == "launch", result
             active = result["session"]["id"]
+            go_held = active
             session = state / active.split("/")[1]
             until(lambda: "fixture" in "\n".join(snapshot(go_env, active)["lines"]).lower(), "native prompt")
             turn(go_env, "Go owner warmup")
@@ -168,16 +170,6 @@ def rehearse(go, rust, root, version, cold=False):
             contents = transcripts[0].read_text()
             assert all(text in contents for text in list(prompts)[:3])
             assert observed_prompts == list(prompts)[:3], observed_prompts
-            if cold:
-                assert owner(go_env, {"op":"kill","session_id":active})["op"] == "ok"
-                until(lambda: disk(session / "meta.json")["status"]["Process"] == "exited", "drained Go source")
-                active = None
-        if cold and guard:
-            until(lambda: all(has_stopped(pid, birth) for pid, birth in identity[0]),
-                  "original Go native processes joined")
-            if guard.paths[0][0].is_socket():
-                refused(rust, rust_env, "Go Codex short listener custody remains")
-            guard.close()
         print("same session, native thread, shim, TUI and app-server across Go → Rust → Go")
         if cold:
             with daemon(rust, rust_env, root / "rust-create.log"):
@@ -191,6 +183,8 @@ def rehearse(go, rust, root, version, cold=False):
                 native_thread = until(lambda: disk(candidate_state / "observation.json").get("conversation_id"),
                                       "Rust-bound native conversation")
                 assert native_thread != thread
+                assert {row["id"] for row in listed(rust_env)} == {go_held, active}
+                assert identities() == identity
                 backend_pid = socket_peer(candidate_state / "b")
                 backend_birth = process_birth(backend_pid)
                 refused_operation = owner(rust_env, {"op":"semantic_send","session_id":active,
@@ -200,6 +194,7 @@ def rehearse(go, rust, root, version, cold=False):
             export = [rust, "daemon", "export-stopped-go"]
             refused_while_live = subprocess.run(export, env=rust_env, capture_output=True, timeout=12)
             assert refused_while_live.returncode and b"live or uncertain Rust shim" in refused_while_live.stderr, refused_while_live
+            assert identities() == identity and not (state / local).exists()
             with daemon(rust, rust_env, root / "rust-drain.log"):
                 assert owner(rust_env, {"op":"kill","session_id":active})["op"] == "ok"
                 until(lambda: (candidate_state / "go-stop-proof.json").is_file(), "Rust stop proof")
@@ -225,6 +220,7 @@ def rehearse(go, rust, root, version, cold=False):
             finally:
                 unknown_ledger.rmdir()
             subprocess.run(export, env=rust_env, check=True, timeout=12)
+            assert identities() == identity
             export_meta = disk(state / local / "meta.json")
             assert export_meta["conversation_id"] == native_thread
             assert export_meta["cli_identity"] == disk(candidate_state / "session.json")["go_rollback"]["cli_identity"]
@@ -232,6 +228,8 @@ def rehearse(go, rust, root, version, cold=False):
             if guard:
                 go_env["SWARM_FIXTURE_SESSION_ID"] = macos.RESUMED_GO_ID
             with daemon(go, go_env, root / "go-cold-resume.log"):
+                assert {row["id"] for row in listed(go_env)} == {go_held, created["session"]["id"]}
+                assert identities() == identity
                 resumed = owner(go_env, {"op":"launch", "launch":launch | {
                     "name":"Go cold Codex resume", "options":{"resume_from":created["session"]["id"]}
                 }}, timeout=55)
@@ -249,17 +247,26 @@ def rehearse(go, rust, root, version, cold=False):
                 assert owner(go_env, {"op":"kill","session_id":active})["op"] == "ok"
                 until(lambda: disk(session / "meta.json")["status"]["Process"] == "exited", "drained Go resume")
                 active = None
-            print("pinned Go resumed the stopped Rust-created managed Codex conversation", flush=True)
+                assert owner(go_env, {"op":"kill","session_id":go_held})["op"] == "ok"
+                until(lambda: all(has_stopped(pid, birth) for pid, birth in identity[0]),
+                      "original Go native processes joined")
+                go_held = None
+            if guard and guard.paths[0][0].is_socket():
+                refused(rust, rust_env, "Go Codex short listener custody remains")
+            print("pinned Go resumed the stopped Rust-created conversation with the original Go PTY still live", flush=True)
 
     finally:
         if rust_held:
             with daemon(rust, rust_env, root / "rust-cleanup.log"):
                 assert owner(rust_env, {"op":"kill","session_id":rust_held})["op"] == "ok"
-        elif active:
+        if go_held or active:
             with daemon(go, go_env, root / "cleanup.log"):
-                result = subprocess.run([go, "kill", active], env=go_env, capture_output=True, timeout=10)
-                assert result.returncode == 0, result.stderr
-                until(lambda: (session / "exit.json").is_file(), "stopped live fixture")
+                running = {row["id"] for row in listed(go_env) if row["status"]["Process"] == "running"}
+                for identifier in {go_held, active} & running:
+                    result = subprocess.run([go, "kill", identifier], env=go_env, capture_output=True, timeout=10)
+                    assert result.returncode == 0, result.stderr
+                    path = state / identifier.split("/")[-1] / "exit.json"
+                    until(lambda: path.is_file(), "stopped live fixture")
         model.shutdown()
         model.server_close()
         if guard:

@@ -238,15 +238,6 @@ impl State {
         mailbox: Option<Value>,
         expected_nonce: Option<&str>,
     ) -> io::Result<Arc<Session>> {
-        if self
-            .stopped_go
-            .as_ref()
-            .is_some_and(stopped_go::Store::has_live)
-        {
-            return Err(io::Error::other(
-                "new launches require separate live Go workspace qualification",
-            ));
-        }
         if self.stopped_go.is_some()
             && (managed.is_some()
                 || mailbox.is_some()
@@ -554,6 +545,10 @@ impl State {
             .values()
             .filter(|s| s.is_live())
             .count()
+            + self
+                .stopped_go
+                .as_ref()
+                .map_or(0, |store| store.live_ids().len())
             >= SESSION_LIMIT
         {
             return Err(io::Error::other("session limit reached"));

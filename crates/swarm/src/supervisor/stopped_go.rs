@@ -937,14 +937,6 @@ impl Store {
         })
     }
 
-    pub(super) fn has_live(&self) -> bool {
-        self.rows
-            .lock()
-            .unwrap()
-            .values()
-            .any(|entry| entry.live.is_some())
-    }
-
     pub(super) fn live(&self, endpoint: &str, id: &str) -> Option<Arc<live::Owner>> {
         let (want, local) = id.split_once('/')?;
         if want != endpoint {

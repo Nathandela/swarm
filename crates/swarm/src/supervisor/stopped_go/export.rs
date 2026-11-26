@@ -36,7 +36,8 @@ pub(in crate::supervisor) fn run() -> io::Result<()> {
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
         .open(&root)?;
-    let imported = Store::open(&root, true, false)?.expect("opt-in store");
+    let adopt_live = std::env::var(super::live::OPT_IN).ok().as_deref() == Some("1");
+    let imported = Store::open(&root, true, adopt_live)?.expect("opt-in store");
     let deleted = go_tombstones(&root)?;
     let prepared = collect(&root)?
         .into_iter()
