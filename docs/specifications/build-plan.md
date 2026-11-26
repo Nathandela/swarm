@@ -1,8 +1,8 @@
 # swarm — Build Plan
 
 **Status**: Approved (Gate 3, 2026-07-16)
-**Source spec**: [system-spec.md](system-spec.md) (Draft 2) · ADR-001..004 · [audit-001](../verification/audit-001-system-spec.md) · [system invariants](../invariants/system-invariants.md)
-**UI reference**: [docs/design/ui-preview.html](../design/ui-preview.html) — the interactive design preview (screens, keyboard dynamics, lifecycle, test strategy) is the canonical visual reference for Epics 7, 8, and 10. Published live at https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
+**Source spec**: [system-spec.md](system-spec.md) (Draft 2) · ADR-001..004 · [audit-001](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/docs/verification/audit-001-system-spec.md) · [system invariants](../invariants/system-invariants.md)
+**UI reference**: [docs/design/ui-preview.html](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/docs/design/ui-preview.html) — the interactive design preview (screens, keyboard dynamics, lifecycle, test strategy) is the canonical visual reference for Epics 7, 8, and 10. Published live at https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
 
 This is the approved plan for the original 15-epic implementation, not a current feature inventory. Its phase labels and scope exclusions (including Epic 11's Claude/Codex-only v1.0) remain historical acceptance boundaries. Its CI scaffolding describes the original build phase; current Actions runs are release-tag-only as described in [AGENTS.md](../../AGENTS.md). Later accepted amendments are identified at the affected contracts; see [docs/INDEX.md](../INDEX.md) for current implementation and release boundaries. Do not infer that a later adapter or product surface changes an earlier epic's acceptance criteria.
 

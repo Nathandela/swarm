@@ -114,13 +114,10 @@ impl Broker {
             }),
         )?;
         for (name, source) in [
-            (
-                SENDER,
-                include_str!("../../../../internal/claudeinput/plugin.js"),
-            ),
+            (SENDER, include_str!("../../assets/claude/plugin.js")),
             (
                 "swarm-native-input-guard",
-                include_str!("../../../../internal/claudeinput/guard.js"),
+                include_str!("../../assets/claude/guard.js"),
             ),
         ] {
             let plugin = dir.join(name);

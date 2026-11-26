@@ -1,6 +1,6 @@
 # Rust M6 local Pilot slice
 
-The [Pilot operator contract](../operations/pilot.md) and [workflow matrix](../specifications/rust-migration/workflows.md) define the retained behavior.
+The [Pilot operator contract](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/docs/operations/pilot.md) and [workflow matrix](../specifications/rust-migration/workflows.md) define the retained behavior.
 
 | Test | Observation |
 |---|---|

@@ -45,3 +45,6 @@ cargo test --locked --workspace
 ```
 
 The migration also uses independent Go and Rust executables, separate private state roots, native macOS and Linux, and real PTYs. The release ledger records the exact scenarios, provider versions, observed results and open gates. [Reproducible comparison harness](scripts/verification/parity/README.md) · [Migration plan](docs/specifications/rust-migration/README.md) · [Release evidence](docs/verification/rust-migration.md)
+
+
+For a comparison build, `python3 scripts/verification/build_rust_references.py /tmp/swarm-go-oracles` builds both pinned Go executables in separate checkouts and writes their identities to a new output directory. The Rust build uses its vendored provider scripts and templates under [crate assets](crates/swarm/assets). The Go product, phone apps, remote service deployment and managed account switching can be inspected at the [reference revision](https://github.com/Nathandela/swarm/tree/f26648d69086e329132ac7849954d2f29a895387).

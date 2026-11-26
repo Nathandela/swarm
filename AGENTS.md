@@ -29,7 +29,9 @@ Use [the local qualification harness](scripts/verification/parity/README.md) for
 
 ## Go reference gates
 
-In a checkout of the pinned Go reference, use Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency — see ADR-005; to 1.25 by
+Run Go gates in a separate reference checkout. The executable builder checks out each source pin independently. Corrections specific to the Go test harness are recorded at `6ea90b40`. [Reference builder](scripts/verification/build_rust_references.py)
+
+The reference requires Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency — see ADR-005; to 1.25 by
 Phase B's mandatory `golang.org/x/mobile` tool directive — see ADR-008, which supersedes ADR-005's
 floor without superseding ADR-005; to 1.26 by the `golang.org/x/net` CVE fix — ADR-008 Amendment 1).
 

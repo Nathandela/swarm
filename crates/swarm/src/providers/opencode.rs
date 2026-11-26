@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const BRIDGE: &str = include_str!("../../../../internal/opencodebridge/tui.mjs");
+const BRIDGE: &str = include_str!("../../assets/opencode/tui.mjs");
 // Extend the pinned provider asset only in the Rust artifact; Go reference builds keep it verbatim.
 fn bridge_source() -> io::Result<String> {
     let mut source = BRIDGE.to_owned();

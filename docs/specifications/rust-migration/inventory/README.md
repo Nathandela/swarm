@@ -31,4 +31,4 @@ their invoking command or a pinned Go build; their stack paths identify the work
 checkout. That checkout was `5863d844dee9fa30119f63b3a73bfdc934be4c52`; Go source/test
 diffs from the M0 pin were limited to dispatcher-guide and checkout-test changes. The
 targeted command and its exact package outcomes are recorded in the `RUN_01` row. No
-fleet run is an all-green result, and no row claims the Rust candidate has passed.
+early fleet run was uniformly green. [Subsequent qualification](../../../verification/rust-migration.md) records later builds and outcomes. The checker reads both historical revisions directly from Git.

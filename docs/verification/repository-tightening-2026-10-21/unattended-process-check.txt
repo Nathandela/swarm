@@ -1,1 +1,0 @@
-ok  	github.com/Nathandela/swarm/cmd/swarm	8.573s
