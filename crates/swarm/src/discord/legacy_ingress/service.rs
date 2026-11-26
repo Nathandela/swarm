@@ -140,6 +140,7 @@ pub(in crate::discord) struct StatusSocket {
     inode: (u64, u64),
     connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
     requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    commit_gate: std::sync::Arc<std::sync::Mutex<()>>,
     stop: std::sync::mpsc::Sender<()>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -183,6 +184,8 @@ impl StatusSocket {
         let live = connected.clone();
         let requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown = requested.clone();
+        let commit_gate = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let shutdown_gate = commit_gate.clone();
         let identity = Sha256::digest(cfg.text("installation_id").as_bytes());
         let stop_path = format!("/installation-v1/{identity:x}/shutdown");
         let mut initial = cfg.status();
@@ -215,6 +218,9 @@ impl StatusSocket {
                 } else if line == format!("POST {stop_path} HTTP/1.0\r\n")
                     && read_shutdown(&mut reader)
                 {
+                    let _commit = shutdown_gate
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     shutdown.store(true, std::sync::atomic::Ordering::Release);
                     live.store(false, std::sync::atomic::Ordering::Release);
                     Some(json!({"stopped":true}))
@@ -239,6 +245,7 @@ impl StatusSocket {
             inode: (meta.dev(), meta.ino()),
             connected,
             requested,
+            commit_gate,
             stop,
             worker: Some(worker),
         })
@@ -246,6 +253,16 @@ impl StatusSocket {
 
     pub(in crate::discord) fn stopping(&self) -> bool {
         self.requested.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(in crate::discord) fn commit_guard(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
+        let guard = self.commit_gate.lock().map_err(|_| invalid())?;
+        if self.stopping() {
+            return Err(io::Error::other(
+                "original connector stopped before Voice commit",
+            ));
+        }
+        Ok(guard)
     }
 
     pub(in crate::discord) fn online(&self, value: bool) {

@@ -2,6 +2,14 @@
 use super::*;
 use bbolt_rs::CursorApi;
 
+#[cfg(test)]
+type RuntimeReplyProbe = Box<dyn FnMut() -> io::Result<()>>;
+
+#[cfg(test)]
+thread_local! {
+    pub(in crate::discord) static MANAGER_RUNTIME_REPLY: std::cell::RefCell<Option<RuntimeReplyProbe>> = const { std::cell::RefCell::new(None) };
+}
+
 const MARKER: &str = ".rust-personal-handoff-v1.json";
 
 fn pin_identity(path: &Path) -> io::Result<Value> {
@@ -173,6 +181,11 @@ pub(in crate::discord) fn verify_idle_manager(
     }
     let current = owner.request_body(json!({"op":"manager_runtime","session_id":stored["session_id"],
         "body_version":1,"manager_runtime_request":{"session_instance":stored["session_instance"]}}),"manager_runtime")?;
+    #[cfg(test)]
+    MANAGER_RUNTIME_REPLY.with(|probe| match probe.borrow_mut().as_mut() {
+        Some(probe) => probe(),
+        None => Ok(()),
+    })?;
     let current = &current["manager_runtime"];
     let mut expected = stored.clone();
     let values = expected.as_object_mut().ok_or_else(invalid)?;

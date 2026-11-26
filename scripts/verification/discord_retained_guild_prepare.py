@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -87,6 +88,19 @@ def serve_discord(timestamps=False):
     return rest, permissions, wait_for_capture, attempts
 
 
+def stop_connector(place):
+    identity = hashlib.sha256(INSTALL.encode()).hexdigest()
+    with socket.socket(socket.AF_UNIX) as stream:
+        stream.settimeout(5)
+        stream.connect(str(place / "bridge.sock"))
+        stream.sendall((f"POST /installation-v1/{identity}/shutdown HTTP/1.0\r\n"
+                        "Host: local\r\nContent-Length: 2\r\nContent-Type: application/json\r\n\r\n{}").encode())
+        with stream.makefile("rb") as response:
+            raw = response.read()
+        assert raw.startswith(b"HTTP/1.0 200 OK\r\n")
+        assert json.loads(raw.split(b"\r\n\r\n", 1)[1]) == {"stopped": True}
+
+
 def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_native=False, queue_only=False):
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
@@ -115,20 +129,57 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
     invoke = lambda *args: run(fixture, env, *args)
     pending = lambda: (json.loads(invoke("ingress-state", place, "original-room"))["pending"] or [])
     native = lambda voice: json.loads(invoke("guild-native", voice.parent, "701"))
-    def rust(phase, evidence=None):
+    def rust_env(phase, evidence=None):
         test_env = env | {"SWARM_TEST_DISCORD_ACTIVE_ROOT": str(base / "state"),
                           "SWARM_TEST_DISCORD_REST_PORT": go_port,
                           "SWARM_TEST_DISCORD_GUILD_PHASE": phase}
         if evidence is not None:
             test_env["SWARM_TEST_DISCORD_VOICE_EVIDENCE"] = json.dumps(evidence)
-        args = ["native_go_retained_guild_preparation", "--ignored", "--nocapture"]
+        return test_env
+
+    rust_args = ["native_go_retained_guild_preparation", "--ignored", "--nocapture"]
+
+    def rust(phase, evidence=None):
+        test_env = rust_env(phase, evidence)
         exit_code = {"prepare-and-exit":75, "voice-storage-and-exit":76,
                      "admit-before":77, "admit-after":78}.get(phase)
         if exit_code is not None:
-            child = subprocess.run([rust_test, *args], env=test_env, capture_output=True, timeout=25)
+            child = subprocess.run([rust_test, *rust_args], env=test_env, capture_output=True, timeout=25)
             assert child.returncode == exit_code, child.stderr
             return
-        return run(rust_test, test_env, *args)
+        return run(rust_test, test_env, *rust_args)
+    def blocked_admission(voice, action, phase, marker="holding writer manager_runtime reply"):
+        with subprocess.Popen([rust_test, *rust_args], env=rust_env(phase), text=True,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            waiting = Event()
+            log = []
+            def read_output():
+                for line in child.stdout:
+                    log.append(line)
+                    if marker in line:
+                        waiting.set()
+            output = Thread(target=read_output)
+            output.start()
+            try:
+                assert waiting.wait(timeout=10), "".join(log)
+                with voice.open("rb") as ledger:
+                    try:
+                        fcntl.flock(ledger, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        raise AssertionError("the blocked admission did not hold the Voice writer")
+                action()
+            finally:
+                try:
+                    child.stdin.write("continue\n")
+                    child.stdin.flush()
+                except BrokenPipeError:
+                    pass
+                child.stdin.close()
+                child.wait(timeout=15)
+                output.join(timeout=5)
+            assert child.returncode == 0, "".join(log)
     try:
         invoke("create", place, base / "state", "teammate", "true", base / "work")
         invoke("bind-thread", place, "original-room", "401", "399")
@@ -245,6 +296,23 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     finally:
                         rest.messages["500"]["content"] = starter
                     assert connector.read_bytes() == source_bytes and voice.read_bytes() == before_queue
+                    blocked_admission(voice, lambda: stop_connector(place), "admit-delayed-stop")
+                    assert connector.read_bytes() == source_bytes and voice.read_bytes() == before_queue
+                    newest = rest.messages["701"]
+                    original_message = newest.copy()
+                    def edit_source():
+                        newest["content"] = "source edited while the supervisor reply was held"
+                        newest["edited_timestamp"] = "2024-09-22T10:00:00Z"
+                    try:
+                        blocked_admission(voice, edit_source, "admit-delayed-edit")
+                    finally:
+                        newest.clear()
+                        newest.update(original_message)
+                    assert connector.read_bytes() == source_bytes and voice.read_bytes() == before_queue
+                    print("PASS stop and a source edit during the final manager_runtime reply left Voice unchanged", flush=True)
+                    blocked_admission(voice, lambda: stop_connector(place), "admit-stop-at-commit", "holding staged Voice commit")
+                    assert connector.read_bytes() == source_bytes and voice.read_bytes() == before_queue
+                    print("PASS acknowledged local stop before the commit gate discarded the staged Voice write", flush=True)
                     rust("admit-before")
                     assert voice.read_bytes() == before_queue and native(voice)["sequence"] == 0
                     assert connector.read_bytes() == source_bytes and pending() == [sending]

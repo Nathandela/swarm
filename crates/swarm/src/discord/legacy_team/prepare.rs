@@ -231,6 +231,17 @@ impl Manager {
     }
 
     pub(super) fn verify(&self, place: &Place, cfg: &Config) -> io::Result<()> {
+        self.verify_pins()?;
+        legacy_ingress::activation::verify_idle_manager(
+            place,
+            cfg,
+            &self.directory,
+            &self.id,
+            &self.binding,
+        )
+    }
+
+    pub(super) fn verify_pins(&self) -> io::Result<()> {
         if !legacy_state::unchanged(
             self.voice.as_ref().ok_or_else(unavailable)?,
             &self.directory.join("voice.db"),
@@ -248,13 +259,7 @@ impl Manager {
         {
             return Err(unavailable());
         }
-        legacy_ingress::activation::verify_idle_manager(
-            place,
-            cfg,
-            &self.directory,
-            &self.id,
-            &self.binding,
-        )
+        Ok(())
     }
 }
 

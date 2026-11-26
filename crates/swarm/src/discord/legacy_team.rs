@@ -254,7 +254,10 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
             Ok(current)
         };
         let input = recheck()?;
-        return admit::queue(place, cfg, binding, &input, dry_run, recheck, before_commit);
+        return admit::queue(place, cfg, binding, &input, dry_run, recheck, || {
+            before_commit();
+            status.commit_guard()
+        });
     }
     if let Some(pending) = pending {
         capture::verify_pending(api, cfg, &route, &guard, &pending, false)?;
@@ -608,7 +611,27 @@ pub(super) fn native_prepare_witness() {
             }
         }
         "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
-        "admit" | "admit-before" | "admit-after" | "admit-dry-run" | "admit-refuse" => {
+        "admit"
+        | "admit-before"
+        | "admit-after"
+        | "admit-dry-run"
+        | "admit-refuse"
+        | "admit-delayed-stop"
+        | "admit-delayed-edit"
+        | "admit-stop-at-commit" => {
+            if phase.starts_with("admit-delayed-") {
+                assert_eq!(cfg.text("installation_id"), "fixture-teammate");
+                let mut replies = 0;
+                super::legacy_ingress::activation::MANAGER_RUNTIME_REPLY.with(|probe| {
+                    *probe.borrow_mut() = Some(Box::new(move || {
+                        replies += 1;
+                        if replies == 2 {
+                            wait_at_test_boundary("holding writer manager_runtime reply")?;
+                        }
+                        Ok(())
+                    }));
+                });
+            }
             let result = continue_without_gateway(
                 &place,
                 &cfg,
@@ -617,17 +640,30 @@ pub(super) fn native_prepare_witness() {
                 Mode::Admit {
                     message: "701",
                     dry_run: phase == "admit-dry-run",
-                    before_commit: if phase == "admit-before" {
-                        || std::process::exit(77)
-                    } else {
-                        || {}
+                    before_commit: match phase.as_str() {
+                        "admit-before" => || std::process::exit(77),
+                        "admit-stop-at-commit" => {
+                            || wait_at_test_boundary("holding staged Voice commit").unwrap()
+                        }
+                        _ => || {},
                     },
                 },
             );
-            if phase == "admit-refuse" {
-                assert!(result.is_err());
-            } else {
-                result.unwrap();
+            match phase.as_str() {
+                "admit-stop-at-commit" => assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "original connector stopped before Voice commit"
+                ),
+                "admit-delayed-stop" => assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "original teammate place stopped"
+                ),
+                "admit-delayed-edit" => assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "retained teammate ingress lacks an exact open, active, repaired source"
+                ),
+                "admit-refuse" => assert!(result.is_err()),
+                _ => result.unwrap(),
             }
             if phase == "admit-after" {
                 std::process::exit(78);
@@ -641,6 +677,22 @@ pub(super) fn native_prepare_witness() {
         }
         phase => panic!("unknown guild test phase {phase}"),
     }
+}
+
+#[cfg(test)]
+fn wait_at_test_boundary(marker: &str) -> io::Result<()> {
+    use std::io::Write;
+    {
+        let mut output = std::io::stdout().lock();
+        writeln!(output, "{marker}")?;
+        output.flush()?;
+    }
+    let mut signal = String::new();
+    std::io::stdin().read_line(&mut signal)?;
+    if signal != "continue\n" {
+        return Err(invalid("fixture did not release the Voice admission"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

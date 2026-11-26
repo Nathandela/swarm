@@ -28,6 +28,14 @@ pub(super) fn authority(cfg: &Config, actor: &str) -> &'static str {
     }
 }
 
+fn checkout_identity(project: &str) -> io::Result<(u64, u64)> {
+    let checkout = std::fs::symlink_metadata(project)?;
+    if !checkout.is_dir() || std::fs::canonicalize(project)? != std::path::Path::new(project) {
+        return Err(unavailable());
+    }
+    Ok((checkout.dev(), checkout.ino()))
+}
+
 fn evidence(route: &Route, message: &Value) -> io::Result<(OffsetDateTime, Value)> {
     let id = field(message, "id");
     let actor = &message["author"];
@@ -100,14 +108,10 @@ pub(super) fn current(
                 .as_object()
                 .is_some_and(serde_json::Map::is_empty))
         || project.is_empty()
-        || std::fs::canonicalize(project)? != std::path::Path::new(project)
     {
         return Err(unavailable());
     }
-    let checkout = std::fs::symlink_metadata(project)?;
-    if !checkout.is_dir() {
-        return Err(unavailable());
-    }
+    let project_identity = checkout_identity(project)?;
     capture::verify_pending(api, cfg, route, guard, pending, true)?;
     let page = api.request(
         &format!("/channels/{}/messages?limit=20", route.channel_id),
@@ -154,6 +158,9 @@ pub(super) fn current(
         String::from_utf8(go_bytes(&json!([rows[0].1, rows[1].1]))?).map_err(io::Error::other)?;
     let body = human_instruction(&pending.candidate.author, &source["id"], text)?;
     verify_thread_authority(api, cfg, route, true)?;
+    if checkout_identity(project)? != project_identity {
+        return Err(unavailable());
+    }
     let origin = json!({"kind":authority(cfg,actor),"installation_id":cfg.text("installation_id"),
         "discussion_id":bound.id,"request_id":legacy_discussions::operation(cfg.text("installation_id"), message)?,
         "actor_id":actor,"actor_name":pending.candidate.author["name"],"requester_id":actor,
@@ -162,7 +169,7 @@ pub(super) fn current(
         origin,
         text: text.into(),
         project: project.into(),
-        project_identity: (checkout.dev(), checkout.ino()),
+        project_identity,
         prompt: format!(
             "{DISCUSSION_INSTRUCTIONS}Earlier Discord messages for context (JSON) {history}\nEvidence source thread, latest message {message}. The history tool can retrieve remaining pages.\n{body}"
         ),
