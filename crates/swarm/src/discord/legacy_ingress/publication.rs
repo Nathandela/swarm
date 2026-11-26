@@ -62,16 +62,10 @@ fn publication<'tx>(
         || row["Route"]["message_id"] != ""
         || row["Internal"] != false
         || output["ID"] != id
-        || [
-            "JobID",
-            "AttemptID",
-            "QuestionID",
-            "QuestionHash",
-            "RecipientID",
-            "SystemCause",
-        ]
-        .iter()
-        .any(|key| !field(output, key).is_empty())
+        || ["QuestionID", "QuestionHash", "RecipientID", "SystemCause"]
+            .iter()
+            .any(|key| !field(output, key).is_empty())
+        || (field(output, "JobID").is_empty() != field(output, "AttemptID").is_empty())
         || !output["Files"].is_null()
         || !field(output, "Body").is_empty()
         || !output["Sequence"].as_u64().is_some_and(|n| n > 0)
@@ -120,6 +114,7 @@ fn original_voice(
     id: &str,
     expected: &Publication,
     cfg: &Config,
+    endpoint: &str,
 ) -> io::Result<(fs::File, impl DbApi + use<>, Value)> {
     open_owner_file(&path.join("voice.initialized"))?;
     let (pin, db) = open_bolt(&path.join("voice.db"), 64 << 20)?;
@@ -188,19 +183,24 @@ fn original_voice(
         || existing["output_sequence"] != output["Sequence"]
         || existing["final"] != true
         || existing["exported"] != true
-        || ["discussion_projects", "discussion_attempts"]
-            .iter()
-            .any(|field| !existing[*field].is_null() && existing[*field] != "")
         || !existing["admission"].as_u64().is_some_and(|n| n > 0)
         || existing["discussion_source"]["admission_id"] != output["AdmissionID"]
-        || !field(&existing["discussion_source"], "job_id").is_empty()
-        || !field(&existing["discussion_source"], "attempt_id").is_empty()
+        || field(&existing["discussion_source"], "job_id") != field(output, "JobID")
+        || field(&existing["discussion_source"], "attempt_id") != field(output, "AttemptID")
         || !field(&existing["discussion_source"], "system_cause").is_empty()
         || !field(&existing, "recipient_id").is_empty()
         || !existing["discussion_files"].is_null()
     {
         return Err(invalid());
     }
+    grants::output(
+        &records,
+        cfg,
+        endpoint,
+        &conversation,
+        field(&expected.binding, "ID"),
+        &existing,
+    )?;
     let origin = origin.clone();
     drop(tx);
     Ok((pin, db, origin))
@@ -267,8 +267,8 @@ where
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
         let tx = db.begin().map_err(io::Error::other)?;
         if let Some(out) = publication(&tx, &cfg, id)? {
-            let (directory, scope, _) = voice_location(place, &cfg, &out.binding)?;
-            let (_, _, origin) = original_voice(&directory, &scope, &out, &cfg)?;
+            let (directory, scope, endpoint) = voice_location(place, &cfg, &out.binding)?;
+            let (_, _, origin) = original_voice(&directory, &scope, &out, &cfg, &endpoint)?;
             verify_guard(&tx, &cfg, &origin)?;
         }
         return Ok(true);
@@ -291,8 +291,8 @@ where
     let Some(mut out) = publication(&tx, cfg, id)? else {
         return Ok(true);
     };
-    let (directory, scope, _) = voice_location(place, cfg, &out.binding)?;
-    let (voice_pin, _voice, origin) = original_voice(&directory, &scope, &out, cfg)?;
+    let (directory, scope, endpoint) = voice_location(place, cfg, &out.binding)?;
+    let (voice_pin, _voice, origin) = original_voice(&directory, &scope, &out, cfg, &endpoint)?;
     verify_guard(&tx, cfg, &origin)?;
     let post = authorize(cfg)?;
     if !identity(&lease.pin, &lease.source)? || !identity(&voice_pin, &directory.join("voice.db"))?
@@ -342,7 +342,12 @@ mod tests {
         let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
             return;
         };
-        for acknowledge in [true, false] {
+        for (acknowledge, grant) in [
+            (true, ""),
+            (false, ""),
+            (true, "project-final"),
+            (true, "attempt-final"),
+        ] {
             let root = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()
@@ -361,7 +366,22 @@ mod tests {
             };
             call(&["create", p, root.to_str().unwrap(), "personal", "true"]);
             call(&["bind", p, "original-room", "400"]);
-            call(&["voice-ingress", p, "original-room", "701", "final"]);
+            if !grant.is_empty() {
+                let project = root.join("current-project");
+                runtime::private_dir(&project).unwrap();
+                let project = project.to_str().unwrap();
+                call(&["project", p, project]);
+                call(&[
+                    "voice-ingress",
+                    p,
+                    "original-room",
+                    "701",
+                    "project-final",
+                    project,
+                ]);
+            } else {
+                call(&["voice-ingress", p, "original-room", "701", "final"]);
+            }
             call(&["publication-queue", p, "original-room", "701"]);
             let place = Place::for_supervisor(&root).unwrap();
             let not_sealed = fs::read(path.join("discord.db")).unwrap();
@@ -437,7 +457,7 @@ mod tests {
         let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
             return;
         };
-        for phase in ["unexported-final", "project-final"] {
+        for phase in ["unexported-final", "project-final", "attempt-final"] {
             let root = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()
@@ -457,7 +477,7 @@ mod tests {
             run(&["bind", p, "original-room", "400"]);
             let old = root.join("former-project");
             runtime::private_dir(&old).unwrap();
-            if phase == "project-final" {
+            if phase != "unexported-final" {
                 run(&["project", p, old.to_str().unwrap()]);
             }
             run(&[
@@ -469,7 +489,7 @@ mod tests {
                 old.to_str().unwrap(),
             ]);
             run(&["publication-queue", p, "original-room", "701"]);
-            if phase == "project-final" {
+            if phase != "unexported-final" {
                 run(&["project", p, "remove"]);
             }
             let place = Place::for_supervisor(&root).unwrap();

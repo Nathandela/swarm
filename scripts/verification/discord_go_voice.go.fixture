@@ -3,6 +3,7 @@ package voice
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -31,7 +32,11 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 		DMOwnerID: origin.ActorID, ThreadID: origin.ChannelID,
 	}}
 	const body = "offline original owner prompt"
-	admission, err := controller.submitDiscussionInProject(origin, body, body, "", "", project, project != "")
+	admissionProject := project
+	if phase == "attempt-final" {
+		admissionProject = ""
+	}
+	admission, err := controller.submitDiscussionInProject(origin, body, body, "", "", admissionProject, admissionProject != "")
 	if err != nil {
 		return err
 	}
@@ -55,6 +60,39 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 	turn := "synthetic-observed-turn"
 	if err := store.controllerInputPhase(binding, admission.Sequence, "running", turn, ""); err != nil || !strings.HasSuffix(phase, "final") {
 		return err
+	}
+	if phase == "attempt-final" {
+		const id = "fixture-attempt"
+		raw, err := json.Marshal(controllerActionRequest{Tool: "swarm_create", Origin: &origin,
+			Project: project, Arguments: json.RawMessage("{}"), Launch: &protocol.LaunchReq{Agent: "codex", Cwd: project}})
+		if err != nil {
+			return err
+		}
+		action, err := protocol.NewLaunchOperationID()
+		if err != nil {
+			return err
+		}
+		if _, err := store.PrepareAction(binding, Action{ID: id, Admission: admission.Sequence,
+			NativeInputID: nonce, Target: project, OperationID: action, Request: raw}); err != nil {
+			return err
+		}
+		owner, _, _ := strings.Cut(session, "/")
+		result, err := json.Marshal(createdWorkerResult{State: "created", Session: owner + "/fixture-worker", SessionInstance: "fixture-worker-instance"})
+		if err != nil {
+			return err
+		}
+		if err := store.SettleAction(binding, id, result); err != nil {
+			return err
+		}
+		if err := store.update(func(st *State) error {
+			k := admissionKey(conversation, admission.Sequence)
+			current := st.Admissions[k]
+			current.WorkerAttempts = addDiscussionScopeValue(current.WorkerAttempts, id)
+			putRecord(st, "admissions", &st.Admissions, k, current)
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	permit, err := store.controllerSpeechPermit(binding, admission.Sequence, nonce, turn)
 	if err != nil {

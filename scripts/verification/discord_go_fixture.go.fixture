@@ -181,7 +181,7 @@ func main() {
 			phase = "quiet"
 		}
 		project := ""
-		if phase == "project-final" {
+		if phase == "project-final" || phase == "attempt-final" {
 			project = os.Args[6]
 		}
 		check(voice.FixturePersonalIngress(filepath.Join(root, id), "discord-teammate-"+id, endpoint+"/fixture-manager", origin, phase, project))
