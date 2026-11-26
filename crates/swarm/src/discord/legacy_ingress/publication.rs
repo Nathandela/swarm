@@ -187,6 +187,10 @@ fn original_voice(
         || existing["text_hash"] != format!("{:x}", Sha256::digest(expected.body.as_bytes()))
         || existing["output_sequence"] != output["Sequence"]
         || existing["final"] != true
+        || existing["exported"] != true
+        || ["discussion_projects", "discussion_attempts"]
+            .iter()
+            .any(|field| !existing[*field].is_null() && existing[*field] != "")
         || !existing["admission"].as_u64().is_some_and(|n| n > 0)
         || existing["discussion_source"]["admission_id"] != output["AdmissionID"]
         || !field(&existing["discussion_source"], "job_id").is_empty()
@@ -424,6 +428,75 @@ mod tests {
             assert_eq!(durable.trim(), format!("{phase} {nonce}"));
             call(&["publication-queue", p, "original-room", "701"]);
             assert_eq!(call(&["publication-read", p, "original-room"]), durable);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn original_unexported_or_removed_project_publication_cannot_send() {
+        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
+            return;
+        };
+        for phase in ["unexported-final", "project-final"] {
+            let root = std::env::temp_dir()
+                .canonicalize()
+                .unwrap()
+                .join(format!("dp-{}", runtime::random_id().unwrap()));
+            runtime::private_dir(&root).unwrap();
+            let path = root.join("fixture");
+            let p = path.to_str().unwrap();
+            let run = |args: &[&str]| {
+                let output = Command::new(&fixture).args(args).output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            };
+            run(&["create", p, root.to_str().unwrap(), "personal", "true"]);
+            run(&["bind", p, "original-room", "400"]);
+            let old = root.join("former-project");
+            runtime::private_dir(&old).unwrap();
+            if phase == "project-final" {
+                run(&["project", p, old.to_str().unwrap()]);
+            }
+            run(&[
+                "voice-ingress",
+                p,
+                "original-room",
+                "701",
+                phase,
+                old.to_str().unwrap(),
+            ]);
+            run(&["publication-queue", p, "original-room", "701"]);
+            if phase == "project-final" {
+                run(&["project", p, "remove"]);
+            }
+            let place = Place::for_supervisor(&root).unwrap();
+            assert!(settle(&place, "701", false).unwrap());
+            let source = path.join("discord.db");
+            let before = fs::read(&source).unwrap();
+            let receipt = fs::read_dir(path.join("discussions"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path()
+                .join("voice.db");
+            let voice_before = fs::read(&receipt).unwrap();
+            assert!(
+                with(
+                    &place,
+                    "fixture-final",
+                    false,
+                    |_| -> io::Result<fn(&Publication) -> Post> {
+                        panic!("revoked or unexported original publication cannot be posted")
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(before, fs::read(&source).unwrap());
+            assert_eq!(voice_before, fs::read(&receipt).unwrap());
             fs::remove_dir_all(root).unwrap();
         }
     }

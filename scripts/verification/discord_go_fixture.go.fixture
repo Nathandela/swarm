@@ -55,6 +55,16 @@ func main() {
 		check(store.Close())
 		return
 	}
+	if action == "project" {
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		cfg.Projects = nil
+		if os.Args[3] != "remove" {
+			cfg.Projects = map[string]string{"former": os.Args[3]}
+		}
+		check(discord.SaveConfig(dir, cfg))
+		return
+	}
 	if action == "voice-phase" {
 		phase, cutover, err := voice.FixturePersonalPhase(dir, os.Args[3])
 		check(err)
@@ -166,7 +176,11 @@ func main() {
 		if phase == "quiet-pending" {
 			phase = "quiet"
 		}
-		check(voice.FixturePersonalIngress(filepath.Join(root, id), "discord-teammate-"+id, endpoint+"/fixture-manager", origin, phase))
+		project := ""
+		if phase == "project-final" {
+			project = os.Args[6]
+		}
+		check(voice.FixturePersonalIngress(filepath.Join(root, id), "discord-teammate-"+id, endpoint+"/fixture-manager", origin, phase, project))
 	case "route":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

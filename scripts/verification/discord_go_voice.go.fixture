@@ -10,7 +10,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
-func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase string) error {
+func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase, project string) error {
 	store, err := OpenStore(dir)
 	if err != nil {
 		return err
@@ -31,7 +31,7 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 		DMOwnerID: origin.ActorID, ThreadID: origin.ChannelID,
 	}}
 	const body = "offline original owner prompt"
-	admission, err := controller.submitDiscussion(origin, body, "", "")
+	admission, err := controller.submitDiscussionInProject(origin, body, body, "", "", project, project != "")
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 		return err
 	}
 	turn := "synthetic-observed-turn"
-	if err := store.controllerInputPhase(binding, admission.Sequence, "running", turn, ""); err != nil || phase != "final" {
+	if err := store.controllerInputPhase(binding, admission.Sequence, "running", turn, ""); err != nil || !strings.HasSuffix(phase, "final") {
 		return err
 	}
 	permit, err := store.controllerSpeechPermit(binding, admission.Sequence, nonce, turn)
@@ -62,7 +62,15 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 	}
 	_, err = store.PublishSpeech(binding, permit, Publication{Admission: admission.Sequence, ID: "fixture-final",
 		NativeTurnID: turn, Sequence: 1, Text: "Original final personal reply.", Final: true})
-	return err
+	if err != nil || phase == "unexported-final" {
+		return err
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		return err
+	}
+	discussion := DiscussionController{store: store, cfg: Config{ConversationID: conversation}, now: time.Now}
+	return discussion.export(state, func(DiscussionOutput) error { return nil })
 }
 
 func FixturePersonalPhase(dir, message string) (string, bool, error) {
