@@ -100,7 +100,7 @@ impl RenderCancel {
         }
     }
 
-    fn canceled(&self) -> bool {
+    pub(super) fn canceled(&self) -> bool {
         self.state.lock().unwrap().0
     }
 
@@ -119,37 +119,7 @@ pub(super) fn render(cancel: &RenderCancel, key: &str, text: &str) -> io::Result
         return Err(invalid("invalid call publication readout"));
     }
     let deadline = Instant::now() + Duration::from_secs(12);
-    let mut stream = None;
-    for address in (API, 443).to_socket_addrs()? {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() || cancel.canceled() {
-            break;
-        }
-        if let Ok(socket) =
-            TcpStream::connect_timeout(&address, remaining.min(Duration::from_secs(3)))
-        {
-            stream = Some(socket);
-            break;
-        }
-    }
-    let stream = stream.ok_or_else(|| invalid("speech TCP connection failed"))?;
-    cancel.connect(&stream)?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let mut request = RENDER
-        .into_client_request()
-        .map_err(|_| invalid("speech WebSocket request failed"))?;
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {key}")
-            .parse()
-            .map_err(|_| invalid("invalid speech credential"))?,
-    );
-    let limits = WebSocketConfig::default()
-        .max_message_size(Some(MAX_AUDIO_EVENT))
-        .max_frame_size(Some(MAX_AUDIO_EVENT));
-    let (mut socket, _) = client_tls_with_config(request, stream, Some(limits), None)
-        .map_err(|_| invalid("speech WebSocket handshake failed"))?;
+    let mut socket = speech_socket(RENDER, key, cancel, deadline)?;
     let command = json!({
         "type":"response.create", "response":{
             "conversation":"none", "output_modalities":["audio"],
@@ -177,6 +147,52 @@ pub(super) fn render(cancel: &RenderCancel, key: &str, text: &str) -> io::Result
         }
     }
     Err(invalid("speech readout was not confirmed"))
+}
+
+pub(super) type SpeechSocket =
+    tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+
+pub(super) fn speech_socket(
+    endpoint: &str,
+    key: &str,
+    cancel: &RenderCancel,
+    deadline: Instant,
+) -> io::Result<SpeechSocket> {
+    if !key_valid(key) {
+        return Err(invalid("invalid speech credential"));
+    }
+    let mut stream = None;
+    for address in (API, 443).to_socket_addrs()? {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || cancel.canceled() {
+            break;
+        }
+        if let Ok(socket) =
+            TcpStream::connect_timeout(&address, remaining.min(Duration::from_secs(3)))
+        {
+            stream = Some(socket);
+            break;
+        }
+    }
+    let stream = stream.ok_or_else(|| invalid("speech TCP connection failed"))?;
+    cancel.connect(&stream)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let mut request = endpoint
+        .into_client_request()
+        .map_err(|_| invalid("speech WebSocket request failed"))?;
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {key}")
+            .parse()
+            .map_err(|_| invalid("invalid speech credential"))?,
+    );
+    let limits = WebSocketConfig::default()
+        .max_message_size(Some(MAX_AUDIO_EVENT))
+        .max_frame_size(Some(MAX_AUDIO_EVENT));
+    let (socket, _) = client_tls_with_config(request, stream, Some(limits), None)
+        .map_err(|_| invalid("speech WebSocket handshake failed"))?;
+    Ok(socket)
 }
 
 fn key_valid(key: &str) -> bool {

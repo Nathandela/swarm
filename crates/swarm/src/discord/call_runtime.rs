@@ -58,6 +58,7 @@ pub(super) struct Driver {
 struct Backends {
     audience: fn(&Config, &super::call_team::Scope, &[String]) -> bool,
     transcribe: fn(&ureq::Agent, &str, &[u8]) -> io::Result<String>,
+    live: bool,
     render: fn(&call_speech::RenderCancel, &str, &str) -> io::Result<Vec<u8>>,
 }
 
@@ -72,6 +73,7 @@ impl Default for Backends {
                     .unwrap_or(false)
             },
             transcribe: call_speech::transcribe,
+            live: !cfg!(test),
             render: call_speech::render,
         }
     }
@@ -240,6 +242,7 @@ struct Call {
     render_epoch: u64,
     transcriber: ureq::Agent,
     render_cancel: Option<Arc<call_speech::RenderCancel>>,
+    live: Option<super::call_live::Live>,
 }
 
 impl Drop for Call {
@@ -280,7 +283,7 @@ struct Calls {
 }
 
 enum Speech {
-    Text(u64, String, Instant, io::Result<String>),
+    Text(u64, String, Instant, io::Result<String>, Vec<u8>),
     Render(u64, u64, io::Result<Vec<u8>>),
 }
 
@@ -423,6 +426,10 @@ impl Calls {
         if self.room.expire(now)
             || self.current.as_ref().is_some_and(|call| {
                 !call.ready && now.duration_since(call.opened) >= Duration::from_secs(10)
+                    || call
+                        .live
+                        .as_ref()
+                        .is_some_and(super::call_live::Live::failed)
             })
         {
             self.end(socket)?;
@@ -463,6 +470,7 @@ impl Calls {
                         render_epoch: 0,
                         transcriber: call_speech::transcription_session(),
                         render_cancel: None,
+                        live: None,
                     })
                 }
                 Err(_) => {
@@ -494,6 +502,9 @@ impl Calls {
                         break;
                     }
                     call.play = Some((cue(), 0, now));
+                    if self.backends.live {
+                        call.live = Some(super::call_live::Live::start(self.key.clone()));
+                    }
                 }
                 Ok(Some(Event::Audio { speaker, pcm })) => {
                     let mut bytes = [0; FRAME_BYTES];
@@ -540,7 +551,7 @@ impl Calls {
         }
         while let Ok(result) = self.rx.try_recv() {
             match result {
-                Speech::Text(generation, speaker, last_voice, text) => {
+                Speech::Text(generation, speaker, last_voice, text, pcm) => {
                     self.transcribing = false;
                     let Some(call) = self
                         .current
@@ -574,6 +585,14 @@ impl Calls {
                     }
                     call.next_turn += 1;
                     if call.next_turn > 256 {
+                        self.end(socket)?;
+                        continue;
+                    }
+                    if call
+                        .live
+                        .as_ref()
+                        .is_some_and(|live| !live.turn(call.next_turn, pcm))
+                    {
                         self.end(socket)?;
                         continue;
                     }
@@ -618,12 +637,22 @@ impl Calls {
                     if matches_turn(call, &origin) && call.floor.quiet(now) =>
                 {
                     call.play = Some((cue(), 0, now));
+                    if let Some(live) = &call.live
+                        && let Some(turn) = origin["voice"]["turn_id"].as_u64()
+                    {
+                        live.commentary(turn, "The dispatcher accepted the request.");
+                    }
                 }
                 Readout::Publication(nonce, origin, text)
                     if matches_turn(call, &origin)
                         && call.seen.len() < 256
                         && call.seen.insert(nonce.clone()) =>
                 {
+                    if let Some(live) = &call.live
+                        && let Some(turn) = origin["voice"]["turn_id"].as_u64()
+                    {
+                        live.commentary(turn, &text);
+                    }
                     self.rendering = true;
                     let (generation, epoch) = (call.generation, call.render_epoch);
                     let (key, tx) = (self.key.clone(), self.tx.clone());
@@ -750,6 +779,7 @@ impl Calls {
                 turn.speaker,
                 turn.last_voice,
                 transcribe(&transcriber, &key, &turn.pcm),
+                turn.pcm,
             ));
         });
         Ok(())
@@ -1005,6 +1035,7 @@ while read -r line; do :; done
             "supervisor_socket":"/tmp/native-fixture.sock","launch":{"manager":{"conversation_id":"discord-teammate-team"}}});
         let cursor = gateway::ready(&mut socket, &cfg, "fixture-token").unwrap();
         let backends = Backends {
+            live: false,
             audience: |_, scope, speakers| scope.thread == "6" && speakers == ["8", "9"],
             transcribe: |_, _, pcm| {
                 Ok(match i16::from_le_bytes([pcm[0], pcm[1]]) {

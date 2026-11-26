@@ -3,6 +3,8 @@ pub(crate) use worker_input::{
     lock_connector_worker_input, verify_connector_worker_input, worker_input_guild_available,
     worker_input_installation,
 };
+mod call_live;
+
 mod call_runtime;
 mod call_speech;
 mod call_team;

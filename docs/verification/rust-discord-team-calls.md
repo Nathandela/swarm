@@ -19,4 +19,6 @@ The composed loopback fixture exercises one Gateway connection and a real fixtur
 
 Worker wake links use the original accepted call turn and native parent-input digest. A persisted note digest covers the immutable note body, kind, attempt and file identities. Final written delivery stays bound to the original audience after hangup. Spoken delivery uses that original voice coordinate only while its call generation remains eligible. The offline reverse-order fixture rejects a different native parent and distinguishes a changed note body.
 
+The GPT-Live sidecar starts one session per accepted room generation. It sends completed isolated utterances, with team audio forwarded only after explicit address recognition. A bounded sample cursor matches a client delegation to the original turn. Only verified admission and canonical publication commentary can come back through that delegation. The loopback Live fixture confirms startup, reversed and duplicate delegation handling, exact commentary routing, and expired-session closure. Live-generated output cannot drive work or room playback.
+
 Public provisioning of a new linked thread, live Discord qualification, and authorization recovery after Gateway gaps remain open. The configured thread is independent of the call configuration so removing media settings can preserve the written discussion.
