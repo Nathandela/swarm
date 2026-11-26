@@ -56,6 +56,26 @@ pub(super) fn write(state: &State, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+pub(super) fn guard_dispatch(state: &State, request: &Value, held: bool) -> io::Result<()> {
+    let composer = &request["composer_send"];
+    let op = field(request, "operation_id");
+    if composer["session"] != request["session"]
+        || composer["session_instance"]
+            != crate::providers::codex_receipt::provider_instance(&state.provider, &state.token)
+        || composer["text"] != request["text"]
+        || composer["manager_admission"].is_null()
+        || composer["manager_admission"] != request["manager_admission"]
+    {
+        return Err(io::Error::other(
+            "dispatcher gate requires the exact admitted composer",
+        ));
+    }
+    if crate::providers::codex_receipt::manager_dispatch(&state.dir, op, composer, held)? {
+        return Err(io::Error::other(UNRESOLVED));
+    }
+    Ok(())
+}
+
 fn known_turn(turn: &str) -> bool {
     matches!(turn, "active" | "idle")
 }

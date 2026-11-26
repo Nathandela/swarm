@@ -1571,10 +1571,20 @@ impl Session {
         if self.agent == "opencode" {
             return self.opencode_operation_status(session, operation, "prompt", root);
         }
-        if self.is_discord_manager()
-            && let Some(rejection) = codex_receipt::unadmitted_rejection(root, operation, session)?
-        {
-            return Ok(Some(rejection));
+        if self.is_discord_manager() {
+            if let Some(rejection) = codex_receipt::unadmitted_rejection(root, operation, session)?
+            {
+                return Ok(Some(rejection));
+            }
+            if let Some(rejection) = codex_receipt::manager_draft_rejection(
+                &self.dir,
+                root,
+                operation,
+                session,
+                &self.semantic_target()?,
+            )? {
+                return Ok(Some(rejection));
+            }
         }
         let thread = self.semantic_thread()?;
         let record = codex_receipt::load_for(

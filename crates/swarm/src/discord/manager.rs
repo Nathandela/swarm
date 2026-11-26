@@ -345,6 +345,19 @@ impl Manager {
         Ok(())
     }
 
+    pub(super) fn semantic_receipt(&self, operation: &str, session: &str) -> io::Result<Value> {
+        let mut client = self.dial()?;
+        let reply = client.request_body(
+            json!({"op":"semantic_status","session_id":session,"operation_id":operation}),
+            "semantic_status",
+        )?;
+        self.verify_endpoint(&client, &reply)?;
+        if reply["operation_id"] != operation {
+            return Err(invalid("uncorrelated dispatcher semantic receipt"));
+        }
+        Ok(reply["semantic_receipt"].clone())
+    }
+
     pub(super) fn input_status(&self, composer: &Value) -> io::Result<Value> {
         let mut client = self.dial()?;
         let admission = &composer["manager_admission"];
@@ -1678,6 +1691,67 @@ mod tests {
                     "start\n"
                 );
                 assert!(fake.posts.borrow().is_empty());
+                return;
+            }
+            if std::env::var_os("SWARM_DISPATCHER_DRAFT_RACE_FIXTURE").is_some() {
+                let mut attachment = Client::dial(&socket, &[]).unwrap();
+                let lease = attachment.request("attach", Some(id), "lease").unwrap();
+                attachment
+                    .take_snapshot(lease["snapshot_len"].as_u64().unwrap() as usize)
+                    .unwrap();
+                let mut stream = attachment.stream();
+                crate::ipc::wire::write_frame(
+                    &mut stream,
+                    runtime::DATA_IN,
+                    b"unsubmitted dispatcher draft",
+                )
+                .unwrap();
+                let state_dir = if rust.is_some() {
+                    state.join("rust-v1")
+                } else {
+                    state.clone()
+                };
+                let marker = state_dir
+                    .join(id.split_once('/').unwrap().1)
+                    .join("direct-input-unresolved.json");
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while !marker.exists() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "shim did not capture terminal draft"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let refusal = manager.send(&operation, &composer).unwrap_err();
+                assert!(
+                    refusal
+                        .to_string()
+                        .contains(crate::shim::manager_terminal::UNRESOLVED),
+                    "{refusal}"
+                );
+                let receipt = manager.semantic_receipt(&operation, id).unwrap();
+                assert_eq!(
+                    receipt,
+                    json!({"operation_id":operation,"session":id,"session_instance":instance,
+                    "state":"rejected","rejection_code":crate::shim::manager_terminal::CODE})
+                );
+                let outcome = manager.input_status(&composer);
+                if rust.is_some() {
+                    assert_eq!(outcome.unwrap()["state"], "unknown");
+                } else {
+                    assert!(
+                        outcome
+                            .unwrap_err()
+                            .to_string()
+                            .contains("manager input outcome unavailable")
+                    );
+                }
+                assert!(manager.send(&operation, &composer).is_err());
+                assert_eq!(manager.semantic_receipt(&operation, id).unwrap(), receipt);
+                if rust.is_some() {
+                    assert_eq!(inbox.manager()["input"]["operation"], operation);
+                    assert_eq!(inbox.manager()["input"]["composer"], composer);
+                }
                 return;
             }
             let park_fixture = std::env::var_os("SWARM_NATIVE_MAIL_PARK_FIXTURE").is_some();

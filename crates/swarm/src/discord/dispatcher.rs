@@ -234,6 +234,21 @@ impl Dispatcher {
         if !state["input"].is_null() {
             self.idle_since.set(None);
             let had_turn = !state["input"]["turn_id"].is_null();
+            let input = &state["input"];
+            if !had_turn
+                && input["draft_retry"] != "prepared"
+                && input["composer"]["manager_admission"]["binding"] == state["binding"]
+                && let Ok(receipt) = self.owner.semantic_receipt(
+                    field(input, "operation"),
+                    field(&input["composer"], "session"),
+                )
+                && exact_draft_refusal(input, &receipt)
+            {
+                state["input"]["operation"] = json!(operation("semantic")?);
+                state["input"]["draft_retry"] = json!("prepared");
+                inbox.set_manager(state)?;
+                return Ok(());
+            }
             let phase = self.reconcile_input(inbox, &mut state)?;
             if let Some((_, driver)) = calls
                 && !had_turn
@@ -245,7 +260,10 @@ impl Dispatcher {
                     .readout
                     .try_send(super::call_runtime::Readout::Acknowledge(origin));
             }
-            if phase == "unknown" && !state["input"]["worker_wake"].is_null() {
+            if phase == "unknown"
+                && !state["input"]["worker_wake"].is_null()
+                && state["input"]["draft_retry"] != "executing"
+            {
                 let input = &state["input"];
                 let id = field(input, "source_id");
                 let revision = &input["worker_wake"]["owner_revision"];
@@ -253,7 +271,8 @@ impl Dispatcher {
                 let Some(current) = Self::mail_owner_current(cfg, inbox, api, id, revision)? else {
                     return Ok(());
                 };
-                let expired = !crate::providers::codex_receipt::timely(field(input, "operation"));
+                let expired = input["draft_retry"].is_null()
+                    && !crate::providers::codex_receipt::timely(field(input, "operation"));
                 if !current || expired {
                     let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
                         Ok(lock) => lock,
@@ -276,12 +295,52 @@ impl Dispatcher {
                     }
                     return Ok(());
                 }
-                if status["ready_for_input"] == true {
+                if status["ready_for_input"] == true && input["draft_retry"].is_null() {
                     // The shim serializes native preparation with cancellation.
                     let _ = self
                         .owner
                         .send(field(input, "operation"), &input["composer"]);
                 }
+            }
+            if phase == "unknown"
+                && status["ready_for_input"] == true
+                && state["input"]["draft_retry"] == "prepared"
+            {
+                let input = &state["input"];
+                let id = field(input, "source_id");
+                let origin = &input["composer"]["origin"];
+                if input["worker_wake"].is_null() {
+                    if origin["voice"].is_object() {
+                        let Some((place, _)) = calls else {
+                            return Ok(());
+                        };
+                        if super::call_runtime::verify_live(place, origin).is_err()
+                            || api.verify(cfg).is_err()
+                        {
+                            return Ok(());
+                        }
+                    } else {
+                        match Self::owner_source_current(
+                            cfg,
+                            inbox,
+                            api,
+                            id,
+                            &origin["revision"],
+                            "sending",
+                        )? {
+                            Some(true) => {}
+                            Some(false) => return inbox.withdraw_draft_retry(id),
+                            None => return Ok(()),
+                        }
+                    }
+                }
+                state = inbox.begin_draft_retry(&state)?;
+                let input = &state["input"];
+                // The renewed operation crosses this boundary once. Only another exact
+                // durable pre-effect refusal can authorize another renewal.
+                let _ = self
+                    .owner
+                    .send(field(input, "operation"), &input["composer"]);
             }
             self.deliver(cfg, inbox, api, &state, millis()?)?;
             if phase == "completed" {
@@ -603,11 +662,25 @@ impl Dispatcher {
         id: &str,
         revision: &Value,
     ) -> io::Result<Option<bool>> {
-        if !inbox.matches_owner_admission(id, revision) {
-            return Ok(Some(false));
-        }
         if super::call_origin::key(id) {
+            if !inbox.matches_owner_admission(id, revision, "accepted") {
+                return Ok(Some(false));
+            }
             return Ok(api.verify(cfg).ok().map(|_| true));
+        }
+        Self::owner_source_current(cfg, inbox, api, id, revision, "accepted")
+    }
+
+    fn owner_source_current(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        id: &str,
+        revision: &Value,
+        state: &str,
+    ) -> io::Result<Option<bool>> {
+        if !inbox.matches_owner_admission(id, revision, state) {
+            return Ok(Some(false));
         }
         let source = match api.current(cfg, id) {
             Ok(Some(source)) => source,
@@ -625,9 +698,9 @@ impl Dispatcher {
         }
         match api.admit(inbox, &source) {
             Ok(receipt) => Ok(Some(receipt.is_some_and(|current| {
-                current["state"] == "accepted" && current["revision"] == *revision
+                current["state"] == state && current["revision"] == *revision
             }))),
-            // Exact scoped GET succeeded, but the accepted revision conflicts with it.
+            // Exact scoped GET succeeded, but the retained revision conflicts with it.
             Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(Some(false)),
             Err(error) => Err(error),
         }
@@ -1378,6 +1451,25 @@ fn quota_input_settled(state: &Value, turn: &Value) -> bool {
             })
 }
 
+fn exact_draft_refusal(input: &Value, receipt: &Value) -> bool {
+    let composer = &input["composer"];
+    let instance = &composer["session_instance"];
+    input["turn_id"].is_null()
+        && input["operation"].is_string()
+        && composer["session"].is_string()
+        && instance.is_string()
+        && receipt["operation_id"] == input["operation"]
+        && receipt["session"] == composer["session"]
+        && receipt["session_instance"] == *instance
+        && receipt["state"] == "rejected"
+        && receipt["rejection_code"] == crate::shim::manager_terminal::CODE
+        && receipt["native_turn_id"].is_null()
+        && receipt["native_input_id"].is_null()
+        && (receipt["native_generation"].is_null()
+            || receipt["native_generation"]
+                == composer["manager_admission"]["binding"]["native_generation"])
+}
+
 fn settle_worker_send(action: &mut Value, result: Value) {
     if result["state"] == "pending" {
         action["state"] = json!("queued");
@@ -1540,14 +1632,58 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn only_an_exact_pre_effect_draft_refusal_renews_a_cutover() {
+        let mut input = json!({"operation":"original","composer":{
+            "session":"ep/dispatcher","session_instance":"instance",
+            "manager_admission":{"binding":{"native_generation":"current"}}}});
+        let receipt = json!({"operation_id":"original","session":"ep/dispatcher",
+            "session_instance":"instance","state":"rejected",
+            "rejection_code":crate::shim::manager_terminal::CODE});
+        assert!(exact_draft_refusal(&input, &receipt));
+        for (key, value) in [
+            ("operation_id", "earlier"),
+            ("session", "ep/other"),
+            ("session_instance", "previous"),
+            ("state", "outcome_unknown"),
+            ("rejection_code", "structured_unsupported"),
+            ("native_turn_id", "turn"),
+            ("native_input_id", "input"),
+            ("native_generation", "replaced"),
+        ] {
+            let mut changed = receipt.clone();
+            changed[key] = json!(value);
+            assert!(!exact_draft_refusal(&input, &changed), "{key}");
+        }
+        input["turn_id"] = json!("turn");
+        assert!(!exact_draft_refusal(&input, &receipt));
+    }
+
+    #[derive(Clone, Copy)]
+    enum LiveSource {
+        Exact,
+        Unavailable,
+        Edited,
+    }
+
     struct MockDiscord {
+        source: std::cell::Cell<LiveSource>,
         outcome: RefCell<Post>,
         posted: RefCell<Vec<(String, String)>>,
     }
 
     impl Audience for MockDiscord {
         fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
-            Ok(Some(source(cfg, id)))
+            let mut message = source(cfg, id);
+            match self.source.get() {
+                LiveSource::Exact => {}
+                LiveSource::Unavailable => return Err(io::ErrorKind::TimedOut.into()),
+                LiveSource::Edited => {
+                    message["content"] = json!("edited while disconnected");
+                    message["edited_timestamp"] = json!("2026-11-26T01:00:00Z");
+                }
+            }
+            Ok(Some(message))
         }
 
         fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -1580,6 +1716,8 @@ mod tests {
         launch: Value,
         composer: Value,
         sends: usize,
+        refusal: Value,
+        input_observed: bool,
         wrong_turn: bool,
         wrong_binding: bool,
         snapshot_busy: bool,
@@ -1643,7 +1781,23 @@ mod tests {
                         self.composer["text"],
                         crate::manager_prompt::render(&"P".repeat(800), "hello").unwrap()
                     );
-                    json!({"op":"ok","operation_id":request["operation_id"]})
+                    if self.sends == 1 {
+                        self.refusal = json!({"operation_id":request["operation_id"],"session":self.row["id"],
+                            "session_instance":self.composer["session_instance"],"state":"rejected",
+                            "rejection_code":crate::shim::manager_terminal::CODE});
+                        json!({"op":"error","error_code":crate::shim::manager_terminal::CODE,"error":"draft"})
+                    } else {
+                        assert_eq!(self.sends, 2, "an uncertain renewed operation was resent");
+                        json!({"op":"error","error_code":"outcome_unknown","error":"fixture lost the reply"})
+                    }
+                }
+                "semantic_status" => {
+                    json!({"op":"semantic_status","operation_id":request["operation_id"],
+                    "semantic_receipt":if request["operation_id"] == self.refusal["operation_id"] {
+                        self.refusal.clone()
+                    } else {
+                        json!({"state":"unknown_operation"})
+                    }})
                 }
                 "manager_input_status" => {
                     assert_eq!(
@@ -1652,8 +1806,9 @@ mod tests {
                     );
                     json!({"op":"manager_input_status","session_id":self.row["id"],
                     "manager_input_status":{
-                       "state":if self.completed {"completed"} else {"running"}, "external_input":0,
-                       "native_input_id":self.composer["manager_admission"]["nonce"],"native_turn_id":"authorized-turn"
+                       "state":if !self.input_observed {"unknown"} else if self.completed {"completed"} else {"running"}, "external_input":0,
+                       "native_input_id":self.composer["manager_admission"]["nonce"],
+                       "native_turn_id":if self.input_observed {"authorized-turn"} else {""}
                     }})
                 }
                 "manager_resolve_call" => {
@@ -1686,6 +1841,7 @@ mod tests {
             .unwrap();
         inbox.publication_state(&nonce, "sending", None).unwrap();
         let api = MockDiscord {
+            source: std::cell::Cell::new(LiveSource::Exact),
             outcome: RefCell::new(Post::Acknowledged(Value::Null)),
             posted: RefCell::new(Vec::new()),
         };
@@ -1700,6 +1856,15 @@ mod tests {
 
     #[test]
     fn owner_dm_runs_through_bound_manager_and_exact_reply_once() {
+        owner_dm_after_draft(false);
+    }
+
+    #[test]
+    fn reconnected_owner_dm_drops_the_edited_source_without_sending() {
+        owner_dm_after_draft(true);
+    }
+
+    fn owner_dm_after_draft(edited: bool) {
         let dir =
             crate::test_temp::root().join(format!("d-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
@@ -1720,6 +1885,8 @@ mod tests {
             launch: Value::Null,
             composer: Value::Null,
             sends: 0,
+            refusal: Value::Null,
+            input_observed: false,
             wrong_turn: false,
             wrong_binding: false,
             snapshot_busy: false,
@@ -1764,6 +1931,7 @@ mod tests {
         inbox.admit(&source(&cfg, "101")).unwrap();
         let dispatcher = Dispatcher::open(&cfg, &dir).unwrap().unwrap();
         let api = MockDiscord {
+            source: std::cell::Cell::new(LiveSource::Exact),
             outcome: RefCell::new(Post::RateLimited(60_000)),
             posted: RefCell::new(Vec::new()),
         };
@@ -1779,8 +1947,61 @@ mod tests {
         assert_eq!(state.lock().unwrap().sends, 0);
         assert_eq!(inbox.next_prepared().unwrap()["route"]["message_id"], "101");
         state.lock().unwrap().snapshot_busy = false;
+        assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
+        assert_eq!(state.lock().unwrap().sends, 1);
+        let held = inbox.manager()["input"].clone();
+        state.lock().unwrap().snapshot_busy = true;
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert_eq!(inbox.manager()["input"], held);
+        state.lock().unwrap().snapshot_busy = false;
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        let renewed = inbox.manager()["input"].clone();
+        assert_ne!(held["operation"], renewed["operation"]);
+        assert_eq!(renewed["draft_retry"], "prepared");
+        assert_eq!(held["composer"], renewed["composer"]);
+        assert_eq!(held["source_id"], renewed["source_id"]);
+        let mut stalled = inbox.manager().clone();
+        let expired = "semantic:1:00000000000000000000000000000001";
+        stalled["input"]["operation"] = json!(expired);
+        inbox.set_manager(stalled.clone()).unwrap();
+        let renewed = stalled["input"].clone();
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        api.source.set(LiveSource::Unavailable);
         dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         assert_eq!(state.lock().unwrap().sends, 1);
+        assert_eq!(inbox.manager()["input"], renewed);
+        if edited {
+            api.source.set(LiveSource::Edited);
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            assert_eq!(state.lock().unwrap().sends, 1);
+            assert!(inbox.manager()["input"].is_null());
+            assert!(!inbox.matches_owner_admission(
+                field(&renewed, "source_id"),
+                &renewed["composer"]["origin"]["revision"],
+                "sending",
+            ));
+            done.store(true, Ordering::Relaxed);
+            let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+            server.join().unwrap();
+            drop(dispatcher);
+            fs::remove_dir_all(dir).unwrap();
+            return;
+        }
+        api.source.set(LiveSource::Exact);
+        let mut stale_inbox = Inbox::open(&dir, &cfg).unwrap();
+        for _ in 0..3 {
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        }
+        assert_eq!(state.lock().unwrap().sends, 2);
+        assert_eq!(inbox.manager()["input"]["draft_retry"], "executing");
+        let chosen = field(&inbox.manager()["input"], "operation");
+        assert_ne!(chosen, expired);
+        assert!(crate::providers::codex_receipt::timely(chosen));
+        assert_eq!(inbox.manager()["input"]["composer"], renewed["composer"]);
+        assert!(stale_inbox.begin_draft_retry(&stalled).is_err());
+        assert!(inbox.begin_draft_retry(&inbox.manager().clone()).is_err());
+        state.lock().unwrap().input_observed = true;
         assert!(api.posted.borrow().is_empty());
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
             "session_id":"local", "call":{"name":"publish","arguments":{
@@ -1886,7 +2107,7 @@ mod tests {
                 (nonce, "deliberate reply".into())
             ]
         );
-        assert_eq!(state.lock().unwrap().sends, 1);
+        assert_eq!(state.lock().unwrap().sends, 2);
         done.store(true, Ordering::Relaxed);
         let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
         server.join().unwrap();

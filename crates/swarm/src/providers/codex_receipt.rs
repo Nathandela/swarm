@@ -221,6 +221,111 @@ pub(crate) fn verify_binding(
     Ok(())
 }
 
+fn manager_dispatch_path(dir: &Path, operation: &str) -> io::Result<PathBuf> {
+    let receipt = path(dir, operation)?;
+    Ok(receipt.with_file_name(format!(
+        "dispatcher-{}",
+        receipt.file_name().unwrap().to_string_lossy()
+    )))
+}
+
+pub(crate) fn manager_dispatch(
+    dir: &Path,
+    operation: &str,
+    composer: &Value,
+    held: bool,
+) -> io::Result<bool> {
+    use crate::ipc::field;
+
+    let session = field(composer, "session");
+    let instance = field(composer, "session_instance");
+    let intent = hash(field(composer, "text"));
+    verify_binding(
+        dir.parent()
+            .ok_or_else(|| io::Error::other("missing semantic operation root"))?,
+        operation,
+        session,
+        instance,
+        &intent,
+    )?;
+    let path = manager_dispatch_path(dir, operation)?;
+    let mut record = json!({"operation_id":operation,"session":session,"session_instance":instance,
+        "intent":intent,"composer_hash":hash(&serde_json::to_string(composer)?)});
+    match runtime::read_json(&path) {
+        Ok(mut saved) => {
+            let outcome = saved
+                .as_object_mut()
+                .and_then(|object| object.shift_remove("state"));
+            if saved != record {
+                return Err(io::Error::other(
+                    "dispatcher operation has a different composer",
+                ));
+            }
+            match outcome.as_ref().and_then(Value::as_str) {
+                Some("rejected") => return Ok(true),
+                Some("dispatching") if !held => return Ok(false),
+                Some("dispatching") => {
+                    return Err(io::Error::other(
+                        "earlier dispatcher input may have reached its provider",
+                    ));
+                }
+                _ => {
+                    return Err(io::Error::other(
+                        "dispatcher operation has an unknown outcome",
+                    ));
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    if held && self::path(dir, operation)?.try_exists()? {
+        return Err(io::Error::other(
+            "earlier dispatcher input may have reached its provider",
+        ));
+    }
+    record["state"] = json!(if held { "rejected" } else { "dispatching" });
+    durable_dir(path.parent().unwrap())?;
+    runtime::write_json(&path, &record)?;
+    Ok(held)
+}
+
+pub(crate) fn manager_draft_rejection(
+    dir: &Path,
+    root: &Path,
+    operation: &str,
+    session: &str,
+    instance: &str,
+) -> io::Result<Option<Value>> {
+    if issued(operation).is_none() {
+        return Ok(None);
+    }
+    match runtime::read_json(&manager_dispatch_path(dir, operation)?) {
+        Ok(record)
+            if record["state"] == "rejected"
+                && record["operation_id"] == operation
+                && record["session"] == session
+                && record["session_instance"] == instance =>
+        {
+            verify_binding(
+                root,
+                operation,
+                session,
+                instance,
+                crate::ipc::field(&record, "intent"),
+            )?;
+            Ok(Some(
+                json!({"operation_id":operation,"session":session,"session_instance":instance,
+                "state":"rejected","rejection_code":crate::shim::manager_terminal::CODE}),
+            ))
+        }
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn fence(
     dir: &Path,
     operation: &str,
@@ -353,6 +458,46 @@ pub(crate) fn load_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispatcher_draft_receipt_cannot_overwrite_a_possible_native_effect() {
+        let root = crate::test_temp::root().join(format!(
+            "dispatcher-dispatch-{}",
+            runtime::random_id().unwrap()
+        ));
+        let dir = root.join("dispatcher");
+        runtime::private_dir(&root).unwrap();
+        runtime::private_dir(&dir).unwrap();
+        let held = operation().unwrap();
+        let dispatched = operation().unwrap();
+        let session = "ep/dispatcher";
+        let instance = "instance";
+        let composer = json!({"session":session,"session_instance":instance,"text":"message",
+            "origin":{"request_id":"source"}});
+        for op in [&held, &dispatched] {
+            bind(&root, op, session, instance, "message").unwrap();
+        }
+        assert!(manager_dispatch(&dir, &held, &composer, true).unwrap());
+        assert!(manager_dispatch(&dir, &held, &composer, false).unwrap());
+        let mut altered = composer.clone();
+        altered["origin"]["request_id"] = json!("other");
+        assert!(manager_dispatch(&dir, &held, &altered, true).is_err());
+        assert_eq!(
+            manager_draft_rejection(&dir, &root, &held, session, instance)
+                .unwrap()
+                .unwrap()["rejection_code"],
+            crate::shim::manager_terminal::CODE
+        );
+
+        assert!(!manager_dispatch(&dir, &dispatched, &composer, false).unwrap());
+        assert!(manager_dispatch(&dir, &dispatched, &composer, true).is_err());
+        assert!(
+            manager_draft_rejection(&dir, &root, &dispatched, session, instance)
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn stale_dispatcher_refusal_leaves_a_fresh_operation_available() {
