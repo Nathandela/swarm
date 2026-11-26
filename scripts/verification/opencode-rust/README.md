@@ -80,3 +80,32 @@ To stop, send SIGTERM to the queue only after checking its PID and birth from
 `status.json`. The queue stops its current stage and prevents later stages.
 Retain private evidence in the run root and copy only scrubbed observations
 for publication.
+
+## Mixed 24-hour development workload
+
+Use a new queue root. Stage the five native probe files above and `mixed.py`.
+Place the offline `scripts/verification/parity/claude` executable at
+`$test_root/bin/claude` and an architecture-matched build of
+`./cmd/swarm-fake-codex` at `$test_root/bin/codex`.
+
+Add `--mixed` to the queue command. This runs one 24-hour stage. It keeps
+the native OpenCode and a Claude fixture PTY alive on the same daemon,
+observes attach, resize and exact echoed input, and checks both sessions
+after SIGKILL and rejoin. On real minute boundaries, the scheduler claims
+one occurrence in a separate workspace, starts a Codex fixture turn,
+observes its proved completion, releases the workspace and deletes the
+stopped fixture session while retaining schedule history. The private
+Discord control receiver verifies the installation-bound publication and
+coalesces exact retry. It uses a Unix endpoint and synthetic receipts.
+
+Every sample measures per-role RSS, kernel CPU, threads and descriptors.
+The mixed runner also records read/write bytes. The scheduler's tick
+driver emits real wall-clock ticks without installing an OS timer. The
+native scheduler parity gate independently checks timer installation,
+cold environment restoration and invocation of the generated unit.
+Protected Discord Gateway and call checks are separate release gates.
+
+For a shorter calibration, invoke the platform runner directly with
+`--mixed --duration 90 --interval 3 --restart-every 4 --source "$SOURCE_SHA"`.
+This exercises at least one real minute boundary and reports actual
+cleanup without satisfying the 24-hour gate.

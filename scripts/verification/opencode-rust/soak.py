@@ -77,6 +77,13 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
     owned = {}
     effect_counts = Counter()
     turn_ids = set()
+    mixed = None
+    if args.mixed:
+        from mixed import Mixed
+        mixed = Mixed(root, env, cli, output, wait, owned)
+        result['mixed'] = mixed.stats
+        result['fixture_sha256']['mixed.py'] = file_sha(Path(__file__).with_name('mixed.py'))
+        result['fixture_sha256'].update({name: file_sha(root / 'bin' / name) for name in ('claude', 'codex')})
 
     def monitor(event):
         health = {role: sample(pid) for role, (pid, started) in owned.items() if alive(pid, started)}
@@ -131,6 +138,9 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         atomic_json(root / 'owned.json', owned)
         key, _ = conversation()
         assert all(key), key
+        if mixed:
+            mixed.start()
+            atomic_json(root / 'owned.json', owned)
         monitor('native_ready')
 
         while not stop_requested and (time.monotonic() < deadline or result['inputs'] == 0):
@@ -186,6 +196,9 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             assert sum(req['primary'] and req['marker'] == marker for req in requests) == 1, marker
             effect_counts.update(req['marker'] for req in requests if req['marker'] == marker and req['primary'])
             result['inputs'] = index
+            if mixed:
+                mixed.interaction(index)
+                mixed.tick()
             monitor('completed')
 
             if index % args.restart_every == 0:
@@ -205,9 +218,13 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
                 assert elapsed <= BUDGETS['rejoin_seconds'], elapsed
                 result['max_rejoin_seconds'] = max(elapsed, result.get('max_rejoin_seconds', 0))
                 result['restarts'] += 1
+                if mixed:
+                    mixed.rejoined()
                 monitor('rejoined')
             pause_until = min(time.monotonic() + args.interval, deadline)
             while not stop_requested and time.monotonic() < pause_until:
+                if mixed:
+                    mixed.tick()
                 time.sleep(min(0.25, max(0, pause_until - time.monotonic())))
 
         assert not stop_requested, 'workload stopped by signal'
@@ -217,6 +234,10 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         assert result['restarts'] == result['inputs'] // args.restart_every
         if args.duration >= 3600:
             assert result['restarts'] > 0 and result['inputs'] >= 25, 'insufficient workload activity'
+        if mixed:
+            assert mixed.stats['schedule_ticks'] == mixed.stats['scheduled_completions'] > 0
+            assert mixed.stats['schedule_ticks'] >= args.duration // 60 - 1
+            assert mixed.stats['operator_attaches'] == mixed.stats['discord_publications'] == result['inputs']
         assert file_sha(config) == config_sha, 'provider configuration changed'
         assert file_sha(swarm) == result['swarm_sha256'] and file_sha(native) == result['opencode_sha256']
         assert file_sha(launcher) == launcher_sha
@@ -226,6 +247,12 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         raise
     finally:
         try:
+            if mixed and daemon and daemon.poll() is None:
+                mixed.close()
+                for entry in output('ls', '--json'):
+                    if entry['id'] != session and entry['status']['Process'] == 'running':
+                        cli('kill', entry['id'])
+                        cli('watch', entry['id'], '--until', 'completed', '--timeout', '8s')
             if session is not None:
                 cli('kill', session)
                 wait(lambda: row()['status']['Process'] == 'exited', 8)
@@ -246,6 +273,8 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             result.update(state='failed', cleanup='failed', cleanup_error=repr(exc))
             raise
         finally:
+            if daemon is not None and daemon.poll() is None:
+                stop(daemon)
             provider.shutdown()
             result['local_provider_calls'] = len(requests)
             result['finished_wall'] = time.time()

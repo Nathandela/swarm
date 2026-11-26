@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -22,6 +23,7 @@ parser.add_argument('--interval', type=int, choices=range(1, 61), default=10, me
 parser.add_argument('--restart-every', type=int, default=20)
 parser.add_argument('--source')
 parser.add_argument('--native', type=Path)
+parser.add_argument('--mixed', action='store_true')
 parser.add_argument('--check-arguments', action='store_true')
 args = parser.parse_args()
 if args.duration is not None and (
@@ -29,6 +31,8 @@ if args.duration is not None and (
     or not re.fullmatch('[a-f0-9]{40}', args.source or '')
 ):
     parser.error('soak requires 1..259200 seconds, a positive restart cadence and the full source SHA')
+if args.mixed and (args.duration is None or args.duration < 70):
+    parser.error('the mixed workload needs at least 70 seconds and a real wall-clock tick')
 root, swarm = args.root, args.swarm
 assert root.is_absolute() and len(os.fsencode(root)) <= 35, 'short absolute scratch path required'
 assert swarm.is_absolute() and os.access(swarm, os.X_OK), 'absolute executable required'
@@ -56,6 +60,16 @@ env = dict(PATH=f'{root.parent}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/b
     OPENCODE_DISABLE_AUTOUPDATE='true', OPENCODE_DISABLE_DEFAULT_PLUGINS='true',
     OPENCODE_DISABLE_PROJECT_CONFIG='true', XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
     XDG_STATE_HOME=str(root/'xdg-state'), XDG_CACHE_HOME=str(root/'cache'))
+if args.mixed:
+    bin_dir = root / 'bin'
+    bin_dir.mkdir(mode=0o700)
+    for name in ('claude', 'codex'):
+        fixture = root.parent / 'bin' / name
+        assert fixture.is_file() and not fixture.is_symlink() and fixture.stat().st_uid == os.getuid()
+        shutil.copyfile(fixture, bin_dir / name)
+        (bin_dir / name).chmod(0o700)
+    env['PATH'] = f"{bin_dir}:{env['PATH']}"
+
 request_log=[]
 class Fixture(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):

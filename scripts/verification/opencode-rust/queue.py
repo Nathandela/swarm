@@ -23,6 +23,7 @@ def main():
     parser.add_argument('root', type=Path, help='private root created by mktemp')
     parser.add_argument('swarm', type=Path)
     parser.add_argument('source')
+    parser.add_argument('--mixed', action='store_true', help='run the 24h mixed workload')
     parser.add_argument('--stage', choices=[name for name, _, _ in STAGES], action='append')
     args = parser.parse_args()
     mac = sys.platform == 'darwin'
@@ -36,14 +37,20 @@ def main():
     assert binary.is_absolute() and os.access(binary, os.X_OK)
     if not mac:
         assert binary == root / 'swarm' and fixtures == root
-    stages = [stage for stage in STAGES if not args.stage or stage[0] in args.stage]
+    if args.mixed and args.stage and args.stage != ['24h']:
+        parser.error('the mixed queue has a single 24h stage')
+    stages = [('24h', 86400, 45)] if args.mixed else [
+        stage for stage in STAGES if not args.stage or stage[0] in args.stage
+    ]
+    extras = (fixtures / 'mixed.py', root / 'bin/codex', root / 'bin/claude') if args.mixed else ()
     assert shutil.disk_usage(root).free >= (len(stages) + 1) * BUDGETS['whole_run_disk_bytes'], 'insufficient scratch capacity'
     manifest = {str(path): file_sha(path) for path in
-                (binary, native, *(fixtures / name for name in (*CORE, runner)))}
+                (binary, native, *(fixtures / name for name in (*CORE, runner)), *extras)}
     assert not (root / 'status.json').exists(), 'queue root already used'
 
     def metadata(duration, interval):
-        return ['--duration', str(duration), '--interval', str(interval), '--source', args.source]
+        flags = ['--duration', str(duration), '--interval', str(interval), '--source', args.source]
+        return flags + (['--mixed', '--restart-every', '10'] if args.mixed else [])
 
     for name, duration, interval in stages:
         subprocess.run([sys.executable, '-B', fixtures / 'loopback.py', root / name, binary,

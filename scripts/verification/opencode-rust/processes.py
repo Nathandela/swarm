@@ -13,6 +13,7 @@ if sys.platform == 'darwin':
     seconds_per_tick = timebase[0] / timebase[1] * 1e-9
     libc.proc_pidinfo.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
                                  ctypes.c_void_p, ctypes.c_int)
+    libc.proc_pid_rusage.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
 
     def proc_info(pid, flavor, buffer):
         ctypes.set_errno(0)
@@ -37,7 +38,10 @@ if sys.platform == 'darwin':
         descriptors = (ctypes.c_uint64 * 16384)()
         fd_bytes = proc_info(pid, 1, descriptors)
         assert fd_bytes < ctypes.sizeof(descriptors) and fd_bytes % 8 == 0
-        return {'rss_bytes': data[1], 'cpu_seconds': (data[2] + data[3]) * seconds_per_tick,
+        usage = (ctypes.c_uint64 * 20)()
+        assert libc.proc_pid_rusage(pid, 2, usage) == 0, 'proc_pid_rusage failed'
+        return {'read_bytes': usage[18], 'written_bytes': usage[19],
+                'rss_bytes': data[1], 'cpu_seconds': (data[2] + data[3]) * seconds_per_tick,
                 'fds': fd_bytes // 8, 'threads': data[10] >> 32}
 else:
     def proc_stat(pid):
@@ -52,7 +56,9 @@ else:
     def sample(pid):
         fields = proc_stat(pid)
         ticks = os.sysconf('SC_CLK_TCK')
-        return {'rss_bytes': int(fields[21]) * os.sysconf('SC_PAGE_SIZE'),
+        usage = dict(row.split(': ', 1) for row in Path(f'/proc/{pid}/io').read_text().splitlines())
+        return {'read_bytes': int(usage['read_bytes']), 'written_bytes': int(usage['write_bytes']),
+                'rss_bytes': int(fields[21]) * os.sysconf('SC_PAGE_SIZE'),
                 'cpu_seconds': (int(fields[11]) + int(fields[12])) / ticks,
                 'fds': len(os.listdir(f'/proc/{pid}/fd')), 'threads': int(fields[17])}
 

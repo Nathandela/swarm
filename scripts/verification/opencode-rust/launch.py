@@ -1,4 +1,5 @@
 """Private owner-protocol client shared by the two installed OpenCode probes."""
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -7,25 +8,48 @@ import struct
 import sys
 
 
-def owner_request(env, request=None, caps=()):
+def read_frame(stream):
+    size, = struct.unpack(">I", stream.read(4))
+    assert 1 < size <= 1 << 20, size
+    reply = stream.read(size)
+    assert len(reply) == size
+    return reply[0], reply[1:]
+
+
+def write_frame(stream, tag, payload):
+    stream.write(struct.pack(">IB", len(payload) + 1, tag) + payload)
+    stream.flush()
+
+
+def send_control(stream, body):
+    write_frame(stream, 1, json.dumps(body).encode())
+
+
+def read_control(stream):
+    tag, payload = read_frame(stream)
+    assert tag == 1, tag
+    return json.loads(payload)
+
+
+@contextmanager
+def owner_stream(env, caps=()):
     expected = "ep-" + hashlib.sha256(os.path.realpath(env["SWARM_DAEMON_STATE"]).encode()).hexdigest()[:8]
     with socket.socket(socket.AF_UNIX) as client:
         client.settimeout(70)
         client.connect(env["SWARM_DAEMON_SOCK"])
         with client.makefile("rwb") as stream:
-            def exchange(body):
-                frame = b"\x01" + json.dumps(body).encode()
-                stream.write(struct.pack(">I", len(frame)) + frame)
-                stream.flush()
-                size, = struct.unpack(">I", stream.read(4))
-                assert 1 < size <= 1 << 20, size
-                reply = stream.read(size)
-                assert len(reply) == size and reply[0] == 1
-                return json.loads(reply[1:])
-
-            hello = exchange(dict(op="hello", protocol_version=1, build_version="dev", capabilities=list(caps)))
+            send_control(stream, dict(op="hello", protocol_version=1, build_version="dev", capabilities=list(caps)))
+            hello = read_control(stream)
             assert hello["op"] == "hello" and hello["endpoint_id"] == expected, hello
-            return exchange(dict(endpoint_id=expected, **request)) if request else hello
+            yield stream, hello
+
+
+def owner_request(env, request=None, caps=()):
+    with owner_stream(env, caps) as (stream, hello):
+        if request is None:
+            return hello
+        send_control(stream, dict(endpoint_id=hello["endpoint_id"], **request))
+        return read_control(stream)
 
 
 def history_page(env, session, limit=1, before=""):
