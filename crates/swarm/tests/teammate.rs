@@ -33,7 +33,9 @@ fn dispatcher_guide_explains_mailbox_fallback_and_preserves_spawn_route() {
     assert!(guide.contains("Start work with ordinary swarm spawn on this supervisor."));
     assert!(guide.contains("Use swarm teammate message for worker notifications."));
     assert!(guide.contains("explain that automatic updates are unavailable."));
-    assert!(guide.contains("Direct swarm message and swarm send text to the dispatcher cannot deliver worker updates."));
+    assert!(guide.contains(
+        "Direct swarm message and swarm send text to the dispatcher cannot deliver worker updates."
+    ));
 }
 
 fn write_frame(stream: &mut impl Write, body: Value) {

@@ -175,7 +175,10 @@ mod tests {
         let rendered = render_dispatch(prompt, &input, true).unwrap();
         assert!(rendered.starts_with("Send messages to this discussion through publish."));
         assert!(rendered.contains("no mailbox for this discussion"));
-        assert!(rendered.contains("Never tell workers to send text directly to this dispatcher session."));
+        assert!(
+            rendered
+                .contains("Never tell workers to send text directly to this dispatcher session.")
+        );
         assert_eq!(
             rendered.len() + crate::providers::codex_proof::claude::ENVELOPE_OVERHEAD,
             4096
