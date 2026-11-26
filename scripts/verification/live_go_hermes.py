@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 
-from live_go_shim import LIVE, attach, connect, read_content, snapshot
+from live_go_shim import LIVE, attach, connect, read_content
 from native_fixture_sandbox import check_guards, guarded
 from stopped_go_state import COMPAT, daemon, disk, fixture_env, listed, owner, refused
 
@@ -60,7 +60,7 @@ def wait_for(check, label):
         try:
             if result := check():
                 return result
-        except (ConnectionError, TimeoutError):
+        except (ConnectionError, FileNotFoundError, TimeoutError):
             pass
         time.sleep(.1)
     raise AssertionError(f"timed out waiting for {label}")
@@ -190,7 +190,7 @@ def rehearse(go, rust, hermes, root, gateway_backed=False):
             assert launched["op"] == "launch", launched
             active = launched["session"]["id"]
             session = state / active.split("/")[-1]
-            wait_for(lambda: any("❯" in line for line in snapshot(go_env, active)["lines"]), "classic Hermes prompt")
+            wait_for(lambda: "❯".encode() in (session / "identity-tail.bin").read_bytes(), "classic Hermes prompt")
             thread = send(go_env, PROMPTS[0], lambda: response(PROMPTS[0]))
             baseline = identity()
             meta = disk(session / "meta.json")
