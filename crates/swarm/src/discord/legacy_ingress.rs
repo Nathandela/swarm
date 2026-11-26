@@ -671,16 +671,14 @@ fn validate_prepared_state(
     {
         return Err(invalid());
     }
-    let operation = field(admission, "operation_id");
-    let fields: Vec<_> = operation.split(':').collect();
+    let issued = u128::from(
+        queue::semantic_issued_at(field(admission, "operation_id")).ok_or_else(invalid)?,
+    );
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_millis();
-    if !matches!(fields.as_slice(), ["semantic", time, id]
-        if time.parse::<u128>().is_ok_and(|time| (now.saturating_sub(3_600_000)..=now+30_000).contains(&time))
-            && id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
-    {
+    if !(now.saturating_sub(3_600_000)..=now.saturating_add(30_000)).contains(&issued) {
         return Err(invalid());
     }
     Ok(())

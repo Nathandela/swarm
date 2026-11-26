@@ -164,6 +164,10 @@ func main() {
 		fmt.Println(phase, cutover)
 		return
 	}
+	if action == "guild-malform-timestamp" {
+		check(voice.FixtureMalformedGuildTimestamp(dir, os.Args[3], os.Args[4]))
+		return
+	}
 	if action == "guild-native" || action == "guild-native-request" {
 		row, err := voice.FixtureGuildNativeAdmission(dir, os.Args[3])
 		check(err)

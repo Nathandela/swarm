@@ -355,6 +355,20 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                             assert voice.read_bytes() == persisted and native(voice) == prepared
                         finally:
                             prompt.write_bytes(original_setting)
+                        for prefix in ("0", "+"):
+                            lock_path = Path(start["bridge_socket"]).with_name("controller.lock")
+                            with lock_path.open("rb") as lock:
+                                fcntl.flock(lock, fcntl.LOCK_EX)
+                                invoke("guild-malform-timestamp", voice.parent, "701", prefix)
+                            try:
+                                malformed_row = prepared | {"operation_id": prepared["operation_id"].replace("semantic:", f"semantic:{prefix}", 1)}
+                                assert native(voice) == malformed_row
+                                malformed = voice.read_bytes()
+                                rust("native-prepare-refuse")
+                                assert voice.read_bytes() == malformed and connector.read_bytes() == source_bytes
+                            finally:
+                                voice.write_bytes(persisted)
+                        print("PASS Go's replay parser and Rust reject noncanonical timestamps without a retry write", flush=True)
                         rust("prepare")
                         assert voice.read_bytes() == persisted and native(voice) == prepared
                         assert connector.read_bytes() == source_bytes and pending() == [sending]
