@@ -222,7 +222,6 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     worker_release = threading.Event()
     selected = set()
     lock = threading.Lock()
-    problems = []
     capture = []
     tool_outputs = []
     file_calls = []
@@ -234,20 +233,26 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
         tool_outputs.extend(item["output"] for item in body["input"]
                             if item.get("type") == "function_call_output")
         if "Worker message and identity" in observed:
+            names = [(tool.get("name"), child.get("name"))
+                     for tool in body.get("tools", []) for child in tool.get("tools", [])
+                     if child.get("name") == "publish"]
+            if not names:
+                return None
+            assert len(names) == 1, names
             capture.append(observed)
             waiting.set()
             if not release.wait(timeout=60) or len(file_calls) >= 3:
                 return None
-            names = [(tool.get("name"), child.get("name"))
-                     for tool in body.get("tools", []) for child in tool.get("tools", [])
-                     if child.get("name") == "publish"]
-            assert len(names) == 1, names
             namespace, name = names[0]
             selected_files = [[file_id, file_id], ["0" * 64], [file_id]][len(file_calls)]
             file_calls.append(selected_files)
             return namespace, name, dict(output_id="retained-worker-file", sequence=1,
                                          text="Verified retained worker file.", final=True,
                                          file_ids=selected_files)
+        shell = next((tool["name"] for tool in body.get("tools", [])
+                      if tool.get("name") in ("exec_command", "shell_command")), None)
+        if shell is None:
+            return None
         is_worker = "rollover-worker-file-fixture" in observed and "offline original owner prompt" not in observed
         command = None
         with lock:
@@ -261,12 +266,8 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             if is_worker:
                 worker_release.wait(timeout=90)
             return None
-        for tool in body["tools"]:
-            if tool.get("name") in ("exec_command", "shell_command"):
-                field = "cmd" if tool["name"] == "exec_command" else "command"
-                return None, tool["name"], {field: command}
-        problems.append([tool.get("name") for tool in body["tools"]])
-        return None
+        field = "cmd" if shell == "exec_command" else "command"
+        return None, shell, {field: command}
 
     model, _ = model_fixture(base, False, fixture_tool=choose)
     discord, posts = discord_fixture(mode != "uncertain", wake=True,
@@ -292,10 +293,10 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
                     deadline = time.monotonic() + 45
-                    while not waiting.wait(0.2) and ctl.poll() is None and not problems:
+                    while not waiting.wait(0.2) and ctl.poll() is None:
                         if time.monotonic() > deadline:
                             break
-                    assert waiting.is_set(), (selected, problems, model.history, listed(env),
+                    assert waiting.is_set(), (selected, model.history, listed(env),
                                               tool_outputs[-4:],
                                               ctl.stderr.read() if ctl.poll() is not None else "running")
                     stop.touch()
@@ -314,7 +315,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                     restored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
                     assert restored == stored
                     rust_env["SWARM_TEST_DISCORD_REST_PORT"] = str(discord.server_port)
-                    fault = mode in ("before-pin", "after-pin", "after-voice")
+                    fault = mode in ("before-pin", "after-pin", "after-voice", "after-outbox")
                     if fault:
                         rust_env["SWARM_TEST_DISCORD_WAKE_FAULT"] = mode
                     elif mode != "prepared":
@@ -339,16 +340,19 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                                                   publication, file_id).strip()
                             assert old_pin() == ("0" if mode == "before-pin" else "1")
                             state_after_fault = (connector.read_bytes(), ledger.read_bytes())
-                            assert state_after_fault[0] == before_crash[0]
-                            assert (state_after_fault[1] != before_crash[1]) == (mode == "after-voice")
+                            assert (state_after_fault[0] != before_crash[0]) == (mode == "after-outbox")
+                            assert (state_after_fault[1] != before_crash[1]) == (mode in ("after-voice", "after-outbox"))
                             replay = rust_env.copy()
                             del replay["SWARM_TEST_DISCORD_WAKE_FAULT"]
                             replay["SWARM_TEST_DISCORD_WAKE_RECOVER"] = mode
                             run(rust_test, replay, "retained_original_go_stages_native_vm_file_call", "--nocapture")
                             assert posts == []
-                            assert old_pin() == ("1" if mode == "after-voice" else "0")
+                            assert old_pin() == ("1" if mode in ("after-voice", "after-outbox") else "0")
                             assert intent.exists() == (mode == "after-voice")
                             assert (connector.read_bytes(), ledger.read_bytes()) == state_after_fault
+                            if mode == "after-outbox":
+                                old = json.loads(run(fixture,env,"vm-read-staged-publication",place,"original-room","prepared"))
+                                assert len(old) == 1 and base64.b64decode(old[0]) == original_bytes
                             return
                         assert stager.returncode == 0, (output, errors, tool_outputs)
                         assert not intent.exists()
@@ -403,7 +407,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             print(f"PASS original Go admitted native worker wake fixture ({mode})")

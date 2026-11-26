@@ -616,6 +616,7 @@ pub(super) fn accept_wake(
         )?;
     }
     acknowledge_export(cfg, lease, binding, &output)?;
+    wake_fault("after-outbox");
     wake_intent::clear(place)?;
     Ok(output)
 }

@@ -23,6 +23,12 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+fn enrollment(cfg: &Config) -> io::Result<String> {
+    let mut ordered = cfg.0.clone();
+    ordered.sort_all_objects();
+    Ok(hash(&serde_json::to_vec(&ordered)?))
+}
+
 fn key(table: &str, conversation: &str, id: &str) -> io::Result<String> {
     let coordinates = serde_json::to_string(&[conversation, id])?;
     Ok(format!("{table}\0{coordinates}"))
@@ -66,6 +72,7 @@ pub(super) fn prepare(
         &file,
         &json!({
             "version":1,"installation":cfg.text("installation_id"),"discussion":binding["ID"],
+        "enrollment":enrollment(cfg)?,
             "connector":physical(&place.dir.join("discord.db"))?,
             "voice":physical(voice)?,"mailbox":mailbox,
             "nonce":nonce,"request":request
@@ -109,6 +116,7 @@ pub(super) fn reconcile(
     let (outbox_key, nonce) = coordinates(cfg, binding, publication)?;
     let source = &request["source"];
     if marker["version"] != 1
+        || marker["enrollment"] != enrollment(cfg)?
         || marker["installation"] != cfg.text("installation_id")
         || marker["discussion"] != binding["ID"]
         || marker["nonce"] != nonce
@@ -205,6 +213,7 @@ pub(super) fn reconcile(
                 && nonce_index.as_deref() == Some(outbox_key.as_bytes())
                 && identity(&voice_pin, &voice_path)?
                 && lease.source_unchanged()?
+                && personal_config(place, true)?.0 == cfg.0
             {
                 clear(place)?;
                 println!(
