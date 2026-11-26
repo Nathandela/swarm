@@ -62,13 +62,20 @@ func publicationFileBytes(files []schema.PublicationFile) (int, error) {
 	return total, nil
 }
 
+// The exact types worker capture produces; capture checks each file's bytes.
 func publicationFileType(value string) bool {
 	switch value {
-	case "image/png", "image/jpeg", "text/csv", "application/pdf":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "text/csv", "application/pdf",
+		"text/plain; charset=utf-8", "application/octet-stream", "application/zip",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"application/vnd.oasis.opendocument.text",
+		"application/vnd.oasis.opendocument.spreadsheet",
+		"application/vnd.oasis.opendocument.presentation":
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
 func matchesPublicationFile(f schema.PublicationFile, raw []byte) bool {
