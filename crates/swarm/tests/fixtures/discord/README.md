@@ -79,3 +79,9 @@ and wake flags to publish two exact staged attachments after the source file
 changes. The offline audience loses the POST acknowledgement. The connector
 must reject a partial attachment observation, accept the exact gateway
 receipt, and avoid a second POST.
+
+Set `SWARM_NATIVE_MAIL_PARK_FIXTURE=1` alongside `SWARM_NATIVE_MAIL_FIXTURE=1`
+to prove the old manager and its backend exit while a delegated worker stays
+live. The worker queues its completion with the connector closed. A fresh
+connector reloads the checkpoint, resumes the exact native conversation under
+a new session incarnation, ingests the completion, and confirms its reply.

@@ -30,9 +30,19 @@ pub(super) fn anchor(data: &Value, binding: &Value, note: &Value) -> Option<(Str
     entries.iter().find_map(|(id, row)| {
         (super::config::snowflake(id)
             && row["state"] == "accepted"
-            && row["native_binding"] == *binding
+            && (row["native_binding"] == *binding
+                || data["manager"]["history"]
+                    .as_array()
+                    .is_some_and(|history| {
+                        history
+                            .iter()
+                            .any(|prior| prior["binding"] == row["native_binding"])
+                    }))
             && row["route"]["message_id"] == *id
             && row["authority"] == "owner_direct"
+            && row["native_binding"]["conversation_id"] == note["Discussion"]
+            && field(&row["native_binding"], "session").rsplit('/').next()
+                == note["Parent"].as_str()
             && row["native_input_id"].as_str().is_some_and(|nonce| {
                 note["ParentInputHash"] == crate::supervisor::mail::parent_hash(nonce)
             }))
@@ -54,7 +64,7 @@ pub(super) fn verify(data: &Value, scope: &Value, root: &Path, composer: &Value)
     if note["State"] != "queued"
         || note["Discussion"] != binding["conversation_id"]
         || note["Parent"]
-            != field(binding, "session")
+            != field(&row["native_binding"], "session")
                 .rsplit('/')
                 .next()
                 .unwrap_or_default()

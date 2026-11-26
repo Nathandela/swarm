@@ -45,6 +45,7 @@ pub(super) struct Dispatcher {
     socket_identity: (u64, u64),
     credential: String,
     mail_cursor: std::cell::Cell<u64>,
+    idle_since: std::cell::Cell<Option<Instant>>,
 }
 
 impl Dispatcher {
@@ -73,6 +74,7 @@ impl Dispatcher {
             socket,
             credential,
             mail_cursor: std::cell::Cell::new(0),
+            idle_since: std::cell::Cell::new(None),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
@@ -111,10 +113,13 @@ impl Dispatcher {
             state = json!({"generation":1, "launch_operation":operation("launch")?, "launch":self.launch});
             inbox.set_manager(state.clone())?;
         }
-        if state["launch"] != self.launch || state["generation"] != 1 {
+        if state["launch"] != self.launch || !state["generation"].as_u64().is_some_and(|n| n > 0) {
             return Err(invalid(
                 "persisted native manager launch differs from this place",
             ));
+        }
+        if !state["retirement"].is_null() {
+            return self.resume_parked(cfg, inbox, state, calls.is_some());
         }
         if state["session"].is_null() {
             let op = field(&state, "launch_operation");
@@ -159,6 +164,7 @@ impl Dispatcher {
             return Err(invalid("native manager requires owner reconciliation"));
         }
         if !state["input"].is_null() {
+            self.idle_since.set(None);
             let had_turn = !state["input"]["turn_id"].is_null();
             let phase = self.reconcile_input(inbox, &mut state)?;
             if let Some((_, driver)) = calls
@@ -245,13 +251,18 @@ impl Dispatcher {
             .next_prepared()
             .or_else(|| calls.and_then(|_| inbox.prepared_voice()))
         else {
-            return self.wake_from_mail(cfg, inbox, api, state, &status);
+            self.wake_from_mail(cfg, inbox, api, state, &status)?;
+            if inbox.manager()["input"].is_null() {
+                self.park_if_idle(cfg, inbox, &status)?;
+            }
+            return Ok(());
         };
         if status["ready_for_input"] != true
             || !matches!(field(&status["turn"], "state"), "idle" | "completed")
         {
             return Ok(());
         }
+        self.idle_since.set(None);
         let voice = input["voice_origin"].is_object();
         let (id, current) = if voice {
             let id = field(&input, "operation_id").to_owned();
@@ -290,6 +301,107 @@ impl Dispatcher {
             }
             result => result,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_idle_elapsed(&self) {
+        self.idle_since
+            .set(Some(Instant::now() - Duration::from_secs(121)));
+    }
+
+    fn park_if_idle(&self, cfg: &Config, inbox: &mut Inbox, status: &Value) -> io::Result<()> {
+        if cfg.0["calls"].is_object()
+            || status["ready_for_input"] != true
+            || status["turn"]["state"] != "completed"
+        {
+            self.idle_since.set(None);
+            return Ok(());
+        }
+        let Some(since) = self.idle_since.get() else {
+            self.idle_since.set(Some(Instant::now()));
+            return Ok(());
+        };
+        if since.elapsed() < Duration::from_secs(120) || !self.owner.can_retire() {
+            return Ok(());
+        }
+        let mut state = inbox.manager().clone();
+        let checkpoint = hash(&json!([
+            state["binding"],
+            state["generation"],
+            status["turn"],
+            operation("retire")?
+        ]))?;
+        let request = json!({"binding":state["binding"],"generation":state["generation"],
+            "checkpoint":checkpoint,"expected_turn":status["turn"]});
+        let id = crate::supervisor::manager::retirement_id(&request)?;
+        state["retirement"] = json!({"operation_id":id,"request":request});
+        inbox.set_manager(state)?;
+        Ok(())
+    }
+
+    fn resume_parked(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        mut state: Value,
+        voice: bool,
+    ) -> io::Result<()> {
+        let checkpoint = &state["retirement"];
+        let phase = self.owner.retirement(checkpoint, true)?;
+        if matches!(phase.as_str(), "prepared" | "uncertain") {
+            let _ = self.owner.retirement(checkpoint, false);
+            return Ok(());
+        }
+        let binding = &state["binding"];
+        let root = self.owner.mail_root()?;
+        let queued = inbox.next_prepared().is_some()
+            || voice && inbox.prepared_voice().is_some()
+            || !mail_store::pending(&root, field(binding, "conversation_id"), 0, |note| {
+                inbox.worker_mail_anchor(binding, note).is_some()
+                    && mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
+            })?
+            .is_empty();
+        if phase == "unknown" {
+            if queued {
+                let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
+                    Ok(lock) => lock,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+                if self.owner.retirement(checkpoint, true)? == "unknown" {
+                    state["retirement"] = Value::Null;
+                    self.idle_since.set(None);
+                    inbox.set_manager(state)?;
+                }
+            } else {
+                let _ = self.owner.retirement(checkpoint, false);
+            }
+            return Ok(());
+        }
+        if !queued {
+            return Ok(());
+        }
+        let generation = state["generation"]
+            .as_u64()
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| invalid("manager generation exceeded"))?;
+        let previous = checkpoint["request"].clone();
+        let history = &mut state["history"];
+        if history.is_null() {
+            *history = json!([]);
+        }
+        history
+            .as_array_mut()
+            .ok_or_else(|| invalid("manager retirement history changed"))?
+            .push(previous.clone());
+        state["generation"] = json!(generation);
+        state["resume_request"] = previous;
+        state["session"] = Value::Null;
+        state["binding"] = Value::Null;
+        state["retirement"] = Value::Null;
+        state["launch_operation"] = json!(operation("launch")?);
+        self.idle_since.set(None);
+        inbox.set_manager(state)
     }
 
     /// None is uncertain transport or a response without exact message coordinates.
@@ -343,17 +455,12 @@ impl Dispatcher {
         }
         let root = self.owner.mail_root()?;
         let binding = &state["binding"];
-        let parent = field(&state, "session")
-            .rsplit('/')
-            .next()
-            .unwrap_or_default();
         let notes = crate::supervisor::mail_store::pending(
             &root,
             field(binding, "conversation_id"),
             self.mail_cursor.get(),
             |note| {
-                note["Parent"] == parent
-                    && mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
+                mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
                     && inbox.worker_mail_anchor(binding, note).is_some()
             },
         )?;
@@ -621,10 +728,14 @@ impl Dispatcher {
                 return Err(invalid("native mailbox tool belongs to another turn"));
             }
             let scope = self.owner.mail_root()?;
-            let session = field(&state, "session")
-                .rsplit('/')
-                .next()
-                .unwrap_or_default();
+            let session = if input["worker_wake"].is_null() {
+                field(&state, "session")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+            } else {
+                field(&input["worker_wake"]["binding"], "Parent")
+            };
             let input_hash = if input["worker_wake"].is_null() {
                 crate::supervisor::mail::parent_hash(field(&proof, "native_input_id"))
             } else {

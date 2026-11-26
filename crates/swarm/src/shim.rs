@@ -324,6 +324,15 @@ fn serve(dir: &Path) -> io::Result<()> {
                 &app_args,
             )?;
             backend = Some(owner);
+            if let Some(native) = scope["resume_request"]["binding"]["native_session_id"].as_str() {
+                if !providers::codex_receipt::canonical_thread(native)
+                    || argv.first().map(String::as_str) != Some("resume")
+                    || argv.get(1).map(String::as_str) != Some(native)
+                {
+                    return Err(io::Error::other("manager resume arguments differ from retirement custody"));
+                }
+                command.args(argv.drain(..2));
+            }
             command
                 .args(["--remote", &connection.endpoint])
                 .env_remove("OPENAI_API_KEY");
@@ -631,6 +640,20 @@ fn serve(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn observation_is_quiescent(
+    observed: &Value,
+    token: &str,
+    binding: &Value,
+    native: &Value,
+) -> bool {
+    observed["token"] == token
+        && observed["backend_available"] == true
+        && observed["conversation_id"] == binding["native_session_id"]
+        && observed["manager_ingress_ready"] == true
+        && native["thread_state"] == "idle"
+        && native["blocked"] == false
+}
+
 fn terminate(state: &State) -> io::Result<()> {
     let _native = state
         .agy_broker
@@ -818,6 +841,56 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         "attach" => {
             opencode_terminal_ready(state)?;
             attach(stream, state)
+        }
+        "manager_park" if state.manager => {
+            let result = (|| {
+                let owner = state.control.lock().unwrap();
+                if *owner != 0 {
+                    return Err(io::Error::other("manager is attached"));
+                }
+                let request = &request["retire"];
+                let binding = &request["binding"];
+                let meta = runtime::read_json(&state.dir.join("session.json"))?;
+                let intent = crate::discord::connector_intent(&meta["manager"])?;
+                if intent["manager"]["retirement"]["request"] != *request
+                    || !intent["manager"]["input"].is_null()
+                    || intent["manager"]["session"] != binding["session"]
+                {
+                    return Err(io::Error::other(
+                        "manager park lacks persisted connector custody",
+                    ));
+                }
+                let observed = runtime::read_json(&state.dir.join("observation.json"))?;
+                let native = providers::codex_proof::Ledger::snapshot(&state.dir, binding)?;
+                let turn = providers::codex_proof::input_status(
+                    &native,
+                    field(&request["expected_turn"], "native_input_id"),
+                );
+                if observation_is_quiescent(&observed, &state.token, binding, &native)
+                    && native["current"] == turn["native_turn_id"]
+                    && turn == request["expected_turn"]
+                {
+                    runtime::write_json(
+                        &state.dir.join("manager-retire.json"),
+                        &json!({
+                            "token":state.token,"request":request
+                        }),
+                    )?;
+                    terminate(state)?;
+                    Ok(())
+                } else {
+                    Err(io::Error::other(
+                        "manager native turn is no longer quiescent",
+                    ))
+                }
+            })();
+            runtime::write_control(
+                &mut stream,
+                &match result {
+                    Ok(()) => json!({"type":"ok"}),
+                    Err(error) => json!({"type":"error","error":error.to_string()}),
+                },
+            )
         }
         "signal" if request["sig"] == "term" => {
             terminate(state)?;

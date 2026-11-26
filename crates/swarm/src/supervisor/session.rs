@@ -1,4 +1,5 @@
 mod hermes;
+mod manager_retire;
 mod manager_runtime;
 
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
@@ -74,6 +75,20 @@ impl Prepared {
             .map(|(_, home)| PathBuf::from(home))
             .ok_or_else(|| io::Error::other("manager requires native account HOME"))?;
         scope["account"] = json!(super::manager::account(&home)?);
+        let predecessor = &scope["resume_request"]["binding"];
+        if !predecessor.is_null() {
+            let native = field(predecessor, "native_session_id");
+            if predecessor["login_epoch"] != scope["account"]
+                || !codex_receipt::canonical_thread(native)
+            {
+                return Err(io::Error::other(
+                    "manager successor cannot resume a different native account or thread",
+                ));
+            }
+            self.provider
+                .argv
+                .splice(0..0, ["resume".to_owned(), native.to_owned()]);
+        }
         scope["account_home"] = json!(home);
         self.manager = scope;
         Ok(())
@@ -1862,6 +1877,10 @@ impl Session {
             "Session":session,"Instance":codex_receipt::instance(&self.token),"Attempt":self.mailbox["attempt"],
             "Agent":self.agent,"Project":self.mailbox["project"],"ParentInputHash":self.mailbox["parent_input_hash"]}),
         )
+    }
+
+    pub(super) fn owns_manager_launch(&self, conversation: &str, operation: &Value) -> bool {
+        self.owns_manager(conversation) && self.manager["launch_operation"] == *operation
     }
 
     pub(super) fn owns_manager(&self, conversation: &str) -> bool {

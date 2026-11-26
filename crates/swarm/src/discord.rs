@@ -94,7 +94,9 @@ pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
         || identity[2] != scope["owner_id"]
         || identity[3] != scope["channel_id"]
         || identity[4] != scope["supervisor_socket"]
-        || data["manager"]["generation"] != 1
+        || !data["manager"]["generation"]
+            .as_u64()
+            .is_some_and(|generation| generation > 0)
         || data["manager"]["launch"] != scope["launch"]
     {
         return Err(invalid(
