@@ -40,7 +40,7 @@ impl Source {
     }
 
     pub(super) fn can_relocate(&self, negotiated: bool) -> bool {
-        negotiated && self.agent == "agy" && !self.scheduled
+        negotiated && !self.scheduled
     }
 
     pub(super) fn directory(&self) -> &Path {

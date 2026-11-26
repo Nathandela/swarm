@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -59,7 +59,7 @@ impl Sandbox {
             stream,
             endpoint: String::new(),
         };
-        let reply = peer.query(json!({"op":"hello","protocol_version":1,"capabilities":["semantic-send","semantic-target","message-origin","native-requests-v1","worker-discord-origin-v1"]}));
+        let reply = peer.query(json!({"op":"hello","protocol_version":1,"capabilities":["semantic-send","semantic-target","message-origin","resume-relocate","native-requests-v1","worker-discord-origin-v1"]}));
         assert_eq!(reply["op"], "hello", "{reply}");
         peer.endpoint = reply["endpoint_id"].as_str().unwrap().into();
         peer
@@ -73,7 +73,11 @@ impl Sandbox {
     }
 
     fn launch(&self, peer: &mut Peer, options: Value) -> Value {
-        peer.query(json!({"op":"launch","launch":{"agent":"hermes","cwd":self.path,
+        self.launch_at(peer, options, &self.path)
+    }
+
+    fn launch_at(&self, peer: &mut Peer, options: Value, cwd: &Path) -> Value {
+        peer.query(json!({"op":"launch","launch":{"agent":"hermes","cwd":cwd,
             "env":[format!("PATH={}:/usr/bin:/bin",self.path.display()),
                 format!("HOME={}",self.path.display()),format!("HERMES_HOME={}/h",self.path.display())],
             "cols":80,"rows":24,"options":options}}))
@@ -180,8 +184,32 @@ fn hermes_classic_launch_status_resume_and_delete() {
     );
     assert_eq!(peer.query(json!({"op":"kill","session_id":id}))["op"], "ok");
     eventually(|| (peer.view(id)["status"]["Process"] == "exited").then_some(()));
-    let resumed = fixture.launch(&mut peer, json!({"resume_from":id}));
+    let relocated = fixture.path.join("selected-workspace");
+    DirBuilder::new().mode(0o700).create(&relocated).unwrap();
+    let inherited = fixture.launch_at(
+        &mut peer,
+        json!({"resume_from":id}),
+        &relocated.join("ignored-missing"),
+    );
+    assert_eq!(inherited["op"], "launch", "{inherited}");
+    assert_eq!(inherited["session"]["cwd"], fixture.path.to_str().unwrap());
+    let ordinary = inherited["session"]["id"].as_str().unwrap();
+    assert_eq!(
+        peer.query(json!({"op":"kill","session_id":ordinary}))["op"],
+        "ok"
+    );
+    eventually(|| (peer.view(ordinary)["status"]["Process"] == "exited").then_some(()));
+    assert_eq!(
+        peer.query(json!({"op":"delete","session_id":ordinary}))["op"],
+        "ok"
+    );
+    let resumed = fixture.launch_at(
+        &mut peer,
+        json!({"resume_from":id, "resume_relocate":"true"}),
+        &relocated,
+    );
     assert_eq!(resumed["op"], "launch", "{resumed}");
+    assert_eq!(resumed["session"]["cwd"], relocated.to_str().unwrap());
     let successor = resumed["session"]["id"].as_str().unwrap();
     let trace = eventually(|| {
         fs::read_to_string(fixture.path.join("argv"))

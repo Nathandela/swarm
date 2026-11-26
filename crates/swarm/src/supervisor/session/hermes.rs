@@ -77,6 +77,14 @@ impl Session {
         if meta["token"] != self.token || meta["id"] != self.id {
             return Err(io::Error::other("Hermes resume reservation changed"));
         }
+        if launch["worktree"] == true {
+            return Err(io::Error::other(
+                "resume: worktree isolation cannot be requested again; resume uses the selected checkout",
+            ));
+        }
+        if let Some(options) = launch["options"].as_object_mut() {
+            options.shift_remove("resume_relocate");
+        }
         let profile = field(&meta["provider"], "hermes_profile");
         if !field(&launch["options"], "profile").is_empty()
             && field(&launch["options"], "profile") != profile

@@ -329,7 +329,10 @@ impl Session {
                             && matches!(key.as_str(), "mode" | "resume_conversation_id"))
                         || (agent == "hermes"
                             && (providers::hermes::OPTIONS.contains(&key.as_str())
-                                || key == "resume_from"))
+                                || key == "resume_from"
+                                || (key == "resume_relocate"
+                                    && source.is_some()
+                                    && value == "true")))
                         || (matches!(agent, "agy" | "claude" | "claude-code")
                             && key == "dangerously-skip-permissions");
                     !supported || !value.is_string()
@@ -338,11 +341,22 @@ impl Session {
         {
             return Err(io::Error::other("unsupported launch options"));
         }
-        let raw_cwd = field(req, "cwd");
-        if raw_cwd.is_empty() || !Path::new(raw_cwd).is_dir() {
+        let requested = Path::new(field(req, "cwd"));
+        let cwd = match source {
+            Some(source) if req["options"]["resume_relocate"].is_null() => {
+                source.verify_effective()?
+            }
+            Some(_) if !requested.is_absolute() => {
+                return Err(io::Error::other(
+                    "resume: relocation directory must be absolute",
+                ));
+            }
+            _ => requested,
+        };
+        if !cwd.is_dir() {
             return Err(io::Error::other("cwd is not an existing directory"));
         }
-        let mut cwd = fs::canonicalize(raw_cwd)?;
+        let mut cwd = fs::canonicalize(cwd)?;
         if cwd.to_str().is_none() {
             return Err(io::Error::other("cwd is not representable as UTF-8"));
         }
