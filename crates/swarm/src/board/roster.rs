@@ -6,6 +6,7 @@ use super::{
     session_form::{CONFIRM_HINT, RENAME_HINT, TAG_HINT},
 };
 use serde_json::Value;
+use std::fmt::Write as _;
 use unicode_width::UnicodeWidthStr;
 
 pub(super) const BOLD: &str = "\x1b[0;1m";
@@ -433,7 +434,16 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
         );
     }
     spans(screen, 1, cols, &[(TITLE, title.into()), (DIM, detail)]);
-    if let Some((message, _)) = &board.banner {
+    if board.upgrading {
+        for (index, text) in board.upgrade_banner(height).into_iter().enumerate() {
+            spans(
+                screen,
+                index as u16 + 2,
+                cols,
+                &[(PLAIN, "  ".into()), (TITLE, text)],
+            );
+        }
+    } else if let Some((message, _)) = &board.banner {
         let text = truncation(&format!("● {message}"), cols.saturating_sub(2));
         spans(screen, 2, cols, &[(PLAIN, "  ".into()), (TITLE, text)]);
     }
@@ -487,6 +497,14 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
         }
     }
 
+    if let Some(notice) = board.version_notice(height) {
+        spans(
+            screen,
+            height - 1,
+            cols,
+            &[(PLAIN, truncation(notice, cols))],
+        );
+    }
     let overlay_hint = match &board.modal {
         Some(Modal::Edit { tag: true, .. }) => Some(TAG_HINT),
         Some(Modal::Edit { .. }) => Some(RENAME_HINT),
@@ -510,7 +528,11 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
         footer += &" ".repeat(gap);
         footer += version;
     }
+    let at_edge = footer.width() == usize::from(cols);
     spans(screen, height, cols, &[(PLAIN, footer)]);
+    if at_edge {
+        let _ = write!(screen, "\x1b[{height};{cols}H");
+    }
 }
 
 #[cfg(test)]

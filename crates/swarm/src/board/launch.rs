@@ -1,13 +1,17 @@
 use super::{Action, Editor, Key, caller_launch_environment, clip};
 use serde_json::{Map, json};
+use std::collections::HashMap;
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+const FAST_EDIT: &str = "⌘←/→ home/end · ⌘⌫/ctrl+u clear-left";
+const ERROR: &str = "\x1b[0;38;5;173m";
 
 const PROVIDERS: [&str; 5] = ["agy", "claude", "codex", "hermes", "opencode"];
 
@@ -21,17 +25,153 @@ enum Detection {
 pub(super) struct Completion {
     pub(super) choices: Vec<String>,
     pub(super) ghost: String,
+    fuzzy: bool,
 }
 
 impl Completion {
     pub(super) fn from_prefix(prefix: &str) -> Self {
         let choices = directories(prefix);
-        let ghost = longest_common_path(&choices)
+        let mut ghost = longest_common_path(&choices)
             .strip_prefix(prefix)
             .unwrap_or("")
             .to_owned();
-        Self { choices, ghost }
+        if choices.len() == 1 {
+            ghost.push('/');
+        }
+        Self {
+            choices,
+            ghost,
+            fuzzy: false,
+        }
     }
+
+    fn names(&self) -> impl Iterator<Item = &str> {
+        self.choices.iter().map(|path| {
+            let bare = path.trim_end_matches('/');
+            bare.rsplit_once('/').map_or(bare, |(_, name)| name)
+        })
+    }
+
+    fn from_typo(typed: &str, expanded: &Path) -> Self {
+        let Some((parent, name)) = expanded.parent().zip(expanded.file_name()) else {
+            return Self::default();
+        };
+        let Some(typed_name) = name.to_str() else {
+            return Self::default();
+        };
+        let lead = typed.rfind('/').map_or("", |i| &typed[..=i]);
+        let threshold = typed_name.chars().count().div_ceil(3).clamp(1, 3);
+        let needle = lower_runes(typed_name);
+        let mut ranked = Vec::new();
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                if name.starts_with('.') && !typed_name.starts_with('.') {
+                    continue;
+                }
+                let candidate = lower_runes(&name);
+                if needle.len().abs_diff(candidate.len()) > threshold
+                    || !entry.file_type().is_ok_and(|kind| {
+                        kind.is_dir() || kind.is_symlink() && entry.path().is_dir()
+                    })
+                {
+                    continue;
+                }
+                let distance = edit_distance(&needle, &candidate);
+                if distance <= threshold {
+                    ranked.push((distance, name));
+                }
+            }
+        }
+        ranked.sort_unstable();
+        let choices: Vec<_> = ranked
+            .into_iter()
+            .take(5)
+            .map(|(_, name)| format!("{lead}{name}"))
+            .collect();
+        Self {
+            fuzzy: !choices.is_empty(),
+            choices,
+            ghost: String::new(),
+        }
+    }
+}
+
+// Go's selector uses Unicode simple lowercasing and unrestricted Damerau-Levenshtein.
+fn lower_runes(text: &str) -> Vec<char> {
+    text.chars()
+        .filter_map(|ch| ch.to_lowercase().next())
+        .collect()
+}
+
+fn edit_distance(left: &[char], right: &[char]) -> usize {
+    let limit = left.len() + right.len();
+    let mut matrix = vec![vec![limit; right.len() + 2]; left.len() + 2];
+    for (i, row) in matrix.iter_mut().enumerate().skip(1) {
+        row[1] = i - 1;
+    }
+    for (j, cell) in matrix[1].iter_mut().enumerate().skip(1) {
+        *cell = j - 1;
+    }
+    let mut last = HashMap::new();
+    for (i, a) in left.iter().enumerate() {
+        let mut matched_column = 0;
+        for (j, b) in right.iter().enumerate() {
+            let (i, j) = (i + 1, j + 1);
+            let previous_row = *last.get(b).unwrap_or(&0);
+            let previous_column = matched_column;
+            let cost = usize::from(a != b);
+            if cost == 0 {
+                matched_column = j;
+            }
+            matrix[i + 1][j + 1] = (matrix[i + 1][j] + 1)
+                .min(matrix[i][j + 1] + 1)
+                .min(matrix[i][j] + cost)
+                .min(
+                    matrix[previous_row][previous_column]
+                        + (i - previous_row)
+                        + (j - previous_column)
+                        - 1,
+                );
+        }
+        last.insert(a, i + 1);
+    }
+    matrix[left.len() + 1][right.len() + 1]
+}
+
+// Directory messages contain paths whose hyphens are soft wrap points in the Go form.
+fn wrap_directory_message(text: &str, cols: u16) -> Vec<String> {
+    let text = clip(text, u16::MAX);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut separator = "";
+    for part in text.split_inclusive(|ch: char| ch == '-' || ch.is_whitespace()) {
+        let word = part.trim_end_matches(char::is_whitespace);
+        if !word.is_empty() {
+            if line.width() + separator.width() + word.width() > usize::from(cols)
+                && !line.is_empty()
+            {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push_str(separator);
+            }
+            if word.width() > usize::from(cols) {
+                let mut wrapped = super::menu::wrap(word, cols);
+                line = wrapped.pop().unwrap_or_default();
+                lines.extend(wrapped);
+            } else {
+                line.push_str(word);
+            }
+        }
+        separator = &part[word.len()..];
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn longest_common_path(paths: &[String]) -> &str {
@@ -207,6 +347,8 @@ pub(super) struct Launch {
     worktree: bool,
     completion: Option<Completion>,
     create_cwd: Option<PathBuf>,
+    error: String,
+    error_stop: usize,
     detection_complete: bool,
     detected: [Detection; PROVIDERS.len()],
     detection: Receiver<(usize, io::Result<String>)>,
@@ -239,6 +381,8 @@ impl Launch {
             worktree: false,
             completion: None,
             create_cwd: None,
+            error: String::new(),
+            error_stop: 0,
             detection_complete: false,
             detected: std::array::from_fn(|_| Detection::Checking),
             detection,
@@ -283,23 +427,51 @@ impl Launch {
         cols >= 32 && rows >= 8
     }
 
-    pub(super) fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> io::Result<Action> {
+    pub(super) fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> Action {
         self.update_detection();
         let extras = self.options.len();
         let count = 6 + extras;
+        let (error_lines, budget) = self.error_context(cols, rows);
+        if error_lines.len() > budget {
+            match key {
+                Key::PageUp => {
+                    self.error_stop = self.error_stop.saturating_sub(budget);
+                    return Action::None;
+                }
+                Key::PageDown => {
+                    self.error_stop = (self.error_stop + budget).min(error_lines.len());
+                    return Action::None;
+                }
+                Key::Enter if self.error_stop < error_lines.len() => return Action::None,
+                _ => {}
+            }
+        }
         if !matches!(key, Key::Enter) {
             self.create_cwd = None;
         }
         match key {
             Key::Up => self.focus = (self.focus + count - 1) % count,
             Key::Down => self.focus = (self.focus + 1) % count,
-            Key::Enter => return self.submit(cols, rows),
+            Key::Enter => match self.submit(cols, rows) {
+                Ok(action) => return action,
+                Err(error) => {
+                    self.error = error.to_string();
+                    self.error_stop = 0;
+                }
+            },
             Key::Left | Key::Right if self.focus == 3 => self.cycle_agent(key == Key::Left),
             Key::Text(' ') if self.focus == 5 + extras => {
                 self.worktree = !self.worktree;
             }
             key => match self.focus {
-                0 => update_directory(&mut self.cwd, &mut self.completion, key),
+                0 => {
+                    let before = self.cwd.text.clone();
+                    update_directory(&mut self.cwd, &mut self.completion, key);
+                    if self.cwd.text != before {
+                        self.error.clear();
+                        self.error_stop = 0;
+                    }
+                }
                 1 => self.name.apply(key),
                 2 => self.tag.apply(key),
                 index if (4..4 + extras).contains(&index) => self.options[index - 4].apply(key),
@@ -307,7 +479,7 @@ impl Launch {
                 _ => {}
             },
         }
-        Ok(Action::None)
+        Action::None
     }
 
     fn submit(&mut self, cols: u16, rows: u16) -> io::Result<Action> {
@@ -322,18 +494,20 @@ impl Launch {
         let agent = PROVIDERS[self.agent];
         let raw = self.cwd.text.trim();
         if raw.is_empty() {
-            return Err(io::Error::other("Directory is required"));
+            return Err(io::Error::other("directory is required"));
         }
         let cwd = absolute_directory(raw)?;
         match fs::metadata(&cwd) {
             Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => return Err(io::Error::other("Workspace exists but is not a directory")),
+            Ok(_) => {
+                return Err(io::Error::other(format!(
+                    "{} exists but is not a directory",
+                    cwd.display()
+                )));
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 if self.create_cwd.as_ref() != Some(&cwd) {
-                    self.create_cwd = Some(cwd);
-                    return Err(io::Error::other(
-                        "Directory does not exist · press Enter again to create it",
-                    ));
+                    return Err(self.arm_directory_creation(cwd));
                 }
                 fs::create_dir_all(&cwd)?;
             }
@@ -367,6 +541,37 @@ impl Launch {
             json!({"op":"launch","launch":launch}),
             "launch",
         ))
+    }
+
+    fn arm_directory_creation(&mut self, expanded: PathBuf) -> io::Error {
+        let typed = self.cwd.text.trim();
+        let display = if typed.starts_with("~/") || typed == "~" {
+            expanded.to_string_lossy()
+        } else {
+            typed.into()
+        };
+        let mut message = format!("directory {display} does not exist; ");
+        if self
+            .completion
+            .as_ref()
+            .is_some_and(|c| !c.fuzzy && !c.choices.is_empty())
+        {
+            message.push_str("arrows complete or enter again to create");
+        } else {
+            let completion = Completion::from_typo(self.cwd.text.trim(), &expanded);
+            if completion.fuzzy {
+                let names = completion.names().collect::<Vec<_>>().join(", ");
+                let _ = write!(
+                    message,
+                    "did you mean {names}? arrows choose or enter again to create"
+                );
+            } else {
+                message.push_str("enter again to create");
+            }
+            self.completion = Some(completion);
+        }
+        self.create_cwd = Some(expanded);
+        io::Error::other(message)
     }
 
     pub(super) fn ready_agent(&self) -> Option<&'static str> {
@@ -448,6 +653,19 @@ impl Launch {
             (ACCENT, PROVIDERS[self.agent].into()),
             (DIM, " ▸".into()),
         ]
+    }
+
+    fn error_context(&self, cols: u16, rows: u16) -> (Vec<String>, usize) {
+        let compact = cols < 64 && rows <= 10;
+        let width = if compact {
+            cols
+        } else {
+            cols.saturating_sub(2)
+        };
+        (
+            wrap_directory_message(&self.error, width),
+            usize::from(rows.saturating_sub(3).max(1)),
+        )
     }
 
     pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
@@ -540,6 +758,35 @@ impl Launch {
             status(output, rows, cols, "esc back");
             return;
         }
+        let (mut error_lines, error_budget) = self.error_context(cols, rows);
+        if error_lines.len() > error_budget {
+            spans(
+                output,
+                1,
+                cols,
+                &[(PLAIN, format!("New session · {agent}"))],
+            );
+            let (label, value) = &fields[self.focus];
+            field(output, 2, cols, label, value, true);
+            let read = self.error_stop >= error_lines.len();
+            let confirmation = if read {
+                "▌ Confirm · enter"
+            } else {
+                "  Confirm · enter"
+            };
+            error_lines.push(confirmation.into());
+            let first = self.error_stop.min(error_lines.len() - error_budget);
+            for (offset, text) in error_lines
+                .into_iter()
+                .skip(first)
+                .take(error_budget)
+                .enumerate()
+            {
+                spans(output, offset as u16 + 3, cols, &[(PLAIN, text)]);
+            }
+            status(output, rows, cols, "pgup/down read · esc back");
+            return;
+        }
         if compact {
             spans(
                 output,
@@ -555,26 +802,48 @@ impl Launch {
                 &[(TITLE, "swarm".into()), (DIM, " · new session".into())],
             );
         }
-        let first_row = if compact { 2 } else { 3 };
+        let mut row = if compact { 2 } else { 3 };
         let mut order: Vec<_> = (0..fields.len()).collect();
         if compact && self.focus < order.len() {
             order.remove(self.focus);
             order.insert(0, self.focus);
         }
-        for (offset, &index) in order
-            .iter()
-            .take(usize::from(rows.saturating_sub(first_row)))
-            .enumerate()
-        {
+        for index in order {
+            if row >= rows {
+                break;
+            }
             let (label, value) = &fields[index];
-            field(
-                output,
-                first_row + offset as u16,
-                cols,
-                label,
-                value,
-                index == self.focus,
-            );
+            field(output, row, cols, label, value, index == self.focus);
+            row += 1;
+            if compact && index == self.focus {
+                for text in &error_lines {
+                    if row >= rows {
+                        break;
+                    }
+                    spans(output, row, cols, &[(PLAIN, text.clone())]);
+                    row += 1;
+                }
+            }
+            if index == 0
+                && self.focus == 0
+                && row < rows
+                && let Some(completion) = &self.completion
+                && (completion.fuzzy || completion.choices.len() > 1)
+            {
+                let names = completion.names().collect::<Vec<_>>().join("  ");
+                spans(output, row, cols, &[(PLAIN, " ".repeat(14)), (DIM, names)]);
+                row += 1;
+            }
+        }
+        if !compact && !self.error.is_empty() {
+            row += 1;
+            for text in error_lines {
+                if row >= rows {
+                    break;
+                }
+                spans(output, row, cols, &[(PLAIN, "  ".into()), (ERROR, text)]);
+                row += 1;
+            }
         }
         let completion = self
             .completion
@@ -598,7 +867,18 @@ impl Launch {
             _ => "type or paste · ←→ move · ⌘←/→ home/end · ⌘⌫/ctrl+u clear-left",
         };
         let mut hint = format!("{tip} · ↑↓ next · enter launch · esc cancel");
-        if hint.width() > usize::from(cols.saturating_sub(2)) {
+        if self.focus == 0 && self.create_cwd.is_some() {
+            let choose = match self.completion.as_ref() {
+                Some(c) if c.fuzzy => "tab/←→ choose · ",
+                Some(c) if !c.choices.is_empty() => "tab/←→ complete · ",
+                _ => "",
+            };
+            let tail = "enter create directory · esc cancel";
+            hint = format!("{choose}{FAST_EDIT} · {tail}");
+            if hint.width() > usize::from(cols.saturating_sub(2)) {
+                hint = format!("esc cancel · enter create directory · {choose}{FAST_EDIT}");
+            }
+        } else if hint.width() > usize::from(cols.saturating_sub(2)) {
             hint = format!("esc cancel · enter launch · {tip} · ↑↓ next");
         }
         status(output, rows, cols, &hint);
@@ -722,13 +1002,13 @@ pub(super) fn update_directory(editor: &mut Editor, completion: &mut Option<Comp
 
 fn complete(editor: &mut Editor, state: &mut Option<Completion>, forward: bool) {
     let completion = state.get_or_insert_with(|| Completion::from_prefix(&editor.text));
-    if forward && !completion.ghost.is_empty() {
+    if forward && !completion.fuzzy && !completion.ghost.is_empty() {
         *editor = Editor::new(&format!("{}{}", editor.text, completion.ghost));
         *state = Some(Completion::from_prefix(&editor.text));
         return;
     }
     let len = completion.choices.len();
-    if len < 2 {
+    if len < 2 && !completion.fuzzy {
         return;
     }
     let index = completion
@@ -756,9 +1036,9 @@ pub(super) fn absolute_directory(raw: &str) -> io::Result<PathBuf> {
 }
 
 fn directories(raw: &str) -> Vec<String> {
-    let (base, prefix) = raw
-        .rsplit_once('/')
-        .map_or(("", raw), |(base, prefix)| (base, prefix));
+    let Some((base, prefix)) = raw.rsplit_once('/') else {
+        return vec![];
+    };
     let directory = if raw.starts_with('/') && base.is_empty() {
         "/"
     } else if base.is_empty() {
@@ -779,8 +1059,8 @@ fn directories(raw: &str) -> Vec<String> {
             let name = entry.file_name().into_string().ok()?;
             (name.starts_with(prefix)
                 && (!name.starts_with('.') || prefix.starts_with('.'))
-                && entry.path().is_dir())
-            .then(|| format!("{lead}{name}/"))
+                && entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .then(|| format!("{lead}{name}"))
         })
         .collect();
     matches.sort_unstable();
@@ -790,6 +1070,16 @@ fn directories(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typo_distance_keeps_transpositions_and_unicode_runes() {
+        assert_eq!(
+            edit_distance(&lower_runes("PONIT"), &lower_runes("point")),
+            1
+        );
+        assert_eq!(edit_distance(&lower_runes("Åb"), &lower_runes("bå")), 1);
+        assert_eq!(edit_distance(&lower_runes("CA"), &lower_runes("ABC")), 2);
+    }
 
     #[test]
     fn wide_viewport_never_moves_suffix_left_of_cursor() {
@@ -813,12 +1103,12 @@ mod tests {
         }
         assert!(form.options.is_empty());
         probe.send((0, Err(io::Error::other("missing")))).unwrap();
-        form.update(Key::Text('p'), (80, 24)).unwrap();
+        form.update(Key::Text('p'), (80, 24));
         assert_eq!(PROVIDERS[form.agent], "claude");
         assert_eq!(form.prompt.text, "p");
         form.focus = 4;
-        form.update(Key::Text('x'), (80, 24)).unwrap();
-        form.update(Key::Right, (80, 24)).unwrap();
+        form.update(Key::Text('x'), (80, 24));
+        form.update(Key::Right, (80, 24));
         let Action::Request(payload, _) = form.submit(80, 24).unwrap() else {
             panic!("expected launch")
         };
@@ -827,15 +1117,15 @@ mod tests {
             json!({"model":"sonnet", "dangerously-skip-permissions":"false"})
         );
         form.focus = 3;
-        form.update(Key::Right, (80, 24)).unwrap();
+        form.update(Key::Right, (80, 24));
         assert_eq!(form.options[1].value.text, "workspace-write");
-        form.update(Key::Right, (80, 24)).unwrap();
+        form.update(Key::Right, (80, 24));
         assert_eq!(
             form.options.iter().map(|o| o.key).collect::<Vec<_>>(),
             crate::providers::hermes::OPTIONS
         );
         form.focus = 4 + form.options.len() - 1;
-        form.update(Key::Text(' '), (80, 24)).unwrap();
+        form.update(Key::Text(' '), (80, 24));
         let Action::Request(payload, _) = form.submit(80, 24).unwrap() else {
             panic!("expected launch")
         };

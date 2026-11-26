@@ -1279,12 +1279,17 @@ def launch_grid_witness(root, roster, start, tmux):
             snapshot = frame(cols, rows)
             text = "\n".join("".join(cell[0] for cell in row) for row in snapshot["cells"]).lower()
             return snapshot if (any(fragment in text for fragment in fragments)
-                                and (not settled or "claude" in text)) else None
+                                and (not settled or "● claude" in text or "◂ claude ▸" in text)) else None
         return p.wait_for(observed, f"{cols}x{rows} {fragments!r}")
 
     daemon = start()
     frames = []
-    for cols, rows in ((80, 24), (40, 8), (24, 4)):
+    (root / "work/point").mkdir()
+    (root / "work/paint").mkdir()
+    far_typo = "nested-workspace-title-for-explicit-confirmation-before-creation-typo"
+    for i in range(5):
+        (root / "work" / (far_typo + str(i))).mkdir()
+    for cols, rows in ((40, 8), (24, 4), (80, 24)):
         barrier = root / "effects/form-cold"
         barrier.touch()
         run("new-session", "-d", "-s", "form", "-x", str(cols), "-y", str(rows),
@@ -1300,8 +1305,59 @@ def launch_grid_witness(root, roster, start, tmux):
             run("send-keys", "-t", "form:0.0", "Enter")
             landmark(("resize to 32",), cols, rows)
             assert roster() == ([],), "compact launch unexpectedly created a session"
-        frames.append({"cols": cols, "rows": rows, "directory": directory, "agent": agent})
+        result = {"cols": cols, "rows": rows, "directory": directory, "agent": agent}
+        if not compact_block:
+            run("send-keys", "-t", "form:0.0", "Up", "Up", "Up", "C-u")
+            run("send-keys", "-t", "form:0.0", "-l", "ponit")
+            landmark(("ponit█",), cols, rows)
+            run("send-keys", "-t", "form:0.0", "Enter")
+            result["directory_typo"] = landmark(("does not exist",), cols, rows)
+            assert not (root / "work/ponit").exists()
+            assert roster() == ([],)
+            run("send-keys", "-t", "form:0.0", "Right")
+            result["directory_typo_corrected"] = landmark(("point█",), cols, rows)
+            assert not (root / "work/ponit").exists()
+            assert roster() == ([],)
+            if cols == 40:
+                run("send-keys", "-t", "form:0.0", "C-u")
+                run("send-keys", "-t", "form:0.0", "-l", far_typo)
+                landmark(("creation-typo█",), cols, rows)
+                run("send-keys", "-t", "form:0.0", "Enter")
+                result["directory_typo_unread"] = landmark(("pgup/down read",), cols, rows)
+                run("send-keys", "-t", "form:0.0", "Enter", "PageDown", "PageDown", "PageDown")
+                result["directory_typo_read"] = landmark(("▌ confirm · enter",), cols, rows)
+                assert not (root / "work" / far_typo).exists() and roster() == ([],)
+            if cols == 80:
+                def launched_in(expected):
+                    rows_now = (roster() or ([],))[0]
+                    return next((row for row in rows_now if Path(row["cwd"]).resolve() == expected), None)
+
+                run("send-keys", "-t", "form:0.0", "Enter")
+                landmark(("fixture ready",), cols, rows)
+                chosen = p.wait_for(lambda: launched_in(root / "work/point"), "corrected workdir launched")
+                assert not (root / "work/ponit").exists()
+                run("send-keys", "-t", "form:0.0", "C-q")
+                landmark(("(n)", "more (m)"), cols, rows)
+                run("send-keys", "-t", "form:0.0", "n", "C-u")
+                run("send-keys", "-t", "form:0.0", "-l", "brand-new")
+                landmark(("brand-new█",), cols, rows, settled=True)
+                run("send-keys", "-t", "form:0.0", "Enter")
+                landmark(("does not exist",), cols, rows)
+                run("send-keys", "-t", "form:0.0", "Down", "Up", "Enter")
+                landmark(("does not exist",), cols, rows)
+                assert not (root / "work/brand-new").exists()
+                run("send-keys", "-t", "form:0.0", "Enter")
+                landmark(("fixture ready",), cols, rows)
+                created = p.wait_for(lambda: launched_in(root / "work/brand-new"), "confirmed directory launched")
+                assert (root / "work/brand-new").is_dir()
+                for session in (chosen, created):
+                    proc = subprocess.run([root / "bin/swarm", "kill", session["id"]],
+                                          env=p.environment(root), capture_output=True, timeout=5)
+                    assert proc.returncode == 0, proc.stderr
+                result["workspace_action"] = {"selected": "point", "confirmed": "brand-new"}
+        frames.append(result)
         run("kill-session", "-t", "form")
+    frames.sort(key=lambda frame: -frame["cols"])
     daemon.terminate()
     daemon.wait(timeout=5)
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
@@ -1843,7 +1899,9 @@ def compare_forms(reference, candidate):
     mismatches = 0
     for r, c in zip(ref["form_frames"], rust["form_frames"], strict=True):
         assert (r["cols"], r["rows"]) == (c["cols"], c["rows"])
-        for landmark in ("directory", "agent"):
+        assert r.keys() == c.keys()
+        assert r.get("workspace_action") == c.get("workspace_action")
+        for landmark in (key for key in r if key not in ("cols", "rows", "workspace_action")):
             count = 0
             for y, (rrow, crow) in enumerate(zip(r[landmark]["cells"], c[landmark]["cells"], strict=True)):
                 for x, (expected, actual) in enumerate(zip(rrow, crow, strict=True)):
@@ -1858,14 +1916,14 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False):
-    scratch = Path("/tmp").resolve()
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, scratch_path=Path("/tmp")):
+    scratch = scratch_path.resolve(strict=True)
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
     else:
         root = form_root.resolve()
         if not (form_grid or board_grid) or root.parent != scratch:
-            raise ValueError("form root must be a new direct child of /tmp")
+            raise ValueError("form root must be a new direct child of the selected scratch directory")
         root.mkdir(mode=0o700)
     child = driver = None
     previous = {}
@@ -2015,7 +2073,8 @@ if __name__ == "__main__":
         parser.add_argument("--terminal-mouse-reply", type=Path,
                             help="inject a physical terminal's binary mouse mode report into the attached PTY")
         parser.add_argument("--grid-evidence", type=Path)
-        parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
+        parser.add_argument("--form-root", type=Path, help="reuse the same new scratch path in sequential form arms")
+        parser.add_argument("--scratch", type=Path, default=Path("/tmp"), help="fixture parent directory")
         grids = parser.add_mutually_exclusive_group()
         grids.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
         grids.add_argument("--reference-board", type=p.binary_path,
@@ -2045,4 +2104,4 @@ if __name__ == "__main__":
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options, args.scratch)

@@ -175,18 +175,57 @@ pub(crate) fn restart() -> io::Result<()> {
         }
         Err(e) => return Err(e),
     };
+    request_restart(&mut client, &std::fs::canonicalize(ipc::state_path()?)?)?;
+    ensure_daemon()
+}
+
+/// The board may restart only the owner and build it originally displayed.
+pub(crate) fn restart_board(
+    socket: &Path,
+    endpoint: &str,
+    version: &str,
+    birth: (u64, u64),
+) -> io::Result<()> {
+    let dir = std::fs::canonicalize(ipc::state_path()?)?;
+    let unchanged =
+        || std::fs::metadata(socket).is_ok_and(|meta| (meta.dev(), meta.ino()) == birth);
+    if crate::supervisor::endpoint(&dir) != endpoint || !unchanged() {
+        return Err(io::Error::other(
+            "selected supervisor is not the configured local owner",
+        ));
+    }
+    let mut client = ipc::Client::dial(socket, &[RESTART])?;
+    if client.endpoint() != endpoint || client.build_version() != version || !unchanged() {
+        return Err(io::Error::other(
+            "selected supervisor changed before restart",
+        ));
+    }
+    request_restart(&mut client, &dir)?;
+    if !reachable(socket, Some(endpoint))? {
+        cold_start(socket, &dir, false, None)?;
+    }
+    let replacement = ipc::Client::dial(socket, &[])?;
+    if replacement.endpoint() != endpoint
+        || replacement.build_version() != option_env!("SWARM_BUILD_VERSION").unwrap_or("dev")
+    {
+        return Err(io::Error::other(
+            "replacement supervisor did not report the selected build",
+        ));
+    }
+    Ok(())
+}
+
+fn request_restart(client: &mut ipc::Client, dir: &Path) -> io::Result<()> {
     if !client.supports(RESTART) {
         return Err(io::Error::other(
             "running daemon requires its matching restart command",
         ));
     }
-    let dir = std::fs::canonicalize(ipc::state_path()?)?;
     client.request_body(
         serde_json::json!({"op":"owner_daemon_restart","state_dir":dir}),
         "ok",
     )?;
-    wait_for_exit(&mut client)?;
-    ensure_daemon()
+    wait_for_exit(client)
 }
 
 fn wait_for_exit(client: &mut ipc::Client) -> io::Result<()> {
