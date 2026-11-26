@@ -9,6 +9,7 @@ mod flags;
 mod hook;
 mod ipc;
 mod manager_mcp;
+mod manager_prompt;
 mod providers;
 mod release;
 mod schedule;
