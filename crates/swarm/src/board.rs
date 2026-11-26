@@ -463,7 +463,8 @@ impl Board {
                     }
                     self.notice = if linked_dispatcher(row) {
                         "Continue this dispatcher in its Discord thread".into()
-                    } else if matches!(field(row, "agent"), "agy" | "opencode") {
+                    } else if matches!(field(row, "agent"), "agy" | "opencode" | "claude" | "codex")
+                    {
                         "Session ended · r resume · ctrl+x delete".into()
                     } else if field(row, "agent") == "hermes"
                         && !field(row, "conversation_id").is_empty()
@@ -1150,7 +1151,7 @@ fn running(row: &Value) -> bool {
 }
 
 fn resumable(row: &Value) -> bool {
-    matches!(field(row, "agent"), "agy" | "opencode")
+    matches!(field(row, "agent"), "agy" | "opencode" | "claude" | "codex")
         || field(row, "agent") == "hermes" && !field(row, "conversation_id").is_empty()
 }
 
