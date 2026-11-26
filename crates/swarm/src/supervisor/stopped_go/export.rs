@@ -170,6 +170,7 @@ fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
         || config["provider"]["name"] != "claude"
         || config["provider"]["mode"] != "classic"
         || !config["manager"].is_null()
+        || !config["mailbox"].is_null()
         || !config["schedule"].is_null()
         || !config["checkout"].is_null()
         || config["lineage"] != json!({})

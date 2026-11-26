@@ -41,6 +41,7 @@ pub(super) struct Prepared {
     agy_launch: Value,
     go_rollback: Value,
     scheduled: Option<(worker::Binding, Value)>,
+    mailbox: Value,
     manager: Value,
 }
 
@@ -50,6 +51,7 @@ impl Prepared {
             || self.isolated
             || self.lineage != json!({})
             || !self.manager.is_null()
+            || !self.mailbox.is_null()
             || self.scheduled.is_some()
             || !self.resume.is_null()
         {
@@ -62,6 +64,9 @@ impl Prepared {
         Ok(())
     }
 
+    pub(super) fn bind_mail(&mut self, scope: Value) {
+        self.mailbox = scope;
+    }
     pub(super) fn bind_manager(&mut self, mut scope: Value) -> io::Result<()> {
         let version: Vec<_> = self
             .provider
@@ -111,6 +116,7 @@ pub(super) struct Session {
     pub(super) notification_gate: Mutex<()>,
     pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
+    mailbox: Value,
     manager: Value,
     agent: String,
     resumed_from: Option<String>,
@@ -160,6 +166,7 @@ impl Session {
             id: id.into(),
             token: token.into(),
             manager: data["manager"].clone(),
+            mailbox: data["mailbox"].clone(),
             agent: match field(&data["provider"], "name") {
                 "codex" => "codex",
                 "agy" => "agy",
@@ -333,6 +340,7 @@ impl Session {
             resume: Value::Null,
             scheduled: None,
             manager: Value::Null,
+            mailbox: Value::Null,
         })
     }
 
@@ -507,6 +515,7 @@ impl Session {
             agy_launch,
             scheduled,
             manager,
+            mailbox,
             resume,
             go_rollback,
         } = prepared;
@@ -565,7 +574,7 @@ impl Session {
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": if provider.hermes.is_null() { 1 } else { 2 }, "go_rollback":go_rollback, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
+                "schema": if provider.hermes.is_null() { 1 } else { 2 }, "go_rollback":go_rollback, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"mailbox":mailbox,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "schedule_claude_conversation":claude_conversation,
@@ -635,7 +644,7 @@ impl Session {
             let _ = child.wait();
         });
         let mut transient = json!({"argv":provider.argv,"schedule":scheduled,"native":provider.native,"hermes":provider.hermes});
-        if self.owner_interactive {
+        if self.owner_interactive || !self.manager.is_null() || !self.mailbox.is_null() {
             transient["owner_socket"] = json!(crate::ipc::socket_path()?);
         }
         runtime::write_control(&mut bootstrap, &transient)
@@ -1808,6 +1817,78 @@ impl Session {
         Ok(())
     }
 
+    pub(super) fn authorize_mail_child(
+        &self,
+        full: &str,
+        claim: &str,
+        cwd: &Path,
+    ) -> io::Result<Value> {
+        if !super::mail::matches_binding(&self.manager, &self.token, claim)
+            || std::fs::canonicalize(cwd)? != self.effective
+        {
+            return Err(io::Error::other(
+                "dispatcher worker authority or project does not match",
+            ));
+        }
+        let status = self.manager_operation(
+            &json!({"op":"manager_runtime","body_version":1,"session_id":full,
+            "manager_runtime_request":{"session_instance":codex_receipt::instance(&self.token)}}),
+        )?;
+        let native = &status["manager_runtime"];
+        let nonce = field(&native["turn"], "native_input_id");
+        if native["turn"]["state"] != "running"
+            || nonce.len() != 64
+            || !nonce.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(io::Error::other(
+                "dispatcher worker launch requires a proved active parent input",
+            ));
+        }
+        Ok(
+            json!({"discussion":native["binding"]["conversation_id"],"parent":self.id,
+            "parent_incarnation":native["binding"]["session_instance"],"parent_input_hash":super::mail::parent_hash(nonce),
+            "project":self.effective}),
+        )
+    }
+
+    pub(super) fn mail_checkout(&self) -> io::Result<(&Path, (u64, u64))> {
+        let path = self.verify_effective()?;
+        let data = runtime::read_json(&self.dir.join("session.json"))?;
+        if data["token"] == self.token
+            && data["id"] == self.id
+            && let (Some(device), Some(inode)) = (
+                data["cwd_identity"][0].as_u64(),
+                data["cwd_identity"][1].as_u64(),
+            )
+        {
+            return Ok((path, (device, inode)));
+        }
+        Err(io::Error::other("worker checkout identity unavailable"))
+    }
+
+    pub(super) fn mail_binding(&self, session: &str, proof: &str) -> io::Result<Value> {
+        use subtle::ConstantTimeEq;
+        if self.mailbox.is_null()
+            || !self.is_live()
+            || proof.len() != 64
+            || !bool::from(
+                super::mail::proof(&self.token, "worker")
+                    .as_bytes()
+                    .ct_eq(proof.as_bytes()),
+            )
+        {
+            return Err(io::Error::other(
+                "worker mailbox unavailable for this incarnation",
+            ));
+        }
+        self.dial()?;
+        Ok(
+            json!({"Discussion":self.mailbox["discussion"],"Parent":self.mailbox["parent"],
+            "Session":session,"Instance":codex_receipt::instance(&self.token),"Attempt":self.mailbox["attempt"],
+            "Agent":self.agent,"Project":self.mailbox["project"],"ParentInputHash":self.mailbox["parent_input_hash"]}),
+        )
+    }
+
     pub(super) fn owns_manager(&self, conversation: &str) -> bool {
         self.manager["launch"]["manager"]["conversation_id"] == conversation
     }
@@ -1873,6 +1954,12 @@ impl Session {
         }
         if !labels.tag.is_empty() {
             view["tag"] = json!(labels.tag);
+        }
+        if !self.mailbox.is_null() {
+            view["role"] = json!("worker");
+            view["worker_discussion"] = self.mailbox["discussion"].clone();
+            view["worker_attempt"] = self.mailbox["attempt"].clone();
+            view["worker_instance"] = json!(codex_receipt::instance(&self.token));
         }
         if !self.manager.is_null() {
             view["role"] = json!("manager");

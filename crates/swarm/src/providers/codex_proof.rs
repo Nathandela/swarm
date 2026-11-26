@@ -166,7 +166,10 @@ impl Ledger {
                     "userMessage" if valid(id) => observe_user(&mut next, turn, id, item),
                     "mcpToolCall"
                         if item["server"] == "swarm_voice"
-                            && item["tool"] == "publish"
+                            && matches!(
+                                field(item, "tool"),
+                                "publish" | "swarm_read_note" | "swarm_reply"
+                            )
                             && valid(id) =>
                     {
                         if message["method"] == "item/completed" {
@@ -178,8 +181,7 @@ impl Ledger {
                             let mut arguments = item["arguments"].clone();
                             arguments.sort_all_objects();
                             let argument_hash = canonical_hash(&arguments)?;
-                            let candidate =
-                                json!({"turn":turn,"arguments_hash":argument_hash,"closed":false});
+                            let candidate = json!({"turn":turn,"tool":item["tool"],"arguments_hash":argument_hash,"closed":false});
                             if next["calls"][id].is_null() {
                                 next["calls"][id] = candidate;
                             } else if next["calls"][id] != candidate {
@@ -256,7 +258,7 @@ pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
     let nonce = field(receipt, "nonce");
     if evidence["blocked"] != false
         || input["binding"] != *binding
-        || input["tool_name"] != "publish"
+        || field(input, "tool_name") != call["tool"].as_str().unwrap_or("publish")
         || call["closed"] != false
         || call["arguments_hash"] != input["arguments_hash"]
         || coordinates.turn != Some(turn)

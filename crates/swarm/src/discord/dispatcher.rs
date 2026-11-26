@@ -391,7 +391,10 @@ impl Dispatcher {
             || request["conversation_id"] != state["binding"]["conversation_id"]
             || request["session_id"] != field(&state, "session").rsplit('/').next().unwrap_or("")
             || state["input"].is_null()
-            || request["call"]["name"] != "publish"
+            || !matches!(
+                field(&request["call"], "name"),
+                "publish" | "swarm_read_note" | "swarm_reply"
+            )
         {
             return Err(invalid("unbound manager publication"));
         }
@@ -404,6 +407,45 @@ impl Dispatcher {
         }
         let call = &request["call"];
         let mut args = call["arguments"].clone();
+        let tool = field(call, "name");
+        if tool != "publish" {
+            if args.as_object().is_none_or(|fields| {
+                fields.keys().any(|key| {
+                    if tool == "swarm_reply" {
+                        !matches!(key.as_str(), "id" | "session" | "session_instance" | "text")
+                    } else {
+                        !matches!(key.as_str(), "id" | "session" | "session_instance")
+                    }
+                })
+            }) {
+                return Err(invalid("invalid worker mailbox tool arguments"));
+            }
+            args.sort_all_objects();
+            let proof = self.owner.prove_publication(
+                &input["composer"],
+                tool,
+                &hash(&args)?,
+                &call["meta"],
+            )?;
+            if proof["native_turn_id"] != input["turn_id"] {
+                return Err(invalid("native mailbox tool belongs to another turn"));
+            }
+            let scope = self.owner.mail_root()?;
+            let session = field(&state, "session")
+                .rsplit('/')
+                .next()
+                .unwrap_or_default();
+            let input_hash =
+                super::super::supervisor::mail::parent_hash(field(&proof, "native_input_id"));
+            return super::super::supervisor::mail_store::manager_note(
+                &scope,
+                field(&state["binding"], "conversation_id"),
+                session,
+                &input_hash,
+                &args,
+                tool == "swarm_reply",
+            );
+        }
         let fields = args
             .as_object()
             .ok_or_else(|| invalid("invalid publication arguments"))?;

@@ -40,6 +40,14 @@ impl Manager {
         })
     }
 
+    pub(super) fn mail_root(&self) -> io::Result<std::path::PathBuf> {
+        let _ = self.dial()?;
+        match self.cfg.0["supervisor"]["state_dir"].as_str() {
+            Some(root) => std::fs::canonicalize(root),
+            None => std::fs::canonicalize(crate::ipc::state_path()?),
+        }
+    }
+
     fn dial(&self) -> io::Result<Client> {
         let client = Client::dial(Path::new(self.cfg.text("daemon_socket")), CAPS)?;
         self.cfg.check_supervisor(&client, CAPS)?;
@@ -646,6 +654,203 @@ mod tests {
                     posts: std::cell::RefCell::new(Vec::new()),
                 };
                 let local = id.split_once('/').unwrap().1;
+                if std::env::var_os("SWARM_NATIVE_MAIL_FIXTURE").is_some() {
+                    let owner =
+                        runtime::read_json(&state.join("rust-v1").join(local).join("session.json"))
+                            .unwrap();
+                    let proof = crate::supervisor::mail::proof(field(&owner, "token"), "spawn");
+                    let attempt = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 47);
+                    let document = root.join("fixture-delegate.md");
+                    std::fs::write(
+                        &document,
+                        "# Fixture delegation\nUse your own worker note.\n",
+                    )
+                    .unwrap();
+                    let launch_worker = || {
+                        Command::new(binary)
+                            .env_clear()
+                            .env("HOME", &root)
+                            .env("TMPDIR", &root)
+                            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                            .env("SWARM_DAEMON_STATE", &state)
+                            .env("SWARM_DAEMON_SOCK", &socket)
+                            .env("SWARM_SESSION_ID", local)
+                            .env("SWARM_DISPATCHER_SPAWN_PROOF", &proof)
+                            .arg("spawn")
+                            .arg("--cli")
+                            .arg("codex")
+                            .arg("--dir")
+                            .arg(&root)
+                            .args([
+                                "--worktree=false",
+                                "--delegate",
+                                document.to_str().unwrap(),
+                                "--operation-id",
+                                &attempt,
+                            ])
+                            .output()
+                            .unwrap()
+                    };
+                    let worker = launch_worker();
+                    assert!(
+                        worker.status.success(),
+                        "worker launch: {}",
+                        String::from_utf8_lossy(&worker.stderr)
+                    );
+                    let worker = String::from_utf8(worker.stdout).unwrap().trim().to_owned();
+                    let replay = launch_worker();
+                    assert!(replay.status.success());
+                    assert_eq!(String::from_utf8(replay.stdout).unwrap().trim(), worker);
+                    let worker_local = worker.split_once('/').unwrap().1;
+                    let meta = runtime::read_json(
+                        &state
+                            .join("rust-v1")
+                            .join(worker_local)
+                            .join("session.json"),
+                    )
+                    .unwrap();
+                    assert_eq!(meta["mailbox"]["attempt"], attempt);
+                    assert_eq!(meta["mailbox"]["parent"], local);
+                    let worker_proof =
+                        crate::supervisor::mail::proof(field(&meta, "token"), "worker");
+                    let cli = |args: &[&str], credential: &str| {
+                        Command::new(binary)
+                            .arg("teammate")
+                            .args(args)
+                            .env_clear()
+                            .env(crate::teammate::SOCKET_ENV, &socket)
+                            .env(crate::teammate::PROOF_ENV, credential)
+                            .env("SWARM_SESSION_ID", worker_local)
+                            .output()
+                            .unwrap()
+                    };
+                    let decode = |out: std::process::Output| {
+                        assert!(
+                            out.status.success(),
+                            "teammate: {}",
+                            String::from_utf8_lossy(&out.stderr)
+                        );
+                        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+                    };
+                    let submitted = decode(cli(
+                        &["message", "--kind", "needs-input", "--text", "Which path?"],
+                        &worker_proof,
+                    ));
+                    let note = field(&submitted, "id");
+                    assert_eq!(submitted["state"], "queued");
+                    assert!(
+                        !cli(&["receipt", "--id", note], &"a".repeat(64))
+                            .status
+                            .success()
+                    );
+                    assert_eq!(
+                        decode(cli(
+                            &[
+                                "message",
+                                "--id",
+                                note,
+                                "--kind",
+                                "needs-input",
+                                "--text",
+                                "Which path?"
+                            ],
+                            &worker_proof
+                        )),
+                        submitted
+                    );
+                    let mut invoke = |tool: &str, call_id: &str, arguments: Value| {
+                        let mut meta = host.clone();
+                        meta["callId"] = json!(call_id);
+                        let mut proxy = Command::new(binary)
+                            .arg("manager-mcp")
+                            .arg(&bridge_socket)
+                            .arg(&auth)
+                            .arg(field(&native["binding"], "conversation_id"))
+                            .arg(local)
+                            .stdin(Stdio::piped())
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::null())
+                            .spawn()
+                            .unwrap();
+                        writeln!(
+                            proxy.stdin.take().unwrap(),
+                            "{}",
+                            json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                            "params":{"name":tool,"arguments":arguments,"_meta":meta}})
+                        )
+                        .unwrap();
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while proxy.try_wait().unwrap().is_none() {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            assert!(Instant::now() < deadline, "mailbox tool did not answer");
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        let result = decode(proxy.wait_with_output().unwrap());
+                        assert!(result["result"]["isError"].is_null(), "{result}");
+                        serde_json::from_str::<Value>(
+                            result["result"]["content"][0]["text"].as_str().unwrap(),
+                        )
+                        .unwrap()
+                    };
+                    let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
+                    assert_eq!(listed["notes"][0]["id"], note);
+                    let answer = invoke(
+                        "swarm_reply",
+                        "fixture-mail-reply",
+                        json!({"text":"Use src"}),
+                    );
+                    assert_eq!(answer["id"], note);
+                    assert_eq!(
+                        decode(cli(&["receipt", "--id", note], &worker_proof))["state"],
+                        "answered"
+                    );
+                    let readback = decode(cli(&["reply", "--id", note], &worker_proof));
+                    assert_eq!(readback["text"], "Use src");
+                    assert_eq!(
+                        decode(cli(&["reply", "--id", note], &worker_proof)),
+                        readback
+                    );
+                    let complete = decode(cli(
+                        &["message", "--kind", "complete", "--text", "Finished"],
+                        &worker_proof,
+                    ));
+                    let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
+                    assert_eq!(listed["notes"][0]["id"], complete["id"]);
+                    if std::env::var_os("SWARM_NATIVE_MAIL_FILES_FIXTURE").is_some() {
+                        let csv = root.join("data.csv");
+                        let pdf = root.join("report.pdf");
+                        std::fs::write(&csv, "source,result\nfixture,ok\n").unwrap();
+                        std::fs::write(&pdf, "%PDF-1.7\n").unwrap();
+                        let receipt = decode(cli(
+                            &[
+                                "message",
+                                "--kind",
+                                "complete",
+                                "--file",
+                                csv.to_str().unwrap(),
+                                "--file",
+                                pdf.to_str().unwrap(),
+                            ],
+                            &worker_proof,
+                        ));
+                        let note = receipt["id"].as_str().unwrap();
+                        assert_eq!(receipt["files"].as_array().unwrap().len(), 2);
+                        std::fs::write(&csv, "edited after queue").unwrap();
+                        assert_eq!(
+                            decode(cli(&["receipt", "--id", note], &worker_proof)),
+                            receipt
+                        );
+                        let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
+                        assert!(
+                            listed["notes"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|entry| entry["id"] == note
+                                    && entry["files"] == receipt["files"])
+                        );
+                    }
+                }
                 let mut proxy = Command::new(binary)
                     .arg("manager-mcp")
                     .arg(&bridge_socket)

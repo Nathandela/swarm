@@ -1,7 +1,7 @@
 pub(crate) mod pilot;
 use crate::flags::options;
 mod actions;
-mod duration;
+pub(crate) mod duration;
 mod handoff;
 mod message;
 pub(crate) mod spawn;
@@ -143,6 +143,10 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn dial(path: &Path, caps: &[&str]) -> io::Result<Self> {
+        Self::dial_before(path, caps, Instant::now() + REQUEST_TIMEOUT)
+    }
+
+    pub(crate) fn dial_before(path: &Path, caps: &[&str], deadline: Instant) -> io::Result<Self> {
         let mut client = Self {
             stream: UnixStream::connect(path).map_err(|err| {
                 let reason = match err.kind() {
@@ -161,7 +165,13 @@ impl Client {
             pushes: VecDeque::new(),
             capabilities: Vec::new(),
         };
-        client.stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        client
+            .stream
+            .set_write_timeout(Some(remaining.min(REQUEST_TIMEOUT)))?;
         let mut hello = json!({
             "op": "hello", "endpoint_id": "", "protocol_version": VERSION, "build_version": "dev"
         });
@@ -169,7 +179,7 @@ impl Client {
             hello["capabilities"] = json!(caps);
         }
         client.send(&hello)?;
-        let reply = client.receive(Instant::now() + REQUEST_TIMEOUT)?;
+        let reply = client.receive(deadline)?;
         let op = field(&reply, "op");
         let daemon_version = reply["protocol_version"].as_i64().unwrap_or_default();
         let incompatibility = if op == "error" {

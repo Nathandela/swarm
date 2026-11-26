@@ -14,12 +14,13 @@ mod setup_trust;
 mod shim;
 mod socket;
 mod supervisor;
+mod teammate;
 mod workspace;
 
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|doctor|discord|pilot|--pilot|setup-trust|dispatcher-guide|version]\n";
+const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|doctor|discord|pilot|--pilot|setup-trust|teammate|dispatcher-guide|version]\n";
 const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
 
@@ -75,6 +76,7 @@ fn main() -> ExitCode {
         Some("schedule-agy-worker") => schedule::agy::worker(&args[1..]),
         Some("manager-mcp") => manager_mcp::run(&args[1..]),
         Some("dispatcher-guide") => guide(&args[1..]),
+        Some("teammate") => teammate::run(&args[1..]),
         Some(
             "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "decide"
             | "send" | "kill",

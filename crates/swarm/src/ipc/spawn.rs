@@ -362,7 +362,8 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
                 .is_ok_and(|r| r.status.success() && r.stdout == b"true\n")
     };
     let parent = env_value("SWARM_SESSION_ID");
-    let dispatcher = env_value("SWARM_MANAGER_VM_CLI") == "1";
+    let dispatcher = env_value("SWARM_MANAGER_VM_CLI") == "1"
+        || !env_value("SWARM_DISPATCHER_SPAWN_PROOF").is_empty();
     let mut proof = String::new();
     if dispatcher && intent == "delegate" {
         proof = dispatcher_proof();
