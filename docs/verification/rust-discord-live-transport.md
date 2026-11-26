@@ -4,6 +4,8 @@ On 26 November 2026 an operator-authorized test used the enrolled personal bot o
 
 The private run receipt contains the guild, thread and message IDs. A read-only rerun uses that receipt. These results cover bot REST, multipart upload, Discord history and attachment download. Human-authored ingress, Discord's visual client, takeover of the live Gateway, and listener-observed audio have separate gates. Both Computer Use transports were unavailable when the archived thread was offered for visual inspection.
 
+The native Discord app retry after verifying the signed Go v0.29.26 reference failed with `Sky Computer Use native pipe startup failed`. The client returned no accessibility state. The existing live transport receipt remains the bot-side text and file evidence.
+
 ## Reproduce
 
 Supply the enrolled bot and owner-verified guild names. Use a new private evidence directory for an authorized live run. The witness selects a guild with one ordinary text parent and verifies its private-thread permissions. It records each remote attempt before submission and can reconcile an interrupted run using that same directory.

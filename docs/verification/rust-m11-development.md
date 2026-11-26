@@ -258,3 +258,7 @@ Integrated source `aec3365e` passed 269 default tests with 25 opt-in cases on ea
 | Default workspace tests | `3dc7e555b1990ad59119a89cb07b5a660d5a6e3ef4c6362bf255876fd115936c` | `26d61fa16247e7897db1bb8521aa33b68a0f2c2ceb2b0ab2c6d0a50453afa427` |
 | Go v0.29.26 attachment opt-ins | `58b51cd0c22f1e222b1473b3bf4b8db65605ed65b987a8aa36906aae45a78793` | `167aaa07be31ee196c161925056a3d926918c92e1970a4270708cb7a7786a9ab` |
 | Signed Go editor comparison | `ddcc82ff3c96dc33cfdd5ed2b67abff5c01473846630b7dbbcc7768ce0fc6c58` | `d9a481fe0a7368bba7729b522874fa9e5eba311ae5b392c04f9ddbb8f5e180d8` |
+
+The integrated Automations row correction and its workspace regression passed 270 default tests with 25 opt-ins on both native hosts. Formatting and warnings-denied Clippy passed. Workspace log SHA-256 is `5b8d4821fec83f482f28f22bd0dedd29babe0bd5ff4648ec4a196cf02e622a7c` on macOS and `d7a21a58b356c958dc07ed88a5807c8840a323bcd2355d7a9af8d73d90611833` on Linux. [XTerm and tmux comparisons](rust-schedules.md#archive-confirmation-and-list-navigation)
+
+A new isolated Linux development soak started from the frozen `aec3365e` executable with SHA-256 `4c58f86f5c33475b864c881b899c6a3201911de5f372fd3cb6b467380b662f60` and the same native OpenCode 1.19.3 fixture executable. Its private unit is running the 24-hour stage and has verified the first three inputs. The 72-hour stage is conditional on a completed, clean 24-hour result. This run qualifies the development build. The final signed artifact retains its own duration gate.

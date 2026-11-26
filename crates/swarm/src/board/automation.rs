@@ -1491,6 +1491,25 @@ mod pointer_tests {
     }
 
     #[test]
+    fn list_continues_after_the_terminals_wrapped_row() {
+        let first: Job = serde_json::from_value(serde_json::json!({
+            "id":"amber","revision_id":"revision","state":"active",
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+            "spec":{"name":format!("Amber sequence {}", "👩‍💻".repeat(10))}
+        }))
+        .unwrap();
+        let mut second = first.clone();
+        second.id = "cedar".into();
+        second.spec.name = "Cedar flag".into();
+        let mut view = Automation::default();
+        view.receive(Ok(Records::List(vec![first, second])));
+        let mut terminal = String::new();
+        view.view(&mut terminal, 40, 8);
+        assert!(terminal.contains("👩‍💻…\r\n"));
+        assert!(terminal.contains(&format!("\r\n{PLAIN} {PLAIN} active · Cedar flag")));
+    }
+
+    #[test]
     fn footer_activation_requires_the_same_position_and_viewport() {
         let mut view = Automation {
             records: Some(Records::List(vec![])),
