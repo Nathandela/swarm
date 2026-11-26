@@ -25,6 +25,7 @@ parser.add_argument('--source')
 parser.add_argument('--native', type=Path)
 parser.add_argument('--mixed', action='store_true')
 parser.add_argument('--hands-off', action='store_true')
+parser.add_argument('--live-go', type=Path)
 parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
                     help='pause the verified native TUI across one preflight deadline')
 parser.add_argument('--check-arguments', action='store_true')
@@ -201,6 +202,13 @@ def stop(daemon):
 version=subprocess.check_output(['opencode','--version'], env=env, text=True, timeout=15).strip()
 assert version=='1.19.3',version
 print('installed native version verified', flush=True)
+if args.live_go:
+    from live_go_opencode import rehearse
+    try:
+        rehearse(args.live_go, swarm, root, env, wait)
+    finally:
+        provider.shutdown()
+    sys.exit(0)
 if args.duration is not None:
     from soak import run
     run(args, env, cli, output, wait, start, stop, provider, request_log)
