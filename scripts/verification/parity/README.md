@@ -87,3 +87,29 @@ permission state. With the Go owner it writes one synthetic native transcript,
 verifies the successor points at it, and leaves the source running. An owner
 without the hands-off capability must refuse visibly and keep the roster at
 one session.
+
+## M11 real-path performance
+
+Run matching optimized native executables on the same idle host. Use the
+full candidate SHA. On Linux use a private executable RAM directory if
+disk space is limited. The driver observes actual kernel process births
+and reaps each arm's processes.
+
+```sh
+python3 -B scripts/verification/m11_performance.py \
+  --reference "$PINNED_GO_SWARM" --candidate "$RUST_SWARM" \
+  --candidate-source "$SOURCE_SHA" --out "$FRESH_EVIDENCE_JSON" --quiet-host
+```
+
+The driver alternates 25 cold dashboard paints per arm at 120×200 with
+50 real sessions and retains all samples. Timing begins before launching
+the dashboard process and ends when all 50 distinct labels reach the
+PTY. The Go in-process first-paint gate starts after protocol hello and has
+a narrower scope. The echo path times one key and its canonical newline
+over the owner protocol and real PTY with 64 warmups and 1,000 samples.
+Aggregate idle CPU uses cumulative kernel times for one daemon and
+three shims over 60 seconds. The output includes p50/p95/p99 and tails,
+per-role RSS and descriptors around 100 attach cycles, binary/source
+identities, host load and cleanup. Record actual host activity with the
+evidence. Omit `--quiet-host` for a descriptive run during other work.
+`--smoke` uses fewer trials and never produces a gate pass.

@@ -1,3 +1,4 @@
+import argparse
 import errno
 import hashlib
 import http.client
@@ -5,6 +6,8 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -12,9 +15,35 @@ import threading
 import time
 
 assert __debug__, "assertions enforce the qualification gates"
-root = Path(sys.argv[1])
-assert root.is_absolute() and not any(root.iterdir()), "fresh private scratch required"
-swarm = Path(sys.argv[2])
+parser = argparse.ArgumentParser(description='Isolated installed OpenCode and Rust Swarm probe')
+parser.add_argument('root', type=Path)
+parser.add_argument('swarm', type=Path)
+parser.add_argument('--duration', type=int)
+parser.add_argument('--interval', type=int, choices=range(1, 61), default=10, metavar='1..60')
+parser.add_argument('--restart-every', type=int, default=20)
+parser.add_argument('--source')
+parser.add_argument('--native', type=Path)
+parser.add_argument('--mixed', action='store_true')
+parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
+                    help='pause the verified native TUI across one preflight deadline')
+parser.add_argument('--check-arguments', action='store_true')
+args = parser.parse_args()
+if args.duration is not None and (
+    not 1 <= args.duration <= 259200 or args.restart_every < 1
+    or not re.fullmatch('[a-f0-9]{40}', args.source or '')
+):
+    parser.error('soak requires 1..259200 seconds, a positive restart cadence and the full source SHA')
+if args.digest_pause and args.duration is not None:
+    parser.error('digest pause is a separate fault trial')
+if args.mixed and (args.duration is None or args.duration < 70):
+    parser.error('the mixed workload needs at least 70 seconds and a real wall-clock tick')
+root, swarm = args.root, args.swarm
+assert root.is_absolute() and len(os.fsencode(root)) <= 35, 'short absolute scratch path required'
+assert swarm.is_absolute() and os.access(swarm, os.X_OK), 'absolute executable required'
+if args.check_arguments:
+    sys.exit(0)
+assert root.is_dir() and root.stat().st_uid == os.getuid() and root.stat().st_mode & 0o077 == 0
+assert not any(root.iterdir()), 'fresh private scratch required'
 if sys.platform.startswith('linux'):
     assert [name for _,name in socket.if_nameindex()] == ['lo'], socket.if_nameindex()
 for target in ['192.0.2.1', '2001:db8::1']:
@@ -35,13 +64,25 @@ env = dict(PATH=f'{root.parent}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/b
     OPENCODE_DISABLE_AUTOUPDATE='true', OPENCODE_DISABLE_DEFAULT_PLUGINS='true',
     OPENCODE_DISABLE_PROJECT_CONFIG='true', XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
     XDG_STATE_HOME=str(root/'xdg-state'), XDG_CACHE_HOME=str(root/'cache'))
+if args.mixed:
+    bin_dir = root / 'bin'
+    bin_dir.mkdir(mode=0o700)
+    for name in ('claude', 'codex'):
+        fixture = root.parent / 'bin' / name
+        assert fixture.is_file() and not fixture.is_symlink() and fixture.stat().st_uid == os.getuid()
+        shutil.copyfile(fixture, bin_dir / name)
+        (bin_dir / name).chmod(0o700)
+    env['PATH'] = f"{bin_dir}:{env['PATH']}"
+
 request_log=[]
 class Fixture(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
     def do_POST(self):
         assert self.path == '/v1/chat/completions'
-        incoming = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        length = int(self.headers['Content-Length'])
+        assert 0 < length <= 16 * 1024 * 1024, 'model input ceiling exceeded'
+        incoming = json.loads(self.rfile.read(length))
         assert incoming['model'] == 'fixture'
         messages = incoming['messages']
         latest = max((i for i,m in enumerate(messages) if m.get('role')=='user'),default=-1)
@@ -59,8 +100,11 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 }]}))
             if 'bash' in names:
                 actions.append(('bash', {'command':"printf 'fixture permission answered\\n'", 'description':'Print fixture response'}))
-        assert len(request_log) < 16, 'fixture call ceiling exceeded'
-        request_log.append({'names':len(names),'actions':[name for name,_ in actions]})
+        assert len(request_log) < (20000 if args.duration else 16), 'fixture call ceiling exceeded'
+        marker = re.search(r'RUST_SOAK_[0-9]{6}', prompt)
+        request_log.append({'names':len(names),'actions':[name for name,_ in actions],
+                            'marker': marker.group() if marker else None,
+                            'primary': bool(names) and not any(m['role']=='tool' for m in after)})
         now=int(time.time())
         if incoming.get('stream'):
             self.send_response(200)
@@ -102,7 +146,7 @@ with socket.create_connection(('127.0.0.1',port),timeout=1):
     pass
 print('loopback guard verified',flush=True)
 (root/'config/opencode/opencode.json').write_text(json.dumps({
-    'autoupdate':False,'enabled_providers':['fixture'],'model':'fixture/fixture','small_model':'fixture/fixture',
+    '$schema':'https://opencode.ai/config.json','autoupdate':False,'enabled_providers':['fixture'],'model':'fixture/fixture','small_model':'fixture/fixture',
     'default_agent':'build','compaction':{'auto':False},'agent':{'build':{'model':'fixture/fixture'}},
     'permission':{'*':'deny','bash':'ask','question':'allow'},
     'provider':{'fixture':{'npm':'@ai-sdk/openai-compatible','name':'Local fixture',
@@ -126,9 +170,9 @@ def wait(check, timeout=25):
             return val
         time.sleep(0.15)
     raise AssertionError('condition timed out')
-def cli(*args, check=True):
+def cli(*args, check=True, timeout=60):
     owner()
-    result=subprocess.run([swarm,*args], env=env,capture_output=True,text=True,timeout=60)
+    result=subprocess.run([swarm,*args], env=env,capture_output=True,text=True,timeout=timeout)
     if check:
         assert result.returncode == 0, (args,result.stdout,result.stderr)
     return result
@@ -149,6 +193,11 @@ def stop(daemon):
 version=subprocess.check_output(['opencode','--version'], env=env, text=True, timeout=15).strip()
 assert version=='1.19.3',version
 print('installed native version verified', flush=True)
+if args.duration is not None:
+    from soak import run
+    run(args, env, cli, output, wait, start, stop, provider, request_log)
+    sys.exit(0)
+
 daemon=start()
 try:
     assert cli('spawn','--cli','opencode','--dir',str(root/'project'),'--model','fixture/fixture',
@@ -163,6 +212,10 @@ try:
     before=history()
     assert any(m['info']['role']=='user' for m in before['history']), before
     assert resume_request(env, row, root/'project')['op'] == 'error'
+    if args.digest_pause:
+        from digest_pause import verify_fault
+        verify_fault(args.digest_pause, root, row, cli, output, history, request_log)
+        sys.exit()
     operation=f'semantic:{int(time.time()*1000)}:00112233445566778899aabbccddeeff'
     message=output('message',row,'--operation-id',operation,'--text','RUST_SEMANTIC. Reply fixture only.')
     assert message['state'] in ('native_accepted','completed'),message

@@ -151,17 +151,7 @@ impl Media {
     }
 
     pub(super) fn poll(&mut self) -> io::Result<Option<Event>> {
-        // Observe the exit without releasing the PID before group teardown.
-        let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        let rc = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                self.child.id(),
-                &mut status,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if rc != 0 || unsafe { status.si_pid() } != 0 {
+        if crate::supervisor::runtime::child_exited(&self.child).unwrap_or(true) {
             return Err(invalid("call helper exited"));
         }
         if !self.buffered.contains(&b'\n') {

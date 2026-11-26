@@ -257,6 +257,33 @@ pub(crate) fn birth(pid: u32) -> io::Result<u64> {
         .ok_or_else(|| io::Error::other("could not read process birth ticks"))
 }
 
+pub(crate) fn child_exited(child: &std::process::Child) -> io::Result<bool> {
+    // waitid with WNOWAIT observes without reaping, so group ownership cannot
+    // transfer via PID recycling before the final group signal.
+    let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut status,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if rc == -1 {
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::Interrupted {
+            return Ok(false);
+        }
+        return Err(err);
+    }
+    // Darwin reports a stopped child even under WEXITED.
+    Ok(unsafe { status.si_pid() } != 0
+        && matches!(
+            status.si_code,
+            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+        ))
+}
+
 fn socket_option<T>(socket: &UnixStream, level: i32, name: i32) -> io::Result<T> {
     let mut value = std::mem::MaybeUninit::<T>::uninit();
     let mut length = size_of::<T>() as libc::socklen_t;
@@ -315,6 +342,45 @@ pub(crate) fn launch_env(supplied: &Value) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn paused_child_remains_owned_until_it_exits() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "kill -STOP $$; exit 17"])
+            .spawn()
+            .expect("start paused fixture child");
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut paused = false;
+        while Instant::now() < deadline {
+            let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut status,
+                    libc::WSTOPPED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if rc == 0 && status.si_code == libc::CLD_STOPPED {
+                paused = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let before = super::child_exited(&child);
+        let resumed = unsafe { libc::kill(pid as libc::pid_t, libc::SIGCONT) } == 0;
+        if !paused || !resumed {
+            let _ = child.kill();
+        }
+        let status = child.wait().expect("reap fixture child");
+        assert!(paused && resumed);
+        assert!(!before.expect("observe paused fixture"));
+        assert_eq!(status.code(), Some(17));
+    }
 
     #[test]
     fn filters_the_launch_boundary() {
