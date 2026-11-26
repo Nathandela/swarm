@@ -14,6 +14,7 @@ mod roster;
 mod session_form;
 mod term;
 mod touch;
+mod version;
 
 use crate::ipc::{self, Client, field};
 use crate::schedule::catalog::{
@@ -67,6 +68,8 @@ fn board(path: &Path) -> io::Result<()> {
     let mut client = connect(path)?;
     let mut board = Board {
         hands_off: client.supports(handoff::CAP),
+        daemon_version: client.build_version().to_owned(),
+        skew_notice: version::notice(client.build_version()),
         can_relocate: client.supports(resume::CAP),
         context_owner: context_settings::Owner::from_connection(path, &client),
         ..Board::default()
@@ -76,10 +79,22 @@ fn board(path: &Path) -> io::Result<()> {
         Err(error) => board.notice = format!("board layout: {error}"),
     }
     board.refresh(&mut client)?;
+    let mut upgrade;
     let _terminal = term::Terminal::raw()?;
     let mut output = io::stdout().lock();
     output.write_all(term::ENTER_BOARD.as_bytes())?;
-    let mut connection = Some(client);
+    upgrade = match version::start(path, &client) {
+        Ok(pending) => pending,
+        Err(error) => {
+            board.note_attention(Some(format!("daemon upgrade failed: {error}")));
+            None
+        }
+    };
+    let mut upgrade_result = None;
+    if upgrade.is_some() {
+        board.upgrading = true;
+    }
+    let mut connection = upgrade.is_none().then_some(client);
     let mut geometry = term::size();
     board.columns = geometry.0;
     let clock = Instant::now();
@@ -87,6 +102,7 @@ fn board(path: &Path) -> io::Result<()> {
     let mut keys = Keys::default();
     let mut raw_input = [0; 4096];
     let mut needs_paint = true;
+    let mut painted = false;
     let mut mouse_enabled = true;
     let mut previous_menu = None;
     let mut previous_editor = None;
@@ -96,6 +112,13 @@ fn board(path: &Path) -> io::Result<()> {
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
+        if painted && let Some(result) = upgrade.as_ref().and_then(version::Upgrade::result) {
+            upgrade = None;
+            upgrade_result = Some(result);
+            board.upgrading = false;
+            retry = Instant::now();
+            needs_paint = true;
+        }
         if board
             .banner
             .as_ref()
@@ -190,6 +213,7 @@ fn board(path: &Path) -> io::Result<()> {
             previous_editor = editor;
             previous_options = options;
             output.flush()?;
+            painted = true;
         }
         needs_paint = false;
         let (input, socket) = term::ready(
@@ -222,10 +246,18 @@ fn board(path: &Path) -> io::Result<()> {
                     needs_paint = true;
                 }
             }
-        } else if Instant::now() >= retry {
+        } else if upgrade.is_none() && Instant::now() >= retry {
             match connect(path).and_then(|mut client| board.refresh(&mut client).map(|()| client)) {
                 Ok(client) => {
                     board.notice.clear();
+                    board.daemon_version = client.build_version().to_owned();
+                    board.skew_notice = version::notice(client.build_version());
+                    if let Some(result) = upgrade_result.take() {
+                        board.note_attention(Some(match result {
+                            Ok(()) => "daemon upgraded".into(),
+                            Err(error) => format!("daemon upgrade failed: {error}"),
+                        }));
+                    }
                     board.hands_off = client.supports(handoff::CAP);
                     board.can_relocate = client.supports(resume::CAP);
                     board.context_owner = context_settings::Owner::from_connection(path, &client);
@@ -236,6 +268,9 @@ fn board(path: &Path) -> io::Result<()> {
                     delay = Duration::from_secs(1);
                 }
                 Err(_) => {
+                    if let Some(Err(error)) = upgrade_result.take() {
+                        board.note_attention(Some(format!("daemon upgrade failed: {error}")));
+                    }
                     delay = (delay * 2).min(Duration::from_secs(8));
                     retry = Instant::now() + delay;
                 }
@@ -252,6 +287,21 @@ fn board(path: &Path) -> io::Result<()> {
             keys.read(&[], true)
         };
         for key in input_keys {
+            if upgrade.is_some()
+                && !matches!(
+                    key,
+                    Key::Escape
+                        | Key::CtrlC
+                        | Key::Up
+                        | Key::Down
+                        | Key::Home
+                        | Key::End
+                        | Key::PageUp
+                        | Key::PageDown
+                )
+            {
+                continue;
+            }
             let (action, resume) = match board.update(key, geometry, connection.is_some()) {
                 Action::Resume(resume) => {
                     (Action::Request(resume.message(), "launch"), Some(resume))
@@ -449,6 +499,9 @@ struct Board {
     layout: Layout,
     press: Option<Press>,
     notice: String,
+    daemon_version: String,
+    skew_notice: Option<String>,
+    upgrading: bool,
     banner: Option<(String, Instant)>,
     modal: Option<Modal>,
 }
@@ -1316,7 +1369,7 @@ impl Board {
                 });
         }
         let first = self.body_first(rows);
-        if event.y < first {
+        if event.y < first || usize::from(event.y - first) >= self.body_capacity(rows) {
             return None;
         }
         let row = self
@@ -1354,7 +1407,7 @@ impl Board {
                 let end = if self.modal.is_some() {
                     2 + menu::capacity(geometry) as u16
                 } else {
-                    geometry.1
+                    first + self.body_capacity(geometry.1) as u16
                 };
                 if (first..end).contains(&event.y) {
                     let down = event.action == MouseAction::WheelDown;
@@ -1607,6 +1660,28 @@ impl Board {
             line(&mut screen, rows, cols, "\x1b[33m", &self.notice);
         }
         screen
+    }
+
+    fn upgrade_banner(&self, height: u16) -> Vec<String> {
+        if !self.upgrading {
+            return Vec::new();
+        }
+        let title = format!(
+            "● upgrading daemon {} -> {}...",
+            self.daemon_version,
+            version::CLIENT
+        );
+        session_form::word_wrap(&title, self.columns.saturating_sub(2))
+            .into_iter()
+            .take(usize::from(height.saturating_sub(3)))
+            .collect()
+    }
+
+    fn version_notice(&self, height: u16) -> Option<&str> {
+        if height.saturating_sub(self.body_first(height)) < 2 {
+            return None;
+        }
+        self.skew_notice.as_deref()
     }
 
     fn roster_view(&self, screen: &mut String, cols: u16, rows: u16) {

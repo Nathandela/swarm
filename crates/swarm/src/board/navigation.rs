@@ -181,15 +181,20 @@ impl Board {
     }
 
     pub(super) fn body_first(&self, rows: u16) -> u16 {
-        if rows >= 12 || self.banner.is_some() {
-            3
+        let banner = if self.upgrading {
+            self.upgrade_banner(rows).len() as u16
         } else {
-            2
-        }
+            u16::from(self.banner.is_some())
+        };
+        2 + banner.max(u16::from(rows >= 12))
     }
 
     pub(super) fn body_capacity(&self, rows: u16) -> usize {
-        usize::from(rows.saturating_sub(self.body_first(rows)).max(1))
+        usize::from(
+            rows.saturating_sub(self.body_first(rows))
+                .saturating_sub(u16::from(self.version_notice(rows).is_some()))
+                .max(1),
+        )
     }
 
     pub(super) fn visible(&self, rows: u16) -> bool {
