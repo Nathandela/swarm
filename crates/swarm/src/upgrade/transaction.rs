@@ -38,6 +38,7 @@ struct Route {
 }
 #[derive(Serialize, Deserialize)]
 struct Stage {
+    route: Option<PathBuf>,
     from: String,
     to: String,
     downgrade: bool,
@@ -742,9 +743,14 @@ pub(super) fn run(root: &Path, exe: &Path, opts: Options<'_>) -> io::Result<u8> 
     }
 }
 
+fn matches_route(stage: &Stage, current: &Route, route_id: &Path) -> bool {
+    stage.from == current.active && stage.route.as_deref() == Some(route_id)
+}
+
 fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
     let _admin = secure_lock(&root.join("admin.lock"))?;
     let current = route(root)?;
+    let route_id = fs::read_link(root.join("current"))?;
     let active = release_path(root, &current.active)?;
     if exe != active.join("swarm") {
         return Err(invalid("use the current managed launcher"));
@@ -757,7 +763,7 @@ fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
     } else {
         None
     };
-    staged = staged.filter(|stage| stage.from == current.active);
+    staged = staged.filter(|stage| matches_route(stage, &current, &route_id));
     if opts.step == "status" {
         let unfinished = fs::read_dir(root.join("inflight"))?
             .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
@@ -841,6 +847,7 @@ fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
             files.insert(name.into(), data);
         }
         let next = Stage {
+            route: Some(route_id),
             from: current.active.clone(),
             to: write_slot(root, files, &target, opts.check_media)?,
             downgrade: cmp == Ordering::Less,
@@ -883,6 +890,16 @@ fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
     let target = verify_slot(&release_path(root, &staged.to)?)?;
     compatible(&old, &target)?;
     let latest = required(&target, "version")?;
+    if current.held.as_deref() == Some(latest) {
+        return report(
+            root,
+            opts,
+            installed,
+            "held",
+            "this version was rolled back",
+            latest,
+        );
+    }
     match version(latest)?.cmp(&version(installed)?) {
         Ordering::Less => {
             if !staged.downgrade {
@@ -996,6 +1013,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(route(&root).unwrap().active, old);
+        let stage = Stage {
+            route: Some(fs::read_link(root.join("current")).unwrap()),
+            from: old.clone(),
+            to: new.clone(),
+            downgrade: false,
+        };
+        assert!(matches_route(
+            &stage,
+            &route(&root).unwrap(),
+            &fs::read_link(root.join("current")).unwrap()
+        ));
         let held = secure_lock(&root.join("writers.lock")).unwrap();
         assert!(secure_lock(&root.join("writers.lock")).is_err());
         drop(held);
@@ -1010,7 +1038,23 @@ mod tests {
         .unwrap();
         let record = route(&root).unwrap();
         assert_eq!(record.active, new);
-        assert_eq!(record.previous, Some(old));
+        assert_eq!(record.previous, Some(old.clone()));
+        point(
+            &root,
+            Route {
+                active: old,
+                previous: None,
+                held: Some("0.2.0".into()),
+            },
+        )
+        .unwrap();
+        let restored = route(&root).unwrap();
+        assert_eq!(restored.active, stage.from);
+        assert!(!matches_route(
+            &stage,
+            &restored,
+            &fs::read_link(root.join("current")).unwrap()
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 }
