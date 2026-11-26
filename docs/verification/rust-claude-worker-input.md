@@ -39,6 +39,8 @@ The Linux x86_64 witness mounted the installed Claude Code 2.1.332 executable re
 
 The enrolled manager used the same installed release to receive the original envelope, prove the native main-loop MCP tool call, and publish the expected reply. The private broker descriptor records the exact admitted release. Both sender and guard must report that release, even when both versions are individually qualified for the host. The Linux test exercised this distinction by attempting to join a 2.1.329 broker with 2.1.332 roles.
 
+The joined `d9577d2f` Linux candidate passed the enrolled manager and the source-deletion control with an updated synthetic response fixture. Its first scoped read finds the Claude worker pending. After the exact transcript records a native close, the next read verifies the worker instance, job, attempt and result. The final logs have SHA-256 `16f0b00d2aa745b8e51c79ca107a167e0a3d88fc5354c97eb19efbc20fbc0268` and `91b321242a91ba5c5393b0c0beb6880c0262c8a53b1ea504c6d0054ac5681311`. The native issuer replacement and schedule passed with log SHA-256 `73961775751c8adc0eb7e6860b4413b26a9dbf966d027cfc7430dc2f6aacfafb` and `6d2a24c6931400f2e4b4aef79c544811342b817dae8617008b6e429a42406e69`. Two earlier runs refused account custody before the model tool calls. The cause of that transient refusal remains unresolved and the custody check is retained.
+
 The installed x86_64 executable SHA-256 was `a2df1f41bb00250992926420d0063f89b127cb81abdd284dbefb80c50ff1d026`. The Rust candidate SHA-256 was `36c09cbf196995cdb576ec30f0d219a981d4aa1b1c1149b58e0dd48ebe171988`.
 
 | Linux fixture log | SHA-256 |

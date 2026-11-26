@@ -142,6 +142,8 @@ The pinned Go v0.29.24 in-process N-1 test separately measured 2.175 ms p95 over
 
 The matching Rust post-dial test uses the real owner, subscription, board initialization and first rendered frame. Its final `16f256c4` release-mode harness rendered all 50 labels in each of 25 fresh trials on both native hosts and left zero fixture processes. It measured 1.110 ms p95 on macOS arm64 and 5.428 ms on Linux x86_64 under concurrent load. Receipts SHA-256 are `b37c47dba79333813967b1a0ca2dddc5835cff75ec0e36c35213d402a78de2c4` on macOS and `2d0a276b98cc232355d84774f17dc3f420d6e8c071a4f42d115c8ad5f6e13a4f` on Linux. The external PTY gate retains its original 100 ms budget. [Benchmark commands](../../scripts/verification/parity/README.md)
 
+The joined `d9577d2f` default suites passed 281 tests on Darwin arm64 and 280 on Linux x86_64, with 26 explicitly guarded tests left to their separate environments. Their logs have SHA-256 `4f201779c750ce542a3e59c99e4f78844b9cb41967e080f0003ca20bebe00531` and `d44fcd035211d842af59807931d085f30146d6b46f2207cb4d2b801153c02036`. The guarded enrolled partial-reply test passed on both hosts. The original Go retained guild fixture passed all seven signed v0.29.26 cases on Linux. [Quiet reply witness](rust-discord-service.md) · [Retained guild witness](rust-discord-retained-state.md)
+
 | Evidence | SHA-256 |
 | --- | --- |
 | `performance-macos.json` | `c75ab9a2731e2075a88b5bd4221c3f1563b6bb487a1f6a65121d176d9aa3f9e5` |
