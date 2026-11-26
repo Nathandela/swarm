@@ -332,13 +332,13 @@ case "$1:$2" in
     fi
     if [ -f "$HOME/loaded" ] && [ -f "$unit" ]; then
       fragment="$unit"
-      command=$(/usr/bin/sed -n 's/^ExecStart=:"\([^"]*\)" discord run --state-dir "\([^"]*\)" --unattended$/\1|\2/p' "$unit")
+      command=$(/usr/bin/sed -n 's/^ExecStart=:"\([^"]*\)" discord run --state-dir "\([^"]*\)" --unattended$/\1|\2/p' "$HOME/loaded")
       binary=${command%%|*}; place=${command#*|}
       printf 'FragmentPath=%s\nDropInPaths=\nExecStart={ path=%s ; argv[]=%s discord run --state-dir %s --unattended ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nExecMainPID=0\n' "$fragment" "$binary" "$binary" "$place"
     else
       printf 'FragmentPath=\nDropInPaths=\nExecStart=\nExecMainPID=0\n'
     fi ;;
-  --user:daemon-reload) if [ -f "$HOME/.config/systemd/user/swarm-discord.service" ]; then : > "$HOME/loaded"; else /bin/rm -f "$HOME/loaded"; fi ;;
+  --user:daemon-reload) if [ -f "$HOME/.config/systemd/user/swarm-discord.service" ]; then /bin/cp "$HOME/.config/systemd/user/swarm-discord.service" "$HOME/loaded"; else /bin/rm -f "$HOME/loaded"; fi ;;
   --user:enable) : > "$HOME/enabled" ;;
   --user:disable) /bin/rm -f "$HOME/enabled" ;;
   --user:restart) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; : > "$HOME/failed-restart"; exit 1; fi; : > "$HOME/active" ;;
