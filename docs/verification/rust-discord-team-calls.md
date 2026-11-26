@@ -17,4 +17,6 @@ The offline fixture verifies exact linked-thread custody at native cutover for t
 
 The composed loopback fixture exercises one Gateway connection and a real fixture child with synthetic PCM and injected offline inference. It confirms that unaddressed conversation and call-control text generate no dispatcher input, two addressed turns preserve distinct speaker identities, and deleting a consent source closes the room.
 
+Worker wake links use the original accepted call turn and native parent-input digest. A persisted note digest covers the immutable note body, kind, attempt and file identities. Final written delivery stays bound to the original audience after hangup. Spoken delivery uses that original voice coordinate only while its call generation remains eligible. The offline reverse-order fixture rejects a different native parent and distinguishes a changed note body.
+
 Public provisioning of a new linked thread, live Discord qualification, and authorization recovery after Gateway gaps remain open. The configured thread is independent of the call configuration so removing media settings can preserve the written discussion.

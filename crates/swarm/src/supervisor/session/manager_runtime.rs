@@ -164,7 +164,9 @@ impl Session {
                     || origin["actor_id"] != origin["requester_id"]
                     || origin["guild_id"] != self.manager["guild_id"]
             }
-            || field(origin, "message_id").is_empty() && origin["voice"].is_null()
+            || field(origin, "message_id").is_empty()
+                && origin["voice"].is_null()
+                && origin["worker_wake"].is_null()
             || field(origin, "revision").is_empty()
             || field(origin, "request_id").is_empty()
         {
