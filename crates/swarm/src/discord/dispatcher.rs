@@ -968,9 +968,11 @@ impl Dispatcher {
                 Post::Acknowledged(receipt)
                     if receipt["nonce"] == nonce.as_str()
                         && inbox.observe(&receipt, Observation::Rest)? => {}
-                Post::RateLimited(after) => {
-                    inbox.publication_state(nonce, "prepared", Some(now.saturating_add(after)))?
-                }
+                Post::RateLimited(after) => inbox.publication_state(
+                    nonce,
+                    "prepared",
+                    Some(millis()?.saturating_add(after)),
+                )?,
                 _ => inbox.publication_state(nonce, "uncertain", None)?,
             }
             if inbox.publication(nonce)["state"] != "sent" {
@@ -1663,7 +1665,16 @@ fn random_hex<const N: usize>() -> io::Result<String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
 fn millis() -> io::Result<u64> {
+    #[cfg(test)]
+    if let Some(now) = TEST_MILLIS.with(std::cell::Cell::get) {
+        return Ok(now);
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
@@ -2068,6 +2079,30 @@ mod tests {
         tx.commit().unwrap();
     }
 
+    fn hold_writer_until_claim(
+        dir: &Path,
+        while_held: impl FnOnce() + 'static,
+    ) -> std::thread::JoinHandle<()> {
+        let writer = super::super::worker_input::lock_ledger_writer(dir).unwrap();
+        let (entered, in_claim) = std::sync::mpsc::sync_channel(1);
+        let effect = std::thread::spawn(move || {
+            in_claim.recv_timeout(Duration::from_secs(5)).unwrap();
+            drop(writer);
+        });
+        let locked_dir = dir.to_owned();
+        super::super::receipt::fixture_before_claim(move || {
+            assert_eq!(
+                super::super::worker_input::lock_ledger(&locked_dir)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
+            while_held();
+            entered.send(()).unwrap();
+        });
+        effect
+    }
+
     fn check_file_publications(
         mut dispatcher: Dispatcher,
         cfg: &Config,
@@ -2131,24 +2166,8 @@ mod tests {
         assert!(api.posted.borrow().is_empty());
         audience.override_source.store(0, Ordering::Release);
 
-        let writer = super::super::worker_input::lock_ledger_writer(dir).unwrap();
-        let (entered, in_claim) = std::sync::mpsc::sync_channel(1);
         let injected = audience.override_source.clone();
-        let effect = std::thread::spawn(move || {
-            in_claim.recv_timeout(Duration::from_secs(5)).unwrap();
-            injected.store(1, Ordering::Release);
-            drop(writer);
-        });
-        let locked_dir = dir.to_owned();
-        super::super::receipt::fixture_before_claim(move || {
-            assert_eq!(
-                super::super::worker_input::lock_ledger(&locked_dir)
-                    .unwrap_err()
-                    .kind(),
-                io::ErrorKind::WouldBlock
-            );
-            entered.send(()).unwrap();
-        });
+        let effect = hold_writer_until_claim(dir, move || injected.store(1, Ordering::Release));
         assert!(
             dispatcher
                 .deliver(cfg, &mut inbox, &audience, &manager, 100)
@@ -2160,10 +2179,23 @@ mod tests {
         assert!(api.posted.borrow().is_empty());
         audience.override_source.store(0, Ordering::Release);
 
+        let response_time = 90_000;
+        let effect = hold_writer_until_claim(dir, move || {
+            TEST_MILLIS.with(|clock| clock.set(Some(response_time)))
+        });
         dispatcher
             .deliver(cfg, &mut inbox, &audience, &manager, 100)
             .unwrap();
+        effect.join().unwrap();
+        TEST_MILLIS.with(|clock| clock.set(None));
         let retry = inbox.publication(&first)["retry_at"].as_u64().unwrap();
+        assert_eq!(retry, response_time + 60_000);
+        for now in [response_time, retry - 1] {
+            dispatcher
+                .deliver(cfg, &mut inbox, &audience, &manager, now)
+                .unwrap();
+            assert_eq!(api.posted.borrow().len(), 1);
+        }
         let pinned = file_pins(dir, &note);
         assert!(pinned[&first].is_array());
         assert_eq!(api.posted.borrow().len(), 1);
