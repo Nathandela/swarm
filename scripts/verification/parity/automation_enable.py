@@ -30,11 +30,15 @@ exit 113
     controller.chmod(0o700)
     claude = root / "bin/claude"
     hold = root / "home/preflight-held"
+    started = root / "home/preflight-started"
 
     def provider():
         claude.write_text("""#!/bin/sh
 test "$1" = --version || exit 70
-while test -f "$HOME/preflight-held"; do /bin/sleep .05; done
+if test -f "$HOME/preflight-held"; then
+    : > "$HOME/preflight-started"
+    while test -f "$HOME/preflight-held"; do /bin/sleep .05; done
+fi
 printf '2.1.329 (Claude Code)\n'
 """)
         claude.chmod(0o700)
@@ -112,8 +116,15 @@ printf '2.1.329 (Claude Code)\n'
                 timer.chmod(0o600)
                 step(b"p", editor)
                 revised = paused["spec"] | {"name": "Owner changed revision"}
-                latest = json.loads(cli("schedule","edit",job["id"],"--spec-file","-", data=json.dumps(revised).encode()))
-                step(b"\x13", b"revision or state changed")
+                started.unlink(missing_ok=True)
+                hold.touch()
+                try:
+                    step(b"\x13", b"Checking automation activation")
+                    p.wait_for(started.exists, "owner passed the initial stale revision check")
+                    latest = json.loads(cli("schedule","edit",job["id"],"--spec-file","-", data=json.dumps(revised).encode()))
+                finally:
+                    hold.unlink()
+                board.wait_bytes(b"schedule job revision changed")
                 assert show() == latest and latest["state"] == "paused"
                 step(b"\x1b[27u", b"History")
                 step(b"u", b"Owner changed revision")
