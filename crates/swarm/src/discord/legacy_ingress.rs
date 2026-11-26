@@ -1,4 +1,5 @@
 //! Settle a Go personal ingress candidate from the original voice controller's cutover receipt.
+pub(super) mod activation;
 pub(super) mod manager_publication;
 pub(super) mod prepare;
 pub(super) mod publication;
@@ -1003,15 +1004,20 @@ fn require_after_boundary<'tx>(
     binding: &Value,
     message: &str,
 ) -> io::Result<()> {
+    let minimum = original_boundary(tx, cfg, binding)?;
+    if minimum >= message.parse::<u64>().map_err(io::Error::other)? {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn original_boundary<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, binding: &Value) -> io::Result<u64> {
     let install = cfg.text("installation_id");
     let channel = cfg.text("dm_channel_id");
     let actor = cfg.text("owner_id");
     let id = field(binding, "ID");
     let minimum = field(binding, "Boundary");
-    if !snowflake(minimum)
-        || minimum.parse::<u64>().map_err(|_| invalid())?
-            >= message.parse::<u64>().map_err(|_| invalid())?
-    {
+    if !snowflake(minimum) {
         return Err(invalid());
     }
     let expected = operation(install, minimum)?;
@@ -1027,7 +1033,7 @@ fn require_after_boundary<'tx>(
     {
         return Err(invalid());
     }
-    Ok(())
+    minimum.parse::<u64>().map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -1284,6 +1290,7 @@ mod tests {
             status: PathBuf,
             acknowledge: bool,
             close_first: std::sync::mpsc::SyncSender<()>,
+            disconnect: std::sync::mpsc::SyncSender<()>,
         }
         impl service::Room for Room {
             fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -1303,8 +1310,12 @@ mod tests {
                 let count = self.posts.get() + 1;
                 self.posts.set(count);
                 let result = self.actual_rest.post_publication(cfg, nonce, body, &[]);
-                if matches!(result, Post::Acknowledged(_)) && count == 1 {
-                    self.close_first.send(()).unwrap();
+                if matches!(result, Post::Acknowledged(_)) {
+                    if count == 1 {
+                        self.close_first.send(()).unwrap();
+                    } else if count == 2 {
+                        self.disconnect.send(()).unwrap();
+                    }
                 }
                 result
             }
@@ -1316,6 +1327,7 @@ mod tests {
         second["id"] = json!("702");
         second["content"] = json!("Second retained real native loopback input.");
         let (close_first, first_closed) = std::sync::mpsc::sync_channel::<()>(1);
+        let (disconnect, stop) = std::sync::mpsc::sync_channel::<()>(1);
         let room = Room {
             current: current.clone(),
             actual_rest: super::super::rest::Discord::loopback_fixture(
@@ -1330,11 +1342,35 @@ mod tests {
             status: place.dir.clone(),
             acknowledge: std::env::var_os("SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK").is_none(),
             close_first,
+            disconnect,
         };
         // An interrupted foreground process leaves this private pathname behind.
         let dormant = runtime::bind(&place.dir.join("bridge.sock")).unwrap();
         drop(dormant);
         let source = place.dir.join("discord.db");
+        let original = fs::read(&source).unwrap();
+        let ordinary_run = || {
+            use super::super::{Request, execute};
+            let args = ["run".to_owned()];
+            execute(&Request::parse(&args).unwrap())
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(!activation::selected(&place).unwrap());
+        assert!(activation::migrate(&place, true, false).unwrap());
+        assert!(!activation::selected(&place).unwrap());
+        // The ordinary command changes routing only after the persisted handoff.
+        let token = place.dir.join("fixture-token");
+        let temporary = place.dir.join("fixture-token-away");
+        fs::rename(&token, &temporary).unwrap();
+        let prior_route = ordinary_run();
+        assert!(activation::migrate(&place, false, false).unwrap());
+        let retained_route = ordinary_run();
+        fs::rename(&temporary, &token).unwrap();
+        assert!(!prior_route.contains("bot token"), "{prior_route}");
+        assert!(retained_route.contains("bot token"), "{retained_route}");
+        assert!(activation::selected(&place).unwrap());
+        assert_eq!(fs::read(&source).unwrap(), original);
         use super::super::gateway;
         let worker = |frames: Vec<Value>, done: std::sync::mpsc::Receiver<()>| {
             let (local, remote) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -1389,7 +1425,16 @@ mod tests {
             sockets.push_back(local);
             peers.push(peer);
         }
-        let result = service::with(&place, &room, Some(2), |cfg| {
+        let stopper = room.acknowledge.then(|| {
+            std::thread::spawn(move || {
+                stop.recv_timeout(std::time::Duration::from_secs(40))
+                    .unwrap();
+                use super::super::{Request, execute};
+                let args = ["disconnect".to_owned()];
+                assert!(execute(&Request::parse(&args).unwrap()).unwrap());
+            })
+        });
+        let result = service::with(&place, &room, None, |cfg| {
             assert!(open_bolt(&source, 64 << 20).is_err());
             let status = super::super::local::call(&place.dir, "status", "", None).unwrap();
             assert_eq!(status["connected"], false);
@@ -1413,6 +1458,10 @@ mod tests {
             let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
             Ok(move || cursor.event(&mut socket))
         });
+        if let Some(stopper) = stopper {
+            stopper.join().unwrap();
+            assert!(!place.load().unwrap().enabled());
+        }
         finish.send(()).unwrap();
         for peer in peers {
             peer.join().unwrap();
@@ -1430,6 +1479,8 @@ mod tests {
             );
         }
         assert_eq!(room.posts.get(), if room.acknowledge { 2 } else { 1 });
+        assert!(activation::migrate(&place, false, true).unwrap());
+        assert!(!activation::selected(&place).unwrap());
         let cfg = place.load().unwrap();
         let request = {
             let (_pin, db) = open_bolt(&source, 64 << 20).unwrap();

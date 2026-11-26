@@ -26,15 +26,15 @@ fn source_author(row: &Value, cfg: &Config, message: &str) -> io::Result<Value> 
     Ok(author.clone())
 }
 
-struct Voice {
+pub(super) struct Voice {
     header: Value,
     conversation_key: Vec<u8>,
-    conversation: Value,
+    pub(super) conversation: Value,
     raw_conversation: Vec<u8>,
     admissions: u64,
 }
 
-fn read_voice<'tx>(
+pub(super) fn read_voice<'tx>(
     tx: &impl TxApi<'tx>,
     id: &str,
     cfg: &Config,
@@ -388,7 +388,7 @@ pub(super) fn with(
     under_lease(place, &cfg, message, &mut lease, fetch)
 }
 
-fn no_pending_output<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<()> {
+pub(super) fn no_pending_output<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<()> {
     let outbox = tx.bucket(b"teammate_outbox").ok_or_else(invalid)?;
     let prefix = format!("{}\0", cfg.text("installation_id"));
     for (count, (key, raw)) in outbox.iter_entries().enumerate() {
