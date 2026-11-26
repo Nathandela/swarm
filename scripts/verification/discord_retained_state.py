@@ -156,6 +156,95 @@ def inspect(go, rust, fixture, base):
     assert run(fixture, env, "read", active).strip() == "true"
     assert run(fixture, env, "traffic-read", active, "sent").strip() == "sent"
     assert run(fixture, env, "traffic-read", active, "uncertain").strip() == "uncertain"
+    # Operate on an enabled but stopped connector with Go-made receipts. There is
+    # no bridge or Discord transport in this rehearsal.
+    controls = base / "controls"
+    run(fixture, old_env, "create", controls, original, "personal", "true")
+    run(fixture, old_env, "traffic", controls, "sent")
+    run(fixture, old_env, "traffic", controls, "uncertain")
+    run(fixture, old_env, "bind", controls, "existing-dm", "400")
+    assert run(fixture, old_env, "ingress", controls, "existing-dm", "501", "settle").strip() == "1"
+    config_bytes = (controls / "config.json").read_bytes()
+    token_bytes = (controls / old_exclude).read_bytes()
+    route_args = ["discord", "migrate-state", "--controls"]
+    with ExitStack() as stack:
+        stack.enter_context(daemon(go, old_env, base / "controls.log"))
+        target = running(stack, old_env, "Selected audience worker")
+        raw_before = (controls / "discord.db").read_bytes()
+        assert json.loads(run(rust, old_env, *route_args, "--dry-run"))["eligible"]
+        assert (controls / "discord.db").read_bytes() == raw_before
+        assert json.loads(run(rust, old_env, *route_args))["state"] == "retained_controls"
+        run(rust, old_env, "discord", "run", code=1)
+        run(rust, old_env, "discord", "exclude", "invalid/target", code=1)
+        with (controls / "discord.db").open("rb") as writer:
+            fcntl.flock(writer, fcntl.LOCK_EX)
+            run(rust, old_env, "discord", "exclude", target, code=1)
+        assert (controls / "discord.db").read_bytes() == raw_before
+        run(rust, old_env, "discord", "exclude", target)
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "true"
+        after = (controls / "discord.db").read_bytes()
+        run(rust, old_env, "discord", "exclude", target)
+        assert (controls / "discord.db").read_bytes() == after
+        run(rust, old_env, "discord", "include", target)
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "false"
+        run(rust, old_env, "discord", "exclude", target)
+        assert json.loads(run(rust, old_env, *route_args, "--rollback"))["state"] == "rolled_back"
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "true"
+        run(rust, old_env, "discord", "include", target, code=1)
+        run(fixture, old_env, "audience-write", controls, target, "false")
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "false"
+    assert (controls / "config.json").read_bytes() == config_bytes
+    assert (controls / old_exclude).read_bytes() == token_bytes
+    assert run(fixture, old_env, "traffic-read", controls, "sent").strip() == "sent"
+    assert run(fixture, old_env, "traffic-read", controls, "uncertain").strip() == "uncertain"
+    # Pinned Go re-sees this message after rollback but creates no new pending work.
+    assert run(fixture, old_env, "ingress", controls, "existing-dm", "501", "replay").strip() == "0"
+    assert run(fixture, old_env, "ingress", controls, "existing-dm", "502", "hold").strip() == "1"
+    pending_database = (controls / "discord.db").read_bytes()
+    assert not json.loads(run(rust, old_env, *route_args, "--dry-run", code=1))["eligible"]
+    assert (controls / "discord.db").read_bytes() == pending_database
+    for phase in ("prepared", "executing", "running"):
+        recovery = base / ("recovery-" + phase)
+        run(fixture, old_env, "create", recovery, original, "personal", "true")
+        run(fixture, old_env, "bind", recovery, "existing-dm", "400")
+        run(fixture, old_env, "voice-ingress", recovery, "existing-dm", "701", phase)
+        original_db = recovery / "discord.db"
+        voice_db, = (recovery / "discussions").glob("*/voice.db")
+        before = original_db.read_bytes()
+        voice_bytes = voice_db.read_bytes()
+        command = ["discord", "migrate-state", "--settle-personal-ingress", "701"]
+        code = int(phase == "prepared")
+        run(rust, old_env, *command, "--dry-run", code=code)
+        assert original_db.read_bytes() == before
+        with voice_db.open("rb") as voice_writer:
+            fcntl.flock(voice_writer, fcntl.LOCK_EX)
+            run(rust, old_env, *command, code=1)
+        assert original_db.read_bytes() == before
+        result = run(rust, old_env, *command, code=code)
+        if not code:
+            assert f"Native phase remains {phase}." in result
+        after = original_db.read_bytes()
+        assert (after == before) == (phase == "prepared")
+        run(rust, old_env, *command, code=code)
+        assert original_db.read_bytes() == after
+        pending = run(fixture, old_env, "ingress", recovery, "existing-dm", "701", "replay").strip()
+        assert pending == ("1" if phase == "prepared" else "0")
+        assert voice_db.read_bytes() == voice_bytes
+        phase_result = run(fixture, old_env, "voice-phase", voice_db.parent, "701").strip()
+        assert phase_result == f"{phase} {str(phase != 'prepared').lower()}"
+    corrupt = base / "recovery-count"
+    run(fixture, old_env, "create", corrupt, original, "personal", "true")
+    run(fixture, old_env, "bind", corrupt, "existing-dm", "400")
+    run(fixture, old_env, "voice-ingress", corrupt, "existing-dm", "701", "running")
+    assert run(fixture, old_env, "ingress", corrupt, "existing-dm", "702", "hold").strip() == "2"
+    run(fixture, old_env, "pending-count", corrupt, "1")
+    source = corrupt / "discord.db"
+    voice, = (corrupt / "discussions").glob("*/voice.db")
+    original_bytes = (source.read_bytes(), voice.read_bytes())
+    settle = ["discord", "migrate-state", "--settle-personal-ingress", "701"]
+    run(rust, old_env, *settle, "--dry-run", code=1)
+    run(rust, old_env, *settle, code=1)
+    assert (source.read_bytes(), voice.read_bytes()) == original_bytes
     print("PASS Go-made Discord personal/team retained evidence, rollback, and verified original/default supervisor split")
 
 

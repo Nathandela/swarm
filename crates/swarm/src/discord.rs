@@ -22,6 +22,8 @@ mod doctor;
 pub(crate) mod enrolled_worker;
 mod gateway;
 mod guild;
+mod legacy_discussions;
+mod legacy_ingress;
 mod legacy_state;
 pub(crate) mod linked_board;
 mod local;
@@ -391,8 +393,8 @@ impl<'a> Request<'a> {
                 ]
             }
             "migrate-state" => {
-                flags = &["dry-run", "rollback"];
-                &[]
+                flags = &["dry-run", "rollback", "controls"];
+                &["settle-personal-ingress"]
             }
             "migrate-supervisor" => {
                 flags = &["dry-run"];
@@ -524,7 +526,18 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     match req.command {
         "connect" => return connect(req, place),
         "migrate-state" => {
-            return legacy_state::migrate(&place, req.on("dry-run"), req.on("rollback"));
+            if let Some(message) = req.get("settle-personal-ingress") {
+                if req.on("controls") || req.on("rollback") {
+                    return Err(invalid("select one migration operation"));
+                }
+                return legacy_ingress::settle(&place, message, req.on("dry-run"));
+            }
+            return legacy_state::migrate(
+                &place,
+                req.on("dry-run"),
+                req.on("rollback"),
+                req.on("controls"),
+            );
         }
         "disconnect" => {
             unit::disconnect(&place)?;
@@ -541,6 +554,13 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         _ => {}
     }
     let cfg = place.load()?;
+    if matches!(req.command, "include" | "exclude")
+        && let Some(result) =
+            legacy_state::audience(&place, &cfg, req.id, req.command == "exclude")?
+    {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(true);
+    }
     match req.command {
         "run" => service::run(&place.bound(&cfg)?, &cfg, req.on("unattended"))?,
         "status" => {

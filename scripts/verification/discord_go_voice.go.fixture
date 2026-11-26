@@ -1,0 +1,69 @@
+// Install in internal/voice of the disposable pinned Go repository.
+package voice
+
+import (
+	"strings"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+)
+
+func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase string) error {
+	store, err := OpenStore(dir)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	binding, err := store.BindManager(ManagerBinding{NativeCLI: true, ConversationID: conversation,
+		Provider: "codex", SessionID: session, SessionInstance: "original-manager-instance",
+		NativeSessionID: "original-native-session", NativeGeneration: "native-1",
+		ObservationGeneration: "observed-1", LoginEpoch: "same-login"})
+	if err != nil {
+		return err
+	}
+	controller := Controller{store: store, binding: binding, discussion: &DiscussionScope{
+		DiscussionID: origin.DiscussionID, InstallationID: origin.InstallationID,
+		DMOwnerID: origin.ActorID, ThreadID: origin.ChannelID,
+	}}
+	const body = "offline original owner prompt"
+	admission, err := controller.submitDiscussion(origin, body, "", "")
+	if err != nil {
+		return err
+	}
+	if err := store.observeController(binding, 0, false); err != nil {
+		return err
+	}
+	nonce := strings.Repeat("1", 64)
+	op, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		return err
+	}
+	request := protocol.ComposerSendReq{Session: binding.SessionID, SessionInstance: binding.SessionInstance,
+		Origin: &origin, Text: body, ManagerAdmission: &schema.ManagerAdmission{Binding: runtimeBinding(binding), Nonce: nonce}}
+	prepared, err := store.prepareControllerInput(binding, admission.Sequence, nonce, op, request, 0)
+	if err != nil || phase == "prepared" {
+		return err
+	}
+	if err := store.beginControllerInput(binding, prepared); err != nil || phase == "executing" {
+		return err
+	}
+	return store.controllerInputPhase(binding, admission.Sequence, "running", "synthetic-observed-turn", "")
+}
+
+func FixturePersonalPhase(dir, message string) (string, bool, error) {
+	store, err := OpenStore(dir)
+	if err != nil {
+		return "", false, err
+	}
+	defer store.Close()
+	snapshot, err := store.Snapshot()
+	if err != nil {
+		return "", false, err
+	}
+	for _, admission := range snapshot.Admissions {
+		if admission.Origin != nil && admission.Origin.MessageID == message {
+			return admission.Phase, admission.SourceCutover, nil
+		}
+	}
+	return "", false, ErrNotFound
+}

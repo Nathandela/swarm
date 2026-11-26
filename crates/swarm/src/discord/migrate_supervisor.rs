@@ -160,7 +160,7 @@ fn peer_holds_lock(pid: u32, path: &Path, lock: &fs::File) -> io::Result<bool> {
             .all(|&holder| holder == ours || holder == pid as i32))
 }
 
-fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<String> {
+pub(super) fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<(String, Vec<Value>)> {
     let endpoint = real_endpoint(root)?;
     let identity = fs::symlink_metadata(socket)?;
     if !identity.file_type().is_socket()
@@ -204,7 +204,7 @@ fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<String> {
     }
     let lock_file = open_owner_file(lock)?;
     let expected_lock = lock_file.metadata()?;
-    client.sessions()?;
+    let rows = client.sessions()?;
     if !peer_holds_lock(pid, lock, &lock_file)? {
         return Err(io::Error::other(
             "supervisor socket peer does not hold the configured owner lock",
@@ -220,7 +220,7 @@ fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<String> {
             "supervisor owner changed during verification",
         ));
     }
-    Ok(endpoint)
+    Ok((endpoint, rows))
 }
 
 struct Plan {
@@ -353,8 +353,8 @@ fn plan(place: &Place, explicit: [Option<&str>; 4]) -> io::Result<Plan> {
         ));
     }
     let old_socket = path(&previous, "socket")?;
-    let actual_old = live(&original, old_socket, path(&previous, "lock")?)?;
-    let actual_new = live(&home, &socket, &lock)?;
+    let (actual_old, _) = live(&original, old_socket, path(&previous, "lock")?)?;
+    let (actual_new, _) = live(&home, &socket, &lock)?;
     if previous["endpoint"] != actual_old {
         return Err(io::Error::other(
             "saved original supervisor endpoint disagrees with its owner",
