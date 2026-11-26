@@ -292,7 +292,7 @@ pub(super) fn apply(
         fields.shift_remove(key);
     }
     receipt["operation_id"] = json!(operation);
-    receipt["state"] = json!("uncertain");
+    receipt["state"] = json!("outcome_unknown");
     runtime::write_json(&fence, &json!({"operation_id":operation,"intent":intent}))?;
     durable::save(target.dir, operation, &intent, &receipt)?;
     send(ws, json!({"id":id,"result":result}))?;
@@ -304,11 +304,123 @@ pub(super) fn apply(
             && frame["params"]["requestId"] == id;
         observe_frame(observation, &frame, target);
         if resolved {
-            receipt["state"] = json!("applied");
-            receipt["native_effect"] = json!("single_request");
+            receipt["reason"] =
+                json!("native request closed; responder and chosen decision are unconfirmed");
             durable::save(target.dir, operation, &intent, &receipt)?;
             return Ok(receipt);
         }
     }
     Ok(receipt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::codex_decision_receipt as durable;
+    use std::{fs, path::Path, thread};
+    use tungstenite::protocol::Role;
+
+    #[test]
+    fn competing_viewer_resolution_cannot_attest_to_our_answer_or_replay() {
+        let root = Path::new("/tmp")
+            .canonicalize()
+            .unwrap()
+            .join(runtime::random_id().unwrap());
+        let dir = root.join("session");
+        runtime::private_dir(&dir).unwrap();
+        let token = "fixture-incarnation";
+        let session = "endpoint/session";
+        let native = "01997f00-face-7000-8000-00000000cde0";
+        let raw = json!({"id":29,"method":"item/commandExecution/requestApproval","params":{
+            "threadId":native,"turnId":"active","command":"printf fixture","kind":"command"
+        }});
+        let mut pending = Pending::new("command", raw);
+        let card = pending.issue(token, session, native).unwrap();
+        let mut body = json!({"kind":"permission_reply","reply":"once"});
+        for key in [
+            "session",
+            "session_instance",
+            "generation",
+            "root_id",
+            "native_session_id",
+            "request_id",
+            "request_hash",
+            "expires_at",
+        ] {
+            body[key] = card[key].clone();
+        }
+        let operation = codex_receipt::operation().unwrap();
+        codex_receipt::bind_intent(
+            &root,
+            &operation,
+            session,
+            &codex_receipt::instance(token),
+            &durable::intent(&body),
+        )
+        .unwrap();
+        let mut observation = Observation {
+            thread: native.to_owned(),
+            turn: Some("active".to_owned()),
+            joined: true,
+            requests: [("29".to_owned(), pending)].into(),
+            ..Observation::default()
+        };
+        let (client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let worker = thread::spawn(move || {
+            let mut peer = WebSocket::from_raw_socket(server, Role::Server, None);
+            assert_eq!(
+                read(&mut peer).unwrap().unwrap(),
+                json!({"id":29,"result":{"decision":"accept"}})
+            );
+            // The fake app-server honors an opposing native viewer's decline.
+            // Its broadcast cannot distinguish that from accepting our reply.
+            let actor_decision = "decline";
+            send(&mut peer,json!({"method":"serverRequest/resolved","params":{"threadId":native,"requestId":29}})).unwrap();
+            actor_decision
+        });
+        let mut socket = WebSocket::from_raw_socket(client, Role::Client, None);
+        let target = SemanticTarget {
+            dir: &dir,
+            token,
+            cwd: &root,
+            schedule: None,
+            manager: &Value::Null,
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let first = apply(
+            &mut socket,
+            &mut observation,
+            &target,
+            &operation,
+            &body,
+            deadline,
+        )
+        .unwrap();
+        assert_eq!(worker.join().unwrap(), "decline");
+        assert_eq!(first["state"], "outcome_unknown");
+        assert!(first.get("native_effect").is_none());
+        assert!(observation.requests.is_empty());
+        assert_eq!(
+            apply(
+                &mut socket,
+                &mut observation,
+                &target,
+                &operation,
+                &body,
+                deadline
+            )
+            .unwrap(),
+            first
+        );
+        assert_eq!(
+            durable::read(&dir, token, session, &operation)
+                .unwrap()
+                .unwrap()["receipt"],
+            first
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

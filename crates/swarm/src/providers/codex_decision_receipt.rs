@@ -33,7 +33,7 @@ pub(crate) fn read(
     session: &str,
     operation: &str,
 ) -> io::Result<Option<Value>> {
-    let record = match runtime::read_json(&path(dir, operation)) {
+    let mut record = match runtime::read_json(&path(dir, operation)) {
         Ok(record) => record,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
@@ -58,7 +58,8 @@ pub(crate) fn read(
             "permission_reply" | "question_reply"
         )
         || !(receipt["state"] == "applied" && receipt["native_effect"] == "single_request"
-            || receipt["state"] == "uncertain" && receipt["native_effect"].is_null())
+            || matches!(field(receipt, "state"), "uncertain" | "outcome_unknown")
+                && receipt["native_effect"].is_null())
     {
         return Err(io::Error::other("uncorrelated Codex decision receipt"));
     }
@@ -69,5 +70,19 @@ pub(crate) fn read(
         &instance,
         field(&record, "intent"),
     )?;
+    if matches!(field(receipt, "state"), "applied" | "uncertain") {
+        let closed = receipt["state"] == "applied";
+        let receipt = record["receipt"]
+            .as_object_mut()
+            .expect("validated receipt");
+        receipt.insert("state".into(), json!("outcome_unknown"));
+        receipt.shift_remove("native_effect");
+        if closed {
+            receipt.insert(
+                "reason".into(),
+                json!("native request closed; responder and chosen decision are unconfirmed"),
+            );
+        }
+    }
     Ok(Some(record))
 }

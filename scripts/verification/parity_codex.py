@@ -328,7 +328,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 decide(request,card,"always",expected=1)
                 assert not (root/"work/fixture-approval-marker").exists()
                 auth=decide(request,card,"once")
-                assert auth["state"]=="applied",auth
+                assert auth["state"]=="outcome_unknown" and "native_effect" not in auth,auth
                 fixtures.wait_for(lambda:(root/"work/fixture-approval-marker").is_file(),"native approved marker")
                 status=json.loads(invoke("decide",identity,"--status","--operation-id",auth["operation_id"]))
                 assert status==auth
@@ -339,7 +339,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 request,card=inspect(question)
                 decide(request,card,"answer","--answers",'[["Forged"]]',expected=1)
                 answer=decide(request,card,"answer","--answers",'[["Blue"]]')
-                assert answer["state"]=="applied",answer
+                assert answer["state"]=="outcome_unknown" and "native_effect" not in answer,answer
                 assert received_answer.wait(12), "real Codex did not feed the selected value to the model"
                 daemon.kill()
                 daemon.wait(timeout=5)
