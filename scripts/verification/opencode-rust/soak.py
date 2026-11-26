@@ -279,6 +279,13 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
                 'elapsed_seconds': time.monotonic() - begin,
                 'primary_model_requests': sum(r['marker'] == marker and r['primary'] for r in requests),
             }
+            record = {}
+            try:
+                record = json.loads(persisted.read_text())
+                if 'dispatch_observation' in record:
+                    failure['dispatch_observation'] = record['dispatch_observation']
+            except (OSError, ValueError):
+                pass
             try:
                 # A status lookup may reconcile the saved receipt. It never reissues input.
                 attempt = cli('message', session, '--status', '--operation-id', operation, check=False, timeout=5)
@@ -286,13 +293,32 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
                     receipt = json.loads(attempt.stdout)
                     failure['status'] = receipt['state']
                     failure['outcome_source'] = receipt.get('outcome_source')
+            except Exception as witness_error:
+                failure['witness_error'] = type(witness_error).__name__
+            try:
                 with sqlite3.connect((root / 'data/opencode/opencode.db').as_uri() + '?mode=ro',
                                      uri=True, timeout=3) as db:
                     failure['native_parts_with_marker'] = db.execute(
                         'SELECT count(*) FROM part WHERE data LIKE ?', (f'%{marker}%',)
                     ).fetchone()[0]
+                    if record.get('message_id') and record.get('target'):
+                        identity = (record['target'], record['message_id'])
+                        failure['exact_native_user_rows'] = db.execute(
+                            "SELECT count(*) FROM message WHERE session_id=? AND id=? "
+                            "AND json_extract(data,'$.role')='user'", identity
+                        ).fetchone()[0]
+                        failure['exact_native_text_parts'] = db.execute(
+                            "SELECT count(*) FROM part WHERE session_id=? AND message_id=? "
+                            "AND json_extract(data,'$.type')='text' AND json_extract(data,'$.text')=?",
+                            (*identity, text)
+                        ).fetchone()[0]
+                        failure['exact_native_assistant_children'] = db.execute(
+                            "SELECT count(*) FROM message WHERE session_id=? "
+                            "AND json_extract(data,'$.parentID')=? AND json_extract(data,'$.role')='assistant'",
+                            identity
+                        ).fetchone()[0]
             except Exception as witness_error:
-                failure['witness_error'] = type(witness_error).__name__
+                failure['native_witness_error'] = type(witness_error).__name__
         raise
     finally:
         try:

@@ -184,8 +184,21 @@ impl Backend {
             )?;
         }
         // No caller can re-enter the native POST after the durable uncertain intent is recorded.
-        if let Ok(reply) = self.http("/dispatch", Some(&body)) {
+        let reply = self.http("/dispatch", Some(&body));
+        let observation = (kind == "prompt").then(|| {
+            dispatch_observation(&reply, |reply| {
+                self.matches(reply, created) && receipts::bridge_matches(&record, reply)
+            })
+        });
+        if let Ok(reply) = reply {
             self.advance(created, operation, &mut record, Some(reply))?;
+        }
+        if let Some(observation) = observation
+            && record["receipt"]["state"] == "outcome_unknown"
+        {
+            record["dispatch_observation"] = observation;
+            // The intent is already durable. Failure to save diagnostics does not change the outcome.
+            let _ = receipts::save(&self.dir, operation, &record);
         }
         Ok(Some(record["receipt"].clone()))
     }
@@ -663,9 +676,51 @@ impl Backend {
     }
 }
 
+fn dispatch_observation(reply: &io::Result<Value>, matches: impl FnOnce(&Value) -> bool) -> Value {
+    match reply {
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => json!({"stage":"bridge_timeout"}),
+        Err(_) => json!({"stage":"bridge_error"}),
+        Ok(reply) if matches(reply) => {
+            let reason = match field(reply, "reason") {
+                reason @ ("native_deadline" | "native_error" | "native_ack_unobserved") => reason,
+                _ => "unspecified",
+            };
+            let status = reply["nativeStatus"]
+                .as_u64()
+                .filter(|n| (100..600).contains(n));
+            json!({"stage":"correlated_bridge_reply","reason":reason,"native_http":status})
+        }
+        Ok(_) => json!({"stage":"uncorrelated_bridge_reply"}),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispatch_observation_preserves_only_correlated_native_diagnostics() {
+        let mut reply = json!({"version":1,"requestHash":"a".repeat(64),"status":"uncertain",
+            "reason":"native_ack_unobserved","nativeStatus":204});
+        let record = json!({"request_hash":reply["requestHash"]});
+        let observe =
+            |reply| dispatch_observation(&reply, |reply| receipts::bridge_matches(&record, reply));
+        assert_eq!(
+            observe(Ok(reply.clone())),
+            json!({"stage":"correlated_bridge_reply","reason":"native_ack_unobserved","native_http":204})
+        );
+        reply["reason"] = json!("arbitrary SDK text");
+        assert_eq!(observe(Ok(reply.clone()))["reason"], "unspecified");
+        reply["requestHash"] = json!("b".repeat(64));
+        assert_eq!(
+            observe(Ok(reply)),
+            json!({"stage":"uncorrelated_bridge_reply"})
+        );
+        assert_eq!(
+            observe(Err(io::ErrorKind::TimedOut.into())),
+            json!({"stage":"bridge_timeout"})
+        );
+    }
 
     #[test]
     fn request_identity_scopes_descendants_and_hash_preserves_ordered_answers() {
