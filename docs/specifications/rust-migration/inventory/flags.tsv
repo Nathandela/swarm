@@ -240,19 +240,19 @@ swarm-pushgw	--quota-allocations-per-installation	cmd/swarm-pushgw/main.go#180	f
 swarm-pushgw healthcheck	-h	cmd/swarm-pushgw/main.go#118	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
 swarm-pushgw healthcheck	-help	cmd/swarm-pushgw/main.go#118	flag.implicit Go help	retire standalone publication/gateway binary	M10 retirement
 swarm-pushgw healthcheck	--url	cmd/swarm-pushgw/main.go#120	flag.String	retire standalone publication/gateway binary	M10 retirement
-teammate message	-h	cmd/swarm/teammate.go#54	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate message	-help	cmd/swarm/teammate.go#54	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate message	--kind	cmd/swarm/teammate.go#56	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate message	--text	cmd/swarm/teammate.go#57	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate message	--id	cmd/swarm/teammate.go#58	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate message	--file	cmd/swarm/teammate.go#60	flag.Func	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate receipt	-h	cmd/swarm/teammate.go#27	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
-teammate receipt	-help	cmd/swarm/teammate.go#27	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
-teammate receipt	--id	cmd/swarm/teammate.go#29	flag.String	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
-teammate reply	-h	cmd/swarm/teammate.go#116	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate reply	-help	cmd/swarm/teammate.go#116	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate reply	--id	cmd/swarm/teammate.go#118	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
-teammate reply	--wait	cmd/swarm/teammate.go#119	flag.Duration	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	-h	cmd/swarm/teammate.go#55	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	-help	cmd/swarm/teammate.go#55	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--kind	cmd/swarm/teammate.go#57	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--text	cmd/swarm/teammate.go#58	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--id	cmd/swarm/teammate.go#59	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate message	--file	cmd/swarm/teammate.go#61	flag.Func	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate receipt	-h	cmd/swarm/teammate.go#28	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
+teammate receipt	-help	cmd/swarm/teammate.go#28	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
+teammate receipt	--id	cmd/swarm/teammate.go#30	flag.String	retain; verify defaults, validation and refusal	discussion receipt observer (M6/M8)
+teammate reply	-h	cmd/swarm/teammate.go#121	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate reply	-help	cmd/swarm/teammate.go#121	flag.implicit Go help	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate reply	--id	cmd/swarm/teammate.go#123	flag.String	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
+teammate reply	--wait	cmd/swarm/teammate.go#124	flag.Duration	retain; verify defaults, validation and refusal	discussion worker return (M6/M8)
 upgrade	-h	cmd/swarm/upgrade.go#22	flag.implicit Go help	split; retain verified local upgrade contract	M10
 upgrade	-help	cmd/swarm/upgrade.go#22	flag.implicit Go help	split; retain verified local upgrade contract	M10
 upgrade	--stage	cmd/swarm/upgrade.go#24	flag.Bool	split; retain verified local upgrade contract	M10

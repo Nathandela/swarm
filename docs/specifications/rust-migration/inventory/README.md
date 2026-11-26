@@ -1,10 +1,11 @@
 # M0 inventories
 
 These ledgers supplement `reference-surfaces.tsv` (dispatcher arms and aliases) and
-`reference-board-keys.tsv` (board gestures). They are discovery indexes for the pinned
-Go reference, not claims that a Rust implementation or live run has passed parity.
+`reference-board-keys.tsv` (board gestures). They are discovery indexes for the active
+shipping Go reference, not claims that a Rust implementation or live run has passed parity.
 
-`generate.py` reads the immutable M0 pin `f26648d69086e329132ac7849954d2f29a895387`
+`generate.py` reads the active v0.29.24 shipping reference
+`a716dd50a5faf746ce6f0831fc31d0d73b06ffeb`
 and extracts standard Go `flag` registrations in command binaries, including custom
 `Var` values, typed registrations, and each `FlagSet`'s implicit `-h`/`-help`. It annotates each row with disposition and an evidence owner. Dynamic
 public parsing is indexed separately in `manual-operations.tsv`; provider-owned CLI

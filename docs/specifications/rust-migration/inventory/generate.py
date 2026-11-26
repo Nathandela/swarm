@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the CLI flag catalog from the immutable M0 Go pin."""
+"""Generate the CLI flag catalog from the active v0.29.24 Go reference."""
 import argparse
 from functools import cache
 import re
@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
-PIN = "f26648d69086e329132ac7849954d2f29a895387"
+PIN = "a716dd50a5faf746ce6f0831fc31d0d73b06ffeb"
 OUT = Path(__file__).with_name("flags.tsv")
 METHODS = ("Bool", "BoolFunc", "Duration", "Float64", "Func", "Int", "Int64", "Text", "Uint", "Uint64", "String", "Var")
 CALL = re.compile(r"\b(\w+)\.((?:" + "|".join(METHODS) + r")(?:Var)?)\s*\(")
