@@ -17,6 +17,21 @@ fn hash(value: &Value) -> io::Result<String> {
     Ok(format!("{:x}", Sha256::digest(prepare::go_bytes(value)?)))
 }
 
+fn counter<T: Default>(row: &Value, name: &str, read: fn(&Value) -> Option<T>) -> io::Result<T> {
+    match row.get(name) {
+        Some(value) => read(value).ok_or_else(invalid),
+        None => Ok(T::default()),
+    }
+}
+
+fn canonical_voice_row(row: &Value, raw: &[u8]) -> io::Result<bool> {
+    Ok(row.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .all(|name| name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+    }) && prepare::go_bytes(row)? == raw)
+}
+
 fn key(table: &str, conversation: &str, suffix: &str) -> io::Result<Vec<u8>> {
     Ok(format!(
         "{table}\0{}",
@@ -64,14 +79,13 @@ pub(in crate::discord) fn run(place: &Place, message: &str, dry_run: bool) -> io
     fields.insert("session".into(), session);
     let request_proof = &receipts.admission["request"]["manager_admission"];
     if request_proof["binding"] != expected_binding
-        || !(request_proof["expected_external_input"].is_null()
-            || request_proof["expected_external_input"] == 0)
+        || counter(request_proof, "expected_external_input", Value::as_u64)? != 0
     {
         return Err(invalid());
     }
     let current = &receipts.conversation;
     if current["external_observed"] != true
-        || !(current["external_input"].is_null() || current["external_input"] == 0)
+        || counter(current, "external_input", Value::as_u64)? != 0
         || [
             "custody_lost",
             "scheduler_paused",
@@ -161,8 +175,7 @@ fn source_and_receipts<'a>(
         let row: Value = serde_json::from_slice(raw)?;
         let origin = &row["origin"];
         if origin["message_id"] == message {
-            let canonical = prepare::go_bytes(&row)?;
-            if canonical != raw
+            if !canonical_voice_row(&row, raw)?
                 || origin["kind"] != "owner_direct"
                 || origin["installation_id"] != cfg.text("installation_id")
                 || origin["channel_id"] != cfg.text("dm_channel_id")
@@ -204,6 +217,26 @@ fn decide<'a>(
     let records = root.bucket(b"records").ok_or_else(invalid)?;
     let admission = &mut receipt.admission;
     let conversation = field(&receipt.binding, "conversation_id");
+    let conversation_key = format!("conversations\0{conversation}").into_bytes();
+    if !canonical_voice_row(
+        &receipt.conversation,
+        records.get(&conversation_key).ok_or_else(invalid)?,
+    )? || !canonical_voice_row(&receipt.header, root.get(b"state").ok_or_else(invalid)?)?
+    {
+        return Err(invalid());
+    }
+    let last_output = counter(&receipt.conversation, "last_output", Value::as_u64)?;
+    let last_admission = receipt.conversation["last_admission"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    let retired_through = receipt.conversation["retired_through"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    let after = counter(admission, "reply_check_after", Value::as_i64)?;
+    let prior_progress = counter(admission, "reply_progress", Value::as_u64)?;
+    let stall_since = counter(admission, "reply_stall_since", Value::as_i64)?;
+    let receipt_checks = counter(admission, "reply_receipt_checks", Value::as_i64)?;
+    let recovery = counter(admission, "reply_recovery", Value::as_u64)?;
     let request = field(&admission["origin"], "request_id").to_owned();
     let revision = field(&admission["origin"], "revision");
     let notice = format!("reply-unresolved-{}", hash(&json!([request, revision]))?);
@@ -220,19 +253,23 @@ fn decide<'a>(
         || turn.is_empty()
         || turn.len() > 512
         || records.get(&key("closed_turns", conversation, turn)?) != Some(b"true".as_slice())
-        || !(admission["reply_recovery"].is_null() || admission["reply_recovery"] == 0)
-        || (!admission["reply_check_after"].is_null() && !admission["reply_check_after"].is_i64())
-        || (!admission["reply_progress"].is_null() && !admission["reply_progress"].is_u64())
-        || (!admission["reply_stall_since"].is_null() && !admission["reply_stall_since"].is_i64())
+        || sequence == 0
+        || sequence > last_admission
+        || retired_through > last_admission
+        || prior_progress > last_output
+        || receipt_checks < 0
+        || recovery != 0
         || admission["reply_delivery_unknown"] == true
         || admission["reply_waiting_for_human"] == true
         || admission["native_binding_retired"] == true
         || admission["recovery_only"] == true
-        || receipt.header["reply_wait_consumed"] == true
+        || !matches!(
+            receipt.header.get("reply_wait_consumed"),
+            None | Some(Value::Bool(false))
+        )
     {
         return Err(unsupported());
     }
-    let after = admission["reply_check_after"].as_i64().unwrap_or_default();
     if after == 0 || records.get(&notice_key).is_some() {
         return Ok(Decision::Existing);
     }
@@ -269,19 +306,15 @@ fn decide<'a>(
             continue;
         }
         let row: Value = serde_json::from_slice(raw)?;
-        if row["conversation_id"] != conversation
-            || row.as_object().is_none_or(|row| {
-                row.keys()
-                    .any(|key| key.bytes().any(|b| b.is_ascii_uppercase()))
-            })
-            || prepare::go_bytes(&row)? != raw
-        {
+        if row["conversation_id"] != conversation || !canonical_voice_row(&row, raw)? {
             return Err(invalid());
         }
         if k.starts_with(b"admissions\0") {
             let seq = row["sequence"].as_u64().ok_or_else(invalid)?;
-            let timer = row["reply_check_after"].as_i64().unwrap_or_default();
-            if k != key("admissions", conversation, &seq.to_string())?
+            let timer = counter(&row, "reply_check_after", Value::as_i64)?;
+            if seq == 0
+                || seq > last_admission
+                || k != key("admissions", conversation, &seq.to_string())?
                 || field(&row, "settled_at").parse::<Timestamp>().is_err()
                 || row["settled_at"] == EMPTY_TIME
                 || !row["origin"].is_null() && timer != 0 && (timer, seq) < (after, sequence)
@@ -290,8 +323,9 @@ fn decide<'a>(
             }
         }
         if k.starts_with(b"workers\0") {
-            if row["admission"] != sequence {
-                if row["admission"] == 0 && row["vm_child"] == true && row["ended"] != true {
+            let linked = row["admission"].as_u64().ok_or_else(invalid)?;
+            if linked != sequence {
+                if linked == 0 && row["vm_child"] == true && row["ended"] != true {
                     return Err(unsupported());
                 }
                 continue;
@@ -331,7 +365,10 @@ fn decide<'a>(
                 return Err(unsupported());
             }
         } else if k.starts_with(b"publications\0") {
-            if k != key("publications", conversation, field(&row, "id"))? {
+            if k != key("publications", conversation, field(&row, "id"))?
+                || !row["admission"].is_u64()
+                || counter(&row, "output_sequence", Value::as_u64)? > last_output
+            {
                 return Err(invalid());
             }
             publications.push(row);
@@ -407,14 +444,11 @@ fn decide<'a>(
         .as_object_mut()
         .ok_or_else(invalid)?
         .shift_remove("reply_receipt_checks");
-    if !admission["reply_stall_since"].is_i64()
-        || admission["reply_stall_since"] == 0
-        || progress > admission["reply_progress"].as_u64().unwrap_or_default()
-    {
+    if stall_since == 0 || progress > prior_progress {
         admission["reply_stall_since"] = json!(now.as_second());
     }
     let mut changes = Vec::new();
-    let description = if progress > admission["reply_progress"].as_u64().unwrap_or_default() {
+    let description = if progress > prior_progress {
         admission["reply_progress"] = json!(progress);
         admission["reply_check_after"] = json!(
             now.as_second()
@@ -429,21 +463,14 @@ fn decide<'a>(
             .shift_remove("reply_check_after");
         "The original reply check closes quietly."
     } else {
-        let next = receipt.conversation["last_output"]
-            .as_u64()
-            .unwrap_or_default()
-            .checked_add(1)
-            .ok_or_else(invalid)?;
+        let next = last_output.checked_add(1).ok_or_else(invalid)?;
         receipt.conversation["last_output"] = json!(next);
         admission["reply_check_after"] = json!(
             now.as_second()
                 .checked_add(RECHECK_SECONDS)
                 .ok_or_else(invalid)?
         );
-        changes.push((
-            format!("conversations\0{conversation}").into_bytes(),
-            receipt.conversation,
-        ));
+        changes.push((conversation_key, receipt.conversation));
         changes.push((notice_key, json!({
             "reply_monitor":true,"discussion_source":{"admission_id":request},
             "output_sequence":next,"admission":sequence,"speech_epoch":0,"id":notice,
@@ -488,43 +515,76 @@ fn observed<'a>(connector: &impl TxApi<'a>, route: &Value, publication: &Value) 
         "QuestionHash":"","Sequence":publication["output_sequence"]
     });
     let body_hash = hash(&json!(body))?;
-    if let Some(out) = value(connector, "teammate_outbox", key.as_bytes())? {
+    let audience = json!({"guild_id":"","channel_id":route["Route"]["channel_id"],"message_id":""});
+    if route["Route"] != audience || !snowflake(field(&audience, "channel_id")) {
+        return Err(unsupported());
+    }
+    let outbox = connector.bucket(b"teammate_outbox").ok_or_else(invalid)?;
+    if let Some(raw) = outbox.get(key.as_bytes()) {
+        if raw.len() > 1 << 20 {
+            return Err(invalid());
+        }
+        let out: Value = serde_json::from_slice(raw)?;
         let nonce = hash(&json!([install, id, output, 0]))?;
+        let nonce = &nonce[..24];
         let chunks = out["Chunks"]
             .as_array()
             .filter(|chunks| chunks.len() == 1)
             .ok_or_else(unsupported)?;
-        if out["Route"] == route["Route"]
-            && out["DiscussionID"] == id
-            && out["Internal"] == false
-            && out["ExportAck"] == true
-            && out["Publication"] == proof
-            && out["BodyHash"] == body_hash
-            && out["ChunkHashes"] == json!([body_hash])
-            && chunks[0]["id"] == nonce[..24]
-            && connector
+        let message = field(&chunks[0], "message_id");
+        let gateway = chunks[0]["gateway_seen"] == true;
+        let rest = chunks[0]["rest_acknowledged"] == true;
+        let settled = field(&out, "SettledAt");
+        let created = field(&out, "Created");
+        let attempted = field(&out, "Attempted");
+        if !snowflake(message)
+            || !(gateway || rest)
+            || [settled, created].contains(&EMPTY_TIME)
+            || [settled, created, attempted]
+                .iter()
+                .any(|time| time.parse::<Timestamp>().is_err())
+            || connector
                 .bucket(b"teammate_meta")
                 .ok_or_else(invalid)?
-                .get(format!("{install}\0nonce:{}", &nonce[..24]).as_bytes())
-                == Some(key.as_bytes())
-            && chunks[0]["state"] == "sent"
-            && snowflake(field(&chunks[0], "message_id"))
-            && (chunks[0]["gateway_seen"] == true || chunks[0]["rest_acknowledged"] == true)
+                .get(format!("{install}\0nonce:{nonce}").as_bytes())
+                != Some(key.as_bytes())
         {
-            return Ok(());
+            return Err(unsupported());
         }
-        return Err(unsupported());
+        let mut chunk = json!({"id":nonce,"body":"","state":"sent","message_id":message});
+        if gateway {
+            chunk["gateway_seen"] = json!(true);
+        }
+        if rest {
+            chunk["rest_acknowledged"] = json!(true);
+        }
+        let expected = json!({
+            "ExportAck":true,"Internal":false,"SettledAt":settled,"Created":created,
+            "Publication":proof,"Route":audience,"DiscussionID":id,"BodyHash":body_hash,
+            "Chunks":[chunk],"ChunkHashes":[body_hash],"Attempted":attempted,"Error":""
+        });
+        // Go accepts case aliases and duplicate keys. Match the exact plain receipt the Go writer emits.
+        return if prepare::go_bytes(&expected)? == raw {
+            Ok(())
+        } else {
+            Err(unsupported())
+        };
     }
-    let receipt = value(connector, "teammate_receipts", key.as_bytes())?.ok_or_else(unsupported)?;
-    if receipt["Route"] == route["Route"]
-        && receipt["PublicationHash"] == hash(&proof)?
-        && receipt["BodyHash"] == body_hash
-        && receipt["DiscordMessageIDs"]
-            .as_array()
-            .is_some_and(|ids| ids.len() == 1 && ids[0].as_str().is_some_and(snowflake))
-        && receipt["UnverifiedMessageIDs"].is_null()
-        && receipt["DiscordAttachmentIDs"].is_null()
-    {
+    let receipts = connector.bucket(b"teammate_receipts").ok_or_else(invalid)?;
+    let raw = receipts
+        .get(key.as_bytes())
+        .filter(|raw| raw.len() <= 1 << 20)
+        .ok_or_else(unsupported)?;
+    let receipt: Value = serde_json::from_slice(raw)?;
+    let ids = receipt["DiscordMessageIDs"]
+        .as_array()
+        .filter(|ids| ids.len() == 1 && ids[0].as_str().is_some_and(snowflake))
+        .ok_or_else(unsupported)?;
+    let expected = json!({
+        "PublicationHash":hash(&proof)?,"BodyHash":body_hash,
+        "Route":audience,"DiscordMessageIDs":ids,
+    });
+    if prepare::go_bytes(&expected)? == raw {
         return Ok(());
     }
     Err(unsupported())
@@ -534,6 +594,22 @@ fn observed<'a>(connector: &impl TxApi<'a>, route: &Value, publication: &Value) 
 mod tests {
     use super::*;
     use std::process::Command;
+
+    const PROGRESS_KEY: &[u8] = b"fixture-personal\x00original-room\x00fixture-progress";
+
+    fn change_progress(path: &Path, bucket: &[u8], change: impl FnOnce(&mut Value)) {
+        let (_pin, mut db) = bounded_writer(writable_pin(path).unwrap()).unwrap();
+        let mut tx = db.begin_rw().unwrap();
+        {
+            let mut table = tx.bucket_mut(bucket).unwrap();
+            let mut row: Value = serde_json::from_slice(table.get(PROGRESS_KEY).unwrap()).unwrap();
+            change(&mut row);
+            table
+                .put(PROGRESS_KEY, prepare::go_bytes(&row).unwrap())
+                .unwrap();
+        }
+        tx.commit().unwrap();
+    }
 
     #[test]
     #[ignore = "requires the exact v0.29.25 Go Discord fixture"]
@@ -647,6 +723,41 @@ mod tests {
                     "direct"
                 };
                 call(&["vm-reply-progress", connector_path, mode]);
+                let connector_file = connector.join("discord.db");
+                let original_connector = fs::read(&connector_file).unwrap();
+                let (table, conflicts) = if scenario == "worker" {
+                    (
+                        b"teammate_receipts".as_slice(),
+                        [
+                            ("", "unverifiedmessageids", json!(["909"])),
+                            ("", "discordmessageids", json!([])),
+                        ],
+                    )
+                } else {
+                    (
+                        b"teammate_outbox".as_slice(),
+                        [
+                            ("", "internal", json!(true)),
+                            ("/Chunks/0", "Gateway_Seen", json!(false)),
+                        ],
+                    )
+                };
+                for (section, alias, bad) in conflicts {
+                    change_progress(&connector_file, table, |row| {
+                        row.pointer_mut(section).unwrap()[alias] = bad;
+                    });
+                    let damaged_connector = fs::read(&connector_file).unwrap();
+                    assert_eq!(
+                        rust_step("701", base + 30, &roster)
+                            .unwrap_err()
+                            .to_string(),
+                        unsupported().to_string(),
+                        "{scenario}",
+                    );
+                    assert_eq!(fs::read(&db_path).unwrap(), bytes);
+                    assert_eq!(fs::read(&connector_file).unwrap(), damaged_connector);
+                    fs::write(&connector_file, &original_connector).unwrap();
+                }
             }
             if scenario == "worker" {
                 let mut running = roster.clone();
@@ -654,6 +765,45 @@ mod tests {
                 assert!(rust_step("701", base + 30, &running).is_err());
                 assert!(rust_step("701", base + 30, &[]).is_err());
                 assert_eq!(fs::read(&db_path).unwrap(), bytes);
+            }
+            if scenario == "window" {
+                for (table, suffix, counter_name, bad) in [
+                    ("conversations", "", "last_output", json!("wrong type")),
+                    ("conversations", "", "last_admission", Value::Null),
+                    ("admissions", "1", "reply_receipt_checks", json!([])),
+                    ("admissions", "2", "reply_check_after", json!("wrong type")),
+                ] {
+                    let (pin, mut voice) = bounded_writer(writable_pin(&db_path).unwrap()).unwrap();
+                    let tx = voice.begin_rw().unwrap();
+                    let (_, receipt) =
+                        source_and_receipts(&tx, &cfg, "fixture-room", "701", "ep-fixture")
+                            .unwrap();
+                    let conversation = field(&receipt.binding, "conversation_id");
+                    let index = if suffix.is_empty() {
+                        format!("{table}\0{conversation}").into_bytes()
+                    } else {
+                        key(table, conversation, suffix).unwrap()
+                    };
+                    let mut row: Value = {
+                        let root = tx.bucket(b"controller").unwrap();
+                        let records = root.bucket(b"records").unwrap();
+                        serde_json::from_slice(records.get(&index).unwrap()).unwrap()
+                    };
+                    row[counter_name] = bad;
+                    manager_publication::apply_voice(tx, receipt.header, &[(index, row)]).unwrap();
+                    drop(voice);
+                    drop(pin);
+                    let damaged = fs::read(&db_path).unwrap();
+                    assert_eq!(
+                        rust_step("701", base + 30, &roster)
+                            .unwrap_err()
+                            .to_string(),
+                        invalid().to_string(),
+                        "{counter_name}",
+                    );
+                    assert_eq!(fs::read(&db_path).unwrap(), damaged);
+                    fs::write(&db_path, &bytes).unwrap();
+                }
             }
             let step = |message, at| {
                 let expected = run(go_path, "check", at);
