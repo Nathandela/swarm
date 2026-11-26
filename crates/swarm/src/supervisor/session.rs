@@ -710,6 +710,15 @@ impl Session {
         launch: &Value,
         source: &str,
     ) -> io::Result<Prepared> {
+        self.prepare_codex_resume_with_relogin(launch, source, None)
+    }
+
+    pub(super) fn prepare_codex_resume_with_relogin(
+        &self,
+        launch: &Value,
+        source: &str,
+        relogin: Option<&Value>,
+    ) -> io::Result<Prepared> {
         use providers::codex_continuity;
         if self.agent != "codex"
             || !self.owner_interactive
@@ -771,13 +780,18 @@ impl Session {
             "native_home",
             "native_home_id",
             "config",
-            "account",
             "project",
             "system_policy",
             "cwd_config",
         ]
         .into_iter()
         .any(|key| current[key] != old[key])
+            || old["account"] != current["account"]
+                && !relogin.is_some_and(|proof| {
+                    proof["from"] == old["account"]
+                        && proof["to"] == current["account"]
+                        && proof["thread"] == thread
+                })
         {
             return Err(io::Error::other("Codex native origin or authority changed"));
         }
@@ -789,6 +803,11 @@ impl Session {
         env.push(("PATH".into(), path.into()));
         let rollout =
             codex_continuity::rollout(Path::new(field(old, "native_home")), &cwd, &thread)?;
+        if relogin.is_some_and(|proof| proof["rollout"] != rollout) {
+            return Err(io::Error::other(
+                "original Codex rollout changed during relogin",
+            ));
+        }
         let mut request = launch.clone();
         request["cwd"] = json!(cwd);
         request["env"] = json!(
@@ -812,8 +831,10 @@ impl Session {
             ));
         }
         prepared.provider.argv = codex_resume_args(&thread, &cwd, field(&old["options"], "model"));
+        let mut continuation = old.clone();
+        continuation["account"] = current["account"].clone();
         prepared.codex_resume =
-            json!({"thread":thread,"resumed_from":source,"profile":old,"rollout":rollout});
+            json!({"thread":thread,"resumed_from":source,"profile":continuation,"rollout":rollout});
         prepared.tag = self.labels.lock().unwrap().tag.clone();
         Ok(prepared)
     }
@@ -1021,7 +1042,7 @@ impl Session {
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         let maintenance_env = maintenance::environment(&provider);
-        let auth_stamp = maintenance::auth_identity(provider.agent, &maintenance_env);
+        let auth_stamp = crate::refresh::auth_identity(provider.agent, &maintenance_env);
         runtime::write_json(
             &dir.join("session.json"),
             &json!({

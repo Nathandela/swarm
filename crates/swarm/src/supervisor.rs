@@ -337,7 +337,11 @@ impl State {
                 .rsplit('/')
                 .next()
                 .unwrap_or_default();
-            let journal = crate::refresh::records(root)?;
+            let journal = match crate::refresh::records(root) {
+                Ok(journal) => journal,
+                Err(_) if expected_nonce.is_none() => Value::Null,
+                Err(error) => return Err(error),
+            };
             let row = &journal["records"][id];
             if matches!(field(row, "state"), "claimed" | "waiting")
                 && row["nonce"].as_str() != expected_nonce
@@ -387,7 +391,26 @@ impl State {
                 if managed.is_some() {
                     return Err(io::Error::other("unsupported Codex resume role"));
                 }
-                let prepared = session.prepare_codex_resume(launch, &qualified)?;
+                let prepared = if let Some(nonce) = expected_nonce {
+                    let root = self
+                        .root
+                        .parent()
+                        .ok_or_else(|| io::Error::other("missing maintenance root"))?;
+                    let document = crate::refresh::records(root)?;
+                    let claim = &document["records"][&session.id];
+                    if claim["nonce"] != nonce || claim["source_instance"] != session.incarnation()
+                    {
+                        return Err(io::Error::other(
+                            "native recovery claim no longer matches the source",
+                        ));
+                    }
+                    let proof = claim["account_proof"]
+                        .as_object()
+                        .map(|_| &claim["account_proof"]);
+                    session.prepare_codex_resume_with_relogin(launch, &qualified, proof)?
+                } else {
+                    session.prepare_codex_resume(launch, &qualified)?
+                };
                 return self.reserve_prepared(prepared, false, None, None);
             }
             if field(launch, "agent") == "opencode" {

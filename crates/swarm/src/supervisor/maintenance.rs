@@ -1,7 +1,5 @@
-use super::{
-    State, runtime,
-    session::{Session, maintenance::auth_identity},
-};
+use super::{State, runtime, session::Session};
+use crate::refresh::auth_identity;
 use crate::{
     ipc::field,
     providers::{self, codex_receipt},
@@ -27,11 +25,15 @@ pub(super) fn manual(state: &State, request: &Value) -> io::Result<Value> {
             "native recovery requires this supervisor and its exact state directory",
         ));
     }
-    let messages = tick(
+    let (messages, failed) = tick(
         state,
         Some((request["dry_run"] == true, request["force"] == true)),
     )?;
-    Ok(json!({"op":"native_relogin", "messages":messages}))
+    let mut reply = json!({"op":"native_relogin", "messages":messages});
+    if failed {
+        reply["error"] = json!("native recovery could not verify every requested effect");
+    }
+    Ok(reply)
 }
 
 pub(super) fn run(state: Arc<State>) {
@@ -59,7 +61,7 @@ fn save(root: &Path, doc: &Value) -> io::Result<()> {
     runtime::write_json(&root.join(refresh::RECORDS), doc)
 }
 
-fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> {
+fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<(Vec<String>, bool)> {
     let mut cursor = state
         .maintenance_gate
         .try_lock()
@@ -67,10 +69,12 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
     let root = root(state)?;
     let mut messages = Vec::new();
     let mut acted = false;
+    let mut failed = false;
     if refresh::legacy_requires_recovery(root)? {
-        return Ok(vec![
-            "hold      an unresolved Go recovery journal needs offline review".into(),
-        ]);
+        return Ok((
+            vec!["hold      an unresolved Go recovery journal needs offline review".into()],
+            false,
+        ));
     }
     let auth_off = refresh::disabled(root, refresh::AUTH).unwrap_or(true);
     let cli_off = refresh::disabled(root, refresh::POLICY).unwrap_or(true);
@@ -80,9 +84,18 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
         let next = roster.partition_point(|session| session.id <= *cursor);
         roster.rotate_left(next);
     }
+    let local = runtime::launch_env(&Value::Null);
+    let local = json!(
+        local
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+    );
+    let local_identity = auth_identity("codex", &local);
     let mut attempts = 0;
+    let budget = Instant::now() + Duration::from_secs(if manual.is_some() { 85 } else { 20 });
     for source in &roster {
-        if attempts >= 8 {
+        if attempts >= 8 || Instant::now() >= budget {
             break;
         }
         let id = &source.id;
@@ -100,18 +113,29 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
             let policy = existing["policy"].as_str();
             let enabled =
                 policy.is_none_or(|name| matches!(refresh::disabled(root, name), Ok(false)));
-            if enabled
-                || source
-                    .maintenance_stopped(field(&existing, "nonce"))
-                    .unwrap_or(false)
-            {
+            let already_stopped = source
+                .maintenance_stopped(field(&existing, "nonce"))
+                .unwrap_or(false);
+            let adopt_manual = manual.is_some()
+                && existing["kind"] == "auth"
+                && policy == Some(refresh::AUTH)
+                && auth_off
+                && !already_stopped;
+            if adopt_manual {
+                doc["records"][id]["policy"] = Value::Null;
+                save(root, &doc)?;
+            }
+            if enabled || already_stopped || adopt_manual {
                 match advance(state, source, &mut doc) {
                     Ok(Some(replacement)) => {
                         acted = true;
                         messages.push(format!("started   {} -> {replacement}", field(&view, "id")));
                     }
                     Ok(None) => {}
-                    Err(err) => messages.push(format!("hold      {label}: {err}")),
+                    Err(err) => {
+                        failed = true;
+                        messages.push(format!("hold      {label}: {err}"));
+                    }
                 }
             }
             continue;
@@ -125,6 +149,9 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
         let agent = field(&meta["provider"], "name");
         let observed = source.maintenance_observation().unwrap_or(Value::Null);
         let thread = field(&observed, "conversation_id");
+        if agent == "agy" && observed["native_joined"] != true {
+            continue;
+        }
         let account = auth_identity(agent, &meta["maintenance_env"]);
         let save_stamp = meta["auth_stamp"].as_str();
         let changed_auth = account
@@ -132,14 +159,7 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
             .is_some_and(|id| save_stamp.is_some_and(|old| id != old));
         let candidate = match manual {
             Some((_, force)) if agent == "codex" => {
-                let local = crate::supervisor::runtime::launch_env(&Value::Null);
-                let local = json!(
-                    local
-                        .iter()
-                        .map(|(key, value)| format!("{key}={value}"))
-                        .collect::<Vec<_>>()
-                );
-                if account.is_some() && auth_identity(agent, &local) != account {
+                if account.is_some() && local_identity != account {
                     messages.push(format!("hold      {label}: different or unreadable session credentials; automatic recovery cannot judge this store"));
                     continue;
                 }
@@ -153,7 +173,11 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
                     ));
                     continue;
                 }
-                if !force && !changed_auth {
+                if !force && save_stamp.is_none() && !auth_off {
+                    messages.push(format!("unstamped {label}: predates identity stamping; rerun with --force to recycle it"));
+                    continue;
+                }
+                if !force && !changed_auth && save_stamp.is_some() {
                     continue;
                 }
                 "auth"
@@ -168,7 +192,7 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
         {
             continue;
         }
-        if !codex_receipt::canonical_thread(thread) {
+        if agent != "opencode" && !codex_receipt::canonical_thread(thread) {
             if manual.is_some() {
                 messages.push(format!(
                     "manual    {label}: no captured conversation id; restart it yourself"
@@ -176,9 +200,20 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
             }
             continue;
         }
-        if candidate == "auth" && changed_auth {
-            if manual.is_some() {
-                messages.push(format!("hold      {label}: the source's native account changed; prove that the new login can open its original thread before recovery"));
+        let rebind = candidate == "auth" && changed_auth;
+        if rebind && local_identity != account {
+            continue;
+        }
+        if manual.is_some_and(|(dry, _)| dry) {
+            if observed["status"]["Turn"] == "idle"
+                && observed["status"]["Interaction"] == "none"
+                && observed["status"]["Attention"] != true
+            {
+                messages.push(format!("would     {label}"));
+            } else {
+                messages.push(format!(
+                    "deferred  {label}: mid-turn or awaiting input; rerun when it is quiet"
+                ));
             }
             continue;
         }
@@ -224,16 +259,15 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
             }
             continue;
         }
-        if let Err(error) = source.maintenance_preflight(&meta, &target, thread) {
-            if manual.is_some() {
-                messages.push(format!("hold      {label}: {error}"));
+        let account_proof = match source.maintenance_preflight(&meta, &target, thread, rebind) {
+            Ok(proof) => proof,
+            Err(error) => {
+                if manual.is_some() {
+                    messages.push(format!("hold      {label}: {error}"));
+                }
+                continue;
             }
-            continue;
-        }
-        if manual.is_some_and(|(dry, _)| dry) {
-            messages.push(format!("would     {label}"));
-            continue;
-        }
+        };
         if candidate == "cli" {
             let confirmed = existing["state"] == "pending"
                 && existing["identity"] == target.identity
@@ -246,6 +280,40 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
                 continue;
             }
         }
+        if rebind {
+            let result = (|| {
+                let mut peer = source.dial()?;
+                peer.set_read_timeout(Some(Duration::from_secs(21)))?;
+                runtime::write_control(
+                    &mut peer,
+                    &json!({
+                        "type":"maintenance_probe","conversation_id":thread,"account":account,
+                        "version":target.version,"executable":target.executable,"identity":target.identity,
+                    }),
+                )?;
+                let reply = runtime::read_control(&mut peer)?;
+                if reply["type"] != "ok" {
+                    return Err(io::Error::other(field(&reply, "error").to_owned()));
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                if manual.is_some() {
+                    messages.push(format!("hold      {label}: {error}"));
+                }
+                continue;
+            }
+            if auth_identity(agent, &meta["maintenance_env"]) != account
+                || source.maintenance_preflight(&meta, &target, thread, true)? != account_proof
+            {
+                if manual.is_some() {
+                    messages.push(format!(
+                        "hold      {label}: native account changed during verification"
+                    ));
+                }
+                continue;
+            }
+        }
         let policy = manual.is_none().then_some(if candidate == "auth" {
             refresh::AUTH
         } else {
@@ -254,7 +322,7 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
         doc["records"][id] = json!({"kind":candidate,"agent":agent,"state":"claimed","version":target.version,
             "identity":target.identity,"executable":target.executable,"conversation_id":thread,
             "policy":policy,"nonce":runtime::random_id()?,"source_instance":source.incarnation(),
-            "account":account,"source_env":meta["maintenance_env"]});
+            "account":account,"source_env":meta["maintenance_env"],"account_proof":account_proof});
         save(root, &doc)?;
         match advance(state, source, &mut doc) {
             Ok(Some(replacement)) => {
@@ -265,13 +333,16 @@ fn tick(state: &State, manual: Option<(bool, bool)>) -> io::Result<Vec<String>> 
                 "deferred  {label}: worker is busy or the native stop is still being verified"
             )),
             Ok(None) => {}
-            Err(err) => messages.push(format!("hold      {label}: {err}")),
+            Err(err) => {
+                failed = true;
+                messages.push(format!("hold      {label}: {err}"));
+            }
         }
     }
     if manual.is_some() && !acted {
         messages.push("nothing recycled".into());
     }
-    Ok(messages)
+    Ok((messages, failed))
 }
 
 fn advance(state: &State, source: &Arc<Session>, doc: &mut Value) -> io::Result<Option<String>> {
@@ -316,12 +387,13 @@ fn advance(state: &State, source: &Arc<Session>, doc: &mut Value) -> io::Result<
                 "existing successor did not use the pinned target installation",
             );
         }
-        if candidate
-            .maintenance_observation()
-            .ok()
-            .is_some_and(|observation| observation["conversation_id"] == record["conversation_id"])
-            && candidate.dial().is_ok()
-        {
+        if candidate.maintenance_exited() {
+            return refuse(
+                doc,
+                "reserved successor exited without joined native evidence",
+            );
+        }
+        if candidate.maintenance_joined(field(&record, "conversation_id")) {
             doc["records"][id]["replacement_id"] = json!(candidate.id);
             doc["records"][id]["state"] = json!("complete");
             save(root, doc)?;
@@ -361,7 +433,18 @@ fn advance(state: &State, source: &Arc<Session>, doc: &mut Value) -> io::Result<
         if !source.is_live() {
             return Ok(None);
         }
-        source.maintenance_preflight(&meta, &target, field(&record, "conversation_id"))?;
+        let proof = source.maintenance_preflight(
+            &meta,
+            &target,
+            field(&record, "conversation_id"),
+            !record["account_proof"].is_null(),
+        )?;
+        if proof != record["account_proof"] {
+            return refuse(
+                doc,
+                "native account or scoped rollout proof changed before stop",
+            );
+        }
         let result = source.status_exchange(&json!({"type":"maintenance_stop","nonce":nonce,
             "conversation_id":record["conversation_id"],"automatic_policy":record["policy"]}))?;
         match field(&result, "type") {
@@ -394,11 +477,7 @@ fn advance(state: &State, source: &Arc<Session>, doc: &mut Value) -> io::Result<
         );
     }
     state.start(&replacement)?;
-    if replacement
-        .maintenance_observation()
-        .ok()
-        .is_some_and(|observation| observation["conversation_id"] == record["conversation_id"])
-    {
+    if replacement.maintenance_joined(field(&record, "conversation_id")) {
         doc["records"][id]["state"] = json!("complete");
         save(root, doc)?;
     }

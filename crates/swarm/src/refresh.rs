@@ -1,11 +1,41 @@
 use crate::{flags, ipc, supervisor::runtime};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{fs, io, path::Path, time::Duration};
 
 pub(crate) const POLICY: &str = "cli-refresh.json";
 pub(crate) const AUTH: &str = "auth-watch.json";
 pub(crate) const RECORDS: &str = "rust-refresh.json";
 pub(crate) const CAP: &str = "native-relogin-v1";
+
+pub(crate) fn auth_identity(agent: &str, environment: &Value) -> Option<String> {
+    if agent != "codex" {
+        return None;
+    }
+    let entries = environment.as_array()?;
+    let get = |name: &str| {
+        entries
+            .iter()
+            .rev()
+            .filter_map(Value::as_str)
+            .filter_map(|entry| entry.split_once('='))
+            .find_map(|(key, value)| (key == name).then_some(value))
+    };
+    let home = Path::new(get("HOME")?);
+    if !home.is_absolute()
+        || get("CODEX_HOME").is_some_and(|path| Path::new(path) != home.join(".codex"))
+    {
+        return None;
+    }
+    let auth = runtime::read_json(&home.join(".codex/auth.json")).ok()?;
+    let mode = ipc::field(&auth, "auth_mode");
+    let account = if mode == "apikey" {
+        ipc::field(&auth, "OPENAI_API_KEY")
+    } else {
+        ipc::field(&auth["tokens"], "account_id")
+    };
+    (!account.is_empty()).then(|| format!("{:x}", Sha256::digest(format!("{mode}\0{account}"))))
+}
 
 pub(crate) fn disabled(root: &Path, name: &str) -> io::Result<bool> {
     match runtime::read_json(&root.join(name)) {
@@ -38,7 +68,42 @@ fn set_disabled(root: &Path, name: &str, is_disabled: bool) -> io::Result<()> {
 
 pub(crate) fn records(root: &Path) -> io::Result<Value> {
     match runtime::read_json(&root.join(RECORDS)) {
-        Ok(value) if value["version"] == 1 && value["records"].is_object() => Ok(value),
+        Ok(value)
+            if value["version"] == 1
+                && value["records"].as_object().is_some_and(|records| {
+                    records.iter().all(|(source, entry)| {
+                        runtime::valid_id(source)
+                            && matches!(ipc::field(entry, "kind"), "cli" | "auth")
+                            && matches!(
+                                ipc::field(entry, "agent"),
+                                "agy" | "claude" | "codex" | "opencode"
+                            )
+                            && matches!(
+                                ipc::field(entry, "state"),
+                                "pending" | "claimed" | "waiting" | "blocked" | "complete"
+                            )
+                            && !ipc::field(entry, "version").is_empty()
+                            && match ipc::field(entry, "state") {
+                                "claimed" | "waiting" => {
+                                    runtime::valid_id(ipc::field(entry, "nonce"))
+                                        && entry["identity"].is_object()
+                                        && Path::new(ipc::field(entry, "executable")).is_absolute()
+                                        && entry["source_env"].is_array()
+                                        && matches!(
+                                            entry["policy"].as_str(),
+                                            None | Some(POLICY | AUTH)
+                                        )
+                                }
+                                "complete" => {
+                                    runtime::valid_id(ipc::field(entry, "replacement_id"))
+                                }
+                                _ => true,
+                            }
+                    })
+                }) =>
+        {
+            Ok(value)
+        }
         Ok(_) => Err(io::Error::other("unrecognized Rust refresh journal")),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(json!({"version":1,"records":{}})),
         Err(err) => Err(err),
@@ -65,7 +130,10 @@ fn legacy(root: &Path) -> io::Result<Value> {
                     .as_object()
                     .unwrap()
                     .values()
-                    .all(|field| field.is_null() || field.is_object()) =>
+                    .all(|field| field.is_null() || field.is_object())
+                && value["identities"]
+                    .as_object()
+                    .is_none_or(|items| items.values().all(Value::is_string)) =>
         {
             Ok(value)
         }
@@ -200,6 +268,50 @@ fn report(root: &Path, as_json: bool) -> io::Result<()> {
                 }
                 rows.push(row);
             }
+        }
+    }
+    if let Ok(old) = crate::refresh::legacy(root)
+        && let Some(prior) = old["cli_refresh"].as_object()
+    {
+        for (source, record) in prior {
+            if rows.iter().any(|row| row["source_id"] == *source)
+                || !source
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                || !(16..=24).contains(&source.len())
+                || !matches!(
+                    ipc::field(record, "agent_type"),
+                    "agy" | "claude" | "codex" | "opencode"
+                )
+            {
+                continue;
+            }
+            let version = ipc::field(&record["target"], "version");
+            let version = if version.len() <= 32
+                && version
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
+            {
+                version
+            } else {
+                ""
+            };
+            let mut row = json!({"source_id":source,"agent_type":record["agent_type"],"target_version":version});
+            if record["state"] == "complete" {
+                row["state"] = json!("complete");
+                let id = ipc::field(record, "replacement_id");
+                if (16..=24).contains(&id.len())
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                {
+                    row["replacement_id"] = json!(id);
+                }
+            } else {
+                row["state"] = json!("blocked");
+                row["last_error"] = json!("preserved Go evidence requires offline custody review");
+            }
+            rows.push(row);
         }
     }
     rows.sort_by(|a, b| ipc::field(a, "source_id").cmp(ipc::field(b, "source_id")));

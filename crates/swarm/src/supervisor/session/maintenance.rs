@@ -1,7 +1,6 @@
 use super::Session;
 use crate::{ipc::field, providers, supervisor::runtime};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{io, path::Path};
 
 pub(super) fn environment(plan: &providers::LaunchPlan) -> Value {
@@ -18,41 +17,22 @@ pub(super) fn environment(plan: &providers::LaunchPlan) -> Value {
             .filter(|(key, _)| {
                 matches!(
                     key.as_str(),
-                    "HOME" | "PATH" | "CODEX_HOME" | "TERM" | "SHELL" | "LANG" | "LANGUAGE"
+                    "HOME"
+                        | "PATH"
+                        | "CODEX_HOME"
+                        | "TERM"
+                        | "SHELL"
+                        | "LANG"
+                        | "LANGUAGE"
+                        | "XDG_CONFIG_HOME"
+                        | "XDG_DATA_HOME"
+                        | "XDG_CACHE_HOME"
+                        | "XDG_STATE_HOME"
                 ) || key.starts_with("LC_")
             })
             .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<_>>()
     )
-}
-
-pub(in crate::supervisor) fn auth_identity(agent: &str, environment: &Value) -> Option<String> {
-    if agent != "codex" {
-        return None;
-    }
-    let entries = environment.as_array()?;
-    let get = |name: &str| {
-        entries
-            .iter()
-            .rev()
-            .filter_map(Value::as_str)
-            .filter_map(|entry| entry.split_once('='))
-            .find_map(|(key, value)| (key == name).then_some(value))
-    };
-    let home = Path::new(get("HOME")?);
-    if !home.is_absolute()
-        || get("CODEX_HOME").is_some_and(|path| Path::new(path) != home.join(".codex"))
-    {
-        return None;
-    }
-    let auth = runtime::read_json(&home.join(".codex/auth.json")).ok()?;
-    let mode = field(&auth, "auth_mode");
-    let account = if mode == "apikey" {
-        field(&auth, "OPENAI_API_KEY")
-    } else {
-        field(&auth["tokens"], "account_id")
-    };
-    (!account.is_empty()).then(|| format!("{:x}", Sha256::digest(format!("{mode}\0{account}"))))
 }
 
 impl Session {
@@ -63,6 +43,7 @@ impl Session {
             || !matches!(self.agent.as_str(), "agy" | "claude" | "codex" | "opencode")
             || self.schedule.is_some()
             || !self.manager.is_null()
+            || self.worker_native_installation.is_some()
             || !meta["checkout"].is_null()
             || !meta["lineage"]
                 .as_object()
@@ -99,7 +80,16 @@ impl Session {
         meta: &Value,
         target: &providers::LaunchPlan,
         thread: &str,
-    ) -> io::Result<()> {
+        changed_auth: bool,
+    ) -> io::Result<Value> {
+        if !providers::codex_continuity::newer_or_same(
+            &target.version,
+            field(&meta["provider"], "version"),
+        ) {
+            return Err(io::Error::other(
+                "native recovery will not downgrade the source CLI",
+            ));
+        }
         let cwd = self.verify_effective()?;
         match self.agent.as_str() {
             "codex" => {
@@ -126,21 +116,26 @@ impl Session {
                         "native_home",
                         "native_home_id",
                         "config",
-                        "account",
                         "project",
                         "system_policy",
                         "cwd_config",
                     ]
                     .iter()
                     .any(|key| old[*key] != current[*key])
+                    || (old["account"] != current["account"]) != changed_auth
                 {
                     return Err(io::Error::other("Codex native origin or authority changed"));
                 }
-                providers::codex_continuity::rollout(
+                let rollout = providers::codex_continuity::rollout(
                     Path::new(field(old, "native_home")),
                     cwd,
                     thread,
                 )?;
+                if changed_auth {
+                    return Ok(
+                        json!({"from":old["account"],"to":current["account"],"thread":thread,"rollout":rollout}),
+                    );
+                }
             }
             "claude" => {
                 let (_, _, original, _) = self.hands_off_claude_source()?;
@@ -151,7 +146,7 @@ impl Session {
             "agy" => {}
             _ => return Err(io::Error::other("no qualified recovery path")),
         }
-        Ok(())
+        Ok(Value::Null)
     }
 
     pub(in crate::supervisor) fn maintenance_observation(&self) -> io::Result<Value> {
@@ -160,6 +155,26 @@ impl Session {
             return Err(io::Error::other("native observation identity changed"));
         }
         Ok(row)
+    }
+
+    pub(in crate::supervisor) fn maintenance_joined(&self, thread: &str) -> bool {
+        self.dial().is_ok()
+            && self.maintenance_observation().is_ok_and(|row| {
+                row["status"]["Process"] == "running"
+                    && row["conversation_id"] == thread
+                    && match self.agent.as_str() {
+                        "agy" => row["native_joined"] == true,
+                        "codex" => {
+                            row["backend_available"] == true && row["requests_available"] == true
+                        }
+                        "claude" => true,
+                        _ => false,
+                    }
+            })
+    }
+
+    pub(in crate::supervisor) fn maintenance_exited(&self) -> bool {
+        self.verified_exit().is_some()
     }
 
     pub(in crate::supervisor) fn maintenance_lineage(&self, source: &str) -> bool {
