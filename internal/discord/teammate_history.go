@@ -489,6 +489,14 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 		if personal {
 			return fmt.Errorf("%w: %w", errPersonalHistoryRepair, errPersonalHistoryPermission)
 		}
+		// Without history nothing can be accounted for, so ask the thread to restate.
+		if b.Opened {
+			d := b.TeammateDiscussion
+			d.Gap = epoch
+			if err := t.queueGap(d); err != nil {
+				return err
+			}
+		}
 		return errors.New("discord: cannot repair thread context without history permission")
 	}
 	if personal {
@@ -503,7 +511,7 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 		upper, low := b.RepairUpper, ""
 		missed := false
 		for _, m := range rows {
-			if !missed && snowflakeLess(b.RepairLower, m.ID) && t.admissibleHuman(m) {
+			if !missed && b.Opened && snowflakeLess(b.RepairLower, m.ID) && t.admissibleHuman(m) {
 				known, e := t.service.Store.teammateKnownMessage(b.InstallationID, m.ID)
 				if e != nil {
 					return e

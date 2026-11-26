@@ -96,3 +96,35 @@ func TestVMUnverifiedNoticeIsPostedOncePerDiscussionWindow(t *testing.T) {
 		t.Fatalf("notice addresses the operator, not the thread: %q", got[0].Text)
 	}
 }
+
+// "On it" followed by a worker that ended without a result still tells the thread.
+func TestVMReplyWithAWorkerThatEndedWithoutAResultStillGetsTheNotice(t *testing.T) {
+	_, s, b, as := settleVMTurns(t, "handoff")
+	a := as[0]
+	if err := s.update(func(st *State) error {
+		n, err := nextDiscussionOutput(st, b.ConversationID)
+		if err != nil {
+			return err
+		}
+		p := Publication{ID: "ack", ConversationID: b.ConversationID, Admission: a.Sequence, OutputSequence: n, Text: "On it", DiscussionSource: DiscussionOutputSource{AdmissionID: a.Origin.RequestID}}
+		putRecord(st, "publications", &st.Publications, key(b.ConversationID, p.ID), p)
+		w := WorkerAssociation{ConversationID: b.ConversationID, Admission: a.Sequence, JobID: "job", AttemptID: "attempt", Ended: true}
+		putRecord(st, "workers", &st.Workers, key(b.ConversationID, "worker"), w)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(a.ReplyCheckAfter, 0)
+	d := DiscussionController{store: s, cfg: Config{ConversationID: b.ConversationID}, now: func() time.Time { return now }, scope: DiscussionScope{VMProjectAccess: true}}
+	for range 2 {
+		st, _ := s.Snapshot()
+		if err := d.checkDiscussionReply(context.Background(), st); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(discussionReplyWait)
+	}
+	st, _ := s.Snapshot()
+	if got := unverifiedNotices(st); len(got) != 1 {
+		t.Fatalf("missing worker result went silent: %d notices", len(got))
+	}
+}

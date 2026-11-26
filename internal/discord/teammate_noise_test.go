@@ -90,10 +90,46 @@ func TestTeammateGapNoticeOnlyWhenRepairFindsAMissedMessage(t *testing.T) {
 			if err != nil || len(pending) != 1 {
 				t.Fatalf("pending %+v %v", pending, err)
 			}
-			_ = bridge.process(ctx, pending[0])
+			if err = bridge.process(ctx, pending[0]); err != nil {
+				t.Fatal(err)
+			}
 			if got := gapNotices(t, bridge, "d1"); got != want {
 				t.Fatalf("gap notices after a received message: %d, want %d", got, want)
 			}
 		})
+	}
+}
+
+// Without history permission repair cannot account for anything, so the thread is asked to restate.
+func TestTeammateGapNoticeWhenThreadHistoryIsUnreadable(t *testing.T) {
+	bridge, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels/20":
+			_, _ = fmt.Fprint(w, teammateParent)
+		case "/channels/201":
+			_, _ = fmt.Fprint(w, teammatePublic)
+		case "/channels/20/permissions/member/99":
+			_, _ = fmt.Fprintf(w, `{"permissions":"%d"}`, discordgo.PermissionViewChannel|discordgo.PermissionSendMessagesInThreads)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	d := TeammateDiscussion{ID: "d1", InstallationID: "install", Route: Route{GuildID: "10", ChannelID: "201", ParentID: "20"}}
+	if err := bridge.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true, Boundary: "220"}); err != nil {
+		t.Fatal(err)
+	}
+	ready := map[string]any{"session_id": "old", "application": map[string]string{"id": "99"}, "user": map[string]string{"id": "99"}}
+	teammateTestEvent(t, bridge, 1, "READY", ready)
+	ready["session_id"] = "new"
+	teammateTestEvent(t, bridge, 2, "READY", ready)
+	bindings, err := bridge.service.Store.teammateBindings("install")
+	if err != nil || len(bindings) != 1 {
+		t.Fatal(bindings, err)
+	}
+	if err = bridge.repair(context.Background(), bindings[0], 1); err == nil {
+		t.Fatal("repair without history permission succeeded")
+	}
+	if got := gapNotices(t, bridge, "d1"); got != 1 {
+		t.Fatalf("gap notices: %d, want 1", got)
 	}
 }
