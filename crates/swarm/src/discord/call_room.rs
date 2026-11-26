@@ -27,6 +27,7 @@ pub(super) struct Room {
     suspended: bool,
     team: Option<(Scope, Consent)>,
     roster_version: u64,
+    retry: Option<(Instant, Instant)>,
 }
 
 #[derive(PartialEq)]
@@ -42,6 +43,7 @@ struct Epoch {
     joined_after: Option<u64>,
     ready: bool,
     speakers: Vec<String>,
+    retried: bool,
 }
 
 pub(super) enum Change {
@@ -73,6 +75,7 @@ impl Room {
             suspended: false,
             team: None,
             roster_version: 0,
+            retry: None,
         })
     }
 
@@ -98,6 +101,7 @@ impl Room {
             && consent.revoked(event)
         {
             consent.close(now);
+            self.retry = None;
             return (true, self.end());
         }
         let (handled, command) = scope.control(event, now);
@@ -109,6 +113,9 @@ impl Room {
                 .map(|presence| presence.session.as_str());
             consent.apply(command, session, now)
         });
+        if ended {
+            self.retry = None;
+        }
         (handled, if ended { self.end() } else { Change::Ignore })
     }
 
@@ -167,7 +174,7 @@ impl Room {
                 now + Duration::from_millis(until.saturating_sub(wall)).min(MAX_CALL),
             )
         } else {
-            if self.attempted
+            if self.attempted && self.retry.is_none()
                 || self.occupants.len() != 1
                 || !self
                     .occupants
@@ -179,11 +186,21 @@ impl Room {
             self.attempted = true;
             (vec![self.owner.clone()], now + MAX_CALL)
         };
+        let (deadline, last_speech, retried) = match self.retry.take() {
+            Some((prior_deadline, last_speech)) => {
+                if now >= prior_deadline || now >= last_speech + IDLE {
+                    return None;
+                }
+                (deadline.min(prior_deadline), last_speech, true)
+            }
+            None => (deadline, now, false),
+        };
         self.generation = self.generation.checked_add(1)?;
         self.active = Some(Epoch {
             generation: self.generation,
             deadline,
-            last_speech: now,
+            last_speech,
+            retried,
             joined_after: None,
             ready: false,
             speakers: speakers.clone(),
@@ -241,11 +258,40 @@ impl Room {
     }
 
     pub(super) fn expire(&mut self, now: Instant) -> bool {
+        if self
+            .retry
+            .is_some_and(|(deadline, last)| now >= deadline || now >= last + IDLE)
+        {
+            self.invalidate_retry();
+        }
         if self.active.is_some() && self.current(self.generation, now).is_none() {
             self.end();
             return true;
         }
         false
+    }
+
+    pub(super) fn rekey(&mut self, now: Instant) -> bool {
+        let Some(epoch) = self.current(self.generation, now) else {
+            return false;
+        };
+        if !epoch.ready || epoch.joined_after.is_none() || epoch.retried {
+            return false;
+        }
+        let retry = (epoch.deadline, epoch.last_speech);
+        self.active.take();
+        self.awaiting_leave = true;
+        self.retry = Some(retry);
+        self.roster_version += 1;
+        true
+    }
+
+    fn invalidate_retry(&mut self) {
+        if self.retry.take().is_some()
+            && let Some((_, consent)) = &mut self.team
+        {
+            consent.close(crate::ipc::spawn::now_ms());
+        }
     }
 
     fn end(&mut self) -> Change {
@@ -270,6 +316,7 @@ impl Room {
 
     pub(super) fn suspend(&mut self) {
         self.suspended = true;
+        self.invalidate_retry();
         self.end();
     }
 
@@ -311,10 +358,12 @@ impl Room {
         }
         if guild != &self.guild {
             self.anchor = false;
+            self.invalidate_retry();
             return self.end();
         }
         let Some(sequence) = event["s"].as_u64().filter(|&sequence| sequence > 0) else {
             self.anchor = false;
+            self.invalidate_retry();
             return self.end();
         };
         if sequence <= self.sequence {
@@ -323,6 +372,7 @@ impl Room {
         self.sequence = sequence;
         match kind {
             "GUILD_CREATE" => {
+                self.invalidate_retry();
                 self.roster_version += 1;
                 if let Some((_, consent)) = &mut self.team {
                     consent.close(crate::ipc::spawn::now_ms());
@@ -349,6 +399,7 @@ impl Room {
                 .map_or(Change::Ignore, |_| Change::Voice(event.clone())),
             "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" => Change::Ignore,
             _ => {
+                self.invalidate_retry();
                 self.roster_version += 1;
                 if let Some((_, consent)) = &mut self.team {
                     // Continuous voice states still describe occupancy. New media
@@ -422,6 +473,7 @@ impl Room {
             || (channel.is_none() && !data.get("channel_id").is_some_and(Value::is_null))
         {
             self.anchor = false;
+            self.invalidate_retry();
             return self.end();
         }
         let user = user.unwrap();
@@ -458,6 +510,7 @@ impl Room {
         if channel != Some(&self.room) {
             let removed = self.occupants.remove(user).is_some();
             if removed {
+                self.invalidate_retry();
                 self.roster_version += 1;
                 if let Some((_, consent)) = &mut self.team {
                     consent.remove(user);
@@ -470,11 +523,13 @@ impl Room {
         }
         let Some(next) = presence(data, None) else {
             self.anchor = false;
+            self.invalidate_retry();
             return self.end();
         };
         if self.occupants.get(user) == Some(&next) {
             return Change::Ignore;
         }
+        self.invalidate_retry();
         self.roster_version += 1;
         if let Some((_, consent)) = &mut self.team {
             consent.remove(user);
@@ -532,6 +587,31 @@ mod tests {
     fn server(sequence: u64) -> Value {
         json!({"t":"VOICE_SERVER_UPDATE","s":sequence,
             "d":{"guild_id":"1","endpoint":"voice.invalid","token":"never-persist"}})
+    }
+
+    #[test]
+    fn one_dave_rekey_waits_for_bot_leave_and_keeps_the_previous_idle_cutoff() {
+        let now = Instant::now();
+        let mut room = Room::new("1", "2", "4", "3").unwrap();
+        room.event(&snapshot(1, 2));
+        let generation = room.begin(now).unwrap();
+        room.join(generation, now).unwrap();
+        room.event(&voice(2, "3", json!("2"), false));
+        assert!(room.ready(generation, now));
+        let later = now + Duration::from_secs(119);
+        assert!(room.rekey(later));
+        assert!(!room.forward(generation, "4", false, later));
+        assert!(room.leave().is_some());
+        assert!(room.begin(later).is_none());
+        room.event(&voice(3, "3", Value::Null, false));
+        let restarted = room.begin(later).unwrap();
+        assert!(restarted > generation);
+        room.join(restarted, later).unwrap();
+        room.event(&voice(4, "3", json!("2"), false));
+        assert!(room.ready(restarted, later));
+        assert!(!room.rekey(later));
+        assert!(room.expire(now + IDLE));
+        assert!(!room.forward(restarted, "4", false, now + IDLE));
     }
 
     #[test]

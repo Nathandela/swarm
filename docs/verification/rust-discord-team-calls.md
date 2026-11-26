@@ -21,4 +21,8 @@ Worker wake links use the original accepted call turn and native parent-input di
 
 The GPT-Live sidecar starts one session per accepted room generation. It sends completed isolated utterances, with team audio forwarded only after explicit address recognition. A bounded sample cursor matches a client delegation to the original turn. Only verified admission and canonical publication commentary can come back through that delegation. The loopback Live fixture confirms startup, reversed and duplicate delegation handling, exact commentary routing, and expired-session closure. Live-generated output cannot drive work or room playback.
 
+A recognized terminal DAVE rekey retires the old helper and generation. One bounded attempt waits for the old bot leave before joining again. It inherits the previous inactivity and hard cutoffs and requires fresh team permission verification. A membership change, withdrawal, or repeated rekey leaves the previous grant closed. The Rust fixtures include a terminal helper fault delivered immediately before process exit.
+
+On macOS arm64 and Ubuntu x86_64, the pinned offline DAVE signer and native addon formed a three-member group, exchanged encrypted Opus, rekeyed, and refused decryption by the removed member. The Rust loopback team transport, voice provenance, and GPT-Live delegation tests ran on both platforms. The separate pinned Go reference run passed its call roster, Gateway and rejoin cases.
+
 Public provisioning of a new linked thread, live Discord qualification, and authorization recovery after Gateway gaps remain open. The configured thread is independent of the call configuration so removing media settings can preserve the written discussion.

@@ -535,7 +535,11 @@ impl Calls {
                         self.transcribe(turn, socket)?;
                     }
                 }
-                Err(_) => {
+                Err(err) => {
+                    if err.kind() == io::ErrorKind::ConnectionAborted && self.room.rekey(now) {
+                        self.approved = None;
+                        self.last_check = None;
+                    }
                     self.end(socket)?;
                     break;
                 }
