@@ -90,6 +90,12 @@ def main():
                 assert time.monotonic() < until, 'owned process survived reaper'
                 time.sleep(0.1)
 
+    # Keep enough real blocks to publish the terminal status even when other VM jobs fill tmpfs.
+    reserve = root / 'failure-report.reserve'
+    with reserve.open('xb') as stream:
+        stream.write(bytes(128 * 1024))
+        stream.flush()
+        os.fsync(stream.fileno())
     try:
         for name, duration, interval in stages:
             assert not stop, 'queue stopped by signal'
@@ -101,9 +107,11 @@ def main():
             with (root / (name + '.log')).open('xb') as log:
                 child = subprocess.Popen([*command, *metadata(duration, interval)], stdin=subprocess.DEVNULL,
                                          stdout=log, stderr=log, start_new_session=True)
-                status(stage_pid=child.pid, stage_birth=birth(child.pid))
                 try:
+                    status(stage_pid=child.pid, stage_birth=birth(child.pid))
                     while child.poll() is None:
+                        if shutil.disk_usage(root).free < 32 * 1024 * 1024:
+                            raise RuntimeError('soak volume has less than 32 MiB free')
                         assert not stop, 'queue stopped by signal'
                         heartbeat = stage / 'heartbeat.json'
                         freshness = time.time() - heartbeat.stat().st_mtime if heartbeat.exists() else time.monotonic() - start
@@ -112,6 +120,8 @@ def main():
                         time.sleep(2)
                 finally:
                     reap(stage, child)
+            if not (stage / 'result.json').is_file():
+                raise RuntimeError(f'{name} exited {child.returncode} without result.json; see {name}.log')
             result = json.loads((stage / 'result.json').read_text())
             assert child.returncode == 0 and result['state'] == result['cleanup'] == 'passed', result
             assert result['live_elapsed_seconds'] >= duration and result['source_sha'] == args.source
@@ -120,8 +130,11 @@ def main():
             status()
         status(state='passed')
     except BaseException as exc:
-        status(state='stopped' if stop else 'failed', error=repr(exc))
+        reserve.unlink(missing_ok=True)
+        status(state='stopped' if stop else 'failed', error=repr(exc)[:4096])
         raise
+    finally:
+        reserve.unlink(missing_ok=True)
 
 
 def owned_processes(stage):

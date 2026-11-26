@@ -23,7 +23,7 @@ from rust_claude_worker_input import Provider, save
 TASK = "Reply with a short synthetic test answer."
 
 
-def verify(swarm, installed, root, server, worktree=False):
+def verify(swarm, installed, root, server, *, worktree=False, through_board=False, external=False, go_owner=None, capacity=False):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     for directory in (home, work, state, tools, home / ".claude"):
         directory.mkdir(mode=0o700)
@@ -33,10 +33,15 @@ def verify(swarm, installed, root, server, worktree=False):
     staged = tools / "swarm"
     shutil.copyfile(swarm, staged)
     staged.chmod(0o700)
+    owner=staged
+    if go_owner:
+        owner=tools/"go-owner"
+        shutil.copyfile(go_owner,owner)
+        owner.chmod(0o700)
     owner_path = str(root / "d")
     env = dict(PATH=f"{tools}:/usr/bin:/bin", HOME=str(home), TMPDIR=str(root), TERM="xterm-256color",
                LANG="en_US.UTF-8", ANTHROPIC_API_KEY="synthetic-resume",
-               SWARM_DAEMON_STATE=str(state), SWARM_DAEMON_SOCK=owner_path)
+               SWARM_DAEMON_STATE=str(state), SWARM_DAEMON_SOCK=owner_path, SWARM_DAEMON_LOCK=str(root/"owner.lock"), SWARM_DAEMON_LOG=str(root/"owner.log"))
     guard = lambda argv: guarded(argv, root, [server.server_port])
     version = subprocess.check_output(guard([binary, "--version"]), env=env, text=True).split()[0]
     save(home / ".claude.json", dict(hasCompletedOnboarding=True, lastOnboardingVersion=version,
@@ -47,10 +52,12 @@ def verify(swarm, installed, root, server, worktree=False):
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1",
         CLAUDE_CODE_TMPDIR=str(root), CLAUDE_CODE_MAX_RETRIES="0")))
     check_guards(root,[server.server_port])
-    def cli(*args):
-        run = subprocess.run(guard([staged,*args]), env=env, cwd=work,
-                             capture_output=True, timeout=15)
-        assert run.returncode==0,(args,run.stderr.decode(errors="replace"))
+    def cli(*args,expected=0,overrides=None,error_contains=None):
+        run = subprocess.run(guard([staged,*args]), env={**env,**(overrides or {})}, cwd=work,
+                             capture_output=True, timeout=50 if args[0]=="reattach" else 15)
+        assert run.returncode==expected,(args,run.stderr.decode(errors="replace"))
+        if error_contains is not None:
+            assert error_contains in run.stderr,(args,run.stderr)
         return run.stdout
 
     def wire(req, caps=()):
@@ -78,8 +85,182 @@ def verify(swarm, installed, root, server, worktree=False):
     daemon=None
     try:
         with (root / "daemon.log").open("wb") as log:
-            daemon=subprocess.Popen(guard([staged,"daemon"]),env=env,cwd=work,stderr=log,stdout=log)
-            eventually(lambda:Path(owner_path).exists(),"daemon")
+            daemon=subprocess.Popen(guard([owner,"daemon"]),env=env,cwd=work,stderr=log,stdout=log)
+            def listening():
+                if daemon.poll() is not None:
+                    raise RuntimeError((root/"daemon.log").read_text()[-2400:])
+                return Path(owner_path).exists()
+            eventually(listening,"daemon")
+            if external:
+                def native_cli(*args):
+                    result=subprocess.run(guard([binary,*args]),env=env,cwd=work,capture_output=True,timeout=35,umask=0o077)
+                    assert result.returncode==0,(args,result.stdout,result.stderr)
+                    return result.stdout
+                native_cli("--bg","--name","External fixture",TASK)
+                if capacity:
+                    native_cli("--bg","--name","Second external fixture",TASK)
+                    def live_native():
+                        rows=json.loads(native_cli("agents","--json","--all"))
+                        return [row["sessionId"] for row in rows if row.get("kind")=="background"
+                                and row.get("state") not in ("done","stopped","complete","completed","failed","cancelled","canceled")]
+                    natives=eventually(lambda: live_native() if len(live_native())==2 else None,
+                                       "two real live Claude Agent View sources",timeout=30)
+                    for native in natives:
+                        eventually(lambda: any(b"Synthetic native input processed" in p.read_bytes()
+                            for p in (home/".claude/projects").rglob(f"{native}.jsonl")),
+                            "native source has a real reply",timeout=20)
+                    agy=tools/"agy"
+                    agy.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo 1.1.0; exit 0; fi\nexec /bin/sleep 1000\n')
+                    agy.chmod(0o700)
+                    occupied=[]
+                    for i in range(63):
+                        result=wire(dict(agent="agy",name=f"Capacity {i}",cwd=str(work)))
+                        assert result["op"]=="launch",result
+                        occupied.append(result["session"]["id"])
+                    roster=json.loads(cli("ls","--json"))
+                    assert len([row for row in roster if row["status"]["Process"]=="running"])==63
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        error_contains=b"batch exceeds available session capacity")
+                    assert set(live_native())==set(natives)
+                    cli("kill",occupied.pop())
+                    eventually(lambda: sum(row["status"]["Process"]=="running" for row in json.loads(cli("ls","--json")))==62,
+                               "exactly two available owner slots")
+                    race=root/"race"
+                    race.mkdir(mode=0o700)
+                    wrapper=race/"claude"
+                    stopping=race/"stopping"
+                    release=race/"release"
+                    wrapper.write_text(f"""#!/bin/sh
+if [ "$1" = daemon ] && [ "$2" = stop ]; then
+  touch '{stopping}'
+  while [ ! -f '{release}' ]; do /bin/sleep 0.05; done
+fi
+exec '{binary}' "$@"
+""")
+                    wrapper.chmod(0o700)
+                    request=subprocess.Popen(guard([staged,"reattach","--cli","claude","--all","--take-over"]),
+                        env={**env,"PATH":f"{race}:{env['PATH']}"},cwd=work,
+                        stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                    outcome=[]
+                    contender=threading.Thread(target=lambda:outcome.append(
+                        wire(dict(agent="agy",name="Competing launch",cwd=str(work)))),daemon=True)
+                    try:
+                        eventually(stopping.exists,"owner holds admission during native stop")
+                        contender.start()
+                        time.sleep(0.3)
+                        assert not outcome
+                    finally:
+                        release.touch()
+                    acquired,err=request.communicate(timeout=45)
+                    assert request.returncode==0,err
+                    contender.join(timeout=12)
+                    assert len(outcome)==1 and outcome[0]["op"]=="error" and "session limit" in outcome[0]["error"],outcome
+                    assert acquired.count(b"reattached")==2 and not live_native(),acquired
+                    roster=json.loads(cli("ls","--json"))
+                    assert sum(row["status"]["Process"]=="running" for row in roster)==64
+                    for row in roster:
+                        if row["status"]["Process"]=="running":
+                            cli("kill",row["id"])
+                    print("63/64 preserved both native sources; at 62/64 takeover reserved both slots ahead of a competing launch")
+                    return
+
+                def original():
+                    rows=json.loads(native_cli("agents","--json","--all"))
+                    return next((row for row in rows if row.get("kind")=="background" and row.get("sessionId")),None)
+                row=eventually(original,"native Claude Agent View registered original",timeout=25)
+                native=row["sessionId"]
+                proof=lambda:next((path for path in (home/".claude/projects").rglob(f"{native}.jsonl")
+                                   if b"Synthetic native input processed" in path.read_bytes()),None)
+                transcript=eventually(proof,"native Claude wrote the external conversation",timeout=25)
+                assert native.encode() in cli("reattach","--cli","claude","--all","--dry-run")
+                if original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled"):
+                    cli("reattach","--cli","claude","--all",expected=1)
+                    assert json.loads(cli("ls","--json"))==[]
+                live = original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                if live and not go_owner:
+                    refused = wire(dict(agent="claude",name="unconfirmed",cwd=str(work),
+                        options={"resume_conversation_id":native}),("external-resume",))
+                    assert refused["op"]=="error" and "exact stopped source" in refused["error"]
+                if live:
+                    legacy_path=str(root/"old-owner")
+                    legacy=socket.socket(socket.AF_UNIX)
+                    legacy.bind(legacy_path)
+                    legacy.listen()
+                    def old_owner():
+                        with legacy:
+                            peer,_=legacy.accept()
+                            with peer:
+                                hello=read_control(peer)
+                                assert hello["op"]=="hello"
+                                control(peer,"hello",endpoint_id="legacy-owner",protocol_version=1,
+                                        capabilities=["external-resume"])
+                    fallback=threading.Thread(target=old_owner,daemon=True)
+                    fallback.start()
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        overrides={"SWARM_DAEMON_SOCK":legacy_path})
+                    fallback.join(timeout=4)
+                    assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+
+                    fake=root/"duplicate-bin"
+                    fake.mkdir(mode=0o700)
+                    marker=root/"native-stop-must-not-run"
+                    fixture=fake/"claude"
+                    data=json.dumps([original(),original()])
+                    fixture.write_text("#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.329 (Claude Code)' ;;\nagents) printf '%s' '"+data+"' ;;\n*) touch '"+str(marker)+"'; exit 3 ;;\nesac\n")
+                    fixture.chmod(0o700)
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        overrides={"PATH":f"{fake}:/usr/bin:/bin"})
+                    assert not marker.exists()
+                    assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                    if not go_owner:
+                        entry=original()
+                        inventory=json.dumps([entry])
+                        changed=json.dumps([entry,{**entry,"sessionId":"01997f00-face-7000-8000-00000000cde0"}])
+                        count=fake/"calls"
+                        fixture.write_text(f"""#!/bin/sh
+case "$1" in
+--version) echo '2.1.329 (Claude Code)' ;;
+agents)
+  echo x >> '{count}'
+  if [ "$(wc -l < '{count}')" -ge 3 ]; then printf '%s' '{changed}'; else printf '%s' '{inventory}'; fi ;;
+*) touch '{marker}'; exit 3 ;;
+esac
+""")
+                        cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                            overrides={"PATH":f"{fake}:/usr/bin:/bin"})
+                        assert len(count.read_text().splitlines())==3 and not marker.exists()
+                        assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                    print("old owner, duplicate UUID, and changed inventory protections preserved the live source")
+                before=transcript.read_bytes()
+                def turn_count(data):
+                    rows = [json.loads(line) for line in data.splitlines()]
+                    return sum(row.get("type")=="user" and TASK in json.dumps(row.get("message"))
+                               for row in rows)
+                initial_turns=turn_count(before)
+                assert initial_turns>=1
+                if go_owner and live:
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        error_contains=b"cannot reserve the whole Claude takeover batch")
+                    assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                    native_cli("daemon","stop","--any")
+                imported=cli("reattach","--cli","claude","--all","--take-over")
+                row,=json.loads(cli("ls","--json"))
+                identity=row["id"]
+                assert identity.encode() in imported
+                directory=state/"rust-v1"/identity.split("/")[1]
+                if not go_owner:
+                    assert json.loads((directory/"observation.json").read_text())["conversation_id"]==native
+                eventually(lambda:b"Synthetic native input processed" in cli("peek",identity),
+                           "new owner viewer rendered the prior background answer")
+                current=transcript.read_bytes()
+                assert current.startswith(before) and turn_count(current)==initial_turns
+                assert original()["state"] in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                if not go_owner:
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1)
+                cli("kill",identity)
+                cli("watch",identity,"--until","completed","--timeout","5s")
+                print("Claude Agent View external acquisition preserved prior answer and did not replay the user turn; source was live before takeover:",live)
+                return
             if worktree:
                 created=wire(dict(agent="claude",name="resume fixture",cwd=str(work),worktree=True,
                                   initial_prompt=TASK,cols=100,rows=30))
@@ -134,7 +315,31 @@ def verify(swarm, installed, root, server, worktree=False):
                 finally:
                     config.unlink()
                     if not existed: directory.rmdir()
-            resumed=wire(launch)
+            if through_board:
+                shutil.copy2(fixtures.__file__, tools / "driver")
+                board = fixtures.Board(guard([staged]), root, env)
+                try:
+                    board.wait_bytes(b"resume fixture")
+                    board.send(b"r")
+
+                    def successor():
+                        board.drain()
+                        return next((r for r in json.loads(cli("ls", "--json")) if r.get("resumed_from") == original), None)
+
+                    row = eventually(successor, "successor from ordinary board resume")
+                    resumed = {"op": "launch", "session": row}
+                    board.wait_bytes(b"Claude Code")
+                    mark = len(board.capture)
+                    board.send(b"\x11")
+                    board.wait_bytes(b"resume fixture", mark)
+                    board.send(b"\x1b[27u")
+                    fixtures.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "board exit")
+                    assert board.child.returncode == 0
+                    print("The board resumed the selected Claude session and returned from its PTY")
+                finally:
+                    board.close()
+            else:
+                resumed=wire(launch)
             assert resumed["op"]=="launch",resumed
             assert resumed["session"]["resumed_from"]==original
             assert resumed["session"]["cwd"]==str(effective)
@@ -220,7 +425,15 @@ if __name__=="__main__":
     parser.add_argument("--candidate",required=True,type=fixtures.binary_path)
     parser.add_argument("--provider",required=True,type=fixtures.binary_path)
     parser.add_argument("--worktree",action="store_true")
+    parser.add_argument("--board", action="store_true", help="resume using the ordinary dashboard action")
+    parser.add_argument("--external",action="store_true")
+    parser.add_argument("--go-owner",type=fixtures.binary_path)
+    parser.add_argument("--capacity",action="store_true")
     args=parser.parse_args()
+    if (args.capacity or args.go_owner) and not args.external or args.capacity and args.go_owner:
+        parser.error("--capacity and --go-owner are separate external qualification paths")
+    if args.external and (args.worktree or args.board):
+        parser.error("--external uses its own native background session")
     root=Path(tempfile.mkdtemp(prefix="cr-",dir=Path("/tmp").resolve()))
     server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Provider)
     server.daemon_threads=True
@@ -230,7 +443,8 @@ if __name__=="__main__":
     thread.start()
     success=False
     try:
-        verify(args.candidate,args.provider,root,server,args.worktree)
+        verify(args.candidate, args.provider, root, server, worktree=args.worktree,
+               through_board=args.board, external=args.external, go_owner=args.go_owner, capacity=args.capacity)
         assert not server.sentinel.exists()
         success=True
     finally:

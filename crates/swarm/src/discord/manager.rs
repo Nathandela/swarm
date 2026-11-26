@@ -18,17 +18,21 @@ pub(super) struct Manager {
     cfg: Config,
     discussion: String,
     conversation: String,
+    route: Option<super::team_thread::Route>,
 }
 
 impl Manager {
     pub(super) fn new(cfg: &Config) -> io::Result<Self> {
-        if cfg.text("mode") != "personal" {
-            return Err(invalid("manager binding requires a personal installation"));
+        let route = super::team_thread::Route::configured(cfg)?;
+        if cfg.text("mode") != "personal" && route.is_none() {
+            return Err(invalid("manager binding requires a linked discussion"));
         }
         let coordinate = serde_json::to_vec(&json!([
             cfg.text("installation_id"),
-            "",
-            cfg.text("dm_channel_id")
+            route.as_ref().map_or("", |route| &route.guild),
+            route
+                .as_ref()
+                .map_or(cfg.text("dm_channel_id"), |route| &route.thread)
         ]))?;
         let digest = format!("{:x}", Sha256::digest(coordinate));
         let discussion = format!("dt_{}", &digest[..32]);
@@ -37,10 +41,20 @@ impl Manager {
             cfg: cfg.clone(),
             discussion,
             conversation,
+            route,
         })
     }
 
-    pub(super) fn mail_root(&self) -> io::Result<std::path::PathBuf> {
+    pub(super) fn channel(&self) -> &str {
+        self.route
+            .as_ref()
+            .map_or(self.cfg.text("dm_channel_id"), |route| &route.thread)
+    }
+    pub(super) fn guild(&self) -> &str {
+        self.route.as_ref().map_or("", |route| &route.guild)
+    }
+
+    pub(super) fn supervisor_root(&self) -> io::Result<std::path::PathBuf> {
         let _ = self.dial()?;
         match self.cfg.0["supervisor"]["state_dir"].as_str() {
             Some(root) => std::fs::canonicalize(root),
@@ -228,7 +242,12 @@ impl Manager {
         Ok(status.clone())
     }
 
-    pub(super) fn composer(&self, input: &Value, runtime: &Value) -> io::Result<Value> {
+    pub(super) fn composer(
+        &self,
+        input: &Value,
+        runtime: &Value,
+        starting_prompt: &str,
+    ) -> io::Result<Value> {
         let binding = &runtime["binding"];
         let actor = field(&input["author"], "id");
         let channel = field(&input["route"], "channel_id");
@@ -238,10 +257,13 @@ impl Manager {
             || !matches!(field(&runtime["turn"], "state"), "idle" | "completed")
             || binding["conversation_id"] != self.conversation
             || input["supervisor_socket"] != self.cfg.text("daemon_socket")
-            || input["authority"] != "owner_direct"
-            || !field(&input["route"], "guild_id").is_empty()
-            || actor != self.cfg.text("owner_id")
-            || channel != self.cfg.text("dm_channel_id")
+            || if self.guild().is_empty() {
+                input["authority"] != "owner_direct" || actor != self.cfg.text("owner_id")
+            } else {
+                input["authority"] != "team_participant" || !super::config::snowflake(actor)
+            }
+            || field(&input["route"], "guild_id") != self.guild()
+            || channel != self.channel()
         {
             return Err(invalid(
                 "manager or source is outside the current personal discussion grant",
@@ -254,20 +276,24 @@ impl Manager {
             binding,
             &runtime["turn"]["external_input"],
         )?;
+        let text = crate::manager_prompt::render(starting_prompt, field(input, "text"))?;
         let mut composer = json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
-            "text": input["text"],
+            "text": text,
             "manager_admission": {
                 "binding": binding, "expected_external_input": runtime["turn"]["external_input"],
                 "nonce":nonce,
             },
             "origin": {
-                "kind":"owner_direct", "installation_id":self.cfg.text("installation_id"),
+                "kind":input["authority"], "installation_id":self.cfg.text("installation_id"),
                 "request_id":input["operation_id"], "actor_id":actor, "requester_id":actor,
                 "channel_id":channel, "message_id":input["route"]["message_id"],
                 "discussion_id":self.discussion, "revision":input["revision"],
             }
         });
+        if !self.guild().is_empty() {
+            composer["origin"]["guild_id"] = json!(self.guild());
+        }
         if input["voice_origin"].is_object() {
             composer["origin"] = input["voice_origin"].clone();
         }
@@ -620,7 +646,18 @@ mod tests {
             let mut inbox = super::super::receipt::Inbox::open(&enrollment, &cfg).unwrap();
             inbox.checkpoint("400").unwrap();
             let admitted = inbox.admit(&source).unwrap().unwrap();
-            let composer = manager.composer(&admitted, &native).unwrap();
+            let setting = "Check the real output.";
+            crate::manager_prompt::save(&state, setting).unwrap();
+            let starting_prompt =
+                crate::manager_prompt::load(&manager.supervisor_root().unwrap()).unwrap();
+            let composer = manager
+                .composer(&admitted, &native, &starting_prompt)
+                .unwrap();
+            assert_eq!(starting_prompt, setting);
+            assert_eq!(
+                composer["text"],
+                crate::manager_prompt::render(setting, field(&admitted, "text")).unwrap()
+            );
             let launch_operation = operation.clone();
             let operation = format!(
                 "semantic:{}:{:032x}",
@@ -633,10 +670,11 @@ mod tests {
             if rust.is_some() {
                 inbox.cutover("401",field(&admitted,"revision"),json!({
                     "generation":1,"launch":request,"launch_operation":launch_operation,"session":id,"binding":native["binding"],
-                    "input":{"operation":operation,"source_id":"401","composer":composer}
+                    "input":{"operation":operation,"source_id":"401","composer":composer,"starting_prompt":starting_prompt}
                 })).unwrap();
             }
             if rust.is_some() {
+                crate::manager_prompt::save(&state, "Inspect the next worker reply.").unwrap();
                 let mut forged = composer.clone();
                 forged["text"] = json!("fabricated Discord text");
                 let err = manager.send(&operation, &forged).unwrap_err();
@@ -1179,6 +1217,8 @@ mod tests {
                         };
                         assert_ne!(wake["turn_id"], turn["native_turn_id"]);
                         assert_eq!(wake["source_id"], "401");
+                        assert_eq!(wake["starting_prompt"], "Inspect the next worker reply.");
+                        assert!(field(&wake["composer"], "text").starts_with("Current owner settings (supersede earlier settings)\nInspect the next worker reply.\n\nCurrent input\n"));
                         let expected = if publish_files_fixture {
                             "Worker attached files"
                         } else {

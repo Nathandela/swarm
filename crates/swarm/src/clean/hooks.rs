@@ -142,8 +142,8 @@ pub(super) fn clean(
     let generation = dir.lock("hooks.spool.open.lock".as_ref(), OFlags::RDWR)?;
     let locks = || -> io::Result<()> {
         fence()?;
-        dir.verify_file("hooks.spool.producer.lock".as_ref(), &producer)?;
-        dir.verify_file("hooks.spool.open.lock".as_ref(), &generation)?;
+        dir.verify_file("hooks.spool.producer.lock".as_ref(), &producer.0)?;
+        dir.verify_file("hooks.spool.open.lock".as_ref(), &generation.0)?;
         Ok(())
     };
     let spool = dir.open_file(

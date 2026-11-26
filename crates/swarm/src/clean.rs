@@ -4,10 +4,10 @@ pub(crate) use diagnostic::DiagnosticLog;
 mod hooks;
 
 use crate::{flags, ipc};
-use files::{Directory, unsafe_target};
+use files::{Directory, LockedFile, unsafe_target};
 use rustix::fs::{Dir, OFlags};
 use serde::Serialize;
-use std::fs::{self, File, Metadata};
+use std::fs::{self, Metadata};
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -122,7 +122,7 @@ fn log(path: &Path, apply: bool) -> Item {
 struct Singleton<'a> {
     parent: Directory,
     name: &'a std::ffi::OsStr,
-    file: File,
+    file: LockedFile,
 }
 impl<'a> Singleton<'a> {
     fn open(path: &'a Path) -> io::Result<Self> {
@@ -131,7 +131,7 @@ impl<'a> Singleton<'a> {
         Ok(Self { parent, name, file })
     }
     fn check(&self) -> io::Result<()> {
-        self.parent.verify_file(self.name, &self.file).map(|_| ())
+        self.parent.verify_file(self.name, &self.file.0).map(|_| ())
     }
 }
 #[derive(Serialize)]

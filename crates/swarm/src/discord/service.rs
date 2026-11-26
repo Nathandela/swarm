@@ -145,7 +145,7 @@ fn run_guild(
     if inbox.cursor().is_none() {
         inbox.checkpoint("")?;
     }
-    let (mut gateway_socket, mut cursor) = gateway::open(cfg)?;
+    let (gateway_socket, cursor) = gateway::open(cfg)?;
     let _guild_authority = {
         let verifier = Discord::connect(cfg)?;
         super::worker_proof::Service::bind(
@@ -160,6 +160,26 @@ fn run_guild(
     let mut worker_read_after = None;
     let mut worker_send: Option<super::worker::Flight> = None;
     let mut guild_events = std::collections::VecDeque::new();
+    let thread = super::team_thread::Route::configured(cfg)?
+        .map(|route| super::team_thread::ThreadAudience { route, api: &api });
+    let dispatcher = if thread.is_some() {
+        super::dispatcher::Dispatcher::open(cfg, &place.dir)?
+    } else {
+        None
+    };
+    let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
+    let scope = call_start
+        .as_ref()
+        .ok()
+        .and_then(|_| dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg)));
+    let driver =
+        super::call_runtime::Driver::start(gateway_socket, cursor, cfg, &place.dir, scope.clone());
+    drop(call_start);
+    use super::call_runtime::Ingress;
+    use std::sync::atomic::Ordering;
+    driver
+        .discussion_ready
+        .store(!inbox.manager()["binding"].is_null(), Ordering::Release);
     loop {
         if worker_send
             .as_ref()
@@ -169,17 +189,16 @@ fn run_guild(
         }
         if worker_send.is_none() {
             while let Some(event) = guild_events.pop_front() {
-                super::guild::ingest(
-                    cfg,
-                    &mut inbox,
-                    &event,
-                    crate::ipc::spawn::now_ms(),
-                    |guild, channel, id| super::guild::current(&api, cfg, guild, channel, id),
-                )?;
+                ingest_guild(cfg, &mut inbox, &api, thread.as_ref(), &event)?;
             }
         }
-        if bridge.serve(cfg, &mut inbox, cursor.sequence(), false, "unavailable")? {
-            let _ = gateway_socket.close(None);
+        if bridge.serve(
+            cfg,
+            &mut inbox,
+            driver.sequence.load(Ordering::Acquire),
+            dispatcher.is_some(),
+            driver.status(),
+        )? {
             return Ok(());
         }
         super::worker::tick(
@@ -189,8 +208,30 @@ fn run_guild(
             &mut worker_read_after,
             &mut worker_send,
         )?;
-        let Some(event) = cursor.event(&mut gateway_socket)? else {
-            continue;
+        if worker_send.is_none()
+            && let (Some(dispatcher), Some(thread)) = (&dispatcher, &thread)
+        {
+            dispatcher.tick_calls(cfg, &mut inbox, thread, Some((&place.dir, &driver)))?;
+            driver
+                .discussion_ready
+                .store(!inbox.manager()["binding"].is_null(), Ordering::Release);
+        }
+        let event = match driver.inbound.recv_timeout(Duration::from_millis(200)) {
+            Ok(Ok(Ingress::Discord(event))) => event,
+            Ok(Ok(Ingress::Transcript(origin, text))) => {
+                if let Some(scope) = &scope
+                    && !inbox.manager()["binding"].is_null()
+                    && super::call_runtime::verify_live(&place.dir, &origin).is_ok()
+                {
+                    inbox.admit_voice(scope, origin, &text)?;
+                }
+                continue;
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(invalid("Discord Gateway owner exited"));
+            }
         };
         if let Some(flight) = &worker_send {
             use super::worker_proof::Invalidation;
@@ -207,7 +248,11 @@ fn run_guild(
             }
         }
         if worker_send.is_some() {
-            if !super::guild::needs_ingest(cfg, &inbox, &event) {
+            if !super::guild::needs_ingest(cfg, &inbox, &event)
+                && !thread
+                    .as_ref()
+                    .is_some_and(|thread| thread.route.matches(&event["d"]))
+            {
                 continue;
             }
             if guild_events.len() >= 128 {
@@ -217,15 +262,30 @@ fn run_guild(
             }
             guild_events.push_back(event);
         } else {
-            super::guild::ingest(
-                cfg,
-                &mut inbox,
-                &event,
-                crate::ipc::spawn::now_ms(),
-                |guild, channel, id| super::guild::current(&api, cfg, guild, channel, id),
-            )?;
+            ingest_guild(cfg, &mut inbox, &api, thread.as_ref(), &event)?;
         }
     }
+}
+
+fn ingest_guild(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    api: &Discord,
+    thread: Option<&super::team_thread::ThreadAudience<'_>>,
+    event: &Value,
+) -> io::Result<()> {
+    if let Some(thread) = thread
+        && super::team_thread::ingest(cfg, inbox, thread, event)?
+    {
+        return Ok(());
+    }
+    super::guild::ingest(
+        cfg,
+        inbox,
+        event,
+        crate::ipc::spawn::now_ms(),
+        |guild, channel, id| super::guild::current(api, cfg, guild, channel, id),
+    )
 }
 
 fn repair(

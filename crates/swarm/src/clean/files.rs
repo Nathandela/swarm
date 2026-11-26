@@ -18,6 +18,15 @@ pub(super) fn same(a: &Metadata, b: &Metadata) -> bool {
     (a.dev(), a.ino()) == (b.dev(), b.ino())
 }
 
+pub(super) struct LockedFile(pub(super) File);
+
+impl Drop for LockedFile {
+    fn drop(&mut self) {
+        // A concurrent fork can still hold a duplicate until its exec closes the descriptor.
+        let _ = flock(&self.0, FlockOperation::Unlock);
+    }
+}
+
 pub(super) struct Directory {
     pub(super) path: PathBuf,
     pub(super) file: File,
@@ -86,11 +95,12 @@ impl Directory {
         }
         Ok(meta)
     }
-    pub(super) fn lock(&self, name: &OsStr, flags: OFlags) -> io::Result<File> {
+    pub(super) fn lock(&self, name: &OsStr, flags: OFlags) -> io::Result<LockedFile> {
         let file = self.open_file(name, flags)?;
         flock(&file, FlockOperation::NonBlockingLockExclusive)?;
-        self.verify_file(name, &file)?;
-        Ok(file)
+        let held = LockedFile(file);
+        self.verify_file(name, &held.0)?;
+        Ok(held)
     }
     pub(super) fn read(&self, name: &str, limit: u64) -> io::Result<Vec<u8>> {
         let mut data = Vec::new();
@@ -131,5 +141,29 @@ impl Directory {
             let _ = unlinkat(&self.file, temp.as_str(), AtFlags::empty());
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_unlocks_at_scope_exit_even_with_an_inherited_descriptor() {
+        let root =
+            std::env::temp_dir().join(format!("clean-lock-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        fs::write(root.join("lock"), []).unwrap();
+        let dir = Directory::open(&root).unwrap();
+        let lock = || dir.lock("lock".as_ref(), OFlags::RDWR);
+        let first = lock().unwrap();
+        let inherited = first.0.try_clone().unwrap();
+        assert!(matches!(lock(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+        drop(first);
+        let second = lock().unwrap();
+        drop(inherited);
+        assert!(matches!(lock(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+        drop(second);
+        fs::remove_dir_all(&root).unwrap();
     }
 }

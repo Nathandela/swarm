@@ -3,8 +3,11 @@ pub(crate) use worker_input::{
     lock_connector_worker_input, verify_connector_worker_input, worker_input_guild_available,
     worker_input_installation,
 };
+mod call_live;
+
 mod call_runtime;
 mod call_speech;
+mod call_team;
 
 mod call_floor;
 mod call_helper;
@@ -24,6 +27,7 @@ pub(crate) mod provenance;
 mod receipt;
 mod rest;
 mod service;
+mod team_thread;
 mod worker;
 mod worker_proof;
 
@@ -70,21 +74,23 @@ pub(crate) fn native_manager_enrollment() -> io::Result<Value> {
     let cfg = place.load()?;
     place.ensure_owned(&cfg)?;
     if !cfg.enabled()
-        || cfg.text("mode") != "personal"
+        || cfg.text("mode") != "personal" && team_thread::Route::configured(&cfg)?.is_none()
         || cfg.text("project_access") == "vm"
         || cfg.text("manager_cli") != "codex"
     {
         return Err(invalid(
-            "qualified Rust manager requires the active enrolled personal Codex place",
+            "qualified Rust manager requires an active enrolled Codex discussion",
         ));
     }
     let owner = manager::Manager::new(&cfg)?;
     let bridge = std::fs::canonicalize(&place.dir)?.join("manager-v1");
-    Ok(
-        json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
-        "installation_id":cfg.text("installation_id"), "application_id":cfg.text("application_id"), "owner_id":cfg.text("owner_id"),
-        "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")}),
-    )
+    let mut scope = json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
+        "installation_id":cfg.text("installation_id"),"application_id":cfg.text("application_id"),
+        "owner_id":cfg.text("owner_id"),"channel_id":owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
+    if !owner.guild().is_empty() {
+        scope["guild_id"] = json!(owner.guild());
+    }
+    Ok(scope)
 }
 
 pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
@@ -104,7 +110,13 @@ pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
         || identity[0] != scope["installation_id"]
         || identity[1] != scope["application_id"]
         || identity[2] != scope["owner_id"]
-        || identity[3] != scope["channel_id"]
+        || if ipc::field(scope, "guild_id").is_empty() {
+            identity[3] != scope["channel_id"]
+        } else {
+            identity[3] != ""
+                || data["team_discussion"]["guild_id"] != scope["guild_id"]
+                || data["team_discussion"]["thread_id"] != scope["channel_id"]
+        }
         || identity[4] != scope["supervisor_socket"]
         || !data["manager"]["generation"]
             .as_u64()
@@ -156,7 +168,7 @@ pub(crate) fn verify_connector_input(
     let origin = &composer["origin"];
     let voice = call_origin::key(id);
     if voice {
-        call_origin::validate(scope, origin, composer["text"].as_str().unwrap_or_default())?;
+        call_origin::validate(scope, origin, ipc::field(source, "text"))?;
         if source["voice_origin"] != *origin || origin["request_id"] != id {
             return Err(invalid("voice origin does not match the persisted cutover"));
         }
@@ -165,7 +177,13 @@ pub(crate) fn verify_connector_input(
         || input["composer"] != *composer
         || manager["session"] != composer["session"]
         || source["state"] != "sending"
-        || source["text"] != composer["text"]
+        || !ipc::field(scope, "guild_id").is_empty()
+            && (source["route"]["guild_id"] != scope["guild_id"]
+                || source["route"]["channel_id"] != scope["channel_id"]
+                || source["author"]["id"] != origin["actor_id"]
+                || source["authority"] != origin["kind"])
+        || composer["text"]
+            != crate::manager_prompt::saved_input(input, ipc::field(source, "text"))?
         || source["revision"] != composer["origin"]["revision"]
         || source["operation_id"] != composer["origin"]["request_id"]
         || !voice
@@ -535,4 +553,11 @@ fn doctor(place: &Place, cfg: &Config, channel: Option<&str>) -> io::Result<bool
     let ok = findings.iter().all(|result| result["status"] != "fail");
     println!("{}", serde_json::to_string_pretty(&Value::Array(findings))?);
     Ok(ok)
+}
+
+pub(crate) fn checkout_status(
+    dir: &std::path::Path,
+    end: std::time::Instant,
+) -> std::io::Result<serde_json::Value> {
+    local::call_until(dir, "checkout-status", "", None, end)
 }

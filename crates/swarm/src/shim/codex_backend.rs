@@ -56,6 +56,47 @@ pub(super) struct Channel {
     connection: WebSocket<UnixStream>,
     pid: u32,
     birth: u64,
+    restored: Option<Observation>,
+}
+
+impl Channel {
+    pub(super) fn bind_resume(&mut self, thread: &str, cwd: &Path) -> io::Result<()> {
+        send(
+            &mut self.connection,
+            json!({"id":2,"method":"thread/resume","params":{"threadId":thread,"excludeTurns":true}}),
+        )?;
+        let mut observation = Observation {
+            thread: thread.to_owned(),
+            idle: true,
+            joined: true,
+            ..Observation::default()
+        };
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            let Some(frame) = read(&mut self.connection)? else {
+                continue;
+            };
+            if frame["id"] != 2 || !frame["method"].is_null() {
+                observation.apply(&frame, cwd);
+                continue;
+            }
+            let restored = &frame["result"]["thread"];
+            let live = field(restored, "cwd");
+            if restored["id"] != thread
+                || live.is_empty()
+                || Path::new(live).canonicalize()?.as_path() != cwd
+                || restored["status"]["type"] != "idle"
+                || !observation.schedule_ready()
+            {
+                return Err(io::Error::other(
+                    "Codex native resume did not prove the exact idle source thread",
+                ));
+            }
+            self.restored = Some(observation);
+            return Ok(());
+        }
+        Err(io::Error::other("Codex native resume proof timed out"))
+    }
 }
 
 pub(super) fn start(
@@ -169,6 +210,7 @@ fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel
         connection,
         pid,
         birth,
+        restored: None,
     })
 }
 
@@ -199,12 +241,14 @@ struct Observation {
     proof: Option<codex_proof::Ledger>,
     thread: String,
     turn: Option<String>,
-    requests: std::collections::BTreeMap<String, &'static str>,
+    requests: std::collections::BTreeSet<String>,
     joined: bool,
     missing_rollout: bool,
     scheduled_turn: Option<ScheduledTurn>,
     fresh_no_rollout: bool,
     requests_unverified: bool,
+    pilot_final: Option<Value>,
+    pilot_user: Option<Value>,
     idle: bool,
     ambiguous: bool,
 }
@@ -236,6 +280,14 @@ impl Observation {
         if method == "thread/started" {
             let thread = &payload["thread"];
             let id = field(thread, "id");
+            // The installed viewer starts a proven ephemeral title generator
+            // after a reply. It never owns the native rollout or the PTY.
+            if thread["ephemeral"] == true
+                && thread["threadSource"] == "thread_title"
+                && thread["source"] == "vscode"
+            {
+                return false;
+            }
             if !self.thread.is_empty() && codex_receipt::canonical_thread(id) && self.thread != id {
                 self.ambiguous = true;
                 self.idle = false;
@@ -265,7 +317,7 @@ impl Observation {
         match method {
             "turn/started" => {
                 let id = field(&payload["turn"], "id");
-                if id.is_empty() {
+                if id.is_empty() || (!parent.is_empty() && parent != id) {
                     return false;
                 }
                 self.turn = Some(id.to_owned());
@@ -290,12 +342,7 @@ impl Observation {
                     self.requests_unverified = true;
                     return true;
                 }
-                let kind = match method {
-                    "item/commandExecution/requestApproval" => "command",
-                    "item/fileChange/requestApproval" => "file_change",
-                    _ => "user_input",
-                };
-                self.requests.insert(message["id"].to_string(), kind);
+                self.requests.insert(message["id"].to_string());
             }
             "serverRequest/resolved" => {
                 self.requests.remove(&payload["requestId"].to_string());
@@ -352,28 +399,117 @@ struct SemanticTarget<'a> {
 }
 
 fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
-    let requests: Vec<_> = observation.requests.iter().map(|(id, kind)| {
-        let public_id = serde_json::from_str::<String>(id).unwrap_or_else(|_| id.clone());
-        let (category, summary) = match *kind {
-            "command" => ("permission","Command execution approval"),
-            "file_change" => ("permission","File change approval"),
-            _ => ("question","User input request"),
-        };
-        json!({"kind":category,"request_id":public_id,"native_session_id":observation.thread,"summary":summary})
-    }).collect();
+    if observation.ambiguous {
+        let _ = runtime::write_json(
+            &target.dir.join("codex-thread-changed.json"),
+            &json!({"token":target.token}),
+        );
+    }
     let _ = runtime::write_json(
         &target.dir.join("observation.json"),
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
             "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
-            "requests":requests,"schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
+            "schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
             "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
                 && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
         }),
     );
 }
 
+fn capture_history(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
+    if observation.ambiguous || !target.manager.is_null() || target.schedule.is_some() {
+        return;
+    }
+    let params = &message["params"];
+    if observation.thread.is_empty() || params["threadId"] != observation.thread {
+        return;
+    }
+    let item = &params["item"];
+    let text_item = |kind, text: &str| {
+        (!text.is_empty() && text.len() <= 4096).then(|| {
+            json!({
+                "kind":kind,"status":"completed","text":text,"turn_id":observation.turn,
+            })
+        })
+    };
+    let turn = field(&params["turn"], "id");
+    let root = field(&params["turn"], "rootTurnId");
+    let active = |candidate: &Value| {
+        observation
+            .turn
+            .as_deref()
+            .is_some_and(|id| candidate == id)
+    };
+    match field(message, "method") {
+        "turn/started"
+            if !turn.is_empty()
+                && observation.turn.as_deref() != Some(turn)
+                && (root.is_empty() || root == turn) =>
+        {
+            observation.pilot_final = None;
+            observation.pilot_user = None;
+        }
+        "item/completed" if active(&params["turnId"]) => match field(item, "type") {
+            "userMessage" => {
+                let Some(parts) = item["content"].as_array() else {
+                    return;
+                };
+                if parts.len() == 1 && parts[0]["type"] == "text" {
+                    observation.pilot_user = text_item("user_message", field(&parts[0], "text"));
+                }
+            }
+            "agentMessage" if item["phase"].is_null() || item["phase"] == "final_answer" => {
+                observation.pilot_final = text_item("agent_message", field(item, "text"));
+            }
+            _ => {}
+        },
+        "turn/completed" if active(&params["turn"]["id"]) => {
+            let user = observation.pilot_user.take();
+            let reply = observation
+                .pilot_final
+                .take()
+                .filter(|_| params["turn"]["status"] == "completed");
+            for item in user.into_iter().chain(reply) {
+                let _ = super::capture_pilot_item(target.dir, target.token, item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'_>) {
+    if observation.ambiguous
+        || !target.manager.is_null()
+        || target.schedule.is_some()
+        || target
+            .dir
+            .join("pilot-replies.json")
+            .symlink_metadata()
+            .is_ok()
+    {
+        return;
+    }
+    let profile = runtime::read_json(&target.dir.join("codex-profile.json"));
+    let Ok(profile) = profile else { return };
+    if profile["token"] == target.token {
+        let items = crate::providers::codex_continuity::initial_history(
+            Path::new(field(&profile["profile"], "native_home")),
+            target.cwd,
+            &observation.thread,
+        );
+        if let Ok(items) = items {
+            for item in items {
+                if super::capture_pilot_item(target.dir, target.token, item).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 fn observe_frame(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
+    capture_history(observation, message, target);
     if observation.apply(message, target.cwd) {
         persist_observation(observation, target);
     }
@@ -606,7 +742,8 @@ pub(super) fn observe(
     actions: Receiver<SemanticAction>,
     manager: Value,
 ) {
-    let mut observation = Observation::default();
+    let resumed = channel.restored.is_some();
+    let mut observation = channel.restored.take().unwrap_or_default();
     let target = SemanticTarget {
         cwd: &cwd,
         dir: &dir,
@@ -614,6 +751,9 @@ pub(super) fn observe(
         schedule: schedule.as_ref(),
         manager: &manager,
     };
+    if resumed {
+        persist_observation(&observation, &target);
+    }
     let mut serial = 10;
     let mut join = None;
     let mut history = None;
@@ -694,6 +834,7 @@ pub(super) fn observe(
                     {
                         observation.joined = true;
                         observation.missing_rollout = false;
+                        backfill_initial_history(&observation, &target);
                         observation.idle = observation.turn.is_none()
                             && field(&message["result"]["thread"]["status"], "type") == "idle";
                         persist_observation(&observation, &target);

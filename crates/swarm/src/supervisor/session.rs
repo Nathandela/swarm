@@ -37,10 +37,12 @@ pub(super) struct Prepared {
     tag: String,
     cols: u16,
     rows: u16,
-    provider: LaunchPlan,
+    pub(super) provider: LaunchPlan,
     pub(super) resume: Value,
     pub(super) claude_resume: Value,
-    claude_profile: Value,
+    pub(super) claude_profile: Value,
+    pub(super) codex_resume: Value,
+    codex_options: Value,
     agy_launch: Value,
     go_rollback: Value,
     scheduled: Option<(worker::Binding, Value)>,
@@ -197,6 +199,7 @@ impl Session {
                 .as_str()
                 .or_else(|| data["opencode_resume"]["resumed_from"].as_str())
                 .or_else(|| data["claude_resume"]["resumed_from"].as_str())
+                .or_else(|| data["codex_resume"]["resumed_from"].as_str())
                 .map(str::to_owned),
             worker_native_installation: data["provider"][if data["provider"]["name"] == "claude" {
                 "claude_native_installation"
@@ -360,11 +363,17 @@ impl Session {
             } else {
                 Value::Null
             },
-            provider,
             go_rollback: Value::Null,
             resume: Value::Null,
             claude_resume: Value::Null,
             claude_profile,
+            codex_resume: Value::Null,
+            codex_options: if provider.agent == "codex" {
+                req["options"].clone()
+            } else {
+                Value::Null
+            },
+            provider,
             scheduled: None,
             manager: Value::Null,
             mailbox: Value::Null,
@@ -424,6 +433,55 @@ impl Session {
             json!({"proof":launch.token,"socket":socket,"binary":binary}),
         ));
         Ok(plan)
+    }
+
+    pub(super) fn prepare_claude_external(
+        launch: &Value,
+        require_stopped: bool,
+    ) -> io::Result<Prepared> {
+        use providers::claude;
+        let options = &launch["options"];
+        let id = field(options, "resume_conversation_id");
+        if !claude::canonical_id(id)
+            || !options.as_object().is_some_and(|opts| opts.len() == 1)
+            || launch.as_object().is_none_or(|keys| {
+                keys.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "agent" | "name" | "cwd" | "env" | "options" | "cols" | "rows"
+                    )
+                })
+            })
+        {
+            return Err(io::Error::other(
+                "invalid external Claude resume parameters",
+            ));
+        }
+        let mut request = launch.clone();
+        request["options"] = Value::Null;
+        let mut prepared = Self::prepare(&json!({"launch":request}))?;
+        if !prepared.claude_profile.is_object() {
+            return Err(io::Error::other(
+                "external Claude resume requires a verified native profile",
+            ));
+        }
+        let home = Path::new(field(&prepared.claude_profile, "home"));
+        let authority = claude::project_authority(home, &prepared.cwd)?;
+        let source = claude::external_proof(
+            &prepared.provider.executable,
+            &prepared.cwd,
+            &prepared.provider.env,
+            home,
+            id,
+            require_stopped,
+        )?;
+        request["claude_retained_conversation"] = json!(id);
+        prepared.provider.argv = claude::argv(&sanitize_name(field(launch, "name")), &request)?;
+        prepared.claude_resume = json!({
+            "conversation_id":id,"transcript":source["transcript"],"project_authority":authority,
+            "external_source":source,
+        });
+        Ok(prepared)
     }
 
     pub(super) fn prepare_claude_resume(
@@ -597,6 +655,183 @@ impl Session {
             })
     }
 
+    pub(super) fn prepare_codex_external(launch: &Value) -> io::Result<Prepared> {
+        use providers::codex_continuity;
+        let options = &launch["options"];
+        let thread = field(options, "resume_conversation_id");
+        if !options
+            .as_object()
+            .is_some_and(|options| options.len() == 1)
+            || launch.as_object().is_none_or(|keys| {
+                keys.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "agent" | "name" | "cwd" | "env" | "options" | "cols" | "rows"
+                    )
+                })
+            })
+            || !codex_receipt::canonical_thread(thread)
+        {
+            return Err(io::Error::other("invalid external Codex resume request"));
+        }
+        let mut request = launch.clone();
+        request["options"] = Value::Null;
+        let mut prepared = Self::prepare(&json!({"launch":request}))?;
+        let profile =
+            codex_continuity::profile(&prepared.provider.env, &prepared.cwd, &Value::Null)?;
+        let native = Path::new(field(&profile, "native_home"));
+        if native != Path::new(field(&profile, "home")).join(".codex") {
+            return Err(io::Error::other(
+                "external Codex resume requires the default native home",
+            ));
+        }
+        let proof = codex_continuity::discover_external(native, true, thread)?
+            .into_iter()
+            .next()
+            .filter(|record| record["archived"] == false)
+            .ok_or_else(|| io::Error::other("external Codex rollout is missing or archived"))?;
+        if proof["cwd"] != json!(prepared.cwd)
+            || !providers::codex::managed(&prepared.provider.version)
+            || !codex_continuity::newer_or_same(
+                &prepared.provider.version,
+                field(&proof, "version"),
+            )
+        {
+            return Err(io::Error::other(
+                "external Codex checkout or runtime is unqualified",
+            ));
+        }
+        prepared.provider.argv = codex_resume_args(thread, &prepared.cwd, "");
+        prepared.codex_resume = json!({
+            "thread":thread,"profile":profile,"external_rollout":proof,
+        });
+        Ok(prepared)
+    }
+
+    pub(super) fn prepare_codex_resume(
+        &self,
+        launch: &Value,
+        source: &str,
+    ) -> io::Result<Prepared> {
+        use providers::codex_continuity;
+        if self.agent != "codex"
+            || !self.owner_interactive
+            || self.schedule.is_some()
+            || !self.exit()?["error"].is_null()
+            || !owner_gone(&self.dir, &self.token)?
+        {
+            return Err(io::Error::other(
+                "Codex resume requires a confirmed stopped ordinary managed viewer",
+            ));
+        }
+        if launch["options"]
+            .as_object()
+            .is_none_or(|options| options.len() != 1)
+            || launch.as_object().is_none_or(|keys| {
+                keys.iter().any(|(key, value)| {
+                    !matches!(
+                        key.as_str(),
+                        "agent" | "name" | "cwd" | "env" | "cols" | "rows" | "options"
+                    ) && !value.is_null()
+                })
+            })
+        {
+            return Err(io::Error::other("unsupported Codex resume parameters"));
+        }
+        let cwd = self.verify_effective()?.to_owned();
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        if meta["provider"]["mode"] != "managed"
+            || self
+                .dir
+                .join("codex-thread-changed.json")
+                .symlink_metadata()
+                .is_ok()
+        {
+            return Err(io::Error::other("unproved Codex thread custody"));
+        }
+        let thread = self.semantic_thread()?;
+        if thread.is_empty() {
+            return Err(io::Error::other("source has no exact Codex conversation"));
+        }
+        let origin = runtime::read_json(&self.dir.join("codex-profile.json"))?;
+        if origin["token"] != self.token || !origin["profile"].is_object() {
+            return Err(io::Error::other("original Codex profile is unproven"));
+        }
+        let old = &origin["profile"];
+        providers::codex::refuse_unqualified_origin(&launch["env"])?;
+        let mut env = runtime::launch_env(&launch["env"]);
+        let home = env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "HOME")
+            .map_or(Path::new(""), |(_, value)| Path::new(value));
+        if let Some(native) = providers::codex::explicit_home(&launch["env"], home)? {
+            env.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+        }
+        let current = codex_continuity::profile(&env, &cwd, &old["options"])?;
+        if [
+            "home",
+            "native_home",
+            "native_home_id",
+            "config",
+            "account",
+            "project",
+            "system_policy",
+            "cwd_config",
+        ]
+        .into_iter()
+        .any(|key| current[key] != old[key])
+        {
+            return Err(io::Error::other("Codex native origin or authority changed"));
+        }
+        let path = old["path"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| io::Error::other("saved Codex PATH is unproved"))?;
+        env.retain(|(key, _)| key != "PATH");
+        env.push(("PATH".into(), path.into()));
+        let rollout =
+            codex_continuity::rollout(Path::new(field(old, "native_home")), &cwd, &thread)?;
+        let mut request = launch.clone();
+        request["cwd"] = json!(cwd);
+        request["env"] = json!(
+            env.iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+        );
+        request["options"] = old["options"].clone();
+        if field(&request, "name").is_empty() {
+            request["name"] = json!(self.labels.lock().unwrap().name)
+        }
+        let mut prepared = Self::prepare(&json!({"launch":request}))?;
+        if !providers::codex::managed(&prepared.provider.version)
+            || !codex_continuity::newer_or_same(
+                &prepared.provider.version,
+                field(&meta["provider"], "version"),
+            )
+        {
+            return Err(io::Error::other(
+                "Codex resume refuses an older or unqualified runtime",
+            ));
+        }
+        prepared.provider.argv = codex_resume_args(&thread, &cwd, field(&old["options"], "model"));
+        prepared.codex_resume =
+            json!({"thread":thread,"resumed_from":source,"profile":old,"rollout":rollout});
+        prepared.tag = self.labels.lock().unwrap().tag.clone();
+        Ok(prepared)
+    }
+
+    pub(super) fn owns_codex_thread(&self, id: &str) -> bool {
+        self.agent == "codex"
+            && !(self.exit().is_ok() && owner_gone(&self.dir, &self.token).is_ok_and(|gone| gone))
+            && (self.semantic_thread().is_ok_and(|thread| thread == id)
+                || runtime::read_json(&self.dir.join("session.json"))
+                    .ok()
+                    .is_some_and(|meta| {
+                        meta["token"] == self.token && meta["codex_resume"]["thread"] == id
+                    }))
+    }
+
     pub(super) fn prepare_opencode_resume(
         &self,
         request: &Value,
@@ -718,6 +953,8 @@ impl Session {
             go_rollback,
             claude_profile,
             claude_resume,
+            codex_options,
+            codex_resume,
         } = prepared;
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
@@ -769,6 +1006,21 @@ impl Session {
         let claude_conversation = (provider.agent == "claude" && scheduled.is_some())
             .then(providers::claude::new_conversation)
             .transpose()?;
+        let codex_home = if let Some((_, origin)) =
+            provider.env.iter().find(|(key, _)| key == "CODEX_HOME")
+        {
+            if scheduled.is_some() || !manager.is_null() || !lineage["worker_discussion"].is_null()
+            {
+                return Err(io::Error::other(
+                    "alternate CODEX_HOME requires an ordinary owner session",
+                ));
+            }
+            let native = Path::new(origin);
+            let info = native.metadata()?;
+            json!({"path":native,"identity":[info.dev(),info.ino()]})
+        } else {
+            Value::Null
+        };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -793,6 +1045,9 @@ impl Session {
                 "opencode_resume": resume,
                 "claude_profile": claude_profile,
                 "claude_resume": claude_resume,
+                "codex_resume":codex_resume,
+                "codex_options":codex_options,
+                "codex_home":codex_home,
                 "opencode_initial": initial,
 
             }),
@@ -860,10 +1115,9 @@ impl Session {
     }
 
     pub(super) fn await_ready(&self) -> io::Result<()> {
-        let resumed =
-            runtime::read_json(&self.dir.join("session.json"))?["claude_resume"]["conversation_id"]
-                .as_str()
-                .map(str::to_owned);
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        let resumed = meta["claude_resume"]["conversation_id"].as_str();
+        let codex = meta["codex_resume"]["thread"].as_str();
         let deadline = Instant::now()
             + Duration::from_secs(match self.agent.as_str() {
                 "claude" if resumed.is_some() => 8,
@@ -891,6 +1145,14 @@ impl Session {
                 } else if resumed
                     .as_ref()
                     .is_none_or(|id| self.claude_conversation().is_ok_and(|actual| &actual == id))
+                    && codex.is_none_or(|id| {
+                        runtime::read_json(&self.dir.join("observation.json")).is_ok_and(|state| {
+                            state["token"] == self.token
+                                && state["conversation_id"] == id
+                                && state["backend_available"] == true
+                                && state["requests_available"] == true
+                        })
+                    })
                 {
                     self.transition(Phase::Running);
                     return Ok(());
@@ -1073,32 +1335,9 @@ impl Session {
                 "type":"opencode_requests","session":session,"request_id":body["request_id"],"native_session_id":body["native_session_id"],
             }));
         }
-        if !["request_id", "native_session_id"]
-            .into_iter()
-            .all(|key| body[key].is_null() || body[key] == "")
-        {
-            return Err(io::Error::other(
-                "only native request summary reads are supported",
-            ));
-        }
-        self.semantic_target()?;
-        // Confirm continued private shim custody at query time.
-        self.dial()?;
-        let observed = runtime::read_json(&self.dir.join("observation.json"))?;
-        if observed["token"] != self.token || observed["requests_available"] != true {
-            return Err(io::Error::other(
-                "bound Codex request stream is not available",
-            ));
-        }
-        let requests = observed["requests"]
-            .as_array()
-            .filter(|requests| requests.len() <= 128)
-            .ok_or_else(|| io::Error::other("invalid Codex request projection"))?;
-        Ok(if requests.is_empty() {
-            json!({"session":session})
-        } else {
-            json!({"session":session,"requests":requests})
-        })
+        Err(io::Error::other(
+            "native request inspection is available for OpenCode sessions",
+        ))
     }
 
     fn semantic_thread(&self) -> io::Result<String> {
@@ -1729,7 +1968,7 @@ impl Session {
     }
 
     pub(super) fn pilot_replies(&self) -> Vec<Value> {
-        if self.agent != "claude" {
+        if self.agent != "claude" && !(self.agent == "codex" && self.owner_interactive) {
             return Vec::new();
         }
         match runtime::read_json(&self.dir.join("pilot-replies.json")) {
@@ -1920,6 +2159,11 @@ impl Session {
         }
         *current = (next, now());
         true
+    }
+
+    pub(super) fn may_occupy_slot(&self) -> bool {
+        // A lost transport can reconcile to Running during another admission.
+        self.state.lock().unwrap().0 != Phase::Exited
     }
 
     pub(super) fn is_live(&self) -> bool {
@@ -2188,6 +2432,21 @@ impl Session {
     }
 }
 
+fn codex_resume_args(thread: &str, cwd: &Path, model: &str) -> Vec<String> {
+    let mut args = vec![
+        "resume".into(),
+        thread.into(),
+        "-c".into(),
+        "check_for_update_on_startup=false".into(),
+        "--cd".into(),
+        cwd.to_string_lossy().into_owned(),
+    ];
+    if !model.is_empty() {
+        args.extend(["--model".into(), model.into()]);
+    }
+    args
+}
+
 fn unrestricted_owner(data: &Value) -> bool {
     data["manager"].is_null()
         && data["schedule"].is_null()
@@ -2219,7 +2478,7 @@ fn claude_conversation(dir: &Path, token: &str) -> io::Result<String> {
     Ok(id.into())
 }
 
-pub(super) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {
+pub(crate) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {
     let exit = runtime::read_json(&dir.join("exit.json"))?;
     let prelaunch = exit["error"].as_str().is_some_and(|s| !s.is_empty())
         && exit["code"].is_null()
@@ -2235,7 +2494,7 @@ pub(super) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {
     Ok(exit)
 }
 
-pub(super) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
+pub(crate) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
     let owner = match runtime::read_json(&dir.join("owner.json")) {
         Ok(v) => v,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {

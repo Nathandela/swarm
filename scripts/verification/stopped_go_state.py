@@ -118,7 +118,7 @@ def refused(binary, env, reason):
     assert done.returncode == 1 and reason in done.stderr, (done.returncode, done.stderr)
 
 
-def rehearse(go, rust, base):
+def rehearse(go, rust, base, on_export=None):
     tools = base / "bin"
     tools.mkdir(mode=0o700)
     for path in [base / "home", base / "source"]:
@@ -217,6 +217,19 @@ def rehearse(go, rust, base):
         refused(rust, rust_env, reason)
         assert disk(sidefile) == altered_sidefile
         sidefile.write_bytes(original_sidefile)
+    launch_config = qualified / "shim-launch.json"
+    before = launch_config.read_bytes()
+    for key, wrong in [
+        ("claude_input", "false"),
+        ("require_launch_identity", 0),
+        ("scheduled_codex_backend", {}),
+        ("backend_required", []),
+    ]:
+        altered = json.loads(before) | {key: wrong}
+        private(launch_config, altered)
+        refused(rust, rust_env, "launch binding or native writer is unqualified")
+        assert disk(launch_config) == altered
+        launch_config.write_bytes(before)
     stopped = qualified / "native-writers-stopped.json"
     stopped.chmod(0o644)
     refused(rust, rust_env, "not a private regular owner file")
@@ -269,10 +282,10 @@ def rehearse(go, rust, base):
     print("PASS stopped Claude: Go launch and native capture, copied-state Rust roster/labels, crash/retry, Go rollback")
 
 
-    new_attempt(go, rust, base, tools, copied, go_env, rust_env)
+    new_attempt(go, rust, base, tools, copied, go_env, rust_env, on_export)
 
 
-def new_attempt(go, rust, base, tools, copied, go_env, rust_env):
+def new_attempt(go, rust, base, tools, copied, go_env, rust_env, on_export):
     native_id = "11111111-2222-4333-8444-555555555555"
     agent = tools / "claude"
     argv_log = base / "agent-argv"
@@ -372,6 +385,8 @@ def new_attempt(go, rust, base, tools, copied, go_env, rust_env):
     published.unlink()  # Recreate the durable state between directory commit and receipt.
     assert export().returncode == 0 and copied_meta.read_bytes() == before and published.is_file()
     assert export().returncode == 0 and copied_meta.read_bytes() == before
+    if on_export:
+        on_export(copied, go_env, session)
     record = disk(copied_meta)
     rust_token = disk(source / "session.json")["token"].encode()
     assert rust_token not in before and rust_token not in (target / "rust-origin.json").read_bytes()

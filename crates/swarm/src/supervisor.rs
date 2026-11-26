@@ -1,3 +1,4 @@
+mod claude_takeover;
 mod handoff;
 pub(crate) mod mail;
 pub(crate) mod mail_files;
@@ -8,7 +9,7 @@ mod reliable;
 mod removal;
 pub(crate) mod runtime;
 mod scheduling;
-mod session;
+pub(crate) mod session;
 mod stopped_go;
 mod supervision;
 
@@ -294,9 +295,29 @@ impl State {
                 )));
             }
         }
+        if matches!(field(launch, "agent"), "claude" | "claude-code")
+            && options.get("resume_conversation_id").is_some()
+        {
+            if managed.is_some() {
+                return Err(io::Error::other(
+                    "external Claude resume requires ordinary owner scope",
+                ));
+            }
+            let prepared = Session::prepare_claude_external(launch, true)?;
+            return self.reserve_prepared(prepared, false, None, None);
+        }
+        if field(launch, "agent") == "codex" && options.get("resume_conversation_id").is_some() {
+            if managed.is_some() {
+                return Err(io::Error::other(
+                    "external Codex resume requires ordinary owner scope",
+                ));
+            }
+            let prepared = Session::prepare_codex_external(launch)?;
+            return self.reserve_prepared(prepared, false, None, None);
+        }
         let resume = matches!(
             field(launch, "agent"),
-            "agy" | "opencode" | "hermes" | "claude" | "claude-code"
+            "agy" | "opencode" | "hermes" | "claude" | "claude-code" | "codex"
         ) && !field(options, "resume_from").is_empty();
         let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
         if field(launch, "agent") == "hermes" && options.get("resume_from").is_some() && !resume {
@@ -333,6 +354,13 @@ impl State {
                     return Err(io::Error::other("unsupported Claude resume role"));
                 }
                 let prepared = session.prepare_claude_resume(launch, &qualified)?;
+                return self.reserve_prepared(prepared, false, None, None);
+            }
+            if field(launch, "agent") == "codex" {
+                if managed.is_some() {
+                    return Err(io::Error::other("unsupported Codex resume role"));
+                }
+                let prepared = session.prepare_codex_resume(launch, &qualified)?;
                 return self.reserve_prepared(prepared, false, None, None);
             }
             if field(launch, "agent") == "opencode" {
@@ -392,13 +420,32 @@ impl State {
 
     fn reserve_prepared_bound(
         &self,
-        mut prepared: session::Prepared,
+        prepared: session::Prepared,
         scheduled: bool,
         source: Option<(String, String)>,
         managed: Option<Value>,
         predecessor: Option<Arc<Session>>,
     ) -> io::Result<Arc<Session>> {
-        let _reservation = self.launch_gate.lock().unwrap();
+        let reservation = self.launch_gate.lock().unwrap();
+        self.reserve_locked(
+            prepared,
+            scheduled,
+            source,
+            managed,
+            predecessor,
+            &reservation,
+        )
+    }
+
+    fn reserve_locked(
+        &self,
+        mut prepared: session::Prepared,
+        scheduled: bool,
+        source: Option<(String, String)>,
+        managed: Option<Value>,
+        predecessor: Option<Arc<Session>>,
+        _reservation: &std::sync::MutexGuard<'_, ()>,
+    ) -> io::Result<Arc<Session>> {
         if let Some((local, instance)) = source {
             if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
                 s.incarnation() == instance
@@ -457,6 +504,18 @@ impl State {
         {
             return Err(io::Error::other(
                 "Claude conversation already has a live or unconfirmed writer",
+            ));
+        }
+        if let Some(id) = prepared.codex_resume["thread"].as_str()
+            && self
+                .sessions
+                .read()
+                .unwrap()
+                .values()
+                .any(|row| row.owns_codex_thread(id))
+        {
+            return Err(io::Error::other(
+                "Codex thread already has a live or unconfirmed writer",
             ));
         }
         if !prepared.resume.is_null()
@@ -833,6 +892,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "subscribe"
                         | "owner-launch"
                         | "hands-off-handoff"
+                        | "claude-batch-takeover-v1"
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"
@@ -1090,6 +1150,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>
                 state.session(&request).and_then(|session| reply(&writer,state,session.manager_retire(&request)?)),
             "worker_mail" if caps.contains(&crate::teammate::MAIL_CAP) => mail::request(state,&request).and_then(|body| reply(&writer,state,body)),
+            "claude_batch_takeover" if caps.contains(&"claude-batch-takeover-v1") => {
+                claude_takeover::acquire(state,&request).and_then(|results|{
+                    reply(&writer,state,json!({"op":"claude_batch_takeover","results":results}))
+                })
+            },
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");
@@ -1103,9 +1168,20 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer,state,json!({"op":"native_requests","session_id":id,"native_requests_result":result}))
             }),
             "interaction_history" if caps.contains(&"journal") => state.session(&request).and_then(|session| {
+                let history = &request["history"];
+                let limit = history["limit"].as_u64().filter(|limit| *limit > 0)
+                    .ok_or_else(||io::Error::other("history requires a positive page size"))?;
+                let before = field(history,"before_item");
+                if history["session"] != request["session_id"] || history["native"] == true
+                    || !history["worker"].is_null() || !field(history,"native_cursor").is_empty()
+                    || (!history["before_item"].is_null() && !history["before_item"].is_string())
+                    || before.len() > 128
+                {
+                    return Err(io::Error::other("invalid interaction history request"));
+                }
                 state.pilot_refresh(&session);
-                let result=state.journal()?.history(&session.id,request["history"]["limit"].as_u64().unwrap_or(20))?;
-                reply(&writer,state,json!({"op":"interaction_history","journal":result}))
+                let (result,floor)=state.journal()?.history(&session.id,before,limit)?;
+                reply(&writer,state,json!({"op":"interaction_history","session_id":request["session_id"],"journal":result,"history_floor":floor}))
             }),
             "journal_subscribe_from" if caps.contains(&"journal") && caps.contains(&"journal-subscribe-from") => {
                 let rows:Vec<_>=state.sessions.read().unwrap().values().cloned().collect();

@@ -37,7 +37,18 @@ minute completions, including deletion of the proved stopped scheduled
 session while retaining schedule history. Read each queue's `status.json`,
 its active stage's `heartbeat.json`, and its immutable `result.json` after
 completion. The native queue sequences real 1h, 24h and 72h stages. Each
-mixed queue runs a separate 24h stage. These elapsed-duration gates are open.
+mixed queue runs a separate 24h stage.
+
+The macOS OpenCode one-hour stage passed after 3,600.006 seconds with
+341 terminal receipts, 138 decisions and 17 daemon crash recoveries.
+Maximum dispatch was 2.162 seconds and maximum rejoin was 0.389 seconds.
+Process cleanup passed. The result SHA-256 is
+`b36a824fec606597a1f9175ff91410b5dd91a12f2d8dba67634838825010e0fe`.
+The longer stages and final-candidate measurements remain open.
+
+The first fixed Linux native rerun and the initial Linux mixed run later stopped when the shared test volume filled. Both Python runners reported `ENOSPC` while writing their results. Their last heartbeats recorded 81 and 30 inputs respectively, and both queue and stage process IDs were gone. The previous `running` status files had survived their failed replacements. Neither run counts toward an elapsed-duration gate. The queue now reserves space for its terminal report and checks the volume during each stage. A deterministic stage-registration fault killed the real test child and left the terminal status readable on both hosts. [Fault fixture](../../scripts/verification/opencode-rust/test_queue_failure.py)
+
+Both replacement Linux queues started from source `cb630ec5b1131e4b4ae6d706a1132120e03a7dbd` using the exact signed Linux archive executable with SHA-256 `419a3fc6a369d8336f02ee5c20fce348a3c4aeca82efb5acd070e66c3c5a9579`. Their first observed native and mixed inputs succeeded. Completion is measured from these fresh starts.
 
 ## Linux interruption and controlled recovery
 

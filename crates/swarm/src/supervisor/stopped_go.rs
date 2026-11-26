@@ -47,7 +47,12 @@ const ROLE_TEXT_FIELDS: &[&str] = &[
     "input_embargo",
     "resumed_from",
 ];
-const ROLE_OBJECT_FIELDS: &[&str] = &["manager_retirement", "login_runtime", "opencode_binding"];
+const ROLE_OBJECT_FIELDS: &[&str] = &[
+    "manager_retirement",
+    "login_runtime",
+    "opencode_binding",
+    "account_binding",
+];
 const ROLE_BOOL_FIELDS: &[&str] = &[
     "hermes_native",
     "manager_native_cli",
@@ -75,6 +80,7 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
     "launch_options",
     "conversation_id",
     "env",
+    "cli_identity",
     "backend_plan_error",
     "resume_error",
 ];
@@ -283,11 +289,12 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
             "Go schema {schema:?} requires offline qualification"
         )));
     }
-    // Scope one fixture-backed role first. A schema-1 stamp alone does not prove ordinary custody.
-    if meta["agent_type"] != "claude"
-        || ROLE_TEXT_FIELDS
-            .iter()
-            .any(|key| !meta[*key].is_null() && meta[*key] != "")
+    if !matches!(
+        field(meta, "agent_type"),
+        "claude" | "agy" | "codex" | "opencode"
+    ) || ROLE_TEXT_FIELDS
+        .iter()
+        .any(|key| !meta[*key].is_null() && meta[*key] != "")
         || ROLE_OBJECT_FIELDS.iter().any(|key| !meta[*key].is_null())
         || ROLE_BOOL_FIELDS
             .iter()
@@ -324,26 +331,39 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         return Err(io::Error::other("missing Go shim birth identity"));
     };
     inactive(pid, birth)?;
-    for name in [
-        c"shim.sock",
-        c"hooks.sock",
-        c"hook.sock",
-        c"codex.sock",
-        c"backend.json",
-    ] {
-        // A crashed shim can leave its socket. Recovery of that custody is outside this slice.
-        let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
-        let present = unsafe {
-            libc::fstatat(
-                file.as_raw_fd(),
-                name.as_ptr(),
-                info.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if present == 0 || io::Error::last_os_error().kind() != io::ErrorKind::NotFound {
-            return Err(io::Error::other("Go shim or backend custody remains"));
+    absent_sidefiles(
+        file,
+        &[
+            c"shim.sock",
+            c"hooks.sock",
+            c"hook.sock",
+            c"codex.sock",
+            c"backend.json",
+        ],
+    )?;
+    let launch = launch_evidence(file, meta)?;
+    if matches!(field(meta, "agent_type"), "agy" | "opencode") {
+        // Classic PTY shims write exit.json after joining their PTY group.
+        // Managed-native custody uses a different proof and is excluded here.
+        absent_sidefiles(
+            file,
+            &[c"native-process.json", c"native-writers-stopped.json"],
+        )?;
+        if !exit["backend_exit"].is_null() {
+            return Err(io::Error::other("unqualified Go classic backend exit"));
         }
+        if meta["agent_type"] == "opencode" {
+            absent_sidefiles(
+                file,
+                &[
+                    c"opencode-binding.json",
+                    c"opencode-input-embargo.json",
+                    c"opencode-tui.json",
+                    c"opencode-tui.mjs",
+                ],
+            )?;
+        }
+        return Ok(());
     }
     let native = read_at(file, c"native-process.json")
         .map_err(|e| io::Error::other(format!("Go native identity unavailable: {e}")))?;
@@ -355,11 +375,11 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         || stopped["writers_stopped"] != true
         || native["shim_pid"] != meta["shim_pid"]
         || native["shim_start_time"] != meta["shim_start_time"]
-        || native["provider"] != "claude"
+        || native["provider"] != meta["agent_type"]
         || field(&native, "generation").is_empty()
-        || !native["backend_pid"].is_null()
-        || !native["backend_start_time"].is_null()
         || !native["incident_id"].is_null()
+        || meta["agent_type"] == "codex"
+            && native["runtime"] != json!({"provider":"","epoch":0,"identity":"","home":""})
     {
         return Err(io::Error::other(
             "Go native writer stop proof disagrees with session custody",
@@ -379,7 +399,48 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         ));
     }
     inactive(native_pid, native_birth)?;
-    launch_evidence(file, meta)?;
+    if meta["agent_type"] == "codex" && !field(&launch, "backend_program").is_empty() {
+        let backend = native["backend_pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|backend| {
+                (2..=i32::MAX as u32).contains(backend) && *backend != native_pid && *backend != pid
+            });
+        let epoch = native["backend_start_time"]
+            .as_u64()
+            .filter(|value| *value > 0);
+        let (Some(backend), Some(epoch)) = (backend, epoch) else {
+            return Err(io::Error::other("missing Go Codex backend birth identity"));
+        };
+        if exit["backend_exit"].as_i64().is_none() {
+            return Err(io::Error::other("missing Go Codex backend exit"));
+        }
+        inactive(backend, epoch)
+    } else if !native["backend_pid"].is_null()
+        || !native["backend_start_time"].is_null()
+        || !exit["backend_exit"].is_null()
+    {
+        Err(io::Error::other("unexpected Go session backend custody"))
+    } else {
+        Ok(())
+    }
+}
+
+fn absent_sidefiles(file: &File, names: &[&CStr]) -> io::Result<()> {
+    for name in names {
+        let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let present = unsafe {
+            libc::fstatat(
+                file.as_raw_fd(),
+                name.as_ptr(),
+                info.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if present == 0 || io::Error::last_os_error().kind() != io::ErrorKind::NotFound {
+            return Err(io::Error::other("Go shim or backend custody remains"));
+        }
+    }
     Ok(())
 }
 
@@ -399,8 +460,21 @@ fn completed(file: &File, meta: &Value) -> io::Result<Option<Value>> {
 }
 
 fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
-    let launch = read_at(file, c"shim-launch.json")
-        .map_err(|e| io::Error::other(format!("Go launch evidence unavailable: {e}")))?;
+    let launch = (|| {
+        let launch = open_at(file, c"shim-launch.json", libc::O_RDONLY)?;
+        let bytes = runtime::read_private_file(launch, 1 << 20)?;
+        let text = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
+        let fields = RawFields::parse(text)?;
+        if fields
+            .0
+            .keys()
+            .any(|key| key.bytes().any(|byte| byte.is_ascii_uppercase()))
+        {
+            return Err(io::Error::other("noncanonical Go launch field"));
+        }
+        Ok::<Value, io::Error>(serde_json::from_str(text)?)
+    })()
+    .map_err(|err| io::Error::other(format!("Go launch evidence unavailable: {err}")))?;
     // The original directory can differ on an offline copy, but the durable
     // ID and config's two physical path components must all identify the same session.
     let launch_dir = Path::new(field(&launch, "session_dir"));
@@ -409,16 +483,33 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || !launch_dir.is_absolute()
         || launch_dir.file_name().and_then(|n| n.to_str()) != meta["id"].as_str()
         || Path::new(field(&launch, "socket_path")) != launch_dir.join("shim.sock")
-        || launch["native_provider"] != "claude"
-        || launch["claude_input"] == true
-        || ["login_runtime", "opencode", "hermes_input", "agy_input"]
-            .iter()
-            .any(|key| !launch[*key].is_null())
+        || (meta["agent_type"] == "claude" && launch["native_provider"] != "claude")
+        || (meta["agent_type"] == "agy" && !classic_agy(meta, &launch))
+        || (meta["agent_type"] == "codex" && !classic_codex(meta, &launch))
+        || (meta["agent_type"] == "opencode" && !classic_opencode(meta, &launch))
         || [
-            "backend_program",
-            "backend_socket_path",
+            "claude_input",
+            "require_launch_identity",
+            "scheduled_codex_backend",
+            "backend_required",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null() && launch[*key] != false)
+        || [
+            "login_runtime",
+            "opencode",
+            "hermes_input",
+            "agy_input",
+            "account_binding",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null())
+        || (meta["agent_type"] != "codex" && backend_declared(&launch))
+        || [
             "manager_replay_id",
             "input_embargo",
+            "account_projection_ref",
+            "account_state_root",
         ]
         .iter()
         .any(|key| !launch[*key].is_null() && launch[*key] != "")
@@ -428,6 +519,154 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         ));
     }
     Ok(launch)
+}
+
+fn executable_binding(meta: &Value, launch: &Value, agent: &str) -> bool {
+    let identity = &launch["cli_identity"];
+    let executable = Path::new(field(identity, "path"));
+    let fingerprint = field(identity, "fingerprint");
+    identity.is_object()
+        && *identity == meta["cli_identity"]
+        && executable.is_absolute()
+        && executable.file_name().and_then(|n| n.to_str()) == Some(agent)
+        && fingerprint.len() == 64
+        && fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+        && launch["argv"].as_array().and_then(|args| args.first()) == Some(&identity["path"])
+}
+
+fn backend_declared(launch: &Value) -> bool {
+    ["backend_program", "backend_socket_path", "backend_cwd"]
+        .iter()
+        .any(|key| !launch[*key].is_null() && launch[*key] != "")
+        || [
+            "backend_args",
+            "backend_agent_args",
+            "backend_agent_command_args",
+            "backend_env",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null() && !launch[*key].as_array().is_some_and(Vec::is_empty))
+}
+
+fn classic_codex(meta: &Value, launch: &Value) -> bool {
+    const NETWORK: &str = "sandbox_workspace_write.network_access=true";
+    let mut argv = vec![launch["cli_identity"]["path"].clone()];
+    // The pinned Go builder gives a fresh ordinary TUI a fixed flag order.
+    // A trailing prompt is deliberately outside this proof because it can be a subcommand.
+    for (option, flag) in [("model", "--model"), ("sandbox", "--sandbox")] {
+        let value = field(&meta["launch_options"], option);
+        if !value.is_empty() {
+            argv.extend([json!(flag), json!(value)]);
+        }
+    }
+    argv.extend([json!("-c"), json!(NETWORK)]);
+    if launch["native_provider"] != "codex"
+        || meta["shim_wire_version"] != 2
+        || !executable_binding(meta, launch, "codex")
+        || launch["argv"] != json!(argv)
+        || !launch["backend_env"].is_null()
+            && !launch["backend_env"]
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string))
+        || crate::providers::codex::version(field(&launch["cli_identity"], "version")).is_err()
+    {
+        return false;
+    }
+    if !backend_declared(launch) {
+        return true;
+    }
+    let socket = Path::new(field(launch, "session_dir")).join("codex.sock");
+    let address = format!("unix://{}", socket.display());
+    Path::new(field(launch, "backend_socket_path")) == socket
+        && launch["backend_program"] == launch["cli_identity"]["path"]
+        && launch["backend_cwd"] == launch["cwd"]
+        && launch["backend_args"] == json!(["app-server", "--listen", address, "-c", NETWORK])
+        && launch["backend_agent_args"] == json!(["--remote", address])
+        && launch["backend_agent_command_args"].is_null()
+}
+
+fn classic_agy(meta: &Value, launch: &Value) -> bool {
+    if !launch["native_provider"].is_null()
+        || meta["shim_wire_version"] != 2
+        || !executable_binding(meta, launch, "agy")
+        || crate::providers::agy::version(field(&launch["cli_identity"], "version")).is_err()
+        || !launch["env"].as_array().is_some_and(|values| {
+            values.iter().all(|v| {
+                v.as_str().is_some_and(|v| {
+                    !v.starts_with("SWARM_AGY_ACP") && !v.starts_with("SWARM_SCHEDULE")
+                })
+            })
+        })
+    {
+        return false;
+    }
+    let remaining = &launch["argv"]
+        .as_array()
+        .expect("established launch arguments")[1..];
+    let mut args = remaining.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            Some("--dangerously-skip-permissions") => {}
+            Some("--model" | "--mode" | "--prompt-interactive" | "--conversation") => {
+                if !args.next().is_some_and(Value::is_string) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn classic_opencode(meta: &Value, launch: &Value) -> bool {
+    if meta["shim_wire_version"] != 1 || !launch["native_provider"].is_null() {
+        return false;
+    }
+    if (!launch["cli_identity"].is_null() || !meta["cli_identity"].is_null())
+        && !executable_binding(meta, launch, "opencode")
+    {
+        return false;
+    }
+    let thread = field(meta, "conversation_id");
+    if !thread.is_empty()
+        && !thread.strip_prefix("ses_").is_some_and(|id| {
+            (10..=128).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_alphanumeric())
+        })
+    {
+        return false;
+    }
+    let Some((program, rest)) = launch["argv"]
+        .as_array()
+        .and_then(|args| args.split_first())
+    else {
+        return false;
+    };
+    let Some(program) = program.as_str().map(Path::new) else {
+        return false;
+    };
+    if !program.is_absolute() || program.file_name().and_then(|n| n.to_str()) != Some("opencode") {
+        return false;
+    }
+    if let [flag, id] = rest
+        && flag == "--session"
+    {
+        return !thread.is_empty() && id == thread;
+    }
+    let mut args = rest.iter();
+    for (option, flag) in [("model", "--model"), ("agent", "--agent")] {
+        let value = field(&meta["launch_options"], option);
+        if !value.is_empty()
+            && (args.next().and_then(Value::as_str) != Some(flag)
+                || args.next().and_then(Value::as_str) != Some(value))
+        {
+            return false;
+        }
+    }
+    match args.as_slice() {
+        [] => true,
+        [flag, prompt] => flag == "--prompt" && prompt.as_str().is_some_and(|s| !s.is_empty()),
+        _ => false,
+    }
 }
 
 fn valid_meta(meta: &Value, id: &str) -> bool {

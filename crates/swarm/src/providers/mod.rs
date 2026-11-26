@@ -3,6 +3,7 @@ pub(crate) mod agy_input;
 pub(crate) mod claude;
 pub(crate) mod claude_input;
 pub(crate) mod codex;
+pub(crate) mod codex_continuity;
 pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;
 pub(crate) mod hermes;
@@ -49,6 +50,21 @@ pub(crate) fn prepare(
     };
     if agent == "codex" {
         codex::refuse_unqualified_origin(&request["env"])?;
+        let home = environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "HOME")
+            .map_or(Path::new(""), |(_, value)| Path::new(value));
+        if let Some(native) = codex::explicit_home(&request["env"], home)? {
+            if !request["worker_discussion"].is_null()
+                || !crate::ipc::field(request, "role").is_empty()
+            {
+                return Err(io::Error::other(
+                    "alternate CODEX_HOME requires an ordinary owner session",
+                ));
+            }
+            environment.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+        }
     }
     environment.retain(|(name, _)| match name.as_str() {
         "ANTHROPIC_API_KEY" => matches!(agent, "claude" | "hermes"),
@@ -232,6 +248,43 @@ fn probe_output(
         16 * 1024
     };
     command_output(executable, cwd, env, args, Duration::from_secs(5), limit)
+}
+
+pub(crate) fn claude_agent_view(
+    executable: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    all: bool,
+) -> io::Result<Vec<Value>> {
+    let mut args = vec!["agents", "--json"];
+    if all {
+        args.push("--all");
+    }
+    let output = command_output(
+        executable,
+        cwd,
+        env,
+        &args,
+        Duration::from_secs(15),
+        8 << 20,
+    )?;
+    Ok(serde_json::from_str(&output)?)
+}
+
+pub(crate) fn stop_claude_agent_view(
+    executable: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+) -> io::Result<()> {
+    command_output(
+        executable,
+        cwd,
+        env,
+        &["daemon", "stop", "--any"],
+        Duration::from_secs(30),
+        8 << 20,
+    )?;
+    Ok(())
 }
 
 fn command_output(

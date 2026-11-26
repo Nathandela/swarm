@@ -21,10 +21,17 @@ pub(crate) fn child_key(key: &str) -> bool {
 pub(crate) fn reliable(agent: &str, environment: Vec<String>) -> Vec<String> {
     let mut admitted = Vec::new();
     let mut unsupported_opencode = false;
+    let mut unsupported_codex = false;
     for entry in environment {
         let (key, value) = entry.split_once('=').unwrap_or((&entry, ""));
         if child_key(key) {
             admitted.push(entry);
+        } else if agent == "codex" {
+            if key == "CODEX_HOME" {
+                admitted.push(entry);
+            } else if !value.is_empty() && crate::providers::codex::unqualified_selector(key) {
+                unsupported_codex = true;
+            }
         } else if agent == "hermes" {
             match key {
                 "HERMES_HOME" | "HERMES_GATEWAY_LOCK_DIR" | "XDG_STATE_HOME" => {
@@ -61,6 +68,9 @@ pub(crate) fn reliable(agent: &str, environment: Vec<String>) -> Vec<String> {
                 _ => {}
             }
         }
+    }
+    if unsupported_codex {
+        admitted.push("SWARM_CODEX_UNSUPPORTED_ORIGIN=1".into());
     }
     if unsupported_opencode {
         admitted.push("SWARM_OPENCODE_UNSUPPORTED_ORIGIN=1".into());

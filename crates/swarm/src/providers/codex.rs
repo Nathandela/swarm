@@ -1,6 +1,8 @@
 use crate::ipc::field;
 use serde_json::{Value, json};
 use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn version(output: &str) -> io::Result<&str> {
     let reported = output
@@ -26,30 +28,36 @@ pub(crate) fn version(output: &str) -> io::Result<&str> {
     Ok(reported.0)
 }
 
+const UNQUALIFIED: &[&str] = &[
+    "SWARM_CODEX_UNSUPPORTED_ORIGIN",
+    "CODEX_PROFILE",
+    "CODEX_AUTH_JSON",
+    "OPENAI_IDENTITY_TOKEN_FILE",
+    "OPENAI_BASE_URL",
+    "CODEX_API_ENDPOINT",
+    "CODEX_ACCESS_TOKEN",
+    "CODEX_API_KEY",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT_ID",
+    "OPENAI_PROJECT",
+    "CODEX_CLI_AUTH_CREDENTIALS_STORE",
+    "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+    "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+];
+
+pub(crate) fn unqualified_selector(key: &str) -> bool {
+    UNQUALIFIED.contains(&key)
+}
+
 pub(crate) fn refuse_unqualified_origin(environment: &Value) -> io::Result<()> {
-    const UNQUALIFIED: &[&str] = &[
-        "CODEX_HOME",
-        "CODEX_PROFILE",
-        "CODEX_AUTH_JSON",
-        "OPENAI_BASE_URL",
-        "CODEX_API_ENDPOINT",
-        "CODEX_ACCESS_TOKEN",
-        "CODEX_API_KEY",
-        "OPENAI_ORG_ID",
-        "OPENAI_ORGANIZATION",
-        "OPENAI_PROJECT_ID",
-        "OPENAI_PROJECT",
-        "CODEX_CLI_AUTH_CREDENTIALS_STORE",
-        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
-        "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
-    ];
     let origin = if let Some(entries) = environment.as_array() {
         entries
             .iter()
             .filter_map(Value::as_str)
             .filter_map(|entry| entry.split_once('='))
             .find_map(|(key, value)| {
-                (!value.is_empty() && UNQUALIFIED.contains(&key)).then_some(key)
+                (!value.is_empty() && unqualified_selector(key)).then_some(key)
             })
     } else if environment.is_null() {
         UNQUALIFIED
@@ -65,6 +73,96 @@ pub(crate) fn refuse_unqualified_origin(environment: &Value) -> io::Result<()> {
         )));
     }
     Ok(())
+}
+
+pub(crate) fn explicit_home(environment: &Value, home: &Path) -> io::Result<Option<PathBuf>> {
+    let values = if environment.is_null() {
+        std::env::var_os("CODEX_HOME")
+            .map(|value| {
+                value
+                    .into_string()
+                    .map_err(|_| io::Error::other("Codex profile path is not UTF-8"))
+            })
+            .transpose()?
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        environment
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|entry| entry.strip_prefix("CODEX_HOME="))
+            .map(str::to_owned)
+            .collect()
+    };
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] if value.is_empty() => Ok(None),
+        [value] => native_home(home, Path::new(value)).map(Some),
+        _ => Err(io::Error::other("ambiguous CODEX_HOME")),
+    }
+}
+
+pub(crate) fn native_home(home: &Path, explicit: &Path) -> io::Result<PathBuf> {
+    let invalid =
+        || io::Error::other("CODEX_HOME requires a physical private ordinary directory below HOME");
+    let path = explicit.strip_prefix(home).map_err(|_| invalid())?;
+    if !home.is_absolute()
+        || !explicit.is_absolute()
+        || path.as_os_str().is_empty()
+        || home.canonicalize()? != home
+        || explicit.canonicalize()? != explicit
+    {
+        return Err(invalid());
+    }
+    let names = path.components().collect::<Vec<_>>();
+    if names.windows(2).any(|parts| {
+        parts[0].as_os_str() == "logins"
+            && matches!(
+                parts[1].as_os_str().to_str(),
+                Some("provider" | "enrollment" | "pending" | "saved")
+            )
+    }) {
+        return Err(io::Error::other(
+            "CODEX_HOME points into a retired Swarm-managed account pool",
+        ));
+    }
+    // SAFETY: UID lookup has no process side effects.
+    let uid = unsafe { libc::geteuid() };
+    let root = home.symlink_metadata()?;
+    if !root.is_dir() || root.uid() != uid || root.mode() & 0o022 != 0 {
+        return Err(invalid());
+    }
+    let mut dir = home.to_owned();
+    for name in names {
+        dir.push(name.as_os_str());
+        let stat = dir.symlink_metadata()?;
+        if !stat.is_dir()
+            || stat.uid() != uid
+            || stat.mode() & 0o022 != 0
+            || dir == explicit && stat.mode() & 0o077 != 0
+        {
+            return Err(invalid());
+        }
+    }
+    for name in ["auth.json", "config.toml"] {
+        match dir.join(name).symlink_metadata() {
+            Ok(info)
+                if info.is_file()
+                    && info.uid() == uid
+                    && info.nlink() == 1
+                    && info.mode() & 0o022 == 0 => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "alternate CODEX_HOME contains an unqualified configuration or authentication file",
+                ));
+            }
+        }
+    }
+    Ok(dir)
 }
 
 pub(crate) fn argv(request: &Value) -> io::Result<Vec<String>> {

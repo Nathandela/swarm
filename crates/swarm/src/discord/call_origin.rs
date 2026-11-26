@@ -15,6 +15,7 @@ fn hex(id: &str, len: usize) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+#[cfg(test)]
 pub(super) fn origin(
     scope: &Value,
     call: &str,
@@ -22,10 +23,31 @@ pub(super) fn origin(
     turn: u64,
     text: &str,
 ) -> io::Result<Value> {
+    speaker_origin(
+        scope,
+        call,
+        generation,
+        turn,
+        scope["owner_id"].as_str().unwrap_or_default(),
+        text,
+    )
+}
+
+pub(super) fn speaker_origin(
+    scope: &Value,
+    call: &str,
+    generation: u64,
+    turn: u64,
+    speaker: &str,
+    text: &str,
+) -> io::Result<Value> {
+    let team = scope["guild_id"]
+        .as_str()
+        .is_some_and(super::config::snowflake);
     let body_hash = hash(&json!(text))?;
     let voice = json!({
         "call_id":call, "generation":generation, "turn_id":turn, "body_hash":body_hash,
-        "speaker_id":scope["owner_id"], "supervisor_socket":scope["supervisor_socket"],
+        "speaker_id":speaker, "supervisor_socket":scope["supervisor_socket"],
     });
     let id = operation(&scope["installation_id"], &voice)?;
     let conversation = scope["launch"]["manager"]["conversation_id"]
@@ -34,11 +56,14 @@ pub(super) fn origin(
     let discussion = conversation
         .strip_prefix("discord-teammate-")
         .ok_or_else(|| invalid("voice discussion has no binding"))?;
-    let origin = json!({
-        "kind":"owner_direct","installation_id":scope["installation_id"],"discussion_id":discussion,
-        "actor_id":scope["owner_id"],"requester_id":scope["owner_id"],"channel_id":scope["channel_id"],
+    let mut origin = json!({
+        "kind":if team {"team_participant"} else {"owner_direct"},"installation_id":scope["installation_id"],"discussion_id":discussion,
+        "actor_id":speaker,"requester_id":speaker,"channel_id":scope["channel_id"],
         "request_id":id,"revision":body_hash,"voice":voice,
     });
+    if team {
+        origin["guild_id"] = scope["guild_id"].clone();
+    }
     validate(scope, &origin, text)?;
     Ok(origin)
 }
@@ -63,15 +88,24 @@ pub(super) fn validate(scope: &Value, origin: &Value, text: &str) -> io::Result<
         || !voice["turn_id"]
             .as_u64()
             .is_some_and(|turn| turn > 0 && turn <= 256)
-        || voice["speaker_id"] != scope["owner_id"]
+        || if super::super::ipc::field(scope, "guild_id").is_empty() {
+            voice["speaker_id"] != scope["owner_id"]
+                || origin["kind"] != "owner_direct"
+                || !origin["guild_id"].is_null()
+        } else {
+            !voice["speaker_id"]
+                .as_str()
+                .is_some_and(super::config::snowflake)
+                || voice["speaker_id"] == scope["application_id"]
+                || origin["kind"] != "team_participant"
+                || origin["guild_id"] != scope["guild_id"]
+        }
         || voice["supervisor_socket"] != scope["supervisor_socket"]
         || origin["installation_id"] != scope["installation_id"]
-        || origin["kind"] != "owner_direct"
-        || origin["actor_id"] != scope["owner_id"]
-        || origin["requester_id"] != scope["owner_id"]
+        || origin["actor_id"] != voice["speaker_id"]
+        || origin["requester_id"] != voice["speaker_id"]
         || origin["channel_id"] != scope["channel_id"]
         || !origin["message_id"].is_null()
-        || !origin["guild_id"].is_null()
         || origin["request_id"] != operation(&scope["installation_id"], voice)?
         || conversation.strip_prefix("discord-teammate-") != origin["discussion_id"].as_str()
         || voice["body_hash"] != origin["revision"]

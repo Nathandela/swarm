@@ -5,6 +5,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -34,6 +36,79 @@ pub(super) fn call(
     query: &str,
     request: Option<(&str, &Value)>,
 ) -> io::Result<Value> {
+    exchange(
+        dir,
+        operation,
+        query,
+        request,
+        Instant::now() + TIMEOUT,
+        false,
+    )
+}
+
+pub(super) fn call_until(
+    dir: &Path,
+    operation: &str,
+    query: &str,
+    request: Option<(&str, &Value)>,
+    end: Instant,
+) -> io::Result<Value> {
+    exchange(dir, operation, query, request, end, true)
+}
+
+fn connect_available(path: &Path) -> io::Result<UnixStream> {
+    let bytes = path.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if bytes.len() >= address.sun_path.len() || bytes.contains(&0) {
+        return Err(invalid("invalid connector socket path"));
+    }
+    address.sun_family = libc::AF_UNIX as _;
+    for (dst, src) in address.sun_path.iter_mut().zip(bytes) {
+        *dst = *src as _;
+    }
+    let length =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
+    #[cfg(target_os = "macos")]
+    {
+        address.sun_len = length as u8;
+    }
+    // A read-only inventory must not block in connect behind a full local listen queue.
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let stream = UnixStream::from(fd);
+    stream.set_nonblocking(true)?;
+    if unsafe {
+        libc::connect(
+            stream.as_raw_fd(),
+            (&address as *const libc::sockaddr_un).cast(),
+            length,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
+
+fn exchange(
+    dir: &Path,
+    operation: &str,
+    query: &str,
+    request: Option<(&str, &Value)>,
+    end: Instant,
+    bounded_connect: bool,
+) -> io::Result<Value> {
+    let remaining = end.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
     let socket = dir.join("bridge.sock");
     let meta = fs::symlink_metadata(&socket).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
@@ -50,9 +125,13 @@ pub(super) fn call(
     {
         return Err(invalid("unsafe local socket"));
     }
-    let mut stream = UnixStream::connect(socket)
-        .map_err(|err| io::Error::new(err.kind(), format!("connect local service: {err}")))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
+    let mut stream = if bounded_connect {
+        connect_available(&socket)
+    } else {
+        UnixStream::connect(socket)
+    }
+    .map_err(|err| io::Error::new(err.kind(), format!("connect local service: {err}")))?;
+    stream.set_write_timeout(Some(remaining))?;
     let (method, path, body) = match request {
         Some((installation, body)) => {
             // Stock Go dispatches exact paths. An unsupported peer refuses the
@@ -73,7 +152,7 @@ pub(super) fn call(
     stream.write_all(headers.as_bytes())?;
     stream.write_all(&body)?;
 
-    let mut reader = DeadlineReader(&stream, Instant::now() + TIMEOUT);
+    let mut reader = DeadlineReader(&stream, end);
     let mut response = Vec::new();
     let mut buf = [0; 8192];
     let mut header_end = None;

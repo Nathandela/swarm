@@ -261,7 +261,19 @@ fn upgrade(root: &Path) -> Finding {
             "swarm upgrade --unattended (retries the converge)",
         );
     }
-    let st = match read_json(&root.join("upgrade.json")) {
+    let journal = match crate::upgrade::identify() {
+        Ok(Some((install, _))) => install.join("upgrade.json"),
+        Ok(None) => root.join("upgrade.json"),
+        Err(error) => {
+            return finding(
+                "auto-update",
+                "warn",
+                format!("cannot identify upgrade owner: {error}"),
+                "",
+            );
+        }
+    };
+    let st = match read_json(&journal) {
         Ok(v) => v,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return finding("auto-update", "ok", "has not run on this machine", "");

@@ -20,6 +20,9 @@ use subtle::ConstantTimeEq;
 pub(super) trait Audience {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>>;
     fn verify(&self, cfg: &Config) -> io::Result<()>;
+    fn admit(&self, inbox: &mut Inbox, source: &Value) -> io::Result<Option<Value>> {
+        inbox.admit(source)
+    }
     fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post;
 }
 
@@ -82,9 +85,13 @@ impl Dispatcher {
     }
 
     pub(super) fn scope(&self, cfg: &Config) -> Value {
-        json!({"launch":self.launch,"installation_id":cfg.text("installation_id"),
+        let mut scope = json!({"launch":self.launch,"installation_id":cfg.text("installation_id"),
             "application_id":cfg.text("application_id"),"owner_id":cfg.text("owner_id"),
-            "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")})
+            "channel_id":self.owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
+        if !self.owner.guild().is_empty() {
+            scope["guild_id"] = json!(self.owner.guild());
+        }
+        scope
     }
 
     #[cfg(test)]
@@ -219,7 +226,12 @@ impl Dispatcher {
             if phase == "completed" {
                 let nonce = field(&state["input"], "final_nonce");
                 if nonce.is_empty() || inbox.publication(nonce)["state"] == "sent" {
-                    let origin = &state["input"]["composer"]["origin"];
+                    let input = &state["input"];
+                    let origin = if input["worker_wake"]["voice_origin"].is_object() {
+                        &input["worker_wake"]["voice_origin"]
+                    } else {
+                        &input["composer"]["origin"]
+                    };
                     if let Some((_, driver)) = calls
                         && !nonce.is_empty()
                         && origin["voice"].is_object()
@@ -236,7 +248,7 @@ impl Dispatcher {
                     let publication = inbox.publication(nonce);
                     if !publication["proof"]["file_source"].is_null() {
                         mail_store::release_publication(
-                            &self.owner.mail_root()?,
+                            &self.owner.supervisor_root()?,
                             &publication["proof"]["file_source"],
                             nonce,
                         )?;
@@ -279,14 +291,15 @@ impl Dispatcher {
             let Some(source) = api.current(cfg, &id)? else {
                 return inbox.withdraw(&id);
             };
-            let Some(current) = inbox.admit(&source)? else {
+            let Some(current) = api.admit(inbox, &source)? else {
                 return inbox.withdraw(&id);
             };
             (id, current)
         };
-        let composer = self.owner.composer(&current, &status)?;
+        let starting_prompt = crate::manager_prompt::load(&self.owner.supervisor_root()?)?;
+        let composer = self.owner.composer(&current, &status, &starting_prompt)?;
         let semantic = operation("semantic")?;
-        state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id});
+        state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id,"starting_prompt":starting_prompt});
         inbox.cutover(&id, field(&current, "revision"), state)?;
         // Ambiguous sends are never retried. Only the native pre-effect authority refusal is safe.
         match self.owner.send(&semantic, &composer) {
@@ -353,7 +366,7 @@ impl Dispatcher {
             return Ok(());
         }
         let binding = &state["binding"];
-        let root = self.owner.mail_root()?;
+        let root = self.owner.supervisor_root()?;
         let queued = inbox.next_prepared().is_some()
             || voice && inbox.prepared_voice().is_some()
             || !mail_store::pending(&root, field(binding, "conversation_id"), 0, |note| {
@@ -415,13 +428,15 @@ impl Dispatcher {
         if !inbox.matches_owner_admission(id, revision) {
             return Ok(Some(false));
         }
+        if super::call_origin::key(id) {
+            return Ok(api.verify(cfg).ok().map(|_| true));
+        }
         let source = match api.current(cfg, id) {
             Ok(Some(source)) => source,
             Ok(None) => return Ok(Some(false)),
             Err(_) => return Ok(None),
         };
         if source["id"] != id
-            || source["channel_id"] != cfg.text("dm_channel_id")
             || !source["author"]["id"].is_string()
             || !source["content"].is_string()
             || !source["attachments"].is_array()
@@ -430,7 +445,7 @@ impl Dispatcher {
         {
             return Ok(None);
         }
-        match inbox.admit(&source) {
+        match api.admit(inbox, &source) {
             Ok(receipt) => Ok(Some(receipt.is_some_and(|current| {
                 current["state"] == "accepted" && current["revision"] == *revision
             }))),
@@ -453,7 +468,7 @@ impl Dispatcher {
         {
             return Ok(());
         }
-        let root = self.owner.mail_root()?;
+        let root = self.owner.supervisor_root()?;
         let binding = &state["binding"];
         let notes = crate::supervisor::mail_store::pending(
             &root,
@@ -486,16 +501,25 @@ impl Dispatcher {
             }
             let key = mail_wake::key(&note)?;
             let accepted_revision = accepted["revision"].clone();
+            let voice = accepted["voice_origin"].clone();
             let mut wake_input = accepted;
+            wake_input
+                .as_object_mut()
+                .unwrap()
+                .shift_remove("voice_origin");
             wake_input["operation_id"] = json!(format!("mail_{key}"));
             wake_input["revision"] = json!(key);
             wake_input["text"] = json!(mail_wake::text(&note));
-            let composer = self.owner.composer(&wake_input, status)?;
+            let starting_prompt = crate::manager_prompt::load(&root)?;
+            let mut composer = self.owner.composer(&wake_input, status, &starting_prompt)?;
             let semantic = operation("semantic")?;
-            state["input"] = json!({
-                "operation":semantic,"composer":composer,"source_id":id,
-                "worker_wake":{"key":key,"binding":mail_wake::identity(&note),"id":note["ID"],"owner_revision":accepted_revision}
-            });
+            let mut wake = json!({"key":key,"binding":mail_wake::identity(&note),"id":note["ID"],"owner_revision":accepted_revision});
+            if voice.is_object() {
+                composer["origin"]["worker_wake"] = json!({"source_id":id,"key":key});
+                wake["voice_origin"] = voice;
+                wake["note_digest"] = json!(mail_wake::note_digest(&note)?);
+            }
+            state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id,"worker_wake":wake,"starting_prompt":starting_prompt});
             state["worker_wakes"][&key] = json!(true);
             inbox.set_manager(state)?;
             if self.owner.send(&semantic, &composer).is_err() {
@@ -557,6 +581,7 @@ impl Dispatcher {
                 || publication["source_id"] != input["source_id"]
                 || input["turn_id"].is_null()
                 || input["final_nonce"] != nonce
+                || publication["voice_worker"] != mail_wake::link(&input["worker_wake"])
                 || publication["call_receipt"]["native_input_id"]
                     != input["composer"]["manager_admission"]["nonce"]
             {
@@ -571,7 +596,12 @@ impl Dispatcher {
             let source_id = field(input, "source_id");
             let origin = &input["composer"]["origin"];
             if super::call_origin::key(source_id) {
-                if !inbox.accepted_voice(source_id, origin) {
+                let voice = if input["worker_wake"]["voice_origin"].is_object() {
+                    &input["worker_wake"]["voice_origin"]
+                } else {
+                    origin
+                };
+                if !inbox.accepted_voice(source_id, voice) {
                     return Err(invalid(
                         "publication requires the original accepted voice admission",
                     ));
@@ -583,8 +613,8 @@ impl Dispatcher {
                     .ok_or_else(|| {
                         invalid("publication requires the original visible Discord source")
                     })?;
-                let current = inbox
-                    .admit(&source)?
+                let current = api
+                    .admit(inbox, &source)?
                     .filter(|receipt| receipt["state"] == "accepted")
                     .ok_or_else(|| {
                         invalid("publication source no longer proves native admission")
@@ -628,7 +658,7 @@ impl Dispatcher {
                         "queued publication no longer matches the selected worker note",
                     ));
                 }
-                mail_store::pin_publication(&self.owner.mail_root()?, file_source, &nonce)?
+                mail_store::pin_publication(&self.owner.supervisor_root()?, file_source, &nonce)?
             };
             inbox.publication_state(&nonce, "sending", None)?;
             match api.post(cfg, &nonce, body, &files) {
@@ -727,7 +757,7 @@ impl Dispatcher {
             if proof["native_turn_id"] != input["turn_id"] {
                 return Err(invalid("native mailbox tool belongs to another turn"));
             }
-            let scope = self.owner.mail_root()?;
+            let scope = self.owner.supervisor_root()?;
             let session = if input["worker_wake"].is_null() {
                 field(&state, "session")
                     .rsplit('/')
@@ -822,6 +852,14 @@ impl Dispatcher {
             "native_call_id":proof["native_call_id"], "call_receipt":proof,
             "host_meta":call["meta"], "arguments":args, "arguments_hash":hash(&args)?
         });
+        let link = mail_wake::link(&input["worker_wake"]);
+        if !link.is_null() {
+            publication["voice_worker"] = link;
+        }
+        if !self.owner.guild().is_empty() {
+            publication["audience"] =
+                json!({"guild_id":self.owner.guild(),"thread_id":self.owner.channel()});
+        }
         if !args["file_ids"].is_null() {
             let ids = args["file_ids"]
                 .as_array()
