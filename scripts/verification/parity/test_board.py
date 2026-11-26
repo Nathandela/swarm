@@ -879,8 +879,13 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             if external.exists():
                 physical = external.read_bytes()
                 assert physical == report, physical
+                pasted = b"\x1b[200~" + physical + b"\x1b[201~"
+                board.send(pasted)
+                wanted += pasted
                 board.send(physical[:5])
                 board.send(physical[5:])
+                board.send(physical)
+                wanted += physical  # The expected reply was consumed. This copy is unsolicited.
             marker(press + release + b"native after query",
                    wanted + press + release + b"native after query\r")
             offset = len(board.capture)

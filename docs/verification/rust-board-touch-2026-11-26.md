@@ -37,3 +37,8 @@ scripts/verification/parity/test_board.py --touch-back --terminal-mouse-reply "$
 | XTerm 372 DECRPM bytes | `7e740e618b402592ca5958698f6a1515ab7dcabad327392f049ef4e71bb18f73` |
 
 The shim queue is bounded. The input filter consumes at most one response per accepted mouse DECRQM within a two-second window and retains unrelated, expired, and pasted reports. This slice qualifies the relevant mouse reports. Full emulator query parity, full Options cell parity, Manager Prompt, and Codex Context Guard settings are separate acceptance items.
+
+
+## Approved input preservation replay
+
+On 26 November 2026 the public PTY fixture replayed the captured XTerm 372 bytes at `dc269ed8` on the Darwin arm64 Mac and Linux x86_64 VM. While a real mouse-mode query was outstanding, it first pasted a complete copy of the report, then delivered the matching physical reply in two fragments, followed by another uncued copy. The worker received the virtual reply exactly once, the complete bracketed paste including delimiters, the unsolicited copy and the following ordinary input in order. Both runs restored the terminal and reported zero surviving children. The Darwin executable SHA-256 was `138c15eee8a2a4f966895ac20b23f56099992befda41e705739dd3c40f767f7a`. The Linux executable SHA-256 was `4e9df2147ca39dcb16a15add46772371768550c84f18bb569d8027b28e16523f`.
