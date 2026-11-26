@@ -28,6 +28,22 @@ struct Compaction {
     expires: Instant,
 }
 
+impl Compaction {
+    fn displaced_by(&self, thread: &str, frame: &Value) -> bool {
+        let params = &frame["params"];
+        let turn = field(&params["turn"], "id");
+        let parent = field(&params["turn"], "rootTurnId");
+        self.completed.is_some()
+            && frame["method"] == "turn/started"
+            && params["threadId"] == thread
+            && (parent.is_empty() || parent == turn)
+            && self
+                .item
+                .as_ref()
+                .is_none_or(|(compaction_turn, _)| compaction_turn != turn)
+    }
+}
+
 pub(super) struct Guard {
     state: Arc<super::super::State>,
     root: PathBuf,
@@ -179,7 +195,14 @@ impl Guard {
         view
     }
 
+    pub(super) fn owner_input(&mut self) {
+        // A later idle observation cannot revive a continuation displaced by new work.
+        self.inflight.take_if(|cycle| cycle.completed.is_some());
+    }
+
     pub(super) fn frame(&mut self, frame: &Value) {
+        self.inflight
+            .take_if(|cycle| cycle.displaced_by(&self.thread, frame));
         let evidence = model::evidence(frame, &self.thread);
         let lifecycle = frame["params"]["threadId"] == self.thread
             && (frame["params"]["item"]["type"] == "contextCompaction"
@@ -479,5 +502,44 @@ impl Guard {
         self.state
             .context_guard_busy
             .store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unrelated_native_turn_permanently_displaces_a_completed_compactions_continuation() {
+        let new_cycle = || Compaction {
+            rpc: 3,
+            ack: true,
+            item: Some(("guard-turn".into(), "item".into())),
+            completed: Some(Instant::now()),
+            attended_generation: 0,
+            settings_revision: 4,
+            expires: Instant::now() + Duration::from_secs(120),
+        };
+        let started = |thread: &str, id: &str, root: &str| {
+            json!({
+                "method":"turn/started","params":{"threadId":thread,"turn":{"id":id,"rootTurnId":root}}
+            })
+        };
+        let mut pending = Some(new_cycle());
+        for frame in [
+            started("ours", "guard-turn", ""),
+            started("other", "owner-turn", ""),
+            started("ours", "child", "guard-turn"),
+        ] {
+            pending.take_if(|cycle| cycle.displaced_by("ours", &frame));
+            assert!(pending.is_some());
+        }
+        for frame in [
+            started("ours", "owner-turn", ""),
+            json!({"method":"thread/status/changed","params":{"threadId":"ours","status":{"type":"idle"}}}),
+        ] {
+            pending.take_if(|cycle| cycle.displaced_by("ours", &frame));
+            assert!(pending.is_none());
+        }
     }
 }

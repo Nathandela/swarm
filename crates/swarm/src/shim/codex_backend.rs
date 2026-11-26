@@ -669,6 +669,9 @@ fn submit(
             ));
         }
     }
+    if let Some(guard) = observation.guard.as_mut() {
+        guard.owner_input();
+    }
     observation.fresh_no_rollout = false;
     observation.idle = false;
     let mut params = json!({"threadId":observation.thread,
