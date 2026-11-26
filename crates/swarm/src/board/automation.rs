@@ -852,6 +852,10 @@ impl Automation {
             let mut cells = 0;
             let mut row = String::new();
             for cluster in line.graphemes(true) {
+                if cluster == "\r" {
+                    continue;
+                }
+                // The Go view expands tabs after measuring the logical row.
                 let tab = cluster == "\t";
                 let size = if tab { 0 } else { cluster.width() };
                 if cells + size.max(usize::from(tab)) > width {
@@ -1353,7 +1357,7 @@ mod pointer_tests {
             "spec":{"name":"Fixture","directory":"/fixture","workspace":"directory",
                 "authority":"agent-default","agents":["claude","codex"],
                 "calendar":{"kind":"daily","time_zone":"UTC","time":"09:00"},
-                "prompt":"A continuation that needs two labels.\n\nEnd\tmarker."}
+                "prompt":"A continuation that needs two labels.\r\n\nEnd\tmarker."}
         }))
         .unwrap();
         let mut view = Automation::default();
