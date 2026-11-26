@@ -86,52 +86,43 @@ func TestMailboxDiscoveryKeepsHealthySupervisorWhenHistoricalIndexUnavailable(t 
 	}
 }
 
-func TestTicketSupervisorStaysPinnedAcrossRestartAndNeverFallsBack(t *testing.T) {
-	ticket := discord.TicketSupervisor{StateDir: "/ticket/state", Socket: "/ticket.sock", Endpoint: "ticket"}
-	b := discord.TeammateDiscussion{
-		SupervisorSocket: ticket.Socket, TicketEventID: "event", TicketProject: "fii", TicketSupervisor: ticket, TicketManagerCLI: "codex",
-		ID: "thread", InstallationID: "place", Route: discord.Route{GuildID: "guild", ChannelID: "thread"},
+func TestTicketDiscussionUsesExistingSupervisorAndKeepsItsRoute(t *testing.T) {
+	r := Runtime{
+		cfg:      voice.Config{DaemonSocket: "/claudio.sock", Provider: "claude"},
+		endpoint: "claudio", managerSettingsDir: "/claudio", ticketProject: "fii",
 	}
-	r := func(shared string) *Runtime {
-		return &Runtime{vmProjectAccess: true, endpoint: shared, cfg: voice.Config{DaemonSocket: "/" + shared + ".sock"},
-			ticketSupervisor: ticket, ticketManagerCLI: "codex", previous: &discord.PreviousSupervisor{Endpoint: "old", Socket: "/old.sock"}}
+	ticket := discord.TeammateDiscussion{
+		SupervisorSocket: r.cfg.DaemonSocket, TicketEventID: "event", TicketProject: "fii", TicketManagerCLI: "claude",
 	}
-	for _, shared := range []string{"shared", "new-shared"} {
-		runtime := r(shared)
-		endpoint, socket, dir, err := runtime.supervisorForDiscussion(b)
-		if err != nil || endpoint != ticket.Endpoint || socket != ticket.Socket || dir != ticket.StateDir {
-			t.Fatalf("ticket followed the shared supervisor after startup or restart: %s %s %s %v", endpoint, socket, dir, err)
-		}
-		generic := discord.TeammateDiscussion{SupervisorSocket: "/" + shared + ".sock"}
-		if endpoint, _, _, err = runtime.supervisorForDiscussion(generic); err != nil || endpoint != shared {
-			t.Fatalf("existing human discussion moved: %s %v", endpoint, err)
-		}
-		fallback := b
-		for _, invalidSocket := range []string{"", "/" + shared + ".sock", "/old.sock", "/other.sock"} {
-			fallback.SupervisorSocket = invalidSocket
-			if _, _, _, err = runtime.supervisorForDiscussion(fallback); !errors.Is(err, voice.ErrStale) {
-				t.Fatalf("ticket substituted supervisor %q: %v", invalidSocket, err)
-			}
+	checkRoute := func() {
+		t.Helper()
+		endpoint, socket, dir, err := r.supervisorForDiscussion(ticket)
+		if err != nil || endpoint != "claudio" || socket != "/claudio.sock" || dir != "/claudio" {
+			t.Fatalf("ticket lost its dispatcher: %s %s %s %v", endpoint, socket, dir, err)
 		}
 	}
-	runtime := r("shared")
-	runtime.ticketManagerCLI = "claude"
-	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
-		t.Fatalf("a configured provider change substituted the ticket's pinned provider: %v", err)
+	checkRoute()
+	r.previous = &discord.PreviousSupervisor{
+		SupervisorPaths: discord.SupervisorPaths{StateDir: r.managerSettingsDir},
+		Endpoint:        r.endpoint, Socket: r.cfg.DaemonSocket,
 	}
-	runtime.ticketManagerCLI = "codex"
-	noPin := b
-	noPin.TicketManagerCLI = ""
-	if _, _, _, err := runtime.supervisorForDiscussion(noPin); !errors.Is(err, voice.ErrStale) {
-		t.Fatalf("ticket without a persisted provider fell back: %v", err)
+	r.endpoint, r.cfg.DaemonSocket, r.managerSettingsDir = "new", "/new.sock", "/new"
+	checkRoute()
+	for _, change := range []func(*discord.TeammateDiscussion){
+		func(b *discord.TeammateDiscussion) { b.SupervisorSocket = "" },
+		func(b *discord.TeammateDiscussion) { b.SupervisorSocket = "/other.sock" },
+		func(b *discord.TeammateDiscussion) { b.TicketManagerCLI = "codex" },
+		func(b *discord.TeammateDiscussion) { b.TicketProject = "other" },
+	} {
+		invalid := ticket
+		change(&invalid)
+		if _, _, _, err := r.supervisorForDiscussion(invalid); !errors.Is(err, voice.ErrStale) {
+			t.Fatalf("accepted a changed ticket binding %+v: %v", invalid, err)
+		}
 	}
-	runtime.ticketSupervisor.Endpoint = "replacement"
-	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
-		t.Fatalf("configuration change moved an existing ticket: %v", err)
-	}
-	runtime.ticketSupervisor = discord.TicketSupervisor{}
-	if _, _, _, err := runtime.supervisorForDiscussion(b); !errors.Is(err, voice.ErrStale) {
-		t.Fatalf("unenrolled ticket fell back: %v", err)
+	r.ticketProject = ""
+	if _, _, _, err := r.supervisorForDiscussion(ticket); !errors.Is(err, voice.ErrStale) {
+		t.Fatalf("accepted a ticket after unenrollment: %v", err)
 	}
 }
 

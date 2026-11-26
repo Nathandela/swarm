@@ -60,7 +60,7 @@ func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 	service.Store = store
-	enrollment.ManagerCLI = "codex"
+	service.Config.ManagerCLI = "codex"
 	duplicate := req(http.MethodPost, endpoint, bearer, event)
 	status := req(http.MethodGet, endpoint+"?event_id="+event.EventID, bearer, ticketEvent{})
 	if duplicate.Code != http.StatusOK || status.Code != http.StatusOK ||
@@ -94,7 +94,6 @@ func TestTicketIngressRequiresBearerAndSurvivesStoreRestart(t *testing.T) {
 
 func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	enrollment, event := ticketFixture()
-	enrollment.ManagerCLI = "codex"
 	opener := teammateTestMessage("201", "20", "87", "Ticket\n"+event.AnnouncementMarker, false)
 	opener.Author.Bot, opener.WebhookID = true, enrollment.WebhookID
 	early := teammateTestMessage("202", "201", "77", "<@99> runs first", true)
@@ -130,6 +129,8 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
+	bridge.service.Config.ManagerCLI = "claude"
+	bridge.service.Config.DaemonSocket = "/tmp/claudio.sock"
 	grantStatus := configureTicketGrantFixture(t, bridge, &enrollment, event, http.StatusNoContent)
 	store := bridge.service.Store
 	install := bridge.service.Config.InstallationID
@@ -137,7 +138,7 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	if pending, err := store.teammatePending(install); err != nil || len(pending) != 0 {
 		t.Fatalf("webhook bypassed trusted admission: %v, %v", pending, err)
 	}
-	if _, err := store.queueTicket(install, event, bridge.service.Config.EffectiveTicketManagerCLI()); err != nil {
+	if _, err := store.queueTicket(install, event, bridge.service.Config.ManagerCLI); err != nil {
 		t.Fatal(err)
 	}
 	process := func(nextState string) ticketRecord {
@@ -161,8 +162,8 @@ func TestTicketDispatchRecoversThreadAndNeverAdmitsColdHuman(t *testing.T) {
 	}
 	original := manager.admitted[0]
 	if original.Authority != AuthorityTicketAssignment || original.Discussion.TicketEventID != event.EventID ||
-		original.Discussion.TicketProject != enrollment.Project || original.Discussion.TicketSupervisor != enrollment.Supervisor ||
-		original.Discussion.SupervisorSocket != enrollment.Supervisor.Socket || original.Discussion.TicketManagerCLI != "codex" {
+		original.Discussion.TicketProject != enrollment.Project ||
+		original.Discussion.SupervisorSocket != bridge.service.Config.DaemonSocket || original.Discussion.TicketManagerCLI != "claude" {
 		t.Fatalf("machine provenance missing: %+v", original)
 	}
 	if _, _, err := bridge.resolve(ctx, teammateCandidate{
@@ -264,9 +265,7 @@ func (m *ticketCheckoutFixture) CheckoutStatus(TeammateDiscussion) (TeammateNati
 }
 
 func ticketFixture() (TicketIntake, ticketEvent) {
-	intake := TicketIntake{GuildID: "10", ChannelID: "20", WebhookID: "89", Repo: "Quanthome/fii", Project: "fii", GrantSocket: "/tmp/relay.sock",
-		Supervisor: TicketSupervisor{StateDir: "/tmp/tickets", Socket: "/tmp/tickets/daemon.sock", Endpoint: "tickets"},
-	}
+	intake := TicketIntake{GuildID: "10", ChannelID: "20", WebhookID: "89", Repo: "Quanthome/fii", Project: "fii", GrantSocket: "/tmp/relay.sock"}
 	event := ticketEvent{EventID: "event-1", AssignmentID: "assignment-1", TicketID: "ticket-1",
 		GuildID: "10", ChannelID: "20", AnnouncementMessageID: "201", AnnouncementMarker: "delivery-marker-example", Repo: "Quanthome/fii", Summary: "Synthetic staging ticket."}
 	return intake, event
@@ -303,12 +302,12 @@ func TestTicketRejectsUnverifiedAnnouncementBeforeAnyEffect(t *testing.T) {
 			configureTicketGrantFixture(t, bridge, &enrollment, event, test.grantStatus)
 			install := bridge.service.Config.InstallationID
 			store := bridge.service.Store
-			if _, err := store.queueTicket(install, event, bridge.service.Config.EffectiveTicketManagerCLI()); err != nil {
+			if _, err := store.queueTicket(install, event, bridge.service.Config.ManagerCLI); err != nil {
 				t.Fatal(err)
 			}
 			duplicateAssignment := event
 			duplicateAssignment.EventID, duplicateAssignment.AnnouncementMessageID = "new-event", "210"
-			if _, err := store.queueTicket(install, duplicateAssignment, bridge.service.Config.EffectiveTicketManagerCLI()); !errors.Is(err, ErrConflict) {
+			if _, err := store.queueTicket(install, duplicateAssignment, bridge.service.Config.ManagerCLI); !errors.Is(err, ErrConflict) {
 				t.Fatalf("one assignment got another event or thread: %v", err)
 			}
 			pending, err := store.teammatePending(install)
@@ -326,7 +325,7 @@ func TestTicketRejectsUnverifiedAnnouncementBeforeAnyEffect(t *testing.T) {
 	}
 }
 
-func TestTicketIntakeRequiresDedicatedSupervisor(t *testing.T) {
+func TestTicketIntakeUsesExistingTeammateManager(t *testing.T) {
 	enrollment, _ := ticketFixture()
 	enrollment.TokenFile = "/tmp/relay"
 	cfg := Config{
@@ -337,25 +336,13 @@ func TestTicketIntakeRequiresDedicatedSupervisor(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.EffectiveTicketManagerCLI() != cfg.ManagerCLI {
-		t.Fatal("ticket lane did not inherit the configured manager")
-	}
-	enrollment.ManagerCLI = "claude"
-	if err := cfg.Validate(); err != nil || cfg.EffectiveTicketManagerCLI() != "claude" || cfg.ManagerCLI != "codex" {
-		t.Fatalf("ticket override changed the shared manager: %v", err)
-	}
-	enrollment.ManagerCLI = "opencode"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("ticket lane accepted an unsupported manager")
-	}
-	enrollment.ManagerCLI = ""
 	cfg.ProjectAccess = ProjectAccessVM
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("dedicated tickets changed regular VM discussions: %v", err)
+		t.Fatalf("ticket enrollment rejected existing VM discussions: %v", err)
 	}
-	enrollment.Supervisor.Socket = cfg.DaemonSocket
+	enrollment.GrantSocket = cfg.DaemonSocket
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("ticket intake accepted the shared supervisor socket")
+		t.Fatal("ticket intake accepted the manager socket as its grant verifier")
 	}
 	cfg.TicketIntake = nil
 	if err := cfg.Validate(); err != nil {

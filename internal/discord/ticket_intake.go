@@ -22,21 +22,13 @@ import (
 
 // TicketIntake enrolls one machine inbox and its fixed local project.
 type TicketIntake struct {
-	GuildID     string           `json:"guild_id"`
-	ChannelID   string           `json:"channel_id"`
-	WebhookID   string           `json:"webhook_id"`
-	Repo        string           `json:"repo"`
-	Project     string           `json:"project"`
-	ManagerCLI  string           `json:"manager_cli,omitempty"`
-	TokenFile   string           `json:"token_file"`
-	GrantSocket string           `json:"grant_socket"`
-	Supervisor  TicketSupervisor `json:"supervisor"`
-}
-
-type TicketSupervisor struct {
-	StateDir string `json:"state_dir"`
-	Socket   string `json:"socket"`
-	Endpoint string `json:"endpoint"`
+	GuildID     string `json:"guild_id"`
+	ChannelID   string `json:"channel_id"`
+	WebhookID   string `json:"webhook_id"`
+	Repo        string `json:"repo"`
+	Project     string `json:"project"`
+	TokenFile   string `json:"token_file"`
+	GrantSocket string `json:"grant_socket"`
 }
 
 type ticketEvent struct {
@@ -138,7 +130,7 @@ func (s *Service) handleTicket(w http.ResponseWriter, r *http.Request) (any, err
 	if err := event.validate(s.Config.TicketIntake); err != nil {
 		return nil, err
 	}
-	return s.Store.queueTicket(s.Config.InstallationID, event, s.Config.EffectiveTicketManagerCLI())
+	return s.Store.queueTicket(s.Config.InstallationID, event, s.Config.ManagerCLI)
 }
 
 func (s *Service) ticketWorkerCompletion(record ticketRecord) *schema.TicketWorkerCompletion {
@@ -269,7 +261,7 @@ func (t *teammateConnector) processTicket(ctx context.Context, candidate teammat
 	if err != nil {
 		return err
 	}
-	if record.ManagerCLI == "" || record.ManagerCLI != cfg.EffectiveTicketManagerCLI() {
+	if record.ManagerCLI == "" || record.ManagerCLI != cfg.ManagerCLI {
 		return store.teammateCandidateChange(cfg.InstallationID, candidate, StateFailed, "ticket provider no longer matches its enrollment", nil)
 	}
 	if a := candidate.Admission; a != nil {
@@ -307,9 +299,9 @@ func (t *teammateConnector) processTicket(ctx context.Context, candidate teammat
 		}
 		d := TeammateDiscussion{
 			ID: "dt_" + digest([]string{cfg.InstallationID, route.GuildID, route.ChannelID})[:32], InstallationID: cfg.InstallationID,
-			SupervisorSocket: cfg.TicketIntake.Supervisor.Socket, Route: route, Starter: candidate.Route,
+			SupervisorSocket: cfg.DaemonSocket, Route: route, Starter: candidate.Route,
 			TicketEventID: record.Event.EventID, TicketProject: cfg.TicketIntake.Project,
-			TicketManagerCLI: record.ManagerCLI, TicketSupervisor: cfg.TicketIntake.Supervisor,
+			TicketManagerCLI: record.ManagerCLI,
 		}
 		if err = t.checkDiscussion(ctx, d); err != nil {
 			if errors.Is(err, ErrNotAuthorized) || teammateAPIStatus(err, http.StatusForbidden) || teammateAPIStatus(err, http.StatusNotFound) {

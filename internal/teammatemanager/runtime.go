@@ -30,8 +30,7 @@ type Runtime struct {
 	dir, socketRoot, endpoint string
 	managerSettingsDir        string
 	previous                  *discord.PreviousSupervisor
-	ticketSupervisor          discord.TicketSupervisor
-	ticketManagerCLI          string
+	ticketProject             string
 	vmProjectAccess           bool
 	cfg                       voice.Config
 	dmChannel, dmOwner        string
@@ -102,17 +101,12 @@ func New(ctx context.Context, dir, endpoint, managerSettingsDir string, config d
 			return nil, voice.ErrInvalid
 		}
 	}
-	var ticketSupervisor discord.TicketSupervisor
+	var ticketProject string
 	if config.TicketIntake != nil {
-		ticketSupervisor = config.TicketIntake.Supervisor
-		if ticketSupervisor.Endpoint == "" || ticketSupervisor.Endpoint == endpoint ||
-			ticketSupervisor.Socket == config.DaemonSocket || ticketSupervisor.StateDir == managerSettingsDir {
-			cancel()
-			return nil, errors.New("discord teammate: ticket supervisor must be distinct from the shared supervisor")
-		}
+		ticketProject = config.TicketIntake.Project
 	}
 	return &Runtime{ctx: ctx, cancel: cancel, dir: privateDir, socketRoot: socketRoot, endpoint: endpoint, managerSettingsDir: managerSettingsDir,
-		previous: config.PreviousSupervisor, ticketSupervisor: ticketSupervisor, ticketManagerCLI: config.EffectiveTicketManagerCLI(),
+		previous: config.PreviousSupervisor, ticketProject: ticketProject,
 		vmProjectAccess: config.ProjectAccess == discord.ProjectAccessVM,
 		cfg:             cfg, dmChannel: dmChannel, dmOwner: dmOwner, projects: projects, discussions: map[string]*discussion{}, dormant: map[string]bool{}}, nil
 }
@@ -164,14 +158,11 @@ func (r *Runtime) Close() error {
 
 // Unmarked human records predate migration and retain their original supervisor.
 func (r *Runtime) supervisorForDiscussion(b discord.TeammateDiscussion) (endpoint, socket, settings string, err error) {
-	if b.TicketEventID != "" || b.TicketManagerCLI != "" || b.TicketSupervisor != (discord.TicketSupervisor{}) {
-		p := r.ticketSupervisor
-		if b.TicketEventID == "" || b.TicketProject == "" || p.Endpoint == "" ||
-			(b.TicketManagerCLI != "codex" && b.TicketManagerCLI != "claude") || b.TicketManagerCLI != r.ticketManagerCLI ||
-			b.TicketSupervisor != p || b.SupervisorSocket != p.Socket {
+	if b.TicketEventID != "" || b.TicketManagerCLI != "" || b.TicketProject != "" {
+		if b.TicketEventID == "" || r.ticketProject == "" || b.TicketProject != r.ticketProject ||
+			b.TicketManagerCLI == "" || b.TicketManagerCLI != r.cfg.Provider || b.SupervisorSocket == "" {
 			return "", "", "", voice.ErrStale
 		}
-		return p.Endpoint, p.Socket, p.StateDir, nil
 	}
 	if p := r.previous; p != nil && (b.SupervisorSocket == "" || b.SupervisorSocket == p.Socket) {
 		return p.Endpoint, p.Socket, p.StateDir, nil
@@ -246,7 +237,6 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 			return nil, voice.ErrInvalid
 		}
 		cfg.WorkDir = project
-		cfg.Provider = bound.TicketManagerCLI
 		ticketRequestID = discord.TicketAdmissionOperation(bound.InstallationID, bound.TicketEventID)
 		projectEnrolled = func(candidate string) bool { return candidate == project && r.projectEnrolled(candidate) }
 	}

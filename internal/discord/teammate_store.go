@@ -361,7 +361,7 @@ func (s *Store) teammateBind(binding teammateBinding) error {
 		err := teammateGet(b, key, &old)
 		if err == nil {
 			if old.ID != binding.ID || old.Route != binding.Route || old.TicketEventID != binding.TicketEventID || old.TicketProject != binding.TicketProject ||
-				old.TicketManagerCLI != binding.TicketManagerCLI || old.TicketSupervisor != binding.TicketSupervisor ||
+				old.TicketManagerCLI != binding.TicketManagerCLI ||
 				binding.TicketEventID != "" && old.SupervisorSocket != binding.SupervisorSocket {
 				return ErrConflict
 			}
