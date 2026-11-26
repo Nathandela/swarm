@@ -47,7 +47,7 @@ pub(super) struct Inventory {
     pub(super) issues: Vec<String>,
 }
 
-fn file_digest(mut file: &fs::File, limit: u64, end: Instant) -> io::Result<String> {
+pub(super) fn file_digest(mut file: &fs::File, limit: u64, end: Instant) -> io::Result<String> {
     if file.metadata()?.len() > limit {
         return Err(io::Error::other("legacy file exceeds the inspection limit"));
     }

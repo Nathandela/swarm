@@ -180,6 +180,12 @@ func main() {
 		check(db.Close())
 		return
 	}
+	if action == "bridge-lease" {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		check((&discord.Service{}).ServeLocal(ctx, dir))
+		return
+	}
 	open := discord.OpenStore
 	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" || action == "vm-verify-queued-file" {
 		open = discord.FixtureOpenRead
