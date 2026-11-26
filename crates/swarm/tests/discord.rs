@@ -23,6 +23,8 @@ impl Place {
         Command::new(support::executable())
             .args(["discord"])
             .args(args)
+            .env("HOME", &self.0)
+            .env("XDG_CONFIG_HOME", self.0.join("config"))
             .env("SWARM_DAEMON_STATE", &self.0)
             .env_remove("SWARM_DAEMON_SOCK")
             .env_remove("SWARM_DAEMON_LOCK")
@@ -291,4 +293,128 @@ fn mutation_refuses_a_wrong_unsupported_or_disabled_installation() {
     let output = place.run(&args);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("connector is disabled"));
+}
+
+// The private PATH contains the complete fake service manager; this fixture cannot address the installed job.
+#[test]
+fn service_activation_restores_the_prior_route_and_only_disconnects_the_selected_place() {
+    let fixture = Place::new("service-install");
+    let tools = fixture.0.join("tools");
+    fs::create_dir(&tools).unwrap();
+    let binary = tools.join(if cfg!(target_os = "macos") {
+        "launchctl"
+    } else {
+        "systemctl"
+    });
+    fs::write(&binary, r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/operations"
+case "$1:$2" in
+  print:*) if [ -f "$HOME/active" ]; then exit 0; fi; echo 'Could not find service' >&2; exit 113 ;;
+  bootout:*) /bin/rm -f "$HOME/active" ;;
+  bootstrap:*) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; exit 1; fi; : > "$HOME/active" ;;
+  --user:is-enabled) if [ -f "$HOME/enabled" ]; then echo enabled; else echo disabled; exit 1; fi ;;
+  --user:is-active) if [ -f "$HOME/active" ]; then echo active; else echo inactive; exit 3; fi ;;
+  --user:daemon-reload) ;;
+  --user:enable) : > "$HOME/enabled" ;;
+  --user:disable) /bin/rm -f "$HOME/enabled" ;;
+  --user:restart) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; exit 1; fi; : > "$HOME/active" ;;
+  --user:stop) /bin/rm -f "$HOME/active" ;;
+  *) exit 100 ;;
+esac
+"#).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let token = fixture.private("token", "synthetic-service-fixture");
+    let one = fixture.0.join("one");
+    let two = fixture.0.join("two");
+    let unit = fixture.0.join(if cfg!(target_os = "macos") {
+        "Library/LaunchAgents/com.swarm.discord.plist"
+    } else {
+        ".config/systemd/user/swarm-discord.service"
+    });
+    let run = |args: &[&str]| {
+        Command::new(support::executable())
+            .env_clear()
+            .env("HOME", &fixture.0)
+            .env("PATH", &tools)
+            .env("SWARM_DAEMON_STATE", &fixture.0)
+            .arg("discord")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let install = |dir: &Path| {
+        run(&[
+            "connect",
+            "--install",
+            "--mode",
+            "legacy",
+            "--name",
+            "Install fixture",
+            "--application-id",
+            "123",
+            "--owner-id",
+            "456",
+            "--token-file",
+            token.to_str().unwrap(),
+            "--workdir",
+            fixture.0.to_str().unwrap(),
+            "--state-dir",
+            dir.to_str().unwrap(),
+        ])
+    };
+    let first = json_output(install(&one));
+    assert_eq!(first["installed"], true);
+    assert!(fixture.0.join("active").exists());
+    let original = fs::read_to_string(&unit).unwrap();
+    if std::env::var_os("SWARM_NATIVE_UNIT_PARSER").is_some() {
+        let mut parser = if cfg!(target_os = "macos") {
+            let mut parser = Command::new("/usr/bin/plutil");
+            parser.args(["-lint", "--"]);
+            parser
+        } else {
+            let mut parser = Command::new("/usr/bin/systemd-analyze");
+            parser.args(["--man=no", "verify"]);
+            parser
+        };
+        let result = parser
+            .arg(&unit)
+            .env("HOME", &fixture.0)
+            .env("LC_ALL", "C")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    assert!(original.contains(one.to_str().unwrap()) && !original.contains("token"));
+    fs::set_permissions(&unit, fs::Permissions::from_mode(0o640)).unwrap();
+    fs::write(fixture.0.join("fail-once"), []).unwrap();
+    assert!(!install(&two).status.success());
+    assert_eq!(fs::read_to_string(&unit).unwrap(), original);
+    assert_eq!(
+        fs::metadata(&unit).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert!(fixture.0.join("active").exists());
+
+    assert!(
+        run(&["disconnect", "--state-dir", two.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert_eq!(fs::read_to_string(&unit).unwrap(), original);
+    assert!(fixture.0.join("active").exists());
+    assert!(
+        run(&["disconnect", "--state-dir", one.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert!(!unit.exists() && !fixture.0.join("active").exists());
+
+    fs::write(&unit, "foreign unit").unwrap();
+    assert!(!install(&one).status.success());
+    assert_eq!(fs::read_to_string(&unit).unwrap(), "foreign unit");
 }

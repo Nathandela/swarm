@@ -33,6 +33,7 @@ mod service;
 mod team_history;
 mod team_thread;
 mod thread_creation;
+mod unit;
 mod worker;
 mod worker_proof;
 
@@ -466,7 +467,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     match req.command {
         "connect" => return connect(req, place),
         "disconnect" => {
-            place.disconnect()?;
+            unit::disconnect(&place)?;
             println!("Discord connector disconnected.");
             return Ok(true);
         }
@@ -479,7 +480,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     }
     let cfg = place.load()?;
     match req.command {
-        "run" => service::run(&place, &cfg, req.on("unattended"))?,
+        "run" => service::run(&place.bound(&cfg)?, &cfg, req.on("unattended"))?,
         "status" => {
             let status = local::call(&place.dir, "status", "", None)
                 .ok()
@@ -536,20 +537,19 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
 }
 
 fn connect(req: &Request<'_>, place: Place) -> io::Result<bool> {
-    if req.on("install") {
-        return Err(io::Error::other(
-            "service activation is unavailable in this Rust build",
-        ));
-    }
     let cfg = place.configure(req)?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "name": cfg.text("name"), "installation_id": cfg.text("installation_id"),
-            "state_dir": place.dir, "installed": false,
-            "next": format!("swarm discord run --state-dir '{}'", place.dir.to_string_lossy().replace('\'', "'\\''"))
-        }))?
-    );
+    let installed = req.on("install");
+    if installed {
+        unit::install(&place, &cfg)?;
+    }
+    let mut report = json!({
+        "name":cfg.text("name"),"installation_id":cfg.text("installation_id"),"state_dir":place.dir,"installed":installed,
+        "next":format!("swarm discord run --state-dir '{}'",place.dir.to_string_lossy().replace('\'', "'\\''"))
+    });
+    if !cfg.text("dm_channel_id").is_empty() {
+        report["dm_channel_id"] = cfg.0["dm_channel_id"].clone();
+    }
+    println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(true)
 }
 

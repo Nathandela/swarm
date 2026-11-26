@@ -1,4 +1,5 @@
 use super::{Result, home};
+use crate::service_unit::{Platform, systemd_string, xml_text};
 use std::{
     env,
     fs::{self, DirBuilder, File, OpenOptions},
@@ -75,12 +76,6 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
         }
         _ => unreachable!(),
     }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Platform {
-    Launchd,
-    Systemd,
 }
 
 type Run<'a> = dyn Fn(&str, &[&str]) -> io::Result<Output> + 'a;
@@ -512,16 +507,9 @@ fn stable_executable() -> Result<String> {
 fn render(platform: Platform, exe: &str, env: &[(&str, &str)]) -> Vec<String> {
     match platform {
         Platform::Launchd => {
-            let escape = |s: &str| {
-                s.replace('&', "&amp;")
-                    .replace('<', "&lt;")
-                    .replace('>', "&gt;")
-                    .replace('"', "&#34;")
-                    .replace('\'', "&#39;")
-            };
             let entries: String = env
                 .iter()
-                .map(|(key, value)| format!("<key>{key}</key><string>{}</string>", escape(value)))
+                .map(|(key, value)| format!("<key>{key}</key><string>{}</string>", xml_text(value)))
                 .collect();
             let minutes: String = (0..60)
                 .map(|m| format!("<dict><key>Minute</key><integer>{m}</integer></dict>"))
@@ -539,26 +527,21 @@ fn render(platform: Platform, exe: &str, env: &[(&str, &str)]) -> Vec<String> {
                     "</dict></plist>\n"
                 ),
                 LABEL,
-                escape(exe),
+                xml_text(exe),
                 entries,
                 minutes
             )]
         }
         Platform::Systemd => {
-            let escape = |s: &str| {
-                s.replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('%', "%%")
-            };
             let entries: String = env
                 .iter()
-                .map(|(k, v)| format!("Environment=\"{}\"\n", escape(&format!("{k}={v}"))))
+                .map(|(k, v)| format!("Environment=\"{}\"\n", systemd_string(&format!("{k}={v}"))))
                 .collect();
             vec![
                 format!(concat!(
                     "[Unit]\nDescription=Swarm schedule tick\n[Service]\nType=oneshot\nKillMode=process\n",
                     "{}ExecStart=:/bin/sh -c 'exec \"$@\"' swarm-schedule \"{}\" schedule tick\n"
-                ), entries, escape(exe)),
+                ), entries, systemd_string(exe)),
                 "[Unit]\nDescription=Run the Swarm schedule tick every minute\n[Timer]\nOnCalendar=*-*-* *:*:00\nPersistent=true\nAccuracySec=1s\nUnit=swarm-schedule.service\n[Install]\nWantedBy=timers.target\n".into(),
             ]
         }

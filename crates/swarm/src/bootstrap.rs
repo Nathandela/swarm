@@ -17,29 +17,77 @@ pub(crate) fn ensure_daemon() -> io::Result<()> {
 
 pub(crate) fn ensure(unattended: bool) -> io::Result<()> {
     let socket = ipc::socket_path()?;
-    let dial = || ipc::Client::dial(&socket, &[]);
-    match dial() {
-        Ok(_) => return Ok(()),
-        Err(e)
-            if matches!(
-                e.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-            ) => {}
-        Err(e) => return Err(e),
+    if reachable(&socket, None)? {
+        return Ok(());
     }
-    let root = ipc::state_path()?;
+    cold_start(&socket, &ipc::state_path()?, unattended, None)
+}
+
+/// Service startup uses the enrolled daemon's paths even when launchd or systemd supplies a different environment.
+pub(crate) fn ensure_bound(
+    socket: &Path,
+    root: &Path,
+    lock: &Path,
+    log: &Path,
+    unattended: bool,
+) -> io::Result<()> {
+    let expected =
+        crate::supervisor::endpoint(&root.canonicalize().unwrap_or_else(|_| root.to_owned()));
+    if reachable(socket, Some(&expected))? {
+        return Ok(());
+    }
+    cold_start(socket, root, unattended, Some((lock, log)))
+}
+
+fn reachable(socket: &Path, expected: Option<&str>) -> io::Result<bool> {
+    match ipc::Client::dial(socket, &[]) {
+        Ok(client) if expected.is_none_or(|id| client.endpoint() == id) => Ok(true),
+        Ok(_) => Err(io::Error::other(
+            "configured socket answered for a different supervisor",
+        )),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn cold_start(
+    socket: &Path,
+    root: &Path,
+    unattended: bool,
+    bound: Option<(&Path, &Path)>,
+) -> io::Result<()> {
     let saved = if unattended {
-        Some(crate::environment::restore(&root)?)
+        Some(crate::environment::restore(root)?)
     } else {
         None
     };
-    let child = command(&socket, &root, saved)?.spawn()?;
-    wait_for_start(child, || ipc::Client::dial(&socket, &[]).is_ok())
+    let expected = bound.map(|_| {
+        crate::supervisor::endpoint(&root.canonicalize().unwrap_or_else(|_| root.to_owned()))
+    });
+    let child = command(socket, root, saved, bound)?.spawn()?;
+    wait_for_start(child, || {
+        reachable(socket, expected.as_deref()).unwrap_or(false)
+    })
 }
 
-fn command(socket: &Path, root: &Path, saved: Option<Vec<String>>) -> io::Result<Command> {
+fn command(
+    socket: &Path,
+    root: &Path,
+    saved: Option<Vec<String>>,
+    bound: Option<(&Path, &Path)>,
+) -> io::Result<Command> {
     runtime::private_dir(root)?;
-    let log = crate::clean::DiagnosticLog::open_owner(&crate::clean::DiagnosticLog::path(root))?;
+    let log_path = bound
+        .map(|(_, log)| log.to_owned())
+        .unwrap_or_else(|| crate::clean::DiagnosticLog::path(root));
+    let log = crate::clean::DiagnosticLog::open_owner(&log_path)?;
     let mut cmd = Command::new(env::current_exe()?);
     if let Some(entries) = saved {
         cmd.env_clear();
@@ -53,6 +101,11 @@ fn command(socket: &Path, root: &Path, saved: Option<Vec<String>>) -> io::Result
                 cmd.env(key, path);
             }
         }
+    }
+    if let Some((lock, log)) = bound {
+        cmd.env("SWARM_DAEMON_SOCK", socket)
+            .env("SWARM_DAEMON_LOCK", lock)
+            .env("SWARM_DAEMON_LOG", log);
     }
     cmd.arg("daemon")
         .env("SWARM_DAEMON_STATE", root)
@@ -222,7 +275,7 @@ fn converge() -> io::Result<(u8, String)> {
     let pid = runtime::peer_pid(client.stream())?;
     let birth = runtime::birth(pid)?;
     // The replacement opens its log and execs successfully before it asks the old daemon to retire.
-    let mut child = command(&socket, &root, Some(saved))?
+    let mut child = command(&socket, &root, Some(saved), None)?
         .args(["--replace-idle", &pid.to_string(), &birth.to_string()])
         .spawn()?;
     let deadline = Instant::now() + Duration::from_secs(12);
