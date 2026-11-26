@@ -389,7 +389,8 @@ impl State {
                     ));
                 }
                 let reservation = self.launch_gate.lock().unwrap();
-                let (prepared, _listener) = store.prepare_codex_resume(launch, &qualified, local)?;
+                let (prepared, _listener) =
+                    store.prepare_codex_resume(launch, &qualified, local)?;
                 runtime::private_dir(&self.root)?;
                 return self.reserve_locked(prepared, false, None, None, None, &reservation);
             }

@@ -982,8 +982,10 @@ impl Store {
         let evidence = launch_evidence(&entry.dir, &entry.meta)?;
         let prepared = codex::prepare(launch, qualified, &entry.meta, &evidence)?;
         let listener = exited(&entry.dir, &entry.meta)?;
-        if !same_file(&entry.dir.metadata()?, &fs::symlink_metadata(self.root.join(id))?)
-            || read_meta(&entry.dir)? != raw
+        if !same_file(
+            &entry.dir.metadata()?,
+            &fs::symlink_metadata(self.root.join(id))?,
+        ) || read_meta(&entry.dir)? != raw
         {
             return Err(io::Error::other("stopped Go Codex source changed"));
         }
