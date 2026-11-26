@@ -31,3 +31,7 @@ The live `notice` fixture also compares Launch and Options against the pinned Go
 | Linux x86_64 | 3.2a | `00fd31fb3695fade7d237642c03b1b6ce6d025e0cf356767c555d13d52768192` | `9c9bf0ff0c42449dcf59ec78782eef822b1274fb2448e580ff2176f078f486ec` |
 
 All Launch and roster cells and styles matched at 80×24, 40×8 and 24×4. Options matched apart from the deliberately retired Go Provider logins row at 80×24. The fixture checks the exact Go row and empty Rust row and preserves both raw frames. Launch keeps the cursor hidden. The receipt records its coordinate differences after Go's incremental repaint and compares the remaining terminal modes. Enter at 24×4 left the live owner's roster empty in both arms, and Esc returned to the roster.
+
+## Proposed prerelease correction
+
+The pinned Go dashboard orders whole prerelease suffixes lexically. That makes an owner on `0.29.23-rc.10` look older to a dashboard on `0.29.23-rc.2` and can trigger a downgrade. Rust compares dot-separated prerelease identifiers with numeric precedence, matching the native updater on recognized release labels. A semantically newer owner gets the existing passive notice. Stable release ordering, layout and restart flow keep their existing behavior. Malformed prerelease suffixes are ineligible for a board-initiated restart. This intentional correction is pending Nathan’s release-contract signoff.

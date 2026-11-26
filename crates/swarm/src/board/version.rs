@@ -16,6 +16,17 @@ fn precedence(version: &str) -> Option<(Vec<u64>, Option<&str>)> {
     let (core, preview) = version
         .split_once('-')
         .map_or((version, None), |(core, suffix)| (core, Some(suffix)));
+    if preview.is_some_and(|suffix| {
+        suffix.split('.').any(|part| {
+            part.is_empty()
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                || (part.len() > 1 && part.starts_with('0') && decimal(part))
+        })
+    }) {
+        return None;
+    }
     let mut parts = core
         .split('.')
         .map(str::parse)
@@ -31,11 +42,30 @@ fn compare(daemon: &str, local: &str) -> Option<Ordering> {
     let (daemon, before) = precedence(daemon)?;
     let (local, after) = precedence(local)?;
     Some(daemon.cmp(&local).then_with(|| match (before, after) {
-        (Some(before), Some(after)) => before.cmp(after),
+        (Some(before), Some(after)) => compare_preview(before, after),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     }))
+}
+
+fn decimal(part: &str) -> bool {
+    part.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn compare_preview(left: &str, right: &str) -> Ordering {
+    for (a, b) in left.split('.').zip(right.split('.')) {
+        let order = match (decimal(a), decimal(b)) {
+            (true, true) => a.len().cmp(&b.len()).then_with(|| a.cmp(b)),
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => a.cmp(b),
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+    left.split('.').count().cmp(&right.split('.').count())
 }
 
 pub(super) fn notice(daemon: &str) -> Option<String> {
@@ -97,6 +127,31 @@ pub(super) fn start(path: &Path, client: &Client) -> io::Result<Option<Upgrade>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prerelease_direction_cannot_downgrade_a_numeric_release_candidate() {
+        assert_eq!(
+            compare("0.29.23-rc.10", "0.29.23-rc.2"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare("0.29.23-rc.2", "0.29.23-rc.10"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare("0.29.23-rc.18446744073709551616", "0.29.23-rc.2"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare("0.29.23-beta.2", "0.29.23-beta.latest"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare("0.29.23-rc.2", "0.29.23-rc.2.3"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(compare("0.29.23-rc.02", "0.29.23"), None);
+    }
 
     #[test]
     fn compares_release_direction_without_treating_dev_as_an_old_daemon() {
