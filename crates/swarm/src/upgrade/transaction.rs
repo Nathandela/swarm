@@ -17,6 +17,7 @@ use std::{
 
 const CHANNEL_BASE: &str =
     "https://github.com/Nathandela/swarm/releases/download/rust-native-preview";
+const CHANNEL_MANIFEST: &str = "rust-native-preview.json";
 const ADMIN: [&str; 2] = ["swarm-rust-install.py", "swarm-rust-install.md"];
 const GROUPS: [&str; 3] = ["darwin_all", "linux_arm64", "linux_amd64"];
 const METADATA_LIMIT: usize = 8 * 1024 * 1024;
@@ -262,7 +263,8 @@ impl Feed {
 }
 
 fn assets(sums: &BTreeMap<String, String>) -> io::Result<(&str, String, &str)> {
-    if sums.len() != ADMIN.len() + GROUPS.len()
+    if sums.len() != ADMIN.len() + GROUPS.len() + 1
+        || !sums.contains_key(CHANNEL_MANIFEST)
         || ADMIN.iter().any(|name| !sums.contains_key(*name))
     {
         return Err(invalid("incomplete signed Rust artifact set"));
@@ -290,6 +292,21 @@ fn assets(sums: &BTreeMap<String, String>) -> io::Result<(&str, String, &str)> {
         }
     }
     Err(invalid("signed assets omit this architecture"))
+}
+
+fn channel_source(input: &[u8], expected: &str, version: &str) -> io::Result<String> {
+    if archive::sha(input) != expected {
+        return Err(invalid("signed channel manifest digest differs"));
+    }
+    let manifest: Value = serde_json::from_slice(input)?;
+    let source = required(&manifest, "source")?;
+    if manifest["channel"] != "rust-native-preview"
+        || manifest["version"] != version
+        || !archive::hex(source, 40)
+    {
+        return Err(invalid("signed channel identity differs"));
+    }
+    Ok(source.to_owned())
 }
 
 fn archive_card(files: &archive::Files, ver: &str, group: &str) -> io::Result<Value> {
@@ -772,6 +789,11 @@ fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
         let utf8 = |bytes| String::from_utf8(bytes).map_err(io::Error::other);
         let sums = archive::checksums(&utf8(key)?, &bytes, &utf8(sig)?)?;
         let (latest, selected, group) = assets(&sums)?;
+        let source = channel_source(
+            &feed.get(CHANNEL_MANIFEST, 4096)?,
+            &sums[CHANNEL_MANIFEST],
+            latest,
+        )?;
         let cmp = version(latest)?.cmp(&version(installed)?);
         let allow = opts.allow_downgrade && opts.step != "unattended";
         let (action, outcome, reason) = if current.held.as_deref() == Some(latest) {
@@ -805,6 +827,11 @@ fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
             &sums[&selected],
         )?;
         let target = archive_card(&files, latest, group)?;
+        if target["source"] != source {
+            return Err(invalid(
+                "signed archive source differs from the channel manifest",
+            ));
+        }
         compatible(&verify_slot(&active)?, &target)?;
         for name in ADMIN {
             let data = feed.get(name, METADATA_LIMIT)?;
@@ -887,6 +914,8 @@ mod tests {
             .iter()
             .map(|name| (name.to_string(), "a".repeat(64)))
             .collect::<BTreeMap<_, _>>();
+        assert!(assets(&sums).is_err());
+        sums.insert(CHANNEL_MANIFEST.into(), "d".repeat(64));
         for group in GROUPS {
             sums.insert(format!("swarm-rust_0.2.0_{group}.tar.gz"), "b".repeat(64));
         }
@@ -896,6 +925,26 @@ mod tests {
         assert!(assets(&sums).is_err());
         assert!(version("0.2.0-rc.2").unwrap() < version("0.2.0-rc.10").unwrap());
         assert!(version("0.2.0-rc.10").unwrap() < version("0.2.0").unwrap());
+    }
+
+    #[test]
+    fn channel_identity_must_match_the_signed_source_and_version() {
+        let input = serde_json::to_vec(&json!({
+            "channel":"rust-native-preview","version":"0.2.0","source":"e".repeat(40)
+        }))
+        .unwrap();
+        let digest = archive::sha(&input);
+        assert_eq!(
+            channel_source(&input, &digest, "0.2.0").unwrap(),
+            "e".repeat(40)
+        );
+        assert!(channel_source(&input, &digest, "0.1.0").is_err());
+        assert!(channel_source(&input, &"f".repeat(64), "0.2.0").is_err());
+        let legacy = serde_json::to_vec(&json!({
+            "channel":"rust-preview","version":"0.2.0","source":"e".repeat(40)
+        }))
+        .unwrap();
+        assert!(channel_source(&legacy, &archive::sha(&legacy), "0.2.0").is_err());
     }
 
     #[test]

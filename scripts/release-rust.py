@@ -43,6 +43,7 @@ VERSION = r"\d+\.\d+\.\d+(?:-[a-z0-9.]+)?"
 ASSET = re.compile(rf"swarm-rust_({VERSION})_({'|'.join(GROUPS)})\.tar\.gz")
 MAX_ARCHIVE = 512 * 1024 * 1024
 MAX_CONTENT = 700 * 1024 * 1024
+NATIVE_CHANNEL = "rust-native-preview.json"
 
 
 def require(ok, msg):
@@ -321,6 +322,9 @@ def build(args):
             path = args.output / name
             shutil.copyfile(source_file, path)
             checksums[name] = file_hash(path)
+        native_channel = json_bytes({key: compat[key] for key in ("channel", "version", "source")})
+        (args.output / NATIVE_CHANNEL).write_bytes(native_channel)
+        checksums[NATIVE_CHANNEL] = digest(native_channel)
         (args.output / "checksums.txt").write_bytes(
             "".join(f"{value}  {name}\n" for name, value in sorted(checksums.items())).encode()
         )
@@ -341,7 +345,8 @@ def artifact_set(dist):
         entries[name] = value
     assets = [ASSET.fullmatch(name) for name in entries]
     archives = [match.groups() for match in assets if match]
-    require(len(entries) == 5 and {"swarm-rust-install.py", "swarm-rust-install.md"} <= entries.keys()
+    expected = 6 if NATIVE_CHANNEL in entries else 5
+    require(len(entries) == expected and {"swarm-rust-install.py", "swarm-rust-install.md"} <= entries.keys()
             and {g for _, g in archives} == GROUPS.keys() and len({v for v, _ in archives}) == 1,
             "checksums do not cover exactly one complete preview release")
     return checksums, entries
@@ -449,6 +454,14 @@ def verified_archive(dist, archive_name, public_key):
         admin[name] = (dist / name).read_bytes()
         require(digest(admin[name]) == entries[name], f"installer content differs for {name}")
     files, compat = inspect_archive(data, match)
+    if compat["channel"] == "rust-native-preview":
+        with (dist / NATIVE_CHANNEL).open("rb") as handle:
+            channel = handle.read(4097)
+        require(len(channel) <= 4096 and digest(channel) == entries[NATIVE_CHANNEL]
+                and json.loads(channel) == {key: compat[key] for key in ("channel", "version", "source")},
+                "native channel metadata differs from the signed archive")
+    else:
+        require(NATIVE_CHANNEL not in entries, "legacy preview cannot advertise the native channel")
     return files, compat, admin, entries[archive_name]
 
 
