@@ -60,6 +60,12 @@ def delegate(root, env, binary, place, launch, manager_id, discussion, operation
     binding = status["binding"]
     external = status["turn"]["external_input"]
     text = "Open a worker for the linked board fixture."
+    prompt = (
+        "Send messages to this discussion through publish. Use swarm dispatcher-guide before delegating. "
+        "Use swarm spawn to delegate work in the VM, and inspect the exact worker with swarm peek. "
+        "Ask workers to use swarm teammate for needs-input and completion notes.\n\n"
+        + text
+    )
     source_id = "401"
     request_id = "da_" + digest(["fixture", source_id])[:32]
     revision = digest(["300", text, "400", "", source_id, None, None, None])
@@ -68,7 +74,7 @@ def delegate(root, env, binary, place, launch, manager_id, discussion, operation
     composer = {
         "session": manager_id,
         "session_instance": instance,
-        "text": text,
+        "text": prompt,
         "manager_admission": {
             "binding": binding,
             "expected_external_input": external,
@@ -211,10 +217,19 @@ def linked_owners(root, local_binary, remote_binary, fake_codex):
     remote_go = "(Rust)" not in subprocess.check_output(
         [remote_binary, "version"], env=remote_env, text=True
     )
-    if remote_go:
-        cfg["project_access"] = "vm"
+    cfg["project_access"] = "vm"
     private(place / "config.json", cfg)
     private(place / ".rust-offline-owner.json", "fixture")
+    if not remote_go:
+        token = Path(cfg["token_file"])
+        token.write_text("offline-linked-fixture")
+        token.chmod(0o600)
+        result = subprocess.run(
+            [remote_binary, "discord", "connect", "--state-dir", str(place), "--project-access", "vm"],
+            env=remote_env, text=True, capture_output=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["project_access"] == "vm"
     platform = (
         (home / "Library/Application Support")
         if sys.platform == "darwin"
@@ -240,12 +255,11 @@ def linked_owners(root, local_binary, remote_binary, fake_codex):
         "initial_prompt": "",
         "manager": {
             "conversation_id": discussion,
+            "native_cli": True,
             "bridge_socket": str(address),
             "auth_file": str(auth),
         },
     }
-    if remote_go:
-        launch["manager"]["native_cli"] = True
     operation = f"launch:{time.time_ns() // 1_000_000}:{1:032x}"
     private(
         place / "rust-text-v1.json",

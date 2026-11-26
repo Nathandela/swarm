@@ -101,7 +101,7 @@ fn check_channel(
             "missing channel history, thread creation or send permission",
         ));
     }
-    if kind == 12 && !admin && bits & (1 << 34) == 0 {
+    if kind == 12 {
         let member = get(&format!("/channels/{id}/thread-members/{bot}"))?.ok_or_else(outside)?;
         if member["id"] != id || member["user_id"] != bot {
             return Err(outside());
@@ -109,6 +109,11 @@ fn check_channel(
     }
     if thread && channel["thread_metadata"]["locked"] == true {
         return Err(invalid("thread is locked"));
+    }
+    if thread && channel["thread_metadata"]["archived"] != false {
+        return Err(invalid(
+            "thread is archived or its active state is unavailable",
+        ));
     }
     Ok("discussion permissions verified")
 }
@@ -124,11 +129,11 @@ mod tests {
         assert_eq!(none[0]["status"], "warn");
         cfg.0["channel_ids"] = json!(["4", "5"]);
         let rights = (1_u64 << 10) | (1 << 16) | (1 << 38);
-        let check = |selected, bits: u64, locked, member: &str, parent_guild: &str| {
+        let check = |selected, bits: u64, locked, archived, member: &str, parent_guild: &str| {
             channels(&cfg, selected, |path| {
                 Ok(Some(match path {
                     "/channels/2" => {
-                        json!({"type":12,"guild_id":"1","id":"2","parent_id":"4","thread_metadata":{"locked":locked}})
+                        json!({"type":12,"guild_id":"1","id":"2","parent_id":"4","thread_metadata":{"locked":locked,"archived":archived}})
                     }
                     "/channels/4" => json!({"type":0,"id":"4","guild_id":parent_guild}),
                     "/channels/5" => json!({"type":2,"id":"5","guild_id":"1"}),
@@ -138,29 +143,43 @@ mod tests {
                 }))
             })
         };
-        let enrolled = check(None, rights | (1 << 35) | (1 << 11), false, "3", "1");
+        let enrolled = check(None, rights | (1 << 35) | (1 << 11), false, false, "3", "1");
         assert_eq!(enrolled[0]["status"], "ok");
         assert_eq!(
             enrolled[1]["detail"],
             "select a regular text channel or a discussion thread"
         );
         assert_eq!(
-            check(Some("4"), rights, false, "3", "1")[0]["status"],
-            "fail"
-        );
-        assert_eq!(check(Some("2"), rights, false, "3", "1")[0]["status"], "ok");
-        assert_eq!(
-            check(Some("2"), rights, false, "9", "1")[0]["status"],
+            check(Some("4"), rights, false, false, "3", "1")[0]["status"],
             "fail"
         );
         assert_eq!(
-            check(Some("2"), rights, false, "3", "8")[0]["status"],
+            check(Some("2"), rights, false, false, "3", "1")[0]["status"],
+            "ok"
+        );
+        assert_eq!(
+            check(Some("2"), rights, false, false, "9", "1")[0]["status"],
             "fail"
         );
         assert_eq!(
-            check(Some("2"), 8, true, "", "1")[0]["detail"],
+            check(Some("2"), rights, false, false, "3", "8")[0]["status"],
+            "fail"
+        );
+        assert_eq!(
+            check(Some("2"), 8, false, false, "9", "1")[0]["status"],
+            "fail"
+        );
+        assert_eq!(
+            check(Some("2"), 8, false, true, "3", "1")[0]["status"],
+            "fail"
+        );
+        assert_eq!(
+            check(Some("2"), 8, true, false, "3", "1")[0]["detail"],
             "thread is locked"
         );
-        assert_eq!(check(Some("../4"), 8, false, "", "1")[0]["status"], "fail");
+        assert_eq!(
+            check(Some("../4"), 8, false, false, "", "1")[0]["status"],
+            "fail"
+        );
     }
 }
