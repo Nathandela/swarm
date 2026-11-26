@@ -109,3 +109,14 @@ For a shorter calibration, invoke the platform runner directly with
 `--mixed --duration 90 --interval 3 --restart-every 4 --source "$SOURCE_SHA"`.
 This exercises at least one real minute boundary and reports actual
 cleanup without satisfying the 24-hour gate.
+
+For the prompt preflight fault trial, also stage `digest_pause.py` and
+`processes.py`. A normal short loopback run with `--digest-pause old`
+verifies the original transport failure and one explicit exact-input
+retry. A build with the read-only retry uses `--digest-pause retry`.
+Use `--digest-pause exhaust` to suspend the fixture across both
+preflight deadlines and check the terminal no-effect behavior.
+
+The test pauses only the TUI whose PID and birth match the private
+worker record. It checks the actual OpenCode database and fixture model
+requests independently of the Swarm receipt before accepting replay.

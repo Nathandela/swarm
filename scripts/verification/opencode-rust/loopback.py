@@ -24,6 +24,8 @@ parser.add_argument('--restart-every', type=int, default=20)
 parser.add_argument('--source')
 parser.add_argument('--native', type=Path)
 parser.add_argument('--mixed', action='store_true')
+parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
+                    help='pause the verified native TUI across one preflight deadline')
 parser.add_argument('--check-arguments', action='store_true')
 args = parser.parse_args()
 if args.duration is not None and (
@@ -31,6 +33,8 @@ if args.duration is not None and (
     or not re.fullmatch('[a-f0-9]{40}', args.source or '')
 ):
     parser.error('soak requires 1..259200 seconds, a positive restart cadence and the full source SHA')
+if args.digest_pause and args.duration is not None:
+    parser.error('digest pause is a separate fault trial')
 if args.mixed and (args.duration is None or args.duration < 70):
     parser.error('the mixed workload needs at least 70 seconds and a real wall-clock tick')
 root, swarm = args.root, args.swarm
@@ -208,6 +212,10 @@ try:
     before=history()
     assert any(m['info']['role']=='user' for m in before['history']), before
     assert resume_request(env, row, root/'project')['op'] == 'error'
+    if args.digest_pause:
+        from digest_pause import verify_fault
+        verify_fault(args.digest_pause, root, row, cli, output, history, request_log)
+        sys.exit()
     operation=f'semantic:{int(time.time()*1000)}:00112233445566778899aabbccddeeff'
     message=output('message',row,'--operation-id',operation,'--text','RUST_SEMANTIC. Reply fixture only.')
     assert message['state'] in ('native_accepted','completed'),message

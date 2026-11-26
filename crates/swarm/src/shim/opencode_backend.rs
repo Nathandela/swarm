@@ -80,7 +80,12 @@ impl Backend {
                 .header("Authorization", &authorization)
                 .call(),
         }
-        .map_err(|_| io::Error::other("OpenCode bridge request failed"))?;
+        .map_err(|error| match error {
+            ureq::Error::Timeout(_) => {
+                io::Error::new(io::ErrorKind::TimedOut, "OpenCode bridge request timed out")
+            }
+            _ => io::Error::other("OpenCode bridge request failed"),
+        })?;
         if !response.status().is_success() {
             return Err(io::Error::other(format!(
                 "OpenCode bridge HTTP {}",

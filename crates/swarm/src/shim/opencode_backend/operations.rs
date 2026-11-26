@@ -137,7 +137,20 @@ impl Backend {
             receipt["native_effect"] = json!(expected_effect);
         }
         // Use the provider bridge's canonical encoding for exact native request metadata.
-        let digest = self.http("/dispatchDigest", Some(&body))?;
+        let digest = match self.http("/dispatchDigest", Some(&body)) {
+            // A second read-only prompt preflight fits the owner deadline. Decision preflight
+            // also spends a snapshot budget, and a native mutation must never retry here.
+            Err(error) if kind == "prompt" && error.kind() == io::ErrorKind::TimedOut => {
+                self.http("/dispatchDigest", Some(&body))
+            }
+            result => result,
+        }
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("OpenCode dispatch preflight: {error}"),
+            )
+        })?;
         let request_hash = field(&digest, "requestHash");
         if !self.matches(&digest, created)
             || digest["operationID"] != operation
