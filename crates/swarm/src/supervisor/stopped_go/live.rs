@@ -92,7 +92,8 @@ impl Process {
 impl Owner {
     pub(super) fn open(path: PathBuf, directory: &File, meta: &Value) -> io::Result<Self> {
         super::qualified_role(meta)?;
-        if meta["status"]["Process"] != "running"
+        if meta["agent_type"] != "claude"
+            || meta["status"]["Process"] != "running"
             || meta["shim_wire_version"] != SHIM_WIRE_VERSION
             || !meta["exit_code"].is_null()
         {
