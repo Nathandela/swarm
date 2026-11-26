@@ -179,7 +179,7 @@ pub(super) fn with<ReadEvent>(
     place: &Place,
     room: &impl Room,
     limit: Option<usize>,
-    open: impl FnOnce(&Config) -> io::Result<ReadEvent>,
+    mut open: impl FnMut(&Config) -> io::Result<ReadEvent>,
 ) -> io::Result<bool>
 where
     ReadEvent: FnMut() -> io::Result<Option<Value>>,
@@ -205,30 +205,28 @@ where
     };
     room.verify(&cfg)?;
     let mut event = open(&cfg)?;
-    let history = room.history(&cfg)?;
-    if !history
-        .iter()
-        .any(|message| field(message, "id").parse::<u64>() == Ok(boundary))
-    {
-        return Err(io::Error::other(
-            "the original personal boundary is absent from the visible Discord history page",
-        ));
-    }
-    let mut pending: std::collections::BTreeSet<_> = history
-        .iter()
-        .filter_map(|row| enrolled_dm(&cfg, row))
-        .filter_map(|id| id.parse::<u64>().ok())
-        .filter(|id| *id > boundary)
-        .collect();
+    let mut pending = history_backlog(room, &cfg, boundary)?;
     let mut handled = 0;
     let mut through = boundary;
+    let mut reconnects = 0;
     loop {
         let sequence = loop {
             if let Some(id) = pending.pop_first() {
                 break id;
             }
-            if let Some(frame) = event()? {
-                queue_event(&cfg, &frame, through, &mut pending)?;
+            match event() {
+                Ok(Some(frame)) => {
+                    reconnects = 0;
+                    queue_event(&cfg, &frame, through, &mut pending)?;
+                }
+                Ok(None) => {}
+                Err(_) if reconnects < 2 => {
+                    reconnects += 1;
+                    room.verify(&cfg)?;
+                    event = open(&cfg)?;
+                    pending = history_backlog(room, &cfg, through)?;
+                }
+                Err(error) => return Err(error),
             }
         };
         let message = sequence.to_string();
@@ -274,6 +272,29 @@ where
             return Ok(true);
         }
     }
+}
+
+fn history_backlog(
+    room: &impl Room,
+    cfg: &Config,
+    boundary: u64,
+) -> io::Result<std::collections::BTreeSet<u64>> {
+    let history = room.history(cfg)?;
+    if !history
+        .iter()
+        .filter_map(|row| enrolled_dm(cfg, row))
+        .any(|id| id.parse::<u64>() == Ok(boundary))
+    {
+        return Err(io::Error::other(
+            "the original personal boundary is absent from the visible Discord history page",
+        ));
+    }
+    Ok(history
+        .iter()
+        .filter_map(|row| enrolled_dm(cfg, row))
+        .filter_map(|id| id.parse::<u64>().ok())
+        .filter(|id| *id > boundary)
+        .collect())
 }
 
 fn queue_event(

@@ -1260,6 +1260,7 @@ mod tests {
             second: Value,
             posts: std::cell::Cell<u32>,
             acknowledge: bool,
+            close_first: std::sync::mpsc::SyncSender<()>,
         }
         impl service::Room for Room {
             fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -1269,6 +1270,9 @@ mod tests {
                 Ok(())
             }
             fn history(&self, _: &Config) -> io::Result<Vec<Value>> {
+                if self.posts.get() > 0 {
+                    return Ok(vec![self.second.clone(), self.current.clone()]);
+                }
                 Ok(vec![
                     json!({"id":"501","channel_id":"400","author":{"id":"200"}}),
                 ])
@@ -1285,6 +1289,9 @@ mod tests {
                 let count = self.posts.get() + 1;
                 self.posts.set(count);
                 if self.acknowledge {
+                    if count == 1 {
+                        self.close_first.send(()).unwrap();
+                    }
                     Post::Acknowledged(json!({"id":(899+count).to_string(),"channel_id":"400",
                         "author":{"id":"100"},"content":body,"nonce":nonce}))
                 } else {
@@ -1298,55 +1305,69 @@ mod tests {
         let mut second = current.clone();
         second["id"] = json!("702");
         second["content"] = json!("Second retained real native loopback input.");
+        let (close_first, first_closed) = std::sync::mpsc::sync_channel::<()>(1);
         let room = Room {
             current: current.clone(),
             second: second.clone(),
             posts: std::cell::Cell::new(0),
             acknowledge: std::env::var_os("SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK").is_none(),
+            close_first,
         };
         let source = place.dir.join("discord.db");
         use super::super::gateway;
-        let (local, remote) = std::os::unix::net::UnixStream::pair().unwrap();
-        local
-            .set_read_timeout(Some(std::time::Duration::from_millis(50)))
-            .unwrap();
-        let (finish, done) = std::sync::mpsc::sync_channel::<()>(1);
-        let peer = std::thread::spawn(move || {
-            let mut socket = tungstenite::accept(remote).unwrap();
-            gateway::send(
-                &mut socket,
-                json!({"op":10,"d":{"heartbeat_interval":45000}}),
-            )
-            .unwrap();
-            let frame = socket.read().unwrap().into_text().unwrap();
-            let identify: Value = serde_json::from_str(&frame).unwrap();
-            assert_eq!(identify["op"], 2);
-            assert_eq!(identify["d"]["intents"], 1 << 12);
-            gateway::send(
-                &mut socket,
-                json!({"op":0,"s":1,"t":"READY","d":{
-                "application":{"id":"100"},"user":{"id":"100","bot":true}}}),
-            )
-            .unwrap();
-            gateway::send(
-                &mut socket,
-                json!({"op":0,"s":2,"t":"MESSAGE_CREATE",
-                "d":{"id":"699","channel_id":"400","author":{"id":"201"}}}),
-            )
-            .unwrap();
-            gateway::send(
-                &mut socket,
-                json!({"op":0,"s":3,"t":"MESSAGE_CREATE","d":current}),
-            )
-            .unwrap();
-            gateway::send(
-                &mut socket,
-                json!({"op":0,"s":4,"t":"MESSAGE_CREATE","d":second}),
-            )
-            .unwrap();
-            done.recv_timeout(std::time::Duration::from_secs(40))
+        let worker = |frames: Vec<Value>, done: std::sync::mpsc::Receiver<()>| {
+            let (local, remote) = std::os::unix::net::UnixStream::pair().unwrap();
+            local
+                .set_read_timeout(Some(std::time::Duration::from_millis(50)))
                 .unwrap();
-        });
+            let peer = std::thread::spawn(move || {
+                let mut socket = tungstenite::accept(remote).unwrap();
+                gateway::send(
+                    &mut socket,
+                    json!({"op":10,"d":{"heartbeat_interval":45000}}),
+                )
+                .unwrap();
+                let frame = socket.read().unwrap().into_text().unwrap();
+                let identify: Value = serde_json::from_str(&frame).unwrap();
+                assert_eq!(identify["op"], 2);
+                assert_eq!(identify["d"]["intents"], 1 << 12);
+                gateway::send(
+                    &mut socket,
+                    json!({"op":0,"s":1,"t":"READY","d":{
+                    "application":{"id":"100"},"user":{"id":"100","bot":true}}}),
+                )
+                .unwrap();
+                for frame in frames {
+                    gateway::send(&mut socket, frame).unwrap();
+                }
+                done.recv_timeout(std::time::Duration::from_secs(40))
+                    .unwrap();
+                let _ = socket.close(None);
+            });
+            (local, peer)
+        };
+        let (finish, done) = std::sync::mpsc::sync_channel::<()>(1);
+        let frames = vec![
+            json!({"op":0,"s":2,"t":"MESSAGE_CREATE","d":{"id":"699","channel_id":"400","author":{"id":"201"}}}),
+            json!({"op":0,"s":3,"t":"MESSAGE_CREATE","d":current}),
+        ];
+        let mut sockets = std::collections::VecDeque::new();
+        let mut peers = Vec::new();
+        if room.acknowledge {
+            let (local, first) = worker(frames, first_closed);
+            sockets.push_back(local);
+            peers.push(first);
+            let (local, second) = worker(
+                vec![json!({"op":0,"s":2,"t":"MESSAGE_CREATE","d":second})],
+                done,
+            );
+            sockets.push_back(local);
+            peers.push(second);
+        } else {
+            let (local, peer) = worker(frames, done);
+            sockets.push_back(local);
+            peers.push(peer);
+        }
         let result = service::with(&place, &room, Some(2), |cfg| {
             assert!(open_bolt(&source, 64 << 20).is_err());
             if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
@@ -1359,12 +1380,21 @@ mod tests {
                 assert!(!other.status.success());
                 assert!(String::from_utf8_lossy(&other.stderr).contains("timeout"));
             }
-            let (mut socket, _) = tungstenite::client("ws://localhost", local).unwrap();
+            let (mut socket, _) = tungstenite::client(
+                "ws://localhost",
+                sockets
+                    .pop_front()
+                    .expect("only the expected Gateway peers should open"),
+            )
+            .unwrap();
             let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
             Ok(move || cursor.event(&mut socket))
         });
         finish.send(()).unwrap();
-        peer.join().unwrap();
+        for peer in peers {
+            peer.join().unwrap();
+        }
+        assert!(sockets.is_empty());
         if room.acknowledge {
             assert!(result.unwrap());
         } else {
