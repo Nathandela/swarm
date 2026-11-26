@@ -457,28 +457,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                 return Err(io::Error::other("Claude resume custody changed before exec"));
             }
         }
-        if let Some(proof)=config["lineage"]["hands_off"].as_object(){
-            match proof.get("kind").and_then(Value::as_str) {
-                Some("codex") => providers::codex_continuity::verify_handoff(dir, &config["lineage"])?,
-                None | Some("claude") => {
-            use std::os::unix::fs::MetadataExt;
-            let get=|key|proof.get(key).and_then(Value::as_str).unwrap_or_default();
-            let cwd=Path::new(get("cwd"));
-            let home=Path::new(get("home"));
-            let authority=proof.get("project_authority").unwrap_or(&Value::Null);
-            providers::claude::verify_project_authority(home,cwd,authority)?;
-            let (transcript,identity)=providers::claude::transcript(home,cwd,get("conversation"))?;
-            let status=cwd.metadata()?;
-            if proof.get("identity")!=Some(&identity)
-                || transcript!=Path::new(get("transcript"))
-                || proof.get("cwd_identity")!=Some(&json!([status.dev(),status.ino()]))
-            {
-                return Err(io::Error::other("hands-off source custody changed before launch"));
-            }
-                }
-                _ => return Err(io::Error::other("unrecognized hands-off provider")),
-            }
-        }
+        crate::supervisor::verify_handoff_artifact(dir, &config["lineage"])?;
         if provider["name"]=="claude" {
             let cwd=Path::new(working_dir);
             let profile=&config["claude_profile"];

@@ -1,6 +1,7 @@
 mod claude_takeover;
 pub(crate) mod context_guard;
 mod handoff;
+pub(crate) use handoff::verify_handoff_artifact;
 pub(crate) mod mail;
 pub(crate) mod mail_files;
 pub(crate) mod mail_store;

@@ -12,6 +12,9 @@ impl Session {
     pub(in crate::supervisor) fn hands_off_source(
         &self,
     ) -> io::Result<(PathBuf, PathBuf, String, Value)> {
+        if self.agent == "agy" {
+            return self.hands_off_agy_source();
+        }
         if !matches!(self.agent.as_str(), "claude" | "codex")
             || !self.owner_interactive
             || self.schedule.is_some()

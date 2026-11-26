@@ -123,6 +123,50 @@ pub(super) fn hands_off(
     Ok((bound, (session.id.clone(), session.incarnation()), proof))
 }
 
+pub(crate) fn verify_handoff_artifact(dir: &Path, lineage: &Value) -> io::Result<()> {
+    use crate::providers;
+    use std::os::unix::fs::MetadataExt;
+    let proof = &lineage["hands_off"];
+    if proof.is_null() {
+        return Ok(());
+    }
+    if !proof.is_object() {
+        return Err(io::Error::other("malformed hands-off source proof"));
+    }
+    let id = field(lineage, "spawned_from");
+    if !runtime::valid_id(id) {
+        return Err(io::Error::other("unproved hands-off source session"));
+    }
+    match proof.get("kind") {
+        Some(kind) if kind == "agy" => {
+            let sessions = dir
+                .parent()
+                .ok_or_else(|| io::Error::other("missing owner session root"))?;
+            providers::agy::verify_handoff(&sessions.join(id), proof)
+        }
+        Some(kind) if kind == "codex" => providers::codex_continuity::verify_handoff(dir, lineage),
+        None => {
+            // The original Claude lineage record predates the provider discriminator.
+            let cwd = Path::new(field(proof, "cwd"));
+            let home = Path::new(field(proof, "home"));
+            providers::claude::verify_project_authority(home, cwd, &proof["project_authority"])?;
+            let (transcript, identity) =
+                providers::claude::transcript(home, cwd, field(proof, "conversation"))?;
+            let status = cwd.metadata()?;
+            if proof["identity"] != identity
+                || transcript != Path::new(field(proof, "transcript"))
+                || proof["cwd_identity"] != json!([status.dev(), status.ino()])
+            {
+                return Err(io::Error::other(
+                    "hands-off source custody changed before launch",
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(io::Error::other("unrecognized hands-off provider")),
+    }
+}
+
 fn render(values: [&str; 5]) -> io::Result<String> {
     const TEMPLATE: &str = include_str!("../../assets/handoff/hands-off.md.tmpl");
     const KEYS: [&str; 5] = [
