@@ -233,6 +233,10 @@ fn decode_path_name(value: &str) -> Option<String> {
 }
 
 fn download(attachment: &Attachment) -> io::Result<Vec<u8>> {
+    download_url(&attachment.url, attachment.size)
+}
+
+fn download_url(url: &str, size: u64) -> io::Result<Vec<u8>> {
     let agent = ureq::Agent::config_builder()
         .https_only(true)
         .proxy(None)
@@ -240,7 +244,7 @@ fn download(attachment: &Attachment) -> io::Result<Vec<u8>> {
         .timeout_global(Some(Duration::from_secs(20)))
         .build()
         .new_agent();
-    fetch(&agent, &attachment.url, attachment.size)
+    fetch(&agent, url, size)
 }
 
 pub(super) fn fetch(agent: &ureq::Agent, url: &str, size: u64) -> io::Result<Vec<u8>> {
@@ -482,6 +486,57 @@ pub(super) fn verify_receipt(place: &Path, files: &Value) -> io::Result<()> {
     Ok(())
 }
 
+pub(super) fn read_current(
+    source: &Value,
+    channel: &str,
+    id: &str,
+    digest: &str,
+    offset: usize,
+) -> io::Result<Value> {
+    read_current_with(source, channel, id, digest, offset, download_url)
+}
+
+pub(super) fn read_current_with(
+    source: &Value,
+    channel: &str,
+    id: &str,
+    digest: &str,
+    offset: usize,
+    receive: impl FnOnce(&str, u64) -> io::Result<Vec<u8>>,
+) -> io::Result<Value> {
+    if !snowflake(channel)
+        || !snowflake(id)
+        || digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(invalid("invalid attachment identity"));
+    }
+    let visible = visible(source)?;
+    if visible.is_forwarded() {
+        return Err(invalid("unsupported original attachment source"));
+    }
+    let mut matches = visible.assets.iter().filter(|(file, _)| file["id"] == id);
+    let (raw, forwarded) = matches
+        .next()
+        .ok_or_else(|| invalid("attachment is outside the authorized source"))?;
+    if matches.next().is_some() {
+        return Err(invalid("duplicate Discord attachment ID"));
+    }
+    let file = parse(channel, raw, *forwarded)?;
+    if offset as u64 > file.size {
+        return Err(invalid("attachment offset exceeds the visible file"));
+    }
+    let bytes = receive(&file.url, file.size)?;
+    if bytes.len() as u64 != file.size || format!("{:x}", Sha256::digest(&bytes)) != digest {
+        return Err(invalid(
+            "Discord attachment bytes do not match the requested digest",
+        ));
+    }
+    file_page(id, digest, &file.filename, offset, &bytes)
+}
+
 pub(super) fn read_granted(
     place: &Path,
     files: &Value,
@@ -489,7 +544,6 @@ pub(super) fn read_granted(
     digest: &str,
     offset: u64,
 ) -> io::Result<Value> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
     let file = files
         .as_array()
         .and_then(|files| {
@@ -503,10 +557,32 @@ pub(super) fn read_granted(
         return Err(invalid("attachment offset exceeds the pinned file"));
     }
     let bytes = verified_bytes(path, size, &file["sha256"])?;
-    let end = offset.saturating_add(8192).min(size);
+    file_page(
+        id,
+        digest,
+        file["filename"]
+            .as_str()
+            .ok_or_else(|| invalid("invalid received attachment name"))?,
+        offset as usize,
+        &bytes,
+    )
+}
+
+fn file_page(
+    id: &str,
+    digest: &str,
+    filename: &str,
+    offset: usize,
+    bytes: &[u8],
+) -> io::Result<Value> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let end = offset.saturating_add(8192).min(bytes.len());
+    let range = bytes
+        .get(offset..end)
+        .ok_or_else(|| invalid("attachment offset exceeds the pinned file"))?;
     Ok(
-        json!({"id":id,"sha256":digest,"filename":file["filename"],"offset":offset,
-        "next_offset":end,"complete":end==size,"encoding":"base64","data":STANDARD.encode(&bytes[offset as usize..end as usize])}),
+        json!({"id":id,"sha256":digest,"filename":filename,"offset":offset,"next_offset":end,
+        "complete":end==bytes.len(),"encoding":"base64","data":STANDARD.encode(range)}),
     )
 }
 

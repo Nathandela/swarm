@@ -2,6 +2,8 @@
 package discord
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -39,9 +41,13 @@ func (s *Store) FixtureIngress(d TeammateDiscussion, owner, id, action string) (
 	if err != nil {
 		return 0, err
 	}
-	if action == "settle" && len(pending) == 1 {
+	if (action == "settle" || action == "settle-attachment") && len(pending) == 1 {
 		msg := &discordgo.Message{ID: id, ChannelID: route.ChannelID, GuildID: route.GuildID,
 			Content: "offline replay witness", Author: &discordgo.User{ID: owner}}
+		if action == "settle-attachment" {
+			msg.Attachments = []*discordgo.MessageAttachment{{ID: "901", Filename: "fixture.csv", ContentType: "text/csv",
+				Size: len("header,value\nfixture,1\n"), URL: "https://cdn.discordapp.com/attachments/400/901/fixture.csv"}}
+		}
 		admission := &TeammateAdmission{Discussion: d, OperationID: "da_" + digest([]string{d.InstallationID, id})[:32],
 			Revision: teammateRevision(msg), Author: record.Author, Route: route}
 		if err := s.teammateCandidateChange(d.InstallationID, pending[0], StateSent, "", admission); err != nil {
@@ -82,9 +88,40 @@ func (s *Store) FixturePersonalGap(installation string) error {
 	})
 }
 
-func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string) error {
-	return s.teammateQueueOutput(d, TeammatePublication{ID: "fixture-final", Body: "Original final personal reply.",
-		AdmissionID: "da_" + digest([]string{d.InstallationID, source})[:32], Sequence: 1}, time.Now().UTC())
+func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string, attached bool) error {
+	publication := TeammatePublication{ID: "fixture-final", Body: "Original final personal reply.",
+		AdmissionID: "da_" + digest([]string{d.InstallationID, source})[:32], Sequence: 1}
+	if attached {
+		data := []byte("header,value\nfixture,1\n")
+		publication.Files = []schema.PublicationFile{{ID: "original-file", Name: "fixture.csv", ContentType: "text/csv",
+			SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Size: int64(len(data))}}
+		return s.teammateQueueOutput(d, publication, time.Now().UTC(), data)
+	}
+	return s.teammateQueueOutput(d, publication, time.Now().UTC())
+}
+
+func (s *Store) FixtureFinalPayload(d TeammateDiscussion, damage bool) (int, error) {
+	key := teammateOutputKey(d.InstallationID, d.ID, "fixture-final")
+	size := 0
+	if damage {
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			bucket := tx.Bucket([]byte(teammateFilePayloadBucket))
+			data := bytes.Clone(bucket.Get(key))
+			if len(data) == 0 {
+				return ErrNotFound
+			}
+			data[0] ^= 1
+			return bucket.Put(key, data)
+		})
+		return 0, err
+	}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if bucket := tx.Bucket([]byte(teammateFilePayloadBucket)); bucket != nil {
+			size = len(bucket.Get(key))
+		}
+		return nil
+	})
+	return size, err
 }
 
 func (s *Store) FixtureFinalState(d TeammateDiscussion) (string, string, error) {

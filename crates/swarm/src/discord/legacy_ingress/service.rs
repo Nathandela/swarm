@@ -128,6 +128,7 @@ struct StatusSocket {
     socket: PathBuf,
     inode: (u64, u64),
     connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
     stop: std::sync::mpsc::Sender<()>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -165,6 +166,10 @@ impl StatusSocket {
         let (stop, exit) = std::sync::mpsc::channel();
         let connected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let live = connected.clone();
+        let requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown = requested.clone();
+        let identity = Sha256::digest(cfg.text("installation_id").as_bytes());
+        let stop_path = format!("/installation-v1/{identity:x}/shutdown");
         let mut initial = cfg.status();
         let worker = std::thread::spawn(move || {
             loop {
@@ -182,21 +187,31 @@ impl StatusSocket {
                 let mut reader = std::io::BufReader::new(
                     crate::socket::DeadlineReader(&stream, deadline).take(512),
                 );
-                if reader.read_line(&mut line).is_err()
-                    || !matches!(
+                let reply = if reader.read_line(&mut line).is_ok()
+                    && matches!(
                         line.as_str(),
                         "GET /status HTTP/1.0\r\n" | "GET /status HTTP/1.1\r\n"
-                    )
+                    ) {
+                    initial["connected"] = json!(live.load(std::sync::atomic::Ordering::Acquire));
+                    Some(initial.clone())
+                } else if line == format!("POST {stop_path} HTTP/1.0\r\n")
+                    && read_shutdown(&mut reader)
                 {
+                    shutdown.store(true, std::sync::atomic::Ordering::Release);
+                    live.store(false, std::sync::atomic::Ordering::Release);
+                    Some(json!({"stopped":true}))
+                } else {
+                    None
+                };
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+                let Some(reply) = reply else {
                     let _ =
                         stream.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
                     continue;
-                }
-                initial["connected"] = json!(live.load(std::sync::atomic::Ordering::Acquire));
-                let Ok(body) = serde_json::to_vec(&initial) else {
+                };
+                let Ok(body) = serde_json::to_vec(&reply) else {
                     continue;
                 };
-                let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
                 let _ = write!(stream, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n", body.len())
                 .and_then(|_| stream.write_all(&body));
             }
@@ -205,15 +220,45 @@ impl StatusSocket {
             socket,
             inode: (meta.dev(), meta.ino()),
             connected,
+            requested,
             stop,
             worker: Some(worker),
         })
     }
 
-    fn online(&self, value: bool) {
-        self.connected
-            .store(value, std::sync::atomic::Ordering::Release);
+    fn stopping(&self) -> bool {
+        self.requested.load(std::sync::atomic::Ordering::Acquire)
     }
+
+    fn online(&self, value: bool) {
+        self.connected.store(
+            value && !self.stopping(),
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+}
+
+fn read_shutdown(input: &mut impl std::io::BufRead) -> bool {
+    let mut host = false;
+    let mut size = false;
+    let mut content = false;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if input.read_line(&mut line).ok().is_none_or(|n| n == 0) {
+            return false;
+        }
+        match line.as_str() {
+            "\r\n" => break,
+            "Host: local\r\n" if !host => host = true,
+            "Content-Length: 2\r\n" if !size => size = true,
+            "Content-Type: application/json\r\n" if !content => content = true,
+            "Connection: close\r\n" => {}
+            _ => return false,
+        }
+    }
+    let mut body = [0; 2];
+    host && size && content && input.read_exact(&mut body).is_ok() && body == *b"{}"
 }
 
 impl Drop for StatusSocket {
@@ -249,7 +294,13 @@ pub(super) trait Room {
     fn verify(&self, cfg: &Config) -> io::Result<()>;
     fn history(&self, cfg: &Config) -> io::Result<Vec<Value>>;
     fn message(&self, cfg: &Config, id: &str) -> io::Result<Value>;
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> crate::discord::rest::Post;
+    fn post(
+        &self,
+        cfg: &Config,
+        nonce: &str,
+        body: &str,
+        files: &[crate::supervisor::mail_files::Captured],
+    ) -> crate::discord::rest::Post;
 }
 
 impl Room for Discord {
@@ -267,8 +318,14 @@ impl Room for Discord {
         self.owner_message(cfg, id)?.ok_or_else(invalid)
     }
 
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> crate::discord::rest::Post {
-        self.post_publication(cfg, nonce, body, &[])
+    fn post(
+        &self,
+        cfg: &Config,
+        nonce: &str,
+        body: &str,
+        files: &[crate::supervisor::mail_files::Captured],
+    ) -> crate::discord::rest::Post {
+        self.post_publication(cfg, nonce, body, files)
     }
 }
 
@@ -294,6 +351,10 @@ where
     let source = place.dir.join("discord.db");
     let expected = fs::symlink_metadata(&source)?;
     let mut lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
+    if !activation::selected(place)? {
+        return Err(invalid());
+    }
+    activation::ready(place, &cfg, &lease.db)?;
     let boundary = {
         let tx = lease.db.begin().map_err(io::Error::other)?;
         let key = format!(
@@ -319,6 +380,9 @@ where
     let mut reconnects = 0;
     loop {
         let sequence = loop {
+            if status.stopping() {
+                return Ok(true);
+            }
             if let Some(id) = pending.pop_first() {
                 break id;
             }
@@ -343,12 +407,18 @@ where
         let fetch = || room.message(&cfg, &message);
         capture_under_lease(&cfg, &message, &mut lease, |_, _| fetch())?;
         prepare::under_lease(place, &cfg, &message, &mut lease, |_, _| fetch())?;
+        if status.stopping() {
+            return Ok(true);
+        }
         let row = pending_dispatch(&lease.db, &cfg, &message)?;
         let bridge = Bridge::open(place, &cfg, &row)?;
         dispatch_under_lease(place, &cfg, &message, &mut lease, |_| fetch())?;
         settle_under_lease(place, &cfg, &message, &mut lease)?;
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
+            if status.stopping() {
+                return Ok(true);
+            }
             if Instant::now() >= deadline {
                 return Err(io::Error::other(
                     "the original native manager has no verified final publication",
@@ -359,7 +429,7 @@ where
                     room.verify(cfg)?;
                     let scope = cfg.clone();
                     Ok(move |row: &publication::Publication| {
-                        room.post(&scope, &row.nonce, &row.body)
+                        room.post(&scope, &row.nonce, &row.body, &row.files)
                     })
                 })?;
                 manager_publication::complete(place, &cfg, &lease, &row)?;

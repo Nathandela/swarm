@@ -646,12 +646,19 @@ pub(super) fn install(place: &Place, cfg: &Config) -> io::Result<()> {
 }
 
 pub(super) fn disconnect(place: &Place) -> io::Result<()> {
+    let disconnect = || {
+        if super::legacy_ingress::activation::selected(place)? {
+            super::legacy_ingress::activation::disconnect(place)
+        } else {
+            place.disconnect()
+        }
+    };
     let unit = Unit::current()?;
     if unit.read()?.is_some() {
         let _registration = registration_lock()?;
         unit.stop(&place.dir)?;
-        place.disconnect()
+        disconnect()
     } else {
-        place.disconnect()
+        disconnect()
     }
 }

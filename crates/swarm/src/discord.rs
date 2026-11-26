@@ -393,13 +393,18 @@ impl<'a> Request<'a> {
                 ]
             }
             "migrate-state" => {
-                flags = &["dry-run", "rollback", "controls"];
+                flags = &["dry-run", "rollback", "controls", "activate-personal"];
                 &[
                     "settle-personal-ingress",
                     "dispatch-personal-ingress",
                     "capture-personal-ingress",
                     "prepare-personal-ingress",
                     "deliver-personal-publication",
+                    "read-personal-publication-file",
+                    "read-personal-source-attachment",
+                    "file-id",
+                    "file-sha256",
+                    "offset",
                 ]
             }
             "migrate-supervisor" => {
@@ -543,6 +548,60 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 ("dispatch-personal-ingress", legacy_ingress::dispatch),
                 ("settle-personal-ingress", legacy_ingress::settle),
             ];
+            let export = req.get("read-personal-publication-file");
+            let source = req.get("read-personal-source-attachment");
+            if export.is_some() && source.is_some() {
+                return Err(invalid("select one original attachment source"));
+            }
+            if let Some(output) = export.or(source) {
+                if req.on("controls")
+                    || req.on("rollback")
+                    || req.on("dry-run")
+                    || req.on("activate-personal")
+                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                {
+                    return Err(invalid("select one migration operation"));
+                }
+                let id = req
+                    .get("file-id")
+                    .ok_or_else(|| invalid("missing --file-id"))?;
+                let digest = req
+                    .get("file-sha256")
+                    .ok_or_else(|| invalid("missing --file-sha256"))?;
+                let offset = req
+                    .get("offset")
+                    .unwrap_or("0")
+                    .parse()
+                    .map_err(|_| invalid("invalid offset"))?;
+                let data = if export.is_some() {
+                    legacy_ingress::publication::read(&place, output, id, digest, offset)?
+                } else {
+                    legacy_ingress::source_attachment::read(&place, output, id, digest, offset)?
+                };
+                println!("{}", serde_json::to_string_pretty(&data)?);
+                return Ok(true);
+            }
+            if ["file-id", "file-sha256", "offset"]
+                .iter()
+                .any(|flag| req.get(flag).is_some())
+            {
+                return Err(invalid(
+                    "select an original publication or source attachment",
+                ));
+            }
+            if req.on("activate-personal") {
+                if req.on("controls")
+                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                    || req.on("dry-run") && req.on("rollback")
+                {
+                    return Err(invalid("select one migration operation"));
+                }
+                return legacy_ingress::activation::migrate(
+                    &place,
+                    req.on("dry-run"),
+                    req.on("rollback"),
+                );
+            }
             let mut selected = personal
                 .iter()
                 .filter_map(|(flag, action)| req.get(flag).map(|message| (message, action)));
@@ -582,11 +641,13 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         return Ok(true);
     }
     match req.command {
-        "run" if req.on("retained-personal") && !req.on("unattended") => {
-            return legacy_ingress::service::run(&place.bound(&cfg)?);
+        "run" if legacy_ingress::activation::selected(&place)? => {
+            return legacy_ingress::service::run(&place);
         }
         "run" if req.on("retained-personal") => {
-            return Err(invalid("retained personal handoff runs in the foreground"));
+            return Err(invalid(
+                "activate the retained personal enrollment with migrate-state --activate-personal",
+            ));
         }
         "run" => service::run(&place.bound(&cfg)?, &cfg, req.on("unattended"))?,
         "status" => {

@@ -55,6 +55,16 @@ func main() {
 		check(store.Close())
 		return
 	}
+	if action == "project-add" {
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		if cfg.Projects == nil {
+			cfg.Projects = map[string]string{}
+		}
+		cfg.Projects[os.Args[3]] = os.Args[4]
+		check(discord.SaveConfig(dir, cfg))
+		return
+	}
 	if action == "project" {
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
@@ -88,7 +98,7 @@ func main() {
 		return
 	}
 	open := discord.OpenStore
-	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" {
+	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" {
 		open = discord.FixtureOpenRead
 	}
 	store, err := open(dir)
@@ -146,13 +156,17 @@ func main() {
 		binding, err := manager.FixtureActivate(ctx, row)
 		check(err)
 		check(json.NewEncoder(os.Stdout).Encode(binding))
-	case "publication-queue", "publication-read", "publication-phases":
+	case "publication-queue", "publication-read", "publication-phases", "publication-payload", "publication-damage":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
 		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
 		check(err)
 		if action == "publication-queue" {
-			check(store.FixtureQueueFinal(row, os.Args[4]))
+			check(store.FixtureQueueFinal(row, os.Args[4], len(os.Args) == 6 && os.Args[5] == "attachment"))
+		} else if action == "publication-payload" || action == "publication-damage" {
+			size, err := store.FixtureFinalPayload(row, action == "publication-damage")
+			check(err)
+			fmt.Println(size)
 		} else if action == "publication-phases" {
 			phases, err := store.FixtureOutputPhases(row)
 			check(err)
@@ -181,7 +195,7 @@ func main() {
 			phase = "quiet"
 		}
 		project := ""
-		if phase == "project-final" {
+		if phase == "project-final" || phase == "attempt-final" {
 			project = os.Args[6]
 		}
 		check(voice.FixturePersonalIngress(filepath.Join(root, id), "discord-teammate-"+id, endpoint+"/fixture-manager", origin, phase, project))

@@ -26,15 +26,15 @@ fn source_author(row: &Value, cfg: &Config, message: &str) -> io::Result<Value> 
     Ok(author.clone())
 }
 
-struct Voice {
+pub(super) struct Voice {
     header: Value,
     conversation_key: Vec<u8>,
-    conversation: Value,
+    pub(super) conversation: Value,
     raw_conversation: Vec<u8>,
     admissions: u64,
 }
 
-fn read_voice<'tx>(
+pub(super) fn read_voice<'tx>(
     tx: &impl TxApi<'tx>,
     id: &str,
     cfg: &Config,
@@ -107,14 +107,10 @@ fn read_voice<'tx>(
                     && value["exported"] == true
                     && value["final"] == true
                     && !field(&value, "id").is_empty()
-                    && [
-                        "discussion_projects",
-                        "discussion_attempts",
-                        "discussion_files",
-                        "recipient_id",
-                    ]
-                    .iter()
-                    .all(|key| value[*key].is_null() || value[*key] == "")
+                    && grants::settled_project_history(&value["discussion_projects"])
+                    && ["discussion_attempts", "discussion_files", "recipient_id"]
+                        .iter()
+                        .all(|key| value[*key].is_null() || value[*key] == "")
                 {
                     continue;
                 }
@@ -149,7 +145,10 @@ fn read_voice<'tx>(
         || state["parked"] == true
         || state["needs_handoff"] == true
         || !state["retirement"].is_null()
-        || !field(&state, "project").is_empty()
+        || !(state["project"].is_null()
+            || state["project"]
+                .as_str()
+                .is_some_and(|path| path.is_empty() || Path::new(path).is_absolute()))
     {
         return Err(invalid());
     }
@@ -168,6 +167,7 @@ fn make_admission(
     author: &Value,
     text: &str,
     settings: &str,
+    projects: &std::collections::BTreeMap<String, String>,
 ) -> io::Result<(Vec<u8>, Value)> {
     let raw_text = String::from_utf8(go_bytes(
         &json!({"Author": author, "MessageID":origin["message_id"], "ReplyTo":"", "Text":text}),
@@ -177,13 +177,23 @@ fn make_admission(
         "Answer simple questions directly. Before longer work, acknowledge a new request once with final=false. Keep replies brief. Use swarm_discussion_yield when shared-thread participants are talking to each other. For a direct reply or clarification in a shared thread, specify recipient_id from the verified Discord actor. Use their message ID as recipient_message_id if needed. Use a distinct output_id and increasing sequence per post, with final=true on the last reply. Use the scoped manager tools and approved project. Verify results with swarm_read.\n",
         "Current human instruction (JSON) "
     );
-    let prompt = format!("{instructions}{raw_text}");
-    let native_text = crate::manager_prompt::render(
-        settings,
-        &format!(
-            "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action.\n{prompt}"
-        ),
-    )?;
+    let (project, explicit) = grants::choose(projects, field(&voice.conversation, "project"), text);
+    let mut prompt = format!("{instructions}{raw_text}");
+    if projects.len() > 1 {
+        let names = projects.keys().cloned().collect::<Vec<_>>().join(", ");
+        if names.len() <= 512 {
+            prompt = format!(
+                "Enrolled project choices {names}. If unresolved and work requires one, ask using these names as choices.\n{prompt}"
+            );
+        }
+    }
+    let context = if project.is_empty() {
+        "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action.".to_owned()
+    } else {
+        let selected = String::from_utf8(go_bytes(&json!(project))?).map_err(io::Error::other)?;
+        format!("Approved project for new work {selected}")
+    };
+    let native_text = crate::manager_prompt::render(settings, &format!("{context}\n{prompt}"))?;
     let n = voice.conversation["last_admission"]
         .as_u64()
         .and_then(|n| n.checked_add(1))
@@ -216,6 +226,12 @@ fn make_admission(
         "request":{"session":session, "session_instance":binding["session_instance"], "text":native_text,
             "origin":origin, "manager_admission":{"binding":binding,"nonce":nonce,"expected_external_input":0}}
     });
+    if !project.is_empty() {
+        admission["project"] = json!(project);
+    }
+    if explicit {
+        admission["project_explicit"] = json!(true);
+    }
     if let Some(after) = voice.conversation["last_output"]
         .as_u64()
         .filter(|v| *v > 0)
@@ -287,13 +303,7 @@ fn prepared_config(place: &Place, message: &str) -> io::Result<Config> {
         return Err(invalid());
     }
     let cfg = personal_enrollment(place)?;
-    if !cfg.0["projects"].is_null()
-        && !cfg.0["projects"]
-            .as_object()
-            .is_some_and(|map| map.is_empty())
-    {
-        return Err(invalid());
-    }
+    grants::enrolled(&cfg)?;
     Ok(cfg)
 }
 
@@ -388,7 +398,7 @@ pub(super) fn with(
     under_lease(place, &cfg, message, &mut lease, fetch)
 }
 
-fn no_pending_output<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<()> {
+pub(super) fn no_pending_output<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<()> {
     let outbox = tx.bucket(b"teammate_outbox").ok_or_else(invalid)?;
     let prefix = format!("{}\0", cfg.text("installation_id"));
     for (count, (key, raw)) in outbox.iter_entries().enumerate() {
@@ -437,7 +447,7 @@ pub(super) fn under_lease(
     let (voice_pin, mut voice_db) = bounded_writer(writable_pin(&voice_path)?)?;
     let mut voice_tx = voice_db.begin_rw().map_err(io::Error::other)?;
     if let Ok(prior) = inspect_voice(&voice_tx, &id, &origin, cfg.text("manager_cli"), &endpoint) {
-        validate_prepared(&prior)?;
+        validate_prepared(&prior, cfg)?;
         if value(&tx, "teammate_ingress", &key)?.is_some_and(|saved| saved["State"] == "sending") {
             println!("The original Go voice controller already has this prepared input.");
             return Ok(true);
@@ -446,8 +456,15 @@ pub(super) fn under_lease(
     }
     let mut voice = read_voice(&voice_tx, &id, cfg, &endpoint)?;
     let settings = crate::manager_prompt::load(place.supervisor_root())?;
-    let (voice_key, admission) =
-        make_admission(&mut voice, &origin, &row["Author"], text, &settings)?;
+    let projects = grants::enrolled(cfg)?;
+    let (voice_key, admission) = make_admission(
+        &mut voice,
+        &origin,
+        &row["Author"],
+        text,
+        &settings,
+        &projects,
+    )?;
     tx.bucket_mut(b"teammate_ingress")
         .ok_or_else(invalid)?
         .put(&key, go_bytes(&row)?)
