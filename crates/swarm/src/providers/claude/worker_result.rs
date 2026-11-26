@@ -158,7 +158,12 @@ mod tests {
         let project = home.join(".claude/projects/-fixture");
         fs::create_dir_all(&project).unwrap();
         let path = project.join(format!("{id}.jsonl"));
-        let mut output = fs::File::create(&path).unwrap();
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
         writeln!(output, "{{\"type\":\"permission-mode\"}}").unwrap();
         let result = || {
             read(
