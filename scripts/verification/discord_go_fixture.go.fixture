@@ -2,7 +2,9 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +39,9 @@ func main() {
 			InstallationID: "fixture-" + mode, ApplicationID: "100", OwnerID: "200",
 			ManagerCLI: "codex", TokenFile: token, DaemonSocket: filepath.Join(root, "daemon.sock"),
 			WorkDir: root, Supervisor: &discord.SupervisorPaths{StateDir: root, Lock: filepath.Join(root, "daemon.lock"), Log: filepath.Join(root, "daemon.log")}}
+		if len(os.Args) == 7 {
+			cfg.WorkDir = os.Args[6]
+		}
 		if mode == "teammate" {
 			cfg.GuildIDs = []string{"300"}
 		} else {
@@ -115,6 +120,20 @@ func main() {
 		count, err := store.FixtureIngress(row, cfg.OwnerID, os.Args[4], os.Args[5])
 		check(err)
 		fmt.Println(count)
+	case "activate":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		defer cancel()
+		root := cfg.Supervisor.StateDir
+		manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(root), root, cfg)
+		check(err)
+		defer manager.Close()
+		binding, err := manager.FixtureActivate(ctx, row)
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(binding))
 	case "voice-ingress":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

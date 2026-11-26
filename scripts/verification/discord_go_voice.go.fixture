@@ -2,7 +2,9 @@
 package voice
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -14,7 +16,7 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 		return err
 	}
 	defer store.Close()
-	binding, err := store.BindManager(ManagerBinding{NativeCLI: true, ConversationID: conversation,
+	binding, err := store.BindManager(ManagerBinding{ConversationID: conversation,
 		Provider: "codex", SessionID: session, SessionInstance: "original-manager-instance",
 		NativeSessionID: "original-native-session", NativeGeneration: "native-1",
 		ObservationGeneration: "observed-1", LoginEpoch: "same-login"})
@@ -69,4 +71,29 @@ func FixturePersonalPhase(dir, message string) (string, bool, error) {
 		}
 	}
 	return "", false, ErrNotFound
+}
+
+// FixtureActivate opens the original manager lane without submitting a prompt.
+func (d *DiscussionController) FixtureActivate(ctx context.Context) (ManagerBinding, error) {
+	st, err := d.store.Snapshot()
+	if err != nil {
+		return ManagerBinding{}, err
+	}
+	if err := d.activate(ctx, st); err != nil {
+		return ManagerBinding{}, err
+	}
+	for {
+		status, err := d.controller.nativeStatus(ctx)
+		if err != nil {
+			return ManagerBinding{}, err
+		}
+		if status.ReadyForInput && !status.Turn.ExternallySteered {
+			return d.controller.binding, d.store.observeController(d.controller.binding, status.Turn.ExternalInput, false)
+		}
+		select {
+		case <-ctx.Done():
+			return ManagerBinding{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }

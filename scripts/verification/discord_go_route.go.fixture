@@ -2,8 +2,10 @@
 package teammatemanager
 
 import (
+	"context"
 	"github.com/Nathandela/swarm/internal/discord"
 	"github.com/Nathandela/swarm/internal/skeleton"
+	"github.com/Nathandela/swarm/internal/voice"
 )
 
 func FixtureSupervisor(cfg discord.Config, discussion discord.TeammateDiscussion) (string, string, string, error) {
@@ -11,4 +13,13 @@ func FixtureSupervisor(cfg discord.Config, discussion discord.TeammateDiscussion
 		managerSettingsDir: cfg.Supervisor.StateDir}
 	r.cfg.DaemonSocket = cfg.DaemonSocket
 	return r.supervisorForDiscussion(discussion)
+}
+
+func (r *Runtime) FixtureActivate(ctx context.Context, bound discord.TeammateDiscussion) (voice.ManagerBinding, error) {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return voice.ManagerBinding{}, err
+	}
+	defer r.release(entry)
+	return entry.voice.FixtureActivate(ctx)
 }

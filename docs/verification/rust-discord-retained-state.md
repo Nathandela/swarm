@@ -22,3 +22,6 @@ In a disposable copy of the pinned Go repository, copy the fixture program to `c
 ```bash
 python3 scripts/verification/discord_retained_state.py PINNED_GO RUST PINNED_GO_FIXTURE
 ```
+
+
+The Linux witness in `scripts/verification/discord_retained_native.py` launches the original Go personal manager on installed Codex 0.170.0 inside an isolated network namespace with only loopback inference. The test binary exercises Rust against the actual Go owner and requires a completed native turn for the exact admission nonce. Pinned Go then reopens the original controller, with only its expected database generation increment. The manager session, instance, provider conversation, observation generation, login identity and credential remain the originals. A replay queues no additional input.
