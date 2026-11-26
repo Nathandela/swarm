@@ -4,7 +4,7 @@ set -eu
 test "$#" -ge 1 && test "$#" -le 3
 mode=${2:-}
 case "$mode" in
-  --cross-provider) test "$#" -eq 3 ;;
+  --cross-provider|--cross-provider-codex) test "$#" -eq 3 ;;
   ""|--relocation|--stopped-resume) test "$#" -le 2 ;;
   *) exit 2 ;;
 esac
@@ -18,18 +18,23 @@ run=$(mktemp -d /private/tmp/cx-run.XXXXXX)
 mkdir "$build/go" "$build/rust" "$run/bin"
 echo "build scratch $build"
 echo "native fixture $run"
-if [ "$mode" != --cross-provider ]; then
+case "$mode" in
+  --cross-provider) source_agent=claude ;;
+  --cross-provider-codex) source_agent=codex ;;
+  *) source_agent= ;;
+esac
+if [ -z "$source_agent" ]; then
   git -C "$repo" archive "$oracle" | tar -x -C "$build/go"
 fi
 git -C "$repo" archive HEAD | tar -x -C "$build/rust"
-python3 - "$build" "$mode" <<'PY'
+python3 - "$build" "$source_agent" <<'PY'
 from pathlib import Path
 import sys
 
 base = Path(sys.argv[1])
 go = base / "go/internal/daemon/identity.go"
 rust = base / "rust/crates/swarm/src/supervisor/session.rs"
-cross_provider = sys.argv[2] == "--cross-provider"
+cross_provider = bool(sys.argv[2])
 if not cross_provider:
     source = go.read_text()
     signature = "func generateID() string {"
@@ -50,8 +55,9 @@ rust.write_text(source.replace(allocation, f'''let id = match std::env::var("{va
 PY
 target=$build/target
 (cd "$build/rust" && CARGO_TARGET_DIR="$target" cargo build --offline --locked -p swarm)
-if [ "$mode" = --cross-provider ]; then
-  exec python3 -Bu "$repo/scripts/verification/rust_cross_provider_handoff.py" "$target/debug/swarm" "$3" "$vendor"
+if [ -n "$source_agent" ]; then
+  exec python3 -Bu "$repo/scripts/verification/rust_cross_provider_handoff.py" \
+    "$target/debug/swarm" "$3" "$vendor" --source "$source_agent"
 fi
 (cd "$build/go" && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o "$build/go-oracle" ./cmd/swarm)
 if [ "$mode" = --relocation ]; then

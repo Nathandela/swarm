@@ -17,10 +17,14 @@ witness=$3
 case "$witness" in
   rust_cross_provider_handoff.py)
     test "$#" -eq 5
-    test "$4" = hands-off
+    case "$4" in
+      hands-off) source_agent=claude ;;
+      hands-off-codex) source_agent=codex ;;
+      *) exit 2 ;;
+    esac
     extra_provider=$(realpath "$5")
     test -x "$extra_provider"
-    set -- /fixture/swarm /native/claude /native/codex ;;
+    set -- /fixture/swarm /native/claude /native/codex --source "$source_agent" ;;
   codex_relocation.py)
     test "$#" -eq 4
     case "$4" in go|rust) ;; *) exit 2 ;; esac
