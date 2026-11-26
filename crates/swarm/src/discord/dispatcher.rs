@@ -1,7 +1,8 @@
 //! One owner-personal discussion on the native supervisor's exact manager binding.
 use super::config::{Config, invalid};
 use super::receipt::{
-    Inbox, Observation, hash, publication_args, publication_nonce, verify_publication,
+    Inbox, Observation, PublicationClaimError, hash, publication_args, publication_nonce,
+    verify_publication,
 };
 use super::rest::{Discord, Post};
 use super::{mail_wake, manager::Manager};
@@ -841,6 +842,16 @@ impl Dispatcher {
                 ));
             }
         } else {
+            let expected_revision = if input["worker_wake"].is_null() {
+                &origin["revision"]
+            } else {
+                &input["worker_wake"]["owner_revision"]
+            };
+            if !inbox.matches_owner_admission(source_id, expected_revision, "accepted") {
+                return Err(invalid(
+                    "publication requires the original accepted source revision",
+                ));
+            }
             let source = api
                 .current(cfg, source_id)?
                 .filter(|source| source["id"] == source_id)
@@ -851,11 +862,6 @@ impl Dispatcher {
                 .admit(inbox, &source)?
                 .filter(|receipt| receipt["state"] == "accepted")
                 .ok_or_else(|| invalid("publication source no longer proves native admission"))?;
-            let expected_revision = if input["worker_wake"].is_null() {
-                &origin["revision"]
-            } else {
-                &input["worker_wake"]["owner_revision"]
-            };
             if current["revision"] != *expected_revision {
                 return Err(invalid("publication source changed after native admission"));
             }
@@ -863,9 +869,10 @@ impl Dispatcher {
         Ok(())
     }
 
-    fn release_sent_pin(&self, nonce: &str, publication: &Value) -> io::Result<()> {
-        let file_source = &publication["file_source"];
+    fn release_sent_pin(&self, nonce: &str, entry: &Value) -> io::Result<()> {
+        let file_source = &entry["proof"]["file_source"];
         if !file_source.is_null() && !self.released_pins.borrow().contains(nonce) {
+            verify_publication(nonce, entry)?;
             mail_store::release_publication(&self.owner.supervisor_root()?, file_source, nonce)?;
             self.released_pins.borrow_mut().insert(nonce.to_owned());
         }
@@ -892,11 +899,10 @@ impl Dispatcher {
         }
         for nonce in &order {
             let entry = inbox.publication(nonce);
-            verify_publication(nonce, &entry)?;
             let publication = &entry["proof"];
             match field(&entry, "state") {
                 "sent" => {
-                    self.release_sent_pin(nonce, publication)?;
+                    self.release_sent_pin(nonce, &entry)?;
                     continue;
                 }
                 "prepared" if entry["retry_at"].as_u64().is_none_or(|at| now >= at) => {}
@@ -936,23 +942,28 @@ impl Dispatcher {
                 }
                 mail_store::pin_publication(&self.owner.supervisor_root()?, file_source, nonce)?
             };
-            // Supervisor IPC and the mailbox writer can both wait. Read the grant again at the send boundary.
-            if let Err(error) = Self::publication_source(cfg, inbox, api, input) {
-                if new_pin {
-                    mail_store::release_publication(
-                        &self.owner.supervisor_root()?,
-                        file_source,
-                        nonce,
-                    )
-                    .map_err(|cleanup| {
-                        io::Error::other(format!(
-                            "{error}. Could not release the new file pin: {cleanup}"
-                        ))
-                    })?;
+            // Recheck after the supervisor, the mailbox, and the receipt writer have all returned.
+            match inbox.claim_publication(nonce, state, &entry, |inbox| {
+                Self::publication_source(cfg, inbox, api, input)
+            }) {
+                Ok(()) => {}
+                Err(PublicationClaimError::Commit(error)) => return Err(error),
+                Err(PublicationClaimError::BeforeWrite(error)) => {
+                    if new_pin {
+                        mail_store::release_publication(
+                            &self.owner.supervisor_root()?,
+                            file_source,
+                            nonce,
+                        )
+                        .map_err(|cleanup| {
+                            io::Error::other(format!(
+                                "{error}. Could not release the new file pin: {cleanup}"
+                            ))
+                        })?;
+                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
-            inbox.publication_state(nonce, "sending", None)?;
             match api.post(cfg, nonce, body, &files) {
                 Post::Acknowledged(receipt)
                     if receipt["nonce"] == nonce.as_str()
@@ -965,7 +976,7 @@ impl Dispatcher {
             if inbox.publication(nonce)["state"] != "sent" {
                 break;
             }
-            self.release_sent_pin(nonce, publication)?;
+            self.release_sent_pin(nonce, &entry)?;
         }
         Ok(order)
     }
@@ -2005,6 +2016,58 @@ mod tests {
         manifest["Pins"].clone()
     }
 
+    fn seed_pinned_prefix(dir: &Path, note: &Value, first: &str, second: &str) {
+        use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+        let path = dir.join("rust-text-v1.json");
+        let mut disk = runtime::read_json(&path).unwrap();
+        let template = disk["outbox"][first]["proof"].clone();
+        let mut order = vec![first.to_owned(), second.to_owned()];
+        for sequence in 3..=128 {
+            let output = format!("file-{sequence}");
+            let body = format!("part {sequence}");
+            let call = format!("tool-{sequence}");
+            let mut proof = template.clone();
+            proof["output_id"] = json!(output);
+            proof["body"] = json!(body);
+            proof["arguments"]["output_id"] = json!(output);
+            proof["arguments"]["text"] = json!(body);
+            proof["arguments"]["sequence"] = json!(sequence);
+            proof["arguments_hash"] = json!(hash(&proof["arguments"]).unwrap());
+            proof["native_call_id"] = json!(call);
+            proof["host_meta"]["callId"] = json!(call);
+            proof["call_receipt"]["native_call_id"] = json!(call);
+            let nonce = publication_nonce(&proof).unwrap();
+            disk["outbox"][&nonce] = json!({
+                "proof":proof,"proof_digest":hash(&proof).unwrap(),"body":body,
+                "state":"sent","message_id":(200 + sequence).to_string(),"rest_acknowledged":true
+            });
+            verify_publication(&nonce, &disk["outbox"][&nonce]).unwrap();
+            order.push(nonce);
+        }
+        disk["manager"]["input"]["publication_nonces"] = json!(order);
+        runtime::write_json(&path, &disk).unwrap();
+
+        let mut db = Bolt::open(dir.join("dispatcher-mail.db")).unwrap();
+        let mut tx = db.begin_rw().unwrap();
+        {
+            let mut notes = tx.bucket_mut(b"note-files").unwrap();
+            let key = mail_store::key(&note["binding"], field(note, "id")).unwrap();
+            let mut files = notes.bucket_mut(key).unwrap();
+            let mut manifest: Value =
+                serde_json::from_slice(files.get(b"manifest").unwrap()).unwrap();
+            manifest["Pins"] = Value::Object(
+                order
+                    .into_iter()
+                    .map(|nonce| (nonce, json!([note["files"][0]["id"]])))
+                    .collect(),
+            );
+            files
+                .put(b"manifest", serde_json::to_vec(&manifest).unwrap())
+                .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
     fn check_file_publications(
         mut dispatcher: Dispatcher,
         cfg: &Config,
@@ -2068,6 +2131,35 @@ mod tests {
         assert!(api.posted.borrow().is_empty());
         audience.override_source.store(0, Ordering::Release);
 
+        let writer = super::super::worker_input::lock_ledger_writer(dir).unwrap();
+        let (entered, in_claim) = std::sync::mpsc::sync_channel(1);
+        let injected = audience.override_source.clone();
+        let effect = std::thread::spawn(move || {
+            in_claim.recv_timeout(Duration::from_secs(5)).unwrap();
+            injected.store(1, Ordering::Release);
+            drop(writer);
+        });
+        let locked_dir = dir.to_owned();
+        super::super::receipt::fixture_before_claim(move || {
+            assert_eq!(
+                super::super::worker_input::lock_ledger(&locked_dir)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
+            entered.send(()).unwrap();
+        });
+        assert!(
+            dispatcher
+                .deliver(cfg, &mut inbox, &audience, &manager, 100)
+                .is_err()
+        );
+        effect.join().unwrap();
+        assert_eq!(fs::read(dir.join("rust-text-v1.json")).unwrap(), snapshot);
+        assert!(file_pins(dir, &note)[&first].is_null());
+        assert!(api.posted.borrow().is_empty());
+        audience.override_source.store(0, Ordering::Release);
+
         dispatcher
             .deliver(cfg, &mut inbox, &audience, &manager, 100)
             .unwrap();
@@ -2111,22 +2203,33 @@ mod tests {
         dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
         assert!(file_pins(dir, &note)[&first].is_null());
 
-        let mut attempts = vec![(first.clone(), "part 1".into()); 2];
-        for sequence in 2..=129 {
-            if sequence == 129 {
-                drop(inbox);
-                drop(dispatcher);
-                dispatcher = Dispatcher::open(cfg, dir).unwrap().unwrap();
-                inbox = Inbox::open(dir, cfg).unwrap();
-            }
-            let nonce = queue(&dispatcher, &mut inbox, sequence);
-            api.outcome.replace(Post::Acknowledged(Value::Null));
-            dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
-            assert_eq!(inbox.publication(&nonce)["state"], "sent");
-            assert!(file_pins(dir, &note)[&nonce].is_null());
-            assert!(!inbox.manager()["input"].is_null());
-            attempts.push((nonce, format!("part {sequence}")));
-        }
+        let second = queue(&dispatcher, &mut inbox, 2);
+        api.outcome.replace(Post::Acknowledged(Value::Null));
+        dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
+        assert_eq!(inbox.publication(&second)["state"], "sent");
+        assert!(file_pins(dir, &note)[&second].is_null());
+        assert!(!inbox.manager()["input"].is_null());
+
+        // Recreate the old accumulated prefix in one fixture transaction per store.
+        drop(inbox);
+        drop(dispatcher);
+        seed_pinned_prefix(dir, &note, &first, &second);
+        assert_eq!(file_pins(dir, &note).as_object().unwrap().len(), 128);
+        dispatcher = Dispatcher::open(cfg, dir).unwrap().unwrap();
+        inbox = Inbox::open(dir, cfg).unwrap();
+        let last = queue(&dispatcher, &mut inbox, 129);
+        api.outcome.replace(Post::Acknowledged(Value::Null));
+        dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
+        assert_eq!(inbox.publication(&last)["state"], "sent");
+        assert!(file_pins(dir, &note).as_object().unwrap().is_empty());
+        assert!(!inbox.manager()["input"].is_null());
+
+        let attempts = vec![
+            (first.clone(), "part 1".into()),
+            (first, "part 1".into()),
+            (second, "part 2".into()),
+            (last, "part 129".into()),
+        ];
         assert_eq!(*api.posted.borrow(), attempts);
         native.lock().unwrap().completed = true;
         dispatcher.tick(cfg, &mut inbox, &audience).unwrap();

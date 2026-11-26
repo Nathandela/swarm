@@ -27,6 +27,24 @@ pub(super) enum Observation {
 pub(super) struct Inbox {
     file: PathBuf,
     data: Value,
+    checking_publication: bool,
+}
+
+pub(super) enum PublicationClaimError {
+    BeforeWrite(io::Error),
+    Commit(io::Error),
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn fixture_before_claim(probe: impl FnOnce() + 'static) {
+    BEFORE_CLAIM.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(probe)).is_none());
+    });
 }
 
 fn certify_attachment_source(saved: &Value, fresh: &Value) -> io::Result<()> {
@@ -147,7 +165,11 @@ impl Inbox {
         } else if !data["team_discussion"].is_null() {
             return Err(invalid("linked team discussion is no longer configured"));
         }
-        let inbox = Self { file, data };
+        let inbox = Self {
+            file,
+            data,
+            checking_publication: false,
+        };
         inbox.verify_team_gap_notices()?;
         if inbox.manager()["input"].get("publication_nonces").is_some() {
             inbox.turn_publications(inbox.manager())?;
@@ -164,6 +186,11 @@ impl Inbox {
     }
 
     fn save(&mut self, next: Value) -> io::Result<()> {
+        if self.checking_publication {
+            return Err(invalid(
+                "publication source recheck cannot alter the admission",
+            ));
+        }
         let _writer = self.lock_writer()?;
         self.write_locked(next)
     }
@@ -1567,6 +1594,46 @@ impl Inbox {
         next["outbox"][nonce] = entry_new;
         next["manager"] = manager;
         self.save(next)
+    }
+
+    pub(super) fn claim_publication(
+        &mut self,
+        nonce: &str,
+        manager: &Value,
+        expected: &Value,
+        check_source: impl FnOnce(&mut Self) -> io::Result<()>,
+    ) -> Result<(), PublicationClaimError> {
+        use PublicationClaimError::BeforeWrite;
+        #[cfg(test)]
+        BEFORE_CLAIM.with(|slot| {
+            if let Some(probe) = slot.borrow_mut().take() {
+                probe();
+            }
+        });
+        let _writer = self.lock_writer().map_err(BeforeWrite)?;
+        let disk = runtime::read_json(&self.file).map_err(BeforeWrite)?;
+        let entry = &disk["outbox"][nonce];
+        // The lock can be held by another effect. Refuse a stale selected turn or outbox snapshot.
+        if disk != self.data
+            || disk["manager"] != *manager
+            || *entry != *expected
+            || entry["state"] != "prepared"
+        {
+            return Err(BeforeWrite(invalid(
+                "queued publication changed before the send claim",
+            )));
+        }
+        verify_publication(nonce, entry).map_err(BeforeWrite)?;
+        self.checking_publication = true;
+        let verified = check_source(self);
+        self.checking_publication = false;
+        verified.map_err(BeforeWrite)?;
+
+        let mut next = disk;
+        next["outbox"][nonce]["state"] = json!("sending");
+        next["outbox"][nonce]["retry_at"] = Value::Null;
+        self.write_locked(next)
+            .map_err(PublicationClaimError::Commit)
     }
 
     pub(super) fn publication_state(
