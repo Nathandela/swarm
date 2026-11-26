@@ -472,6 +472,9 @@ impl Store {
             }) {
                 return Err(CONFLICT.into());
             }
+            if expected.is_some() && job.state == "paused" && state == "active" {
+                return Err("open the paused automation and use Save and enable".into());
+            }
             if job.state == state {
                 return Ok(job);
             }

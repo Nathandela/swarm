@@ -228,7 +228,9 @@ pub(crate) fn change(
             store.check_future(&spec, now)?;
             readiness(&spec)?;
             super::workspace::preview(root, &id, &spec, &store.active()?, conflict)?;
-            if super::timer::command("status")?.as_deref() != Some("installed, active") {
+            let installed =
+                super::timer::command("status")?.as_deref() != Some("installed, active");
+            if installed {
                 if !install_timer {
                     return Ok(
                         json!({"op":CHANGE,"timer_confirmation":{"id":id,"revision":revision}}),
@@ -239,13 +241,21 @@ pub(crate) fn change(
                     return Err("host timer is not active; retry or save paused".into());
                 }
             }
-            store.edit_bound(
-                &id,
-                Some(&revision),
-                *spec,
-                Some((generation, updated_at, true)),
-                jiff::Timestamp::now(),
-            )?
+            store
+                .edit_bound(
+                    &id,
+                    Some(&revision),
+                    *spec,
+                    Some((generation, updated_at, true)),
+                    jiff::Timestamp::now(),
+                )
+                .map_err(|error| {
+                    if installed {
+                        format!("host timer enabled; job save failed: {error}").into()
+                    } else {
+                        error
+                    }
+                })?
         }
         Change::State {
             id,

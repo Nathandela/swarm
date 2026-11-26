@@ -36,7 +36,7 @@ Both tests removed their private registrations, including the Linux persistence 
 
 On a paused job, `p` opens the saved definition. Escape leaves its state and revision untouched. `Ctrl+S` checks the proposed definition, provider and workspace against the current owner. If the timer is already active, the owner saves the edited revision and active state in one catalog transaction. Otherwise the board offers a separate timer confirmation. `Ctrl+D` saves the draft while paused. The CLI's explicit `schedule resume JOB` remains available.
 
-The isolated PTY witness compares the paused editor and cancel against the released Go v0.29.24 binary. The Rust arm also checks unavailable and held preflight, timer confirmation and cancel, a stale revision, and successful activation under an already armed fixture timer. It verifies no timer mutations or scheduled launches occurred. This fixture uses a disposable macOS `launchctl` response and a version-only Claude stub.
+The isolated PTY witness compares the paused editor and cancel against the released Go v0.29.24 binary. The Rust arm also checks unavailable and held preflight, timer confirmation and cancel, a stale revision, and successful activation under an already armed fixture timer. An older dashboard’s direct paused-to-active owner request is refused. The affirmative confirmation arms the fixture timer, and a second installation changes the job revision during timer startup to verify the board reports that the timer is active and the save failed. No job launches in these tests. The fixture uses a disposable `launchctl` or `systemctl` and a version-only Claude stub.
 
 ```sh
 python3 -Bu scripts/verification/parity/automation_enable.py GO_V0_29_24 --reference-go
