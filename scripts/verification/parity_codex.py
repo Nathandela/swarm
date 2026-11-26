@@ -23,7 +23,7 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root, alternate_check, guard_check=False):
+def model_fixture(root, alternate_check, guard_check=False, answer_for_input=None):
     replies = []
     history=[]
     release_pressure=threading.Event()
@@ -57,6 +57,8 @@ def model_fixture(root, alternate_check, guard_check=False):
             replies.append(index)
             ident = f"fixture-response-{index}"
             text = "Native loopback reply." if index == 1 else "Auxiliary fixture reply."
+            if answer_for_input is not None:
+                text = answer_for_input(body.get("input", [])) or text
             item = {"type":"message","id":f"fixture-item-{index}","role":"assistant","status":"completed",
                     "content":[{"type":"output_text","text":text,"annotations":[]}]}
             response = {"id":ident,"object":"response","created_at":int(time.time()),"model":"fixture","status":"in_progress","output":[]}
