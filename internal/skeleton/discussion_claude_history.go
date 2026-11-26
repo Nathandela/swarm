@@ -83,8 +83,11 @@ func (scan *discussionTranscriptScan) readClaude(reader *bufio.Reader, session, 
 		if json.Unmarshal(row.Message.Content, &blocks) != nil {
 			return none, nil
 		}
+		if row.PromptID != "" && row.PromptID != scan.turn {
+			return none, nil
+		}
 		if row.Type == "user" {
-			if row.PromptID != "" || len(blocks) == 0 {
+			if len(blocks) == 0 {
 				return none, nil
 			}
 			for _, block := range blocks {
@@ -93,9 +96,6 @@ func (scan *discussionTranscriptScan) readClaude(reader *bufio.Reader, session, 
 				}
 			}
 			continue
-		}
-		if row.PromptID != "" && row.PromptID != scan.turn {
-			return none, nil
 		}
 		if row.APIError {
 			return schema.WorkerTurnEvidence{TurnID: scan.turn, State: "failed"}, nil
