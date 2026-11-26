@@ -1,9 +1,13 @@
 //! One owner-personal discussion on the native supervisor's exact manager binding.
 use super::config::{Config, invalid};
-use super::manager::Manager;
 use super::receipt::{Inbox, Observation, hash, publication_nonce, verify_publication};
 use super::rest::{Discord, Post};
-use crate::{ipc::field, socket::DeadlineReader, supervisor::runtime};
+use super::{mail_wake, manager::Manager};
+use crate::{
+    ipc::field,
+    socket::DeadlineReader,
+    supervisor::{mail_files::Captured, mail_store, runtime},
+};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -16,7 +20,7 @@ use subtle::ConstantTimeEq;
 pub(super) trait Audience {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>>;
     fn verify(&self, cfg: &Config) -> io::Result<()>;
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post;
+    fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post;
 }
 
 impl Audience for Discord {
@@ -28,8 +32,8 @@ impl Audience for Discord {
         self.verify_dm(cfg, None).map(|_| ())
     }
 
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
-        self.post_reply(cfg, nonce, body)
+    fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post {
+        self.post_publication(cfg, nonce, body, files)
     }
 }
 
@@ -40,6 +44,8 @@ pub(super) struct Dispatcher {
     socket: PathBuf,
     socket_identity: (u64, u64),
     credential: String,
+    mail_cursor: std::cell::Cell<u64>,
+    idle_since: std::cell::Cell<Option<Instant>>,
 }
 
 impl Dispatcher {
@@ -67,6 +73,8 @@ impl Dispatcher {
             launch,
             socket,
             credential,
+            mail_cursor: std::cell::Cell::new(0),
+            idle_since: std::cell::Cell::new(None),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
@@ -105,10 +113,13 @@ impl Dispatcher {
             state = json!({"generation":1, "launch_operation":operation("launch")?, "launch":self.launch});
             inbox.set_manager(state.clone())?;
         }
-        if state["launch"] != self.launch || state["generation"] != 1 {
+        if state["launch"] != self.launch || !state["generation"].as_u64().is_some_and(|n| n > 0) {
             return Err(invalid(
                 "persisted native manager launch differs from this place",
             ));
+        }
+        if !state["retirement"].is_null() {
+            return self.resume_parked(cfg, inbox, state, calls.is_some());
         }
         if state["session"].is_null() {
             let op = field(&state, "launch_operation");
@@ -153,6 +164,7 @@ impl Dispatcher {
             return Err(invalid("native manager requires owner reconciliation"));
         }
         if !state["input"].is_null() {
+            self.idle_since.set(None);
             let had_turn = !state["input"]["turn_id"].is_null();
             let phase = self.reconcile_input(inbox, &mut state)?;
             if let Some((_, driver)) = calls
@@ -165,12 +177,51 @@ impl Dispatcher {
                     .readout
                     .try_send(super::call_runtime::Readout::Acknowledge(origin));
             }
+            if phase == "unknown" && !state["input"]["worker_wake"].is_null() {
+                let input = &state["input"];
+                let id = field(input, "source_id");
+                let revision = &input["worker_wake"]["owner_revision"];
+                let wake_key = field(&input["worker_wake"], "key").to_owned();
+                let Some(current) = Self::mail_owner_current(cfg, inbox, api, id, revision)? else {
+                    return Ok(());
+                };
+                let expired = !crate::providers::codex_receipt::timely(field(input, "operation"));
+                if !current || expired {
+                    let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
+                        Ok(lock) => lock,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                        Err(error) => return Err(error),
+                    };
+                    let observed = self.owner.input_status(&input["composer"])?;
+                    if observed["state"] == "unknown"
+                        && observed["external_input"]
+                            == input["composer"]["manager_admission"]["expected_external_input"]
+                        && field(&observed, "native_turn_id").is_empty()
+                    {
+                        if !current {
+                            inbox.withdraw(id)?;
+                        } else if let Some(wakes) = state["worker_wakes"].as_object_mut() {
+                            wakes.shift_remove(&wake_key);
+                        }
+                        state["input"] = Value::Null;
+                        inbox.set_manager(state)?;
+                    }
+                    return Ok(());
+                }
+                if status["ready_for_input"] == true {
+                    // The shim serializes native preparation with cancellation.
+                    let _ = self
+                        .owner
+                        .send(field(input, "operation"), &input["composer"]);
+                }
+            }
             self.deliver(cfg, inbox, api, &state, millis()?)?;
             if phase == "completed" {
                 let nonce = field(&state["input"], "final_nonce");
-                if !nonce.is_empty() && inbox.publication(nonce)["state"] == "sent" {
+                if nonce.is_empty() || inbox.publication(nonce)["state"] == "sent" {
                     let origin = &state["input"]["composer"]["origin"];
                     if let Some((_, driver)) = calls
+                        && !nonce.is_empty()
                         && origin["voice"].is_object()
                     {
                         let entry = inbox.publication(nonce);
@@ -182,6 +233,14 @@ impl Dispatcher {
                                 field(&entry, "body").into(),
                             ));
                     }
+                    let publication = inbox.publication(nonce);
+                    if !publication["proof"]["file_source"].is_null() {
+                        mail_store::release_publication(
+                            &self.owner.mail_root()?,
+                            &publication["proof"]["file_source"],
+                            nonce,
+                        )?;
+                    }
                     state["input"] = Value::Null;
                     inbox.set_manager(state)?;
                 }
@@ -192,6 +251,10 @@ impl Dispatcher {
             .next_prepared()
             .or_else(|| calls.and_then(|_| inbox.prepared_voice()))
         else {
+            self.wake_from_mail(cfg, inbox, api, state, &status)?;
+            if inbox.manager()["input"].is_null() {
+                self.park_if_idle(cfg, inbox, &status)?;
+            }
             return Ok(());
         };
         if status["ready_for_input"] != true
@@ -199,6 +262,7 @@ impl Dispatcher {
         {
             return Ok(());
         }
+        self.idle_since.set(None);
         let voice = input["voice_origin"].is_object();
         let (id, current) = if voice {
             let id = field(&input, "operation_id").to_owned();
@@ -239,6 +303,209 @@ impl Dispatcher {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn fixture_idle_elapsed(&self) {
+        self.idle_since
+            .set(Some(Instant::now() - Duration::from_secs(121)));
+    }
+
+    fn park_if_idle(&self, cfg: &Config, inbox: &mut Inbox, status: &Value) -> io::Result<()> {
+        if cfg.0["calls"].is_object()
+            || status["ready_for_input"] != true
+            || status["turn"]["state"] != "completed"
+        {
+            self.idle_since.set(None);
+            return Ok(());
+        }
+        let Some(since) = self.idle_since.get() else {
+            self.idle_since.set(Some(Instant::now()));
+            return Ok(());
+        };
+        if since.elapsed() < Duration::from_secs(120) || !self.owner.can_retire() {
+            return Ok(());
+        }
+        let mut state = inbox.manager().clone();
+        let checkpoint = hash(&json!([
+            state["binding"],
+            state["generation"],
+            status["turn"],
+            operation("retire")?
+        ]))?;
+        let request = json!({"binding":state["binding"],"generation":state["generation"],
+            "checkpoint":checkpoint,"expected_turn":status["turn"]});
+        let id = crate::supervisor::manager::retirement_id(&request)?;
+        state["retirement"] = json!({"operation_id":id,"request":request});
+        inbox.set_manager(state)?;
+        Ok(())
+    }
+
+    fn resume_parked(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        mut state: Value,
+        voice: bool,
+    ) -> io::Result<()> {
+        let checkpoint = &state["retirement"];
+        let phase = self.owner.retirement(checkpoint, true)?;
+        if matches!(phase.as_str(), "prepared" | "uncertain") {
+            let _ = self.owner.retirement(checkpoint, false);
+            return Ok(());
+        }
+        let binding = &state["binding"];
+        let root = self.owner.mail_root()?;
+        let queued = inbox.next_prepared().is_some()
+            || voice && inbox.prepared_voice().is_some()
+            || !mail_store::pending(&root, field(binding, "conversation_id"), 0, |note| {
+                inbox.worker_mail_anchor(binding, note).is_some()
+                    && mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
+            })?
+            .is_empty();
+        if phase == "unknown" {
+            if queued {
+                let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
+                    Ok(lock) => lock,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+                if self.owner.retirement(checkpoint, true)? == "unknown" {
+                    state["retirement"] = Value::Null;
+                    self.idle_since.set(None);
+                    inbox.set_manager(state)?;
+                }
+            } else {
+                let _ = self.owner.retirement(checkpoint, false);
+            }
+            return Ok(());
+        }
+        if !queued {
+            return Ok(());
+        }
+        let generation = state["generation"]
+            .as_u64()
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| invalid("manager generation exceeded"))?;
+        let previous = checkpoint["request"].clone();
+        let history = &mut state["history"];
+        if history.is_null() {
+            *history = json!([]);
+        }
+        history
+            .as_array_mut()
+            .ok_or_else(|| invalid("manager retirement history changed"))?
+            .push(previous.clone());
+        state["generation"] = json!(generation);
+        state["resume_request"] = previous;
+        state["session"] = Value::Null;
+        state["binding"] = Value::Null;
+        state["retirement"] = Value::Null;
+        state["launch_operation"] = json!(operation("launch")?);
+        self.idle_since.set(None);
+        inbox.set_manager(state)
+    }
+
+    /// None is uncertain transport or a response without exact message coordinates.
+    fn mail_owner_current(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        id: &str,
+        revision: &Value,
+    ) -> io::Result<Option<bool>> {
+        if !inbox.matches_owner_admission(id, revision) {
+            return Ok(Some(false));
+        }
+        let source = match api.current(cfg, id) {
+            Ok(Some(source)) => source,
+            Ok(None) => return Ok(Some(false)),
+            Err(_) => return Ok(None),
+        };
+        if source["id"] != id
+            || source["channel_id"] != cfg.text("dm_channel_id")
+            || !source["author"]["id"].is_string()
+            || !source["content"].is_string()
+            || !source["attachments"].is_array()
+            || !source["type"].is_u64()
+            || !(source["edited_timestamp"].is_null() || source["edited_timestamp"].is_string())
+        {
+            return Ok(None);
+        }
+        match inbox.admit(&source) {
+            Ok(receipt) => Ok(Some(receipt.is_some_and(|current| {
+                current["state"] == "accepted" && current["revision"] == *revision
+            }))),
+            // Exact scoped GET succeeded, but the accepted revision conflicts with it.
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(Some(false)),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn wake_from_mail(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        mut state: Value,
+        status: &Value,
+    ) -> io::Result<()> {
+        if status["ready_for_input"] != true
+            || !matches!(field(&status["turn"], "state"), "idle" | "completed")
+        {
+            return Ok(());
+        }
+        let root = self.owner.mail_root()?;
+        let binding = &state["binding"];
+        let notes = crate::supervisor::mail_store::pending(
+            &root,
+            field(binding, "conversation_id"),
+            self.mail_cursor.get(),
+            |note| {
+                mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
+                    && inbox.worker_mail_anchor(binding, note).is_some()
+            },
+        )?;
+        if notes.is_empty() {
+            self.mail_cursor.set(0);
+        }
+        for note in notes {
+            self.mail_cursor.set(
+                note["Sequence"]
+                    .as_u64()
+                    .ok_or_else(|| invalid("invalid worker wake order"))?,
+            );
+            let (id, accepted) = inbox
+                .worker_mail_anchor(binding, &note)
+                .ok_or_else(|| invalid("worker wake has no current owner anchor"))?;
+            match Self::mail_owner_current(cfg, inbox, api, &id, &accepted["revision"])? {
+                Some(true) => {}
+                Some(false) => {
+                    inbox.withdraw(&id)?;
+                    continue;
+                }
+                None => continue,
+            }
+            let key = mail_wake::key(&note)?;
+            let accepted_revision = accepted["revision"].clone();
+            let mut wake_input = accepted;
+            wake_input["operation_id"] = json!(format!("mail_{key}"));
+            wake_input["revision"] = json!(key);
+            wake_input["text"] = json!(mail_wake::text(&note));
+            let composer = self.owner.composer(&wake_input, status)?;
+            let semantic = operation("semantic")?;
+            state["input"] = json!({
+                "operation":semantic,"composer":composer,"source_id":id,
+                "worker_wake":{"key":key,"binding":mail_wake::identity(&note),"id":note["ID"],"owner_revision":accepted_revision}
+            });
+            state["worker_wakes"][&key] = json!(true);
+            inbox.set_manager(state)?;
+            if self.owner.send(&semantic, &composer).is_err() {
+                eprintln!("discord: worker mailbox wake awaits native admission reconciliation");
+            }
+            return Ok(());
+        }
+        Ok(())
+    }
+
     fn reconcile_input(&self, inbox: &mut Inbox, state: &mut Value) -> io::Result<String> {
         let input = &state["input"];
         let observation = self.owner.input_status(&input["composer"])?;
@@ -262,7 +529,11 @@ impl Dispatcher {
             if input["turn_id"].is_null() {
                 let id = field(input, "source_id").to_owned();
                 state["input"]["turn_id"] = json!(native_turn);
-                inbox.settled_input(&id, state.clone())?;
+                if state["input"]["worker_wake"].is_null() {
+                    inbox.settled_input(&id, state.clone())?;
+                } else {
+                    inbox.set_manager(state.clone())?;
+                }
             }
         }
         Ok(phase.to_owned())
@@ -318,7 +589,12 @@ impl Dispatcher {
                     .ok_or_else(|| {
                         invalid("publication source no longer proves native admission")
                     })?;
-                if current["revision"] != origin["revision"] {
+                let expected_revision = if input["worker_wake"].is_null() {
+                    &origin["revision"]
+                } else {
+                    &input["worker_wake"]["owner_revision"]
+                };
+                if current["revision"] != *expected_revision {
                     return Err(invalid("publication source changed after native admission"));
                 }
             }
@@ -333,8 +609,29 @@ impl Dispatcher {
                 ));
             }
             let body = field(&entry, "body");
+            let file_source = &publication["file_source"];
+            let files = if file_source.is_null() {
+                Vec::new()
+            } else {
+                let selected = &input["selected_note"];
+                if selected["id"] != file_source["id"]
+                    || selected["binding"] != file_source["binding"]
+                    || !file_source["files"].as_array().is_some_and(|files| {
+                        files.iter().all(|file| {
+                            selected["files"]
+                                .as_array()
+                                .is_some_and(|known| known.contains(file))
+                        })
+                    })
+                {
+                    return Err(invalid(
+                        "queued publication no longer matches the selected worker note",
+                    ));
+                }
+                mail_store::pin_publication(&self.owner.mail_root()?, file_source, &nonce)?
+            };
             inbox.publication_state(&nonce, "sending", None)?;
-            match api.post(cfg, &nonce, body) {
+            match api.post(cfg, &nonce, body, &files) {
                 Post::Acknowledged(receipt)
                     if receipt["nonce"] == nonce
                         && inbox.observe(&receipt, Observation::Rest)? => {}
@@ -431,25 +728,69 @@ impl Dispatcher {
                 return Err(invalid("native mailbox tool belongs to another turn"));
             }
             let scope = self.owner.mail_root()?;
-            let session = field(&state, "session")
-                .rsplit('/')
-                .next()
-                .unwrap_or_default();
-            let input_hash =
-                super::super::supervisor::mail::parent_hash(field(&proof, "native_input_id"));
-            return super::super::supervisor::mail_store::manager_note(
+            let session = if input["worker_wake"].is_null() {
+                field(&state, "session")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+            } else {
+                field(&input["worker_wake"]["binding"], "Parent")
+            };
+            let input_hash = if input["worker_wake"].is_null() {
+                crate::supervisor::mail::parent_hash(field(&proof, "native_input_id"))
+            } else {
+                let wake = &input["worker_wake"];
+                if args.as_object().is_some_and(|fields| !fields.is_empty())
+                    && (!args["id"].is_null() && args["id"] != wake["id"]
+                        || !args["session"].is_null()
+                            && args["session"] != wake["binding"]["Session"]
+                        || !args["session_instance"].is_null()
+                            && args["session_instance"] != wake["binding"]["Instance"])
+                {
+                    return Err(invalid(
+                        "worker wake tools require their exact selected note",
+                    ));
+                }
+                args["id"] = wake["id"].clone();
+                args["session"] = wake["binding"]["Session"].clone();
+                args["session_instance"] = wake["binding"]["Instance"].clone();
+                field(&wake["binding"], "ParentInputHash").to_owned()
+            };
+            let mut result = mail_store::manager_note(
                 &scope,
                 field(&state["binding"], "conversation_id"),
                 session,
                 &input_hash,
                 &args,
                 tool == "swarm_reply",
-            );
+            )?;
+            if let Some(binding) = result
+                .as_object_mut()
+                .and_then(|result| result.shift_remove("file_binding"))
+            {
+                if !state["input"]["final_nonce"].is_null() {
+                    return Err(invalid(
+                        "cannot change file selection after final publication",
+                    ));
+                }
+                state["input"]["selected_note"] = json!({
+                    "id":result["id"],"binding":binding,"files":result["files"]
+                });
+                inbox.set_manager(state)?;
+            }
+            return Ok(result);
         }
         let fields = args
             .as_object()
             .ok_or_else(|| invalid("invalid publication arguments"))?;
-        if fields.len() != 4 || args["sequence"] != 1 || args["final"] != true {
+        if fields.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "output_id" | "sequence" | "text" | "final" | "file_ids"
+            )
+        }) || args["sequence"] != 1
+            || args["final"] != true
+        {
             return Err(invalid(
                 "only one deliberate final text publication is supported",
             ));
@@ -459,7 +800,8 @@ impl Dispatcher {
         if output.is_empty()
             || output.len() > 128
             || output.chars().any(char::is_control)
-            || body.trim().is_empty()
+            || args["text"].as_str().is_none()
+            || body.trim().is_empty() && args["file_ids"].is_null()
             || body.encode_utf16().count() > 1900
         {
             return Err(invalid("invalid final publication ID or body"));
@@ -474,12 +816,37 @@ impl Dispatcher {
         if proof["native_turn_id"] != input["turn_id"] {
             return Err(invalid("manager publication belongs to another turn"));
         }
-        let publication = json!({
+        let mut publication = json!({
             "binding":state["binding"], "turn_id":input["turn_id"],
             "source_id":input["source_id"], "output_id":output,"body":body,
             "native_call_id":proof["native_call_id"], "call_receipt":proof,
             "host_meta":call["meta"], "arguments":args, "arguments_hash":hash(&args)?
         });
+        if !args["file_ids"].is_null() {
+            let ids = args["file_ids"]
+                .as_array()
+                .filter(|ids| !ids.is_empty() && ids.len() <= 10)
+                .ok_or_else(|| invalid("select 1 to 10 exact worker file IDs"))?;
+            let selected_note = &input["selected_note"];
+            let candidates = selected_note["files"].as_array().ok_or_else(|| {
+                invalid("read the exact worker completion before publishing its files")
+            })?;
+            let mut picked = Vec::new();
+            for requested in ids {
+                let file = candidates
+                    .iter()
+                    .find(|file| requested.is_string() && &file["id"] == requested)
+                    .ok_or_else(|| {
+                        invalid("publication file does not belong to the read worker note")
+                    })?;
+                if picked.contains(&file) {
+                    return Err(invalid("publication requested a duplicate worker file"));
+                }
+                picked.push(file);
+            }
+            publication["file_source"] =
+                json!({"id":selected_note["id"],"binding":selected_note["binding"],"files":picked});
+        }
         let nonce = publication_nonce(&publication)?;
         if input["final_nonce"]
             .as_str()
@@ -647,7 +1014,7 @@ mod tests {
             Ok(())
         }
 
-        fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
+        fn post(&self, cfg: &Config, nonce: &str, body: &str, _files: &[Captured]) -> Post {
             self.posted
                 .borrow_mut()
                 .push((nonce.to_owned(), body.to_owned()));
@@ -774,7 +1141,7 @@ mod tests {
             outcome: RefCell::new(Post::Acknowledged(Value::Null)),
             posted: RefCell::new(Vec::new()),
         };
-        let Post::Acknowledged(receipt) = api.post(&cfg, &nonce, "deliberate reply") else {
+        let Post::Acknowledged(receipt) = api.post(&cfg, &nonce, "deliberate reply", &[]) else {
             panic!("expected acknowledgement")
         };
         assert!(inbox.observe(&receipt, Observation::Rest).unwrap());

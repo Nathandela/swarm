@@ -440,6 +440,9 @@ fn submit(
             "semantic authority expired before dispatch",
         ));
     }
+    let _manager_effect = manager_nonce
+        .map(|_| crate::discord::lock_manager_mail_effect(target.manager))
+        .transpose()?;
     if let Some(nonce) = manager_nonce {
         let proof = observation
             .proof
@@ -457,6 +460,7 @@ fn submit(
             target.manager,
             &action.operation,
             &action.composer,
+            root.parent(),
         )?;
         proof.prepare(&action.operation, nonce, &action.text, external)?;
     }
@@ -481,6 +485,7 @@ fn submit(
             target.manager,
             &action.operation,
             &action.composer,
+            root.parent(),
         )?;
         if action.composer["text"] != action.text || action.composer["session"] != action.session {
             return Err(io::Error::other(
@@ -698,10 +703,11 @@ pub(super) fn observe(
                             == format!("no rollout found for thread id {}", observation.thread)
                     {
                         observation.missing_rollout = true;
-                        observation.fresh_no_rollout = observation
-                            .proof
-                            .as_ref()
-                            .is_some_and(|proof| proof.is_virgin());
+                        observation.fresh_no_rollout = manager["resume_request"].is_null()
+                            && observation
+                                .proof
+                                .as_ref()
+                                .is_some_and(|proof| proof.is_virgin());
                         persist_observation(&observation, &target);
                         next_join = Some(Instant::now() + Duration::from_secs(1));
                         persist_observation(&observation, &target);
@@ -711,6 +717,12 @@ pub(super) fn observe(
                 } else {
                     observe_frame(&mut observation, &message, &target);
                     if !manager.is_null() && !observation.thread.is_empty() {
+                        if manager["resume_request"]["binding"]["native_session_id"]
+                            .as_str()
+                            .is_some_and(|expected| expected != observation.thread)
+                        {
+                            break;
+                        }
                         if observation.proof.is_none() {
                             let binding = json!({
                                 "session":format!("{}/{}", field(&manager,"endpoint_id"),field(&manager,"session_id")),

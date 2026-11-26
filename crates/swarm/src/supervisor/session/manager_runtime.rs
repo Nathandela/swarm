@@ -165,7 +165,12 @@ impl Session {
                 "semantic input does not match the exact personal manager authority",
             ));
         }
-        crate::discord::verify_connector_input(&self.manager, operation, body)
+        crate::discord::verify_connector_input(
+            &self.manager,
+            operation,
+            body,
+            self.dir.parent().and_then(Path::parent),
+        )
     }
 }
 

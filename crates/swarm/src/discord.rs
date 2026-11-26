@@ -18,6 +18,7 @@ mod dispatcher;
 mod gateway;
 mod guild;
 mod local;
+mod mail_wake;
 mod manager;
 pub(crate) mod provenance;
 mod receipt;
@@ -105,7 +106,9 @@ pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
         || identity[2] != scope["owner_id"]
         || identity[3] != scope["channel_id"]
         || identity[4] != scope["supervisor_socket"]
-        || data["manager"]["generation"] != 1
+        || !data["manager"]["generation"]
+            .as_u64()
+            .is_some_and(|generation| generation > 0)
         || data["manager"]["launch"] != scope["launch"]
     {
         return Err(invalid(
@@ -115,14 +118,36 @@ pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
     Ok(data)
 }
 
+pub(crate) fn lock_manager_mail_effect(scope: &Value) -> io::Result<std::fs::File> {
+    let place = Path::new(ipc::field(&scope["launch"]["manager"], "auth_file"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("missing manager mailbox custody directory"))?;
+    crate::supervisor::runtime::lock(&place.join(".rust-manager-mail-effect.lock"))
+}
+
 pub(crate) fn verify_connector_input(
     scope: &Value,
     operation: &str,
     composer: &Value,
+    supervisor_root: Option<&Path>,
 ) -> io::Result<()> {
     let data = connector_intent(scope)?;
     let manager = &data["manager"];
     let input = &manager["input"];
+    if !input["worker_wake"].is_null() {
+        if input["operation"] != operation
+            || input["composer"] != *composer
+            || manager["session"] != composer["session"]
+        {
+            return Err(invalid(
+                "worker wake does not match the exact connector cutover",
+            ));
+        }
+        let root = supervisor_root
+            .ok_or_else(|| invalid("worker wake requires local supervisor custody"))?;
+        return mail_wake::verify(&data, scope, root, composer);
+    }
     let id = input["source_id"]
         .as_str()
         .filter(|id| config::snowflake(id) || call_origin::key(id))

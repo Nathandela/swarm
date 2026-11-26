@@ -351,6 +351,7 @@ impl Inbox {
             || !message["guild_id"].is_null()
             || !message["webhook_id"].is_null()
             || message["content"] != entry["body"]
+            || !matches_attachments(&entry["proof"]["file_source"], &message["attachments"])
         {
             return Ok(false);
         }
@@ -432,6 +433,28 @@ pub(super) fn boundary(value: &Value) -> u64 {
         .unwrap_or_default()
 }
 
+fn matches_attachments(source: &Value, attachments: &Value) -> bool {
+    if source.is_null() {
+        return attachments.is_null() || attachments.as_array().is_some_and(Vec::is_empty);
+    }
+    let (Some(files), Some(attachments)) = (source["files"].as_array(), attachments.as_array())
+    else {
+        return false;
+    };
+    files.len() == attachments.len()
+        && files.iter().all(|file| {
+            attachments
+                .iter()
+                .filter(|attachment| {
+                    attachment["filename"] == file["name"]
+                        && attachment["size"] == file["size"]
+                        && attachment["id"].as_str().is_some_and(snowflake)
+                })
+                .count()
+                == 1
+        })
+}
+
 pub(super) fn publication_nonce(proof: &Value) -> io::Result<String> {
     Ok(hash(&json!([
         proof["binding"],
@@ -448,10 +471,25 @@ pub(super) fn verify_publication(nonce: &str, entry: &Value) -> io::Result<()> {
     let host = super::provenance::coordinates(&proof["binding"], &proof["host_meta"])?;
     let mut canonical = args.clone();
     canonical.sort_all_objects();
+    let staged_files = &proof["file_source"];
+    let valid_files = if staged_files.is_null() {
+        args.as_object()
+            .is_some_and(|fields| fields.len() == 4 && !fields.contains_key("file_ids"))
+    } else {
+        let manifest = staged_files["files"].as_array();
+        let ids = args["file_ids"].as_array();
+        matches!((manifest, ids), (Some(manifest), Some(ids))
+            if !manifest.is_empty() && manifest.len() <= 10 && manifest.len()==ids.len()
+                && manifest.iter().zip(ids).all(|(file,id)| file["id"] == *id && id.as_str().is_some_and(|id|
+                    id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))))
+            && args.as_object().is_some_and(|fields| fields.len() == 5)
+            && staged_files["id"].as_str().is_some_and(|id| !id.is_empty())
+            && staged_files["binding"].is_object()
+    };
     if entry["proof_digest"] != hash(proof)?
         || publication_nonce(proof)? != nonce
         || entry["body"] != proof["body"]
-        || args.as_object().is_none_or(|fields| fields.len() != 4)
+        || !valid_files
         || args["final"] != true
         || args["sequence"] != 1
         || args["output_id"] != proof["output_id"]
@@ -490,6 +528,19 @@ pub(super) fn hash(value: &Value) -> io::Result<String> {
 }
 
 impl Inbox {
+    pub(super) fn matches_owner_admission(&self, source: &str, revision: &Value) -> bool {
+        let current = &self.data["messages"][source];
+        current["state"] == "accepted" && current["revision"] == *revision
+    }
+
+    pub(super) fn worker_mail_anchor(
+        &self,
+        binding: &Value,
+        note: &Value,
+    ) -> Option<(String, Value)> {
+        super::mail_wake::anchor(&self.data, binding, note)
+    }
+
     pub(super) fn manager(&self) -> &Value {
         &self.data["manager"]
     }

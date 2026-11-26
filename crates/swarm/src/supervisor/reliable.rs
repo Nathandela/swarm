@@ -145,12 +145,31 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
         }
     }
     if let Some(scope) = managed.as_mut() {
-        if crate::discord::connector_intent(scope)?["manager"]["launch_operation"] != id {
+        let intent = crate::discord::connector_intent(scope)?;
+        let manager = &intent["manager"];
+        if manager["launch_operation"] != id {
             return Ok(refusal(
                 id,
                 "manager_launch_prerequisite",
                 "manager launch is not the connector's persisted operation",
             ));
+        }
+        if manager["generation"].as_u64().unwrap_or(0) > 1 {
+            let request = &manager["resume_request"];
+            if request["generation"]
+                .as_u64()
+                .and_then(|n| n.checked_add(1))
+                != manager["generation"].as_u64()
+                || request["binding"]["conversation_id"]
+                    != scope["launch"]["manager"]["conversation_id"]
+            {
+                return Ok(refusal(
+                    id,
+                    "manager_launch_prerequisite",
+                    "manager successor lacks its exact retired predecessor",
+                ));
+            }
+            scope["resume_request"] = request.clone();
         }
         scope["launch_operation"] = json!(id);
         scope["request_hash"] = json!(hash);

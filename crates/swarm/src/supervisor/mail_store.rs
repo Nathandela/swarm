@@ -230,7 +230,7 @@ pub(super) fn submit(
     Ok(note)
 }
 
-pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value> {
+pub(crate) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value> {
     let key = key(binding, id)?;
     let path = open_path(root, false)?;
     let db = Bolt::open_ro(path).map_err(io_error)?;
@@ -250,9 +250,10 @@ pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
     with_files(&tx, &key, note)
 }
 
-fn pending(
+pub(crate) fn pending(
     root: &Path,
     discussion: &str,
+    after: u64,
     matches: impl Fn(&Value) -> bool,
 ) -> io::Result<Vec<Value>> {
     let path = match open_path(root, false) {
@@ -270,7 +271,8 @@ fn pending(
     };
     let prefix = format!("{discussion}\0");
     let mut cursor = pending.cursor();
-    let mut row = cursor.seek(&prefix);
+    let start = [prefix.as_bytes(), &after.saturating_add(1).to_be_bytes()].concat();
+    let mut row = cursor.seek(&start);
     let mut result = Vec::new();
     while let Some((order_key, key)) = row {
         let key = key.ok_or_else(absent)?;
@@ -291,6 +293,109 @@ fn pending(
         row = cursor.next();
     }
     Ok(result)
+}
+
+/// Pin the exact proved selection while the Discord outcome remains outstanding.
+pub(crate) fn pin_publication(
+    root: &Path,
+    source: &Value,
+    nonce: &str,
+) -> io::Result<Vec<Captured>> {
+    let binding = &source["binding"];
+    let id = source["id"].as_str().ok_or_else(absent)?;
+    let key = key(binding, id)?;
+    let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
+    let mut tx = db.begin_rw().map_err(io_error)?;
+    let note: Value = serde_json::from_slice(
+        tx.bucket(b"notes")
+            .and_then(|notes| notes.get(&key).map(<[u8]>::to_vec))
+            .as_deref()
+            .ok_or_else(absent)?,
+    )?;
+    if note["ID"] != id
+        || note["Kind"] != "complete"
+        || note["State"] != "ingested"
+        || binding
+            .as_object()
+            .is_none_or(|fields| fields.iter().any(|(field, value)| note[field] != *value))
+    {
+        return Err(absent());
+    }
+    let selected: Vec<Descriptor> = serde_json::from_value(source["files"].clone())?;
+    if selected.is_empty() || selected.len() > super::mail_files::MAX_FILES {
+        return Err(io_error("invalid publication file selection"));
+    }
+    let all_files = descriptors(&tx, &key)?;
+    let mut root_bucket = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
+    let mut bucket = root_bucket.bucket_mut(&key).ok_or_else(absent)?;
+    let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
+    let selection: Vec<_> = selected.iter().map(|file| file.id.clone()).collect();
+    if !manifest["Pins"][nonce].is_null() && manifest["Pins"][nonce] != json!(selection) {
+        return Err(io_error("conflicting publication pin"));
+    }
+    if manifest["Pins"]
+        .as_object()
+        .is_some_and(|pins| pins.len() >= 128 && !pins.contains_key(nonce))
+    {
+        return Err(io_error("worker file publication pin limit"));
+    }
+    let mut total = 0usize;
+    let mut files = Vec::with_capacity(selected.len());
+    for file in selected {
+        if !all_files.contains(&file)
+            || files
+                .iter()
+                .any(|prior: &Captured| prior.file.id == file.id)
+        {
+            return Err(absent());
+        }
+        let data = bucket.get(&file.id).ok_or_else(absent)?;
+        if !super::mail_files::verify(&file, data) {
+            return Err(io_error(
+                "worker publication bytes do not match their pinned receipt",
+            ));
+        }
+        total += data.len();
+        if total > MAX_BYTES {
+            return Err(io_error("staged worker file total exceeds Discord limit"));
+        }
+        files.push(Captured {
+            file,
+            data: data.to_vec(),
+        });
+    }
+    manifest["Pins"][nonce] = json!(selection);
+    bucket
+        .put(b"manifest", serde_json::to_vec(&manifest)?)
+        .map_err(io_error)?;
+    tx.commit().map_err(io_error)?;
+    Ok(files)
+}
+
+pub(crate) fn release_publication(root: &Path, source: &Value, nonce: &str) -> io::Result<()> {
+    let key = key(
+        &source["binding"],
+        source["id"].as_str().ok_or_else(absent)?,
+    )?;
+    let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
+    let mut tx = db.begin_rw().map_err(io_error)?;
+    let Some(mut root) = tx.bucket_mut(b"note-files") else {
+        return Ok(());
+    };
+    let Some(mut bucket) = root.bucket_mut(&key) else {
+        return Ok(());
+    };
+    let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
+    let Some(pins) = manifest["Pins"].as_object_mut() else {
+        return Ok(());
+    };
+    if pins.shift_remove(nonce).is_none() {
+        return Ok(());
+    }
+    bucket
+        .put(b"manifest", serde_json::to_vec(&manifest)?)
+        .map_err(io_error)?;
+    tx.commit().map_err(io_error)
 }
 
 pub(crate) fn manager_note(
@@ -314,7 +419,7 @@ pub(crate) fn manager_note(
             && (!reply || note["Kind"] == "needs-input")
     };
     if !reply && args.as_object().is_some_and(|obj| obj.is_empty()) {
-        let rows: Vec<_> = pending(root, discussion, same)?.into_iter()
+        let rows: Vec<_> = pending(root, discussion, 0, same)?.into_iter()
             .map(|note| {
                 let mut row = json!({"id":note["ID"],"session":note["Session"],"session_instance":note["Instance"],
                     "kind":note["Kind"],"state":note["State"]});
@@ -374,6 +479,7 @@ pub(crate) fn manager_note(
         "session":updated["Session"],"session_instance":updated["Instance"],"text":updated["Text"]});
     if !updated["Files"].is_null() {
         result["files"] = updated["Files"].clone();
+        result["file_binding"] = binding;
     }
     Ok(result)
 }
@@ -457,6 +563,37 @@ pub(super) fn settle(
 mod tests {
     use super::*;
     #[test]
+    fn pending_pages_past_twelve_failed_source_checks() -> io::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("mail-page-{}", super::super::runtime::random_id()?));
+        super::super::runtime::private_dir(&root)?;
+        let binding = json!({"Discussion":"discussion","Parent":"manager","Session":"endpoint/worker",
+            "Instance":"worker","Attempt":"old","Agent":"codex","Project":"/project","ParentInputHash":"old"});
+        for index in 0..13 {
+            submit(
+                &root,
+                &binding,
+                &format!("note-{index}"),
+                "complete",
+                "Queued",
+                true,
+                &[],
+            )?;
+        }
+        let first = pending(&root, "discussion", 0, |_| true)?;
+        assert_eq!(first.len(), 12);
+        let next = pending(
+            &root,
+            "discussion",
+            first[11]["Sequence"].as_u64().unwrap(),
+            |_| true,
+        )?;
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0]["ID"], "note-12");
+        std::fs::remove_dir_all(&root)
+    }
+
+    #[test]
     fn older_scope_cannot_starve_current_manager_mail() -> io::Result<()> {
         let root = std::env::temp_dir().join(format!(
             "mail-scope-{}",
@@ -537,6 +674,25 @@ mod tests {
         .unwrap();
         assert_eq!(ingested["state"], "ingested");
         assert_eq!(ingested["files"], queued["Files"]);
+        let source = json!({"binding":binding,"id":id,"files":ingested["files"]});
+        let pinned = pin_publication(&root, &source, "nonce").unwrap();
+        assert_eq!(
+            pinned
+                .iter()
+                .map(|file| file.data.as_slice())
+                .collect::<Vec<_>>(),
+            [csv_data.as_slice(), pdf_data.as_slice()]
+        );
+        let mut corrupt = source.clone();
+        corrupt["files"][0]["size"] = json!(1);
+        assert!(pin_publication(&root, &corrupt, "nonce").is_err());
+        let mut foreign = source.clone();
+        foreign["binding"]["Instance"] = json!("other-worker");
+        assert!(pin_publication(&root, &foreign, "nonce").is_err());
+        let mut changed_order = source.clone();
+        changed_order["files"].as_array_mut().unwrap().reverse();
+        assert!(pin_publication(&root, &changed_order, "nonce").is_err());
+        release_publication(&root, &source, "nonce").unwrap();
         for file in &files {
             let mut worker = Command::new(&binary)
                 .arg("read-file")
@@ -692,7 +848,10 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(pending(&root, "discussion", |_| true).unwrap(), [created]);
+        assert_eq!(
+            pending(&root, "discussion", 0, |_| true).unwrap(),
+            [created]
+        );
         let filter = json!({"session":"endpoint/worker","session_instance":"worker-incarnation","id":"question"});
         assert!(
             manager_note(
@@ -708,7 +867,11 @@ mod tests {
         let seen = manager_note(&root, "discussion", "manager", "input", &filter, false).unwrap();
         assert_eq!(seen["text"], "Which path?");
         assert_eq!(seen["state"], "ingested");
-        assert!(pending(&root, "discussion", |_| true).unwrap().is_empty());
+        assert!(
+            pending(&root, "discussion", 0, |_| true)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             manager_note(&root, "discussion", "manager", "input", &filter, false).unwrap(),
             seen

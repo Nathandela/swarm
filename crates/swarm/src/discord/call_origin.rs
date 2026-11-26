@@ -119,10 +119,11 @@ mod tests {
             .cutover(id, origin["revision"].as_str().unwrap(), state)
             .unwrap();
         assert!(
-            crate::discord::verify_connector_input(&scope, "another-attempt", &composer).is_err()
+            crate::discord::verify_connector_input(&scope, "another-attempt", &composer, None)
+                .is_err()
         );
         assert_eq!(
-            crate::discord::verify_connector_input(&scope, "attempt", &composer)
+            crate::discord::verify_connector_input(&scope, "attempt", &composer, None)
                 .unwrap_err()
                 .to_string(),
             crate::discord::call_runtime::WITHDRAWN
@@ -141,10 +142,10 @@ mod tests {
                 client.write_all(b"y").unwrap();
             })
         };
-        crate::discord::verify_connector_input(&scope, "attempt", &composer).unwrap();
+        crate::discord::verify_connector_input(&scope, "attempt", &composer, None).unwrap();
         server.join().unwrap();
         assert_eq!(
-            crate::discord::verify_connector_input(&scope, "attempt", &composer)
+            crate::discord::verify_connector_input(&scope, "attempt", &composer, None)
                 .unwrap_err()
                 .to_string(),
             crate::discord::call_runtime::WITHDRAWN

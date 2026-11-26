@@ -1,6 +1,6 @@
 mod handoff;
 pub(crate) mod mail;
-mod mail_files;
+pub(crate) mod mail_files;
 pub(crate) mod mail_store;
 pub(crate) mod manager;
 mod pilot_journal;
@@ -423,30 +423,59 @@ impl State {
             runtime::private_dir(&guard_root)?;
             let key = format!("{:x}", Sha256::digest(conversation.as_bytes()));
             let marker = guard_root.join(format!("{key}.json"));
-            let existing = self
-                .sessions
-                .read()
-                .unwrap()
+            let sessions = self.sessions.read().unwrap();
+            let existing = sessions
                 .values()
-                .find(|session| session.owns_manager(conversation))
+                .find(|session| {
+                    session.owns_manager_launch(conversation, &scope["launch_operation"])
+                })
                 .cloned();
             let recorded = match runtime::read_json(&marker) {
                 Ok(record) => Some(record),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => None,
                 Err(err) => return Err(err),
             };
+            let mut previous_id = None;
+            if !scope["resume_request"].is_null() {
+                let previous = field(&scope["resume_request"]["binding"], "session")
+                    .strip_prefix(&format!("{}/", self.endpoint))
+                    .and_then(|id| sessions.get(id))
+                    .ok_or_else(|| io::Error::other("manager predecessor is not retained"))?;
+                if !previous.owns_manager(conversation)
+                    || !previous.manager_parked(&scope["resume_request"])?
+                {
+                    return Err(io::Error::other(
+                        "manager predecessor is not proved retired",
+                    ));
+                }
+                previous_id = Some(previous.id.clone());
+            } else if existing.is_none()
+                && sessions
+                    .values()
+                    .any(|session| session.owns_manager(conversation))
+            {
+                return Err(io::Error::other(
+                    "discussion already has a durable manager reservation",
+                ));
+            }
+            drop(sessions);
             if let Some(session) = existing {
-                if recorded.as_ref().is_some_and(|record| {
-                    record["session_id"] != session.id
-                        || record["operation_id"] != scope["launch_operation"]
-                        || record["request_hash"] != scope["request_hash"]
-                }) {
+                let matches = recorded.as_ref().is_some_and(|record| {
+                    record["session_id"] == session.id
+                        && record["operation_id"] == scope["launch_operation"]
+                        && record["request_hash"] == scope["request_hash"]
+                });
+                if !matches
+                    && recorded.as_ref().is_some_and(|record| {
+                        record["session_id"].as_str() != previous_id.as_deref()
+                    })
+                {
                     return Err(io::Error::other(
                         "discussion already has a durable manager reservation",
                     ));
                 }
                 session.resume_manager_reservation(prepared)?;
-                if recorded.is_none() {
+                if !matches {
                     runtime::write_json(
                         &marker,
                         &json!({"session_id":session.id,"operation_id":scope["launch_operation"],"request_hash":scope["request_hash"]}),
@@ -454,7 +483,11 @@ impl State {
                 }
                 return Ok(session);
             }
-            if recorded.is_some() {
+            if recorded
+                .as_ref()
+                .and_then(|record| record["session_id"].as_str())
+                != previous_id.as_deref()
+            {
                 return Err(io::Error::other(
                     "discussion already has a durable manager reservation",
                 ));
@@ -736,7 +769,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 || manager_available
                     && matches!(
                         *cap,
-                        "manager-launch" | "manager-provenance" | "message-origin"
+                        "manager-launch"
+                            | "manager-provenance"
+                            | "message-origin"
+                            | "manager-retire"
+                            | "manager-retire-resume-v1"
                     )
                 || matches!(
                     *cap,
@@ -997,6 +1034,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
+            "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>
+                state.session(&request).and_then(|session| reply(&writer,state,session.manager_retire(&request)?)),
             "worker_mail" if caps.contains(&crate::teammate::MAIL_CAP) => mail::request(state,&request).and_then(|body| reply(&writer,state,body)),
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];

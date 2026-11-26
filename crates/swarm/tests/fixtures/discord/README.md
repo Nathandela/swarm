@@ -63,5 +63,25 @@ Set `SWARM_NATIVE_MAIL_FILES_FIXTURE=1` to also send a two-file completion
 from the bound checkout and compare its receipt with the manager tool response.
 Run `go_reads_the_exact_rust_pinned_worker_files -- --ignored` with the oracle
 above to verify the original immutable bytes through Go's scoped file reader
-after Rust reads the note and the checkout content changes. Post-turn manager
-wake and Discord publication of staged files have separate qualification.
+after Rust reads the note and the checkout content changes.
+
+Set `SWARM_NATIVE_MAIL_WAKE_FIXTURE=1` alongside `SWARM_NATIVE_MAIL_FIXTURE=1`
+to close the first native turn, reopen the connector, and verify a queued
+completion starts one distinct manager turn and is ingested by its MCP tool.
+
+Set `SWARM_NATIVE_MAIL_CANCEL_FIXTURE` to `edited`, `empty` or `attachment`
+to withdraw an exact still-unprepared wake and admit another owner DM. The
+`prepared` mode verifies that the same scoped withdrawal retains the native
+preparation, even when its turn has no observed receipt.
+
+Set `SWARM_NATIVE_MAIL_PUBLISH_FILES_FIXTURE=1` alongside the mailbox, file,
+and wake flags to publish two exact staged attachments after the source file
+changes. The offline audience loses the POST acknowledgement. The connector
+must reject a partial attachment observation, accept the exact gateway
+receipt, and avoid a second POST.
+
+Set `SWARM_NATIVE_MAIL_PARK_FIXTURE=1` alongside `SWARM_NATIVE_MAIL_FIXTURE=1`
+to prove the old manager and its backend exit while a delegated worker stays
+live. The worker queues its completion with the connector closed. A fresh
+connector reloads the checkpoint, resumes the exact native conversation under
+a new session incarnation, ingests the completion, and confirms its reply.

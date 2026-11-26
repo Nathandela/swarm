@@ -100,6 +100,48 @@ impl Manager {
         Ok(session.clone())
     }
 
+    pub(super) fn can_retire(&self) -> bool {
+        let caps = ["manager-retire", "manager-retire-resume-v1"];
+        Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)
+            .is_ok_and(|client| self.cfg.check_supervisor(&client, &caps).is_ok())
+    }
+
+    pub(super) fn retirement(&self, checkpoint: &Value, status_only: bool) -> io::Result<String> {
+        let mut client = Client::dial(
+            Path::new(self.cfg.text("daemon_socket")),
+            &["manager-retire"],
+        )?;
+        self.cfg.check_supervisor(&client, &["manager-retire"])?;
+        let op = if status_only {
+            "manager_retire_status"
+        } else {
+            "manager_retire"
+        };
+        let request = &checkpoint["request"];
+        let session = &request["binding"]["session"];
+        let id = &checkpoint["operation_id"];
+        let reply = client.request_body(
+            json!({"op":op,"body_version":1,
+            "session_id":session,"operation_id":id,"manager_retire_request":request}),
+            op,
+        )?;
+        self.verify_endpoint(&client, &reply)?;
+        let receipt = &reply["manager_retire"];
+        if reply["operation_id"] != *id
+            || reply["session_id"] != *session
+            || receipt["operation_id"] != *id
+        {
+            return Err(invalid(
+                "manager retirement receipt does not match the checkpoint",
+            ));
+        }
+        let state = field(receipt, "state");
+        if !matches!(state, "unknown" | "prepared" | "uncertain" | "retired") {
+            return Err(invalid("unconfirmed manager retirement outcome"));
+        }
+        Ok(state.to_owned())
+    }
+
     pub(super) fn launch_status(&self, operation: &str) -> io::Result<Value> {
         let mut client = self.dial()?;
         let reply = client.request_body(
@@ -361,6 +403,7 @@ mod tests {
     struct FixtureAudience {
         source: Value,
         posts: std::cell::RefCell<Vec<(String, String)>>,
+        file_ack: std::cell::RefCell<Value>,
     }
 
     impl super::super::dispatcher::Audience for FixtureAudience {
@@ -373,12 +416,31 @@ mod tests {
             Ok(())
         }
 
-        fn post(&self, cfg: &Config, nonce: &str, text: &str) -> super::super::rest::Post {
+        fn post(
+            &self,
+            cfg: &Config,
+            nonce: &str,
+            text: &str,
+            files: &[crate::supervisor::mail_files::Captured],
+        ) -> super::super::rest::Post {
             self.posts.borrow_mut().push((nonce.into(), text.into()));
-            super::super::rest::Post::Acknowledged(json!({
-                "id":"402","channel_id":cfg.text("dm_channel_id"),"author":{"id":"200","bot":true},
+            let mut receipt = json!({
+                "id":(401 + self.posts.borrow().len()).to_string(),
+                "channel_id":cfg.text("dm_channel_id"),"author":{"id":"200","bot":true},
                 "nonce":nonce,"content":text
-            }))
+            });
+            if !files.is_empty() {
+                assert_eq!(files.len(), 2);
+                assert_eq!(files[0].data, b"source,result\nfixture,ok\n");
+                assert_eq!(files[1].data, b"%PDF-1.7\n");
+                receipt["attachments"] =
+                    json!(files.iter().enumerate().map(|(i, file)| json!({
+                    "id":format!("42{i}"),"filename":file.file.name,"size":file.file.size
+                })).collect::<Vec<_>>());
+                self.file_ack.replace(receipt);
+                return super::super::rest::Post::Unconfirmed;
+            }
+            super::super::rest::Post::Acknowledged(receipt)
         }
     }
 
@@ -580,6 +642,17 @@ mod tests {
                 let err = manager.send(&operation, &forged).unwrap_err();
                 assert!(err.to_string().contains("exact connector cutover"));
             }
+            let park_fixture = std::env::var_os("SWARM_NATIVE_MAIL_PARK_FIXTURE").is_some();
+            let wake_fixture =
+                park_fixture || std::env::var_os("SWARM_NATIVE_MAIL_WAKE_FIXTURE").is_some();
+            let publish_files_fixture =
+                std::env::var_os("SWARM_NATIVE_MAIL_PUBLISH_FILES_FIXTURE").is_some();
+            if publish_files_fixture {
+                std::fs::write(root.join(".fixture-mail-publish-files"), "").unwrap();
+            }
+            if wake_fixture {
+                std::fs::write(root.join(".fixture-mail-wake-enabled"), "").unwrap();
+            }
             manager.send(&operation, &composer).unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
             let turn = loop {
@@ -652,8 +725,10 @@ mod tests {
                 let fake = FixtureAudience {
                     source,
                     posts: std::cell::RefCell::new(Vec::new()),
+                    file_ack: Default::default(),
                 };
                 let local = id.split_once('/').unwrap().1;
+                let mut retained_worker = None;
                 if std::env::var_os("SWARM_NATIVE_MAIL_FIXTURE").is_some() {
                     let owner =
                         runtime::read_json(&state.join("rust-v1").join(local).join("session.json"))
@@ -810,13 +885,20 @@ mod tests {
                         decode(cli(&["reply", "--id", note], &worker_proof)),
                         readback
                     );
-                    let complete = decode(cli(
-                        &["message", "--kind", "complete", "--text", "Finished"],
-                        &worker_proof,
-                    ));
-                    let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
-                    assert_eq!(listed["notes"][0]["id"], complete["id"]);
-                    if std::env::var_os("SWARM_NATIVE_MAIL_FILES_FIXTURE").is_some() {
+                    if park_fixture {
+                        retained_worker = Some((worker_local.to_owned(), worker_proof.clone()));
+                    }
+                    if !publish_files_fixture && !park_fixture {
+                        let complete = decode(cli(
+                            &["message", "--kind", "complete", "--text", "Finished"],
+                            &worker_proof,
+                        ));
+                        let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
+                        assert_eq!(listed["notes"][0]["id"], complete["id"]);
+                    }
+                    if !park_fixture
+                        && std::env::var_os("SWARM_NATIVE_MAIL_FILES_FIXTURE").is_some()
+                    {
                         let csv = root.join("data.csv");
                         let pdf = root.join("report.pdf");
                         std::fs::write(&csv, "source,result\nfixture,ok\n").unwrap();
@@ -890,6 +972,358 @@ mod tests {
                 assert_eq!(posts.len(), 1);
                 assert_eq!(posts[0].1, "go-fixture text");
                 assert_eq!(inbox.publication(&posts[0].0)["rest_acknowledged"], true);
+                drop(posts);
+                if wake_fixture {
+                    drop(dispatcher);
+                    std::fs::write(root.join(".fixture-mail-complete"), "").unwrap();
+                    let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &enrollment)
+                        .unwrap()
+                        .unwrap();
+                    let dispatcher = if park_fixture {
+                        let old_id = field(inbox.manager(), "session").to_owned();
+                        let deadline = Instant::now() + Duration::from_secs(8);
+                        let unclaimed = loop {
+                            dispatcher.fixture_idle_elapsed();
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            let retirement = &inbox.manager()["retirement"];
+                            if !retirement.is_null() {
+                                break retirement.clone();
+                            }
+                            assert!(Instant::now() < deadline, "no idle retirement checkpoint");
+                            std::thread::sleep(Duration::from_millis(30));
+                        };
+                        let mut late = fake.source.clone();
+                        late["id"] = json!("408");
+                        late["content"] = json!("Ingress just before retirement");
+                        inbox.admit(&late).unwrap().unwrap();
+                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                        assert!(inbox.manager()["retirement"].is_null());
+                        assert_eq!(manager.retirement(&unclaimed, true).unwrap(), "unknown");
+                        assert!(manager.retirement(&unclaimed, false).is_err());
+                        inbox.withdraw("408").unwrap();
+                        let deadline = Instant::now() + Duration::from_secs(12);
+                        loop {
+                            dispatcher.fixture_idle_elapsed();
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            let retirement = &inbox.manager()["retirement"];
+                            if !retirement.is_null()
+                                && manager.retirement(retirement, true).unwrap() == "retired"
+                            {
+                                break;
+                            }
+                            assert!(
+                                Instant::now() < deadline,
+                                "manager did not prove native retirement: {}",
+                                inbox.manager()
+                            );
+                            std::thread::sleep(Duration::from_millis(30));
+                        }
+                        let (worker, proof) = retained_worker.take().unwrap();
+                        assert!(
+                            manager
+                                .dial()
+                                .unwrap()
+                                .sessions()
+                                .unwrap()
+                                .iter()
+                                .any(|row| field(row, "id").ends_with(&format!("/{worker}"))
+                                    && row["status"]["Process"] == "running")
+                        );
+                        let deadline = Instant::now() + Duration::from_secs(3);
+                        while manager.session(&old_id).is_ok() {
+                            assert!(
+                                Instant::now() < deadline,
+                                "supervisor did not project its confirmed manager exit"
+                            );
+                            std::thread::sleep(Duration::from_millis(30));
+                        }
+                        drop(dispatcher);
+                        std::fs::write(root.join(".fixture-parked-manager"), "").unwrap();
+                        let completion = Command::new(binary)
+                            .env_clear()
+                            .env(crate::teammate::SOCKET_ENV, &socket)
+                            .env(crate::teammate::PROOF_ENV, proof)
+                            .env("SWARM_SESSION_ID", &worker)
+                            .args([
+                                "teammate",
+                                "message",
+                                "--kind",
+                                "complete",
+                                "--text",
+                                "Finished after manager parked",
+                            ])
+                            .output()
+                            .unwrap();
+                        assert!(
+                            completion.status.success(),
+                            "{}",
+                            String::from_utf8_lossy(&completion.stderr)
+                        );
+                        inbox = super::super::receipt::Inbox::open(&enrollment, &cfg).unwrap();
+                        let dispatcher =
+                            super::super::dispatcher::Dispatcher::open(&cfg, &enrollment)
+                                .unwrap()
+                                .unwrap();
+                        let deadline = Instant::now() + Duration::from_secs(14);
+                        loop {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            if !inbox.manager()["binding"].is_null()
+                                && inbox.manager()["generation"] == 2
+                            {
+                                break;
+                            }
+                            assert!(
+                                Instant::now() < deadline,
+                                "manager did not resume from parked predecessor"
+                            );
+                            std::thread::sleep(Duration::from_millis(30));
+                        }
+                        assert_ne!(inbox.manager()["session"], old_id);
+                        assert_eq!(
+                            inbox.manager()["binding"]["native_session_id"],
+                            native["binding"]["native_session_id"]
+                        );
+                        assert_eq!(
+                            std::fs::read_to_string(root.join(".fixture-resumed-thread")).unwrap(),
+                            field(&native["binding"], "native_session_id")
+                        );
+                        dispatcher
+                    } else {
+                        dispatcher
+                    };
+                    let deadline = Instant::now() + Duration::from_secs(8);
+                    let cancel = std::env::var_os("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").is_some();
+                    if cancel {
+                        let prepared = std::env::var("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").as_deref()
+                            == Ok("prepared");
+                        if prepared {
+                            std::fs::write(root.join(".fixture-mail-hold-turn"), "").unwrap();
+                        }
+                        let lock = (!prepared).then(|| {
+                            super::super::lock_manager_mail_effect(&dispatcher.scope(&cfg)).unwrap()
+                        });
+                        loop {
+                            let attempt = dispatcher.tick(&cfg, &mut inbox, &fake);
+                            if !inbox.manager()["input"]["worker_wake"].is_null() {
+                                attempt.unwrap();
+                                break;
+                            }
+                            attempt.unwrap();
+                            assert!(
+                                Instant::now() < deadline,
+                                "did not reserve mailbox wake: {}, observed {:?}",
+                                inbox.manager(),
+                                manager.input_status(&composer)
+                            );
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        let refused = inbox.manager()["input"]["composer"].clone();
+                        assert_eq!(
+                            manager.input_status(&refused).unwrap()["state"],
+                            if prepared { "prepared" } else { "unknown" }
+                        );
+                        let mut withdrawal = fake.source.clone();
+                        match std::env::var("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").as_deref() {
+                            Ok("edited") => {
+                                withdrawal["content"] = json!("Edited after cutover");
+                                withdrawal["edited_timestamp"] = json!("2026-01-01T00:00:00Z");
+                            }
+                            Ok("empty") => withdrawal["content"] = json!(""),
+                            Ok("attachment") => withdrawal["attachments"] = json!([{"id":"430"}]),
+                            _ => withdrawal["id"] = json!("407"),
+                        }
+                        let withdrawn = FixtureAudience {
+                            source: withdrawal,
+                            posts: Default::default(),
+                            file_ack: Default::default(),
+                        };
+                        dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
+                        assert_eq!(inbox.manager()["input"]["composer"], refused);
+                        drop(lock);
+                        dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
+                        if prepared {
+                            assert_eq!(inbox.manager()["input"]["composer"], refused);
+                            assert_eq!(
+                                manager.input_status(&refused).unwrap()["state"],
+                                "prepared"
+                            );
+                        } else {
+                            assert!(inbox.manager()["input"].is_null());
+                            assert_eq!(manager.input_status(&refused).unwrap()["state"], "unknown");
+                            let mut replacement = fake.source.clone();
+                            replacement["id"] = json!("407");
+                            replacement["content"] = json!("Independent DM after withdrawn source");
+                            let other = FixtureAudience {
+                                source: replacement.clone(),
+                                posts: Default::default(),
+                                file_ack: Default::default(),
+                            };
+                            inbox.admit(&replacement).unwrap().unwrap();
+                            dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
+                            assert_eq!(inbox.manager()["input"]["source_id"], "407");
+                            assert!(inbox.manager()["input"]["worker_wake"].is_null());
+                        }
+                    } else {
+                        let wake = loop {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            let wake = &inbox.manager()["input"];
+                            if !wake["worker_wake"].is_null() && !wake["turn_id"].is_null() {
+                                break wake.clone();
+                            }
+                            assert!(
+                                Instant::now() < deadline,
+                                "did not observe a mailbox wake: {}",
+                                inbox.manager()
+                            );
+                            std::thread::sleep(Duration::from_millis(30));
+                        };
+                        assert_ne!(wake["turn_id"], turn["native_turn_id"]);
+                        assert_eq!(wake["source_id"], "401");
+                        let expected = if publish_files_fixture {
+                            "Worker attached files"
+                        } else {
+                            "Finished"
+                        };
+                        assert!(field(&wake["composer"], "text").contains(expected));
+                        for _ in 0..3 {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            assert_eq!(inbox.manager()["input"], wake);
+                        }
+                        let current_local = field(inbox.manager(), "session")
+                            .rsplit('/')
+                            .next()
+                            .unwrap()
+                            .to_owned();
+                        let mut wake_host = host.clone();
+                        wake_host["callId"] = json!("fixture-wake-read");
+                        wake_host["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
+                        let mut proxy = Command::new(binary)
+                            .arg("manager-mcp")
+                            .arg(&bridge_socket)
+                            .arg(&auth)
+                            .arg(field(&native["binding"], "conversation_id"))
+                            .arg(&current_local)
+                            .stdin(Stdio::piped())
+                            .stdout(Stdio::piped())
+                            .spawn()
+                            .unwrap();
+                        writeln!(
+                            proxy.stdin.take().unwrap(),
+                            "{}",
+                            json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                        "params":{"name":"swarm_read_note","arguments":{},"_meta":wake_host}})
+                        )
+                        .unwrap();
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while proxy.try_wait().unwrap().is_none() {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            assert!(Instant::now() < deadline, "wake note tool timed out");
+                            std::thread::sleep(Duration::from_millis(15));
+                        }
+                        let response = proxy.wait_with_output().unwrap();
+                        let result: Value = serde_json::from_slice(&response.stdout).unwrap();
+                        assert!(result["result"]["isError"].is_null(), "{result}");
+                        let selected: Value =
+                            serde_json::from_str(field(&result["result"]["content"][0], "text"))
+                                .unwrap();
+                        assert_eq!(selected["id"], wake["worker_wake"]["id"]);
+                        assert_eq!(selected["state"], "ingested");
+                        if park_fixture {
+                            let mut meta = host.clone();
+                            meta["callId"] = json!("fixture-park-publish");
+                            meta["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
+                            let mut proxy = Command::new(binary)
+                                .arg("manager-mcp")
+                                .arg(&bridge_socket)
+                                .arg(&auth)
+                                .arg(field(&native["binding"], "conversation_id"))
+                                .arg(&current_local)
+                                .stdin(Stdio::piped())
+                                .stdout(Stdio::piped())
+                                .spawn()
+                                .unwrap();
+                            writeln!(proxy.stdin.take().unwrap(), "{}", json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                                "params":{"name":"publish","arguments":{"output_id":"park-final","sequence":1,
+                                "text":"Worker finished after the manager parked","final":true},"_meta":meta}})).unwrap();
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            while fake.posts.borrow().len() < 2 {
+                                dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                                assert!(
+                                    Instant::now() < deadline,
+                                    "post-park publication timed out"
+                                );
+                                std::thread::sleep(Duration::from_millis(15));
+                            }
+                            let response = proxy.wait_with_output().unwrap();
+                            let result: Value = serde_json::from_slice(&response.stdout).unwrap();
+                            assert!(result["result"]["isError"].is_null(), "{result}");
+                            let posts = fake.posts.borrow();
+                            assert_eq!(posts[1].1, "Worker finished after the manager parked");
+                            assert_eq!(inbox.publication(&posts[1].0)["rest_acknowledged"], true);
+                        }
+                        if publish_files_fixture {
+                            let ids: Vec<_> = selected["files"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .map(|file| file["id"].clone())
+                                .collect();
+                            let mut meta = host.clone();
+                            meta["callId"] = json!("fixture-wake-attachments");
+                            meta["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
+                            let mut proxy = Command::new(binary)
+                                .arg("manager-mcp")
+                                .arg(&bridge_socket)
+                                .arg(&auth)
+                                .arg(field(&native["binding"], "conversation_id"))
+                                .arg(local)
+                                .stdin(Stdio::piped())
+                                .stdout(Stdio::piped())
+                                .spawn()
+                                .unwrap();
+                            writeln!(proxy.stdin.take().unwrap(), "{}", json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                                "params":{"name":"publish","arguments":{"output_id":"file-final","sequence":1,
+                                "text":"worker attachment fixture","final":true,"file_ids":ids},"_meta":meta}})).unwrap();
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            while fake.file_ack.borrow().is_null() {
+                                dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                                assert!(Instant::now() < deadline, "file publication timed out");
+                                std::thread::sleep(Duration::from_millis(15));
+                            }
+                            let response = proxy.wait_with_output().unwrap();
+                            let result: Value = serde_json::from_slice(&response.stdout).unwrap();
+                            assert!(result["result"]["isError"].is_null(), "{result}");
+                            let ack = fake.file_ack.borrow();
+                            let nonce = field(&ack, "nonce");
+                            assert_eq!(inbox.publication(nonce)["state"], "uncertain");
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            let mut incomplete = ack.clone();
+                            incomplete["attachments"].as_array_mut().unwrap().pop();
+                            assert!(
+                                !inbox
+                                    .observe(
+                                        &incomplete,
+                                        super::super::receipt::Observation::Gateway
+                                    )
+                                    .unwrap()
+                            );
+                            assert!(
+                                inbox
+                                    .observe(&ack, super::super::receipt::Observation::Gateway)
+                                    .unwrap()
+                            );
+                            assert_eq!(inbox.publication(nonce)["state"], "sent");
+                        }
+                    }
+                    assert_eq!(
+                        fake.posts.borrow().len(),
+                        if publish_files_fixture || park_fixture {
+                            2
+                        } else {
+                            1
+                        }
+                    );
+                }
             }
             let mut stale = host;
             stale["x-codex-turn-metadata"]["turn_id"] = json!("old-turn");

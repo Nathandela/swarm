@@ -8,6 +8,42 @@ use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 
+pub(crate) fn retirement_id(request: &Value) -> io::Result<String> {
+    let mut binding = serde_json::Map::new();
+    let supplied = &request["binding"];
+    for key in [
+        "session",
+        "session_instance",
+        "conversation_id",
+        "provider",
+        "native_session_id",
+        "native_generation",
+        "observation_generation",
+        "login_epoch",
+    ] {
+        binding.insert(key.into(), supplied[key].clone());
+    }
+    let turn = &request["expected_turn"];
+    let mut normalized = serde_json::Map::new();
+    for key in [
+        "native_input_id",
+        "native_turn_id",
+        "state",
+        "reason",
+        "external_input",
+    ] {
+        if key == "state" || key == "external_input" || !field(turn, key).is_empty() {
+            normalized.insert(key.into(), turn[key].clone());
+        }
+    }
+    let canonical = json!({"binding":binding,"generation":request["generation"],
+        "checkpoint":request["checkpoint"],"expected_turn":normalized});
+    Ok(format!(
+        "manager-retire:{:x}",
+        Sha256::digest(serde_json::to_vec(&canonical)?)
+    ))
+}
+
 pub(super) fn launch_scope(state: &State, launch: &Value) -> io::Result<Value> {
     let mut scope = crate::discord::native_manager_enrollment()?;
     if scope["launch"] != *launch
