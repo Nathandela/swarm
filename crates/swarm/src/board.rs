@@ -24,7 +24,7 @@ use automation::Automation;
 use handoff::Handoff;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
-use navigation::{Focus, Row, board_capacity, board_first, capacity, usable};
+use navigation::{Focus, Row, board_capacity, board_first, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -1320,6 +1320,10 @@ impl Board {
     }
 
     fn mouse(&mut self, event: Mouse, geometry: (u16, u16), online: bool) -> Action {
+        if let Some(Modal::Automation(view)) = &mut self.modal {
+            let action = view.mouse(event, geometry);
+            return action.map_or(Action::None, |key| self.update(key, geometry, online));
+        }
         if !online || !matches!(self.modal, None | Some(Modal::More { .. })) || !usable(geometry) {
             self.press = None;
             return Action::None;

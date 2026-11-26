@@ -288,10 +288,6 @@ pub(super) fn board_capacity(rows: u16) -> usize {
     usize::from(rows.saturating_sub(board_first(rows)).max(1))
 }
 
-pub(super) fn capacity(rows: u16) -> usize {
-    usize::from(rows.saturating_sub(2).max(1))
-}
-
 pub(super) fn usable((cols, rows): (u16, u16)) -> bool {
     cols >= 24 && rows >= 4
 }
