@@ -70,6 +70,7 @@ type teammateBinding struct {
 	PersonalScanEpoch           uint64    `json:",omitempty"`
 	PersonalRepairEpoch         uint64    `json:",omitempty"`
 	NotifiedEpoch               uint64
+	GapMissed                   uint64 `json:",omitempty"`
 	ParentLow                   string
 	Error                       string
 }

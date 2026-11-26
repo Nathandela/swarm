@@ -16,6 +16,8 @@ const discussionReplyWait = 2 * time.Minute
 const discussionReplyStall = 10 * time.Minute
 const discussionStallNotice = "I still can’t verify a result. The work may be running. Please check the dispatcher in Swarm before trying again."
 const discussionWorkerWaitNotice = "I’m waiting for the worker’s result."
+const discussionUnverifiedNotice = "I don’t have a confirmed final answer for this yet. Ask me here for a status update."
+const discussionUnverifiedWindow = 30 * time.Minute
 
 var ErrReplyWaitObsolete = errors.New("voice: routine wait notice superseded")
 
@@ -382,10 +384,15 @@ func (d *DiscussionController) checkDiscussionReply(ctx context.Context, st Stat
 			if err := recordReplyNotice(current, input, "My question expired. Please reply here with the missing detail so I can continue.", true); err != nil {
 				return err
 			}
-		case evidence.progress != 0 || d.scope.VMProjectAccess || current.Conversations[input.ConversationID].Binding.NativeCLI:
+		case evidence.progress != 0:
+			// The thread already saw a reply to this message. Another notice is noise.
+			next = 0
+		case d.scope.VMProjectAccess || current.Conversations[input.ConversationID].Binding.NativeCLI:
 			// A normal VM CLI has unrestricted shell tools. A reporting prompt cannot
 			// fence another spawn or shell side effect. Publication stays explicit.
-			if err := recordReplyNotice(current, input, "I couldn’t verify a final answer. The work may have run. The person running Swarm can check its result.", true); err != nil {
+			if recentUnverifiedNotice(current, input, now) {
+				next = 0
+			} else if err := recordReplyNotice(current, input, discussionUnverifiedNotice, true); err != nil {
 				return err
 			}
 		case input.ReplyRecovery == 0:
@@ -524,4 +531,17 @@ func (c *Controller) yieldSharedReply(a Admission) error {
 		putRecord(st, "admissions", &st.Admissions, k, input)
 		return nil
 	})
+}
+
+// One unverified-answer notice per discussion per window. Later ones end silently.
+func recentUnverifiedNotice(st *State, a Admission, now time.Time) bool {
+	for _, p := range st.Publications {
+		if p.ConversationID != a.ConversationID || p.Admission == a.Sequence || p.Text != discussionUnverifiedNotice {
+			continue
+		}
+		if other := st.Admissions[admissionKey(a.ConversationID, p.Admission)]; now.Sub(other.SettledAt) < discussionUnverifiedWindow {
+			return true
+		}
+	}
+	return false
 }

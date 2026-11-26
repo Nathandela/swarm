@@ -337,11 +337,9 @@ func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) er
 		if err != nil {
 			return err
 		}
+		// Repair posts the restate notice only for a message it could not account for.
 		if cfg.Mode != "personal" && b.Opened && p.GapEpoch > b.NotifiedEpoch {
 			b.Gap = p.GapEpoch
-			if err = t.queueGap(b.TeammateDiscussion); err != nil {
-				return err
-			}
 			if err = store.teammateChangeBinding(b.TeammateDiscussion, func(binding *teammateBinding) { binding.NotifiedEpoch = p.GapEpoch; binding.Gap = p.GapEpoch }); err != nil {
 				return err
 			}
