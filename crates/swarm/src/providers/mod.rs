@@ -193,26 +193,46 @@ pub(crate) fn manager_version(agent: &str, version: &str) -> bool {
 pub(crate) fn manager_health(agent: &str, root: &Path) -> io::Result<(String, bool)> {
     // Login status is an account check. A caller's project settings must not run during diagnosis.
     let cwd = Path::new("/");
-    let env = crate::supervisor::runtime::launch_env(&Value::Null);
-    let path = env
-        .iter()
-        .find(|(key, _)| key == "PATH")
-        .map_or("", |(_, path)| path);
     let locate =
         |path: &str| crate::doctor::resolve(path, agent).and_then(|p| p.canonicalize().ok());
-    let binary = locate(path)
+    let caller_path = std::env::var("PATH").unwrap_or_default();
+    let binary = locate(&caller_path)
         .ok_or_else(|| io::Error::other(format!("could not find {agent} on the launch PATH")))?;
-    if let Ok(saved) = crate::environment::load_saved(root) {
-        let path = saved
-            .iter()
-            .find_map(|entry| entry.strip_prefix("PATH="))
-            .unwrap_or("");
-        if locate(path).as_ref() != Some(&binary) {
-            return Err(io::Error::other(
-                "daemon and invoking shell resolve different provider executables; inspect swarm doctor",
-            ));
-        }
+    let saved = crate::environment::restore(root)?;
+    let path = saved
+        .iter()
+        .find_map(|entry| entry.strip_prefix("PATH="))
+        .unwrap_or("");
+    if locate(path).as_ref() != Some(&binary) {
+        return Err(io::Error::other(
+            "daemon and invoking shell resolve different provider executables; inspect swarm doctor",
+        ));
     }
+    let marker = format!("SWARM_MANAGER_{}_UNSUPPORTED_ORIGIN=", agent.to_uppercase());
+    if saved.iter().any(|line| line.starts_with(&marker))
+        || !saved
+            .iter()
+            .filter_map(|line| line.strip_prefix("HOME="))
+            .any(|home| Path::new(home).is_absolute())
+    {
+        return Err(io::Error::other(
+            "saved manager account origin cannot be verified",
+        ));
+    }
+    let env = saved
+        .iter()
+        .filter_map(|entry| entry.split_once('='))
+        .filter(|(key, _)| {
+            crate::environment::child_key(key)
+                || matches!(
+                    *key,
+                    "XDG_CONFIG_HOME" | "XDG_DATA_HOME" | "XDG_STATE_HOME" | "XDG_CACHE_HOME"
+                )
+                || agent == "codex" && *key == "CODEX_HOME"
+                || agent == "claude" && *key == "CLAUDE_CONFIG_DIR"
+        })
+        .map(|(key, val)| (key.to_owned(), val.to_owned()))
+        .collect::<Vec<_>>();
     let before = identity(&binary)?;
     let banner = version_banner(agent, &binary, cwd, &env)?;
     let version = admitted_version(agent, &banner)?;

@@ -504,6 +504,12 @@ fn doctor_confirms_native_manager_login_only_for_the_selected_executable() {
     let executable = bin.join("codex");
     fs::write(&executable, b"#!/bin/sh\ncase \"$*\" in\n--version) echo 'codex-cli 0.170.0';;\n'login status') echo private-fixture-details; echo checked >> \"$HOME/login-probes\";;\n*) exit 1;;\nesac\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let service_home = fixture.0.join("service");
+    fs::create_dir(&service_home).unwrap();
+    fixture.private(
+        "daemon.env",
+        format!("PATH={}\nHOME={}\n", bin.display(), service_home.display()),
+    );
     let check = || {
         let output = Command::new(support::executable())
             .args(["discord", "doctor", "--state-dir"])
@@ -535,8 +541,15 @@ fn doctor_confirms_native_manager_login_only_for_the_selected_executable() {
             .any(|r| r["check"] == "native manager CLI" && r["status"] == "fail")
     );
     assert!(!rows.iter().any(|r| r["check"] == "native provider login"));
+    fixture.private("daemon.env", "malformed");
+    assert!(
+        check()
+            .iter()
+            .any(|r| r["check"] == "native manager CLI" && r["status"] == "fail")
+    );
+    assert!(!fixture.0.join("login-probes").exists());
     assert_eq!(
-        fs::read_to_string(fixture.0.join("login-probes")).unwrap(),
+        fs::read_to_string(service_home.join("login-probes")).unwrap(),
         "checked\n"
     );
 }
