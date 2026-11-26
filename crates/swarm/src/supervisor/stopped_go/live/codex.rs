@@ -151,23 +151,31 @@ pub(in crate::supervisor::stopped_go) fn verify_stopped_socket(
     use rustix::fs::{AtFlags, FileType, OFlags, fstat, open, readlinkat, statat};
     let flags = AtFlags::SYMLINK_NOFOLLOW;
     let alias = match statat(directory, "codex.sock", flags) {
-        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(rustix::io::Errno::NOENT) => None,
         Err(error) => return Err(error.into()),
-        Ok(alias) => alias,
+        Ok(alias) => Some(alias),
     };
     let uid = directory.metadata()?.uid();
+    if version != "0.172.0" && alias.is_none() {
+        return Ok(None);
+    }
     if version != "0.172.0"
-        || FileType::from_raw_mode(alias.st_mode) != FileType::Symlink
-        || alias.st_uid != uid
+        || alias.as_ref().is_some_and(|alias| {
+            FileType::from_raw_mode(alias.st_mode) != FileType::Symlink || alias.st_uid != uid
+        })
     {
         return Err(io::Error::other("Go Codex listener custody remains"));
     }
     let endpoint = Path::new(field(launch, "session_dir")).join("codex.sock");
     let expected = short_socket(&endpoint, uid)?;
     let alias_matches = || -> io::Result<bool> {
-        Ok(same_entry(&alias, &statat(directory, "codex.sock", flags)?)
-            && readlinkat(directory, "codex.sock", Vec::new())?.to_bytes()
-                == expected.as_os_str().as_bytes())
+        match (alias.as_ref(), statat(directory, "codex.sock", flags)) {
+            (None, Err(rustix::io::Errno::NOENT)) => Ok(true),
+            (Some(before), Ok(after)) => Ok(same_entry(before, &after)
+                && readlinkat(directory, "codex.sock", Vec::new())?.to_bytes()
+                    == expected.as_os_str().as_bytes()),
+            _ => Ok(false),
+        }
     };
     if !alias_matches()? {
         return Err(io::Error::other(

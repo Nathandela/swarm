@@ -102,14 +102,15 @@ def exercise(go, rust, root):
         lock = alias.with_suffix(".lock")
         stale = alias.is_socket()
 
-        def coordinates():
+        def coordinates(paths=(endpoint, alias, lock)):
             return [(entry.st_dev, entry.st_ino, entry.st_mode)
-                    for entry in (p.lstat() for p in (endpoint, alias, lock))]
+                    for entry in (p.lstat() for p in paths)]
 
-        if stale:
+        def require_held_lock_refusal():
             with lock.open("rb") as held:
                 fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 refused(rust, rust_env, "Go Codex short listener lock is held")
+        def require_live_listener_refusal():
             # An exact same-user socket with a real listener must still refuse
             # even when the old Go process identities are proved dead.
             original_socket = alias.with_suffix(".witness")
@@ -120,11 +121,31 @@ def exercise(go, rust, root):
                     live.bind(str(alias))
                     alias.chmod(0o600)
                     live.listen(1)
+                    before = coordinates((alias, lock))
                     refused(rust, rust_env, "Go Codex short listener custody remains")
+                    assert coordinates((alias, lock)) == before
             finally:
                 if alias.is_socket():
                     alias.unlink()
                 original_socket.rename(alias)
+        if stale:
+            require_held_lock_refusal()
+            require_live_listener_refusal()
+            if endpoint.is_symlink():
+                saved_link = original / "codex.sock.witness"
+                assert not saved_link.is_symlink()
+                endpoint.rename(saved_link)
+                derived = coordinates((alias, lock))
+                try:
+                    require_held_lock_refusal()
+                    require_live_listener_refusal()
+                    with daemon(rust, rust_env, root / "rust-unlinked.log"):
+                        assert [row["id"] for row in listed(rust_env)] == [source]
+                    assert not endpoint.is_symlink()
+                    assert coordinates((alias, lock)) == derived
+                    print("proved derived custody with the Go session symlink absent", flush=True)
+                finally:
+                    saved_link.rename(endpoint)
             socket_identity = coordinates()
             print("joined Go .172 processes left their native vendor listener and lock on disk", flush=True)
 
