@@ -5,7 +5,7 @@ import json
 import time
 
 
-def rehearse(expected, root, session, output, history, wait, release):
+def rehearse(expected, root, session, output, history, wait, release, requests):
     state = root / "state/rust-v1" / session.split("/")[-1]
     operation = f"semantic:{time.time_ns() // 1000000}:ad00112233445566778899aabbccdd11"
     text = "RUST_TERMINAL_GAP. Reply with the private fixture only."
@@ -30,6 +30,15 @@ def rehearse(expected, root, session, output, history, wait, release):
 
     def persisted():
         return json.loads(path.read_text())["receipt"]
+
+    if expected in ("incomplete", "conflict"):
+        time.sleep(5)
+        assert persisted()["state"] == "native_accepted", persisted()
+        assert output("message", session, "--status", "--operation-id", operation) == first
+        assert output("message", session, "--operation-id", operation, "--text", text) == first
+        assert sum(row["marker"] == "RUST_TERMINAL_GAP" and row["primary"] for row in requests) == 1
+        print(f"{expected} history stayed native_accepted without replay", flush=True)
+        return
 
     if expected == "missing":
         # Before the fix this receipt remains nonterminal even with the native

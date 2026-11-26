@@ -270,7 +270,7 @@ impl Backend {
                 // Completion events are hints. Reconcile the durable prompt
                 // independently when a notification is lost or contended.
                 if Instant::now() >= next_checkpoint {
-                    let _ = self.checkpoint_prompt(created, None);
+                    let _ = self.checkpoint_prompt(created);
                     next_checkpoint = Instant::now() + Duration::from_secs(2);
                 }
                 let _ = pending.recv_timeout(Duration::from_secs(2));
@@ -322,7 +322,6 @@ impl Backend {
                 ));
             }
             let _ = updates.try_send(());
-            let _ = self.checkpoint_terminal(created, &update);
         }
     }
 

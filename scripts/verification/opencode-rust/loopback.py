@@ -26,7 +26,7 @@ parser.add_argument('--source')
 parser.add_argument('--native', type=Path)
 parser.add_argument('--mixed', action='store_true')
 parser.add_argument('--hands-off', action='store_true')
-parser.add_argument('--terminal-checkpoint', choices=('missing', 'recovered'))
+parser.add_argument('--terminal-checkpoint', choices=('missing', 'recovered', 'incomplete', 'conflict'))
 parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
                     help='pause the verified native TUI across one preflight deadline')
 parser.add_argument('--check-arguments', action='store_true')
@@ -105,7 +105,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             if 'bash' in names:
                 actions.append(('bash', {'command':"printf 'fixture permission answered\\n'", 'description':'Print fixture response'}))
         assert len(request_log) < (20000 if args.duration else 16), 'fixture call ceiling exceeded'
-        marker = re.search(r'RUST_SOAK_[0-9]{6}', prompt)
+        marker = re.search(r'RUST_(?:SOAK_[0-9]{6}|TERMINAL_GAP)', prompt)
         request_log.append({'names':len(names),'actions':[name for name,_ in actions],
                             'marker': marker.group() if marker else None,
                             'primary': bool(names) and not any(m['role']=='tool' for m in after)})
@@ -231,7 +231,7 @@ try:
     wait(ready)
     if args.terminal_checkpoint:
         from terminal_checkpoint import rehearse
-        rehearse(args.terminal_checkpoint, root, row, output, history, wait, terminal_release)
+        rehearse(args.terminal_checkpoint, root, row, output, history, wait, terminal_release, request_log)
         sys.exit(0)
     before=history()
     assert any(m['info']['role']=='user' for m in before['history']), before
@@ -395,7 +395,7 @@ try:
         receipt=json.loads(persisted.read_text())['receipt']
         return receipt if receipt['state']=='completed' else None
     durable=wait(checkpointed)
-    assert durable['outcome_source']=='reconciled_message',durable
+    assert durable['outcome_source']=='reconciled_snapshot',durable
     done=wait(completed)
     assert done==durable
     assert output('message',row,'--operation-id',operation,'--text','RUST_SEMANTIC. Reply fixture only.')==done
