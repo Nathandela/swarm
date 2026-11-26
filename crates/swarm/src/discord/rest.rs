@@ -1,4 +1,7 @@
 //! Discord v10 enrollment and read-side verification. Credentials stay in-process.
+#[cfg(test)]
+mod live_transport;
+
 use super::config::{Config, invalid, load_token, snowflake};
 use crate::supervisor::mail_files::Captured;
 use serde_json::{Value, json};
