@@ -43,3 +43,20 @@ The same pinned source and TUI ran on native Linux x86_64 with its installation 
 ## Integration with manager and scheduled workers
 
 The merged macOS arm64 candidate passed the locked offline Rust workspace suite, workspace formatting and all-target Clippy with warnings denied. The same binary passed the guarded native Hermes probe above, the Rust Codex manager admission and publication fixture, and the cold scheduled Codex fixture with an 8 KiB Unicode prompt. The scheduled fixture verified independent final output, worker exit, and workspace release. [Manager fixture commands](../../../crates/swarm/tests/fixtures/discord/README.md), [scheduled fixture](../../../scripts/verification/parity_schedule.py)
+
+## Original Go classic terminal round trip
+
+For an ordinary Go Hermes session, the Rust supervisor can adopt the existing Go shim on the original state root with both `SWARM_DAEMON_STOPPED_GO_COMPAT=1` and `SWARM_DAEMON_LIVE_GO_COMPAT=1`. The original shim keeps the PTY and hook spool. Rust checks that the launch points at the original private session directory, that the recorded arguments match the classic Hermes invocation, and that the socket peers, shim identity and unique PTY leader agree. It accepts the pinned Go launch shape with an absent CLI probe. A Hermes shared-native descriptor or stop marker prevents this path. Once the original Go shim records viewer exit, Rust displays a read-only Needs input row with native work unknown and directs the operator to the original Go supervisor. The adopted root cannot enter stopped-state export or start new Rust sessions while it retains a Go Hermes row.
+
+The native witness builds Go from `f26648d69086e329132ac7849954d2f29a895387` and uses Hermes Agent 0.20.6 from `aff5125f8edf5095aef5d3d79bbbb101c95b9413`, installed with `uv sync --frozen --no-dev --python 3.11`. It launches the ordinary interactive classic CLI with a disposable home and a loopback model. Go, Rust and restored Go each submit a different terminal prompt. The witness verifies three ordered user/assistant pairs in the same native SQLite conversation, with the same Go shim, Hermes PTY worker and socket identities. A forged native descriptor is refused before Rust assumes custody. Original Go metadata and launch evidence stay byte-for-byte intact during the Rust turn. After restored Go exits the standalone CLI, Go records the same native conversation ID. Rust displays the viewer-only status and refuses label mutation and stopped-state export. The standalone round trip passed on macOS arm64 and Linux x86_64.
+
+Run [the witness](../../../scripts/verification/live_go_hermes.py) with a new private directory and the two Swarm binaries.
+
+```sh
+python3 scripts/verification/live_go_hermes.py \
+  --root "$(mktemp -d /tmp/hc.XXXXXX)" --go "$go_swarm" --rust "$rust_swarm" --hermes "$classic_hermes"
+```
+
+Hermes 0.22.5 uses its own gateway behind the classic UI. Pass `--gateway-backed` and the 0.22.5 console from the pinned Hermes release above to test this path with a private prestarted gateway. The fixture launches Go with Discord disabled and checks that the original Hermes gateway and native SQLite conversation survive supervisor handoffs, viewer exit, and rejected stopped-state export. The only provider-side action Rust takes is terminal input through the original shim.
+
+On macOS the harness uses `sandbox-exec`. On Linux run the command in the existing native fixture boundary with a fresh network and PID namespace, an enabled loopback interface, a read-only host mount, and only the fixture root writable. The harness tests both the network and write guards before launching a provider.

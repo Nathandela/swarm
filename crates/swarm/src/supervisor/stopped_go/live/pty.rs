@@ -1,10 +1,10 @@
 use super::{Process, runtime};
 use std::io;
 
-/// Classic Go agy runs a single ordinary PTY process without the managed
+/// A classic Go shim runs a single ordinary PTY process without the managed
 /// native-process side file. Discover the original session leader from the
 /// authenticated Go shim's actual children. This is terminal custody only.
-pub(super) fn pty_worker(shim: &Process) -> io::Result<Process> {
+pub(super) fn worker(shim: &Process) -> io::Result<Process> {
     shim.matches()?;
     let mut worker = None;
     for pid in children(shim.pid)? {
@@ -20,12 +20,12 @@ pub(super) fn pty_worker(shim: &Process) -> io::Result<Process> {
             continue;
         }
         if born < shim.birth || born != runtime::birth(pid)? || worker.is_some() {
-            return Err(io::Error::other("ambiguous Go agy terminal worker custody"));
+            return Err(io::Error::other("ambiguous Go terminal worker custody"));
         }
         worker = Some(Process { pid, birth: born });
     }
     shim.matches()?;
-    worker.ok_or_else(|| io::Error::other("no owned Go agy terminal worker"))
+    worker.ok_or_else(|| io::Error::other("no owned Go terminal worker"))
 }
 
 #[cfg(target_os = "linux")]
@@ -43,7 +43,7 @@ fn children(pid: u32) -> io::Result<Vec<u32>> {
             children.insert(child);
         }
         if children.len() > 64 {
-            return Err(io::Error::other("unbounded Go agy child inventory"));
+            return Err(io::Error::other("unbounded Go child inventory"));
         }
     }
     Ok(children.into_iter().collect())
@@ -61,7 +61,7 @@ fn children(pid: u32) -> io::Result<Vec<u32>> {
         )
     };
     if count <= 0 || count as usize >= children.len() {
-        return Err(io::Error::other("unproved Go agy child inventory"));
+        return Err(io::Error::other("unproved Go child inventory"));
     }
     children[..count as usize]
         .iter()
@@ -69,7 +69,7 @@ fn children(pid: u32) -> io::Result<Vec<u32>> {
             u32::try_from(*pid)
                 .ok()
                 .filter(|pid| *pid > 1)
-                .ok_or_else(|| io::Error::other("invalid Go agy child inventory"))
+                .ok_or_else(|| io::Error::other("invalid Go child inventory"))
         })
         .collect()
 }

@@ -238,6 +238,9 @@ impl State {
         mailbox: Option<Value>,
         expected_nonce: Option<&str>,
     ) -> io::Result<Arc<Session>> {
+        if let Some(store) = &self.stopped_go {
+            store.verify_rollback_scope()?;
+        }
         if self.stopped_go.is_some()
             && (managed.is_some()
                 || mailbox.is_some()

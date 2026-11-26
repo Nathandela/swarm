@@ -2,7 +2,7 @@ use super::*;
 use crate::providers::hermes::{classic_id, native, transfer};
 use sha2::{Digest, Sha256};
 
-pub(super) fn unknown_native_status() -> Value {
+pub(in crate::supervisor) fn unknown_native_status() -> Value {
     json!({"Process":"lost","Turn":"unknown","Interaction":"error","Attention":true,"NativeWorkUnknown":true})
 }
 

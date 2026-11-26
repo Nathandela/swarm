@@ -38,6 +38,7 @@ pub(in crate::supervisor) fn run() -> io::Result<()> {
         .open(&root)?;
     let adopt_live = std::env::var(super::live::OPT_IN).ok().as_deref() == Some("1");
     let imported = Store::open(&root, true, adopt_live)?.expect("opt-in store");
+    imported.verify_rollback_scope()?;
     let deleted = go_tombstones(&root)?;
     let prepared = collect(&root)?
         .into_iter()

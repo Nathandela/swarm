@@ -1,6 +1,7 @@
 pub(crate) mod agy_handoff;
 mod handoff;
 mod hermes;
+pub(super) use hermes::unknown_native_status as hermes_viewer_unavailable_status;
 pub(super) mod maintenance;
 mod manager_retire;
 mod manager_runtime;
