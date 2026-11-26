@@ -48,8 +48,8 @@ rust.write_text(source.replace(allocation, f'''let id = match std::env::var("{va
                 _ => runtime::random_id()?,
             }};''', 1))
 PY
-(cd "$build/rust" && CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$build/target}" cargo build --offline --locked -p swarm)
-target=${CARGO_TARGET_DIR:-$build/target}
+target=$build/target
+(cd "$build/rust" && CARGO_TARGET_DIR="$target" cargo build --offline --locked -p swarm)
 if [ "$mode" = --cross-provider ]; then
   exec python3 -Bu "$repo/scripts/verification/rust_cross_provider_handoff.py" "$target/debug/swarm" "$3" "$vendor"
 fi

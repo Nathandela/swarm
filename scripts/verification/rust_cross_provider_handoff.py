@@ -189,7 +189,9 @@ def verify(root, candidate, claude, codex, anthropic):
             pointers = "\n".join(("<pointers>", f"conversation uid: {native}",
                                   f"transcript file: {transcript}", f"working directory: {work}",
                                   "source agent: claude", f"source swarm session: {local}", "</pointers>"))
-            assert pointers in prompt and SOURCE not in prompt
+            assert pointers in prompt
+            assert all(SOURCE not in part.get("text", "") for item in received
+                       for part in item.get("content", []))
             fixtures.wait_for(lambda: b"Synthetic destination answer." in invoke("peek", child["id"]),
                               "native Codex displayed the synthetic answer", timeout=15)
             assert user_turns() == baseline
