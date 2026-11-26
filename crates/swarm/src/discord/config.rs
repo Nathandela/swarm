@@ -55,7 +55,7 @@ fn existing(path: &Path) -> io::Result<bool> {
     }
 }
 
-fn open_owner_file(path: &Path) -> io::Result<File> {
+pub(super) fn open_owner_file(path: &Path) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -650,7 +650,7 @@ impl Config {
         matches!(self.text("mode"), "personal" | "teammate")
     }
 
-    fn validate(&self) -> io::Result<()> {
+    pub(super) fn validate(&self) -> io::Result<()> {
         let text = |key| self.text(key);
         let map = self
             .0
