@@ -354,7 +354,12 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
     read_rollout(home, cwd, thread, false, None)
 }
 
-pub(crate) fn go_rollout(home: &Path, cwd: &Path, thread: &str, version: &str) -> io::Result<Value> {
+pub(crate) fn go_rollout(
+    home: &Path,
+    cwd: &Path,
+    thread: &str,
+    version: &str,
+) -> io::Result<Value> {
     read_rollout(home, cwd, thread, true, Some(version))
 }
 
@@ -938,9 +943,12 @@ mod tests {
             (&cwd, "cli", "0.172.0", false),
             (&cwd, "vscode", "0.171.0", false),
         ] {
-            runtime::write_json(&file, &json!({"type":"session_meta",
-                "payload":{"cwd":recorded,"id":id,"source":source,"cli_version":version}
-            }))?;
+            runtime::write_json(
+                &file,
+                &json!({"type":"session_meta",
+                    "payload":{"cwd":recorded,"id":id,"source":source,"cli_version":version}
+                }),
+            )?;
             assert_eq!(go_rollout(&home, &cwd, id, "0.172.0").is_ok(), admitted);
         }
         fs::remove_dir_all(home)?;
