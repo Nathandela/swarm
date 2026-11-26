@@ -63,12 +63,26 @@ impl Backend {
                     let prior_id = value
                         .as_str()
                         .ok_or_else(|| io::Error::other("invalid OpenCode prompt fence"))?;
-                    if receipts::read(&self.dir, &self.token, session, prior_id)?
-                        .is_none_or(|saved| saved["receipt"]["state"] == "outcome_unknown")
-                    {
+                    let Some(mut record) =
+                        receipts::read(&self.dir, &self.token, session, prior_id)?
+                    else {
                         return Err(io::Error::other(
                             "an earlier OpenCode input remains unresolved",
                         ));
+                    };
+                    if matches!(
+                        field(&record["receipt"], "state"),
+                        "outcome_unknown" | "native_accepted"
+                    ) {
+                        self.advance(created, prior_id, &mut record, None)?;
+                        if matches!(
+                            field(&record["receipt"], "state"),
+                            "outcome_unknown" | "native_accepted"
+                        ) {
+                            return Err(io::Error::other(
+                                "an earlier OpenCode input remains unresolved",
+                            ));
+                        }
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -256,6 +270,19 @@ impl Backend {
         record: &mut Value,
         terminal_id: Option<&str>,
     ) -> io::Result<()> {
+        if let Some(next) = self.observe_prompt(created, record, terminal_id)? {
+            receipts::save(&self.dir, operation, &next)?;
+            *record = next;
+        }
+        Ok(())
+    }
+
+    fn observe_prompt(
+        &self,
+        created: u64,
+        record: &Value,
+        terminal_id: Option<&str>,
+    ) -> io::Result<Option<Value>> {
         let root = field(record, "target");
         let input = field(record, "message_id");
         let row = self.http(&format!("/message?messageID={input}"), None)?;
@@ -266,7 +293,7 @@ impl Backend {
             || info["role"] != "user"
             || at < record["issued_ms"].as_u64().unwrap_or(u64::MAX)
         {
-            return Ok(());
+            return Ok(None);
         }
         let parts = row["parts"]
             .as_array()
@@ -278,7 +305,7 @@ impl Backend {
                 || field(part, "id").is_empty()
                 || !part_ids.insert(field(part, "id"))
         }) {
-            return Ok(());
+            return Ok(None);
         }
         let text: Vec<_> = parts
             .iter()
@@ -292,7 +319,7 @@ impl Backend {
                 .iter()
                 .any(|name| field(&info["model"], name).is_empty())
         {
-            return Ok(());
+            return Ok(None);
         }
         let state = field(&record["receipt"], "state");
         let mut receipt = record["receipt"].clone();
@@ -325,6 +352,7 @@ impl Backend {
         } else {
             find_terminal(root, input, at, |before| self.snapshot(created, 50, before))
         };
+        let mut next = record.clone();
         if let Some((state, native_message)) = outcome {
             receipt["state"] = json!(state);
             receipt["native_turn_id"] = json!(native_message);
@@ -333,14 +361,14 @@ impl Backend {
             } else {
                 "reconciled_snapshot"
             });
-            record["terminal_proof"] = json!({"state":state,"assistant":native_message,"parent":row["info"]["id"],"session":row["info"]["sessionID"]});
+            next["terminal_proof"] = json!({"state":state,"assistant":native_message,"parent":row["info"]["id"],"session":row["info"]["sessionID"]});
         }
-        if record["receipt"] != receipt {
-            record["receipt"] = receipt;
-            record["native_input"] = native_input;
-            receipts::save(&self.dir, operation, record)?;
+        if record["receipt"] == receipt {
+            return Ok(None);
         }
-        Ok(())
+        next["receipt"] = receipt;
+        next["native_input"] = native_input;
+        Ok(Some(next))
     }
     pub(super) fn checkpoint_terminal(&self, created: u64, event: &Value) -> io::Result<()> {
         let info = &event["properties"]["info"];
@@ -353,13 +381,32 @@ impl Backend {
         {
             return Ok(());
         }
+        self.checkpoint_prompt(created, Some((field(info, "parentID"), id)))
+    }
+
+    pub(super) fn checkpoint_prompt(
+        &self,
+        created: u64,
+        event: Option<(&str, &str)>,
+    ) -> io::Result<()> {
+        let Some((operation, before)) = receipts::pending_prompt(&self.dir, &self.token)? else {
+            return Ok(());
+        };
+        if event.is_some_and(|(parent, _)| before["message_id"] != parent) {
+            return Ok(());
+        }
+        let Some(next) = self.observe_prompt(created, &before, event.map(|(_, id)| id))? else {
+            return Ok(());
+        };
+        // SDK reads can wait on the worker. Acquire the mutation lane only for
+        // the compare-and-save so a slow read cannot block a native decision.
         let Ok(_action) = self.actions.try_lock() else {
             return Ok(());
         };
-        if let Some((operation, mut record)) = receipts::pending_prompt(&self.dir, &self.token)?
-            && info["parentID"] == record["message_id"]
+        if receipts::pending_prompt(&self.dir, &self.token)?
+            .is_some_and(|(current, receipt)| current == operation && receipt == before)
         {
-            self.reconcile_prompt(created, &operation, &mut record, Some(id))?;
+            receipts::save(&self.dir, &operation, &next)?;
         }
         Ok(())
     }

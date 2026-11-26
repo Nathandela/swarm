@@ -253,6 +253,7 @@ impl Backend {
                     thread::sleep(Duration::from_millis(500));
                 }
             });
+            let mut next_checkpoint = Instant::now();
             loop {
                 let current = epoch.load(Ordering::Acquire);
                 if current % 2 == 1 {
@@ -265,6 +266,12 @@ impl Backend {
                         }
                         Ok(_) => {}
                     }
+                }
+                // Completion events are hints. Reconcile the durable prompt
+                // independently when a notification is lost or contended.
+                if Instant::now() >= next_checkpoint {
+                    let _ = self.checkpoint_prompt(created, None);
+                    next_checkpoint = Instant::now() + Duration::from_secs(2);
                 }
                 let _ = pending.recv_timeout(Duration::from_secs(2));
                 thread::sleep(Duration::from_millis(80));
