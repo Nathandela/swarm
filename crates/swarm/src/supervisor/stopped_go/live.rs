@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub(super) mod codex;
+pub(super) mod hermes;
 pub(super) mod open_code;
 mod pty;
 
@@ -27,6 +28,7 @@ pub(in crate::supervisor) struct Owner {
     worker: Process,
     backend: Option<Process>,
     opencode: Option<open_code::Bridge>,
+    hermes: Option<hermes::Viewer>,
     lease: Mutex<Option<Controller>>,
 }
 
@@ -127,6 +129,7 @@ fn managed_processes(
 impl Owner {
     pub(super) fn open(path: PathBuf, directory: &File, meta: &Value) -> io::Result<Self> {
         let managed_opencode = open_code::managed(meta);
+        let managed_hermes = hermes::managed(meta);
         if !managed_opencode {
             super::qualified_role(meta)?;
         }
@@ -165,7 +168,7 @@ impl Owner {
         if agent != "codex" {
             super::absent_sidefiles(directory, &[c"backend.json", c"codex.sock"])?;
         }
-        if agent == "hermes" {
+        if agent == "hermes" && !managed_hermes {
             super::absent_hermes_sidefiles(directory)?;
         }
         let shim = Process::new(&meta["shim_pid"], &meta["shim_start_time"])?;
@@ -178,6 +181,9 @@ impl Owner {
         let opencode = managed_opencode
             .then(|| open_code::Bridge::open(&path, directory, meta, &launch, &worker))
             .transpose()?;
+        let hermes = managed_hermes
+            .then(|| hermes::Viewer::open(directory, meta, &launch))
+            .transpose()?;
         let owner = Self {
             dir: path,
             directory: directory.try_clone()?,
@@ -185,6 +191,7 @@ impl Owner {
             worker,
             backend,
             opencode,
+            hermes,
             lease: Mutex::new(None),
         };
         owner.connect("hook.sock")?;
@@ -212,6 +219,9 @@ impl Owner {
             return Err(io::Error::other("unproven live Go socket custody"));
         }
         self.worker.matches()?;
+        if let Some(viewer) = &self.hermes {
+            viewer.validate(&self.directory)?;
+        }
         if let Some(backend) = &self.backend {
             backend.matches()?;
         }
@@ -245,6 +255,10 @@ impl Owner {
             ));
         }
         Ok(stream)
+    }
+
+    pub(in crate::supervisor) fn read_only(&self) -> bool {
+        self.hermes.is_some()
     }
 
     pub(super) fn has_opencode(&self) -> bool {
