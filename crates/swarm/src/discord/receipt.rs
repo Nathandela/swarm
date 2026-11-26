@@ -547,7 +547,7 @@ impl Inbox {
             return Err(invalid("dispatcher retry changed before commit"));
         }
         let mut manager = expected.clone();
-        if !codex_receipt::timely(field(input, "operation")) {
+        if !codex_receipt::timely(crate::ipc::field(input, "operation")) {
             manager["input"]["operation"] = json!(codex_receipt::operation()?);
         }
         manager["input"]["draft_retry"] = json!("executing");
