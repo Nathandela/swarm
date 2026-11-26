@@ -1,7 +1,7 @@
 use super::{Calendar, Result, worker};
 use crate::ipc::{self, Client};
 use serde_json::{Value, json};
-use std::{env, io, time::Duration};
+use std::{env, io, path::Path, time::Duration};
 
 const CAPS: &[&str] = &[
     "schedule",
@@ -41,13 +41,24 @@ pub(super) fn owner(from_timer: bool) -> Result<Client> {
 }
 
 pub(super) fn qualified_timer() -> Result<()> {
-    let mut client = owner(false)?;
+    qualify_timer(&mut owner(false)?)
+}
+
+pub(super) fn qualified_board_timer(path: &Path, endpoint: &str) -> Result<()> {
+    let mut client = Client::dial(path, CAPS)?;
+    if client.endpoint() != endpoint {
+        return Err("automation owner changed before enabling the timer".into());
+    }
+    qualify_timer(&mut client)
+}
+
+fn qualify_timer(client: &mut Client) -> Result<()> {
     if !client.supports("schedule-native") {
         return Err("timer installation requires the native schedule supervisor with unattended startup support".into());
     }
     let root = std::fs::canonicalize(ipc::state_path()?)?;
     request(
-        &mut client,
+        client,
         json!({"op":"schedule_native_status","state_dir":root}),
         "schedule_native_status",
     )?;

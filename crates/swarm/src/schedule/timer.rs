@@ -21,6 +21,7 @@ use std::{
 const LABEL: &str = "com.swarm.schedule";
 const TIMER: &str = "swarm-schedule.timer";
 const SERVICE: &str = "swarm-schedule.service";
+const STALE_STATUS: &str = "timer status changed; refresh the list and review before enabling";
 
 fn local_manager<'a>(run: &'a Run<'a>) -> Result<Manager<'a>> {
     let home = home()?;
@@ -57,35 +58,46 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
         "status" => Ok(Some(manager.status()?)),
         "install" => {
             super::rpc::qualified_timer()?;
-            let exe = stable_executable()?;
-            let state = crate::ipc::state_path()?;
-            let bindings = [
-                ("SWARM_DAEMON_STATE", state.clone()),
-                ("SWARM_DAEMON_SOCK", crate::ipc::socket_path()?),
-                (
-                    "SWARM_DAEMON_LOCK",
-                    crate::ipc::env_path("SWARM_DAEMON_LOCK")
-                        .unwrap_or_else(|| state.join("daemon.lock")),
-                ),
-                (
-                    "SWARM_DAEMON_LOG",
-                    crate::ipc::env_path("SWARM_DAEMON_LOG")
-                        .unwrap_or_else(|| state.join("daemon.log")),
-                ),
-            ];
-            let env = bindings
-                .iter()
-                .map(|(key, path)| Ok((*key, safe_path(path)?)))
-                .collect::<Result<Vec<_>>>()?;
-            manager.change(Some(render(manager.platform, &exe, &env)))?;
+            install(&manager, &crate::ipc::socket_path()?, None)?;
             Ok(None)
         }
         "uninstall" => {
-            manager.change(None)?;
+            manager.change(None, None)?;
             Ok(None)
         }
         _ => unreachable!(),
     }
+}
+
+pub(super) fn board_install(path: &Path, endpoint: &str, expected: &str) -> Result<()> {
+    super::rpc::qualified_board_timer(path, endpoint)?;
+    if board_status(&AtomicBool::new(false))? != expected {
+        return Err(STALE_STATUS.into());
+    }
+    let run = |name: &str, args: &[&str]| Command::new(name).args(args).env("LC_ALL", "C").output();
+    install(&local_manager(&run)?, path, Some(expected))
+}
+
+fn install(manager: &Manager<'_>, socket: &Path, expected: Option<&str>) -> Result<()> {
+    let exe = stable_executable()?;
+    let state = crate::ipc::state_path()?;
+    let bindings = [
+        ("SWARM_DAEMON_STATE", state.clone()),
+        ("SWARM_DAEMON_SOCK", socket.to_owned()),
+        (
+            "SWARM_DAEMON_LOCK",
+            crate::ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| state.join("daemon.lock")),
+        ),
+        (
+            "SWARM_DAEMON_LOG",
+            crate::ipc::env_path("SWARM_DAEMON_LOG").unwrap_or_else(|| state.join("daemon.log")),
+        ),
+    ];
+    let env = bindings
+        .iter()
+        .map(|(key, path)| Ok((*key, safe_path(path)?)))
+        .collect::<Result<Vec<_>>>()?;
+    manager.change(Some(render(manager.platform, &exe, &env)), expected)
 }
 
 pub(super) fn board_status(cancel: &AtomicBool) -> Result<String> {
@@ -273,15 +285,19 @@ impl Manager<'_> {
                 count += 1;
             }
         }
-        let installed = match count {
-            0 => "not installed",
-            n if n == self.paths.len() => "installed",
-            _ => "partially installed",
-        };
+        let installed = self.installed(count);
         let state = self
             .inspect()
             .map_err(|e| format!("{installed}; runtime status unknown: {e}"))?;
         Ok(format!("{installed}, {}", state.active))
+    }
+
+    fn installed(&self, count: usize) -> &'static str {
+        match count {
+            0 => "not installed",
+            n if n == self.paths.len() => "installed",
+            _ => "partially installed",
+        }
     }
 
     fn check_systemd_service(&self) -> Result<()> {
@@ -320,7 +336,7 @@ impl Manager<'_> {
         Ok(())
     }
 
-    fn change(&self, rendered: Option<Vec<String>>) -> Result<()> {
+    fn change(&self, rendered: Option<Vec<String>>, expected: Option<&str>) -> Result<()> {
         let install = rendered.is_some();
         let dir = self.paths[0].parent().ok_or("invalid timer path")?;
         if install {
@@ -349,6 +365,15 @@ impl Manager<'_> {
             .map(|p| definition(p))
             .collect::<Result<Vec<_>>>()?;
         let state = self.inspect()?;
+        if let Some(expected) = expected {
+            let installed =
+                self.installed(old.iter().filter(|definition| definition.is_some()).count());
+            if format!("{installed}, {}", state.active) != expected {
+                return Err(
+                    "timer status changed; refresh the list and review before enabling".into(),
+                );
+            }
+        }
         if self.platform == Platform::Systemd {
             if state.drops {
                 return Err("cannot replace Swarm timer with a systemd timer override".into());
@@ -716,7 +741,7 @@ mod tests {
         assert!(units[1].contains("Persistent=true"));
         assert!(
             manager
-                .change(Some(units))
+                .change(Some(units), None)
                 .unwrap_err()
                 .to_string()
                 .contains("fixture rejected activation")
@@ -754,7 +779,7 @@ mod tests {
         };
         assert!(
             manager
-                .change(Some(render(Platform::Systemd, "/tmp/swarm", &[])))
+                .change(Some(render(Platform::Systemd, "/tmp/swarm", &[])), None)
                 .is_err()
         );
         assert_eq!(fs::read(&paths[0]).unwrap(), b"previous service");

@@ -198,6 +198,15 @@ pub(crate) fn automation_timer_status(cancel: &std::sync::atomic::AtomicBool) ->
     timer::board_status(cancel).unwrap_or_else(|_| "status unavailable".into())
 }
 
+pub(crate) fn automation_install_timer(
+    path: &Path,
+    endpoint: &str,
+    expected: &str,
+) -> io::Result<()> {
+    timer::board_install(path, endpoint, expected)
+        .map_err(|error| io::Error::other(error.to_string()))
+}
+
 pub(crate) fn automation_duration(input: &str) -> Result<i64> {
     cli::duration(input)
 }

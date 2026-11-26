@@ -49,6 +49,7 @@ const ROSTER_CAPS: &[&str] = &[
     MANUAL_CAP,
     "schedule",
     "schedule-run-id",
+    "schedule-native",
 ];
 
 pub(crate) fn run() -> u8 {
@@ -160,6 +161,27 @@ fn board(path: &Path) -> io::Result<()> {
             automation_changed(view, result, connection.as_mut());
             needs_paint = true;
         }
+        if let Some(Modal::Automation(view)) = &mut board.modal
+            && let Some((endpoint, result)) = view.poll_install_timer()
+        {
+            if connection
+                .as_ref()
+                .is_some_and(|client| client.endpoint() == endpoint)
+            {
+                automation_read(
+                    view,
+                    CatalogRead::List,
+                    connection.as_mut(),
+                    &mut timer_status,
+                );
+                if let Err(error) = result {
+                    view.timer_install_error(error);
+                }
+            } else {
+                view.timer_install_error("automation owner changed; refresh to check timer status");
+            }
+            needs_paint = true;
+        }
         if let Some((generation, status)) = timer_status.poll()
             && let Some(Modal::Automation(view)) = &mut board.modal
         {
@@ -227,7 +249,7 @@ fn board(path: &Path) -> io::Result<()> {
                 }
             }
             if let Some(Modal::Automation(view)) = &mut board.modal {
-                view.note_archive_paint(geometry);
+                view.note_confirmation_paint(geometry);
             }
             painted = true;
         }
@@ -256,6 +278,9 @@ fn board(path: &Path) -> io::Result<()> {
                     board.context_owner = None;
                     if let Some(Modal::Options(form)) = &mut board.modal {
                         form.disconnected();
+                    }
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        view.disconnect_timer_owner();
                     }
                     board.notice = "daemon connection lost · reconnecting".to_owned();
                     retry = Instant::now() + delay;
@@ -332,7 +357,7 @@ fn board(path: &Path) -> io::Result<()> {
             let needs_current_size = match (&board.modal, &key) {
                 (Some(Modal::Handoff(_)), Key::Enter | Key::Text('y')) => true,
                 (Some(Modal::Automation(view)), Key::Text('y') | Key::Mouse(_)) => {
-                    view.archive_pending()
+                    view.confirmation_pending()
                 }
                 _ => false,
             };
@@ -407,22 +432,21 @@ fn board(path: &Path) -> io::Result<()> {
                     break;
                 }
                 Action::Catalog(query) => {
-                    let result = connection.as_mut().map_or_else(
-                        || {
-                            Err(io::Error::other(
-                                "daemon disconnected; reconnect and refresh",
-                            ))
-                        },
-                        |client| query.remote(client),
-                    );
-                    let state = automation_status(&result, connection.as_mut());
                     if let Some(Modal::Automation(view)) = &mut board.modal {
-                        if matches!(&result, Ok(CatalogRecords::List(_))) {
-                            view.expect_timer_status(timer_status.refresh());
-                        }
-                        view.receive(result);
-                        if let Some(state) = state {
-                            view.triggered(state);
+                        automation_read(view, query, connection.as_mut(), &mut timer_status);
+                    }
+                }
+                Action::InstallAutomationTimer { endpoint, status } => {
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        if connection.as_ref().is_some_and(|client| {
+                            client.endpoint() == endpoint && client.supports("schedule-native")
+                        }) {
+                            view.install_timer(path, endpoint, status);
+                        } else {
+                            view.disconnect_timer_owner();
+                            view.timer_install_error(
+                                "automation owner changed; refresh before enabling the timer",
+                            );
                         }
                     }
                 }
@@ -615,6 +639,10 @@ enum Action {
     Retry,
     SaveLayout(Layout),
     Catalog(CatalogRead),
+    InstallAutomationTimer {
+        endpoint: String,
+        status: String,
+    },
     ChangeAutomation(CatalogChange),
     TriggerAutomation {
         job: String,
@@ -1805,6 +1833,33 @@ impl FormViewport<'_> {
 
 fn form_header(output: &mut String, cols: u16, title: &str) {
     line(output, 1, cols, "\x1b[38;2;142;180;230;1m", title);
+}
+
+fn automation_read(
+    view: &mut Automation,
+    query: CatalogRead,
+    mut connection: Option<&mut Client>,
+    timer_status: &mut TimerStatusProbe,
+) {
+    let result = connection.as_deref_mut().map_or_else(
+        || {
+            Err(io::Error::other(
+                "daemon disconnected; reconnect and refresh",
+            ))
+        },
+        |client| query.remote(client),
+    );
+    let state = automation_status(&result, connection.as_deref_mut());
+    if matches!(&result, Ok(CatalogRecords::List(_))) {
+        let owner = connection
+            .filter(|client| client.supports("schedule-native"))
+            .map(|client| client.endpoint().to_owned());
+        view.expect_timer_status(timer_status.refresh(), owner);
+    }
+    view.receive(result);
+    if let Some(state) = state {
+        view.triggered(state);
+    }
 }
 
 fn automation_changed(

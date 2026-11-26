@@ -3,8 +3,8 @@ use super::navigation::truncation;
 use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, terminal_char, usable};
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
-    Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
-    automation_timer_status,
+    Calendar, Job, Occurrence, Spec, automation_duration, automation_install_timer,
+    automation_invocation, automation_timer_status,
 };
 use std::{
     fmt::Write as _,
@@ -92,6 +92,9 @@ pub(super) struct Automation {
     archived: bool,
     timer_request: Option<u64>,
     timer_status: String,
+    timer_owner: Option<String>,
+    timer_prompt: Option<TimerPrompt>,
+    timer_installing: Option<(String, mpsc::Receiver<io::Result<()>>)>,
     job: String,
     draft: Option<Draft>,
     archive: Option<ArchivePrompt>,
@@ -100,6 +103,12 @@ pub(super) struct Automation {
     run: Option<Occurrence>,
     manual: Option<RunState>,
     press: Option<(Mouse, (u16, u16), PointerTarget)>,
+}
+
+struct TimerPrompt {
+    endpoint: String,
+    status: String,
+    painted: Option<(u16, u16)>,
 }
 
 struct ArchivePrompt {
@@ -144,12 +153,16 @@ impl Automation {
                 self.run = None;
                 self.selected = 0;
             }
-            Err(error) => self.error = error.to_string(),
+            Err(error) => {
+                self.disconnect_timer_owner();
+                self.error = error.to_string();
+            }
         }
     }
 
-    pub(super) fn expect_timer_status(&mut self, generation: u64) {
+    pub(super) fn expect_timer_status(&mut self, generation: u64, owner: Option<String>) {
         self.timer_request = Some(generation);
+        self.timer_owner = owner;
     }
 
     pub(super) fn receive_timer_status(&mut self, generation: u64, status: String) -> bool {
@@ -160,6 +173,49 @@ impl Automation {
         self.timer_request = None;
         self.timer_status = status;
         true
+    }
+
+    fn can_offer_timer(&self) -> bool {
+        self.timer_owner.is_some()
+            && self.timer_request.is_none()
+            && !self.timer_status.is_empty()
+            && self.timer_status != "installed, active"
+    }
+
+    pub(super) fn disconnect_timer_owner(&mut self) {
+        self.timer_owner = None;
+        if self.timer_prompt.take().is_some() {
+            self.press = None;
+            self.selected = 0;
+        }
+    }
+
+    pub(super) fn install_timer(&mut self, path: &Path, endpoint: String, status: String) {
+        let (send, receive) = mpsc::channel();
+        self.timer_installing = Some((endpoint.clone(), receive));
+        self.timer_owner = None;
+        self.error.clear();
+        let path = path.to_owned();
+        thread::spawn(move || {
+            let _ = send.send(automation_install_timer(&path, &endpoint, &status));
+        });
+    }
+
+    pub(super) fn poll_install_timer(&mut self) -> Option<(String, io::Result<()>)> {
+        let (_, receive) = self.timer_installing.as_ref()?;
+        let result = match receive.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(io::Error::other("timer status unconfirmed"))
+            }
+        };
+        let (endpoint, _) = self.timer_installing.take()?;
+        Some((endpoint, result))
+    }
+
+    pub(super) fn timer_install_error(&mut self, error: impl ToString) {
+        self.error = error.to_string();
     }
 
     pub(super) fn changed(&mut self, response: std::io::Result<Records>) {
@@ -228,19 +284,26 @@ impl Automation {
         }
     }
 
-    pub(super) fn archive_pending(&self) -> bool {
-        self.archive.is_some()
+    pub(super) fn confirmation_pending(&self) -> bool {
+        self.archive.is_some() || self.timer_prompt.is_some()
     }
 
-    pub(super) fn note_archive_paint(&mut self, geometry: (u16, u16)) {
+    pub(super) fn note_confirmation_paint(&mut self, geometry: (u16, u16)) {
         if let Some(archive) = &mut self.archive {
             archive.painted = Some(geometry);
+        }
+        if let Some(prompt) = &mut self.timer_prompt {
+            prompt.painted = Some(geometry);
         }
     }
 
     pub(super) fn back(&mut self, online: bool) -> Option<Action> {
         self.press = None;
-        if self.enabling.is_some() {
+        if self.enabling.is_some() || self.timer_installing.is_some() {
+            return Some(Action::None);
+        }
+        if self.timer_prompt.take().is_some() {
+            self.selected = 0;
             return Some(Action::None);
         }
         if self.enable_confirmation {
@@ -277,13 +340,18 @@ impl Automation {
     fn buttons(&self, (cols, rows): (u16, u16)) -> Vec<Button> {
         let list_controls = [
             ("New", 'n'),
+            ("Enable timer", 'i'),
             (if self.archived { "Active" } else { "Archived" }, 'v'),
             ("Refresh", 'r'),
             ("Open", '⏎'),
             ("Back", '⎋'),
         ];
-        let controls: &[(&str, char)] = if self.enabling.is_some() {
+        let controls: &[(&str, char)] = if self.enabling.is_some()
+            || self.timer_installing.is_some()
+        {
             &[]
+        } else if self.timer_prompt.is_some() {
+            &[("Enable timer", 'y'), ("Cancel", '⎋')]
         } else if let Some(run) = &self.run {
             if run.live_session().is_some() {
                 &[("Open worker", 'o'), ("History", '←'), ("Back", '⎋')]
@@ -358,7 +426,8 @@ impl Automation {
         let controls = controls
             .iter()
             .filter(priority)
-            .chain(controls.iter().filter(|entry| !priority(entry)));
+            .chain(controls.iter().filter(|entry| !priority(entry)))
+            .filter(|(_, key)| *key != 'i' || self.can_offer_timer());
         let mut buttons = Vec::new();
         let (mut x, mut y) = (1_u16, 0);
         for &(name, key) in controls {
@@ -414,8 +483,15 @@ impl Automation {
 
     fn rows_at(&self, geometry: (u16, u16)) -> (usize, usize, usize) {
         let budget = self.body_capacity(geometry);
-        if self.enabling.is_some() || self.enable_confirmation {
+        if self.enabling.is_some() || self.enable_confirmation || self.timer_installing.is_some() {
             return (0, 0, 0);
+        }
+        if self.timer_prompt.is_some() {
+            return (
+                (self.selected + 1).saturating_sub(budget),
+                budget,
+                timer_prompt_rows(geometry.0).count(),
+            );
         }
         if let Some(draft) = &self.draft {
             let budget = budget.saturating_sub(1).max(1);
@@ -514,7 +590,37 @@ impl Automation {
 
     pub(super) fn update(&mut self, key: Key, geometry: (u16, u16)) -> Action {
         self.press = None;
-        if !usable(geometry) || self.enabling.is_some() {
+        if !usable(geometry) || self.enabling.is_some() || self.timer_installing.is_some() {
+            return Action::None;
+        }
+        if let Some(prompt) = &self.timer_prompt {
+            if key == Key::Text('y')
+                && prompt.painted == Some(geometry)
+                && geometry.0 >= 32
+                && geometry.1 >= 8
+            {
+                let prompt = self
+                    .timer_prompt
+                    .take()
+                    .expect("painted timer confirmation");
+                self.selected = 0;
+                return Action::InstallAutomationTimer {
+                    endpoint: prompt.endpoint,
+                    status: prompt.status,
+                };
+            }
+            let step = self.body_capacity(geometry);
+            let last = timer_prompt_rows(geometry.0).count().saturating_sub(1);
+            self.selected = match key {
+                Key::Up | Key::Text('k') => self.selected.saturating_sub(1),
+                Key::Down | Key::Tab | Key::Text('j') => self.selected + 1,
+                Key::PageUp => self.selected.saturating_sub(step),
+                Key::PageDown => self.selected + step,
+                Key::Home => 0,
+                Key::End => last,
+                _ => self.selected,
+            }
+            .min(last);
             return Action::None;
         }
         if let Some(run) = &self.run {
@@ -570,6 +676,16 @@ impl Automation {
             return Action::None;
         }
         match (&self.records, key) {
+            (Some(Records::List(_)), Key::Text('i')) if self.can_offer_timer() => {
+                self.timer_prompt = Some(TimerPrompt {
+                    endpoint: self.timer_owner.clone().expect("qualified timer owner"),
+                    status: self.timer_status.clone(),
+                    painted: None,
+                });
+                self.selected = 0;
+                self.error.clear();
+                Action::None
+            }
             (Some(Records::List(_)), Key::Text('n')) => {
                 self.draft = Some(Draft::new(None));
                 Action::None
@@ -705,6 +821,27 @@ impl Automation {
     }
 
     pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
+        if self.timer_prompt.is_some() || self.timer_installing.is_some() {
+            let title = if self.timer_installing.is_some() {
+                "Enable automation timer? · Loading"
+            } else {
+                "Enable automation timer?"
+            };
+            line(output, 1, cols, ACCENT, &truncation(title, cols));
+            let budget = self.body_capacity((cols, rows));
+            let start = (self.selected + 1).saturating_sub(budget);
+            for (index, text) in timer_prompt_rows(cols).enumerate().skip(start).take(budget) {
+                write_list_row(
+                    output,
+                    (index - start) as u16 + 2,
+                    cols,
+                    text,
+                    self.selected == index,
+                );
+            }
+            self.footer(output, cols, rows);
+            return;
+        }
         if let Some(run) = &self.run {
             form_header(output, cols, "Automation run");
             for (index, text) in [
@@ -837,6 +974,19 @@ impl Automation {
         }
         self.footer(output, cols, rows);
     }
+}
+
+fn timer_prompt_rows(cols: u16) -> impl Iterator<Item = &'static str> {
+    [
+        "Install a per-user timer on this host.",
+        "It checks for due jobs and launches eligible runs.",
+    ]
+    .into_iter()
+    .flat_map(move |text| {
+        text.as_bytes()
+            .chunks(usize::from(cols.saturating_sub(2).max(1)))
+    })
+    .map(|row| std::str::from_utf8(row).expect("ASCII timer prompt"))
 }
 
 fn write_list_row(output: &mut String, row: u16, cols: u16, text: &str, selected: bool) {
@@ -1092,6 +1242,47 @@ mod pointer_tests {
     use super::*;
 
     #[test]
+    fn timer_install_requires_a_painted_confirmation_for_the_current_view() {
+        let mut view = Automation {
+            records: Some(Records::List(vec![])),
+            timer_owner: Some("owner".into()),
+            timer_status: "not installed, inactive".into(),
+            ..Automation::default()
+        };
+        let wide = (80, 24);
+        let compact = (40, 8);
+        let tiny = (24, 4);
+        assert!(view.buttons(wide).iter().any(|button| button.key == 'i'));
+        assert!(matches!(view.update(Key::Text('i'), wide), Action::None));
+        assert!(matches!(view.update(Key::Text('y'), wide), Action::None));
+        view.note_confirmation_paint(wide);
+        assert!(matches!(view.update(Key::Text('y'), compact), Action::None));
+        view.note_confirmation_paint(tiny);
+        assert!(matches!(view.update(Key::Text('y'), tiny), Action::None));
+
+        view.disconnect_timer_owner();
+        assert!(!view.confirmation_pending());
+        assert!(!view.buttons(wide).iter().any(|button| button.key == 'i'));
+        assert!(matches!(view.update(Key::Text('y'), compact), Action::None));
+
+        view.expect_timer_status(1, Some("owner".into()));
+        assert!(view.receive_timer_status(1, "not installed, inactive".into()));
+        view.update(Key::Text('i'), compact);
+        view.note_confirmation_paint(compact);
+        let Action::InstallAutomationTimer { endpoint, status } =
+            view.update(Key::Text('y'), compact)
+        else {
+            panic!("expected the painted timer confirmation to take effect");
+        };
+        assert_eq!(endpoint, "owner");
+        assert_eq!(status, "not installed, inactive");
+        assert!(matches!(view.update(Key::Text('y'), compact), Action::None));
+        view.expect_timer_status(2, Some("owner".into()));
+        assert!(view.receive_timer_status(2, "installed, active".into()));
+        assert!(!view.buttons(compact).iter().any(|button| button.key == 'i'));
+    }
+
+    #[test]
     fn timer_status_is_bound_to_the_latest_list_refresh() {
         let mut view = Automation {
             records: Some(Records::List(vec![])),
@@ -1101,15 +1292,15 @@ mod pointer_tests {
             view.update(Key::Text('r'), (80, 24)),
             Action::Catalog(Read::List)
         ));
-        view.expect_timer_status(1);
-        view.expect_timer_status(2);
+        view.expect_timer_status(1, None);
+        view.expect_timer_status(2, None);
         assert!(!view.receive_timer_status(1, "not installed, inactive".into()));
         assert_eq!(view.list_title(80), "Automations");
         assert!(view.receive_timer_status(2, "installed, active".into()));
         assert_eq!(view.list_title(80), "Automations · Timer installed, active");
         assert_eq!(view.list_title(40), "Automations · active");
         view.archived = true;
-        view.expect_timer_status(3);
+        view.expect_timer_status(3, None);
         assert!(view.receive_timer_status(3, "status unavailable".into()));
         assert_eq!(
             view.list_title(80),
