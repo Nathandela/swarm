@@ -254,13 +254,9 @@ impl State {
                 || request["launch"]["worktree"] == true
                 || request["launch"]["options"].get("resume_from").is_some()
                     && field(&request["launch"], "agent") != "codex"
-                || [
-                    "resume_conversation_id",
-                    "resume_relocate",
-                    "handoff_from",
-                ]
-                .iter()
-                .any(|key| request["launch"]["options"].get(*key).is_some())
+                || ["resume_conversation_id", "resume_relocate", "handoff_from"]
+                    .iter()
+                    .any(|key| request["launch"]["options"].get(*key).is_some())
                 || ["spawned_from", "spawn_intent", "supervision"]
                     .iter()
                     .any(|key| !field(&request["launch"], key).is_empty()))

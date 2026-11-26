@@ -970,8 +970,10 @@ impl Store {
             ));
         }
         let raw = read_meta(&entry.dir)?;
-        if !same_file(&entry.dir.metadata()?, &fs::symlink_metadata(self.root.join(id))?)
-            || raw != entry.raw
+        if !same_file(
+            &entry.dir.metadata()?,
+            &fs::symlink_metadata(self.root.join(id))?,
+        ) || raw != entry.raw
             || qualified_role(&entry.meta).is_err()
             || entry.meta["status"]["Process"] != "exited"
         {
