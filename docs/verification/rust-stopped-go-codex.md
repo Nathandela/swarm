@@ -2,7 +2,7 @@
 
 The copied-state fixture runs the pinned Go supervisor and its real shim, with the pinned repository's synthetic Codex CLI standing in for the provider. The supervisor joins the synthetic App Server and discovers its thread through the actual local protocol. The original Go shim publishes both the ordinary PTY worker and App Server birth epochs, a joined native-writer record, and the backend exit.
 
-Rust accepts this stopped schema-1 record when the original private launch directory, CLI installation identity, backend command and socket coordinates, worker/daemon/backend birth evidence, and recorded exit agree. The offline copy excludes Unix sockets. A socket entry at the original source causes the Rust gate to refuse without removing it. The gate also refuses changed backend coordinates, malformed backend configuration, and incomplete stop evidence.
+Rust accepts this stopped schema-1 record when the original private launch directory, CLI installation identity, backend command and socket coordinates, worker/daemon/backend birth evidence, and recorded exit agree. The offline copy excludes Unix sockets. A socket entry at the original source causes the Rust gate to refuse without removing it. The gate also refuses changed backend coordinates, extra backend arguments, malformed backend configuration, and incomplete stop evidence. This qualification checks the pinned Go builder’s exact fresh TUI arguments. Initial prompts and subcommands stay outside this proof.
 
 ```bash
 cargo build --locked -p swarm

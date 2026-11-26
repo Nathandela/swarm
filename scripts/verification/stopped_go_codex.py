@@ -59,7 +59,10 @@ def exercise(go, rust, synthetic, base):
     meta=path/"meta.json"
     with daemon(go,ge,base/"copy.log"):
         expected,=listed(ge)
+    launch_witness=disk(path/"shim-launch.json")
     for filename,changes,reason in [
+        ("shim-launch.json",{"backend_args":launch_witness["backend_args"]+["--listen","unix:///foreign.sock"]},"Go launch binding or native writer is unqualified"),
+        ("shim-launch.json",{"argv":launch_witness["argv"]+["exec"]},"Go launch binding or native writer is unqualified"),
         ("shim-launch.json",{"backend_cwd":str(base)},"Go launch binding or native writer is unqualified"),
         ("shim-launch.json",{"backend_socket_path":str(base/"wrong.sock")},"Go launch binding or native writer is unqualified"),
         ("shim-launch.json",{"backend_env":False},"Go launch binding or native writer is unqualified"),

@@ -506,25 +506,25 @@ fn backend_declared(launch: &Value) -> bool {
 }
 
 fn classic_codex(meta: &Value, launch: &Value) -> bool {
+    const NETWORK: &str = "sandbox_workspace_write.network_access=true";
+    let mut argv = vec![launch["cli_identity"]["path"].clone()];
+    // The pinned Go builder gives a fresh ordinary TUI a fixed flag order.
+    // A trailing prompt is deliberately outside this proof because it can be a subcommand.
+    for (option, flag) in [("model", "--model"), ("sandbox", "--sandbox")] {
+        let value = field(&meta["launch_options"], option);
+        if !value.is_empty() {
+            argv.extend([json!(flag), json!(value)]);
+        }
+    }
+    argv.extend([json!("-c"), json!(NETWORK)]);
     if launch["native_provider"] != "codex"
         || meta["shim_wire_version"] != 2
         || !executable_binding(meta, launch, "codex")
-        || !launch["argv"].as_array().is_some_and(|args| {
-            args.iter().skip(1).all(|arg| {
-                arg.as_str().is_some_and(|arg| {
-                    !matches!(
-                        arg.split('=').next(),
-                        Some("app-server" | "--remote" | "--listen")
-                    )
-                })
-            })
-        })
-        || ["backend_args", "backend_env"].iter().any(|key| {
-            !launch[*key].is_null()
-                && !launch[*key]
-                    .as_array()
-                    .is_some_and(|items| items.iter().all(Value::is_string))
-        })
+        || launch["argv"] != json!(argv)
+        || !launch["backend_env"].is_null()
+            && !launch["backend_env"]
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string))
         || crate::providers::codex::version(field(&launch["cli_identity"], "version")).is_err()
     {
         return false;
@@ -537,9 +537,7 @@ fn classic_codex(meta: &Value, launch: &Value) -> bool {
     Path::new(field(launch, "backend_socket_path")) == socket
         && launch["backend_program"] == launch["cli_identity"]["path"]
         && launch["backend_cwd"] == launch["cwd"]
-        && launch["backend_args"].as_array().is_some_and(|args| {
-            args.starts_with(&[json!("app-server"), json!("--listen"), json!(address)])
-        })
+        && launch["backend_args"] == json!(["app-server", "--listen", address, "-c", NETWORK])
         && launch["backend_agent_args"] == json!(["--remote", address])
         && launch["backend_agent_command_args"].is_null()
 }
