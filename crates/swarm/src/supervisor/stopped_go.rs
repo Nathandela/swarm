@@ -647,15 +647,26 @@ fn classic_opencode(meta: &Value, launch: &Value) -> bool {
     if !program.is_absolute() || program.file_name().and_then(|n| n.to_str()) != Some("opencode") {
         return false;
     }
+    if let [flag, id] = rest
+        && flag == "--session"
+    {
+        return !thread.is_empty() && id == thread;
+    }
     let mut args = rest.iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            Some("--model" | "--agent" | "--prompt" | "--session")
-                if args.next().is_some_and(Value::is_string) => {}
-            _ => return false,
+    for (option, flag) in [("model", "--model"), ("agent", "--agent")] {
+        let value = field(&meta["launch_options"], option);
+        if !value.is_empty()
+            && (args.next().and_then(Value::as_str) != Some(flag)
+                || args.next().and_then(Value::as_str) != Some(value))
+        {
+            return false;
         }
     }
-    true
+    match args.as_slice() {
+        [] => true,
+        [flag, prompt] => flag == "--prompt" && prompt.as_str().is_some_and(|s| !s.is_empty()),
+        _ => false,
+    }
 }
 
 fn valid_meta(meta: &Value, id: &str) -> bool {

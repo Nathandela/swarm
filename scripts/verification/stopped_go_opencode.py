@@ -26,6 +26,7 @@ def exercise(go, current_go, rust, base):
     opencode.chmod(0o700)
     ge = fixture_env(base, source, tools)
     launch = {"agent":"opencode", "cwd":str(home), "name":"Original OpenCode", "cols":80,"rows":24,
+              "options":{"model":"fixture/model","agent":"fixture-agent"}, "initial_prompt":"fixture prompt",
               "env":[f"PATH={ge['PATH']}",f"HOME={ge['HOME']}"]}
     session = None
     try:
@@ -64,6 +65,10 @@ def exercise(go, current_go, rust, base):
         (launchfile, {"opencode":{}}, "Go launch binding or native writer is unqualified"),
         (launchfile, {"account_binding":{}}, "Go launch binding or native writer is unqualified"),
         (launchfile, {"argv":[str(opencode),"--port","9090"]}, "Go launch binding or native writer is unqualified"),
+        (launchfile, {"argv":[str(opencode),"--session",THREAD,"--session",THREAD]}, "Go launch binding or native writer is unqualified"),
+        (launchfile, {"argv":[str(opencode),"--session","ses_1234567890"]}, "Go launch binding or native writer is unqualified"),
+        (launchfile, {"argv":[str(opencode),"--agent","foreign"]}, "Go launch binding or native writer is unqualified"),
+        (launchfile, {"argv":[str(opencode),"--prompt","one","--prompt","two"]}, "Go launch binding or native writer is unqualified"),
     ]:
         before=path.read_bytes()
         value=disk(path)|change
