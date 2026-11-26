@@ -31,7 +31,6 @@ pub(super) fn launch_scope(
     if !caps.contains(&teammate::MAIL_CAP)
         || launch["spawn_intent"] != "delegate"
         || operation.is_empty()
-        || launch["worktree"] == true
         || launch["options"].get("resume_from").is_some()
     {
         return Err(refused(
@@ -45,6 +44,11 @@ pub(super) fn launch_scope(
         format!("{}/{}", state.endpoint, parent)
     };
     let session = state.session(&json!({"session_id":full}))?;
+    if launch["worktree"] == true && !session.native_cli_manager() {
+        return Err(refused(
+            "delegated worktrees require the enrolled VM manager scope",
+        ));
+    }
     let mut scope = session.authorize_mail_child(&full, claim, Path::new(field(launch, "cwd")))?;
     scope["attempt"] = json!(operation);
     Ok(Some(scope))

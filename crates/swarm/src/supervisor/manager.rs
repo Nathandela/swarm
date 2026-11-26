@@ -111,18 +111,52 @@ pub(crate) fn mcp_args(scope: &Value, session: &str) -> io::Result<Vec<String>> 
         session
     ]);
     let binary = std::env::current_exe()?;
+    let native_cli = manager["native_cli"] == true;
+    let transport = [
+        "publish",
+        "swarm_read_note",
+        "swarm_reply",
+        "swarm_read_attachment",
+    ];
     if scope["launch"]["agent"] == "claude" {
-        let server = json!({"mcpServers":{"swarm_voice":{"command":binary,"args":args}}});
-        return Ok(vec![
-            "--strict-mcp-config".into(), "--mcp-config".into(), serde_json::to_string(&server)?,
-            "--tools".into(), String::new(), "--permission-mode".into(), "default".into(),
-            "--allowedTools=mcp__swarm_voice__publish,mcp__swarm_voice__swarm_read_note,mcp__swarm_voice__swarm_reply,mcp__swarm_voice__swarm_read_attachment".into(),
-        ]);
+        let mut server = json!({"mcpServers":{"swarm_voice":{"command":binary,"args":args}}});
+        if native_cli {
+            server["mcpServers"]["swarm_voice"]["env"] = json!({"SWARM_MANAGER_VM_CLI":"1"});
+        }
+        let allowed = transport
+            .iter()
+            .map(|name| format!("mcp__swarm_voice__{name}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut flags = vec![
+            "--strict-mcp-config".into(),
+            "--mcp-config".into(),
+            serde_json::to_string(&server)?,
+            "--permission-mode".into(),
+            "default".into(),
+            format!("--allowedTools={allowed}"),
+        ];
+        if !native_cli {
+            flags.extend(["--tools".into(), String::new()]);
+        }
+        return Ok(flags);
     }
     let command = serde_json::to_string(&binary)?;
+    let authority = if native_cli {
+        let approvals = transport
+            .iter()
+            .map(|tool| format!(r#"{tool}={{approval_mode="approve"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(r#",env={{SWARM_MANAGER_VM_CLI="1"}},tools={{{approvals}}}"#)
+    } else {
+        String::new()
+    };
     Ok(vec![
         "-c".into(),
-        format!("mcp_servers.swarm_voice={{command={command},args={args},required=true}}"),
+        format!(
+            "mcp_servers.swarm_voice={{command={command},args={args},required=true{authority}}}"
+        ),
     ])
 }
 

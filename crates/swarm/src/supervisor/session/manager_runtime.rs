@@ -115,6 +115,7 @@ impl Session {
                         && self.claude_park_resume_record(binding).is_ok();
                 json!({"op":"manager_runtime","session_id":session,"manager_runtime":{
                     "binding":binding,"ready_for_input":ready,"turn":status,"retirement_ready":retirement_ready,
+                    "native_cli":self.manager["launch"]["manager"]["native_cli"] == true,
                     "bridge_socket":self.manager["launch"]["manager"]["bridge_socket"],
                     "auth_file":self.manager["launch"]["manager"]["auth_file"]
                 }})

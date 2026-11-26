@@ -22,7 +22,7 @@ pub(super) fn ingest(
     api: &Discord,
     event: &Value,
 ) -> io::Result<Option<Value>> {
-    if cfg.text("mode") != "teammate" || cfg.text("project_access") == "vm" {
+    if cfg.text("mode") != "teammate" {
         return Ok(None);
     }
     if let Some(plan) = inbox.thread_creation() {

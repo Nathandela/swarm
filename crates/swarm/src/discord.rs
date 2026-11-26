@@ -128,7 +128,6 @@ pub(crate) fn native_manager_available(socket: &str) -> bool {
 fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
     if !cfg.enabled()
         || cfg.text("mode") != "personal" && team_thread::Route::configured(cfg)?.is_none()
-        || cfg.text("project_access") == "vm"
         || !matches!(cfg.text("manager_cli"), "codex" | "claude")
     {
         return Err(invalid(
@@ -239,7 +238,11 @@ pub(crate) fn verify_connector_input(
                 || source["author"]["id"] != origin["actor_id"]
                 || source["authority"] != origin["kind"])
         || composer["text"]
-            != crate::manager_prompt::saved_input(input, ipc::field(source, "text"))?
+            != crate::manager_prompt::saved_input(
+                input,
+                ipc::field(source, "text"),
+                scope["launch"]["manager"]["native_cli"] == true,
+            )?
         || source["revision"] != composer["origin"]["revision"]
         || source["operation_id"] != composer["origin"]["request_id"]
         || !voice

@@ -73,7 +73,7 @@ impl Manager {
     }
 
     pub(super) fn launch_request(&self, bridge_socket: &Path, auth_file: &Path) -> Value {
-        json!({
+        let mut launch = json!({
             "agent": self.cfg.text("manager_cli"),
             "name": self.cfg.text("name"),
             "cwd": self.cfg.text("work_dir"),
@@ -84,7 +84,11 @@ impl Manager {
                 "conversation_id": self.conversation,
                 "bridge_socket": bridge_socket, "auth_file": auth_file
             }
-        })
+        });
+        if self.cfg.text("project_access") == "vm" {
+            launch["manager"]["native_cli"] = json!(true);
+        }
+        launch
     }
 
     pub(super) fn launch(&self, operation: &str, launch: &Value) -> io::Result<Value> {
@@ -223,6 +227,7 @@ impl Manager {
             || binding["session_instance"] != instance
             || binding["conversation_id"] != self.conversation
             || binding["provider"] != self.cfg.text("manager_cli")
+            || (status["native_cli"] == true) != (launch["manager"]["native_cli"] == true)
             || status["bridge_socket"] != launch["manager"]["bridge_socket"]
             || status["auth_file"] != launch["manager"]["auth_file"]
             || [
@@ -276,7 +281,11 @@ impl Manager {
             binding,
             &runtime["turn"]["external_input"],
         )?;
-        let text = crate::manager_prompt::render(starting_prompt, field(input, "text"))?;
+        let text = crate::manager_prompt::render_dispatch(
+            starting_prompt,
+            field(input, "text"),
+            self.cfg.text("project_access") == "vm",
+        )?;
         let mut composer = json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
             "text": text,
@@ -604,6 +613,57 @@ mod tests {
             "toolu_fixture_swarm_publish"
         );
         drop(posts);
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_VM").is_some() {
+            assert_eq!(runtime["native_cli"], true);
+            let worker = manager
+                .dial()
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .find(|row| row["role"] == "worker" && row["cwd"] == json!(root.join("child")))
+                .unwrap();
+            assert_eq!(
+                worker["worker_discussion"],
+                runtime["binding"]["conversation_id"]
+            );
+            assert!(
+                worker["worker_attempt"]
+                    .as_str()
+                    .is_some_and(|attempt| attempt.starts_with("launch:"))
+            );
+            if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_WORKTREE").is_some() {
+                let binary = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_BINARY").unwrap();
+                let local = field(&worker, "id").rsplit('/').next().unwrap();
+                let meta =
+                    runtime::read_json(&root.join("s/rust-v1").join(local).join("session.json"))
+                        .unwrap();
+                let checkout = Path::new(field(&meta["checkout"], "path"));
+                assert!(checkout.is_dir() && checkout != root.join("child"));
+                let file = checkout.join("result.csv");
+                fs::write(&file, "scope,result\nworker,ok\n").unwrap();
+                let note = Command::new(binary)
+                    .env(crate::teammate::SOCKET_ENV, cfg.text("daemon_socket"))
+                    .env(
+                        crate::teammate::PROOF_ENV,
+                        crate::supervisor::mail::proof(field(&meta, "token"), "worker"),
+                    )
+                    .env("SWARM_SESSION_ID", local)
+                    .args(["teammate", "message", "--kind", "complete", "--file"])
+                    .arg(&file)
+                    .output()
+                    .unwrap();
+                assert!(
+                    note.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&note.stderr)
+                );
+                let note: Value = serde_json::from_slice(&note.stdout).unwrap();
+                assert_eq!(note["files"][0]["name"], "result.csv");
+                assert_eq!(note["files"][0]["size"], 23);
+            }
+        }
+
         if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_PARK").is_some() {
             let binary = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_BINARY").unwrap();
             let local = session.rsplit('/').next().unwrap();

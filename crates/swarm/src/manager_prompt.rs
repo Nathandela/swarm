@@ -10,6 +10,7 @@ const NAME: &str = "starting-prompt";
 const LIMIT: usize = 1024;
 const HEADER: &str = "Current owner settings (supersede earlier settings)\n";
 const INPUT: &str = "\n\nCurrent input\n";
+const VM: &str = "Send messages to this discussion through publish. Use swarm dispatcher-guide before delegating. Use swarm spawn to delegate work in the VM, and inspect the exact worker with swarm peek. Ask workers to use swarm teammate for needs-input and completion notes.\n\n";
 
 pub(crate) fn input_budget(prompt: &str) -> usize {
     if prompt.is_empty() {
@@ -19,13 +20,26 @@ pub(crate) fn input_budget(prompt: &str) -> usize {
     }
 }
 
-pub(crate) fn provider_input_budget(provider: &str, prompt: &str) -> usize {
-    let budget = input_budget(prompt);
+pub(crate) fn provider_input_budget(provider: &str, prompt: &str, native_cli: bool) -> usize {
+    let budget = input_budget(prompt).saturating_sub(if native_cli { VM.len() } else { 0 });
     if provider == "claude" {
         budget.saturating_sub(crate::providers::codex_proof::claude::ENVELOPE_OVERHEAD)
     } else {
         budget
     }
+}
+
+pub(crate) fn render_dispatch(prompt: &str, input: &str, native_cli: bool) -> io::Result<String> {
+    let rendered = render(prompt, input)?;
+    if !native_cli {
+        return Ok(rendered);
+    }
+    if VM.len() + rendered.len() > 4096 {
+        return Err(io::Error::other(
+            "manager VM input exceeds native dispatch limit",
+        ));
+    }
+    Ok(format!("{VM}{rendered}"))
 }
 
 fn validate(text: &str) -> io::Result<()> {
@@ -140,8 +154,12 @@ pub(crate) fn saved(input: &serde_json::Value) -> io::Result<&str> {
     Ok(prompt)
 }
 
-pub(crate) fn saved_input(input: &serde_json::Value, text: &str) -> io::Result<String> {
-    render(saved(input)?, text)
+pub(crate) fn saved_input(
+    input: &serde_json::Value,
+    text: &str,
+    native_cli: bool,
+) -> io::Result<String> {
+    render_dispatch(saved(input)?, text, native_cli)
 }
 
 #[cfg(test)]
@@ -149,6 +167,23 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn vm_guidance_is_bound_to_the_exact_provider_budget() {
+        let prompt = "Owner settings";
+        let input = "x".repeat(provider_input_budget("claude", prompt, true));
+        let rendered = render_dispatch(prompt, &input, true).unwrap();
+        assert!(rendered.starts_with("Send messages to this discussion through publish."));
+        assert_eq!(
+            rendered.len() + crate::providers::codex_proof::claude::ENVELOPE_OVERHEAD,
+            4096
+        );
+        assert_eq!(
+            saved_input(&serde_json::json!({"starting_prompt":prompt}), &input, true).unwrap(),
+            rendered
+        );
+        assert_ne!(render_dispatch(prompt, &input, false).unwrap(), rendered);
+    }
 
     #[test]
     fn go_prompt_file_and_cached_admissions_keep_their_bounds() {
@@ -167,11 +202,14 @@ mod tests {
         let saved = serde_json::json!({"starting_prompt":load(&root).unwrap()});
         save(&root, "next").unwrap();
         assert_eq!(
-            saved_input(&saved, "hello").unwrap(),
+            saved_input(&saved, "hello", false).unwrap(),
             "Current owner settings (supersede earlier settings)\nfirst\n\nCurrent input\nhello"
         );
-        assert_eq!(saved_input(&serde_json::json!({}), "old").unwrap(), "old");
-        assert!(saved_input(&serde_json::json!({"starting_prompt":1}), "old").is_err());
+        assert_eq!(
+            saved_input(&serde_json::json!({}), "old", false).unwrap(),
+            "old"
+        );
+        assert!(saved_input(&serde_json::json!({"starting_prompt":1}), "old", false).is_err());
         assert!(render("next", &"x".repeat(4096)).is_err());
         let path = root.join("manager-settings").join(NAME);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();

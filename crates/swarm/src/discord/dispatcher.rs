@@ -53,10 +53,6 @@ pub(super) struct Dispatcher {
 
 impl Dispatcher {
     pub(super) fn open(cfg: &Config, place: &Path) -> io::Result<Option<Self>> {
-        // This first discussion path uses the native restricted manager harness.
-        if cfg.text("project_access") == "vm" {
-            return Ok(None);
-        }
         let owner = Manager::new(cfg)?;
         if owner.verify_supervisor().is_err() {
             return Ok(None);
@@ -299,7 +295,13 @@ impl Dispatcher {
         let starting_prompt = crate::manager_prompt::load(&self.owner.supervisor_root()?)?;
         let provider = field(&status["binding"], "provider");
         let body = field(&current, "text");
-        if body.len() > crate::manager_prompt::provider_input_budget(provider, &starting_prompt) {
+        if body.len()
+            > crate::manager_prompt::provider_input_budget(
+                provider,
+                &starting_prompt,
+                cfg.text("project_access") == "vm",
+            )
+        {
             return inbox.reject_manager_input(
                 &id,
                 &current["revision"],
@@ -535,7 +537,8 @@ impl Dispatcher {
                 &note,
                 crate::manager_prompt::provider_input_budget(
                     field(binding, "provider"),
-                    &starting_prompt
+                    &starting_prompt,
+                    cfg.text("project_access") == "vm"
                 )
             )?);
             let mut composer = self.owner.composer(&wake_input, status, &starting_prompt)?;

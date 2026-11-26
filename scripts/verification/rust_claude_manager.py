@@ -6,6 +6,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -29,12 +30,29 @@ class Model(http.server.BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         tools = [tool.get("name") for tool in request.get("tools", [])]
         content = json.dumps(request.get("messages", []))
-        main = "[SWARM_MANAGER_INPUT_V1:" in content and "mcp__swarm_voice__publish" in tools
+        envelope = "[SWARM_MANAGER_INPUT_V1:" in content
+        main = envelope and ("mcp__swarm_voice__publish" in tools or self.server.vm and "Bash" in tools)
+        discover = main and self.server.vm and "mcp__swarm_voice__publish" not in tools \
+            and "ToolSearch" in tools and "toolu_fixture_vm_discover" not in content
+        if envelope:
+            self.server.seen_tools.append(tools)
         wake = main and "Fixture worker retained across parking." in content
         forwarded = main and self.server.forwarded and "Visible forwarded fixture quote" in content
         data = b"a,b\n1,2\n"
         read_attachment = forwarded and "toolu_fixture_forwarded_read" not in content
         read_note = wake and "toolu_fixture_swarm_read_note" not in content
+        spawn = main and self.server.vm and not discover and "toolu_fixture_vm_spawn" not in content
+        if main and self.server.vm and not spawn and not discover:
+            result = next((item for row in request.get("messages", [])
+                           if isinstance(row.get("content"), list) for item in row["content"]
+                           if item.get("type") == "tool_result"
+                           and item.get("tool_use_id") == "toolu_fixture_vm_spawn"), {})
+            report = json.dumps(result.get("content", ""))
+            exact = not result.get("is_error") and re.search(r"ep-[0-9a-f]{8}/[0-9a-f]{24}", report)
+            if not exact:
+                self.server.vm_failure = report
+                self.send_error(400)
+                return
         call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
         may_publish = not forwarded or self.server.forwarded == "allowed"
         if forwarded and not read_attachment:
@@ -45,8 +63,8 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert not received and "Manager request was not confirmed." in content, \
                     "the changed forwarded receipt was not refused"
             self.server.forwarded_checked.write_text("classified")
-        publish = main and not read_note and not read_attachment and may_publish and call_id not in content
-        tool = publish or read_note or read_attachment
+        publish = main and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
+        tool = publish or spawn or discover or read_note or read_attachment
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
         message = dict(id="msg_fixture", type="message", role="assistant", model=model,
@@ -64,7 +82,13 @@ class Model(http.server.BaseHTTPRequestHandler):
                 return
             self.server.main_requests.append((publish, content, tools))
         if tool:
-            if read_attachment:
+            if discover:
+                name, call = "ToolSearch", "toolu_fixture_vm_discover"
+                args = dict(query="select:mcp__swarm_voice__publish")
+            elif spawn:
+                name, call = "Bash", "toolu_fixture_vm_spawn"
+                args = dict(command=self.server.spawn_command, description="Launch the selected synthetic worker")
+            elif read_attachment:
                 name, call = "swarm_read_attachment", "toolu_fixture_forwarded_read"
                 args = dict(id="421", sha256=hashlib.sha256(data).hexdigest(), offset=0)
                 if self.server.forwarded == "revoked":
@@ -77,7 +101,7 @@ class Model(http.server.BaseHTTPRequestHandler):
                     "Read the pinned forwarded file." if forwarded else "Bounded native Claude reply.")
                 args = dict(output_id="native-parked" if wake else "native-claude",
                             sequence=1, final=True, text=text)
-            block = dict(type="tool_use", name=f"mcp__swarm_voice__{name}", id=call, input={})
+            block = dict(type="tool_use", name=name if spawn or discover else f"mcp__swarm_voice__{name}", id=call, input={})
             delta = dict(type="input_json_delta", partial_json=json.dumps(args))
         else:
             block = dict(type="text", text="")
@@ -118,6 +142,8 @@ def verify(swarm, provider, test, root, server):
     wrapper = tools / "claude"
     wrapper.write_text("#!/bin/sh\n" + f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{server.server_port}\n"
                        + "export CLAUDE_SECURESTORAGE_CONFIG_DIR=" + shlex.quote(str(home / ".claude")) + "\n"
+                       + "export CLAUDE_CODE_TMPDIR=" + shlex.quote(str(root)) + " TMPDIR=" + shlex.quote(str(root)) + "\n"
+                       + "export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_MAX_RETRIES=0 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n"
                        + "exec " + shlex.quote(str(native)) + ' "$@"\n')
     wrapper.chmod(0o700)
     endpoint = root / "d"
@@ -140,6 +166,29 @@ def verify(swarm, provider, test, root, server):
     save(home / ".claude/.credentials.json", dict(claudeAiOauth=dict(accessToken="synthetic-token",
          refreshToken="synthetic-refresh", expiresAt=int(time.time() * 1000) + 3600000,
          scopes=["user:inference", "user:profile"], subscriptionType="max", rateLimitTier="default_claude_max_5x")))
+    access = {}
+    if server.vm:
+        child = root / "child"
+        child.mkdir(mode=0o700)
+        document = child / "delegation.md"
+        document.write_text("Wait for the synthetic worker fixture.")
+        (tools / "swarm").symlink_to(swarm)
+        if server.worktree:
+            git = lambda *args: subprocess.run(
+                guarded(["/usr/bin/git", "-C", str(child), *args], root, [server.server_port]),
+                env=env, check=True, capture_output=True)
+            git("init", "-b", "main")
+            git("add", "delegation.md")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-m", "Prepare synthetic checkout")
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_WORKTREE"] = "1"
+        command = shlex.join(["swarm", "spawn", "--cli", "claude",
+                              "--worktree=" + ("true" if server.worktree else "false"),
+                              "--dir", str(child), "--delegate", str(document)])
+        server.spawn_command = command
+        save(home / ".claude/settings.json", dict(permissions=dict(allow=["Bash(" + command + ")"])))
+        access["project_access"] = "vm"
+        env["SWARM_CLAUDE_MANAGER_FIXTURE_VM"] = "1"
     marker = root / "token"
     marker.write_text("unused synthetic Discord token")
     marker.chmod(0o600)
@@ -147,7 +196,7 @@ def verify(swarm, provider, test, root, server):
     save(place / "config.json", dict(version=1, enabled=True, mode="personal", installation_id="claude-fixture",
          name="Claude Fixture", application_id="200", owner_id="300", dm_channel_id="400",
          token_file=str(marker), daemon_socket=str(endpoint), work_dir=str(project),
-         manager_cli="claude", supervisor=dict(state_dir=str(state), lock=str(root/"lock"), log=str(root/"daemon.log"))))
+         manager_cli="claude", **access, supervisor=dict(state_dir=str(state), lock=str(root/"lock"), log=str(root/"daemon.log"))))
     run = lambda argv: guarded([str(x) for x in argv], root, [server.server_port])
     with (root / "daemon.log").open("w+") as log:
         daemon = subprocess.Popen(run([swarm, "daemon"]), cwd=project, env=env, stdout=log, stderr=log)
@@ -161,14 +210,18 @@ def verify(swarm, provider, test, root, server):
             expected_posts = 0 if server.forwarded == "revoked" else (2 if server.park else 1)
             assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
             assert not server.forwarded or server.forwarded_checked.is_file()
-            assert all("Bash" not in tools for _, _, tools in server.main_requests)
+            assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=True,
-                                  exact_main_mcp_tool=True, observed_reply=expected_posts > 0, disabled_shell_tools=True,
+                                  exact_main_mcp_tool=True, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
+                                  vm_native_worker_launch=server.vm, vm_worktree_files=server.worktree,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
             log.flush()
             log.seek(0)
             print(log.read())
+            print("Provider tools at admitted native turns:", server.seen_tools)
+            if server.vm:
+                print("Synthetic VM launch result:", getattr(server,"vm_failure",None))
             listing = subprocess.run(run([swarm, "ls", "--json"]), cwd=project, env=env,
                                      capture_output=True, text=True, timeout=4).stdout
             print(listing)
@@ -207,12 +260,17 @@ if __name__ == "__main__":
         parser.add_argument(arg, type=Path)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--park", action="store_true")
+    modes.add_argument("--vm", action="store_true")
+    modes.add_argument("--vm-worktree", action="store_true")
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
         server.main_requests = []
+        server.seen_tools = []
         server.park = args.park
+        server.vm = args.vm or args.vm_worktree
+        server.worktree = args.vm_worktree
         server.forwarded = args.forwarded
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:

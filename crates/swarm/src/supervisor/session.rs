@@ -1139,6 +1139,17 @@ impl Session {
                     );
                 })?;
         }
+        if !self.mailbox.is_null() && !meta["checkout"].is_null() {
+            use std::os::unix::fs::MetadataExt;
+            let effective = self.verify_effective()?;
+            let identity = effective.metadata()?;
+            runtime::write_json(
+                &self.dir.join("mail-checkout.json"),
+                &json!({
+                    "token":self.token,"path":effective,"identity":[identity.dev(),identity.ino()]
+                }),
+            )?;
+        }
         let mut shim = Command::new(env::current_exe()?);
         shim.env_clear()
             .envs(provider.env)
@@ -1168,6 +1179,19 @@ impl Session {
         let mut transient = json!({"argv":provider.argv,"schedule":scheduled,"native":provider.native,"hermes":provider.hermes});
         if self.owner_interactive || !self.manager.is_null() || !self.mailbox.is_null() {
             transient["owner_socket"] = json!(crate::ipc::socket_path()?);
+        }
+        if self.manager["launch"]["manager"]["native_cli"] == true {
+            let root = self
+                .dir
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| io::Error::other("missing VM supervisor root"))?;
+            transient["owner_root"] = json!(root);
+            transient["owner_lock"] = json!(
+                crate::ipc::env_path("SWARM_DAEMON_LOCK")
+                    .unwrap_or_else(|| root.join("daemon.lock"))
+            );
+            transient["owner_log"] = json!(log_path);
         }
         runtime::write_control(&mut bootstrap, &transient)
     }
@@ -2352,14 +2376,22 @@ impl Session {
         Ok(())
     }
 
+    pub(super) fn native_cli_manager(&self) -> bool {
+        self.manager["launch"]["manager"]["native_cli"] == true
+    }
+
     pub(super) fn authorize_mail_child(
         &self,
         full: &str,
         claim: &str,
         cwd: &Path,
     ) -> io::Result<Value> {
+        let project = std::fs::canonicalize(cwd)?;
+        let vm = self.native_cli_manager();
         if !super::mail::matches_binding(&self.manager, &self.token, claim)
-            || std::fs::canonicalize(cwd)? != self.effective
+            || !project.is_dir()
+            || project != cwd
+            || !vm && project != self.effective
         {
             return Err(io::Error::other(
                 "dispatcher worker authority or project does not match",
@@ -2382,21 +2414,26 @@ impl Session {
         Ok(
             json!({"discussion":native["binding"]["conversation_id"],"parent":self.id,
             "parent_incarnation":native["binding"]["session_instance"],"parent_input_hash":super::mail::parent_hash(nonce),
-            "project":self.effective}),
+            "project":project}),
         )
     }
 
     pub(super) fn mail_checkout(&self) -> io::Result<(&Path, (u64, u64))> {
         let path = self.verify_effective()?;
         let data = runtime::read_json(&self.dir.join("session.json"))?;
-        if data["token"] == self.token
-            && data["id"] == self.id
-            && let (Some(device), Some(inode)) = (
-                data["cwd_identity"][0].as_u64(),
-                data["cwd_identity"][1].as_u64(),
-            )
-        {
-            return Ok((path, (device, inode)));
+        if data["token"] == self.token && data["id"] == self.id {
+            let identity = if data["checkout"].is_null() {
+                data["cwd_identity"].clone()
+            } else {
+                let witness = runtime::read_json(&self.dir.join("mail-checkout.json"))?;
+                if witness["token"] != self.token || witness["path"] != json!(path) {
+                    return Err(io::Error::other("worker checkout custody changed"));
+                }
+                witness["identity"].clone()
+            };
+            if let (Some(device), Some(inode)) = (identity[0].as_u64(), identity[1].as_u64()) {
+                return Ok((path, (device, inode)));
+            }
         }
         Err(io::Error::other("worker checkout identity unavailable"))
     }

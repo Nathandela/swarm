@@ -237,11 +237,25 @@ fn serve(dir: &Path) -> io::Result<()> {
         environment.push(("SWARM_DAEMON_SOCK".into(), owner_socket.into()));
         environment.push(("SWARM_SESSION_ID".into(), field(&config, "id").into()));
         if !config["manager"].is_null() {
-            if provider["name"] != "claude" {
+            if scope["launch"]["manager"]["native_cli"] == true {
                 environment.push((
                     "SWARM_DISPATCHER_SPAWN_PROOF".into(),
                     crate::supervisor::mail::proof(token, "spawn"),
                 ));
+                environment.push(("SWARM_MANAGER_VM_CLI".into(), "1".into()));
+                for (key, field) in [
+                    ("SWARM_DAEMON_STATE", "owner_root"),
+                    ("SWARM_DAEMON_LOCK", "owner_lock"),
+                    ("SWARM_DAEMON_LOG", "owner_log"),
+                ] {
+                    let value = bootstrap[field]
+                        .as_str()
+                        .filter(|value| Path::new(value).is_absolute())
+                        .ok_or_else(|| {
+                            io::Error::other("VM manager supervisor environment is unavailable")
+                        })?;
+                    environment.push((key.into(), value.into()));
+                }
             }
         } else {
             environment.push((crate::teammate::SOCKET_ENV.into(), owner_socket.into()));
