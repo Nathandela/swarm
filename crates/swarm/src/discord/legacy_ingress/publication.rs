@@ -426,7 +426,11 @@ where
             "the original publication enrollment changed before delivery",
         ));
     }
-    if !identity(&lease.pin, &lease.source)? || !identity(&voice_pin, &directory.join("voice.db"))?
+    let (_fresh_pin, _fresh_voice, fresh_origin) =
+        original_voice(&directory, &scope, &out, cfg, &endpoint)?;
+    if fresh_origin != origin
+        || !identity(&lease.pin, &lease.source)?
+        || !identity(&voice_pin, &directory.join("voice.db"))?
     {
         return Err(invalid());
     }
@@ -809,6 +813,8 @@ mod tests {
         assert!(settle(&place, "701", false).unwrap());
         let source = path.join("discord.db");
         let before = fs::read(&source).unwrap();
+        let config = path.join("config.json");
+        let original_config = place.load().unwrap();
         assert!(
             with(&place, "fixture-final", false, |cfg| {
                 let mut changed = cfg.0.clone();
@@ -818,6 +824,22 @@ mod tests {
             })
             .is_err()
         );
+        assert_eq!(before, fs::read(&source).unwrap());
+        runtime::write_json(&config, &original_config.0).unwrap();
+        let alternative = root.join("other-project");
+        runtime::private_dir(&alternative).unwrap();
+        let invoked = std::cell::Cell::new(false);
+        assert!(
+            with(&place, "fixture-final", false, |_| {
+                invoked.set(true);
+                fs::rename(&project, root.join("moved-project"))?;
+                std::os::unix::fs::symlink(&alternative, &project)?;
+                Ok(|_: &Publication| panic!("a replaced project cannot post"))
+            })
+            .is_err()
+        );
+        assert!(invoked.get());
+        assert_eq!(place.load().unwrap().0, original_config.0);
         assert_eq!(before, fs::read(&source).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
