@@ -21,7 +21,7 @@ mod workspace;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|clean|doctor|discord|pilot|--pilot|setup-trust|teammate|dispatcher-guide|version]\n";
+const USAGE: &str = include_str!("usage.txt");
 const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
 

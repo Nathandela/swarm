@@ -1,0 +1,37 @@
+usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|version]
+
+  swarm            open the TUI
+  swarm --pilot    enter a private pilot context and show the discussion roster
+  swarm pilot      operate discussions (--context <path> roster|open|view|send|await|create|resume|exit)
+  swarm daemon     run the session daemon
+  swarm shim       run the PTY-owning shim process
+  swarm hook       post a hook event to the daemon
+  swarm schedule   create, manage, and run scheduled agent jobs (schedule help)
+  swarm discord    connect this Swarm to Discord, or operate its local bridge
+  swarm handoff    launch a supervised cross-CLI handoff
+                   (--cli agent [--model m] [--name n]
+                    [--supervision passive|manual|none] --context-file file)
+  swarm spawn      launch a new session with context
+                   (--cli agent [--dir d] [--model m] [--worktree] [--name n],
+                    one of --prompt text | --handoff file | --delegate file)
+  swarm ls         list sessions (--json for the full roster)
+  swarm watch      wait for a session to reach a status
+                   (--until needs_input[,ready_for_review,completed]|change, --timeout d)
+  swarm kill       terminate a session
+  swarm send       type into a session <session>
+                   (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
+  swarm setup-trust on|off|status /absolute/workspace   configure automatic native setup
+  swarm dispatcher-guide    read how to delegate and handle worker replies
+  swarm teammate message --text s   send a note to your own Swarm manager
+  swarm message    submit a semantic message <session> --text s [--operation-id id]
+                   or read its receipt with --status --operation-id id
+  swarm requests   list native pending requests <session>, or inspect one with
+                   --request-id id --native-session-id id
+  swarm decide     answer an inspected native request <session> with --request-id id
+                   --native-session-id id --request-hash hash --reply once|always|reject|answer
+                   [--answers JSON], or read its receipt with --status --operation-id id
+  swarm peek       print a session's current screen <session> [--lines N]
+  swarm clean      preview safe storage cleanup [--apply] [--json]
+  swarm doctor     diagnose this machine's swarm lifecycle [--json]
+                   (never starts a daemon; safe from cron)
+  swarm version    print the build version
