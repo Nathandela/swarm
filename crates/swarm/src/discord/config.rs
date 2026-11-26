@@ -1008,6 +1008,11 @@ mod registry_tests {
             denied.to_string(),
             "another configuration change is in progress"
         );
+        // Release the deliberately inherited lock even if another fixture forked during the check.
+        assert_eq!(
+            unsafe { libc::flock(inherited.as_raw_fd(), libc::LOCK_UN) },
+            0
+        );
         drop(inherited);
 
         let locks = place.lock().unwrap();
