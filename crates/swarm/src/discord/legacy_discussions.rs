@@ -63,6 +63,12 @@ fn scoped(cfg: &Config, route: &Route) -> bool {
                     .as_array()
                     .is_some_and(|ids| ids.iter().any(|id| id == &route.guild_id))
                 && (route.parent_id.is_empty() || snowflake(&route.parent_id))
+                && cfg.0["channel_ids"].as_array().is_none_or(|channels| {
+                    channels.is_empty()
+                        || channels
+                            .iter()
+                            .any(|id| id == &route.channel_id || id == &route.parent_id)
+                })
         }
 }
 
@@ -190,4 +196,27 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
         return Err(invalid());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_team_route_requires_enrolled_channel_or_parent() {
+        let cfg = Config(json!({"mode":"teammate","guild_ids":["300"],"channel_ids":["401"]}));
+        let mut route = Route {
+            guild_id: "300".into(),
+            channel_id: "402".into(),
+            message_id: "500".into(),
+            parent_id: "403".into(),
+        };
+        assert!(!scoped(&cfg, &route));
+        route.parent_id = "401".into();
+        assert!(scoped(&cfg, &route));
+        route.parent_id.clear();
+        route.channel_id = "401".into();
+        assert!(scoped(&cfg, &route));
+    }
 }
