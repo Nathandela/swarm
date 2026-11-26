@@ -273,6 +273,15 @@ impl Session {
         {
             return Err(refuse("enrolled worker has no matching verified exit"));
         }
+        if state.sessions.read().unwrap().values().any(|peer| {
+            let other = &peer.mailbox;
+            peer.id != child.id
+                && other["discussion"] == mail["discussion"]
+                && (other["parent_input_hash"] == mail["parent_input_hash"]
+                    || field(other, "parent_input_hash").is_empty())
+        }) {
+            return Err(refuse("another worker could share the completed admission"));
+        }
         let native = self.native_manager_proof(session, false)?;
         let original = codex_proof::input_status(&native, nonce);
         if native["binding"] != completion["binding"]
