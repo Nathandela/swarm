@@ -186,7 +186,19 @@ impl Discord {
         body: &str,
         files: &[Captured],
     ) -> Post {
-        let channel = cfg.text("dm_channel_id");
+        self.post_publication_channel(cfg.text("dm_channel_id"), nonce, body, files)
+    }
+
+    pub(super) fn post_publication_channel(
+        &self,
+        channel: &str,
+        nonce: &str,
+        body: &str,
+        files: &[Captured],
+    ) -> Post {
+        if !snowflake(channel) {
+            return Post::Unconfirmed;
+        }
         let url = format!("{API}/channels/{channel}/messages");
         let request = self
             .agent

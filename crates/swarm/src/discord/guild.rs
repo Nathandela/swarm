@@ -237,7 +237,7 @@ fn scoped_message(
     Ok(Some(source))
 }
 
-fn lookup(api: &Discord, path: &str) -> io::Result<Option<Value>> {
+pub(super) fn lookup(api: &Discord, path: &str) -> io::Result<Option<Value>> {
     match api.request(path, None) {
         Ok(value) => Ok(Some(value)),
         Err(err)

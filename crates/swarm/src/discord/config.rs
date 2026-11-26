@@ -532,9 +532,11 @@ impl Config {
                 match key.as_str() {
                     "version" => true,
                     "enabled" => value.is_boolean(),
-                    "projects" | "supervisor" | "previous_supervisor" | "calls" => {
-                        value.is_object() || value.is_null()
-                    }
+                    "projects"
+                    | "supervisor"
+                    | "previous_supervisor"
+                    | "calls"
+                    | "team_discussion" => value.is_object() || value.is_null(),
                     _ => false,
                 }
             };
@@ -624,6 +626,7 @@ impl Config {
         if !supervisor.is_null() && !valid_supervisor(supervisor, &["state_dir", "lock", "log"]) {
             return Err(invalid("invalid enrolled supervisor paths"));
         }
+        super::team_thread::Route::configured(self)?;
         let previous = &self.0["previous_supervisor"];
         if !previous.is_null()
             && (!self.managed()

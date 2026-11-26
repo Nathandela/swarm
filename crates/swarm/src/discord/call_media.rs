@@ -151,9 +151,7 @@ impl Media {
     }
 
     pub(super) fn poll(&mut self) -> io::Result<Option<Event>> {
-        if crate::supervisor::runtime::child_exited(&self.child).unwrap_or(true) {
-            return Err(invalid("call helper exited"));
-        }
+        let exited = crate::supervisor::runtime::child_exited(&self.child)?;
         if !self.buffered.contains(&b'\n') {
             let mut chunk = [0_u8; MAX_LINE + 1];
             // MSG_DONTWAIT leaves the separate bounded write behavior intact.
@@ -168,14 +166,20 @@ impl Media {
             };
             if n < 0 {
                 let err = io::Error::last_os_error();
-                return if err.kind() == io::ErrorKind::WouldBlock {
+                return if exited {
+                    Err(invalid("call helper exited"))
+                } else if err.kind() == io::ErrorKind::WouldBlock {
                     Ok(None)
                 } else {
                     Err(invalid("call helper pipe read failed"))
                 };
             }
             if n == 0 {
-                return Err(invalid("call helper pipe closed"));
+                return Err(invalid(if exited {
+                    "call helper exited"
+                } else {
+                    "call helper pipe closed"
+                }));
             }
             self.buffered.extend_from_slice(&chunk[..n as usize]);
         }
@@ -183,10 +187,25 @@ impl Media {
         if split.unwrap_or(self.buffered.len()) > MAX_LINE {
             return Err(invalid("call helper event exceeds pipe limit"));
         }
-        let Some(split) = split else { return Ok(None) };
+        let Some(split) = split else {
+            return if exited {
+                Err(invalid("call helper exited"))
+            } else {
+                Ok(None)
+            };
+        };
         let event: Value = serde_json::from_slice(&self.buffered[..split])
             .map_err(|_| invalid("invalid call helper event"))?;
         self.buffered.drain(..=split);
+        if self.ready && event["type"] == "fault" && event["code"] == "dave_changed" {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "DAVE epoch changed",
+            ));
+        }
+        if exited {
+            return Err(invalid("call helper exited"));
+        }
         self.validate(event).map(Some)
     }
 
@@ -272,6 +291,45 @@ mod tests {
             assert!(Instant::now() < limit, "helper did not emit an event");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn rekey_fault_survives_the_helpers_immediate_exit() {
+        let dir = std::env::temp_dir().join(format!(
+            "swarm-rekey-{}",
+            crate::supervisor::runtime::random_id().unwrap()
+        ));
+        crate::supervisor::runtime::private_dir(&dir).unwrap();
+        let helper = dir.join("helper");
+        let script = r#"#!/bin/sh
+read -r start
+printf '%s
+' '{"type":"gateway","data":{"op":4,"d":{"guild_id":"1","channel_id":"2","self_deaf":false,"self_mute":false}}}'
+read -r state
+read -r server
+printf '%s
+' '{"type":"ready"}'
+read -r clear
+printf '%s
+' '{"type":"fault","code":"dave_changed"}'
+exit 1
+"#;
+        fs::write(&helper, script).unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut media =
+            Media::start(&Helper::Fixture(helper), "1", "2", "3", vec!["4".into()]).unwrap();
+        assert!(matches!(wait(&mut media).unwrap(), Event::Join));
+        media.gateway(&json!({"t":"VOICE_STATE_UPDATE","d":{"guild_id":"1","channel_id":"2","user_id":"3",
+            "session_id":"fixture","self_mute":false,"self_deaf":false,"mute":false,"deaf":false,"suppress":false}})).unwrap();
+        media.gateway(&json!({"t":"VOICE_SERVER_UPDATE","d":{"guild_id":"1","endpoint":"voice.invalid","token":"fixture"}})).unwrap();
+        assert!(matches!(wait(&mut media).unwrap(), Event::Ready));
+        media.silence().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            matches!(wait(&mut media),Err(err) if err.kind() == io::ErrorKind::ConnectionAborted)
+        );
+        drop(media);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
