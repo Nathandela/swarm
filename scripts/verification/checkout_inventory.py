@@ -170,6 +170,34 @@ def check(go, rust, base):
         code, uncertain = inventory(binary, ge, repo, conflicting)
         assert code == 1 and any(p["path"] == str(linked) and p["git_kind"] == "ambiguous" for p in uncertain["paths"]), uncertain
 
+    lexical, physical = base / "lexical", base / "physical"
+    for parent in (lexical, physical):
+        parent.mkdir(mode=0o700)
+        (parent / "repo").mkdir()
+        git(parent / "repo", "init")
+        git(parent / "repo", "-c", "user.name=Fixture", "-c", "user.email=f@invalid.invalid",
+            "commit", "--allow-empty", "-m", parent.name)
+        side = parent / "state"
+        side.mkdir(mode=0o700)
+        (side / "idempotency").mkdir(mode=0o700)
+        log = side / "idempotency/idempotency.log"
+        log.touch(mode=0o600)
+        fake = side / parent.name
+        fake.mkdir(mode=0o700)
+        private(fake / "meta.json", {"schema_version":1, "id":parent.name, "name":parent.name,
+                  "agent_type":"claude", "cwd":str(parent / "repo"), "status":{"Process":"exited"}})
+    (physical / "subdir").mkdir()
+    (lexical / "link").symlink_to(physical / "subdir", target_is_directory=True)
+    route = lexical / "link" / ".."
+    code, fixed = inventory(rust, re, "--supervisor-state", route / "state", route / "repo")
+    assert code == 0 and str(physical / "state") in fixed["supervisors"], fixed
+    assert str(lexical / "state") not in fixed["supervisors"]
+    assert [item["path"] for item in fixed["paths"]] == [str(physical / "repo")]
+    assert [row["name"] for row in fixed["paths"][0]["linked_sessions"]] == ["physical"]
+    code, fixed = inventory(rust, re, route / "repo" / "missing")
+    assert code == 1 and any(row["path"] == str(physical / "repo" / "missing") and
+                             row["path_state"] == "missing" for row in fixed["paths"]), fixed
+
     def inspect_export(copied, env, session):
         before = manifest(copied)
         results = [inventory(binary, env, Path(env["HOME"]))[1] for binary in (go, rust)]

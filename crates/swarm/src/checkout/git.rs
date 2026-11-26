@@ -11,33 +11,44 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub(super) fn canonical(input: &Path) -> io::Result<PathBuf> {
-    let abs = std::path::absolute(input)?;
-    let mut clean = PathBuf::new();
-    for part in abs.components() {
-        match part {
-            Component::ParentDir => {
-                clean.pop();
-            }
-            _ => clean.push(part.as_os_str()),
-        }
-    }
-    let mut parent = clean.as_path();
-    loop {
-        match fs::canonicalize(parent) {
+    // Filesystem traversal resolves each link before applying a following "..".
+    // Keep the raw component order when probing the input and existing prefixes.
+    let absolute = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(input)
+    };
+    let mut prefix = absolute.as_path();
+    for _ in 0..256 {
+        match fs::canonicalize(prefix) {
             Ok(base) => {
-                let suffix = clean
-                    .strip_prefix(parent)
-                    .expect("ancestor of cleaned path");
-                return Ok(if suffix.as_os_str().is_empty() {
-                    base
+                let suffix = absolute.strip_prefix(prefix).expect("ancestor of input");
+                if suffix.components().any(|part| part == Component::ParentDir) {
+                    return Err(io::Error::other(
+                        "unresolved parent traversal after a missing path",
+                    ));
+                }
+                return if suffix.as_os_str().is_empty() {
+                    Ok(base)
                 } else {
-                    base.join(suffix)
-                });
+                    Ok(base.join(suffix))
+                };
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => parent = parent.parent().ok_or(e)?,
-            Err(e) => return Err(e),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match fs::symlink_metadata(prefix) {
+                    Ok(meta) if meta.is_symlink() => {
+                        return Err(io::Error::other("unresolved symbolic link target"));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+                prefix = prefix.parent().ok_or(error)?;
+            }
+            Err(error) => return Err(error),
         }
     }
+    Err(io::Error::other("checkout path ancestor limit reached"))
 }
 
 struct Capture {
