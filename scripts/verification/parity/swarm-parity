@@ -118,6 +118,11 @@ def role(root, pid, command):
         return None
     if argv[0] in (str(root / "bin/swarm"), str(root / "bin/board"), str(root / "bin/reference-board"), str(root / "bin/codex")) and executable(pid) == argv[0]:
         return "swarm"
+    launcher = root / "install/swarm"
+    if str(root / "install") + "/" in argv[0] and launcher.is_symlink():
+        installed = launcher.resolve(strict=True)
+        if argv[0] in (str(launcher), str(installed)) and Path(executable(pid)).resolve() == installed:
+            return "swarm"
     if (len(argv) > 1 and argv[1] in (str(root / "bin/claude"), str(root / "bin/agy"), str(root / "bin/driver"))
             and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(executable(pid)).name.lower())):
         return "tty-driver" if argv[1] == str(root / "bin/driver") else "fixture"
@@ -129,7 +134,7 @@ def owned(root, driver, previous):
     matches = {}
     unresolved = {}
     for pid, row in rows.items():
-        staged = str(root / "bin") + "/" in row[3]
+        staged = any(str(root / name) + "/" in row[3] for name in ("bin", "install"))
         if not (pid in previous or (driver and pid == driver[0]) or staged):
             continue
         birth, _ = process_identity(pid)
