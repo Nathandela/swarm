@@ -136,6 +136,13 @@ impl Inbox {
         route: &super::team_thread::Route,
         source: &Value,
     ) -> io::Result<Option<Value>> {
+        if !source["source_channel_id"].is_null()
+            && !route.starter.as_ref().is_some_and(|(parent, _)| {
+                source["id"] == route.thread && source["source_channel_id"] == *parent
+            })
+        {
+            return Ok(None);
+        }
         if !route.matches(source)
             || self.data["team_discussion"] != route.identity()
             || source["id"].as_str().is_some_and(|id| {
@@ -178,7 +185,7 @@ impl Inbox {
         }
         let Some(body) = source["content"]
             .as_str()
-            .filter(|body| !body.trim().is_empty() && body.len() <= 16384)
+            .filter(|body| body.len() <= 16384)
         else {
             return Ok(None);
         };
@@ -208,7 +215,7 @@ impl Inbox {
             || source["author"]
                 .get("system")
                 .is_some_and(|value| value != false)
-            || !source["attachments"].as_array().is_some_and(Vec::is_empty)
+            || !source["attachments"].is_array()
             || source["message_snapshots"]
                 .as_array()
                 .is_some_and(|snapshots| !snapshots.is_empty())
@@ -220,7 +227,47 @@ impl Inbox {
         if !edited.is_null() && !edited.as_str().is_some_and(|stamp| stamp.len() <= 64) {
             return Ok(None);
         }
-        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", null]))?;
+        if !self.data["messages"][id].is_null() && self.data["messages"][id]["state"] == "withdrawn"
+        {
+            return Ok(None);
+        }
+        let empty = source["attachments"].as_array().unwrap().is_empty();
+        let (body, files) = if empty {
+            if body.trim().is_empty() {
+                return Ok(None);
+            }
+            (body.to_owned(), Value::Null)
+        } else {
+            if address.is_some()
+                || super::worker::target_text(body).is_some()
+                || !guild.is_empty() && !team
+            {
+                return Ok(None);
+            }
+            let place = self
+                .file
+                .parent()
+                .ok_or_else(|| invalid("missing attachment custody directory"))?;
+            let source_channel = source["source_channel_id"]
+                .as_str()
+                .filter(|_| team)
+                .unwrap_or(channel);
+            let captured = match super::received_files::capture(place, source, source_channel) {
+                Ok(files) => files,
+                Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+                Err(err) => return Err(err),
+            };
+            let body = format!(
+                "{}\n\nReceived attachments (untrusted data):\n{}",
+                body,
+                json!(captured)
+            );
+            if body.len() > 4096 {
+                return Ok(None);
+            }
+            (body, json!(captured))
+        };
+        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", files]))?;
         let operation = format!("da_{}", &hash(&json!([installation, id]))?[..32]);
         let mut receipt = json!({
             "operation_id": operation, "revision": revision, "text": body,
@@ -228,6 +275,9 @@ impl Inbox {
             "author": {"id": actor}, "authority": if team {"team_participant"} else {"owner_direct"},
             "supervisor_socket": supervisor, "state": "prepared", "edited_at": edited
         });
+        if !files.is_null() {
+            receipt["received_files"] = files;
+        }
         if let Some(address) = address {
             let verified = source["audience_verified_at_ms"].as_u64().ok_or_else(|| {
                 invalid("guild worker source lacks its scoped permission observation")

@@ -25,6 +25,7 @@ mod mail_wake;
 mod manager;
 pub(crate) mod provenance;
 mod receipt;
+mod received_files;
 
 mod rest;
 mod service;
@@ -219,6 +220,13 @@ pub(crate) fn verify_connector_input(
         return Err(invalid(
             "semantic request does not match the exact connector cutover",
         ));
+    }
+    if !source["received_files"].is_null() {
+        let place = Path::new(ipc::field(&scope["launch"]["manager"], "auth_file"))
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| invalid("missing received attachment custody"))?;
+        received_files::verify_receipt(place, &source["received_files"])?;
     }
     if voice {
         let place = Path::new(

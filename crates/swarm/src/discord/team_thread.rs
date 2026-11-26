@@ -259,7 +259,10 @@ pub(super) fn explicit(cfg: &Config, source: &Value) -> bool {
                 .iter()
                 .any(|prefix| {
                     text.trim_start().strip_prefix(prefix).is_some_and(|tail| {
-                        !tail.trim().is_empty()
+                        (!tail.trim().is_empty()
+                            || source["attachments"]
+                                .as_array()
+                                .is_some_and(|files| !files.is_empty()))
                             && !matches!(
                                 tail.trim(),
                                 "voice join" | "voice consent" | "voice leave"
