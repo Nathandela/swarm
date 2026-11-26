@@ -156,6 +156,45 @@ def inspect(go, rust, fixture, base):
     assert run(fixture, env, "read", active).strip() == "true"
     assert run(fixture, env, "traffic-read", active, "sent").strip() == "sent"
     assert run(fixture, env, "traffic-read", active, "uncertain").strip() == "uncertain"
+    # Operate on an enabled but stopped connector with Go-made receipts. There is
+    # no bridge or Discord transport in this rehearsal.
+    controls = base / "controls"
+    run(fixture, old_env, "create", controls, original, "personal", "true")
+    run(fixture, old_env, "traffic", controls, "sent")
+    run(fixture, old_env, "traffic", controls, "uncertain")
+    config_bytes = (controls / "config.json").read_bytes()
+    token_bytes = (controls / old_exclude).read_bytes()
+    route_args = ["discord", "migrate-state", "--controls"]
+    with ExitStack() as stack:
+        stack.enter_context(daemon(go, old_env, base / "controls.log"))
+        target = running(stack, old_env, "Selected audience worker")
+        raw_before = (controls / "discord.db").read_bytes()
+        assert json.loads(run(rust, old_env, *route_args, "--dry-run"))["eligible"]
+        assert (controls / "discord.db").read_bytes() == raw_before
+        assert json.loads(run(rust, old_env, *route_args))["state"] == "retained_controls"
+        run(rust, old_env, "discord", "run", code=1)
+        run(rust, old_env, "discord", "exclude", "invalid/target", code=1)
+        with (controls / "discord.db").open("rb") as writer:
+            fcntl.flock(writer, fcntl.LOCK_EX)
+            run(rust, old_env, "discord", "exclude", target, code=1)
+        assert (controls / "discord.db").read_bytes() == raw_before
+        run(rust, old_env, "discord", "exclude", target)
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "true"
+        after = (controls / "discord.db").read_bytes()
+        run(rust, old_env, "discord", "exclude", target)
+        assert (controls / "discord.db").read_bytes() == after
+        run(rust, old_env, "discord", "include", target)
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "false"
+        run(rust, old_env, "discord", "exclude", target)
+        assert json.loads(run(rust, old_env, *route_args, "--rollback"))["state"] == "rolled_back"
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "true"
+        run(rust, old_env, "discord", "include", target, code=1)
+        run(fixture, old_env, "audience-write", controls, target, "false")
+        assert run(fixture, old_env, "audience-read", controls, target).strip() == "false"
+    assert (controls / "config.json").read_bytes() == config_bytes
+    assert (controls / old_exclude).read_bytes() == token_bytes
+    assert run(fixture, old_env, "traffic-read", controls, "sent").strip() == "sent"
+    assert run(fixture, old_env, "traffic-read", controls, "uncertain").strip() == "uncertain"
     print("PASS Go-made Discord personal/team retained evidence, rollback, and verified original/default supervisor split")
 
 

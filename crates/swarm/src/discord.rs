@@ -338,7 +338,7 @@ impl<'a> Request<'a> {
                 ]
             }
             "migrate-state" => {
-                flags = &["dry-run", "rollback"];
+                flags = &["dry-run", "rollback", "controls"];
                 &[]
             }
             "migrate-supervisor" => {
@@ -471,7 +471,12 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     match req.command {
         "connect" => return connect(req, place),
         "migrate-state" => {
-            return legacy_state::migrate(&place, req.on("dry-run"), req.on("rollback"));
+            return legacy_state::migrate(
+                &place,
+                req.on("dry-run"),
+                req.on("rollback"),
+                req.on("controls"),
+            );
         }
         "disconnect" => {
             place.disconnect()?;
@@ -488,6 +493,13 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         _ => {}
     }
     let cfg = place.load()?;
+    if matches!(req.command, "include" | "exclude")
+        && let Some(result) =
+            legacy_state::audience(&place, &cfg, req.id, req.command == "exclude")?
+    {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(true);
+    }
     match req.command {
         "run" => service::run(&place, &cfg)?,
         "status" => {
