@@ -90,6 +90,7 @@ pub(super) struct Dispatcher {
     #[cfg(test)]
     pub(super) lose_enrolled_ack: std::cell::Cell<bool>,
     idle_since: std::cell::Cell<Option<Instant>>,
+    released_pins: std::cell::RefCell<std::collections::HashSet<String>>,
 }
 
 impl Dispatcher {
@@ -120,6 +121,7 @@ impl Dispatcher {
             #[cfg(test)]
             lose_enrolled_ack: std::cell::Cell::new(false),
             idle_since: std::cell::Cell::new(None),
+            released_pins: Default::default(),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
@@ -370,18 +372,9 @@ impl Dispatcher {
                             field(&entry, "body").into(),
                         ));
                 }
-                for nonce in publications {
-                    let publication = inbox.publication(&nonce);
-                    if !publication["proof"]["file_source"].is_null() {
-                        mail_store::release_publication(
-                            &self.owner.supervisor_root()?,
-                            &publication["proof"]["file_source"],
-                            &nonce,
-                        )?;
-                    }
-                }
                 state["input"] = Value::Null;
                 inbox.set_manager(state)?;
+                self.released_pins.borrow_mut().clear();
             }
             return Ok(());
         }
@@ -827,6 +820,58 @@ impl Dispatcher {
         Ok(phase.to_owned())
     }
 
+    fn publication_source(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        input: &Value,
+    ) -> io::Result<()> {
+        api.verify(cfg)?;
+        let source_id = field(input, "source_id");
+        let origin = &input["composer"]["origin"];
+        if super::call_origin::key(source_id) {
+            let voice = if input["worker_wake"]["voice_origin"].is_object() {
+                &input["worker_wake"]["voice_origin"]
+            } else {
+                origin
+            };
+            if !inbox.accepted_voice(source_id, voice) {
+                return Err(invalid(
+                    "publication requires the original accepted voice admission",
+                ));
+            }
+        } else {
+            let source = api
+                .current(cfg, source_id)?
+                .filter(|source| source["id"] == source_id)
+                .ok_or_else(|| {
+                    invalid("publication requires the original visible Discord source")
+                })?;
+            let current = api
+                .admit(inbox, &source)?
+                .filter(|receipt| receipt["state"] == "accepted")
+                .ok_or_else(|| invalid("publication source no longer proves native admission"))?;
+            let expected_revision = if input["worker_wake"].is_null() {
+                &origin["revision"]
+            } else {
+                &input["worker_wake"]["owner_revision"]
+            };
+            if current["revision"] != *expected_revision {
+                return Err(invalid("publication source changed after native admission"));
+            }
+        }
+        Ok(())
+    }
+
+    fn release_sent_pin(&self, nonce: &str, publication: &Value) -> io::Result<()> {
+        let file_source = &publication["file_source"];
+        if !file_source.is_null() && !self.released_pins.borrow().contains(nonce) {
+            mail_store::release_publication(&self.owner.supervisor_root()?, file_source, nonce)?;
+            self.released_pins.borrow_mut().insert(nonce.to_owned());
+        }
+        Ok(())
+    }
+
     fn deliver(
         &self,
         cfg: &Config,
@@ -848,49 +893,17 @@ impl Dispatcher {
         for nonce in &order {
             let entry = inbox.publication(nonce);
             verify_publication(nonce, &entry)?;
+            let publication = &entry["proof"];
             match field(&entry, "state") {
-                "sent" => continue,
+                "sent" => {
+                    self.release_sent_pin(nonce, publication)?;
+                    continue;
+                }
                 "prepared" if entry["retry_at"].as_u64().is_none_or(|at| now >= at) => {}
                 _ => break,
             }
-            let publication = &entry["proof"];
             let input = &state["input"];
-            api.verify(cfg)?;
-            let source_id = field(input, "source_id");
-            let origin = &input["composer"]["origin"];
-            if super::call_origin::key(source_id) {
-                let voice = if input["worker_wake"]["voice_origin"].is_object() {
-                    &input["worker_wake"]["voice_origin"]
-                } else {
-                    origin
-                };
-                if !inbox.accepted_voice(source_id, voice) {
-                    return Err(invalid(
-                        "publication requires the original accepted voice admission",
-                    ));
-                }
-            } else {
-                let source = api
-                    .current(cfg, source_id)?
-                    .filter(|source| source["id"] == source_id)
-                    .ok_or_else(|| {
-                        invalid("publication requires the original visible Discord source")
-                    })?;
-                let current = api
-                    .admit(inbox, &source)?
-                    .filter(|receipt| receipt["state"] == "accepted")
-                    .ok_or_else(|| {
-                        invalid("publication source no longer proves native admission")
-                    })?;
-                let expected_revision = if input["worker_wake"].is_null() {
-                    &origin["revision"]
-                } else {
-                    &input["worker_wake"]["owner_revision"]
-                };
-                if current["revision"] != *expected_revision {
-                    return Err(invalid("publication source changed after native admission"));
-                }
-            }
+            Self::publication_source(cfg, inbox, api, input)?;
             let evidence = self.owner.input_status(&input["composer"])?;
             if evidence["native_turn_id"] != input["turn_id"]
                 || evidence["external_input"]
@@ -903,8 +916,8 @@ impl Dispatcher {
             }
             let body = field(&entry, "body");
             let file_source = &publication["file_source"];
-            let files = if file_source.is_null() {
-                Vec::new()
+            let (files, new_pin) = if file_source.is_null() {
+                (Vec::new(), false)
             } else {
                 let selected = &input["selected_note"];
                 if selected["id"] != file_source["id"]
@@ -923,6 +936,22 @@ impl Dispatcher {
                 }
                 mail_store::pin_publication(&self.owner.supervisor_root()?, file_source, nonce)?
             };
+            // Supervisor IPC and the mailbox writer can both wait. Read the grant again at the send boundary.
+            if let Err(error) = Self::publication_source(cfg, inbox, api, input) {
+                if new_pin {
+                    mail_store::release_publication(
+                        &self.owner.supervisor_root()?,
+                        file_source,
+                        nonce,
+                    )
+                    .map_err(|cleanup| {
+                        io::Error::other(format!(
+                            "{error}. Could not release the new file pin: {cleanup}"
+                        ))
+                    })?;
+                }
+                return Err(error);
+            }
             inbox.publication_state(nonce, "sending", None)?;
             match api.post(cfg, nonce, body, &files) {
                 Post::Acknowledged(receipt)
@@ -936,6 +965,7 @@ impl Dispatcher {
             if inbox.publication(nonce)["state"] != "sent" {
                 break;
             }
+            self.release_sent_pin(nonce, publication)?;
         }
         Ok(order)
     }
@@ -1703,7 +1733,7 @@ mod tests {
             Ok(())
         }
 
-        fn post(&self, cfg: &Config, nonce: &str, body: &str, _files: &[Captured]) -> Post {
+        fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post {
             self.posted
                 .borrow_mut()
                 .push((nonce.to_owned(), body.to_owned()));
@@ -1711,7 +1741,11 @@ mod tests {
                 Post::Acknowledged(_) => Post::Acknowledged(json!({
                     "id":(101 + self.posted.borrow().len()).to_string(),
                     "author":{"id":"200","bot":true},"channel_id":cfg.text("dm_channel_id"),
-                    "nonce":nonce,"content":body
+                    "nonce":nonce,"content":body,
+                    "attachments":files.iter().enumerate().map(|(i, item)| json!({
+                        "id":(10_000 + 10*self.posted.borrow().len() + i).to_string(),
+                        "filename":item.file.name,"size":item.file.size
+                    })).collect::<Vec<_>>()
                 })),
                 result => result,
             }
@@ -1870,22 +1904,234 @@ mod tests {
 
     #[test]
     fn owner_dm_runs_through_bound_manager_and_exact_reply_once() {
-        owner_dm_after_draft(false, None);
+        owner_dm_after_draft(ReplyFixture::Final);
     }
 
     #[test]
     fn reconnected_owner_dm_drops_the_edited_source_without_sending() {
-        owner_dm_after_draft(true, None);
+        owner_dm_after_draft(ReplyFixture::Edited);
     }
 
     #[test]
     fn ordered_publications_wait_for_exact_receipts_after_an_uncertain_send() {
-        owner_dm_after_draft(false, Some(true));
+        owner_dm_after_draft(ReplyFixture::Ordered(true));
     }
 
     #[test]
     fn ordered_publications_allow_a_completed_partial_only_turn_to_settle() {
-        owner_dm_after_draft(false, Some(false));
+        owner_dm_after_draft(ReplyFixture::Ordered(false));
+    }
+
+    #[test]
+    fn file_publications_recheck_a_held_pin_and_release_the_confirmed_prefix() {
+        owner_dm_after_draft(ReplyFixture::Files);
+    }
+
+    enum ReplyFixture {
+        Final,
+        Edited,
+        Ordered(bool),
+        Files,
+    }
+
+    fn publish_bridge(
+        dispatcher: &Dispatcher,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        arguments: Value,
+        tool_id: &str,
+    ) -> Value {
+        let request = json!({
+            "version":1,"conversation_id":inbox.manager()["binding"]["conversation_id"],"session_id":"local",
+            "call":{"name":"publish","arguments":arguments,
+                "meta":{"callId":tool_id,"threadId":"provider-thread","sessionId":"provider-thread",
+                    "x-codex-turn-metadata":{"turn_id":"authorized-turn","thread_id":"provider-thread","session_id":"provider-thread"}}}
+        });
+        let body = serde_json::to_vec(&request).unwrap();
+        let mut stream = std::os::unix::net::UnixStream::connect(&dispatcher.socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        write!(stream,
+            "POST /manager/call HTTP/1.0\r\nHost: voice\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            dispatcher.credential, body.len()
+        ).unwrap();
+        stream.write_all(&body).unwrap();
+        dispatcher.serve_tool(cfg, inbox, api).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    }
+
+    struct PinAudience<'a> {
+        inner: &'a MockDiscord,
+        override_source: Arc<std::sync::atomic::AtomicU8>,
+    }
+
+    impl Audience for PinAudience<'_> {
+        fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
+            match self.override_source.load(Ordering::Acquire) {
+                1 => {
+                    let mut edited = source(cfg, id);
+                    edited["content"] = json!("edited while the pin was held");
+                    edited["edited_timestamp"] = json!("2026-11-26T01:00:00Z");
+                    Ok(Some(edited))
+                }
+                2 => Ok(None),
+                _ => self.inner.current(cfg, id),
+            }
+        }
+
+        fn verify(&self, cfg: &Config) -> io::Result<()> {
+            self.inner.verify(cfg)
+        }
+
+        fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post {
+            self.inner.post(cfg, nonce, body, files)
+        }
+    }
+
+    fn file_pins(dir: &Path, note: &Value) -> Value {
+        use bbolt_rs::{BucketApi, DbApi, TxApi};
+        let (_pin, db) =
+            crate::checkout::state::receipts::open_bolt(&dir.join("dispatcher-mail.db"), 256 << 20)
+                .unwrap();
+        let tx = db.begin().unwrap();
+        let notes = tx.bucket(b"note-files").unwrap();
+        let key = mail_store::key(&note["binding"], field(note, "id")).unwrap();
+        let files = notes.bucket(key).unwrap();
+        let manifest: Value = serde_json::from_slice(files.get(b"manifest").unwrap()).unwrap();
+        manifest["Pins"].clone()
+    }
+
+    fn check_file_publications(
+        mut dispatcher: Dispatcher,
+        cfg: &Config,
+        mut inbox: Inbox,
+        api: &MockDiscord,
+        native: &Mutex<Record>,
+        dir: &Path,
+    ) {
+        let mut manager = inbox.manager().clone();
+        let note = mail_store::fixture_file_selection(
+            dir,
+            field(&manager["binding"], "conversation_id"),
+            "local",
+            field(&manager["input"]["composer"]["manager_admission"], "nonce"),
+        )
+        .unwrap();
+        manager["input"]["selected_note"] = note.clone();
+        inbox.set_manager(manager).unwrap();
+
+        let audience = PinAudience {
+            inner: api,
+            override_source: Default::default(),
+        };
+        let queue = |dispatcher: &Dispatcher, inbox: &mut Inbox, sequence| {
+            let output = format!("file-{sequence}");
+            let published = publish_bridge(
+                dispatcher,
+                cfg,
+                inbox,
+                &audience,
+                json!({"output_id":output,"sequence":sequence,"text":format!("part {sequence}"),
+                    "final":false,"file_ids":[note["files"][0]["id"]]}),
+                &format!("tool-{sequence}"),
+            );
+            assert_eq!(published["data"]["state"], "prepared");
+            inbox
+                .turn_publications(inbox.manager())
+                .unwrap()
+                .pop()
+                .unwrap()
+        };
+        let first = queue(&dispatcher, &mut inbox, 1);
+        let snapshot = fs::read(dir.join("rust-text-v1.json")).unwrap();
+        let manager = inbox.manager().clone();
+        let source_during_pin = |value| {
+            let injected = audience.override_source.clone();
+            let mailbox = dir.join("dispatcher-mail.db");
+            mail_store::fixture_while_pin_writer_held(move || {
+                assert!(crate::checkout::state::receipts::open_bolt(&mailbox, 256 << 20).is_err());
+                injected.store(value, Ordering::Release);
+            });
+        };
+        source_during_pin(1);
+        assert!(
+            dispatcher
+                .deliver(cfg, &mut inbox, &audience, &manager, 100)
+                .is_err()
+        );
+        assert_eq!(fs::read(dir.join("rust-text-v1.json")).unwrap(), snapshot);
+        assert!(file_pins(dir, &note)[&first].is_null());
+        assert!(api.posted.borrow().is_empty());
+        audience.override_source.store(0, Ordering::Release);
+
+        dispatcher
+            .deliver(cfg, &mut inbox, &audience, &manager, 100)
+            .unwrap();
+        let retry = inbox.publication(&first)["retry_at"].as_u64().unwrap();
+        let pinned = file_pins(dir, &note);
+        assert!(pinned[&first].is_array());
+        assert_eq!(api.posted.borrow().len(), 1);
+        source_during_pin(2);
+        assert!(
+            dispatcher
+                .deliver(cfg, &mut inbox, &audience, &manager, retry)
+                .is_err()
+        );
+        assert_eq!(file_pins(dir, &note), pinned);
+        assert_eq!(api.posted.borrow().len(), 1);
+        assert_eq!(inbox.publication(&first)["state"], "prepared");
+        audience.override_source.store(0, Ordering::Release);
+
+        dispatcher
+            .deliver(cfg, &mut inbox, &audience, &manager, retry)
+            .unwrap();
+        assert_eq!(inbox.publication(&first)["state"], "uncertain");
+        assert_eq!(file_pins(dir, &note), pinned);
+        drop(inbox);
+        drop(dispatcher);
+        dispatcher = Dispatcher::open(cfg, dir).unwrap().unwrap();
+        inbox = Inbox::open(dir, cfg).unwrap();
+        dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
+        assert_eq!(file_pins(dir, &note), pinned);
+        assert_eq!(api.posted.borrow().len(), 2);
+
+        let received = json!({"id":"102","channel_id":"400","author":{"id":"200","bot":true},
+            "nonce":first,"content":"part 1","attachments":[{"id":"200","filename":note["files"][0]["name"],
+                "size":note["files"][0]["size"]}]});
+        assert!(inbox.observe(&received, Observation::Gateway).unwrap());
+        drop(inbox);
+        drop(dispatcher);
+        dispatcher = Dispatcher::open(cfg, dir).unwrap().unwrap();
+        inbox = Inbox::open(dir, cfg).unwrap();
+        assert_eq!(file_pins(dir, &note), pinned);
+        dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
+        assert!(file_pins(dir, &note)[&first].is_null());
+
+        let mut attempts = vec![(first.clone(), "part 1".into()); 2];
+        for sequence in 2..=129 {
+            if sequence == 129 {
+                drop(inbox);
+                drop(dispatcher);
+                dispatcher = Dispatcher::open(cfg, dir).unwrap().unwrap();
+                inbox = Inbox::open(dir, cfg).unwrap();
+            }
+            let nonce = queue(&dispatcher, &mut inbox, sequence);
+            api.outcome.replace(Post::Acknowledged(Value::Null));
+            dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
+            assert_eq!(inbox.publication(&nonce)["state"], "sent");
+            assert!(file_pins(dir, &note)[&nonce].is_null());
+            assert!(!inbox.manager()["input"].is_null());
+            attempts.push((nonce, format!("part {sequence}")));
+        }
+        assert_eq!(*api.posted.borrow(), attempts);
+        native.lock().unwrap().completed = true;
+        dispatcher.tick(cfg, &mut inbox, &audience).unwrap();
+        assert!(inbox.manager()["input"].is_null());
+        assert_eq!(*api.posted.borrow(), attempts);
     }
 
     fn ordered_publications(
@@ -1897,33 +2143,20 @@ mod tests {
         dir: &Path,
         finish: bool,
     ) {
-        let conversation = inbox.manager()["binding"]["conversation_id"].clone();
         let call = |inbox: &mut Inbox,
                     output: &str,
                     sequence: u64,
                     body: &str,
                     final_reply: bool,
                     tool_id: &str| {
-            let request = json!({
-                "version":1,"conversation_id":conversation,"session_id":"local",
-                "call":{"name":"publish","arguments":{"output_id":output,"sequence":sequence,"text":body,"final":final_reply},
-                    "meta":{"callId":tool_id,"threadId":"provider-thread","sessionId":"provider-thread",
-                        "x-codex-turn-metadata":{"turn_id":"authorized-turn","thread_id":"provider-thread","session_id":"provider-thread"}}}
-            });
-            let body = serde_json::to_vec(&request).unwrap();
-            let mut stream = std::os::unix::net::UnixStream::connect(&dispatcher.socket).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            write!(stream,
-                "POST /manager/call HTTP/1.0\r\nHost: voice\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-                dispatcher.credential, body.len()
-            ).unwrap();
-            stream.write_all(&body).unwrap();
-            dispatcher.serve_tool(cfg, inbox, api).unwrap();
-            let mut response = String::new();
-            stream.read_to_string(&mut response).unwrap();
-            serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+            publish_bridge(
+                dispatcher,
+                cfg,
+                inbox,
+                api,
+                json!({"output_id":output,"sequence":sequence,"text":body,"final":final_reply}),
+                tool_id,
+            )
         };
         let saved = dir.join("rust-text-v1.json");
         let first = ("progress", 2, "on it", false, "tool-one");
@@ -2058,7 +2291,7 @@ mod tests {
         assert!(Inbox::open(dir, cfg).unwrap().manager()["input"].is_null());
     }
 
-    fn owner_dm_after_draft(edited: bool, sequence: Option<bool>) {
+    fn owner_dm_after_draft(fixture: ReplyFixture) {
         let dir =
             crate::test_temp::root().join(format!("d-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
@@ -2165,7 +2398,7 @@ mod tests {
         dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         assert_eq!(state.lock().unwrap().sends, 1);
         assert_eq!(inbox.manager()["input"], renewed);
-        if edited {
+        if matches!(fixture, ReplyFixture::Edited) {
             api.source.set(LiveSource::Edited);
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
             assert_eq!(state.lock().unwrap().sends, 1);
@@ -2197,16 +2430,31 @@ mod tests {
         assert!(inbox.begin_draft_retry(&inbox.manager().clone()).is_err());
         state.lock().unwrap().input_observed = true;
         assert!(api.posted.borrow().is_empty());
-        if let Some(final_reply) = sequence {
-            ordered_publications(&dispatcher, &cfg, inbox, &api, &state, &dir, final_reply);
-            done.store(true, Ordering::Relaxed);
-            let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
-            server.join().unwrap();
-            drop(dispatcher);
-            fs::remove_dir_all(dir).unwrap();
-            return;
+        match fixture {
+            ReplyFixture::Ordered(final_reply) => {
+                ordered_publications(&dispatcher, &cfg, inbox, &api, &state, &dir, final_reply);
+            }
+            ReplyFixture::Files => {
+                check_file_publications(dispatcher, &cfg, inbox, &api, &state, &dir)
+            }
+            _ => {
+                legacy_publication(&dispatcher, &cfg, inbox, &api, &state, &dir);
+            }
         }
+        done.store(true, Ordering::Relaxed);
+        let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+        server.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
 
+    fn legacy_publication(
+        dispatcher: &Dispatcher,
+        cfg: &Config,
+        mut inbox: Inbox,
+        api: &MockDiscord,
+        state: &Mutex<Record>,
+        dir: &Path,
+    ) {
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
             "session_id":"local", "call":{"name":"publish","arguments":{
                 "output_id":"final","sequence":1,"text":"deliberate reply","final":true
@@ -2214,21 +2462,21 @@ mod tests {
                 "x-codex-turn-metadata":{"turn_id":"authorized-turn","thread_id":"provider-thread","session_id":"provider-thread"}}}});
         let mut alien = publish.clone();
         alien["call"]["meta"]["threadId"] = json!("unbound-thread");
-        assert!(dispatcher.tool(&cfg, &mut inbox, &api, &alien).is_err());
+        assert!(dispatcher.tool(cfg, &mut inbox, api, &alien).is_err());
         let mut wrong_recipient = publish.clone();
         wrong_recipient["call"]["arguments"]["recipient_id"] = json!("401");
         assert!(
             dispatcher
-                .tool(&cfg, &mut inbox, &api, &wrong_recipient)
+                .tool(cfg, &mut inbox, api, &wrong_recipient)
                 .is_err()
         );
         assert!(inbox.pending_publications().is_empty());
         state.lock().unwrap().wrong_turn = true;
-        assert!(dispatcher.tool(&cfg, &mut inbox, &api, &publish).is_err());
+        assert!(dispatcher.tool(cfg, &mut inbox, api, &publish).is_err());
         assert!(inbox.pending_publications().is_empty());
         state.lock().unwrap().wrong_turn = false;
-        dispatcher.tool(&cfg, &mut inbox, &api, &publish).unwrap();
-        dispatcher.tool(&cfg, &mut inbox, &api, &publish).unwrap();
+        dispatcher.tool(cfg, &mut inbox, api, &publish).unwrap();
+        dispatcher.tool(cfg, &mut inbox, api, &publish).unwrap();
         let nonce = field(&inbox.manager()["input"], "final_nonce").to_owned();
         assert!(inbox.manager()["input"].get("publication_nonces").is_none());
         assert_eq!(inbox.pending_publications(), std::slice::from_ref(&nonce));
@@ -2251,39 +2499,39 @@ mod tests {
                 }
             }
             runtime::write_json(&outbox, &corrupted).unwrap();
-            assert!(Inbox::open(&dir, &cfg).is_err());
+            assert!(Inbox::open(dir, cfg).is_err());
             assert!(api.posted.borrow().is_empty());
         }
         runtime::write_json(&outbox, &original).unwrap();
-        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
         let mut displaced = inbox.manager().clone();
         displaced["input"]["final_nonce"] = json!("other-output");
         assert!(
             dispatcher
-                .deliver(&cfg, &mut inbox, &api, &displaced, millis().unwrap())
+                .deliver(cfg, &mut inbox, api, &displaced, millis().unwrap())
                 .is_err()
         );
         assert!(api.posted.borrow().is_empty());
         state.lock().unwrap().wrong_binding = true;
-        assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
+        assert!(dispatcher.tick(cfg, &mut inbox, api).is_err());
         assert!(api.posted.borrow().is_empty());
         state.lock().unwrap().wrong_binding = false;
         state.lock().unwrap().completed = true;
-        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
         let retry_at = inbox.publication(&nonce)["retry_at"].as_u64().unwrap();
         let manager = inbox.manager().clone();
         dispatcher
-            .deliver(&cfg, &mut inbox, &api, &manager, retry_at - 1)
+            .deliver(cfg, &mut inbox, api, &manager, retry_at - 1)
             .unwrap();
         assert_eq!(api.posted.borrow().len(), 1);
         dispatcher
-            .deliver(&cfg, &mut inbox, &api, &manager, retry_at)
+            .deliver(cfg, &mut inbox, api, &manager, retry_at)
             .unwrap();
         assert_eq!(inbox.publication(&nonce)["state"], "uncertain");
         drop(inbox);
 
-        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
         assert_eq!(api.posted.borrow().len(), 2);
         let wrong = json!({
             "id":"102", "author":{"id":"200", "bot":true},"channel_id":"401",
@@ -2293,9 +2541,9 @@ mod tests {
         let mut observed = wrong.clone();
         observed["channel_id"] = json!("400");
         assert!(inbox.observe(&observed, Observation::History).unwrap());
-        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
         drop(inbox);
-        let inbox = Inbox::open(&dir, &cfg).unwrap();
+        let inbox = Inbox::open(dir, cfg).unwrap();
         assert_eq!(inbox.publication(&nonce)["state"], "sent");
         assert_eq!(inbox.publication(&nonce)["history_seen"], true);
         let mut inbox = inbox;
@@ -2313,10 +2561,5 @@ mod tests {
             ]
         );
         assert_eq!(state.lock().unwrap().sends, 2);
-        done.store(true, Ordering::Relaxed);
-        let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
-        server.join().unwrap();
-        drop(dispatcher);
-        fs::remove_dir_all(dir).unwrap();
     }
 }

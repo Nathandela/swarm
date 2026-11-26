@@ -439,12 +439,12 @@ fn publication_files<'a>(
     Ok(files)
 }
 
-/// Pin the exact proved selection while the Discord outcome remains outstanding.
+/// Pin the exact proved selection and report whether this call installed the pin.
 pub(crate) fn pin_publication(
     root: &Path,
     source: &Value,
     nonce: &str,
-) -> io::Result<Vec<Captured>> {
+) -> io::Result<(Vec<Captured>, bool)> {
     let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
     pin_in(&mut db, source, nonce)
 }
@@ -456,34 +456,83 @@ pub(crate) fn pin_original_publication(
     identity: (u64, u64),
 ) -> io::Result<Vec<Captured>> {
     let (_pin, mut db) = open_original_writer(root, identity)?;
-    pin_in(&mut db, source, nonce)
+    pin_in(&mut db, source, nonce).map(|(files, _)| files)
 }
 
-fn pin_in(db: &mut Bolt, source: &Value, nonce: &str) -> io::Result<Vec<Captured>> {
+#[cfg(test)]
+thread_local! {
+    static BEFORE_PIN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_while_pin_writer_held(probe: impl FnOnce() + 'static) {
+    BEFORE_PIN.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(probe)).is_none());
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_file_selection(
+    root: &Path,
+    discussion: &str,
+    parent: &str,
+    input_id: &str,
+) -> io::Result<Value> {
+    let path = root.join("fixture.csv");
+    std::fs::write(&path, b"row,value\n1,fixture\n")?;
+    let meta = root.metadata()?;
+    let files = super::mail_files::capture(
+        root,
+        (meta.dev(), meta.ino()),
+        &[path.to_str().ok_or_else(absent)?],
+    )?;
+    let input = super::mail::parent_hash(input_id);
+    let binding = json!({
+        "Discussion":discussion,"Parent":parent,"Session":"ep-fixture/worker","Instance":"incarnation",
+        "Attempt":"file-fixture","Agent":"codex","Project":root,"ParentInputHash":input
+    });
+    let id = "file-note";
+    submit(root, &binding, id, "complete", "", true, &files)?;
+    let note = manager_note(root, discussion, parent, &input, &json!({"id":id}), false)?;
+    Ok(json!({"id":note["id"],"binding":note["file_binding"],"files":note["files"]}))
+}
+
+fn pin_in(db: &mut Bolt, source: &Value, nonce: &str) -> io::Result<(Vec<Captured>, bool)> {
     let binding = &source["binding"];
     let id = source["id"].as_str().ok_or_else(absent)?;
     let key = key(binding, id)?;
     let mut tx = db.begin_rw().map_err(io_error)?;
     let files = publication_files(&tx, &key, binding, id, &source["files"], "ingested")?;
+    #[cfg(test)]
+    BEFORE_PIN.with(|slot| {
+        if let Some(probe) = slot.borrow_mut().take() {
+            probe();
+        }
+    });
     let mut root_bucket = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
     let mut bucket = root_bucket.bucket_mut(&key).ok_or_else(absent)?;
     let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
-    let selection: Vec<_> = files.iter().map(|file| file.file.id.clone()).collect();
-    if !manifest["Pins"][nonce].is_null() && manifest["Pins"][nonce] != json!(selection) {
-        return Err(io_error("conflicting publication pin"));
+    let selection = json!(files.iter().map(|file| &file.file.id).collect::<Vec<_>>());
+    if let Some(pins) = manifest["Pins"].as_object() {
+        if let Some(existing) = pins.get(nonce) {
+            return if *existing == selection {
+                Ok((files, false))
+            } else {
+                Err(io_error("conflicting publication pin"))
+            };
+        }
+        if pins.len() >= 128 {
+            return Err(io_error("worker file publication pin limit"));
+        }
+    } else if !manifest["Pins"].is_null() {
+        return Err(io_error("invalid worker file publication pins"));
     }
-    if manifest["Pins"]
-        .as_object()
-        .is_some_and(|pins| pins.len() >= 128 && !pins.contains_key(nonce))
-    {
-        return Err(io_error("worker file publication pin limit"));
-    }
-    manifest["Pins"][nonce] = json!(selection);
+    manifest["Pins"][nonce] = selection;
     bucket
         .put(b"manifest", serde_json::to_vec(&manifest)?)
         .map_err(io_error)?;
     tx.commit().map_err(io_error)?;
-    Ok(files)
+    Ok((files, true))
 }
 
 fn open_original_writer(root: &Path, identity: (u64, u64)) -> io::Result<(File, Bolt)> {
@@ -697,12 +746,20 @@ pub(crate) fn release_publication(root: &Path, source: &Value, nonce: &str) -> i
         return Ok(());
     };
     let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
-    let Some(pins) = manifest["Pins"].as_object_mut() else {
-        return Ok(());
-    };
-    if pins.shift_remove(nonce).is_none() {
+    if manifest["Pins"].is_null() {
         return Ok(());
     }
+    let pins = manifest["Pins"]
+        .as_object_mut()
+        .ok_or_else(|| io_error("invalid worker file publication pins"))?;
+    let Some(saved) = pins.get(nonce) else {
+        return Ok(());
+    };
+    let expected = source["files"].as_array().ok_or_else(absent)?;
+    if *saved != json!(expected.iter().map(|file| &file["id"]).collect::<Vec<_>>()) {
+        return Err(io_error("worker publication pin selection changed"));
+    }
+    pins.shift_remove(nonce);
     bucket
         .put(b"manifest", serde_json::to_vec(&manifest)?)
         .map_err(io_error)?;
@@ -986,7 +1043,9 @@ mod tests {
         assert_eq!(ingested["state"], "ingested");
         assert_eq!(ingested["files"], queued["Files"]);
         let source = json!({"binding":binding,"id":id,"files":ingested["files"]});
-        let pinned = pin_publication(&root, &source, "nonce").unwrap();
+        let (pinned, added) = pin_publication(&root, &source, "nonce").unwrap();
+        assert!(added);
+        assert!(!pin_publication(&root, &source, "nonce").unwrap().1);
         assert_eq!(
             pinned
                 .iter()
