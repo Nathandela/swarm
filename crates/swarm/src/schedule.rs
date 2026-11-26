@@ -21,7 +21,7 @@ pub(crate) type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-fn id(now: Timestamp) -> Result<String> {
+pub(crate) fn id(now: Timestamp) -> Result<String> {
     let mut bytes = [0; 16];
     bytes[..6].copy_from_slice(&now.as_millisecond().to_be_bytes()[2..]);
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes[6..])?;

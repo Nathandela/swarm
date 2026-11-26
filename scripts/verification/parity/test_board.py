@@ -443,6 +443,47 @@ fi
             step(b"\x1b[<0;4;2M\x1b[<0;4;2m", b"Automations / Fixture automation")
             assert schedule_db.read_bytes() == archived_catalog
 
+            def templates():
+                return json.loads(cli("schedule", "templates", "list").stdout)
+
+            picker = b"Automations / Personal templates"
+            template_editor = b"Personal templates / Edit"
+            before_jobs = json.loads(cli("schedule", "list", "--json").stdout)
+            step(b"\x1b[27u", b"[Templates (t)]")
+            step(b"t", b"No personal templates yet.")
+            step(b"n", template_editor)
+            step(b"Fixture instructions\t\x1b[200~First line\r\nSecond line\x1b[201~\x1b\rThird line",
+                 b"Third line")
+            step(b"\r", picker)
+            original, = templates()
+            assert original["name"] == "Fixture instructions"
+            assert original["prompt"] == "First line\nSecond line\nThird line"
+            step(b"\r", template_editor)
+            step(b"\x15Revised instructions\r", picker)
+            revised, = templates()
+            assert revised["id"] == original["id"] and revised["name"] == "Revised instructions"
+            assert revised["prompt"] == original["prompt"]
+            step(b"\x1b[27u", b"[Templates (t)]")
+            step(b"n", b"New automation")
+            step(b"Keep job name\x14", picker)
+            step(b"\r", b"Third line")
+            step(b"\x05", template_editor)
+            step(b"\r", b"New automation")
+            copies = {item["name"]: item for item in templates()}
+            assert copies["Keep job name"]["prompt"] == revised["prompt"]
+            assert copies["Keep job name"]["id"] != revised["id"]
+            step(b"\x1b[27u", b"[Templates (t)]")
+            step(b"t", picker)
+            step(b"dy", b"Delete Keep job name?")
+            assert len(templates()) == 2
+            step(b"\x1b[27u", picker)
+            step(b"d", b"Saved jobs keep their own copy of the instructions.")
+            step(b"y", picker)
+            remaining, = templates()
+            assert remaining["id"] == revised["id"]
+            assert json.loads(cli("schedule", "list", "--json").stdout) == before_jobs
+            step(b"\x1b[27u", b"[Templates (t)]")
+
             daemon.terminate()
             daemon.wait(timeout=5)
             offline = cli("schedule", "list", "--json")

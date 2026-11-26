@@ -75,7 +75,6 @@ const TEMPLATES: &str = "schedule_templates";
 pub(crate) struct TemplateRead;
 
 impl TemplateRead {
-    #[allow(dead_code)]
     pub(crate) fn remote(client: &mut Client) -> io::Result<Vec<Template>> {
         if !client.supports(CAP) {
             return Err(io::Error::other(
@@ -123,6 +122,8 @@ const TEMPLATE_CHANGE: &str = "schedule_template_change";
 pub(crate) enum TemplateChange {
     Save {
         id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        create_id: Option<String>,
         name: String,
         prompt: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,7 +136,6 @@ pub(crate) enum TemplateChange {
 }
 
 impl TemplateChange {
-    #[allow(dead_code)]
     pub(crate) fn remote(self, client: &mut Client) -> io::Result<Option<Template>> {
         if !client.supports(CONTROL) {
             return Err(io::Error::other(
@@ -151,10 +151,17 @@ impl TemplateChange {
         }
         let template = match self {
             Self::Save {
-                id, name, prompt, ..
+                id,
+                create_id,
+                name,
+                prompt,
+                ..
             } => {
                 let template: Template = serde_json::from_value(reply["template"].clone())?;
-                if id.as_ref().is_some_and(|id| id != &template.id)
+                if id
+                    .as_ref()
+                    .or(create_id.as_ref())
+                    .is_some_and(|id| id != &template.id)
                     || template.name != name
                     || template.prompt != prompt
                 {
@@ -183,21 +190,34 @@ pub(crate) fn change_template(root: &Path, request: &Value, endpoint_id: &str) -
     match change {
         TemplateChange::Save {
             id,
+            create_id,
             name,
             prompt,
             expected_updated_at,
         } => {
-            if id.as_ref().is_some_and(|id| !super::valid_id(id)) {
+            if id
+                .as_ref()
+                .or(create_id.as_ref())
+                .is_some_and(|id| !super::valid_id(id))
+            {
                 return Err("invalid personal template ID".into());
             }
             if id.is_some() != expected_updated_at.is_some() {
                 return Err("editing a personal template requires its current updated_at".into());
             }
+            if id.is_some() && create_id.is_some() {
+                return Err("a personal template change cannot create and edit together".into());
+            }
+            use super::store::TemplateTarget;
+            let target = id
+                .as_deref()
+                .map_or(TemplateTarget::Create(create_id.as_deref()), |id| {
+                    TemplateTarget::Edit(id, expected_updated_at)
+                });
             let template = store.save_template_if_current(
-                id.as_deref(),
+                target,
                 name,
                 prompt,
-                expected_updated_at,
                 endpoint_id,
                 jiff::Timestamp::now(),
             )?;
@@ -342,6 +362,30 @@ mod tests {
         assert_eq!(templates.len(), 1);
         assert_eq!(templates[0].id, original.id);
         assert_eq!(templates[0].prompt, "New prompt");
+    }
+
+    #[test]
+    fn explicit_template_create_identity_recovers_an_unacknowledged_reply() {
+        let temp = Temp::with_go_catalog();
+        let id = "01M8C694P5EA2PJDV268PQ74XW";
+        let change_body = |prompt| {
+            json!({"change":{"kind":"save","create_id":id,
+            "name":"Retry fixture","prompt":prompt}})
+        };
+        let first = change(&temp, &change_body("same prompt")).unwrap();
+        assert_eq!(first["template"]["id"], id);
+        assert_eq!(change(&temp, &change_body("same prompt")).unwrap(), first);
+        let database = temp.0.join("schedules/state.db");
+        let unchanged = fs::read(&database).unwrap();
+        assert!(change(&temp, &change_body("different prompt")).is_err());
+        assert_eq!(fs::read(&database).unwrap(), unchanged);
+        assert_eq!(
+            serve_templates(&temp.0).unwrap()["templates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

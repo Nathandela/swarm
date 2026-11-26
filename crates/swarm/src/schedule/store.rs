@@ -36,6 +36,11 @@ pub(super) struct Store {
     pub host: PathBuf,
 }
 
+pub(super) enum TemplateTarget<'a> {
+    Create(Option<&'a str>),
+    Edit(&'a str, Option<Timestamp>),
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Occurrence {
     pub id: String,
@@ -545,54 +550,62 @@ impl Store {
         prompt: String,
         now: Timestamp,
     ) -> Result<Template> {
-        self.save_template_inner(existing, name, prompt, None, None, now)
+        let target = existing.map_or(TemplateTarget::Create(None), |id| {
+            TemplateTarget::Edit(id, None)
+        });
+        self.save_template_inner(target, name, prompt, None, now)
     }
 
     pub fn save_template_if_current(
         &self,
-        existing: Option<&str>,
+        target: TemplateTarget<'_>,
         name: String,
         prompt: String,
-        expected_updated_at: Option<Timestamp>,
         endpoint_id: &str,
         now: Timestamp,
     ) -> Result<Template> {
-        self.save_template_inner(
-            existing,
-            name,
-            prompt,
-            expected_updated_at,
-            Some(endpoint_id),
-            now,
-        )
+        self.save_template_inner(target, name, prompt, Some(endpoint_id), now)
     }
 
     fn save_template_inner(
         &self,
-        existing: Option<&str>,
+        target: TemplateTarget<'_>,
         name: String,
         prompt: String,
-        expected_updated_at: Option<Timestamp>,
         endpoint_id: Option<&str>,
         now: Timestamp,
     ) -> Result<Template> {
         validate_text(&name, &prompt)?;
         self.write(|tx| {
-            let mut template: Template = match existing {
-                Some(id) => {
+            let mut template: Template = match target {
+                TemplateTarget::Edit(id, expected_updated_at) => {
                     let template: Template = require(tx, TEMPLATES, id)?;
                     if expected_updated_at.is_some_and(|expected| expected != template.updated_at) {
                         return Err("personal template changed; refresh before editing".into());
                     }
                     template
                 }
-                None => Template {
-                    id: id(now)?,
-                    name: String::new(),
-                    prompt: String::new(),
-                    created_at: now,
-                    updated_at: now,
-                },
+                TemplateTarget::Create(chosen) => {
+                    let id = match chosen {
+                        Some(id) => id.to_owned(),
+                        None => id(now)?,
+                    };
+                    if let Some(template) = get::<Template>(tx, TEMPLATES, &id)? {
+                        if chosen.is_some() && template.name == name && template.prompt == prompt {
+                            return Ok(template);
+                        }
+                        return Err(
+                            "personal template ID already belongs to another request".into()
+                        );
+                    }
+                    Template {
+                        id,
+                        name: String::new(),
+                        prompt: String::new(),
+                        created_at: now,
+                        updated_at: now,
+                    }
+                }
             };
             template.name = name;
             template.prompt = prompt;

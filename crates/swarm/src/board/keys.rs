@@ -2,10 +2,13 @@
 pub(super) enum Key {
     Escape,
     Enter,
+    AltEnter,
     Backspace,
     CtrlC,
     CtrlD,
+    CtrlE,
     CtrlS,
+    CtrlT,
     CtrlU,
     CtrlX,
     Tab,
@@ -112,14 +115,15 @@ impl Keys {
                             b"D" => keys.push(Key::Left),
                             b"Z" | b"9;2u" => keys.push(Key::BackTab),
                             b"27u" => keys.push(Key::Escape),
+                            b"13;3u" => keys.push(Key::AltEnter),
                             b"100;5u" => keys.push(Key::CtrlD),
+                            b"101;5u" => keys.push(Key::CtrlE),
                             b"115;5u" => keys.push(Key::CtrlS),
+                            b"116;5u" => keys.push(Key::CtrlT),
                             b"1;9D" | b"57350;9u" | b"57350;33u" | b"97;5u" => {
                                 keys.push(Key::EditHome)
                             }
-                            b"1;9C" | b"57351;9u" | b"57351;33u" | b"101;5u" => {
-                                keys.push(Key::EditEnd)
-                            }
+                            b"1;9C" | b"57351;9u" | b"57351;33u" => keys.push(Key::EditEnd),
                             b"127;9u" | b"127;33u" | b"8;9u" | b"8;33u" | b"27;9;127~"
                             | b"27;9;8~" | b"117;5u" => keys.push(Key::CtrlU),
                             b"H" | b"1~" | b"7~" => keys.push(Key::Home),
@@ -143,6 +147,11 @@ impl Keys {
                 if pending.len() == 1 && !flush {
                     break;
                 }
+                if matches!(pending.get(1), Some(b'\r' | b'\n')) {
+                    keys.push(Key::AltEnter);
+                    start += 2;
+                    continue;
+                }
                 if matches!(pending.get(1), Some(8 | 127)) {
                     // A legacy ESC prefix encodes Option, not Command, for Backspace.
                     start += 2;
@@ -159,8 +168,9 @@ impl Keys {
                 1 => Some(Key::EditHome),
                 3 => Some(Key::CtrlC),
                 4 => Some(Key::CtrlD),
-                5 => Some(Key::EditEnd),
+                5 => Some(Key::CtrlE),
                 19 => Some(Key::CtrlS),
+                20 => Some(Key::CtrlT),
                 21 => Some(Key::CtrlU),
                 24 => Some(Key::CtrlX),
                 b'\t' => Some(Key::Tab),

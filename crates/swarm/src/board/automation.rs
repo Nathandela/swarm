@@ -3,7 +3,7 @@ use super::navigation::truncation;
 use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, terminal_char, usable};
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
-    Calendar, Job, Occurrence, Spec, automation_duration, automation_install_timer,
+    Calendar, Job, Occurrence, Spec, Template, automation_duration, automation_install_timer,
     automation_invocation, automation_timer_status,
 };
 use std::{
@@ -19,6 +19,8 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+mod templates;
 
 #[derive(Default)]
 pub(super) struct TimerStatusProbe {
@@ -98,6 +100,7 @@ pub(super) struct Automation {
     timer_installing: Option<(String, mpsc::Receiver<io::Result<()>>)>,
     job: String,
     draft: Option<Draft>,
+    templates: Option<templates::Picker>,
     archive: Option<ArchivePrompt>,
     enable_confirmation: bool,
     enabling: Option<mpsc::Receiver<io::Result<Option<Records>>>>,
@@ -288,7 +291,13 @@ impl Automation {
     }
 
     pub(super) fn confirmation_pending(&self) -> bool {
-        self.archive.is_some() || self.timer_prompt.is_some()
+        self.archive.is_some()
+            || self.timer_prompt.is_some()
+            || self.error.is_empty()
+                && self
+                    .templates
+                    .as_ref()
+                    .is_some_and(templates::Picker::deleting)
     }
 
     pub(super) fn note_confirmation_paint(&mut self, geometry: (u16, u16)) {
@@ -298,10 +307,22 @@ impl Automation {
         if let Some(prompt) = &mut self.timer_prompt {
             prompt.painted = Some(geometry);
         }
+        if self.error.is_empty()
+            && let Some(picker) = &mut self.templates
+        {
+            picker.painted(geometry);
+        }
     }
 
     pub(super) fn back(&mut self, online: bool) -> Option<Action> {
         self.press = None;
+        if let Some(picker) = &mut self.templates {
+            if picker.back() {
+                self.templates = None;
+            }
+            self.error.clear();
+            return Some(Action::None);
+        }
         if self.enabling.is_some() || self.timer_installing.is_some() {
             return Some(Action::None);
         }
@@ -345,6 +366,7 @@ impl Automation {
             ("New", 'n'),
             ("Enable timer", 'i'),
             (if self.archived { "Active" } else { "Archived" }, 'v'),
+            ("Templates", 't'),
             ("Refresh", 'r'),
             ("Open", '⏎'),
             ("Back", '⎋'),
@@ -355,6 +377,8 @@ impl Automation {
             &[]
         } else if self.timer_prompt.is_some() {
             &[("Enable timer", 'y'), ("Cancel", '⎋')]
+        } else if let Some(picker) = &self.templates {
+            picker.controls()
         } else if let Some(run) = &self.run {
             if run.live_session().is_some() {
                 &[("Open worker", 'o'), ("History", '←'), ("Back", '⎋')]
@@ -371,10 +395,17 @@ impl Automation {
             &[
                 ("Save paused", '↡'),
                 ("Save and enable", '↟'),
+                ("Use template", templates::USE),
+                ("Save template", templates::SAVE),
                 ("Cancel", '⎋'),
             ]
         } else if self.draft.is_some() {
-            &[("Save", '⏎'), ("Cancel", '⎋')]
+            &[
+                ("Save", '⏎'),
+                ("Use template", templates::USE),
+                ("Save template", templates::SAVE),
+                ("Cancel", '⎋'),
+            ]
         } else if self.archive.is_some() {
             &[("Archive job", 'y'), ("Cancel", '⎋')]
         } else {
@@ -436,6 +467,8 @@ impl Automation {
                 '⎋' => "esc".into(),
                 '↟' => "ctrl+s".into(),
                 '↡' => "ctrl+d".into(),
+                templates::USE => "ctrl+t".into(),
+                templates::SAVE => "ctrl+e".into(),
                 _ => key.to_string(),
             };
             let text = if compact {
@@ -493,6 +526,9 @@ impl Automation {
                 budget,
                 timer_prompt_rows(geometry.0).count(),
             );
+        }
+        if let Some(picker) = &self.templates {
+            return picker.rows_at(budget);
         }
         if let Some(draft) = &self.draft {
             let budget = budget.saturating_sub(1).max(1);
@@ -557,7 +593,9 @@ impl Automation {
                     let activate = match target {
                         PointerTarget::Button(_) => true,
                         PointerTarget::Row(index) => {
-                            if let Some(draft) = &mut self.draft {
+                            if let Some(picker) = &mut self.templates {
+                                picker.select(index)
+                            } else if let Some(draft) = &mut self.draft {
                                 draft.focus = index;
                                 index + 1 == FIELDS.len()
                             } else {
@@ -589,6 +627,8 @@ impl Automation {
                         PointerTarget::Button('←') => Key::Left,
                         PointerTarget::Button('↟') => Key::CtrlS,
                         PointerTarget::Button('↡') => Key::CtrlD,
+                        PointerTarget::Button(templates::USE) => Key::CtrlT,
+                        PointerTarget::Button(templates::SAVE) => Key::CtrlE,
                         PointerTarget::Button(key) => Key::Text(key),
                     });
                 }
@@ -601,6 +641,9 @@ impl Automation {
         self.press = None;
         if !usable(geometry) || self.enabling.is_some() || self.timer_installing.is_some() {
             return Action::None;
+        }
+        if self.templates.is_some() {
+            return self.template_key(key, geometry);
         }
         if let Some(prompt) = &self.timer_prompt {
             if key == Key::Text('y')
@@ -648,6 +691,12 @@ impl Automation {
         if self.enable_confirmation && !matches!(key, Key::Text('y')) {
             return Action::None;
         }
+        if key == Key::CtrlT && self.draft.is_some() {
+            return self.open_templates(true);
+        }
+        if key == Key::CtrlE && self.draft.is_some() {
+            return self.save_draft_template();
+        }
         if let Some(draft) = &mut self.draft {
             let install_timer = self.enable_confirmation;
             if key == Key::Enter && (draft.enable.is_none() || draft.focus + 1 == FIELDS.len())
@@ -685,6 +734,7 @@ impl Automation {
             return Action::None;
         }
         match (&self.records, key) {
+            (Some(Records::List(_)), Key::Text('t')) => self.open_templates(false),
             (Some(Records::List(_)), Key::Text('i')) if self.can_offer_timer() => {
                 self.timer_prompt = Some(TimerPrompt {
                     endpoint: self.timer_owner.clone().expect("qualified timer owner"),
@@ -883,6 +933,16 @@ impl Automation {
     }
 
     pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
+        if let Some(picker) = &self.templates {
+            if self.error.is_empty() {
+                line(output, 1, cols, ACCENT, &truncation(&picker.title(), cols));
+            } else {
+                line(output, 1, cols, "\x1b[33m", &truncation(&self.error, cols));
+            }
+            picker.paint(output, cols, self.body_capacity((cols, rows)));
+            self.footer(output, cols, rows);
+            return;
+        }
         if self.timer_prompt.is_some() || self.timer_installing.is_some() {
             let title = if self.timer_installing.is_some() {
                 "Enable automation timer? · Loading"

@@ -436,6 +436,27 @@ fn board(path: &Path) -> io::Result<()> {
                         automation_read(view, query, connection.as_mut(), &mut timer_status);
                     }
                 }
+                Action::ReadTemplates => {
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        view.receive_templates(read_templates(connection.as_mut()));
+                    }
+                }
+                Action::ChangeTemplate { owner, change } => {
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        let result = connection
+                            .as_mut()
+                            .filter(|client| client.endpoint() == owner)
+                            .ok_or_else(|| {
+                                io::Error::other(
+                                    "template owner changed; reopen templates before saving",
+                                )
+                            })
+                            .and_then(|client| change.remote(client));
+                        if view.complete_template_change(result) {
+                            view.receive_templates(read_templates(connection.as_mut()));
+                        }
+                    }
+                }
                 Action::InstallAutomationTimer { endpoint, status } => {
                     if let Some(Modal::Automation(view)) = &mut board.modal {
                         if connection.as_ref().is_some_and(|client| {
@@ -639,6 +660,11 @@ enum Action {
     Retry,
     SaveLayout(Layout),
     Catalog(CatalogRead),
+    ReadTemplates,
+    ChangeTemplate {
+        owner: String,
+        change: crate::schedule::catalog::TemplateChange,
+    },
     InstallAutomationTimer {
         endpoint: String,
         status: String,
@@ -1835,6 +1861,15 @@ fn form_header(output: &mut String, cols: u16, title: &str) {
     line(output, 1, cols, "\x1b[38;2;142;180;230;1m", title);
 }
 
+fn read_templates(
+    client: Option<&mut Client>,
+) -> io::Result<(String, Vec<crate::schedule::Template>)> {
+    let client =
+        client.ok_or_else(|| io::Error::other("daemon disconnected before reading templates"))?;
+    let items = crate::schedule::catalog::TemplateRead::remote(client)?;
+    Ok((client.endpoint().to_owned(), items))
+}
+
 fn automation_read(
     view: &mut Automation,
     query: CatalogRead,
@@ -1944,7 +1979,7 @@ impl Editor {
             .map_or(0, |(i, _)| i);
         match key {
             Key::Home | Key::EditHome => self.cursor = 0,
-            Key::End | Key::EditEnd => self.cursor = self.text.len(),
+            Key::End | Key::EditEnd | Key::CtrlE => self.cursor = self.text.len(),
             Key::Left => self.cursor = previous,
             Key::Right => {
                 self.cursor += self.text[self.cursor..]
