@@ -21,3 +21,14 @@ The combined serial Rust run passed 102 tests with three opt-in cases ignored. C
 Installed Claude 2.1.329 passed three independent runs on macOS arm64 and Linux x86_64. The personal DM admitted the owner’s explicitly addressed text. An enrolled guild thread admitted the owner’s mention and verified its audience again at the native effect. A separate guild run withdrew the audience at that recheck. Its native receipt was rejected and the subsequent real model request included a fresh local operator message with zero occurrences of the withdrawn text. In the accepted cases, the model observed the addressed message exactly once. All six runs preserved the pending Bash dialog and its protected file, then revoked the installation's native readiness on `/clear`.
 
 The producer, owner IPC, receipt store, guild proof socket, native Claude plugin and PTY ran as real processes. The Discord message lookup and membership result were synthetic, as were the Claude inference responses. Use the optional native test executable argument to [the worker witness](../../scripts/verification/rust_claude_worker_input.py) with `--guild accepted` or `--guild revoked`. Run Linux through the scratch-only launcher with the staged test executable named `producer`. Live Discord delivery and a real encrypted call have separate release gates.
+
+## Enrolled worker transcript startup
+
+Claude 2.1.329 can create its native transcript with only a header before the first conversation row. The worker read stays pending while that bounded prefix is valid. After conversation records arrive, completion still requires the original transcript inode, expected prompt hash and linked assistant response. The parser refuses a conflicting conversation or checkout, malformed complete JSON and a scan that exhausts the size bound.
+
+Six isolated enrolled worker runs per host completed the original prompt envelope and manager tool call, then recorded the expected reply. Darwin arm64 ran `46dd3b10`. Linux x86_64 ran `17de672c`, which also makes the test create its transcript with explicit `0600` permissions. The focused test passed on Linux under both the VM default umask and `077`. An earlier separate manager custody error was absent in the repeated runs. These runs qualify the transcript startup change and leave that custody error open.
+
+| Native evidence | SHA-256 |
+| --- | --- |
+| Darwin enrolled runs, ordered list of six log digests | `13471f458b9993e8047e23676440b8e0f6a35c729b766160cd3dc5a518d96c4e` |
+| Linux enrolled runs and focused file-mode tests | `b226aff0f3b69bdc5bad61586b47008d8b0ef50b785289c8a397be12692216a6` |
