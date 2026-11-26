@@ -64,6 +64,8 @@ and network namespaces with a read-only bind of the installed OpenCode.
 python3 -B "$test_root/queue.py" "$test_root" "$test_root/swarm" "$SOURCE_SHA"
 ```
 
+Use `--opencode /absolute/path/to/opencode` to select a specific installed or byte-verified staged executable. The queue passes that exact resolved path to the stage and checks its digest before launch and in the terminal report.
+
 The queue records `status.json` and a log per stage. Each active stage writes
 an atomic `heartbeat.json` and append-only `metrics.jsonl`. The final
 `result.json` includes typed decisions, per-operation admitted and terminal
@@ -75,6 +77,8 @@ disk use is capped at 512 MiB per stage. Native OpenCode measurements are
 separate. Fresh native execution, simulator inference and final-release
 qualification are distinct observations. Qualify the final source and
 executable hashes again before release.
+
+If the first dispatch returns `outcome_unknown`, the verifier watches that operation's durable receipt for the rest of the 30-second dispatch budget. A transition without one verified native input or an unresolved deadline fails the run. The verifier does not post the input again.
 
 To stop, send SIGTERM to the queue only after checking its PID and birth from
 `status.json`. The queue stops its current stage and prevents later stages.

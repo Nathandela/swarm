@@ -154,7 +154,16 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             operation = f'semantic:{time.time_ns() // 1000000}:{index:032x}'
             begin = time.monotonic()
             dispatch = (index, marker, operation)
+            persisted = state / 'opencode-receipts' / (hashlib.sha256(operation.encode()).hexdigest() + '.json')
             initial = output('message', session, '--operation-id', operation, '--text', text)
+            if initial['state'] == 'outcome_unknown':
+                # The worker may recover a delayed SDK reply from the exact native input.
+                # Observe the saved operation within the same dispatch budget; never resubmit.
+                def resolved():
+                    receipt = json.loads(persisted.read_text())['receipt']
+                    return receipt if receipt['state'] != 'outcome_unknown' else None
+
+                initial = wait(resolved, max(0, BUDGETS['dispatch_seconds'] - (time.monotonic() - begin)))
             assert initial['state'] in ('native_accepted', 'completed'), initial
             observed = time.monotonic() - begin
             assert observed <= BUDGETS['dispatch_seconds'], observed
@@ -177,8 +186,6 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
                     kinds.add(card['kind'])
                     result['cards'] += 1
                 assert kinds == {'permission', 'question'}, kinds
-            persisted = state / 'opencode-receipts' / (hashlib.sha256(operation.encode()).hexdigest() + '.json')
-
             def completed():
                 receipt = json.loads(persisted.read_text())['receipt']
                 return receipt if receipt['state'] == 'completed' else None

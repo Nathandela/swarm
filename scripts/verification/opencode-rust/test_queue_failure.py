@@ -18,7 +18,7 @@ def verify(root):
     app = root / "swarm"
     native = root / ".local/bin/opencode"
     native.parent.mkdir(parents=True)
-    native.touch()
+    native.touch(mode=0o700)
     app.touch(mode=0o700)
     for fixture in queue.CORE:
         (root / fixture).touch()
@@ -37,11 +37,10 @@ def verify(root):
 
     with (
         patch.object(queue, "__file__", str(root / "queue.py")),
-        patch.object(Path, "home", return_value=root),
-        patch.object(queue.shutil, "which", return_value=str(native)),
         patch.object(queue, "BUDGETS", {"whole_run_disk_bytes": 1}),
         patch.object(queue, "atomic_json", side_effect=full_at_registration),
-        patch.object(sys, "argv", ["queue.py", str(root), str(app), "a"*40, "--stage", "1h"]),
+        patch.object(sys, "argv", ["queue.py", str(root), str(app), "a"*40,
+                                   "--stage", "1h", "--opencode", str(native)]),
     ):
         try:
             queue.main()
@@ -52,6 +51,7 @@ def verify(root):
 
     status = json.loads((root / "status.json").read_text())
     assert status["state"] == "failed" and status["completed"] == []
+    assert status["manifest"][str(native)] == queue.file_sha(native)
     assert not alive(status["stage_pid"], status["stage_birth"])
 
 

@@ -23,12 +23,23 @@ def main():
     parser.add_argument('root', type=Path, help='private root created by mktemp')
     parser.add_argument('swarm', type=Path)
     parser.add_argument('source')
+    parser.add_argument('--opencode', type=Path, help='absolute path to the native OpenCode executable')
     parser.add_argument('--mixed', action='store_true', help='run the 24h mixed workload')
     parser.add_argument('--stage', choices=[name for name, _, _ in STAGES], action='append')
     args = parser.parse_args()
     mac = sys.platform == 'darwin'
     root, binary = args.root, args.swarm
-    native = Path(shutil.which('opencode') if mac else Path.home() / '.local/bin/opencode').resolve(strict=True)
+    selected = args.opencode
+    if selected is None:
+        default = shutil.which('opencode') if mac else Path.home() / '.local/bin/opencode'
+        if default is None:
+            parser.error('OpenCode is missing from PATH')
+        selected = Path(default)
+    if not selected.is_absolute():
+        parser.error('the native OpenCode executable path must be absolute')
+    native = selected.resolve(strict=True)
+    if not native.is_file() or not os.access(native, os.X_OK):
+        parser.error('the native OpenCode binary is not executable')
     fixtures = Path(__file__).resolve().parent
     runner = 'run-macos-loopback.sh' if mac else 'run-linux.sh'
     assert root.is_absolute() and root == root.resolve()
@@ -106,7 +117,8 @@ def main():
             start = time.monotonic()
             with (root / (name + '.log')).open('xb') as log:
                 child = subprocess.Popen([*command, *metadata(duration, interval)], stdin=subprocess.DEVNULL,
-                                         stdout=log, stderr=log, start_new_session=True)
+                                         stdout=log, stderr=log, start_new_session=True,
+                                         env=dict(os.environ, SWARM_OPENCODE_TEST_EXECUTABLE=str(native)))
                 try:
                     status(stage_pid=child.pid, stage_birth=birth(child.pid))
                     while child.poll() is None:

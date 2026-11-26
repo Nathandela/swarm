@@ -11,8 +11,9 @@ test_dir=${root%/*}
 [[ "${root##*/}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
 [ "$(cd -- "$test_dir" && pwd -P)" = "$test_dir" ]
 [ "$(stat -f '%u %Lp' "$test_dir")" = "$(id -u) 700" ]
-native=$(command -v opencode)
+native=${SWARM_OPENCODE_TEST_EXECUTABLE:-$(command -v opencode)}
 case "$native" in /*) ;; *) exit 2 ;; esac
+test -x "$native"
 mkdir -m 700 "$root"
 mkdir -p "$test_dir/bin"
 [[ ! -L "$test_dir/bin" && ! -L "$test_dir/bin/opencode" && ! -d "$test_dir/bin/opencode" ]]

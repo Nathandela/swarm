@@ -7,7 +7,8 @@ if [ "$#" -lt 2 ]; then
 fi
 probe_root=$1
 case "$probe_root" in /tmp/oc.*|/dev/shm/oc.*) ;; *) exit 2 ;; esac
-native=$(readlink -f "$HOME/.local/bin/opencode")
+native=$(readlink -f "${SWARM_OPENCODE_TEST_EXECUTABLE:-$HOME/.local/bin/opencode}")
+test -x "$native"
 run_name=$2
 case "$run_name" in ""|.*|*/*) exit 2 ;; esac
 mkdir -p "$probe_root/bin"
