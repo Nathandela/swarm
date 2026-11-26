@@ -444,7 +444,10 @@ fn serve(dir: &Path) -> io::Result<()> {
             let home=Path::new(field(saved,"home"));
             let cwd=Path::new(working_dir);
             providers::claude::verify_project_authority(home,cwd,&config["claude_resume"]["project_authority"])?;
-            let (_,transcript)=providers::claude::transcript(home,cwd,id)?;
+            let (_,transcript)=match config["claude_resume"].get("source_cwd") {
+                Some(value) => providers::claude::relocation::transcript(home,Path::new(value.as_str().ok_or_else(|| io::Error::other("invalid original Claude project"))?),id)?,
+                None => providers::claude::transcript(home,cwd,id)?,
+            };
             if config["claude_resume"]["external_source"].is_object()
                 && providers::claude::external_proof(executable,cwd,&environment,home,id,true)?
                     !=config["claude_resume"]["external_source"] {

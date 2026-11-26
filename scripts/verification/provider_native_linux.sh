@@ -22,6 +22,8 @@ case "$witness" in
       external) set -- --external ;;
       external-go) set -- --external --go-owner /fixture/go-owner ;;
       capacity) set -- --external --capacity ;;
+      relocate) set -- --relocate ;;
+      relocate-go) set -- --relocate --go-owner /fixture/go-owner ;;
       board) set -- --board ;;
       worktree-board) set -- --worktree --board ;;
       *) exit 2 ;;

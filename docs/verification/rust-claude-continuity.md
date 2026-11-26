@@ -17,3 +17,15 @@ python3 scripts/verification/rust_claude_resume.py --candidate "$PWD/target/debu
 ```
 
 The [Linux fixture launcher](../../scripts/verification/provider_native_linux.sh) accepts `rust_claude_resume.py`. The installed executable is exposed read-only, and the fixture uses a scratch-only profile and loopback inference. These runs did not reuse an installed login or test an externally managed profile. External Claude acquisition passed on Linux. Cross-provider handoff and macOS external acquisition have separate gates. [External Claude evidence](rust-claude-reattach.md) · [Codex resume evidence](rust-codex-resume.md)
+
+
+## Explicit relocation after the original checkout disappears
+
+Claude Code 2.1.329 retained its native conversation after the original checkout was moved. The Rust owner checked the stopped worker, native account and original transcript, checked the selected destination's project authority, and launched the successor there. Its private shim repeated the transcript identity and destination authority checks before execution. An ambiguous duplicate in another Claude project and a destination with a newly introduced hook were refused. Future resumes and hands-off retain the original transcript directory as well as the current execution directory.
+
+The private loopback model saw both user turns in the same request. The provider wrote the follow-up under the same native UUID with the newly selected directory in its transcript record. The Go and Rust owner witnesses use the same installed provider and a fresh home per arm. The macOS arm64 and Linux x86_64 runs restored their temporary state with zero surviving fixture processes.
+
+```sh
+python3 scripts/verification/rust_claude_resume.py --candidate "$rust" --provider "$claude" --relocate
+python3 scripts/verification/rust_claude_resume.py --candidate "$rust" --provider "$claude" --relocate --go-owner "$go"
+```

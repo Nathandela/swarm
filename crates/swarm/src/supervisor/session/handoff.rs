@@ -59,10 +59,23 @@ impl Session {
         }
         let id = self.claude_conversation()?;
         let authority = self.claude_project_authority(&home, &cwd)?;
-        let (transcript, identity) = providers::claude::transcript(&home, &cwd, &id)?;
+        let previous = &meta["claude_resume"];
+        let (transcript, identity) = if let Some(recorded) = previous["source_cwd"].as_str() {
+            providers::claude::relocation::transcript(&home, Path::new(recorded), &id)?
+        } else {
+            providers::claude::transcript(&home, &cwd, &id)?
+        };
+        if previous.is_object() && previous["transcript"] != identity {
+            return Err(io::Error::other(
+                "original Claude handoff transcript changed",
+            ));
+        }
         let dir = cwd.metadata()?;
-        let proof = json!({"conversation":id,"transcript":transcript,"identity":identity,
+        let mut proof = json!({"conversation":id,"transcript":transcript,"identity":identity,
             "cwd":cwd,"cwd_identity":[dir.dev(),dir.ino()],"home":home,"project_authority":authority});
+        if let Some(origin) = previous.get("source_cwd") {
+            proof["source_cwd"] = origin.clone();
+        }
         Ok((cwd, transcript, id, proof))
     }
 

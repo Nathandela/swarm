@@ -1912,7 +1912,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_directory_without_a_qualified_relocation_route_refuses() {
+    fn missing_source_directory_opens_the_selector_only_with_negotiated_relocation() {
         let mut board = Board {
             rows: vec![json!({
                 "id":"claude", "agent":"claude", "name":"Source", "cwd":"/unavailable/fixture",
@@ -1926,8 +1926,15 @@ mod tests {
             board.update(Key::Text('r'), (80, 24), true),
             Action::None
         ));
+        assert!(matches!(board.modal, Some(Modal::Relocate(_))));
+        board.modal = None;
+        board.can_relocate = false;
+        assert!(matches!(
+            board.update(Key::Text('r'), (80, 24), true),
+            Action::None
+        ));
         assert!(board.modal.is_none());
-        assert!(board.notice.contains("claude relocation is unsupported"));
+        assert!(!board.notice.is_empty());
     }
 
     #[test]

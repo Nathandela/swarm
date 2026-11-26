@@ -156,8 +156,15 @@ pub(crate) fn verify_handoff_artifact(dir: &Path, lineage: &Value) -> io::Result
             let cwd = Path::new(field(proof, "cwd"));
             let home = Path::new(field(proof, "home"));
             providers::claude::verify_project_authority(home, cwd, &proof["project_authority"])?;
-            let (transcript, identity) =
-                providers::claude::transcript(home, cwd, field(proof, "conversation"))?;
+            let (transcript, identity) = if let Some(original) = proof["source_cwd"].as_str() {
+                providers::claude::relocation::transcript(
+                    home,
+                    Path::new(original),
+                    field(proof, "conversation"),
+                )?
+            } else {
+                providers::claude::transcript(home, cwd, field(proof, "conversation"))?
+            };
             let status = cwd.metadata()?;
             if proof["identity"] != identity
                 || transcript != Path::new(field(proof, "transcript"))

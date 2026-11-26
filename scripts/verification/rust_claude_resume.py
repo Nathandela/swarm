@@ -4,6 +4,7 @@
 import argparse
 import http.server
 import json
+import io
 import os
 from pathlib import Path
 import shutil
@@ -23,7 +24,21 @@ from rust_claude_worker_input import Provider, save
 TASK = "Reply with a short synthetic test answer."
 
 
-def verify(swarm, installed, root, server, *, worktree=False, through_board=False, external=False, go_owner=None, capacity=False):
+RELOCATED_PROMPT = "Synthetic followup from the explicitly relocated checkout."
+
+class RelocationModel(Provider):
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        messages = json.dumps(json.loads(raw).get("messages", []))
+        if TASK in messages and RELOCATED_PROMPT in messages:
+            self.server.joined_relocation = True
+        stream, self.rfile = self.rfile, io.BytesIO(raw)
+        try:
+            super().do_POST()
+        finally:
+            self.rfile = stream
+
+def verify(swarm, installed, root, server, *, worktree=False, through_board=False, external=False, go_owner=None, capacity=False, relocate=False):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     for directory in (home, work, state, tools, home / ".claude"):
         directory.mkdir(mode=0o700)
@@ -45,7 +60,7 @@ def verify(swarm, installed, root, server, *, worktree=False, through_board=Fals
     guard = lambda argv: guarded(argv, root, [server.server_port])
     version = subprocess.check_output(guard([binary, "--version"]), env=env, text=True).split()[0]
     save(home / ".claude.json", dict(hasCompletedOnboarding=True, lastOnboardingVersion=version,
-         theme="dark", projects={str(work):dict(hasTrustDialogAccepted=True)},
+         theme="dark", projects={str(path):dict(hasTrustDialogAccepted=True) for path in (work,root/"relocated")},
          customApiKeyResponses=dict(approved=[env["ANTHROPIC_API_KEY"]], rejected=[])))
     save(home / ".claude/settings.json", dict(env=dict(
         ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}",
@@ -53,7 +68,7 @@ def verify(swarm, installed, root, server, *, worktree=False, through_board=Fals
         CLAUDE_CODE_TMPDIR=str(root), CLAUDE_CODE_MAX_RETRIES="0")))
     check_guards(root,[server.server_port])
     def cli(*args,expected=0,overrides=None,error_contains=None):
-        run = subprocess.run(guard([staged,*args]), env={**env,**(overrides or {})}, cwd=work,
+        run = subprocess.run(guard([owner if relocate and go_owner else staged,*args]), env={**env,**(overrides or {})}, cwd=root if relocate else work,
                              capture_output=True, timeout=50 if args[0]=="reattach" else 15)
         assert run.returncode==expected,(args,run.stderr.decode(errors="replace"))
         if error_contains is not None:
@@ -77,6 +92,23 @@ def verify(swarm, installed, root, server, *, worktree=False, through_board=Fals
             time.sleep(.08)
         raise AssertionError(label)
 
+    def joined_turn(sid, native, retained, selected):
+        def prior_history():
+            display = cli("peek",sid)
+            if b"trust the files" in display and b"trust this folder" in display:
+                cli("send", sid, "--key", "enter")
+            return b"Synthetic native input processed" in display
+        eventually(prior_history,"original assistant transcript at new working directory",25)
+        cli("send",sid,"--text",RELOCATED_PROMPT)
+        eventually(lambda: server.joined_relocation, "old and new input in the same native model request",25)
+        def provider_working_directory():
+            for line in retained.read_text().splitlines():
+                row = json.loads(line)
+                if row.get("type") == "user" and RELOCATED_PROMPT in json.dumps(row.get("message")):
+                    return row.get("sessionId") == native and row.get("cwd") == str(selected)
+            return False
+        eventually(provider_working_directory, "new native user turn saved in selected checkout",25)
+
     if worktree:
         for argv in (["init","-q"],["-c","user.name=Synthetic","-c","user.email=fixture@example.invalid",
                                     "-c","commit.gpgsign=false","commit","--allow-empty","-qm","fixture"]):
@@ -91,6 +123,37 @@ def verify(swarm, installed, root, server, *, worktree=False, through_board=Fals
                     raise RuntimeError((root/"daemon.log").read_text()[-2400:])
                 return Path(owner_path).exists()
             eventually(listening,"daemon")
+            if relocate and go_owner:
+                original = cli("spawn","--cli","claude","--name","go relocation","--dir",str(work),"--prompt",TASK).decode().strip()
+                def original_turn():
+                    display = cli("peek", original)
+                    if b"I am using this for local development" in display:
+                        cli("send",original,"--key","down")
+                        cli("send",original,"--key","enter")
+                    if b"trust the files" in display and b"trust this folder" in display:
+                        cli("send",original,"--key","enter")
+                    return b"Synthetic native input processed" in display
+                eventually(original_turn,"Go-launched original loopback turn",30)
+                def native_history():
+                    candidates = [p for p in (home/".claude/projects").rglob("*.jsonl") if TASK in p.read_text()]
+                    return candidates[0] if len(candidates) == 1 else None
+                retained = eventually(native_history,"original Go worker wrote the native transcript")
+                native = retained.stem
+                cli("kill",original)
+                cli("watch",original,"--until","completed","--timeout","8s")
+                selected=root/"relocated"
+                selected.mkdir(mode=0o700)
+                work.rename(root/"old-removed")
+                request=dict(agent="claude",name="go relocation",cwd=str(selected),
+                             options={"resume_from":original,"resume_relocate":"true"},cols=100,rows=30)
+                offered=wire(request,["resume-relocate"])
+                assert offered["op"]=="launch" and offered["session"]["cwd"]==str(selected),offered
+                sid=offered["session"]["id"]
+                joined_turn(sid,native,retained,selected)
+                cli("kill",sid)
+                cli("watch",sid,"--until","completed","--timeout","8s")
+                print("pinned Go relocated Claude's original conversation and completed its new turn in the selected checkout")
+                return
             if external:
                 def native_cli(*args):
                     result=subprocess.run(guard([binary,*args]),env=env,cwd=work,capture_output=True,timeout=35,umask=0o077)
@@ -298,6 +361,39 @@ esac
                 if isinstance(actual,tuple): actual=actual[0]*1_000_000+actual[1]
                 return actual is None or int(actual)!=exited["birth"]
             eventually(reaped,"shim reaped")
+            if relocate:
+                selected = root / "relocated"
+                selected.mkdir(mode=0o700)
+                work.rename(root / "old-removed")
+                assert wire(launch)["op"] == "error"
+                retained, = (home / ".claude/projects").rglob(native + ".jsonl")
+                other = retained.parent.with_name("other-private-project")
+                other.mkdir(mode=0o700)
+                alias = other / retained.name
+                shutil.copyfile(retained, alias)
+                relocated = launch | {"cwd":str(selected), "options":{"resume_from":original,"resume_relocate":"true"}}
+                caps = ["resume-relocate"]
+                assert wire(relocated)["op"] == "error"
+                refused = wire(relocated, caps)
+                assert refused["op"] == "error" and "multiple transcripts" in refused["error"], refused
+                alias.unlink()
+                trap = selected / ".claude"
+                trap.mkdir(mode=0o700)
+                save(trap/"settings.local.json", {"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"true"}]}]}})
+                assert wire(relocated, caps)["op"] == "error"
+                (trap/"settings.local.json").unlink()
+                trap.rmdir()
+                successor = wire(relocated, caps)
+                assert successor["op"] == "launch" and successor["session"]["cwd"] == str(selected), successor
+                sid = successor["session"]["id"]
+                joined_turn(sid,native,retained,selected)
+                resumed = state/"rust-v1"/sid.split("/")[1]
+                assert json.loads((resumed/"observation.json").read_text())["conversation_id"] == native
+                assert json.loads((resumed/"session.json").read_text())["claude_resume"]["source_cwd"] == str(work)
+                cli("kill", sid)
+                eventually(lambda:(resumed/"exit.json").exists(),"relocated worker exit")
+                print("native Claude resumed the original transcript at the selected checkout; duplicate transcript and unsafe destination refused")
+                return
             changed=launch | {"env":[f"{key}={value}" for key,value in (env | {"ANTHROPIC_API_KEY":"unauthorized-other"}).items()]}
             assert wire(changed)["op"]=="error"
             for base,name in [(effective,"settings.local.json"),(root,"settings.json")]:
@@ -425,17 +521,21 @@ if __name__=="__main__":
     parser.add_argument("--candidate",required=True,type=fixtures.binary_path)
     parser.add_argument("--provider",required=True,type=fixtures.binary_path)
     parser.add_argument("--worktree",action="store_true")
+    parser.add_argument("--relocate", action="store_true", help="resume a stopped native conversation after its original directory disappears")
     parser.add_argument("--board", action="store_true", help="resume using the ordinary dashboard action")
     parser.add_argument("--external",action="store_true")
     parser.add_argument("--go-owner",type=fixtures.binary_path)
     parser.add_argument("--capacity",action="store_true")
     args=parser.parse_args()
-    if (args.capacity or args.go_owner) and not args.external or args.capacity and args.go_owner:
-        parser.error("--capacity and --go-owner are separate external qualification paths")
+    if args.capacity and not args.external or args.go_owner and not (args.external or args.relocate) or args.capacity and args.go_owner:
+        parser.error("--capacity is an external case; --go-owner qualifies external or relocated acquisition")
+    if args.relocate and (args.external or args.worktree or args.board):
+        parser.error("--relocate runs a separate missing-directory case")
     if args.external and (args.worktree or args.board):
         parser.error("--external uses its own native background session")
     root=Path(tempfile.mkdtemp(prefix="cr-",dir=Path("/tmp").resolve()))
-    server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Provider)
+    server=http.server.ThreadingHTTPServer(("127.0.0.1",0),RelocationModel if args.relocate else Provider)
+    server.joined_relocation = False
     server.daemon_threads=True
     server.observed=[]
     server.sentinel=root/"must-not-exist"
@@ -444,7 +544,7 @@ if __name__=="__main__":
     success=False
     try:
         verify(args.candidate, args.provider, root, server, worktree=args.worktree,
-               through_board=args.board, external=args.external, go_owner=args.go_owner, capacity=args.capacity)
+               through_board=args.board, external=args.external, go_owner=args.go_owner, capacity=args.capacity, relocate=args.relocate)
         assert not server.sentinel.exists()
         success=True
     finally:

@@ -1,3 +1,4 @@
+pub(crate) mod relocation;
 pub(crate) mod worker_result;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -725,7 +726,8 @@ pub(crate) fn transcript(
         let thread = crate::ipc::field(&value, "sessionId");
         let location = crate::ipc::field(&value, "cwd");
         if !thread.is_empty() && !location.is_empty() && value["isSidechain"] != true {
-            if thread != id || std::path::Path::new(location).canonicalize()? != cwd {
+            let recorded = std::path::Path::new(location);
+            if thread != id || (recorded != cwd && recorded.canonicalize()? != cwd) {
                 return Err(io::Error::other(
                     "Claude transcript identity or checkout changed",
                 ));

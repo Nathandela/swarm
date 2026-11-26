@@ -544,21 +544,19 @@ impl Session {
                 "Claude resume requires a confirmed stopped ordinary worker",
             ));
         }
-        if launch["options"]
-            .as_object()
-            .is_none_or(|opts| opts.len() != 1)
-            || launch.as_object().is_none_or(|fields| {
-                fields.iter().any(|(key, value)| {
-                    !matches!(
-                        key.as_str(),
-                        "agent" | "cwd" | "env" | "name" | "cols" | "rows" | "options"
-                    ) && !value.is_null()
-                })
+        let relocate = launch["options"].get("resume_relocate").is_some();
+        if launch["options"].as_object().is_none_or(|opts| {
+            opts.len() != 1 + usize::from(relocate) || relocate && opts["resume_relocate"] != "true"
+        }) || launch.as_object().is_none_or(|fields| {
+            fields.iter().any(|(key, value)| {
+                !matches!(
+                    key.as_str(),
+                    "agent" | "cwd" | "env" | "name" | "cols" | "rows" | "options"
+                ) && !value.is_null()
             })
-        {
+        }) {
             return Err(io::Error::other("unsupported Claude resume parameters"));
         }
-        let cwd = self.verify_effective()?.to_owned();
         let meta = runtime::read_json(&self.dir.join("session.json"))?;
         let id = self.claude_conversation()?;
         let info = &meta["claude_profile"];
@@ -572,6 +570,57 @@ impl Session {
             .all(|key| current[*key] == info[*key]);
         if !same {
             return Err(io::Error::other("Claude native profile or account changed"));
+        }
+        let home = Path::new(field(info, "home"));
+        let previous = &meta["claude_resume"];
+        let original =
+            previous
+                .get("source_cwd")
+                .map_or(Ok(self.effective.as_path()), |value| {
+                    value
+                        .as_str()
+                        .map(Path::new)
+                        .filter(|p| p.is_absolute())
+                        .ok_or_else(|| {
+                            io::Error::other("Claude saved transcript directory is invalid")
+                        })
+                })?;
+        let cwd = if relocate {
+            let selected = Path::new(field(launch, "cwd"));
+            if !selected.is_absolute() || !selected.is_dir() {
+                return Err(io::Error::other(
+                    "resume: relocation requires an existing absolute directory",
+                ));
+            }
+            match self.effective.symlink_metadata() {
+                Ok(_) => {
+                    self.verify_effective()?;
+                    self.claude_project_authority(home, &self.effective)?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    self.saved_claude_authority(home, &self.effective)?;
+                }
+                Err(error) => return Err(error),
+            }
+            selected.canonicalize()?
+        } else {
+            self.verify_effective()?.to_owned()
+        };
+        let authority = if relocate {
+            providers::claude::project_authority(home, &cwd)?
+        } else {
+            self.claude_project_authority(home, &cwd)?
+        };
+        let moved = relocate || previous.get("source_cwd").is_some();
+        let (_, transcript) = if moved {
+            providers::claude::relocation::transcript(home, original, &id)?
+        } else {
+            providers::claude::transcript(home, &cwd, &id)?
+        };
+        if previous.is_object() && previous["transcript"] != transcript {
+            return Err(io::Error::other(
+                "original Claude transcript was replaced after acquisition",
+            ));
         }
         let saved_path = info["path"]
             .as_str()
@@ -611,11 +660,11 @@ impl Session {
                 "installed Claude CLI is older than the source runtime",
             ));
         }
-        let home = Path::new(field(info, "home"));
-        let authority = self.claude_project_authority(home, &cwd)?;
-        let (_, transcript) = providers::claude::transcript(home, &cwd, &id)?;
         prepared.tag = self.labels.lock().unwrap().tag.clone();
         prepared.claude_resume = json!({"conversation_id":id,"resumed_from":source,"transcript":transcript,"project_authority":authority});
+        if moved {
+            prepared.claude_resume["source_cwd"] = json!(original);
+        }
         Ok(prepared)
     }
 
@@ -624,8 +673,15 @@ impl Session {
     }
 
     fn claude_project_authority(&self, home: &Path, cwd: &Path) -> io::Result<Value> {
+        let authority = self.saved_claude_authority(home, cwd)?;
+        providers::claude::verify_project_authority(home, cwd, &authority)?;
+        Ok(authority)
+    }
+
+    fn saved_claude_authority(&self, home: &Path, cwd: &Path) -> io::Result<Value> {
         let proof = runtime::read_json(&self.dir.join("claude-authority.json"))?;
         if proof["token"] != self.token
+            || !proof["authority"].is_string()
             || Path::new(field(&proof, "home")) != home
             || Path::new(field(&proof, "cwd")) != cwd
         {
@@ -633,7 +689,6 @@ impl Session {
                 "Claude project authority provenance is unproved",
             ));
         }
-        providers::claude::verify_project_authority(home, cwd, &proof["authority"])?;
         Ok(proof["authority"].clone())
     }
 
