@@ -438,7 +438,7 @@ fn board(path: &Path) -> io::Result<()> {
                 }
                 Action::ReadTemplates => {
                     if let Some(Modal::Automation(view)) = &mut board.modal {
-                        view.receive_templates(read_templates(connection.as_mut()));
+                        view.receive_templates(read_templates(path, connection.as_ref()));
                     }
                 }
                 Action::ChangeTemplate { owner, change } => {
@@ -453,7 +453,7 @@ fn board(path: &Path) -> io::Result<()> {
                             })
                             .and_then(|client| change.remote(client));
                         if view.complete_template_change(result) {
-                            view.receive_templates(read_templates(connection.as_mut()));
+                            view.receive_templates(read_templates(path, connection.as_ref()));
                         }
                     }
                 }
@@ -1862,11 +1862,16 @@ fn form_header(output: &mut String, cols: u16, title: &str) {
 }
 
 fn read_templates(
-    client: Option<&mut Client>,
+    path: &Path,
+    client: Option<&Client>,
 ) -> io::Result<(String, Vec<crate::schedule::Template>)> {
     let client =
         client.ok_or_else(|| io::Error::other("daemon disconnected before reading templates"))?;
-    let items = crate::schedule::catalog::TemplateRead::remote(client)?;
+    let mut reader = Client::dial(path, &[CATALOG_CAP])?;
+    if reader.endpoint() != client.endpoint() {
+        return Err(io::Error::other("template owner changed before reading"));
+    }
+    let items = crate::schedule::catalog::TemplateRead::remote(&mut reader)?;
     Ok((client.endpoint().to_owned(), items))
 }
 

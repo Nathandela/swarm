@@ -1254,10 +1254,17 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer, state, message)
             }
             "schedule_templates" => {
+                let root = state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?;
+                if request["stream"] == true && caps.contains(&crate::schedule::catalog::CAP) {
+                    match crate::schedule::catalog::templates(root) {
+                        Ok(templates) => crate::schedule::catalog::stream_templates(
+                            &mut *writer.lock().unwrap(), &state.endpoint, &templates)?,
+                        Err(error) => reply(&writer, state, json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))?,
+                    }
+                    continue;
+                }
                 let message = if caps.contains(&crate::schedule::catalog::CAP) {
-                    crate::schedule::catalog::serve_templates(
-                        state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?,
-                    )
+                    crate::schedule::catalog::serve_templates(root)
                     .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
                 } else {
                     json!({"op":"error","error_code":"capability_refused","error":"schedule catalog requires the owner catalog capability"})

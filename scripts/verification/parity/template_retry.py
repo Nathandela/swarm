@@ -17,6 +17,7 @@ def run(root, rust, go):
     staged_rust, staged_go = root / "bin/swarm-rust", root / "bin/swarm-go"
     shutil.copy2(rust, staged_rust)
     shutil.copy2(go, staged_go)
+    shutil.copy2(p.__file__, root / "bin/driver")
     rust, go = staged_rust, staged_go
     env = p.environment(root)
     guard = p.guard(root)
@@ -75,6 +76,44 @@ def run(root, rust, go):
         assert database.read_bytes() == deleted
         assert cli(go, "show", template_id, check=False).returncode != 0
         assert json.loads(cli(go, "show", original["id"]).stdout) == original
+
+        big_prompt = "🙂a\t\n" * 200_000 + "Legacy checked tail"
+        assert len(big_prompt.encode()) > 1 << 20
+        prompt.write_text(big_prompt)
+        large = json.loads(cli(go, "create", "Large retained Go template", prompt).stdout)
+        unchanged = database.read_bytes()
+        board = p.Board([*guard, str(rust)], root, env)
+        try:
+            def step(keys, landmark):
+                board.drain()
+                start = len(board.capture)
+                board.send(keys)
+                board.wait_bytes(landmark, start)
+
+            board.wait_bytes(b"swarm")
+            step(b"m", b"More")
+            step(b"a", b"Automations")
+            step(b"t", b"Large retained Go template")
+            step(b"\x1b[B\r", b"Personal templates / Edit")
+            step(b"\t", b"Legacy checked tail")
+            step(b"\x1b[27u", b"Automations / Personal templates")
+            assert database.read_bytes() == unchanged
+            step(b"n", b"Personal templates / Edit")
+            step(b"A small template\tSmall instructions\r", b"Automations / Personal templates")
+            assert json.loads(cli(go, "show", large["id"]).stdout)["prompt"] == big_prompt
+            all_templates = json.loads(cli(go, "list").stdout)
+            small, = [item for item in all_templates if item["name"] == "A small template"]
+            assert small["prompt"] == "Small instructions"
+            board.send(b"\x1b[27u\x1b[27u\x1b[27u")
+
+            def exited():
+                board.drain()
+                return board.child.poll() is not None
+
+            p.wait_for(exited, "large template board quit")
+            assert board.child.returncode == 0
+        finally:
+            board.close()
     finally:
         if owner.poll() is None:
             owner.terminate()
@@ -82,6 +121,7 @@ def run(root, rust, go):
         result = p.reap(root, None, {})
         assert not result["remaining"], result
     print("Go reopened and deleted the Rust template. Exact retry after restart made no write.")
+    print("The board read an over-frame Go template and saved another without changing it.")
 
 
 if __name__ == "__main__":

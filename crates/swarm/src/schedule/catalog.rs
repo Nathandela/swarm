@@ -71,6 +71,8 @@ pub(super) fn project(root: &Path, read: Read) -> Result<Records> {
 }
 
 const TEMPLATES: &str = "schedule_templates";
+const TEMPLATE_CHUNK: &str = "schedule_template_chunk";
+const CHUNK_BYTES: usize = 64 << 10;
 
 pub(crate) struct TemplateRead;
 
@@ -81,21 +83,134 @@ impl TemplateRead {
                 "selected supervisor does not support the automation catalog",
             ));
         }
-        let reply = client.request_body(json!({"op":TEMPLATES}), TEMPLATES)?;
+        let reply = client.request_body(json!({"op":TEMPLATES,"stream":true}), TEMPLATES)?;
         if field(&reply, "endpoint_id") != client.endpoint() {
             return Err(io::Error::other(
                 "personal template reply came from another supervisor",
             ));
         }
-        serde_json::from_value(reply["templates"].clone()).map_err(Into::into)
+        if reply["stream"] != true {
+            return serde_json::from_value(reply["templates"].clone()).map_err(Into::into);
+        }
+        serde_json::from_reader(io::BufReader::new(TemplateStream {
+            owner: client,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
+            chunk: io::Cursor::new(Vec::new()),
+            sequence: 0,
+            done: false,
+        }))
+        .map_err(Into::into)
     }
 }
 
-pub(crate) fn serve_templates(root: &Path) -> Result<Value> {
-    let templates = match Store::existing(root, Path::new("/etc/localtime"))? {
+struct TemplateStream<'a> {
+    owner: &'a mut Client,
+    deadline: std::time::Instant,
+    chunk: io::Cursor<Vec<u8>>,
+    sequence: u64,
+    done: bool,
+}
+
+impl io::Read for TemplateStream<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        if output.is_empty() || self.done {
+            return Ok(0);
+        }
+        let ready = io::Read::read(&mut self.chunk, output)?;
+        if ready != 0 {
+            return Ok(ready);
+        }
+        let next = self.owner.receive(self.deadline)?;
+        if next["op"] != TEMPLATE_CHUNK
+            || next["endpoint_id"] != self.owner.endpoint()
+            || next["sequence"] != self.sequence
+        {
+            return Err(io::Error::other(
+                "personal template stream changed identity or order",
+            ));
+        }
+        if next["complete"] == true && next["data"].is_null() {
+            self.done = true;
+            return Ok(0);
+        }
+        let data = next["data"]
+            .as_str()
+            .filter(|data| !data.is_empty() && data.len() <= CHUNK_BYTES.div_ceil(3) * 4)
+            .ok_or_else(|| io::Error::other("invalid personal template stream chunk"))?;
+        let decoded = STANDARD.decode(data).map_err(io::Error::other)?;
+        if decoded.is_empty() || decoded.len() > CHUNK_BYTES || !next["complete"].is_null() {
+            return Err(io::Error::other("invalid personal template stream chunk"));
+        }
+        self.sequence += 1;
+        self.chunk = io::Cursor::new(decoded);
+        io::Read::read(&mut self.chunk, output)
+    }
+}
+
+struct TemplateChunks<'a, W> {
+    output: &'a mut W,
+    endpoint: &'a str,
+    sequence: u64,
+}
+
+impl<W: io::Write> io::Write for TemplateChunks<'_, W> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let size = data.len().min(CHUNK_BYTES);
+        if size == 0 {
+            return Ok(0);
+        }
+        crate::supervisor::runtime::write_control(
+            self.output,
+            &json!({"op":TEMPLATE_CHUNK,
+            "endpoint_id":self.endpoint,"sequence":self.sequence,"data":STANDARD.encode(&data[..size])}),
+        )?;
+        self.sequence += 1;
+        Ok(size)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
+}
+
+pub(crate) fn stream_templates(
+    output: &mut impl io::Write,
+    endpoint: &str,
+    templates: &[Template],
+) -> io::Result<()> {
+    use crate::supervisor::runtime::write_control;
+    use io::Write as _;
+    write_control(
+        output,
+        &json!({"op":TEMPLATES,"endpoint_id":endpoint,"stream":true}),
+    )?;
+    let mut chunks = TemplateChunks {
+        output,
+        endpoint,
+        sequence: 0,
+    };
+    let mut buffered = io::BufWriter::with_capacity(CHUNK_BYTES, &mut chunks);
+    serde_json::to_writer(&mut buffered, templates)?;
+    buffered.flush()?;
+    drop(buffered);
+    write_control(
+        chunks.output,
+        &json!({"op":TEMPLATE_CHUNK,"endpoint_id":endpoint,
+        "sequence":chunks.sequence,"complete":true}),
+    )
+}
+
+pub(crate) fn templates(root: &Path) -> Result<Vec<Template>> {
+    Ok(match Store::existing(root, Path::new("/etc/localtime"))? {
         Some(store) => store.templates()?,
         None => Vec::new(),
-    };
+    })
+}
+
+pub(crate) fn serve_templates(root: &Path) -> Result<Value> {
+    let templates = templates(root)?;
     let reply = json!({"op":TEMPLATES,"templates":templates});
     if serde_json::to_vec(&reply)?.len() > (1 << 20) - 1024 {
         return Err("personal template result exceeds the owner socket frame limit".into());
@@ -452,6 +567,99 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn template_stream_refuses_a_valid_document_without_a_completed_transfer() {
+        use crate::supervisor::runtime::{read_control, write_control};
+        let temp = crate::test_temp::root().join(format!(
+            "ts-{}",
+            &crate::supervisor::runtime::random_id().unwrap()[..8]
+        ));
+        std::fs::create_dir(&temp).unwrap();
+        let socket = temp.join("p");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .unwrap();
+            assert_eq!(read_control(&mut stream).unwrap()["op"], "hello");
+            write_control(
+                &mut stream,
+                &json!({"op":"hello","endpoint_id":"fixture",
+                "protocol_version":1,"capabilities":[CAP]}),
+            )
+            .unwrap();
+            let request = read_control(&mut stream).unwrap();
+            assert_eq!(request["stream"], true);
+            write_control(
+                &mut stream,
+                &json!({"op":TEMPLATES,"endpoint_id":"fixture","stream":true}),
+            )
+            .unwrap();
+            // This is a complete JSON array, but the owner closes before acknowledging the transfer.
+            write_control(
+                &mut stream,
+                &json!({"op":TEMPLATE_CHUNK,"endpoint_id":"fixture",
+                "sequence":0,"data":"W10="}),
+            )
+            .unwrap();
+        });
+        let mut owner = Client::dial(&socket, &[CAP]).unwrap();
+        let received = TemplateRead::remote(&mut owner);
+        server.join().unwrap();
+        std::fs::remove_dir_all(temp).unwrap();
+        assert!(received.is_err());
+    }
+
+    #[test]
+    fn retained_large_template_has_a_complete_bounded_snapshot() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let temp = Temp::with_go_catalog();
+        let store = Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        let prompt = "🙂\n".repeat(240_000);
+        assert!(prompt.len() > crate::ipc::wire::MAX_FRAME);
+        let legacy = store
+            .save_template(
+                None,
+                "Large Go template".into(),
+                prompt,
+                "2026-11-01T06:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert!(serve_templates(&temp.0).is_err());
+        let snapshot = templates(&temp.0).unwrap();
+        let mut bytes = Vec::new();
+        stream_templates(&mut bytes, "owner", &snapshot).unwrap();
+        let mut wire = io::Cursor::new(bytes);
+        let (tag, header) = crate::ipc::wire::read_frame(&mut wire).unwrap();
+        assert_eq!(tag, crate::ipc::wire::CONTROL);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&header).unwrap(),
+            json!({"op":TEMPLATES, "endpoint_id":"owner", "stream":true})
+        );
+        let mut joined = Vec::new();
+        for index in 0.. {
+            let (tag, payload) = crate::ipc::wire::read_frame(&mut wire).unwrap();
+            assert_eq!(tag, crate::ipc::wire::CONTROL);
+            let record: Value = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(record["endpoint_id"], "owner");
+            assert_eq!(record["sequence"], index);
+            if record["complete"] == true {
+                assert!(index > 1);
+                break;
+            }
+            let part = STANDARD.decode(record["data"].as_str().unwrap()).unwrap();
+            assert!(!part.is_empty() && part.len() <= CHUNK_BYTES);
+            joined.extend(part);
+        }
+        assert_eq!(wire.position(), wire.get_ref().len() as u64);
+        let rendered: Vec<Template> = serde_json::from_slice(&joined).unwrap();
+        assert_eq!(rendered.len(), snapshot.len());
+        let large = rendered.iter().find(|item| item.id == legacy.id).unwrap();
+        assert!(large.prompt == legacy.prompt);
+        assert_eq!(large.updated_at, legacy.updated_at);
     }
 
     #[test]

@@ -633,21 +633,6 @@ impl Store {
             template.prompt = prompt;
             template.updated_at = now;
             if let Some(endpoint_id) = endpoint_id {
-                let mut templates: Vec<Template> = records(tx, TEMPLATES)?;
-                if let Some(existing) = templates.iter_mut().find(|item| item.id == template.id) {
-                    *existing = template.clone();
-                } else {
-                    templates.push(template.clone());
-                }
-                templates.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
-                let list = serde_json::json!({"op":"schedule_templates","templates":templates});
-                if serde_json::to_vec(&list)?.len()
-                    > crate::ipc::wire::MAX_FRAME.saturating_sub(1024)
-                {
-                    return Err(
-                        "personal template list would exceed the owner socket frame limit".into(),
-                    );
-                }
                 check_template_reply(&template, endpoint_id)?;
             }
             put(tx, TEMPLATES, &template.id, &template)?;
