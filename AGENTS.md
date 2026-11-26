@@ -1,10 +1,8 @@
 # Agent Instructions
 
-swarm is a terminal application that centralizes coding-agent CLI sessions in one keyboard-driven dashboard. The Go + Bubble Tea client talks to a per-user supervisor daemon; per-session shims own the PTYs and preserve live sessions across terminal close and daemon restart. Public and released; see the [releases page](https://github.com/Nathandela/swarm/releases).
+The active product on this branch is a Rust terminal application for managing coding-agent sessions. The per-user supervisor owns session state. Each shim owns its PTY and can survive a supervisor restart. The supported provider families are Claude Code, Codex, agy, Hermes Agent and OpenCode. Discord handles the retained remote and voice interaction.
 
-The production adapters are Claude Code, Codex, agy, Hermes Agent, and OpenCode; adapter capabilities differ. OpenCode's native worker lifecycle and controls are deployed from v0.19.0, while its unattended status/attention parity and longer qualification remain open. Android remote control is a separate product surface: the current clean replacement is an accepted architecture with implementation and hosted/physical-device gates still open. See the current boundaries map in [docs/INDEX.md](docs/INDEX.md), then the linked source of truth before making claims about a capability.
-
-This file is a map, not a manual — read the linked source of truth before acting, don't rely on this summary.
+Use the [migration roadmap](docs/specifications/rust-migration/README.md) for scope and the [verification ledger](docs/verification/rust-migration.md) for what has passed. The stable Go product is the pinned behavioral reference. Its mobile clients, phone connectors and managed account rotation are outside the Rust product. Provider-native authentication and schedule fallback between agent types are retained.
 
 ## Entry points
 
@@ -18,9 +16,20 @@ This file is a map, not a manual — read the linked source of truth before acti
 | Foundational architecture decisions | [docs/adr/README.md](docs/adr/README.md) |
 | Vendored codebase-governance principles | [docs/governance/](docs/governance/) |
 
-## Build, test, run
+## Build and test this branch
 
-Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency — see ADR-005; to 1.25 by
+```sh
+cargo build --locked --workspace
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+```
+
+Use [the local qualification harness](scripts/verification/parity/README.md) for Go/Rust comparisons, failure injection and whole-PTY checks. Use temporary installation and state directories throughout testing.
+
+## Go reference gates
+
+In a checkout of the pinned Go reference, use Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency — see ADR-005; to 1.25 by
 Phase B's mandatory `golang.org/x/mobile` tool directive — see ADR-008, which supersedes ADR-005's
 floor without superseding ADR-005; to 1.26 by the `golang.org/x/net` CVE fix — ADR-008 Amendment 1).
 

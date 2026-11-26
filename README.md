@@ -1,246 +1,47 @@
-# swarm
+# Swarm
 
 <p align="center">
-  <img src="docs/assets/swarm-hero-flightwritten.png" alt="swarm — its name written by autonomous light trails across a blue-hour landscape toward a persistent relay" width="960">
+  <img src="docs/assets/swarm-hero-flightwritten.png" alt="Swarm terminal session dashboard project artwork" width="960">
 </p>
 
-<p align="center"><strong>Every coding agent on your machine. One calm, keyboard-driven view.</strong></p>
+Swarm keeps coding-agent sessions running when you close your terminal. Its keyboard-driven board groups sessions by whether they need input, are working, are ready for review, or have finished. Each worker has its own PTY. Reopening the board or restarting the supervisor reconnects you to that worker.
 
-<p align="center">
-  Run agents in the background, see what needs you, and keep every session alive when the terminal closes or the daemon upgrades.
-</p>
+**This branch is the Rust migration preview.** For the currently shipped application, installation instructions and upgrade channel, use the [stable release](https://github.com/Nathandela/swarm/releases/tag/v0.29.22) and its [operator README](https://github.com/Nathandela/swarm/blob/v0.29.22/README.md).
 
-<p align="center">
-  <a href="https://github.com/Nathandela/swarm/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Nathandela/swarm?color=8eb4e6"></a>
-  <a href="https://go.dev/"><img alt="Go 1.26 or newer" src="https://img.shields.io/badge/Go-1.26+-6fc3bc?logo=go&amp;logoColor=white"></a>
-  <img alt="Platforms: macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-66718a">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-8eb4e6"></a>
-</p>
+## Run the preview
 
-swarm brings Claude Code, Codex, and other coding-agent CLIs into one Agent View-style terminal dashboard. Sessions sort themselves by what they need from you and run under durable per-session supervisors, so closing the wrong tab no longer kills the work.
-
-Inspired by Claude Code's Agent View, but agent-agnostic and open source.
-
-## Why swarm
-
-- **One view for every agent.** Watch supported CLIs from a single board instead of a wall of terminal tabs.
-- **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious. Codex waits show `approval`, `question`, or `error` so you can see what needs attention, and agy (`>= 1.4.0`) reports structured state, native conversation IDs, and titles via its `statusLine` hook.
-- **Automatic reconnection.** The board reconnects after daemon connection loss, retaining your selection and unsent edits while marking cached data stale.
-- **Background by default.** Each session owns a real PTY through its own shim process and continues after the TUI exits.
-- **Safe daemon upgrades.** Restart or upgrade swarm while agents are running; the replacement daemon finds and reconnects to them.
-- **Agent CLI refresh.** Resume eligible idle Claude, Codex, and agy sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
-- **Scheduled agents.** Define recurring or one-time local jobs, review their run history, and inspect completion in the session board. A per-user host timer drives eligible runs; supported routes and setup steps are in the [scheduled agents operator guide](docs/operations/scheduled-agents.md).
-- **Provider logins.** Save native Claude Code and Codex logins in Options → Logins; one selected login is shared by that provider's Swarm sessions. See the [provider login guide](docs/operations/provider-logins.md).
-- **A teammate in Discord.** Mention your named Swarm app to bring a native manager into a discussion. Everyone in the thread can ask questions, direct workers on the connected machine, and receive their results there. The manager starts on demand. The original agent directory remains available in legacy mode. [Discord guide](docs/ops/discord.md)
-- **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
-- **Remote companion.** The Android app in this repository can securely watch and control agents running on your computer.
-
-## How it works
-
-<p align="center">
-  <img src="docs/assets/swarm-system-vista.png" alt="A disposable swarm TUI reaches a central replaceable daemon, which reconnects to three independent persistent session shims" width="960">
-</p>
-
-One binary plays a few clear roles:
-
-1. `swarm` is the thin terminal client. On first run it starts `swarm daemon` automatically.
-2. The daemon owns the protocol, registry, status engine, and CLI adapters.
-3. Every agent session gets a tiny **shim** process that owns its PTY, VT screen grid, and transcript.
-4. Session metadata is written to disk, allowing a replacement daemon to rebuild the registry and reconnect safely.
-
-Clients never talk to shims directly. Everything crosses the daemon's versioned Unix-socket protocol—the same product spine used by the remote companion.
-
-### Why sessions survive
-
-<p align="center">
-  <img src="docs/assets/swarm-session-survival.png" alt="One uninterrupted session trail continues after the terminal closes and while a replacement daemon reconnects" width="960">
-</p>
-
-The terminal is only a view, and the daemon is replaceable. The per-session shim is the durable process: it keeps the agent, PTY, screen state, and transcript alive. After a restart, the daemon reads each session's `meta.json`, verifies process identity by PID and start time, and reconnects without taking ownership away from the shim.
-
-## Install
-
-The terminal app is a static binary with no runtime dependencies. Remote
-control also needs the `swarm-remote` companion; release packages and Homebrew
-install both.
+Build locally with Cargo. The release rehearsal used Rust 1.99.1. Open a disposable workspace in a fresh home to try the preview alongside a stable installation.
 
 ```sh
-# Homebrew · macOS
-brew install --cask Nathandela/swarm/swarm
-
-# Go · terminal only; see docs/install.md for remote-capable source installs
-go install github.com/Nathandela/swarm/cmd/swarm@latest
+cargo build --locked --bin swarm
+preview=$(mktemp -d /tmp/swarm-preview.XXXXXX)
+mkdir -p "$preview/home" "$preview/work"
+binary="$PWD/target/debug/swarm"
+(cd "$preview/work" && env -i HOME="$preview/home" PATH="$PATH" TERM="${TERM:-xterm-256color}" SWARM_DAEMON_STATE="$preview/s" "$binary")
 ```
 
-Or download a platform archive from the [releases page](https://github.com/Nathandela/swarm/releases). See [docs/install.md](docs/install.md) for archive contents, platform details and upgrade notes.
+Press `n` to start a session. Choose an installed provider, enter a directory and press Enter. The board attaches to the new worker. The footer shows the available controls for the focused field or session. The preview can launch Claude Code, Codex, agy, Hermes Agent and OpenCode. Each provider has its own native controls and version requirements. [Provider workflows](docs/specifications/rust-migration/workflows.md) · [Terminal qualification](docs/verification/rust-migration.md)
 
-```sh
-swarm version
-```
+Use the same home and state directory for scripting commands. For example, `env HOME="$preview/home" SWARM_DAEMON_STATE="$preview/s" "$binary" ls --json` lists that preview's workers. Closing the board leaves the supervisor and workers running.
 
-## Quickstart
+## Working on Swarm
 
-```sh
-swarm
-```
-
-The daemon starts automatically and opens the session board.
-
-| Key | Action |
+| Area | Where to start |
 |---|---|
-| <kbd>↑</kbd> <kbd>↓</kbd> / <kbd>j</kbd> <kbd>k</kbd> | Move through visible sessions and folded groups |
-| <kbd>⏎</kbd> | Open a visible selected session or expand a folded group; <kbd>ctrl</kbd>+<kbd>q</kbd> returns from an agent |
-| <kbd>←</kbd> <kbd>→</kbd> | Fold or expand the selected group |
-| <kbd>page up</kbd> <kbd>page down</kbd> / <kbd>home</kbd> <kbd>end</kbd> | Navigate the visible board by pages or ends |
-| <kbd>g</kbd> | Reveal the next session needing input or ready for review |
-| <kbd>m</kbd> | More: existing global and selected-session actions |
-| <kbd>n</kbd> | Start a session and choose its CLI, working directory, and optional tag |
-| <kbd>e</kbd> | Rename the selected session |
-| <kbd>t</kbd> | Tag the selected session; an empty tag clears it |
-| <kbd>o</kbd> | Options: board grouping/order and the optional CLI return button. Choices are remembered across restarts |
-| <kbd>h</kbd> | Hand work to another supported CLI |
-| <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill a live session or delete a finished one; confirm with <kbd>y</kbd> |
-| <kbd>esc</kbd> | Close the TUI while agents keep running |
+| Terminal board, CLI, per-user supervisor and PTY shims | [Rust application](crates/swarm/src) · [runtime contracts](docs/specifications/rust-migration/terminal-runtime.md) |
+| Native agent drivers and managed sessions | [Provider code](crates/swarm/src/providers) · [qualification ledger](docs/verification/rust-migration.md) |
+| Schedules, worktrees, Pilot and unattended daemon restart | [Workflows](docs/specifications/rust-migration/workflows.md) · [scheduling evidence](docs/verification/rust-schedules.md) · [Pilot](docs/verification/rust-pilot.md) |
+| Discord messages, worker mail and calls | [Connector](crates/swarm/src/discord) · [pinned Discord media helper](services/discord-voice) · [call qualification](docs/verification/rust-discord-personal-calls.md) |
+| State migration and rollback trials | [Stopped sessions](docs/verification/rust-stopped-go-state.md) · [live Go shim adoption](docs/verification/rust-live-go-shim.md) |
+| Storage inspection and cleanup | [Cleanup and retention evidence](docs/verification/rust-storage-cleanup.md) |
+| Local signing and release rehearsal | [Manual preview release](docs/operations/rust-preview-release.md) |
 
-The board also takes the mouse: click an unselected session to select it, click the selected session to open it, tap a group header to fold it, and scroll to move the viewport without changing selection. Buttons include their shortcut once, such as `[Open (⏎)]` and `[More (m)]`. Wider screens expose Rename, Tag, Handoff and Kill, or Resume/Delete for ended sessions. Narrow screens move overflow into More, including New when necessary. More provides every available agent action and tappable Back/Up/Down controls. An offscreen selected session is revealed before a session command can act; repeat the command after checking its target.
-
-For phone terminals over SSH, layout follows the available columns and rows, including software-keyboard resizing. Compact rows prioritize names and attention; folded groups retain attention counts. Tap the attention count or press <kbd>g</kbd> to reveal an attention session. Text forms still use your keyboard and preserve terminal-native selection/paste. On the board or More, use your terminal's selection bypass modifier if available (usually <kbd>shift</kbd>, or <kbd>option</kbd> in iTerm2 and Terminal.app). Gesture translation depends on the terminal app; an actual client must emit mouse/wheel reports for those interactions.
-
-The board/menu minimum is 24×4 cells; text and decision screens require 32×8. Smaller screens preserve drafts and allow cancel/back while pausing new actions. Swarm stops board mouse capture before handing the terminal to an attached agent. See the [mobile terminal interaction contract](docs/specifications/mobile-terminal-touch-plan.md) and [qualification evidence](docs/verification/mobile-terminal-touch/implementation.md).
-
-Attach mode shows the agent's native interface with a reserved bottom return hint. Ctrl+Q returns to the board while the session keeps running. Ctrl+P and Ctrl+N switch straight to the previous and next running session in board order, without going back to the board. Enable **Options → CLI button** for `[swarm (ctrl+q)]` in that same row. The complete button must fit before it becomes active. It defaults off: enabling it captures mouse input across the terminal and can affect native selection/scrolling. Supported mouse modes use the button; older live shims without mouse-state metadata and unsupported modes retain Ctrl+Q. Unknown mode transitions can safely return you to the board with an explanation; turn the option off to continue raw attach. Actual Termux/iOS touch qualification remains open.
-
-Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it. If the saved directory is unavailable, choose an existing directory to relocate and resume the same conversation, or press <kbd>esc</kbd> to cancel.
-
-## Status is the interface
-
-<p align="center">
-  <img src="docs/assets/swarm-status-ridge.png" alt="Four ordered lights represent Needs input, Working, Ready for review, and Completed" width="960">
-</p>
-
-swarm combines process, turn, and interaction signals into one actionable group:
-
-| Group | What it means |
-|---|---|
-| **Needs input** | The agent asked a question or requested permission. Always sorted first. |
-| **Working** | A turn is active. The last meaningful output appears underneath. |
-| **Ready for review** | The turn finished. Attach, review the diff, or send the next prompt. |
-| **Completed** | The process exited or was lost. It remains until you delete it. |
-
-Structured events are preferred when a CLI exposes them—Claude Code uses configured hooks. Otherwise swarm reads the emulated screen grid and applies adapter-specific detection; it never guesses from arbitrary raw byte fragments.
-
-## The terminal board
-
-<p align="center">
-  <img src="docs/assets/swarm-board.svg" alt="The swarm terminal board listing coding-agent sessions grouped by status, with Needs input first" width="840">
-</p>
-
-`o` opens the board options: group by status, repository, or tag, and order by arrival, activity, creation, or name. Repository and tag cells stay blocked by status internally — Needs input first, Completed last — so the ordering you pick applies within each status block rather than shuffling an idle session above one waiting on you.
-
-## Bring existing sessions into swarm
-
-Inspect Claude Agent View background sessions that can be adopted:
+Run the development gates locally.
 
 ```sh
-swarm reattach --cli claude --all --dry-run
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 ```
 
-Transfer active sessions from Claude's background supervisor to swarm:
-
-```sh
-swarm reattach --cli claude --take-over
-```
-
-Add `--all` to include completed and stopped sessions. Interactive sessions are never imported. The operation is idempotent: swarm reuses a row with the same native Claude session ID instead of creating a duplicate.
-
-Codex CLI conversations can also be discovered from their native history:
-
-```sh
-swarm reattach --cli codex --dry-run
-```
-
-Stop the original Codex CLI before importing a selected conversation:
-
-```sh
-swarm reattach --cli codex --session <conversation-uuid> --take-over
-```
-
-For Codex, `--take-over` confirms that you already stopped the original CLI; swarm does not stop Codex automatically. Omitting `--session` imports every discovered unarchived CLI conversation. Discovery reads native rollout metadata, so it cannot tell whether a conversation is currently running. Repeated imports reuse the existing Swarm row.
-
-Use `--all --dry-run` to also inspect archived Codex conversations. Archived imports are refused before launching anything: run `codex unarchive <conversation-uuid>` first. Codex import currently supports uncompressed CLI rollout files in the default `~/.codex` home, including physical rollout UUID suffixes. Compressed-only and index-only histories are not discovered. Custom `CODEX_HOME` can be inspected with `--dry-run`; imports with a custom home, `CODEX_PROFILE`, or an active managed Codex login are refused to avoid resuming in a different native history store. Return to native sign-in before importing. See [verification and limits](docs/verification/codex-reattach.md).
-
-## Supervised handoff
-
-Select a source session at an ordinary prompt or ready for review and press <kbd>h</kbd>. Choose the target CLI, model, and supervision mode. The source writes a context document, launches the linked child, and can monitor it with `swarm watch`, `swarm peek`, and `swarm send`.
-
-```sh
-swarm handoff --cli claude --model opus --supervision passive --context-file /tmp/handoff.md
-```
-
-Supervision modes:
-
-- `passive` — the daemon notifies the source when the child needs input, becomes ready for review, or completes.
-- `manual` — the source agent runs the watch/peek/send loop itself.
-- `none` — the source reports the child session ID and leaves supervision to you.
-
-Permission requests are never approved by handoff automation; they remain explicit human decisions.
-
-## Supported agents
-
-| Agent | Status |
-|---|---|
-| Claude Code | Supported |
-| Codex | Supported |
-| agy / Antigravity CLI | Supported (options, statusLine hook, handoff, CLI refresh) |
-| OpenCode | Supported |
-| [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation) | Supported on Apple Silicon macOS and Linux |
-
-Every integration is a self-contained adapter covering detection, spawn arguments, status signals, and resume behavior. Characterization harnesses record real CLI output so adapters are tested against observed behavior rather than assumptions. See the [Hermes adapter evidence](docs/verification/hermes-adapter-evidence.md) for its current upstream limitations.
-
-## Android companion
-
-The Android app pairs with a computer running swarm, displays the same session priorities, and supports encrypted remote observation and control. There is no swarm account: the phone and computer pair directly, and the relay transports encrypted envelopes it cannot read.
-
-The application source lives under [`android/`](android/). Product, privacy, pairing, and self-hosted relay documentation is indexed from [docs/INDEX.md](docs/INDEX.md).
-
-## Upgrading
-
-The daemon keeps running when the binary on disk changes. After an upgrade, move it to the new build with:
-
-```sh
-swarm daemon restart
-```
-
-Running sessions survive and reconnect by design. See [docs/install.md](docs/install.md) for the complete upgrade path.
-
-## Project status
-
-Public and released; see the [releases page](https://github.com/Nathandela/swarm/releases). Building requires Go 1.26 or newer.
-
-The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, production CLI adapters, inter-session handoff, and Android remote-control foundation are implemented and covered by verification evidence under [`docs/verification/`](docs/verification/).
-
-Known limitation: sessions make progress only while the host computer is awake. Sleep pauses agent processes; they resume automatically on wake with their state intact.
-
-## Documentation
-
-- [Documentation index](docs/INDEX.md) — every major document, one hop away
-- [System specification](docs/specifications/system-spec.md) — requirements, architecture, and scenarios
-- [Build plan](docs/specifications/build-plan.md) — ordered delivery plan and contracts
-- [Architecture decisions](docs/adr/) — the decisions behind the process and protocol model
-- [UI preview](docs/design/ui-preview.html) — navigable terminal design mockup
-- [Brandbook v1](docs/design/swarm-illustration-direction/index.html) — Night Orchestra artwork, logo, icon, palette, and README asset system
-
-## Build and test
-
-```sh
-go build ./...
-go test ./...
-go vet ./...
-golangci-lint run
-```
-
-All gates must pass before a feature closes. Contributions follow the TDD, evidence, and ADR conventions in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md).
-
-## License
-
-swarm is licensed under the [MIT License](LICENSE). Bundled third-party components and assets remain subject to their respective license notices.
+The migration also uses independent Go and Rust executables, separate private state roots, native macOS and Linux, and real PTYs. The release ledger records the exact scenarios, provider versions, observed results and open gates. [Reproducible comparison harness](scripts/verification/parity/README.md) · [Migration plan](docs/specifications/rust-migration/README.md) · [Release evidence](docs/verification/rust-migration.md)
