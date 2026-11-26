@@ -68,7 +68,11 @@ def main():
 
     root = new_directory(args.stage_parent, "sw-test")
     # Workspace identity tests need a filesystem that reports directory birth time.
-    scratch = root if args.stage_parent == scratch_parent else new_directory(scratch_parent, "sw")
+    try:
+        scratch = root if args.stage_parent == scratch_parent else new_directory(scratch_parent, "sw")
+    except Exception:
+        subprocess.run([*ssh, f"rmdir {root}"], check=False)
+        raise
     print(f"Running {len(tests)} test executables on {host} in {root}, scratch {scratch}", flush=True)
     subprocess.run(["scp", "-q", "-o", "BatchMode=yes", *binaries, f"{host}:{root}/"], check=True)
     failed = []
