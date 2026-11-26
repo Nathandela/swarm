@@ -156,6 +156,40 @@ def check_source(source):
     require(output("git", "rev-parse", "HEAD") == source, "source commit differs from the requested freeze")
 
 
+def rust_notices():
+    """Collect notices from the installed compiler and the locked target graphs."""
+    sysroot = Path(output("rustup", "run", TOOLCHAIN, "rustc", "--print", "sysroot"))
+    toolchain = sysroot / "share/doc/rust"
+    files = {}
+    for path in sorted([toolchain / "COPYRIGHT-library.html", *(toolchain / "licenses").glob("*.txt")]):
+        files[f"notices/toolchain/{path.name}"] = path.read_bytes()
+    packages = {}
+    for target in TARGETS.values():
+        graph = json.loads(output("rustup", "run", TOOLCHAIN, "cargo", "metadata", "--frozen",
+                                  "--format-version", "1", "--filter-platform", target))
+        for p in graph["packages"]:
+            if p["source"]:
+                packages[p["id"]] = p
+    inventory = {}
+    for p in sorted(packages.values(), key=lambda item: item["id"]):
+        key = f'{p["name"]}-{p["version"]}'
+        package = Path(p["manifest_path"]).parent
+        sources = {path for path in package.rglob("*") if path.is_file() and re.fullmatch(
+            r"(LICENSE|LICENCE|COPYING|COPYRIGHT|NOTICE|UNLICENSE)([-_.].*)?",
+            path.name, re.IGNORECASE)}
+        if p["license_file"]:
+            sources.add(package / p["license_file"])
+        require(p["license"] or p["license_file"], f"missing declared Cargo license for {key}")
+        inventory[key] = {"license": p["license"], "source": p["source"], "notice_files": []}
+        for path in sorted(sources):
+            relative = path.resolve().relative_to(package.resolve()).as_posix()
+            name = f"notices/crates/{key}/{relative}"
+            files[name] = path.read_bytes()
+            inventory[key]["notice_files"].append(name)
+    files["notices/cargo.json"] = json_bytes(inventory)
+    return files
+
+
 def build(args):
     import tomllib
 
@@ -169,6 +203,7 @@ def build(args):
     require(ROOT not in args.output.parents and args.output != ROOT, "release output must be outside checkout")
     with tempfile.TemporaryDirectory(prefix="swarm-release-") as tmp:
         scratch = Path(tmp)
+        notices = rust_notices()
         pins = stage_media(scratch, args.node_archives)
         pins_file = scratch / "release-media.json"
         pins_file.write_bytes(json_bytes(pins))
@@ -204,6 +239,7 @@ def build(args):
                 "compat.json": json_bytes(compat),
                 "media-pins.json": pins_file.read_bytes(),
                 "LICENSE": (ROOT / "LICENSE").read_bytes(),
+                **notices,
             }
             for platform in platforms:
                 for relative in pins[platform]:
@@ -296,6 +332,17 @@ def inspect_archive(data, match):
             name = f"media/{platform}/{relative}"
             require(name in files and sha == digest(files[name]), f"media pin differs for {name}")
             expected.add(name)
+    notices = {name for name in files if name.startswith("notices/")}
+    if notices:
+        require({"notices/cargo.json", "notices/toolchain/COPYRIGHT-library.html"} <= notices,
+                "incomplete third-party notices")
+        inventory = json.loads(files["notices/cargo.json"])
+        listed = {name for package in inventory.values() for name in package["notice_files"]}
+        toolchain = {name for name in notices if re.fullmatch(
+            r"notices/toolchain/(COPYRIGHT-library\.html|[a-zA-Z0-9_.-]+\.txt)", name)}
+        require(listed | toolchain | {"notices/cargo.json"} == notices, "unlisted third-party notice")
+        require(all(name.startswith("notices/crates/") for name in listed), "invalid Cargo notice path")
+        expected |= notices
     require(files.keys() == expected, "archive contains unlisted or retired members")
     return files, compat
 
