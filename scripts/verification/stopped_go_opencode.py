@@ -93,6 +93,14 @@ def exercise(go, current_go, rust, base):
         cli=subprocess.check_output([rust,"ls","--json"],env=re,text=True)
         assert json.loads(cli)==[expected]
         id=expected["id"]
+        original = metadata.read_bytes()
+        before_argv = observed.read_bytes()
+        resume = launch | {"options":{"resume_from":id}, "initial_prompt":""}
+        rejected = owner(re, {"op":"launch", "launch":resume})
+        assert rejected["op"] == "error", rejected
+        assert "verified native conversation and account binding" in rejected["error"], rejected
+        assert listed(re) == [expected] and metadata.read_bytes() == original
+        assert observed.read_bytes() == before_argv
         assert owner(re,{"op":"rename","session_id":id,"name":"Renamed under Rust"})["op"]=="ok"
         assert owner(re,{"op":"set_tag","session_id":id,"tag":"restored"})["op"]=="ok"
     assert before=={p.name:p.read_bytes() for p in owned.iterdir() if p.is_file() and p!=metadata}

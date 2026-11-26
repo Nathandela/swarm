@@ -255,10 +255,18 @@ impl State {
             let (endpoint, local) = source.split_once('/').unwrap_or((&self.endpoint, source));
             if field(launch, "agent") == "agy"
                 && endpoint == self.endpoint
-                && store.is_stopped_agy(local)
+                && store.is_stopped_agent(local, "agy")
             {
                 return Err(io::Error::other(
                     "Go Antigravity resume requires native account and checkout custody; resume this session with Go",
+                ));
+            }
+            if field(launch, "agent") == "opencode"
+                && endpoint == self.endpoint
+                && store.is_stopped_agent(local, "opencode")
+            {
+                return Err(io::Error::other(
+                    "Go OpenCode resume requires a verified native conversation and account binding; resume this session with its original Go owner",
                 ));
             }
         }

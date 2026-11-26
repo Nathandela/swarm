@@ -27,7 +27,9 @@ parser.add_argument('--native', type=Path)
 parser.add_argument('--mixed', action='store_true')
 parser.add_argument('--hands-off', action='store_true')
 parser.add_argument('--terminal-checkpoint', choices=('missing', 'recovered', 'incomplete', 'conflict'))
-parser.add_argument('--live-go', type=Path)
+go_owner = parser.add_mutually_exclusive_group()
+go_owner.add_argument('--live-go', type=Path)
+go_owner.add_argument('--stopped-go', type=Path)
 parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
                     help='pause the verified native TUI across one preflight deadline')
 parser.add_argument('--shim-pause', choices=('old', 'retry', 'exhaust'),
@@ -211,6 +213,13 @@ def stop(daemon):
 version=subprocess.check_output(['opencode','--version'], env=env, text=True, timeout=15).strip()
 assert version=='1.19.3',version
 print('installed native version verified', flush=True)
+if args.stopped_go:
+    from stopped_go_opencode_native import rehearse
+    try:
+        rehearse(args.stopped_go, swarm, root, env, wait, request_log)
+    finally:
+        provider.shutdown()
+    sys.exit(0)
 if args.live_go:
     from live_go_opencode import rehearse
     try:

@@ -945,10 +945,10 @@ impl Store {
         self.rows.lock().unwrap().contains_key(id)
     }
 
-    pub(super) fn is_stopped_agy(&self, id: &str) -> bool {
+    pub(super) fn is_stopped_agent(&self, id: &str, agent: &str) -> bool {
         self.rows.lock().unwrap().get(id).is_some_and(|entry| {
             let effective = entry.observed_exit.as_ref().unwrap_or(&entry.meta);
-            effective["agent_type"] == "agy" && effective["status"]["Process"] == "exited"
+            effective["agent_type"] == agent && effective["status"]["Process"] == "exited"
         })
     }
 
