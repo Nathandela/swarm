@@ -136,3 +136,18 @@ counts, and calibration results are in the local evidence directory
 
 [Native fixture and queue commands](../../scripts/verification/opencode-rust/README.md) ·
 [Performance commands](../../scripts/verification/parity/README.md)
+
+
+## Long-run failures observed on November 26
+
+The one-hour receipts above remain valid. Three longer development runs stopped before their 24-hour target. All three reapers reported successful cleanup. The original raw reports remain with their run roots. The digests below identify the terminal reports.
+
+| Host and workload | Development source | Elapsed seconds | Completed native inputs | Daemon restarts | Terminal report SHA-256 |
+|---|---|---:|---:|---:|---|
+| Darwin arm64 native OpenCode | `7202a48d` | 15,518.45 | 255 | 12 | `16eddcf70479119775522cbe2af00aa7f6eb065bd2159c40e242af352e4a5888` |
+| Darwin arm64 mixed | `7202a48d` | 17,915.24 | 389 | 38 | `532ccd8066aee01cf48abf8afbcfbc1b0ea1a56c01d433285371601b33d2310b` |
+| Linux x86_64 mixed | `cb630ec5` | 13,133.01 | 286 | 28 | `d8cab0ae974bf916ea26c58e116b5782fce9aab4f79164cb4fadc15da2ae5e82` |
+
+The native Mac run stopped waiting for the durable result of input 256. The provider had already completed that turn, including both permission and question steps. Its worker receipt still read `native_accepted`. In the Linux mixed run the 30-second durable wait expired on input 287. A read-only query against the stopped test database found exactly one matching native user row and one terminal assistant child with `finish=stop`. The model saw one request. The first explicit status query reconciled the missing completion from the native snapshot. These runs expose automatic receipt reconciliation when a completion event is lost.
+
+The Mac mixed run stopped with a different outcome. Its 299th scheduled occurrence was exhausted after 298 earlier completions. The original schedule database recorded only a rejected Codex attempt, with no worker session or prompt delivery. Its detail was `provider command timed out` during pre-reservation discovery. The evidence distinguishes this from a verified native quota or a failed model turn. A new timed run is needed after the independent receipt and discovery repairs.

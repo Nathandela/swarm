@@ -6,6 +6,10 @@ Nathan approved preserving the combining accent after reattach, delivering exact
 
 ## November 26 combined implementation
 
+The complete suite at `1be8f6c8` passed 215 tests on each native host. Ten tests require explicit prerequisites or an opt-in live test. This revision includes the approved prerelease comparison and XTerm input-preservation contract. The instrumented rc.2/rc.10 board run showed the newer-owner notice and preserved the live worker on both platforms. [Darwin receipt](rust-migration/rc-order-darwin.json) · [Linux receipt](rust-migration/rc-order-linux.json)
+
+Three development 24-hour trials subsequently stopped before reaching their requested duration. The native Mac and mixed Linux traces expose a missing automatic terminal receipt after the real provider finished. The mixed Mac trace records a scheduled provider's read-only version probe timing out before creating a worker. [Durations, custody and raw report hashes](rust-m11-development.md)
+
 The real registered Discord bot published synthetic text and a CSV in a dedicated private thread on the owner-verified server. Both IDs, the downloaded bytes and the archived state were independently read back while the deployed Gateway stayed online. Discord UI inspection and a live call with consenting participants remain open. [Live transport evidence](rust-discord-live-transport.md)
 
 At `dc269ed8`, 206 default tests passed on each native host. Nine additional cases require external fixtures or run as private subprocesses. Both hosts passed the service replacement regression with an injected service-manager failure. The fixture verifies that failure was reached and the original service recovered. The signed `5e42c2cf` package separately kept its managed writer lease and worker across daemon termination on all three exercised OS/architecture pairs. [Installed launcher receipts](rust-installed-pty.md) · [Service installation](rust-discord-service.md)
