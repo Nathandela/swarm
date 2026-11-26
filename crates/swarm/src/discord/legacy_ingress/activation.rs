@@ -15,10 +15,16 @@ fn identity_of(place: &Place, cfg: &Config) -> io::Result<Value> {
     // Stop can disable a connector without replacing its retained authority.
     stable["enabled"] = json!(true);
     let enrollment = format!("{:x}", Sha256::digest(serde_json::to_vec(&stable)?));
-    Ok(
-        json!({"version":1,"installation":cfg.text("installation_id"), "enrollment":enrollment,
-        "directory":pin_identity(&place.dir)?, "connector":pin_identity(&place.dir.join("discord.db"))?}),
-    )
+    let mut marker = json!({"version":1,"installation":cfg.text("installation_id"), "enrollment":enrollment,
+        "directory":pin_identity(&place.dir)?, "connector":pin_identity(&place.dir.join("discord.db"))?});
+    if retained_vm(cfg) {
+        let checkout = Path::new(cfg.text("work_dir"));
+        if !grants::project(cfg, cfg.text("work_dir")) {
+            return Err(invalid());
+        }
+        marker["vm_checkout"] = pin_identity(checkout)?;
+    }
+    Ok(marker)
 }
 
 pub(in crate::discord) fn selected(place: &Place) -> io::Result<bool> {
@@ -36,6 +42,14 @@ pub(in crate::discord) fn selected(place: &Place) -> io::Result<bool> {
 }
 
 pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<()> {
+    probe(place, cfg, db, true)
+}
+
+pub(super) fn idle(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<()> {
+    probe(place, cfg, db, false)
+}
+
+fn probe(place: &Place, cfg: &Config, db: &impl DbApi, admitted_wake: bool) -> io::Result<()> {
     let tx = db.begin().map_err(io::Error::other)?;
     let install = cfg.text("installation_id");
     let channel = cfg.text("dm_channel_id");
@@ -86,7 +100,7 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
     let (_pin, voice) = open_bolt(&path, 64 << 20)?;
     let voice_tx = voice.begin().map_err(io::Error::other)?;
     let state = match prepare::read_voice(&voice_tx, &ledger, cfg, &endpoint) {
-        Err(_) if cfg.text("project_access") == "vm" => {
+        Err(_) if retained_vm(cfg) && admitted_wake => {
             require_no_pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?;
             return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint)
                 .map(|_| ());
@@ -150,7 +164,7 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
     Ok(())
 }
 
-fn require_no_pending_vm_mail(place: &Place, discussion: &str) -> io::Result<()> {
+pub(super) fn require_no_pending_vm_mail(place: &Place, discussion: &str) -> io::Result<()> {
     let path = place.supervisor_root().join("dispatcher-mail.db");
     let (_pin, db) = match open_bolt(&path, 256 << 20) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -196,12 +210,18 @@ pub(in crate::discord) fn migrate(
     place: &Place,
     dry_run: bool,
     rollback: bool,
+    vm: bool,
 ) -> io::Result<bool> {
     let path = place.dir.join(MARKER);
     if rollback {
         let _configuration = place.lock()?;
         let _bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
         if selected(place)? {
+            if retained_vm(&place.load()?) != vm {
+                return Err(io::Error::other(
+                    "the rollback command does not match the retained personal mode",
+                ));
+            }
             let source = place.dir.join("discord.db");
             let (_pin, _db) = open_bolt(&source, 64 << 20)?;
             fs::remove_file(path)?;
@@ -210,20 +230,23 @@ pub(in crate::discord) fn migrate(
         println!("Original Go personal connector remains selected.");
         return Ok(true);
     }
-    let cfg = personal_enrollment(place)?;
+    let cfg = personal_config(place, vm)?;
     grants::enrolled(&cfg)?;
     let source = place.dir.join("discord.db");
     let expected = fs::symlink_metadata(&source)?;
+    let record = identity_of(place, &cfg)?;
     if dry_run {
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
-        ready(place, &cfg, &db)?;
-    } else {
-        let lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
-        ready(place, &cfg, &lease.db)?;
-        if !lease.source_unchanged()? {
+        idle(place, &cfg, &db)?;
+        if identity_of(place, &place.load()?)? != record {
             return Err(invalid());
         }
-        let record = identity_of(place, &cfg)?;
+    } else {
+        let lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
+        idle(place, &cfg, &lease.db)?;
+        if !lease.source_unchanged()? || identity_of(place, &place.load()?)? != record {
+            return Err(invalid());
+        }
         if !selected(place)? {
             runtime::write_json(&path, &record)?;
         }

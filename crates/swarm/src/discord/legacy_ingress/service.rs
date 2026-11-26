@@ -407,7 +407,7 @@ pub(super) fn with_vm_wake(
 }
 
 pub(in crate::discord) fn run(place: &Place) -> io::Result<bool> {
-    let cfg = personal_enrollment(place)?;
+    let cfg = selected_personal(place)?;
     let api = Discord::connect(&cfg)?;
     with(place, &api, None, |cfg| {
         let (mut socket, mut cursor) = gateway::open(cfg)?;
@@ -424,15 +424,15 @@ pub(super) fn with<ReadEvent>(
 where
     ReadEvent: FnMut() -> io::Result<Option<Value>>,
 {
-    let cfg = personal_enrollment(place)?;
+    let cfg = selected_personal(place)?;
     let source = place.dir.join("discord.db");
     let expected = fs::symlink_metadata(&source)?;
     let mut lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
     if !activation::selected(place)? {
         return Err(invalid());
     }
-    activation::ready(place, &cfg, &lease.db)?;
-    let boundary = {
+    activation::idle(place, &cfg, &lease.db)?;
+    let (boundary, vm_discussion) = {
         let tx = lease.db.begin().map_err(io::Error::other)?;
         let key = format!(
             "{}\0{}",
@@ -445,7 +445,26 @@ where
         if !snowflake(boundary) {
             return Err(invalid());
         }
-        boundary.parse::<u64>().map_err(io::Error::other)?
+        let vm_discussion = if retained_vm(&cfg) {
+            let (_, id, _) = voice_location(place, &cfg, &saved)?;
+            Some(format!("discord-teammate-{id}"))
+        } else {
+            None
+        };
+        (
+            boundary.parse::<u64>().map_err(io::Error::other)?,
+            vm_discussion,
+        )
+    };
+    let mut next_mail_check = Instant::now();
+    let mut check_mail = || {
+        if let Some(discussion) = &vm_discussion
+            && Instant::now() >= next_mail_check
+        {
+            activation::require_no_pending_vm_mail(place, discussion)?;
+            next_mail_check = Instant::now() + Duration::from_millis(250);
+        }
+        Ok::<(), io::Error>(())
     };
     let status = StatusSocket::start(place, &cfg)?;
     room.verify(&cfg)?;
@@ -460,6 +479,7 @@ where
             if status.stopping() {
                 return Ok(true);
             }
+            check_mail()?;
             if let Some(id) = pending.pop_first() {
                 break id;
             }
@@ -496,6 +516,7 @@ where
             if status.stopping() {
                 return Ok(true);
             }
+            check_mail()?;
             if Instant::now() >= deadline {
                 return Err(io::Error::other(
                     "the original native manager has no verified final publication",

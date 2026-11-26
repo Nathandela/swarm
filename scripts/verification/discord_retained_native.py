@@ -28,6 +28,17 @@ def run(bin, env, *args):
 
 
 
+def activate_original(fixture, env, place):
+    argv = [fixture, "activate", place, "original-room"]
+    for retry in range(3):
+        ready = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=80)
+        if ready.returncode == 0:
+            return json.loads(ready.stdout)
+        assert retry < 2 and "discussion manager could not become ready" in ready.stderr, ready.stderr
+        time.sleep(1)
+    raise AssertionError("original Go manager never became ready")
+
+
 def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
     posts = []
     app_reads = 0
@@ -134,7 +145,7 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
         assert run(fixture, env, "ingress", place, "original-room", "501", "settle").strip() == "1"
         with daemon(go, env, base / "go.log"):
             try:
-                binding = json.loads(run(fixture, env, "activate", place, "original-room"))
+                binding = activate_original(fixture, env, place)
                 session = binding["session_id"]
                 row, = [r for r in listed(env) if r["id"] == session]
                 assert row["role"] == "manager" and row["status"]["Process"] == "running"
@@ -149,6 +160,7 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
                                   "SWARM_TEST_DISCORD_REST_PORT": str(discord.server_port)}
                 if vm:
                     assert binding["native_cli"] is True
+                if vm and not os.environ.get("SWARM_DISCORD_CONTINUED_VM_TEXT"):
                     test_env["SWARM_TEST_DISCORD_ACTIVE_VM"] = "1"
                     run(rust_test, test_env, "retained_original_go_vm_inspection", "--nocapture")
                     assert posts == [] and calls == []
@@ -280,14 +292,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
         run(fixture, env, "ingress", place, "original-room", "501", "settle")
         with daemon(go, env, base / "go.log"):
             try:
-                activate = [fixture, "activate", place, "original-room"]
-                for retry in range(3):
-                    ready = subprocess.run(activate, env=env, capture_output=True, text=True, timeout=80)
-                    if ready.returncode == 0:
-                        break
-                    assert (retry < 2 and "discussion manager could not become ready" in ready.stderr), ready.stderr
-                    time.sleep(1)
-                initial = json.loads(ready.stdout)
+                initial = activate_original(fixture, env, place)
                 assert initial["native_cli"] is True
                 ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -411,6 +416,11 @@ if __name__ == "__main__":
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             print(f"PASS original Go admitted native worker wake fixture ({mode})")
+        sys.exit(0)
+    if os.environ.get("SWARM_DISCORD_CONTINUED_VM_TEXT"):
+        with tempfile.TemporaryDirectory(prefix="dn-vm-text-", dir="/tmp") as directory:
+            exercise(go, fixture, codex, rust_test, Path(directory), True, vm=True)
+        print("PASS retained original Go VM manager continues text across Rust service restart")
         sys.exit(0)
     for acknowledge in (True, False):
         with tempfile.TemporaryDirectory(prefix="dn-", dir="/tmp") as directory:

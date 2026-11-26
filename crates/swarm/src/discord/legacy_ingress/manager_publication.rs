@@ -126,6 +126,7 @@ fn native_proof(
     )?;
     let native = &runtime["manager_runtime"];
     if native["binding"] != admission["binding"]
+        || !native_cli_matches(&native["native_cli"], retained_vm(cfg))
         || native["turn"]["native_input_id"] != admission["nonce"]
         || native["turn"]["native_turn_id"] != turn
         || native["turn"]["state"] != "running"
@@ -426,13 +427,7 @@ pub(super) fn accept(
     let path = directory.join("voice.db");
     let (pin, mut voice) = bounded_writer(writable_pin(&path)?)?;
     let tx = voice.begin_rw().map_err(io::Error::other)?;
-    let receipt = inspect_voice(
-        &tx,
-        &id,
-        &candidate.origin,
-        cfg.text("manager_cli"),
-        &endpoint,
-    )?;
+    let receipt = inspect_voice(&tx, &id, &candidate.origin, cfg, &endpoint)?;
     if request["conversation_id"] != receipt.binding["conversation_id"]
         || request["session_id"]
             != field(&receipt.binding, "session_id")
@@ -446,9 +441,7 @@ pub(super) fn accept(
         return Err(invalid());
     }
     let turn = native_proof(place, cfg, &receipt, args, &call["meta"])?;
-    if personal_enrollment(place)?.0 != cfg.0 {
-        return Err(invalid());
-    }
+    current_turn_enrollment(place, cfg)?;
     let project = field(&receipt.admission, "project");
     if !project.is_empty() && !grants::project(cfg, project) {
         return Err(invalid());
@@ -464,13 +457,7 @@ pub(super) fn accept(
     queue(cfg, lease, &candidate.binding, &output, &speech)?;
     if output["exported"] != true {
         let tx = voice.begin_rw().map_err(io::Error::other)?;
-        let receipt = inspect_voice(
-            &tx,
-            &id,
-            &candidate.origin,
-            cfg.text("manager_cli"),
-            &endpoint,
-        )?;
+        let receipt = inspect_voice(&tx, &id, &candidate.origin, cfg, &endpoint)?;
         let publication = key(
             "publications",
             field(&receipt.binding, "conversation_id"),
@@ -638,13 +625,7 @@ pub(super) fn complete(
     let path = directory.join("voice.db");
     let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
-    let mut original = inspect_voice(
-        &tx,
-        &id,
-        &candidate.origin,
-        cfg.text("manager_cli"),
-        &endpoint,
-    )?;
+    let mut original = inspect_voice(&tx, &id, &candidate.origin, cfg, &endpoint)?;
     let request = &original.admission["request"];
     let admission = &request["manager_admission"];
     let turn = field(&original.admission, "native_turn_id").to_owned();

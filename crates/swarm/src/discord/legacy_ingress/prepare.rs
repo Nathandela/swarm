@@ -428,9 +428,10 @@ pub(super) fn under_lease(
     lease: &mut ConnectorLease,
     fetch: impl FnOnce(&Config, &str) -> io::Result<Value>,
 ) -> io::Result<bool> {
-    if prepared_config(place, message)?.0 != cfg.0 {
+    if !snowflake(message) {
         return Err(invalid());
     }
+    current_turn_enrollment(place, cfg)?;
     let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
     no_pending_output(&tx, cfg)?;
     let input = fetch(cfg, message)?;
@@ -446,7 +447,7 @@ pub(super) fn under_lease(
     let voice_path = directory.join("voice.db");
     let (voice_pin, mut voice_db) = bounded_writer(writable_pin(&voice_path)?)?;
     let mut voice_tx = voice_db.begin_rw().map_err(io::Error::other)?;
-    if let Ok(prior) = inspect_voice(&voice_tx, &id, &origin, cfg.text("manager_cli"), &endpoint) {
+    if let Ok(prior) = inspect_voice(&voice_tx, &id, &origin, cfg, &endpoint) {
         validate_prepared(&prior, cfg)?;
         if value(&tx, "teammate_ingress", &key)?.is_some_and(|saved| saved["State"] == "sending") {
             println!("The original Go voice controller already has this prepared input.");

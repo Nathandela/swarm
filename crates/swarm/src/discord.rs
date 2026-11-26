@@ -399,6 +399,7 @@ impl<'a> Request<'a> {
                     "rollback",
                     "controls",
                     "activate-personal",
+                    "activate-personal-vm",
                     "inspect-personal-vm",
                     "stage-personal-vm-wake",
                     "deliver-personal-vm-wake",
@@ -570,6 +571,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     || req.on("controls")
                     || req.on("rollback")
                     || req.on("activate-personal")
+                    || req.on("activate-personal-vm")
                     || (!req.on("inspect-personal-vm") && req.on("dry-run"))
                     || export.is_some()
                     || source.is_some()
@@ -597,6 +599,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     || req.on("rollback")
                     || req.on("dry-run")
                     || req.on("activate-personal")
+                    || req.on("activate-personal-vm")
                     || personal.iter().any(|(flag, _)| req.get(flag).is_some())
                 {
                     return Err(invalid("select one migration operation"));
@@ -628,8 +631,9 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     "select an original publication or source attachment",
                 ));
             }
-            if req.on("activate-personal") {
-                if req.on("controls")
+            if req.on("activate-personal") || req.on("activate-personal-vm") {
+                if (req.on("activate-personal") && req.on("activate-personal-vm"))
+                    || req.on("controls")
                     || personal.iter().any(|(flag, _)| req.get(flag).is_some())
                     || req.on("dry-run") && req.on("rollback")
                 {
@@ -639,6 +643,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     &place,
                     req.on("dry-run"),
                     req.on("rollback"),
+                    req.on("activate-personal-vm"),
                 );
             }
             let mut selected = personal

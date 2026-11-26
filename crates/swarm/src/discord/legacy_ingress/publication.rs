@@ -421,11 +421,9 @@ where
     let (voice_pin, _voice, origin) = original_voice(&directory, &scope, &out, cfg, &endpoint)?;
     verify_guard(&tx, cfg, &origin)?;
     let post = authorize(cfg)?;
-    if personal_enrollment(place)?.0 != cfg.0 {
-        return Err(io::Error::other(
-            "the original publication enrollment changed before delivery",
-        ));
-    }
+    current_turn_enrollment(place, cfg).map_err(|_| {
+        io::Error::other("the original publication enrollment changed before delivery")
+    })?;
     let (_fresh_pin, _fresh_voice, fresh_origin) =
         original_voice(&directory, &scope, &out, cfg, &endpoint)?;
     if fresh_origin != origin

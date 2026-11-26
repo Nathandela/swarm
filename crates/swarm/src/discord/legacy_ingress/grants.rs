@@ -7,9 +7,11 @@ pub(super) fn project(cfg: &Config, root: &str) -> bool {
     if !path.is_absolute()
         || !fs::canonicalize(path).is_ok_and(|resolved| resolved == path)
         || !path.is_dir()
-        || cfg.text("project_access") == "vm"
     {
         return false;
+    }
+    if retained_vm(cfg) {
+        return cfg.text("work_dir") == root;
     }
     match cfg.0["projects"].as_object() {
         Some(grants) if !grants.is_empty() => grants.values().any(|configured| configured == root),
@@ -19,6 +21,13 @@ pub(super) fn project(cfg: &Config, root: &str) -> bool {
 
 pub(super) fn enrolled(cfg: &Config) -> io::Result<BTreeMap<String, String>> {
     let mut rows = BTreeMap::new();
+    if retained_vm(cfg) {
+        let root = cfg.text("work_dir");
+        if !project(cfg, root) {
+            return Err(invalid());
+        }
+        return Ok(BTreeMap::from([(String::new(), root.to_owned())]));
+    }
     if let Some(projects) = cfg.0["projects"].as_object() {
         for (name, path) in projects {
             let root = path.as_str().ok_or_else(invalid)?;

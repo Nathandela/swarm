@@ -187,7 +187,7 @@ fn controller(
     path: &Path,
     id: &str,
     origin: &Value,
-    provider: &str,
+    cfg: &Config,
     endpoint: &str,
 ) -> io::Result<(fs::File, impl DbApi + use<>, Receipt)> {
     let dir = fs::symlink_metadata(path)?;
@@ -201,7 +201,7 @@ fn controller(
         &db.begin().map_err(io::Error::other)?,
         id,
         origin,
-        provider,
+        cfg,
         endpoint,
     )?;
     Ok((pin, db, receipt))
@@ -211,7 +211,7 @@ fn inspect_voice<'tx>(
     tx: &impl TxApi<'tx>,
     id: &str,
     origin: &Value,
-    provider: &str,
+    cfg: &Config,
     endpoint: &str,
 ) -> io::Result<Receipt> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
@@ -245,8 +245,8 @@ fn inspect_voice<'tx>(
             let entry: Value = serde_json::from_slice(raw)?;
             let b = entry["binding"].clone();
             if b["conversation_id"] != conversation
-                || !matches!(b["native_cli"], Value::Null | Value::Bool(false))
-                || b["provider"] != provider
+                || !native_cli_matches(&b["native_cli"], retained_vm(cfg))
+                || b["provider"] != cfg.text("manager_cli")
                 || !field(&b, "session_id").starts_with(&format!("{endpoint}/"))
                 || [
                     "session_instance",
@@ -347,6 +347,30 @@ fn native_cli_matches(flag: &Value, vm: bool) -> bool {
     } else {
         matches!(flag, Value::Null | Value::Bool(false))
     }
+}
+
+fn retained_vm(cfg: &Config) -> bool {
+    cfg.text("project_access") == "vm"
+}
+
+fn selected_personal(place: &Place) -> io::Result<Config> {
+    let current = place.load()?;
+    let cfg = personal_config(place, retained_vm(&current))?;
+    if current.0 != cfg.0 || !activation::selected(place)? {
+        return Err(invalid());
+    }
+    Ok(cfg)
+}
+
+fn current_turn_enrollment(place: &Place, cfg: &Config) -> io::Result<()> {
+    if personal_config(place, retained_vm(cfg))?.0 != cfg.0
+        || (retained_vm(cfg) && !activation::selected(place)?)
+    {
+        return Err(io::Error::other(
+            "the original personal enrollment changed during dispatch",
+        ));
+    }
+    Ok(())
 }
 
 fn personal_enrollment(place: &Place) -> io::Result<Config> {
@@ -454,13 +478,7 @@ pub(super) fn settle(place: &Place, message: &str, dry_run: bool) -> io::Result<
     let source_identity = fs::symlink_metadata(&source)?;
     let stage = |c: Candidate| {
         let (directory, id, endpoint) = voice_location(place, &cfg, &c.binding)?;
-        let (pin, voice, receipt) = controller(
-            &directory,
-            &id,
-            &c.origin,
-            cfg.text("manager_cli"),
-            &endpoint,
-        )?;
+        let (pin, voice, receipt) = controller(&directory, &id, &c.origin, &cfg, &endpoint)?;
         if receipt.admission["source_cutover"] != true {
             return Err(invalid());
         }
@@ -498,13 +516,7 @@ fn settle_under_lease(
         return Ok(true);
     };
     let (directory, id, endpoint) = voice_location(place, cfg, &row.binding)?;
-    let (voice, _voice_db, receipt) = controller(
-        &directory,
-        &id,
-        &row.origin,
-        cfg.text("manager_cli"),
-        &endpoint,
-    )?;
+    let (voice, _voice_db, receipt) = controller(&directory, &id, &row.origin, cfg, &endpoint)?;
     let phase = field(&receipt.admission, "phase");
     let mut c = row;
     if receipt.admission["source_cutover"] != true
@@ -665,13 +677,7 @@ fn dispatch_with(
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
         let c = pending_dispatch(&db, &cfg, message)?;
         let (directory, id, endpoint) = voice_location(place, &cfg, &c.binding)?;
-        let (_pin, _voice, receipt) = controller(
-            &directory,
-            &id,
-            &c.origin,
-            cfg.text("manager_cli"),
-            &endpoint,
-        )?;
+        let (_pin, _voice, receipt) = controller(&directory, &id, &c.origin, &cfg, &endpoint)?;
         validate_prepared(&receipt, &cfg)?;
         println!("Verified a prepared original personal DM with no native cutover recorded.");
         return Ok(true);
@@ -696,13 +702,7 @@ fn dispatch_under_lease(
 ) -> io::Result<bool> {
     let c = pending_dispatch(&lease.db, cfg, message)?;
     let (directory, id, endpoint) = voice_location(place, cfg, &c.binding)?;
-    let (voice_pin, voice_db, receipt) = controller(
-        &directory,
-        &id,
-        &c.origin,
-        cfg.text("manager_cli"),
-        &endpoint,
-    )?;
+    let (voice_pin, voice_db, receipt) = controller(&directory, &id, &c.origin, cfg, &endpoint)?;
     validate_prepared(&receipt, cfg)?;
     let voice_identity = voice_pin.metadata()?;
     drop(voice_db);
@@ -716,7 +716,7 @@ fn dispatch_under_lease(
         return Err(invalid());
     }
     let tx = writer.begin_rw().map_err(io::Error::other)?;
-    let mut read = inspect_voice(&tx, &id, &c.origin, cfg.text("manager_cli"), &endpoint)?;
+    let mut read = inspect_voice(&tx, &id, &c.origin, cfg, &endpoint)?;
     validate_prepared(&read, cfg)?;
     if read.raw != receipt.raw {
         return Err(invalid());
@@ -755,7 +755,7 @@ fn dispatch_under_lease(
         "body_version":1,"manager_runtime_request":{"session_instance":request["session_instance"]}}), "manager_runtime")?;
     let current = &current["manager_runtime"];
     if current["binding"] != request["manager_admission"]["binding"]
-        || !matches!(current["native_cli"], Value::Null | Value::Bool(false))
+        || !native_cli_matches(&current["native_cli"], retained_vm(cfg))
         || current["ready_for_input"] != true
         || current["provider_exhausted"] == true
         || current["turn"]["externally_steered"] == true
@@ -775,11 +775,7 @@ fn dispatch_under_lease(
     {
         return Err(invalid());
     }
-    if personal_enrollment(place)?.0 != cfg.0 {
-        return Err(io::Error::other(
-            "the original personal enrollment changed during dispatch",
-        ));
-    }
+    current_turn_enrollment(place, cfg)?;
     validate_prepared(&read, cfg)?;
     let operation = field(&read.admission, "operation_id").to_owned();
     persist_cutover(tx, &mut read)?;
@@ -1155,7 +1151,7 @@ mod tests {
                     .unwrap();
                 let (dir, id, endpoint) = voice_location(&place, &cfg, &c.binding).unwrap();
                 let (_pin, _db, receipt) =
-                    controller(&dir, &id, &c.origin, "codex", &endpoint).unwrap();
+                    controller(&dir, &id, &c.origin, &cfg, &endpoint).unwrap();
                 (dir, id, endpoint, receipt)
             };
             if fresh {
@@ -1511,11 +1507,15 @@ mod tests {
         // Config alone cannot turn an already running restricted Go manager into VM authority.
         let config = place.dir.join("config.json");
         let original = place.load().unwrap();
-        let mut spoofed = original.0.clone();
-        spoofed["project_access"] = json!("vm");
-        runtime::write_json(&config, &spoofed).unwrap();
-        assert!(activation::inspect_vm(&place).is_err());
-        runtime::write_json(&config, &original.0).unwrap();
+        let vm = retained_vm(&original);
+        if !vm {
+            let mut spoofed = original.0.clone();
+            spoofed["project_access"] = json!("vm");
+            runtime::write_json(&config, &spoofed).unwrap();
+            assert!(activation::inspect_vm(&place).is_err());
+            assert!(activation::migrate(&place, true, false, true).is_err());
+            runtime::write_json(&config, &original.0).unwrap();
+        }
         let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
             "content":"Use project former. Retained real native loopback input.", "type":0, "attachments":[]});
         let mut second = current.clone();
@@ -1553,14 +1553,14 @@ mod tests {
                 .to_string()
         };
         assert!(!activation::selected(&place).unwrap());
-        assert!(activation::migrate(&place, true, false).unwrap());
+        assert!(activation::migrate(&place, true, false, vm).unwrap());
         assert!(!activation::selected(&place).unwrap());
         // The ordinary command changes routing only after the persisted handoff.
         let token = place.dir.join("fixture-token");
         let temporary = place.dir.join("fixture-token-away");
         fs::rename(&token, &temporary).unwrap();
         let prior_route = ordinary_run();
-        assert!(activation::migrate(&place, false, false).unwrap());
+        assert!(activation::migrate(&place, false, false, vm).unwrap());
         let retained_route = ordinary_run();
         fs::rename(&temporary, &token).unwrap();
         assert!(!prior_route.contains("bot token"), "{prior_route}");
@@ -1630,7 +1630,7 @@ mod tests {
                 assert!(execute(&Request::parse(&args).unwrap()).unwrap());
             })
         });
-        let result = service::with(&place, &room, None, |cfg| {
+        let mut open = |cfg: &Config| {
             assert!(open_bolt(&source, 64 << 20).is_err());
             let status = super::super::local::call(&place.dir, "status", "", None).unwrap();
             assert_eq!(status["connected"], false);
@@ -1653,7 +1653,14 @@ mod tests {
             .unwrap();
             let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
             Ok(move || cursor.event(&mut socket))
-        });
+        };
+        if vm && room.acknowledge {
+            assert!(service::with(&place, &room, Some(1), &mut open).unwrap());
+            assert_eq!(room.posts.get(), 1);
+            assert!(activation::selected(&place).unwrap());
+            assert!(!place.dir.join("bridge.sock").exists());
+        }
+        let result = service::with(&place, &room, None, open);
         if let Some(stopper) = stopper {
             stopper.join().unwrap();
             assert!(!place.load().unwrap().enabled());
@@ -1675,7 +1682,7 @@ mod tests {
             );
         }
         assert_eq!(room.posts.get(), if room.acknowledge { 2 } else { 1 });
-        assert!(activation::migrate(&place, false, true).unwrap());
+        assert!(activation::migrate(&place, false, true, vm).unwrap());
         assert!(!activation::selected(&place).unwrap());
         let cfg = place.load().unwrap();
         let request = {
@@ -1690,7 +1697,7 @@ mod tests {
             origin["revision"] = json!(original_revision(&room.current, &origin).unwrap());
             let (directory, id, endpoint) = voice_location(&place, &cfg, &saved).unwrap();
             let (_pin, _db, receipt) =
-                controller(&directory, &id, &origin, "codex", &endpoint).unwrap();
+                controller(&directory, &id, &origin, &cfg, &endpoint).unwrap();
             let phase = if room.acknowledge {
                 "completed"
             } else {
@@ -1698,7 +1705,7 @@ mod tests {
             };
             assert_eq!(receipt.admission["phase"], phase);
             assert_eq!(receipt.admission["project"], cfg.text("work_dir"));
-            let current_project = if room.acknowledge {
+            let current_project = if room.acknowledge && !vm {
                 field(&cfg.0["projects"], "secondary")
             } else {
                 cfg.text("work_dir")
@@ -1709,7 +1716,7 @@ mod tests {
                     .contains("Approved project for new work")
             );
             assert_eq!(receipt.admission["source_cutover"], true);
-            if room.acknowledge {
+            if room.acknowledge && !vm {
                 // Reopening acknowledged history must not require a live grant
                 // for the earlier project. Fresh admission uses only the remaining one.
                 let mut revised = Config(cfg.0.clone());
