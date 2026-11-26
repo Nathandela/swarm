@@ -211,7 +211,7 @@ mod tests {
             "revision":format!("revision-{id}"),"actor_id":"300","requester_id":"300","kind":"owner_direct","channel_id":"400",
             "discussion_id":"reply"});
         let actual_nonce = crate::discord::manager_nonce(
-            CONVERSATION,
+            field(&origin, "discussion_id"),
             &origin["request_id"],
             &origin["revision"],
             &binding,

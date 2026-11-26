@@ -598,8 +598,11 @@ def verify(swarm, provider, test, root, server):
                             authored.extend(part.get("text") for part in item["content"])
                 assert authored.count(opening) == 1, "durable native opening was duplicated"
                 if server.missing_reply:
-                    assert len(server.codex_requests) == 1
-                    assert sum(1 for _, content, _ in server.main_requests if "toolu_fixture_swarm_publish" not in content) == 2
+                    assert authored == [opening], "the monitor submitted another native worker input"
+                    proofs = [json.loads(path.read_text())["evidence"]
+                              for path in state.glob("rust-v1/*/manager-proof.json")]
+                    assert len(proofs) == 1 and len(proofs[0]["prepared"]) == len(proofs[0]["turns"]) == 1, \
+                        "the monitor submitted another native manager input"
                 if server.codex_send:
                     assert authored.count("Start the exact enrolled worker follow-up.") == (0 if server.codex_send_revoked else 1)
                     assert "This divergent action must never reach the worker." not in authored
@@ -610,6 +613,7 @@ def verify(swarm, provider, test, root, server):
                                   exact_main_mcp_tool=not server.project_fault and not server.vm_revoked, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
                                   vm_native_worker_launch=server.vm and not server.vm_revoked, vm_grant_revoked=server.vm_revoked, vm_worktree_files=server.worktree,
                                   enrolled_typed_launch=server.enrolled,
+                                  missing_worker_reply=server.missing_reply,
                                   project_authority_fault=server.project_fault,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
