@@ -164,6 +164,12 @@ func main() {
 		fmt.Println(phase, cutover)
 		return
 	}
+	if action == "guild-native" {
+		row, err := voice.FixtureGuildNativeAdmission(dir, os.Args[3])
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(row))
+		return
+	}
 	if action == "pending" || action == "pending-count" {
 		db, err := bolt.Open(filepath.Join(dir, "discord.db"), 0600, nil)
 		check(err)
@@ -194,6 +200,22 @@ func main() {
 	check(err)
 	defer store.Close()
 	switch action {
+	case "guild-record":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		check(store.FixtureGuildRecord(row, os.Args[4], os.Args[5], os.Args[6]))
+	case "guild-advance":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		ctx, cancel := context.WithTimeout(context.Background(), 28*time.Second)
+		defer cancel()
+		root := cfg.Supervisor.StateDir
+		manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(root), root, cfg)
+		check(err)
+		defer manager.Close()
+		check(store.FixtureGuildAdvance(ctx, cfg, manager, os.Args[3], os.Args[4]))
 	case "audience-read":
 		out, err := store.IsOptedOut(discord.Target{ID: os.Args[3], Instance: "offline-verification"})
 		check(err)

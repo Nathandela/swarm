@@ -136,6 +136,17 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
     if cfg.text("project_access") == "vm" {
         require_no_pending_vm_mail(place, field(stored, "conversation_id"))?;
     }
+    verify_idle_manager(place, cfg, &directory, &ledger, stored)?;
+    Ok(Ready::Idle)
+}
+
+pub(in crate::discord) fn verify_idle_manager(
+    place: &Place,
+    cfg: &Config,
+    directory: &Path,
+    ledger: &str,
+    stored: &Value,
+) -> io::Result<()> {
     let caps = ["semantic-send", "manager-provenance", "message-origin"];
     let (mut owner, rows) = super::super::migrate_supervisor::verified_owner(
         place.supervisor_root(),
@@ -186,7 +197,7 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
         return Err(invalid());
     }
     open_owner_file(&directory.join("bridge.auth"))?;
-    Ok(Ready::Idle)
+    Ok(())
 }
 
 pub(super) fn pending_vm_mail(place: &Place, discussion: &str) -> io::Result<bool> {

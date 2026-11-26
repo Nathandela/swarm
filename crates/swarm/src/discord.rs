@@ -410,6 +410,7 @@ impl<'a> Request<'a> {
                     "dispatch-personal-ingress",
                     "capture-personal-ingress",
                     "prepare-personal-ingress",
+                    "prepare-teammate-ingress",
                     "deliver-personal-publication",
                     "read-personal-publication-file",
                     "read-personal-source-attachment",
@@ -554,13 +555,14 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         "connect" => return connect(req, place),
         "migrate-state" => {
             type Migration = fn(&Place, &str, bool) -> io::Result<bool>;
-            let personal: [(&str, Migration); 5] = [
+            let ingress: [(&str, Migration); 6] = [
                 ("capture-personal-ingress", legacy_ingress::capture),
                 (
                     "deliver-personal-publication",
                     legacy_ingress::publication::run,
                 ),
                 ("prepare-personal-ingress", legacy_ingress::prepare::run),
+                ("prepare-teammate-ingress", legacy_team::prepare_ingress),
                 ("dispatch-personal-ingress", legacy_ingress::dispatch),
                 ("settle-personal-ingress", legacy_ingress::settle),
             ];
@@ -584,7 +586,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     || ["file-id", "file-sha256", "offset"]
                         .iter()
                         .any(|flag| req.get(flag).is_some())
-                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                    || ingress.iter().any(|(flag, _)| req.get(flag).is_some())
                 {
                     return Err(invalid("select one migration operation"));
                 }
@@ -606,7 +608,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     || req.on("dry-run")
                     || req.on("activate-personal")
                     || req.on("activate-personal-vm")
-                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                    || ingress.iter().any(|(flag, _)| req.get(flag).is_some())
                 {
                     return Err(invalid("select one migration operation"));
                 }
@@ -640,7 +642,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
             if req.on("activate-personal") || req.on("activate-personal-vm") {
                 if (req.on("activate-personal") && req.on("activate-personal-vm"))
                     || req.on("controls")
-                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                    || ingress.iter().any(|(flag, _)| req.get(flag).is_some())
                     || req.on("dry-run") && req.on("rollback")
                 {
                     return Err(invalid("select one migration operation"));
@@ -652,7 +654,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     req.on("activate-personal-vm"),
                 );
             }
-            let mut selected = personal
+            let mut selected = ingress
                 .iter()
                 .filter_map(|(flag, action)| req.get(flag).map(|message| (message, action)));
             if let Some((message, action)) = selected.next() {
@@ -868,4 +870,11 @@ pub(crate) fn checkout_status(
     end: std::time::Instant,
 ) -> std::io::Result<serde_json::Value> {
     local::call_until(dir, "checkout-status", "", None, end)
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires the isolated original Go supervisor and guild REST fixture"]
+fn native_go_retained_guild_preparation() {
+    legacy_team::native_prepare_witness();
 }

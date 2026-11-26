@@ -464,7 +464,7 @@ impl ConnectorLease {
     }
 }
 
-fn voice_location(
+pub(super) fn voice_location(
     place: &Place,
     cfg: &Config,
     binding: &Value,
@@ -476,12 +476,20 @@ fn voice_location(
     if parent != fs::canonicalize(&place.dir)?.join("discussions") {
         return Err(invalid());
     }
+    let (guild, channel) = if cfg.text("mode") == "teammate" {
+        (
+            field(&binding["Route"], "guild_id"),
+            field(&binding["Route"], "channel_id"),
+        )
+    } else {
+        ("", cfg.text("dm_channel_id"))
+    };
     let coordinate = [
         parent_path,
         endpoint.as_str(),
         cfg.text("installation_id"),
-        "",
-        cfg.text("dm_channel_id"),
+        guild,
+        channel,
         field(binding, "ID"),
     ]
     .join("\0");

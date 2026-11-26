@@ -72,6 +72,12 @@ The observer rehearsal uses the original Go binding and settled ingress transact
 
 The capture witness delays writer acquisition while editing or deleting the candidate or withdrawing permission. Each case leaves the ledger byte-identical. A fresh invocation verifies the unchanged candidate and refuses the same edited, deleted or inaccessible source. Copied databases with duplicate or case-aliased row fields are rejected byte-for-byte. Go reopens the original database and replays the new message without adding another candidate. An original Go edit rewrites that row under the same sequence and removes the Rust capture revision. Go then settles the row and suppresses its replay.
 
+`swarm discord migrate-state --prepare-teammate-ingress MESSAGE_ID --dry-run` verifies one original Rust-captured public thread follow-up for the stopped Go connector. It checks the exact capture and repaired boundary, the bot's current read and thread send permissions, the original controller lease and the idle manager binding on the original Go supervisor. Apply without dry-run to commit the Go-readable `sending` row under its original sequence and source operation. Go reopens the same state through ordinary connector recovery, renders the prompt, allocates the native nonce, and owns admission and publication. This command writes no Voice record and starts no Gateway or native turn.
+
+The isolated Linux witness compares Rust's prepared row with the row written by original Go `process` immediately before the Go manager admits it. Both arms use the signed Go v0.29.24 supervisor and a real restricted Codex manager with synthetic loopback inference and Discord REST. Rust refuses the missing send permission, a held controller lease and an aliased owner field. Go itself refuses a revoked send permission at reopen. With permission restored, each original Go manager submits one native input and settles the exact ingress guard. Replay adds no input and the fixture makes zero Discord POSTs.
+
+Run `python3 scripts/verification/discord_retained_guild_prepare.py PINNED_GO PINNED_GO_FIXTURE CODEX RUST_TEST_BINARY` inside an isolated Linux network namespace. Set `SWARM_NATIVE_FIXTURE_HOST_NETNS` to the outer network namespace inode. The Rust binary is the `cargo test --locked -p swarm --bin swarm --no-run` test executable.
+
 Run the nine tests that use the pinned Go helper built above as an explicit group.
 
 ```sh

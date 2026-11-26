@@ -435,3 +435,30 @@ func (d *DiscussionController) FixtureNativeParentSettled(message string) (bool,
 	conversation := st.Conversations[d.cfg.ConversationID]
 	return found && conversation.RetiredThrough == conversation.LastAdmission, nil
 }
+
+func FixtureGuildNativeAdmission(dir, message string) (Admission, error) {
+	var out Admission
+	db, err := bolt.Open(filepath.Join(dir, "voice.db"), 0, &bolt.Options{
+		ReadOnly: true, Timeout: time.Second, OpenFile: openInventoryLedger,
+	})
+	if err != nil {
+		return out, err
+	}
+	defer db.Close()
+	err = db.View(func(tx *bolt.Tx) error {
+		st, err := readState(tx)
+		if err != nil {
+			return err
+		}
+		for _, row := range st.Admissions {
+			if row.ConversationID == st.CurrentConversation && row.Origin != nil && row.Origin.MessageID == message {
+				if out.Sequence != 0 {
+					return ErrConflict
+				}
+				out = row
+			}
+		}
+		return nil
+	})
+	return out, err
+}

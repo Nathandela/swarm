@@ -2,11 +2,15 @@
 package discord
 
 import (
+	"net/http"
+	"strconv"
+
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/voice"
 
 	"fmt"
 	"path/filepath"
@@ -269,4 +273,92 @@ func (s *Store) FixtureVerifyQueuedOwner(cfg Config, d TeammateDiscussion, origi
 		}
 		return nil
 	})
+}
+
+var fixtureBeforeGuildAdmit = errors.New("fixture stopped before native controller admission")
+
+type fixtureGuildStopManager struct{ TeammateManager }
+
+func (fixtureGuildStopManager) Admit(context.Context, TeammateAdmission, TeammateHistoryReader) error {
+	return fixtureBeforeGuildAdmit
+}
+
+func (s *Store) FixtureGuildRecord(d TeammateDiscussion, id, actor, name string) error {
+	route := d.Route
+	route.ParentID, route.MessageID = "", id
+	return s.teammateRecord(d.InstallationID, "synthetic-gateway", 1, []teammateCandidate{{
+		Route: route, Author: Actor{ID: actor, Name: name},
+	}}, false)
+}
+
+func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager TeammateManager, port, phase string) error {
+	n, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || n == 0 || cfg.Mode != "teammate" {
+		return ErrInvalid
+	}
+	client, err := NewDiscordClient("synthetic-unused-credential")
+	if err != nil {
+		return err
+	}
+	client.apiBase = "http://127.0.0.1:" + strconv.FormatUint(n, 10) + "/api/v10"
+	client.http.Transport = &http.Transport{}
+	client.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	var bot discordgo.User
+	if err := client.REST(ctx, http.MethodGet, "/users/@me", nil, &bot); err != nil {
+		return err
+	}
+	if bot.ID != cfg.ApplicationID || !bot.Bot {
+		return ErrConflict
+	}
+	service := NewService(cfg, s, nil, nil)
+	service.SetBotID(bot.ID)
+	connector := &teammateConnector{service: service, client: client, manager: manager}
+	pending, err := s.teammatePending(cfg.InstallationID)
+	if err != nil || len(pending) == 0 && phase == "advance" {
+		return err
+	}
+	if len(pending) != 1 {
+		return ErrConflict
+	}
+	c := pending[0]
+	switch phase {
+	case "stage":
+		if c.State != StatePrepared {
+			return ErrConflict
+		}
+		connector.manager = fixtureGuildStopManager{manager}
+		if err := connector.process(ctx, c); !errors.Is(err, fixtureBeforeGuildAdmit) {
+			return fmt.Errorf("did not reach connector sending commit: %w", err)
+		}
+		return nil
+	case "accept":
+		if c.State != StateSending || c.Admission == nil {
+			return ErrConflict
+		}
+		return connector.process(ctx, c)
+	case "advance":
+		if c.State != teammateStateAccepted || c.Admission == nil {
+			return ErrConflict
+		}
+		d := c.Admission.Discussion
+		for ctx.Err() == nil {
+			err = manager.Sync(ctx, d, connector.history(d), func(p TeammatePublication) error {
+				return fmt.Errorf("unexpected publication %s", p.ID)
+			})
+			if err != nil && !errors.Is(err, voice.ErrControllerJournalResync) {
+				return err
+			}
+			if err := connector.reconcileAccepted(ctx, c); err != nil {
+				return err
+			}
+			current, err := s.teammatePending(cfg.InstallationID)
+			if err != nil || len(current) == 0 {
+				return err
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		return ctx.Err()
+	default:
+		return ErrInvalid
+	}
 }

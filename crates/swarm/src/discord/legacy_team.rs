@@ -1,5 +1,6 @@
 //! Gateway custody and capture of one original Go thread.
 mod capture;
+mod prepare;
 use super::{
     config::{Config, LockDescription, Place, invalid, open_owner_file},
     gateway, guild,
@@ -20,19 +21,58 @@ use std::{
 
 const RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy)]
+enum Mode<'a> {
+    Observe,
+    Capture,
+    Prepare { message: &'a str, dry_run: bool },
+}
+
 pub(super) fn run(place: &Place, cfg: &Config, capture_once: bool) -> io::Result<()> {
     let api = Discord::connect(cfg)?;
-    observe(place, cfg, &api, capture_once, RECHECK_INTERVAL, |cfg| {
+    let mode = if capture_once {
+        Mode::Capture
+    } else {
+        Mode::Observe
+    };
+    observe(place, cfg, &api, mode, RECHECK_INTERVAL, |cfg| {
         let (mut socket, mut cursor) = gateway::open_observer(cfg)?;
         Ok(move || cursor.event(&mut socket))
     })
+}
+
+pub(super) fn prepare_ingress(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
+    let cfg = place.load()?;
+    let api = Discord::connect(&cfg)?;
+    prepare_with(place, &cfg, &api, message, dry_run)?;
+    Ok(true)
+}
+
+fn prepare_with(
+    place: &Place,
+    cfg: &Config,
+    api: &Discord,
+    message: &str,
+    dry_run: bool,
+) -> io::Result<()> {
+    if !super::config::snowflake(message) {
+        return Err(invalid("invalid retained teammate message ID"));
+    }
+    observe(
+        place,
+        cfg,
+        api,
+        Mode::Prepare { message, dry_run },
+        RECHECK_INTERVAL,
+        |_| Err::<fn() -> io::Result<Option<Value>>, _>(invalid("preparation cannot open Gateway")),
+    )
 }
 
 fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     place: &Place,
     cfg: &Config,
     api: &Discord,
-    capture_once: bool,
+    mode: Mode<'_>,
     recheck_interval: Duration,
     open: impl FnOnce(&Config) -> io::Result<ReadEvent>,
 ) -> io::Result<()> {
@@ -71,25 +111,32 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     if cfg.0 != place.load()?.0 || !verify_config()? {
         return Err(invalid("original connector configuration changed"));
     }
+    if matches!(mode, Mode::Prepare { .. }) {
+        prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
+    }
     let source = place.dir.join("discord.db");
     let (pin, db) = open_bolt(&source, 64 << 20)?;
-    let (route, guard, pending) = {
+    let (route, guard, pending, binding) = {
         let tx = db.begin().map_err(io::Error::other)?;
-        let pending = if capture_once {
+        let needs_capture_scope = !matches!(mode, Mode::Observe);
+        let pending = if needs_capture_scope {
             capture::pending(&tx, cfg)?
         } else {
             None
         };
         let (route, guard) = read_scope(&tx, cfg, pending.as_ref())?;
-        if capture_once {
-            capture::binding(&tx, cfg, &route, &guard, pending.as_ref())?;
+        if matches!(mode, Mode::Prepare { .. }) {
+            prepare::verify_ledger(&tx, cfg, &route, &guard)?;
         }
-        (route, guard, pending)
+        let binding = needs_capture_scope
+            .then(|| capture::binding(&tx, cfg, &route, &guard, pending.as_ref()))
+            .transpose()?;
+        (route, guard, pending, binding)
     };
-    let connector_state = if capture_once {
-        "retained_teammate_capture_once"
-    } else {
-        "retained_teammate_read_only"
+    let connector_state = match mode {
+        Mode::Observe => "retained_teammate_read_only",
+        Mode::Capture => "retained_teammate_capture_once",
+        Mode::Prepare { .. } => "retained_teammate_preparing",
     };
     let status = StatusSocket::start(place, cfg, Some(connector_state))?;
     let verify_pins = || {
@@ -101,8 +148,48 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         Ok(())
     };
     api.verify_app(cfg)?;
+    if let Mode::Prepare { message, dry_run } = mode {
+        let pending = pending
+            .as_ref()
+            .filter(|row| row.candidate.route["message_id"] == message)
+            .ok_or_else(|| invalid("requires the exact original captured teammate message"))?;
+        let binding = binding
+            .as_ref()
+            .ok_or_else(|| invalid("original thread binding is unavailable"))?;
+        prepare::ready_discussion(binding)?;
+        capture::verify_pending(api, cfg, &route, &guard, pending, true)?;
+        let manager = prepare::Manager::claim(place, cfg, binding)?;
+        verify_pins()?;
+        if status.stopping() {
+            return Ok(());
+        }
+        if dry_run {
+            println!("The original Go connector can resume this teammate message.");
+            return Ok(());
+        }
+        let source_identity = pin.metadata()?;
+        drop(db);
+        drop(pin);
+        prepare::commit(
+            &source,
+            &source_identity,
+            cfg,
+            pending,
+            binding,
+            |route, guard| {
+                capture::verify_pending(api, cfg, route, guard, pending, true)?;
+                manager.verify(place, cfg)?;
+                if status.stopping() || !verify_config()? {
+                    return Err(invalid("original teammate place stopped or changed"));
+                }
+                Ok(())
+            },
+        )?;
+        println!("Prepared the original teammate message for Go to resume.");
+        return Ok(());
+    }
     if let Some(pending) = pending {
-        capture::verify_pending(api, cfg, &route, &guard, &pending)?;
+        capture::verify_pending(api, cfg, &route, &guard, &pending, false)?;
         verify_pins()?;
         if !status.stopping() {
             println!("Verified that the original captured thread message is still prepared.");
@@ -119,14 +206,14 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         verify_pins()?;
         if let Some(frame) = frame {
             let data = &frame["d"];
-            if capture_once
+            if matches!(mode, Mode::Capture)
                 && frame["t"] == "MESSAGE_CREATE"
                 && data["guild_id"] == route.guild_id
                 && data["channel_id"] == route.channel_id
                 && data["id"] != guard.route.message_id
             {
                 status.online(false);
-                let captured = capture::read_source(api, cfg, &route, &guard, data)?;
+                let captured = capture::read_source(api, cfg, &route, &guard, data, false)?;
                 if status.stopping() {
                     return Ok(());
                 }
@@ -145,7 +232,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
                         if status.stopping() || !verify_config()? {
                             return Ok(false);
                         }
-                        let fresh = capture::read_source(api, cfg, &route, &guard, data)?;
+                        let fresh = capture::read_source(api, cfg, &route, &guard, data, false)?;
                         Ok(fresh == *captured && !status.stopping() && verify_config()?)
                     },
                 )?;
@@ -156,7 +243,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         }
         if Instant::now() >= next_authority_check && !status.stopping() {
             status.online(false);
-            verify_read_authority(api, cfg, &route)?;
+            verify_thread_authority(api, cfg, &route, false)?;
             verify_pins()?;
             status.online(true);
             next_authority_check = Instant::now() + recheck_interval;
@@ -192,7 +279,12 @@ fn read_scope<'tx>(
     legacy_discussions::observer_scope(tx)
 }
 
-fn verify_read_authority(api: &Discord, cfg: &Config, route: &Route) -> io::Result<()> {
+fn verify_thread_authority(
+    api: &Discord,
+    cfg: &Config,
+    route: &Route,
+    sending: bool,
+) -> io::Result<()> {
     let unavailable = || invalid("original thread or read authority changed");
     let thread = api.request(&format!("/channels/{}", route.channel_id), None)?;
     let parent = api.request(&format!("/channels/{}", route.parent_id), None)?;
@@ -205,6 +297,7 @@ fn verify_read_authority(api: &Discord, cfg: &Config, route: &Route) -> io::Resu
         || parent["id"] != route.parent_id
         || parent["guild_id"] != route.guild_id
         || !matches!(parent["type"].as_u64(), Some(0 | 5 | 15 | 16))
+        || sending && parent["type"] == 16
     {
         return Err(unavailable());
     }
@@ -214,14 +307,15 @@ fn verify_read_authority(api: &Discord, cfg: &Config, route: &Route) -> io::Resu
         cfg.text("application_id"),
     )?;
     const READ: u64 = (1 << 10) | (1 << 16);
-    if rights & (1 << 3) == 0 && rights & READ != READ {
+    let required = if sending { READ | (1 << 38) } else { READ };
+    if rights & (1 << 3) == 0 && rights & required != required {
         return Err(unavailable());
     }
     Ok(())
 }
 
 fn verify_boundary(api: &Discord, cfg: &Config, route: &Route, guard: &Guard) -> io::Result<()> {
-    verify_read_authority(api, cfg, route)?;
+    verify_thread_authority(api, cfg, route, false)?;
     let unavailable = || invalid("original thread or settled read boundary changed");
     let messages = human_boundary_rows(api, cfg, route)?;
     let message = messages.first().ok_or_else(unavailable)?;
@@ -340,6 +434,37 @@ fn verify_event(cfg: &Config, route: &Route, guard: &Guard, frame: &Value) -> io
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn native_prepare_witness() {
+    let root =
+        std::fs::canonicalize(std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT").unwrap()).unwrap();
+    let place = Place::for_supervisor(&root).unwrap();
+    let phase = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE").unwrap();
+    let cfg = match place.load() {
+        Err(_) if phase == "refuse" => return,
+        result => result.unwrap(),
+    };
+    let port = std::env::var("SWARM_TEST_DISCORD_REST_PORT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let api = Discord::loopback_fixture(&cfg, port).unwrap();
+    match phase.as_str() {
+        "capture" => observe(&place, &cfg, &api, Mode::Capture, RECHECK_INTERVAL, |_| {
+            Ok(|| {
+                Ok(Some(json!({"t":"MESSAGE_CREATE","d":{
+                    "id":"701","guild_id":"300","channel_id":"401","author":{"id":"201"}
+                }})))
+            })
+        })
+        .unwrap(),
+        "prepare" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
+        "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
+        "refuse" => assert!(prepare_with(&place, &cfg, &api, "701", false).is_err()),
+        phase => panic!("unknown guild test phase {phase}"),
+    }
 }
 
 #[cfg(test)]
@@ -548,10 +673,30 @@ mod tests {
             panic!("blocked observer opened a Gateway");
         }
         let held = LockDescription(runtime::lock(&dir.join("bridge.lock")).unwrap());
-        assert!(observe(&place, &cfg, &api, false, RECHECK_INTERVAL, unopened).is_err());
+        assert!(
+            observe(
+                &place,
+                &cfg,
+                &api,
+                Mode::Observe,
+                RECHECK_INTERVAL,
+                unopened
+            )
+            .is_err()
+        );
         drop(held);
         let writer = LockDescription(runtime::lock(&dir.join("discord.db")).unwrap());
-        assert!(observe(&place, &cfg, &api, false, RECHECK_INTERVAL, unopened).is_err());
+        assert!(
+            observe(
+                &place,
+                &cfg,
+                &api,
+                Mode::Observe,
+                RECHECK_INTERVAL,
+                unopened
+            )
+            .is_err()
+        );
         drop(writer);
         let rest_worker = rest_fixture(rest, None, None);
         let gateway = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -592,7 +737,7 @@ mod tests {
                 .unwrap();
             }
         });
-        let err = observe(&place, &cfg, &api, false, RECHECK_INTERVAL, |cfg| {
+        let err = observe(&place, &cfg, &api, Mode::Observe, RECHECK_INTERVAL, |cfg| {
             let stream = TcpStream::connect(address)?;
             stream.set_read_timeout(Some(Duration::from_secs(3)))?;
             let (mut socket, _) =
@@ -642,7 +787,7 @@ mod tests {
             assert_ne!(disabled.as_bytes(), &protected[1]);
             assert_eq!(disabled.len(), protected[1].len());
             let error =
-                observe(&place, &cfg, &api, false, Duration::ZERO, |_| {
+                observe(&place, &cfg, &api, Mode::Observe, Duration::ZERO, |_| {
                     let mut checked = false;
                     let (dir, config_file, disabled) = (&dir, &config_file, &disabled);
                     Ok(move || {
@@ -696,7 +841,7 @@ mod tests {
             let rest = TcpListener::bind("127.0.0.1:0").unwrap();
             let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
             let server = rest_fixture(rest, None, Some((fault, dir.join("discord.db"))));
-            let result = observe(&place, &cfg, &api, true, RECHECK_INTERVAL, |_| {
+            let result = observe(&place, &cfg, &api, Mode::Capture, RECHECK_INTERVAL, |_| {
                 assert!(runtime::lock(&dir.join("bridge.lock")).is_err());
                 Ok(|| {
                     Ok(Some(json!({"t":"MESSAGE_CREATE","d":{
@@ -797,7 +942,14 @@ mod tests {
             let rest = TcpListener::bind("127.0.0.1:0").unwrap();
             let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
             let server = rest_fixture(rest, None, Some((trial, dir.join("discord.db"))));
-            let result = observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened);
+            let result = observe(
+                &place,
+                &cfg,
+                &api,
+                Mode::Capture,
+                RECHECK_INTERVAL,
+                unopened,
+            );
             assert_eq!(result.is_ok(), trial == "restart valid", "{result:?}");
             server.join().unwrap();
             assert_eq!(read_original(), preserved);
@@ -811,11 +963,31 @@ mod tests {
         assert_eq!(rewritten["Sequence"], captured["Sequence"]);
         assert_eq!(rewritten["Mutation"], 1);
         assert!(rewritten["CaptureRevision"].is_null());
-        assert!(observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened).is_err());
+        assert!(
+            observe(
+                &place,
+                &cfg,
+                &api,
+                Mode::Capture,
+                RECHECK_INTERVAL,
+                unopened
+            )
+            .is_err()
+        );
         assert_eq!(go(&["ingress", p, "existing", "503", "settle"]).trim(), "1");
         assert_eq!(go(&["ingress", p, "existing", "503", "replay"]).trim(), "0");
         assert_eq!(go(&["ingress", p, "existing", "505", "replay"]).trim(), "1");
-        assert!(observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened).is_err());
+        assert!(
+            observe(
+                &place,
+                &cfg,
+                &api,
+                Mode::Capture,
+                RECHECK_INTERVAL,
+                unopened
+            )
+            .is_err()
+        );
         assert_eq!(go(&["traffic-read", p, "sent"]).trim(), "sent");
         fs::remove_dir_all(root).unwrap();
     }

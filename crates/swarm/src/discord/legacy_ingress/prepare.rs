@@ -26,10 +26,10 @@ fn source_author(row: &Value, cfg: &Config, message: &str) -> io::Result<Value> 
     Ok(author.clone())
 }
 
-pub(super) struct Voice {
+pub(in crate::discord) struct Voice {
     header: Value,
     conversation_key: Vec<u8>,
-    pub(super) conversation: Value,
+    pub(in crate::discord) conversation: Value,
     raw_conversation: Vec<u8>,
     admissions: u64,
 }
@@ -131,7 +131,7 @@ fn settled_vm_file<'tx>(
             .is_some_and(|original| published.iter().all(|file| original.contains(file))))
 }
 
-pub(super) fn read_voice<'tx>(
+pub(in crate::discord) fn read_voice<'tx>(
     tx: &impl TxApi<'tx>,
     id: &str,
     cfg: &Config,
@@ -145,6 +145,10 @@ pub(super) fn read_voice<'tx>(
         return Err(invalid());
     }
     let header: Value = serde_json::from_slice(raw)?;
+    let guild = cfg.text("mode") == "teammate";
+    if guild && !canonical_guild_voice(&header, raw)? {
+        return Err(invalid());
+    }
     let conversation = format!("discord-teammate-{id}");
     let media_history = retained_vm(cfg) && header["version"] == 4;
     if (header["version"] != 3 && !media_history)
@@ -176,6 +180,9 @@ pub(super) fn read_voice<'tx>(
             continue;
         }
         let value: Value = serde_json::from_slice(raw)?;
+        if guild && !canonical_guild_voice(&value, raw)? {
+            return Err(invalid());
+        }
         if key.starts_with(b"admissions\0")
             && value["conversation_id"] == conversation
             && value["settled_at"]
@@ -229,6 +236,22 @@ pub(super) fn read_voice<'tx>(
     let raw_conversation = records.get(&conversation_key).ok_or_else(invalid)?.to_vec();
     let state: Value = serde_json::from_slice(&raw_conversation)?;
     let binding = &state["binding"];
+    if guild
+        && (!canonical_guild_voice(&state, &raw_conversation)?
+            || !snake_keys(binding)
+            || !matches!(state["external_input"], Value::Null)
+                && state["external_input"].as_u64() != Some(0)
+            || [
+                "custody_lost",
+                "scheduler_paused",
+                "parked",
+                "needs_handoff",
+            ]
+            .iter()
+            .any(|key| !matches!(state[*key], Value::Null | Value::Bool(false))))
+    {
+        return Err(invalid());
+    }
     if binding["conversation_id"] != conversation
         || !native_cli_matches(&binding["native_cli"], cfg.text("project_access") == "vm")
         || binding["provider"] != cfg.text("manager_cli")
@@ -262,6 +285,19 @@ pub(super) fn read_voice<'tx>(
         conversation: state,
         raw_conversation,
         admissions,
+    })
+}
+
+fn canonical_guild_voice(value: &Value, raw: &[u8]) -> io::Result<bool> {
+    Ok((!value.is_object() || snake_keys(value)) && go_bytes(value)? == raw)
+}
+
+fn snake_keys(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.keys().all(|key| {
+            key.bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        })
     })
 }
 

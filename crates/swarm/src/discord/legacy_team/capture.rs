@@ -55,16 +55,17 @@ pub(super) fn binding<'tx>(
 
 #[derive(PartialEq)]
 pub(super) struct Candidate {
-    route: Value,
-    author: Value,
-    revision: String,
+    pub(super) route: Value,
+    pub(super) author: Value,
+    pub(super) revision: String,
 }
 
+#[derive(PartialEq)]
 pub(super) struct Pending {
     pub(super) ingress_key: Vec<u8>,
     pub(super) pending_key: Vec<u8>,
-    sequence: u64,
-    candidate: Candidate,
+    pub(super) sequence: u64,
+    pub(super) candidate: Candidate,
 }
 
 pub(super) fn pending<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Option<Pending>> {
@@ -128,10 +129,11 @@ pub(super) fn verify_pending(
     route: &Route,
     guard: &Guard,
     pending: &Pending,
+    sending: bool,
 ) -> io::Result<()> {
     let saved = &pending.candidate;
     let hint = json!({"id":saved.route["message_id"],"author":saved.author});
-    if read_source(api, cfg, route, guard, &hint)? != *saved {
+    if read_source(api, cfg, route, guard, &hint, sending)? != *saved {
         return Err(denied());
     }
     Ok(())
@@ -143,6 +145,7 @@ pub(super) fn read_source(
     route: &Route,
     guard: &Guard,
     hint: &Value,
+    sending: bool,
 ) -> io::Result<Candidate> {
     let id = field(hint, "id");
     let actor = field(&hint["author"], "id");
@@ -158,7 +161,7 @@ pub(super) fn read_source(
     {
         return Err(denied());
     }
-    verify_read_authority(api, cfg, route)?;
+    verify_thread_authority(api, cfg, route, sending)?;
     let messages = human_boundary_rows(api, cfg, route)?;
     let [current, baseline] = messages.as_slice() else {
         return Err(denied());
@@ -193,7 +196,7 @@ pub(super) fn read_source(
     {
         return Err(denied());
     }
-    verify_read_authority(api, cfg, route)?;
+    verify_thread_authority(api, cfg, route, sending)?;
     Ok(Candidate {
         route: json!({"guild_id":route.guild_id,"channel_id":route.channel_id,"message_id":id}),
         author: json!({"id":actor,"name":name}),
