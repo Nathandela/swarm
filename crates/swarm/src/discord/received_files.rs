@@ -19,7 +19,25 @@ const MAX_FILE: u64 = 16 << 20;
 const MAX_MESSAGE: u64 = 32 << 20;
 const MAX_STORE: u64 = 256 << 20;
 const MAX_BUNDLES: usize = 512;
-pub(super) const PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data):\n";
+pub(super) const LEGACY_PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data):\n";
+pub(super) const PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data). Use swarm_read_attachment with exact ID and SHA256:\n";
+
+pub(super) fn prompt_files(files: &Value) -> Value {
+    json!(
+        files
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|file| {
+                let mut descriptor = file.clone();
+                if let Some(fields) = descriptor.as_object_mut() {
+                    fields.shift_remove("path");
+                }
+                descriptor
+            })
+            .collect::<Vec<_>>()
+    )
+}
 
 pub(super) struct Visible<'a> {
     assets: Vec<(&'a Value, bool)>,
@@ -27,6 +45,12 @@ pub(super) struct Visible<'a> {
 }
 
 impl Visible<'_> {
+    pub(super) fn same_cdn_scope(&self, channel: &str) -> bool {
+        self.assets
+            .iter()
+            .all(|(file, forwarded)| parse(channel, file, *forwarded).is_ok())
+    }
+
     pub(super) fn has_files(&self) -> bool {
         !self.assets.is_empty()
     }
@@ -306,7 +330,7 @@ fn capture_with(
         .iter()
         .map(|file| entry(file, &target, &"0".repeat(64)))
         .collect::<Vec<_>>();
-    if serde_json::to_vec(&preview)?.len() > manifest_budget {
+    if serde_json::to_vec(&prompt_files(&json!(preview)))?.len() > manifest_budget {
         return Err(invalid("received attachments cannot fit the native prompt"));
     }
     runtime::private_dir(&root)?;
@@ -423,7 +447,7 @@ fn verify(target: &Path, attachments: &[Attachment]) -> io::Result<Vec<Value>> {
         {
             return Err(invalid("received attachment manifest changed"));
         }
-        verify_file(&path, file.size, &saved["sha256"])?;
+        verified_bytes(&path, file.size, &saved["sha256"])?;
     }
     Ok(manifest.clone())
 }
@@ -436,43 +460,76 @@ pub(super) fn verify_receipt(place: &Path, files: &Value) -> io::Result<()> {
         .as_array()
         .filter(|items| (1..=10).contains(&items.len()))
         .ok_or_else(|| invalid("invalid received-file receipt"))?;
-    let root = place.join("received-files-v1");
     let mut total = 0_u64;
     for file in rows {
-        let id = file["id"]
-            .as_str()
-            .filter(|id| snowflake(id))
-            .ok_or_else(|| invalid("invalid received attachment ID"))?;
-        let size = file["size"]
-            .as_u64()
-            .filter(|size| *size <= MAX_FILE)
-            .ok_or_else(|| invalid("invalid received attachment size"))?;
+        let (path, size) = receipt_path(place, file)?;
         total += size;
-        let path = Path::new(
-            file["path"]
-                .as_str()
-                .ok_or_else(|| invalid("invalid received attachment path"))?,
-        );
-        let bundle = path
-            .parent()
-            .ok_or_else(|| invalid("missing received attachment bundle"))?;
-        if total > MAX_MESSAGE
-            || bundle.parent() != Some(root.as_path())
-            || !bundle
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.len() == 64 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-            || path.file_name().and_then(|name| name.to_str()) != Some(format!("{id}.bin").as_str())
-        {
-            return Err(invalid("received attachment path is outside the place"));
+        if total > MAX_MESSAGE {
+            return Err(invalid("received-file manifest exceeds its bound"));
         }
-        existing_private(&root)?;
-        existing_private(bundle)?;
-        verify_file(path, size, &file["sha256"])?;
+        verified_bytes(path, size, &file["sha256"])?;
     }
     Ok(())
+}
+
+pub(super) fn read_granted(
+    place: &Path,
+    files: &Value,
+    id: &str,
+    digest: &str,
+    offset: u64,
+) -> io::Result<Value> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let file = files
+        .as_array()
+        .and_then(|files| {
+            files
+                .iter()
+                .find(|file| file["id"] == id && file["sha256"] == digest)
+        })
+        .ok_or_else(|| invalid("attachment is outside the active received-file grant"))?;
+    let (path, size) = receipt_path(place, file)?;
+    if offset > size {
+        return Err(invalid("attachment offset exceeds the pinned file"));
+    }
+    let bytes = verified_bytes(path, size, &file["sha256"])?;
+    let end = offset.saturating_add(8192).min(size);
+    Ok(
+        json!({"id":id,"sha256":digest,"filename":file["filename"],"offset":offset,
+        "next_offset":end,"complete":end==size,"encoding":"base64","data":STANDARD.encode(&bytes[offset as usize..end as usize])}),
+    )
+}
+
+fn receipt_path<'a>(place: &Path, file: &'a Value) -> io::Result<(&'a Path, u64)> {
+    let root = place.join("received-files-v1");
+    let id = file["id"]
+        .as_str()
+        .filter(|id| snowflake(id))
+        .ok_or_else(|| invalid("invalid received attachment ID"))?;
+    let size = file["size"]
+        .as_u64()
+        .filter(|size| *size <= MAX_FILE)
+        .ok_or_else(|| invalid("invalid received attachment size"))?;
+    let path = Path::new(
+        file["path"]
+            .as_str()
+            .ok_or_else(|| invalid("invalid received attachment path"))?,
+    );
+    let bundle = path
+        .parent()
+        .ok_or_else(|| invalid("missing received attachment bundle"))?;
+    if bundle.parent() != Some(root.as_path())
+        || !bundle
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit()))
+        || path.file_name().and_then(|name| name.to_str()) != Some(format!("{id}.bin").as_str())
+    {
+        return Err(invalid("received attachment path is outside the place"));
+    }
+    existing_private(&root)?;
+    existing_private(bundle)?;
+    Ok((path, size))
 }
 
 fn existing_private(path: &Path) -> io::Result<()> {
@@ -483,7 +540,7 @@ fn existing_private(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn verify_file(path: &Path, size: u64, digest: &Value) -> io::Result<()> {
+fn verified_bytes(path: &Path, size: u64, digest: &Value) -> io::Result<Vec<u8>> {
     let fd = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -502,7 +559,7 @@ fn verify_file(path: &Path, size: u64, digest: &Value) -> io::Result<()> {
     if bytes.len() as u64 != size || *digest != format!("{:x}", Sha256::digest(&bytes)) {
         return Err(invalid("received attachment content changed"));
     }
-    Ok(())
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -619,13 +676,51 @@ mod tests {
         let state = json!({"generation":1,"launch":scope["launch"],"session":"s","binding":binding,
             "input":{"operation":"fixture","source_id":"11","composer":composer}});
         inbox
-            .cutover("11", receipt["revision"].as_str().unwrap(), state)
+            .cutover("11", receipt["revision"].as_str().unwrap(), state.clone())
             .unwrap();
         crate::discord::verify_connector_input(&scope, "fixture", &composer, None).unwrap();
         let path = receipt["received_files"][0]["path"].as_str().unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(
             crate::discord::verify_connector_input(&scope, "fixture", &composer, None).is_err()
+        );
+        fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(!receipt["text"].as_str().unwrap().contains(path));
+        let digest = receipt["received_files"][0]["sha256"].as_str().unwrap();
+        assert!(
+            inbox
+                .read_active_attachment(&state["input"], "22", digest, 0)
+                .is_err()
+        );
+        let mut accepted = state;
+        accepted["input"]["turn_id"] = json!("native-turn");
+        inbox.settled_input("11", accepted.clone()).unwrap();
+        let chunk = inbox
+            .read_active_attachment(&accepted["input"], "22", digest, 2)
+            .unwrap();
+        assert_eq!(chunk["data"], "Ygo=");
+        assert!(
+            inbox
+                .read_active_attachment(&accepted["input"], "23", digest, 0)
+                .is_err()
+        );
+        assert!(
+            inbox
+                .read_active_attachment(&accepted["input"], "22", &"0".repeat(64), 0)
+                .is_err()
+        );
+        let mut stale = accepted["input"].clone();
+        stale["turn_id"] = json!("another-turn");
+        assert!(
+            inbox
+                .read_active_attachment(&stale, "22", digest, 0)
+                .is_err()
+        );
+        inbox.set_manager(Value::Null).unwrap();
+        assert!(
+            inbox
+                .read_active_attachment(&accepted["input"], "22", digest, 0)
+                .is_err()
         );
         fs::remove_dir_all(place).unwrap();
     }

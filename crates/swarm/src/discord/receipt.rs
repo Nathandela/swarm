@@ -266,28 +266,49 @@ impl Inbox {
                 .as_str()
                 .filter(|_| team)
                 .unwrap_or(channel);
-            let header = super::received_files::PROMPT_HEADER;
+            let old = &self.data["messages"][id];
+            let saved = &old["received_files"];
+            let legacy_header = super::received_files::LEGACY_PROMPT_HEADER;
+            let legacy = saved.is_array() && old["text"] == format!("{body}{legacy_header}{saved}");
+            let header = if legacy {
+                legacy_header
+            } else {
+                super::received_files::PROMPT_HEADER
+            };
             let Some(budget) = 4096_usize.checked_sub(body.len() + header.len()) else {
                 return Ok(None);
             };
-            let old = &self.data["messages"][id];
+            let display = |files: &Value| {
+                if legacy {
+                    files.clone()
+                } else {
+                    super::received_files::prompt_files(files)
+                }
+            };
             let existing_revision = matches!(old["state"].as_str(), Some("accepted" | "sending"))
                 || !old.is_null() && old["edited_at"] == *edited;
-            if existing_revision
-                && (!old["received_files"].is_array()
-                    || old["text"] != format!("{body}{header}{}", old["received_files"])
-                    || !visible.matches(&old["received_files"]))
-            {
-                return Ok(None);
-            }
-            let captured =
+            let captured = if existing_revision {
+                if !saved.is_array()
+                    || old["text"] != format!("{body}{header}{}", display(saved))
+                    || !visible.matches(saved)
+                    || !visible.same_cdn_scope(source_channel)
+                {
+                    return Ok(None);
+                }
+                super::received_files::verify_receipt(&place.canonicalize()?, saved)?;
+                saved.clone()
+            } else {
                 match super::received_files::capture(place, source, source_channel, budget) {
-                    Ok(files) => files,
+                    Ok(files) => json!(files),
                     Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
                     Err(err) => return Err(err),
-                };
-            let body = format!("{body}{header}{}", json!(captured));
-            (body, json!(captured))
+                }
+            };
+            let body = format!("{body}{header}{}", display(&captured));
+            if body.len() > 4096 {
+                return Ok(None);
+            }
+            (body, captured)
         };
         let revision = hash(&json!([
             actor, body, channel, guild, id, edited, forwarding, files
@@ -434,6 +455,39 @@ impl Inbox {
         next["messages"][id]["state"] = json!("withdrawn");
         next["manager"]["input"] = Value::Null;
         self.save(next)
+    }
+
+    pub(super) fn read_active_attachment(
+        &self,
+        input: &Value,
+        id: &str,
+        digest: &str,
+        offset: u64,
+    ) -> io::Result<Value> {
+        let source_id = input["source_id"]
+            .as_str()
+            .filter(|id| snowflake(id))
+            .ok_or_else(|| invalid("no original Discord attachment source"))?;
+        let source = &self.data["messages"][source_id];
+        let composer = &input["composer"];
+        if input != &self.data["manager"]["input"]
+            || !input["worker_wake"].is_null()
+            || source["state"] != "accepted"
+            || !input["turn_id"].is_string()
+            || source["native_turn_id"] != input["turn_id"]
+            || source["native_input_id"] != composer["manager_admission"]["nonce"]
+            || source["revision"] != composer["origin"]["revision"]
+        {
+            return Err(invalid(
+                "attachment grant does not match the active admitted turn",
+            ));
+        }
+        let place = self
+            .file
+            .parent()
+            .ok_or_else(|| invalid("missing attachment custody directory"))?
+            .canonicalize()?;
+        super::received_files::read_granted(&place, &source["received_files"], id, digest, offset)
     }
 
     pub(super) fn accepted_voice(&self, id: &str, origin: &Value) -> bool {

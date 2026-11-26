@@ -719,7 +719,7 @@ impl Dispatcher {
             || state["input"].is_null()
             || !matches!(
                 field(&request["call"], "name"),
-                "publish" | "swarm_read_note" | "swarm_reply"
+                "publish" | "swarm_read_note" | "swarm_reply" | "swarm_read_attachment"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -734,6 +734,33 @@ impl Dispatcher {
         let call = &request["call"];
         let mut args = call["arguments"].clone();
         let tool = field(call, "name");
+        if tool == "swarm_read_attachment" {
+            if args.as_object().is_none_or(|fields| fields.len() != 3)
+                || !args["id"].as_str().is_some_and(super::config::snowflake)
+                || !args["sha256"].as_str().is_some_and(|hash| {
+                    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+                || !args["offset"].is_u64()
+            {
+                return Err(invalid("malformed exact received attachment request"));
+            }
+            args.sort_all_objects();
+            let proof = self.owner.prove_publication(
+                &input["composer"],
+                tool,
+                &hash(&args)?,
+                &call["meta"],
+            )?;
+            if proof["native_turn_id"] != input["turn_id"] {
+                return Err(invalid("attachment read belongs to another native turn"));
+            }
+            return inbox.read_active_attachment(
+                input,
+                field(&args, "id"),
+                field(&args, "sha256"),
+                args["offset"].as_u64().unwrap(),
+            );
+        }
         if tool != "publish" {
             if args.as_object().is_none_or(|fields| {
                 fields.keys().any(|key| {
