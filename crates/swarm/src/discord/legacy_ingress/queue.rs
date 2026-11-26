@@ -273,7 +273,7 @@ pub(super) fn inspect(
             || wake["id"] != event
             || wake["event_id"] != event
             || wake["conversation_id"] != conversation
-            || wake["admission"].as_u64().unwrap_or_default() != 0
+            || !unassigned(&wake)
         {
             return Err(io::Error::other(
                 "the original queued worker already has conflicting Voice state",
@@ -293,6 +293,14 @@ pub(super) fn inspect(
         mailbox_identity,
         header: parsed,
     }))
+}
+
+fn unassigned(wake: &Value) -> bool {
+    wake.get("admission")
+        .is_none_or(|value| value.as_u64() == Some(0))
+        && wake
+            .get("native_input_id")
+            .is_none_or(|value| value.as_str() == Some(""))
 }
 
 fn prepared_file<'tx>(
@@ -317,8 +325,7 @@ fn prepared_file<'tx>(
             || wake["id"] != event
             || !event.starts_with("worker-message-")
             || key != record_key("wakes", conversation, event)?
-            || wake["admission"].as_u64().unwrap_or_default() != 0
-            || !field(&wake, "native_input_id").is_empty()
+            || !unassigned(&wake)
             || semantic_issued_at(field(&wake, "operation_id")).is_none()
         {
             return Err(invalid());
@@ -479,6 +486,7 @@ pub(super) fn prepare(
             || saved["conversation_id"] != *conversation
             || saved["id"] != *event_id
             || saved["event_id"] != *event_id
+            || !unassigned(&saved)
             || semantic_issued_at(field(&saved, "operation_id")).is_none()
         {
             return Err(invalid());
@@ -647,8 +655,7 @@ pub(super) fn dispatch(
         || wake["request"] != prepared.request
         || wake["request_hash"] != digest(&prepared.request)?
         || wake["operation_id"] != prepared.operation
-        || !field(&wake, "native_input_id").is_empty()
-        || wake["admission"].as_u64().unwrap_or_default() != 0
+        || !unassigned(&wake)
         || wake["id"] != prepared.event
         || wake["conversation_id"] != *conversation
         || binding["native_cli"] != true
@@ -911,6 +918,24 @@ pub(super) fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_prepared_wake_requires_exact_unassigned_fields() {
+        for valid in [json!({}), json!({"admission":0,"native_input_id":""})] {
+            assert!(unassigned(&valid), "{valid}");
+        }
+        for malformed in [
+            json!({"admission":"1"}),
+            json!({"admission":1}),
+            json!({"admission":null}),
+            json!({"admission":0.0}),
+            json!({"native_input_id":{}}),
+            json!({"native_input_id":null}),
+            json!({"native_input_id":"assigned"}),
+        ] {
+            assert!(!unassigned(&malformed), "{malformed}");
+        }
+    }
 
     #[test]
     fn original_semantic_operation_checks_syntax_independently_of_age() {

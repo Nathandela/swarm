@@ -1356,6 +1356,57 @@ mod tests {
         let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
         let marker = root.join("rust-wake-ready");
         let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
+        if let Some(field) = deliver.strip_prefix("ordinary-restart-corrupt-")
+            && std::env::var_os("SWARM_TEST_DISCORD_REJECT_CORRUPT_WAKE").is_some()
+        {
+            let discussion = fs::read_dir(place.dir.join("discussions"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let voice = discussion.join("voice.db");
+            let mailbox = root.join("dispatcher-mail.db");
+            let connector = place.dir.join("discord.db");
+            let replace = |update: &dyn Fn(&mut Value)| {
+                let (_pin, mut db) = bounded_writer(writable_pin(&voice).unwrap()).unwrap();
+                let tx = db.begin_rw().unwrap();
+                let header = tx.bucket(b"controller").unwrap();
+                let state = serde_json::from_slice(header.get(b"state").unwrap()).unwrap();
+                let records = header.bucket(b"records").unwrap();
+                let (key, raw) = records
+                    .iter_entries()
+                    .find(|(key, _)| key.starts_with(b"wakes\0"))
+                    .unwrap();
+                let mut wake: Value = serde_json::from_slice(raw).unwrap();
+                assert_eq!(wake["state"], "prepared");
+                let key = key.to_vec();
+                update(&mut wake);
+                manager_publication::apply_voice(tx, state, &[(key, wake)]).unwrap();
+            };
+            replace(&|wake| {
+                wake[field] = match field {
+                    "admission" => json!("1"),
+                    "native_input_id" => json!({}),
+                    _ => unreachable!(),
+                }
+            });
+            let files = [&voice, &mailbox, &connector];
+            let before = files.map(|path| fs::read(path).unwrap());
+            let mut opened = false;
+            let result = service::with(&place, &api, Some(1), |_| {
+                opened = true;
+                Ok(|| Ok(None))
+            });
+            assert!(result.is_err());
+            assert!(!opened);
+            assert_eq!(before, files.map(|path| fs::read(path).unwrap()));
+            replace(&|wake| {
+                wake.as_object_mut().unwrap().shift_remove(field);
+            });
+            assert!(activation::migrate(&place, false, true, true).unwrap());
+            return;
+        }
         if std::env::var_os("SWARM_TEST_DISCORD_EXPECT_WAKE_HOLD").is_some() {
             let mut opened = false;
             let run = service::with(&place, &api, Some(1), |_| {

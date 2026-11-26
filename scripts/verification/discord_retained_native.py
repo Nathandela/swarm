@@ -451,6 +451,24 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                                     note["Instance"], note["Attempt"], note["ID"], "ingested"))
                                 assert list(map(base64.b64decode, receipt["Files"])) == [original_bytes]
                                 assert posts == [] and worker_wake_requests == []
+                            if mode.startswith("ordinary-restart-corrupt-"):
+                                run(rust_test, rust_env | {"SWARM_TEST_DISCORD_REJECT_CORRUPT_WAKE": "1"},
+                                    "retained_original_go_stages_native_vm_file_call", "--nocapture")
+                                after = json.loads(run(fixture, env, "vm-read-prepared-queued-wake",
+                                    ledger.parent, base / "state", note["Discussion"], note["Session"],
+                                    note["Instance"], note["Attempt"], note["ID"], "ingested"))
+                                assert after == receipt
+                                missing = owner(env, {
+                                    "op": "semantic_status", "session_id": initial["session_id"],
+                                    "operation_id": receipt["Operation"],
+                                }, caps=("semantic-send",))
+                                assert missing["op"] == "error" and missing["error"] == (
+                                    "semantic receipt: semantic operation does not belong to this session"), missing
+                                assert posts == [] and file_calls == [] and worker_wake_requests == []
+                                reopened = activate_original(fixture, env, place)
+                                assert reopened.pop("generation") > initial.pop("generation")
+                                assert reopened == initial
+                                return
                             if mode_fence:
                                 rust_env["SWARM_TEST_DISCORD_DISPATCH_BLOCK_RUNTIME"] = "1"
                                 blocked = base / "state/rust-dispatch-runtime-blocked"
@@ -679,7 +697,8 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh", "ordinary-fence-edit", "ordinary-fence-delete", "ordinary-fence-stop", "ordinary-live", "ordinary-live-edit", "ordinary-restart", "ordinary-restart-lost")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh", "ordinary-fence-edit", "ordinary-fence-delete", "ordinary-fence-stop", "ordinary-live", "ordinary-live-edit", "ordinary-restart", "ordinary-restart-lost",
+                            "ordinary-restart-corrupt-admission", "ordinary-restart-corrupt-native_input_id")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             if mode == "pending-file":
