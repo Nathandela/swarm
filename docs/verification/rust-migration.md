@@ -4,6 +4,8 @@
 
 Nathan approved preserving the combining accent after reattach, delivering exactly one XTerm mouse-mode reply while preserving unsolicited and pasted input, and using numeric prerelease ordering to keep an `rc.10` daemon running under an `rc.2` dashboard with the newer-daemon notice. Prerelease approval is recorded in Discord message `1575388077306810399`. The native test targets are this Darwin arm64 Mac and the Linux x86_64 VM reached by SSH as `tf_nathan`. Translated and virtualized architecture evidence identifies its execution environment. [Release contracts](../specifications/rust-migration/qualification.md)
 
+Nathan also approved two inline Automations corrections in the migration session on November 26. Timer installation requires a separate approval after the confirmation is visible, and the save preserves any concurrent pause. Both native hosts passed the reproduction and corrected behavior. [Automations comparison and receipts](rust-schedules.md#typed-editor-and-ready-timer-saves)
+
 ## Current Go reference
 
 The latest stable comparison is signed Go v0.29.26 at `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`. Both native binaries verified and ran. The release reconciliation records Rust evidence for the scheduled opening fixes, quieter Discord threads and the expanded worker file types. [v0.29.24 and v0.29.25 reconciliation](../specifications/rust-migration/reference-checks.md#v02924-and-v02925-release-reconciliation) · [v0.29.26 reference and evidence](../specifications/rust-migration/reference-checks.md#v02926-worker-attachments)
