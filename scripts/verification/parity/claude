@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline substitute for the Claude executable on the fixture PATH."""
 import os
+import json
 from pathlib import Path
 import signal
 import struct
@@ -21,6 +22,9 @@ if "--version" in sys.argv:
     sys.exit(0)
 
 effects.mkdir(exist_ok=True)
+if (effects / "handoff-fixture").exists():
+    with (effects / "provider-argv").open("a") as log:
+        log.write(json.dumps(sys.argv[1:]) + "\n")
 (effects / "worker").write_text(f"{os.getpid()}\n")
 tty.setraw(0)
 

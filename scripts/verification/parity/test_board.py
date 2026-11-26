@@ -52,7 +52,10 @@ def owner_request(path, capability, body, *, discard=False):
         conn.connect(path)
         send(conn, {"op":"hello", "protocol_version":1, "capabilities":[capability]})
         hello = receive(conn)
-        assert hello["op"] == "hello" and capability in hello["capabilities"]
+        assert hello["op"] == "hello"
+        if body is None:
+            return hello
+        assert capability in hello["capabilities"]
         send(conn, {**body, "endpoint_id":hello["endpoint_id"]})
         if discard:
             conn.shutdown(socket.SHUT_WR)
@@ -60,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -79,6 +82,87 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
                                       stdin=subprocess.DEVNULL, stdout=log, stderr=log)
         p.wait_for(roster, "public owner socket")
         return result
+
+    if handoff:
+        os.umask(0o077)
+        daemon = start()
+        (root / "effects/board-events").touch()
+        (root / "effects/handoff-fixture").touch()
+        src = cli("spawn", "--cli", "claude", "--name", "amber", "--dir", cwd,
+                  "--prompt", "source for synthetic handoff")
+        assert src.returncode == 0, src.stderr
+        source = src.stdout.decode().strip()
+        source_row, = roster()[0]
+        project = root / "home/.claude/projects" / re.sub(r"[^a-zA-Z0-9]", "-", str(cwd))
+        project.mkdir(mode=0o700, parents=True)
+        conversation = "8bf8d92a-d8f0-4025-9e38-8c70c64c6dd1"
+        transcript = project / (conversation + ".jsonl")
+        transcript.write_text(json.dumps({"sessionId":conversation, "cwd":str(cwd),
+                                          "timestamp":source_row["created_at"]}) + "\n")
+        transcript.chmod(0o600)
+
+        def hook(text, group):
+            assert cli("send", source, "--text", text).returncode == 0
+            def seen():
+                rows = roster()
+                return rows and any(row["id"] == source and row["group"] == group for row in rows[0])
+            p.wait_for(seen, group)
+
+        hook("fixture review", "ready_for_review")
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"amber")
+            board.send(b"h")
+            board.wait_bytes("● claude".encode())
+            board.send(b"\r")
+            log = root / "effects/input"
+            p.wait_for(lambda: b"Prepare and supervise a handoff" in log.read_bytes(),
+                       "supervised prompt on captured source")
+            before_hook = len(board.capture)
+            hook("fixture permission", "needs_input")
+            board.wait_bytes(b"approval", before_hook)
+            begin = len(board.capture)
+            board.send(b"h")
+            board.wait_bytes(b"hands-off", begin)
+            board.wait_bytes("● claude".encode(), begin)
+            hello = owner_request(env["SWARM_DAEMON_SOCK"], "hands-off-handoff", None)
+            negotiated = "hands-off-handoff" in hello.get("capabilities", [])
+            begin = len(board.capture)
+            board.send(b"\r")
+            if negotiated:
+                def successor():
+                    rows = roster()
+                    return rows and len(rows[0]) == 2 and next(
+                        (row for row in rows[0] if row["id"] != source), None)
+                child = p.wait_for(successor, "hands-off successor")
+                assert child["spawned_from"] == source.split("/", 1)[1]
+                board.wait_bytes(b"fixture ready", begin)
+                args = root / "effects/provider-argv"
+                p.wait_for(lambda: str(transcript) in args.read_text()
+                           or str(transcript).encode() in log.read_bytes(),
+                           "owner-authored transcript pointer")
+                back = len(board.capture)
+                board.send(b"\x11")
+                board.wait_bytes(b"amber", back)
+                assert cli("kill", child["id"]).returncode == 0
+            else:
+                board.wait_bytes(b"daemon is too old for hands-off", begin)
+                assert len(roster()[0]) == 1
+                board.send(b"\x1b[27u")
+            assert any(row["id"] == source and row["status"]["Process"] == "running"
+                       for row in roster()[0])
+            assert cli("kill", source).returncode == 0
+            board.send(b"\x1b[27u\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "handoff board quit")
+            assert board.child.returncode == 0
+        except RuntimeError:
+            print("handoff fixture terminal tail:", repr(bytes(board.capture[-1400:])))
+            raise
+        finally:
+            board.close()
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
 
     if automations:
         daemon = start()
@@ -774,7 +858,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False):
+        form_root=None, board_grid=False, handoff=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -796,7 +880,9 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             dest.chmod(0o700)
         p.table()
         command = [*p.guard(root), sys.executable, root / "bin/test_board.py", "_inside", root]
-        if automations:
+        if handoff:
+            command.append("--handoff-board")
+        elif automations:
             command.append("--automations")
         elif cycle:
             command.append("--cycle")
@@ -833,7 +919,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("comparative roster grids" if board_grid else
+    exercise = ("supervised and hands-off handoff" if handoff else
+                "comparative roster grids" if board_grid else
                 "comparative launch-form grids" if form_grid else
                 "local automation CLI and owner dashboard catalog/disconnect" if automations else
                 "running-session cycling" if cycle else "board launch, attach and live reattach")
@@ -851,7 +938,7 @@ if __name__ == "__main__":
         mode = sys.argv[3] if len(sys.argv) >= 4 else None
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
-                sys.argv[-1] == "--board-grid")
+                sys.argv[-1] == "--board-grid", mode == "--handoff-board")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -859,6 +946,7 @@ if __name__ == "__main__":
         modes = parser.add_mutually_exclusive_group()
         modes.add_argument("--tmux", type=p.binary_path)
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
+        modes.add_argument("--handoff-board", action="store_true", help="exercise supervised and capability-gated hands-off handoff")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
         parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
@@ -871,4 +959,4 @@ if __name__ == "__main__":
         if (args.form_grid or args.board_grid) and not args.tmux:
             parser.error("--form-grid requires --tmux")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
-            args.form_grid, args.form_root, args.board_grid)
+            args.form_grid, args.form_root, args.board_grid, args.handoff_board)

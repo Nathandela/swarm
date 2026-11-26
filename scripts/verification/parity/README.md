@@ -80,3 +80,10 @@ More and Options at 120×24, 80×24, 40×8 and 24×4. Use the same
 mode differences, including animation, elapsed time and hidden cursor
 positions. The capture and action witness can pass while the comparator still
 reports rendering differences.
+
+The `--handoff-board` witness drives the supervised form against the exact
+captured idle source, then drives the hands-off form from the same source's
+permission state. With the Go owner it writes one synthetic native transcript,
+verifies the successor points at it, and leaves the source running. An owner
+without the hands-off capability must refuse visibly and keep the roster at
+one session.

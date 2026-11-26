@@ -299,15 +299,7 @@ impl Launch {
             Key::Left | Key::Right | Key::Tab if directory_completion => {
                 self.complete(!matches!(key, Key::Left));
             }
-            Key::Left | Key::Right if self.focus == 3 && self.detection_complete => {
-                let step = if matches!(key, Key::Left) {
-                    PROVIDERS.len() - 1
-                } else {
-                    1
-                };
-                self.agent = (self.agent + step) % PROVIDERS.len();
-                self.options = provider_options(PROVIDERS[self.agent]);
-            }
+            Key::Left | Key::Right if self.focus == 3 => self.cycle_agent(key == Key::Left),
             Key::Text(' ') if self.focus == 5 + extras => {
                 self.worktree = !self.worktree;
             }
@@ -412,7 +404,20 @@ impl Launch {
         ))
     }
 
-    fn picker(&self, cols: u16) -> Vec<(&'static str, String)> {
+    pub(super) fn ready_agent(&self) -> Option<&'static str> {
+        (self.detection_complete && matches!(self.detected[self.agent], Detection::Ready))
+            .then_some(PROVIDERS[self.agent])
+    }
+
+    pub(super) fn cycle_agent(&mut self, left: bool) {
+        if self.detection_complete {
+            let step = if left { PROVIDERS.len() - 1 } else { 1 };
+            self.agent = (self.agent + step) % PROVIDERS.len();
+            self.options = provider_options(PROVIDERS[self.agent]);
+        }
+    }
+
+    pub(super) fn picker(&self, cols: u16) -> Vec<(&'static str, String)> {
         if !self.detection_complete {
             return vec![(DIM, "checking...".into())];
         }
@@ -658,7 +663,7 @@ pub(super) fn spans(output: &mut String, row: u16, cols: u16, pieces: &[(&str, S
     output.push_str(PLAIN);
 }
 
-fn field(
+pub(super) fn field(
     output: &mut String,
     row: u16,
     cols: u16,
@@ -677,7 +682,7 @@ fn field(
     spans(output, row, cols, &pieces);
 }
 
-fn label_layout(label: &str, cols: u16) -> (String, u16) {
+pub(super) fn label_layout(label: &str, cols: u16) -> (String, u16) {
     let width = label.width();
     let max_label = cols.saturating_sub(3);
     let padded = if (width + 1).max(12) > usize::from(max_label) {
@@ -696,7 +701,7 @@ fn label_layout(label: &str, cols: u16) -> (String, u16) {
     (padded, remaining)
 }
 
-fn block_cursor(editor: &Editor, width: u16) -> String {
+pub(super) fn block_cursor(editor: &Editor, width: u16) -> String {
     if width == 0 {
         return String::new();
     }
@@ -722,7 +727,7 @@ fn block_cursor(editor: &Editor, width: u16) -> String {
     )
 }
 
-fn status(output: &mut String, row: u16, cols: u16, hint: &str) {
+pub(super) fn status(output: &mut String, row: u16, cols: u16, hint: &str) {
     let available = cols.saturating_sub(2);
     let hint = if hint.width() > usize::from(available) && available > 0 {
         format!("{}…", clip(hint, available - 1))

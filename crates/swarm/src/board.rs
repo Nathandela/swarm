@@ -1,5 +1,6 @@
 mod attach;
 mod automation;
+mod handoff;
 mod keys;
 mod launch;
 mod navigation;
@@ -13,6 +14,7 @@ use crate::schedule::catalog::{
     Read as CatalogRead, Records as CatalogRecords, RunState,
 };
 use automation::Automation;
+use handoff::Handoff;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
 use navigation::{Focus, GROUPS, ORDERS, Row, board_capacity, board_first, capacity, usable};
@@ -32,6 +34,7 @@ const ROSTER_CAPS: &[&str] = &[
     "subscribe",
     "opencode-observation",
     "resume-relocate",
+    handoff::CAP,
     CATALOG_CAP,
     CATALOG_CONTROL,
     MANUAL_CAP,
@@ -54,7 +57,10 @@ pub(crate) fn run() -> u8 {
 
 fn board(path: &Path) -> io::Result<()> {
     let mut client = connect(path)?;
-    let mut board = Board::default();
+    let mut board = Board {
+        hands_off: client.supports(handoff::CAP),
+        ..Board::default()
+    };
     match Layout::load() {
         Ok(settings) => board.layout = settings,
         Err(error) => board.notice = format!("board layout: {error}"),
@@ -75,8 +81,10 @@ fn board(path: &Path) -> io::Result<()> {
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
-        if let Some(Modal::Launch(form)) = &mut board.modal {
-            needs_paint |= form.update_detection();
+        match &mut board.modal {
+            Some(Modal::Launch(form)) => needs_paint |= form.update_detection(),
+            Some(Modal::Handoff(form)) => needs_paint |= form.update_detection(),
+            _ => {}
         }
         let spinner = (clock.elapsed().as_millis() / 90) as usize % 10;
         let second = clock.elapsed().as_secs();
@@ -129,6 +137,7 @@ fn board(path: &Path) -> io::Result<()> {
             match connect(path).and_then(|mut client| board.refresh(&mut client).map(|()| client)) {
                 Ok(client) => {
                     board.notice.clear();
+                    board.hands_off = client.supports(handoff::CAP);
                     connection = Some(client);
                     delay = Duration::from_secs(1);
                 }
@@ -272,6 +281,7 @@ struct Board {
     rows: Vec<Value>,
     columns: u16,
     spinner: usize,
+    hands_off: bool,
     second: u64,
     selected: String,
     focused_section: Option<String>,
@@ -309,6 +319,7 @@ struct Press {
 
 enum Modal {
     Launch(Box<Launch>),
+    Handoff(Box<Handoff>),
     Automation(Box<Automation>),
     ResumeAgy {
         id: String,
@@ -468,8 +479,10 @@ impl Board {
         if !usable(geometry) {
             return Action::None;
         }
-        if matches!(key, Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r'))
-            && self.current_focus().is_some()
+        if matches!(
+            key,
+            Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r' | 'h')
+        ) && self.current_focus().is_some()
             && !self.visible(rows)
         {
             self.reveal_focus(rows);
@@ -492,7 +505,7 @@ impl Board {
                     top: selected.saturating_sub(capacity(rows) - 1),
                 });
             }
-            Key::Text('n' | 'o') | Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r') => {
+            Key::Text('n' | 'o') | Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r' | 'h') => {
                 let id = self.selected.clone();
                 return self.command(key, &id, geometry, online);
             }
@@ -557,6 +570,12 @@ impl Board {
                     } else {
                         "Session ended · ctrl+x delete".into()
                     };
+                }
+            }
+            Key::Text('h') => {
+                if let Some(source) = self.by_id(id).filter(|source| !linked_dispatcher(source)) {
+                    self.modal = Some(Modal::Handoff(Box::new(Handoff::new(source))));
+                    self.notice.clear();
                 }
             }
             Key::Text('r') => {
@@ -625,6 +644,10 @@ impl Board {
                         }
                     }
                 }
+            }
+            Modal::Handoff(form) => {
+                let source = self.by_id(&form.source_id);
+                form.update(key, source, geometry, self.hands_off, online)
             }
             Modal::ResumeAgy { id, cwd } => {
                 if matches!(key, Key::Enter) {
@@ -800,7 +823,11 @@ impl Board {
                 {
                     entries.push(("Resume".into(), Some('r')));
                 }
-                entries.extend([("Rename".into(), Some('e')), ("Tag".into(), Some('t'))]);
+                entries.extend([
+                    ("Rename".into(), Some('e')),
+                    ("Tag".into(), Some('t')),
+                    ("Handoff".into(), Some('h')),
+                ]);
                 if !field(row, "cwd").is_empty() {
                     entries.push(("Schedule in this directory".into(), Some('c')));
                 }
@@ -849,7 +876,7 @@ impl Board {
             buttons.remove(0);
         }
         if let Some(row) = target.filter(|row| self.visible(rows) && !linked_dispatcher(row)) {
-            buttons.extend([("Rename (e)", 'e'), ("Tag (t)", 't')]);
+            buttons.extend([("Rename (e)", 'e'), ("Tag (t)", 't'), ("Handoff (h)", 'h')]);
             let lifecycle = if running(row) {
                 "Kill (ctrl+x)"
             } else {
@@ -1034,6 +1061,7 @@ impl Board {
         }
         match &self.modal {
             Some(Modal::Launch(form)) => form.view(&mut screen, cols, rows),
+            Some(Modal::Handoff(form)) => form.view(&mut screen, cols, rows),
             Some(Modal::Automation(view)) => view.view(&mut screen, cols, rows),
             Some(Modal::ResumeAgy { cwd, .. }) => {
                 line(&mut screen, 1, cols, "\x1b[1m", "Relocate session");
