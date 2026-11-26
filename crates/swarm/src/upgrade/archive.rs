@@ -1,5 +1,4 @@
 //! Read the signed GNU tar format emitted by the release builder.
-#![allow(dead_code)] // The transaction consumes this reader in the next increment.
 use super::invalid;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flate2::bufread::GzDecoder;

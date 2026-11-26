@@ -384,7 +384,10 @@ def inspect_archive(data, match):
     manifest = json.loads(files.pop("files.json"))
     require(manifest == {name: digest(content) for name, content in files.items()}, "archive member digest mismatch")
     compat = json.loads(files["compat.json"])
-    require(compat["format"] == 1 and compat["channel"] == "rust-preview" and compat["version"] == version
+    require(compat["format"] == 1 and (
+                    compat["channel"] == "rust-preview" and "upgrade_runtime" not in compat
+                    or compat["channel"] == "rust-native-preview" and compat.get("upgrade_runtime") == 2
+                ) and compat["version"] == version
             and re.fullmatch(r"[0-9a-f]{40}", compat["source"])
             and compat["media_pins_sha256"] == digest(files["media-pins.json"]), "invalid compatibility card")
     pins = json.loads(files["media-pins.json"])
@@ -590,7 +593,7 @@ def managed_install(root, public, files, compat, media):
     for name, data in (("admin.lock", b""), ("writers.lock", b""), ("public.pem", public)):
         private_write(root / name, data)
     active = populate(root, files, compat, media)
-    private_write(root / ".swarm-managed", b"1\n")
+    private_write(root / ".swarm-managed", b"2\n" if compat.get("upgrade_runtime") == 2 else b"1\n")
     fsync_path(root)
     (root / "swarm").symlink_to(Path("current") / "swarm")
     point(root, active, None)
