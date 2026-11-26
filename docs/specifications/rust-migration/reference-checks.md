@@ -32,12 +32,19 @@ In the call reference checkout build to a different path and exercise `discord -
 
 On 25 November 2026, `gh release download v0.29.22 --repo Nathandela/swarm -p checksums.txt -p checksums.txt.sig -p swarm_0.29.22_darwin_all.tar.gz` retrieved the three assets into a private scratch directory. Ed25519 verification of the original checksum bytes and base64-decoded signature succeeded with the [public key in the pinned source](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/internal/upgrade/keys.go). Appending one byte to the checksum document caused verification to fail. The downloaded archive matched its unique signed SHA-256 entry, `381b638c39a03476094ad02a5987e9e6f65238b48717bbba6647271c5da1fc98`. Extracting the regular member `swarm` produced universal x86_64/arm64 Mach-O bytes with SHA-256 `addfa213521388e13278ea9cca4e6eeeb5aa15d3bea61b9e59f737ea78e80129`. Running `version` from scratch printed `swarm 0.29.22 (go1.26.11)`. Its `discord --help` omitted `stop-call`. Use this artifact for published macOS comparisons and record the executing architecture. Linux release-archive execution remains open.
 
-On 26 November 2026, the v0.29.23 tag resolved to `edee76a0745152594d162b64de273f8d53a6d5c2`. The active Go oracle's signed checksum document verified using the unchanged trusted Ed25519 release key. The same verifier rejected a one-byte modification. Both extracted executables reported `swarm 0.29.23 (go1.26.11)` on the designated native hosts. Their Discord help included `resume-manual`. The separate `da7b9f2d` reference still supplies the call-specific `stop-call` surface. [Go v0.29.23 release](https://github.com/Nathandela/swarm/releases/tag/v0.29.23)
+On 26 November 2026, the v0.29.23 tag resolved to `edee76a0745152594d162b64de273f8d53a6d5c2`. The signed checksum document verified using the unchanged trusted Ed25519 release key. The same verifier rejected a one-byte modification. Both extracted executables reported `swarm 0.29.23 (go1.26.11)` on the designated native hosts. Their Discord help included `resume-manual`. The separate `da7b9f2d` reference supplies the call-specific `stop-call` surface. [Go v0.29.23 release](https://github.com/Nathandela/swarm/releases/tag/v0.29.23)
 
 | Executed reference | Signed archive SHA-256 | Extracted Swarm SHA-256 |
 | --- | --- | --- |
 | Darwin arm64 (universal archive) | `62209ecf8363dd6ceef6bec6eb192791dc596ee745f8638bae12d9628129e95a` | `180d1083123a44325ab878543124539ac0ee8863983abfb14f4a933b32ab7549` |
 | `tf_nathan` Linux x86_64 | `94c41cb6d79dc1dc97e2efc24f500378d625f27679e7beb2cc74078277a77c95` | `dbf174e757922d2e0da593a2c3f9ae770d4f1e966f1572282388eb87a5ce742a` |
+
+The v0.29.24 tag and main resolved to `a716dd50a5faf746ce6f0831fc31d0d73b06ffeb`. The change from v0.29.23 is the scheduled opening-prompt repair. The new reference claims native Claude composer custody before input, stops an attempt after ten minutes if the opening prompt never began, waits for verified exit before closing the attempt, and directs a scheduled worker without a manager to `schedule complete`. The call branch available from GitHub was already an ancestor of the separately qualified `da7b9f2d` source. Both new signed binaries reported `swarm 0.29.24 (go1.26.11)` and emitted identical scheduled-worker guidance on the designated native hosts. The signature verifier rejected a one-byte checksum modification. [Go v0.29.24 release](https://github.com/Nathandela/swarm/releases/tag/v0.29.24) · [Scheduled prompt change](https://github.com/Nathandela/swarm/pull/110)
+
+| Executed v0.29.24 reference | Signed archive SHA-256 | Extracted Swarm SHA-256 |
+| --- | --- | --- |
+| Darwin arm64 (universal archive) | `5e116edab170d3db7cebeaf3b5f21d832e43b39b19cbf92315cda022dce245e3` | `1527e5688243cdf98fb20f45cd00c9dc9427cb8e50faf5640c0778640359fe7a` |
+| `tf_nathan` Linux x86_64 | `4a9451ca5caa670c08406bfe091f9bf5faaff59e7a67fbcba189b8cd3ab368af` | `3eac509227792e1ef4812860ea74a7d3c56f9a2ade5a8eff26b30b6f4861f6d8` |
 
 ## M0 source build repeatability on Apple Silicon
 

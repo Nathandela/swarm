@@ -42,3 +42,14 @@ The CPU architecture was native to the host. The guest kernel was LinuxKit 6.10.
 ## macOS x86_64 under Rosetta
 
 The same signed universal archive passed the stable-launcher rehearsal from an x86_64 Python process under Rosetta on the Apple Silicon Mac. It rejoined the same worker, restored terminal settings and observed the writer lease across daemon death and release after worker exit. An independent macOS sample identified the actual media-checking Swarm process as `X86-64 (translated)`. The signed package's cold media check took 24.56 seconds in this translated rehearsal. The installed-package witness times media verification separately from terminal input and recovery. The receipt SHA-256 is `666bddaba33fc8d46271cf199f45edb4fc2663f361cf839b8847bd144059c215`. Native Intel hardware was not exercised in this run.
+
+## Signed development checkpoint from November 26
+
+The signed archives for `ded21c92e384ac8560827ce11d3567da0ed190a6` passed the managed install, packaged-media self-check, writer-lease continuity, PTY recovery and fixture cleanup on all four exercised targets. The ARM Linux guest was offline under Apple's Virtualization framework. This checkpoint uses a disposable signing key.
+
+| Execution environment | Archive SHA-256 | PTY receipt SHA-256 |
+| --- | --- | --- |
+| macOS arm64 native | `bb34a9c08b9074e990611630d63a780bedb59d5be0fa0adcdb11c3bacdca6d5f` | `cc21db32c0b0349912dac963927120192321268fb9321cde4df89b5f9ad73398` |
+| macOS x86_64 under Rosetta | `bb34a9c08b9074e990611630d63a780bedb59d5be0fa0adcdb11c3bacdca6d5f` | `3748dda299a04e671f8bd279bbc48e947995f5cc879624996c7171d6b2ab719a` |
+| Linux x86_64 native | `23002ac6613ad459054ab122a0e12df8a1a2fdc0b232957ad3b3196767ad5c64` | `895b19c8730caa4576667abcde320c3f2d309f673adde45aefd6d5c5476fec8d` |
+| Linux arm64 guest on Apple Silicon | `cd06e43267757469dfbaaaac11b13ed531bc136787fc30130c86bb2253a34ee7` | `f4c11874298033b9fe107c35993e77b8d77163f423ea8cd807f6e2539b57291f` |
