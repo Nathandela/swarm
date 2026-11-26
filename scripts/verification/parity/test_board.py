@@ -63,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -372,6 +372,51 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         finally:
             board.close()
 
+    if manager_options:
+        daemon = start()
+        destination = Path(env["SWARM_DAEMON_STATE"]) / "manager-settings" / "starting-prompt"
+        board = p.Board([str(root / "bin/board")], root, env)
+        expected = b"Honor logs. Then  inspect."
+        try:
+            board.wait_bytes(b"More (m)")
+            board.send(b"o")
+            board.wait_bytes(b"manager prompt")
+            board.send(b"\x1b[B" * 3)
+            board.wait_bytes(b"enter save prompt")
+            board.send(b"\x1b[200~  Honor logs.\r\nThen \tinspect.\x01  \x1b[201~\r")
+            board.wait_bytes(b"Manager prompt saved.")
+            assert destination.read_bytes() == expected
+            assert destination.stat().st_mode & 0o777 == 0o600
+
+            board.send(b"\x15\x1b[200~" + b"X" * 1025 + b"\x1b[201~\r")
+            board.wait_bytes(b"1024 bytes")
+            assert destination.read_bytes() == expected
+            offset = len(board.capture)
+            board.send(b"\x1b[27u")
+            board.wait_bytes(b"More (m)", offset)
+            offset = len(board.capture)
+            board.send(b"o")
+            board.wait_bytes(expected, offset)
+            board.send(b"\x1b[B" * 3)
+            board.resize(24, 4)
+            board.wait_bytes("Resize to 32×8".encode(), offset)
+            board.send(b"\x15unsafe\r")
+            assert destination.read_bytes() == expected
+            offset = len(board.capture)
+            board.send(b"\x1b[27u")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None,
+                       "quit after manager prompt")
+            assert board.child.returncode == 0
+            assert termios.tcgetattr(board.master) == board.original_mode
+            assert destination.read_bytes() == expected and roster() == ([],)
+        finally:
+            board.close()
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
+
     if edit_rows:
         daemon = start()
         launched = cli("spawn", "--cli", "claude", "--name", "edit-amber",
@@ -624,8 +669,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
     if tmux is not None:
         if form_grid:
             launch_grid_witness(root, roster, start, tmux)
-        elif board_grid or menu_grid or edit_grid:
-            roster_grid_witness(root, cli, roster, start, tmux, menu_grid, edit_grid)
+        elif board_grid or menu_grid or edit_grid or manager_grid:
+            roster_grid_witness(root, cli, roster, start, tmux, menu_grid, edit_grid, manager_grid)
         else:
             grid_witness(root, cli, roster, start, tmux)
         return
@@ -892,7 +937,7 @@ def launch_grid_witness(root, roster, start, tmux):
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
 
 
-def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_grid=False):
+def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_grid=False, manager_grid=False):
     (root / "effects/board-events").touch()
     daemon = start()
     ids = {}
@@ -973,7 +1018,7 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         daemon.terminate()
         daemon.wait(timeout=5)
 
-    if menu_grid or edit_grid:
+    if menu_grid or edit_grid or manager_grid:
         def click(x, y):
             press = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
             run("send-keys", "-H", "-t", "roster:0.0", *(f"{byte:02x}" for byte in press))
@@ -1015,6 +1060,29 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
                 run("kill-session", "-t", "roster")
             return frames
 
+        def collect_manager(binary):
+            frames = []
+            prompt = "Review fixture artifacts."
+            prompt_file = root / "state/manager-settings/starting-prompt"
+            prompt_file.parent.mkdir(mode=0o700, exist_ok=True)
+            if not prompt_file.exists():
+                prompt_file.touch(mode=0o600)
+                prompt_file.write_text(prompt)
+            for cols, height in ((40, 8), (24, 4)):
+                run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
+                    "-c", root / "work", root / "bin" / binary)
+                capture(cols, height, "selected:amber")
+                key("o")
+                capture(cols, height, "options" if cols == 40 else "resize to 32", form=True)
+                key("Down", "Down", "Down")
+                focused = capture(cols, height, "▌ manager prompt", form=True)
+                key("Escape")
+                capture(cols, height, "selected:amber")
+                frames.append({"cols":cols, "rows":height, "manager":focused})
+                run("kill-session", "-t", "roster")
+            assert prompt_file.read_text() == prompt
+            return frames
+
         def collect_menu(binary):
             frames = []
             for cols, height in ((120, 24), (80, 24), (40, 8), (24, 4)):
@@ -1047,7 +1115,7 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
                 run("kill-session", "-t", "roster")
             return frames
 
-        collect = collect_edits if edit_grid else collect_menu
+        collect = collect_manager if manager_grid else collect_edits if edit_grid else collect_menu
         expected = collect("reference-board")
         actual = collect("board")
         differences = []
@@ -1061,7 +1129,7 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
                     differences.append({"cols":left["cols"], "rows":left["rows"], "frame":view,
                                         "difference":first})
         close_fixture()
-        prefix = "edit" if edit_grid else "menu"
+        prefix = "manager" if manager_grid else "edit" if edit_grid else "menu"
         p.write_json(root / "grid.json", {f"{prefix}_reference":expected, f"{prefix}_candidate":actual,
             "fixture_ids":ids, "fixture_cwd":str(root / "work"), "first_divergence":differences[0] if differences else None,
             "differences":differences})
@@ -1160,7 +1228,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -1198,6 +1266,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--touch-back")
         elif edit_rows:
             command.append("--edit-rows")
+        elif manager_options:
+            command.append("--manager-options")
         elif tmux is not None:
             command.append(tmux)
             if form_grid:
@@ -1205,7 +1275,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             elif board_grid:
                 command.append("--board-grid")
             elif reference_board is not None:
-                command.append("--edit-grid" if edit_grid else "--menu-grid")
+                command.append("--manager-grid" if manager_grid else "--edit-grid" if edit_grid else "--menu-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
@@ -1235,9 +1305,11 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("rename, tag, cancel, kill and delete through public board" if edit_rows else
+    exercise = ("owner manager prompt persistence and validation through Options" if manager_options else
+                "rename, tag, cancel, kill and delete through public board" if edit_rows else
                 "attached CLI button, native mouse and terminal restoration" if touch else
                 "supervised and hands-off handoff" if handoff else
+                "paired compact manager prompt grids" if manager_grid else
                 "paired edit and confirmation grids" if edit_grid else
                 "paired More menu grids" if reference_board else
                 "comparative roster grids" if board_grid else
@@ -1259,7 +1331,7 @@ if __name__ == "__main__":
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
                 sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
-                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid")
+                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -1268,6 +1340,8 @@ if __name__ == "__main__":
         modes.add_argument("--tmux", type=p.binary_path)
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--handoff-board", action="store_true", help="exercise supervised and capability-gated hands-off handoff")
+        modes.add_argument("--manager-options", action="store_true",
+                           help="edit the owner-shared manager prompt and verify save/refusal")
         modes.add_argument("--edit-rows", action="store_true",
                            help="exercise inline edits and lifecycle confirmation against actual owner state")
         modes.add_argument("--touch-back", action="store_true",
@@ -1282,17 +1356,20 @@ if __name__ == "__main__":
         grids.add_argument("--reference-board", type=p.binary_path,
                            help="compare the More menu with this board using the same public owner and IDs")
         grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
-        parser.add_argument("--edit-grid", action="store_true",
+        paired = parser.add_mutually_exclusive_group()
+        paired.add_argument("--manager-grid", action="store_true",
+                            help="compare compact manager-prompt focus with --reference-board")
+        paired.add_argument("--edit-grid", action="store_true",
                            help="compare edit and confirmation panels with --reference-board")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
         if (args.form_grid or args.board_grid or args.reference_board) and not args.tmux:
             parser.error("grid checks require --tmux")
-        if args.edit_grid and not args.reference_board:
-            parser.error("--edit-grid requires --reference-board")
+        if (args.edit_grid or args.manager_grid) and not args.reference_board:
+            parser.error("--edit-grid and --manager-grid require --reference-board")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid)
