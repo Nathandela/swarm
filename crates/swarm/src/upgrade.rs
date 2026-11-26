@@ -289,12 +289,13 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> u8 {
         let admin = exe.with_file_name("swarm-rust-install.py");
         let mut command = Command::new("python3");
         command
+            .arg("-I")
             .arg(admin)
             .arg("upgrade")
             .arg(root)
+            .arg(step)
             .arg("--caller")
-            .arg(exe.parent().unwrap().file_name().unwrap())
-            .arg(step);
+            .arg(exe.parent().unwrap().file_name().unwrap());
         if let Some(path) = dist {
             command.arg("--dist").arg(path);
         }

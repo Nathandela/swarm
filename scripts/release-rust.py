@@ -767,8 +767,7 @@ def main():
     p = commands.add_parser("upgrade", help=argparse.SUPPRESS)
     p.add_argument("prefix", type=Path)
     p.add_argument("--caller", required=True)
-    p.add_argument("step", choices=("check", "status", "stage", "activate", "rollback", "unattended"),
-                   default="check", nargs="?")
+    p.add_argument("step", choices=("check", "status", "stage", "activate", "rollback", "unattended"))
     p.add_argument("--json", action="store_true")
     p.add_argument("--allow-downgrade", action="store_true")
     p.add_argument("--writer-lock", type=Path, action="append", default=[])
