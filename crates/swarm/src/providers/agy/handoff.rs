@@ -31,8 +31,12 @@ fn inode(meta: &fs::Metadata) -> [u64; 2] {
     [meta.dev(), meta.ino()]
 }
 
+fn owner(meta: &fs::Metadata) -> bool {
+    meta.uid() == unsafe { libc::geteuid() }
+}
+
 fn safe(meta: &fs::Metadata) -> bool {
-    meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o022 == 0
+    owner(meta) && meta.mode() & 0o022 == 0
 }
 
 fn open_transcript(home: &Path, id: &str) -> io::Result<(fs::File, PathBuf, Vec<[u64; 2]>)> {
@@ -78,12 +82,16 @@ fn open_transcript(home: &Path, id: &str) -> io::Result<(fs::File, PathBuf, Vec<
         .join("logs");
     let mut chain = vec![inode(&base_info), [link.st_dev as u64, link.st_ino as u64]];
     let mut dir = base.try_clone()?;
+    // A private ancestor prevents other users from reaching a group-writable
+    // provider directory even when its creator inherits a permissive umask.
+    let mut private = base_info.mode() & 0o077 == 0;
     for part in relative.iter() {
         dir = fs::File::from(openat(&dir, part, DIRECTORY, Mode::empty())?);
         let meta = dir.metadata()?;
-        if !safe(&meta) {
+        if !owner(&meta) || !private && meta.mode() & 0o022 != 0 {
             return Err(invalid("unsafe provider directory"));
         }
+        private |= meta.mode() & 0o077 == 0;
         chain.push(inode(&meta));
     }
     let file = fs::File::from(openat(
@@ -187,15 +195,23 @@ fn transcript(home: &Path, id: &str) -> io::Result<(PathBuf, Value)> {
     Ok((path, json!({"chain":chain,"prefix_sha256":evidence})))
 }
 
-pub(crate) fn reserve_home(env: &[(String, String)]) -> Option<PathBuf> {
+pub(crate) fn reserve_home(env: &[(String, String)]) -> Option<Value> {
     let worker_home = env.iter().rev().find(|(key, _)| key == "HOME")?;
     let daemon_home = std::env::var_os("HOME").map(PathBuf::from)?;
-    (daemon_home.is_absolute() && daemon_home == Path::new(&worker_home.1)).then_some(daemon_home)
+    if !daemon_home.is_absolute() || daemon_home != Path::new(&worker_home.1) {
+        return None;
+    }
+    let metadata = daemon_home.symlink_metadata().ok()?;
+    (metadata.is_dir() && safe(&metadata))
+        .then(|| json!({"path":daemon_home, "identity":inode(&metadata)}))
 }
 
-fn original_home(meta: &Value) -> io::Result<&Path> {
-    // Sessions reserved before this field used the same saved private launch environment.
-    let home = if let Some(home) = meta.get("agy_source_home") {
+fn original_home(meta: &Value) -> io::Result<(&Path, [u64; 2])> {
+    // Sessions reserved before the physical stamp used the saved private launch environment.
+    let recorded = &meta["agy_source_home"];
+    let home = if recorded.is_object() {
+        recorded["path"].as_str()
+    } else if let Some(home) = meta.get("agy_source_home") {
         home.as_str()
     } else {
         meta["maintenance_env"].as_array().and_then(|env| {
@@ -205,9 +221,19 @@ fn original_home(meta: &Value) -> io::Result<&Path> {
                 .find_map(|item| item.strip_prefix("HOME="))
         })
     };
-    home.map(Path::new)
+    let path = home
+        .map(Path::new)
         .filter(|path| path.is_absolute())
-        .ok_or_else(|| invalid("original source home is unproved"))
+        .ok_or_else(|| invalid("original source home is unproved"))?;
+    let metadata = path.symlink_metadata()?;
+    let identity = inode(&metadata);
+    if !metadata.is_dir()
+        || !safe(&metadata)
+        || recorded.is_object() && recorded["identity"] != json!(identity)
+    {
+        return Err(invalid("original source home changed"));
+    }
+    Ok((path, identity))
 }
 
 fn coordinates(dir: &Path) -> io::Result<Value> {
@@ -216,7 +242,7 @@ fn coordinates(dir: &Path) -> io::Result<Value> {
         return Err(invalid("source reservation is not private"));
     }
     let meta = runtime::read_json(&dir.join("session.json"))?;
-    let home = original_home(&meta)?;
+    let (home, home_identity) = original_home(&meta)?;
     let id = field(&meta, "id");
     let token = field(&meta, "token");
     if dir.file_name().and_then(|name| name.to_str()) != Some(id)
@@ -257,7 +283,8 @@ fn coordinates(dir: &Path) -> io::Result<Value> {
     Ok(
         json!({"kind":"agy","source_dir":dir,"instance":codex_receipt::instance(token),
         "cwd":cwd,"cwd_identity":inode(&info),"project_identity":inode(&repo_info),
-        "checkout":meta["checkout"],"home":home,"conversation":conversation}),
+        "checkout":meta["checkout"],"home":home,"home_identity":home_identity,
+        "source_identity":inode(&directory),"conversation":conversation}),
     )
 }
 
@@ -267,7 +294,7 @@ pub(crate) fn source(dir: &Path) -> io::Result<Value> {
         Path::new(field(&proof, "home")),
         field(&proof, "conversation"),
     )?;
-    if coordinates(dir)? != proof {
+    if identity["chain"][0] != proof["home_identity"] || coordinates(dir)? != proof {
         return Err(invalid("source identity changed during transcript read"));
     }
     proof["transcript"] = json!(path);
@@ -287,6 +314,7 @@ pub(crate) fn verify(dir: &Path, proof: &Value) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     struct Scratch(PathBuf);
 
@@ -343,9 +371,15 @@ mod tests {
             fs::write(&path, raw)?;
             assert!(transcript(&home, ID).is_err());
         }
-        fs::write(&path, format!("{STEP}{{partial"))?;
+        fs::write(&path, "{}\n".repeat(MAX_RECORDS - 1) + STEP + "{partial")?;
         let (found, _) = transcript(&home, ID)?;
         assert_eq!(found, path);
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(home.join(".gemini"), fs::Permissions::from_mode(0o775))?;
+        assert!(transcript(&home, ID).is_err());
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700))?;
+        assert_eq!(transcript(&home, ID)?.0, path);
+        fs::set_permissions(home.join(".gemini"), fs::Permissions::from_mode(0o755))?;
 
         let real = home.join("private/native");
         fs::create_dir_all(real.parent().unwrap())?;
@@ -367,6 +401,13 @@ mod tests {
         fs::remove_file(&path)?;
         fs::hard_link(&moved, &path)?;
         assert!(transcript(&home, ID).is_err());
+        fs::remove_file(&path)?;
+        fs::rename(&moved, &path)?;
+        let logs = path.parent().unwrap();
+        let prior_logs = logs.with_file_name("prior-logs");
+        fs::rename(logs, &prior_logs)?;
+        std::os::unix::fs::symlink(prior_logs, logs)?;
+        assert!(transcript(&home, ID).is_err());
         Ok(())
     }
 
@@ -379,7 +420,6 @@ mod tests {
         let session = root.0.join("source");
         for directory in [&home, &forged, &project, &session] {
             fs::create_dir(directory)?;
-            use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         for home in [&home, &forged] {
@@ -390,7 +430,7 @@ mod tests {
         let token = "session-instance";
         let mut metadata = json!({
             "id":"source","token":token,"cwd":project,"cwd_identity":inode(&project.metadata()?),
-            "agy_source_home":home,"provider":{"name":"agy","mode":"classic"}
+            "agy_source_home":{"path":home,"identity":inode(&home.metadata()?)},"provider":{"name":"agy","mode":"classic"}
         });
         let meta_path = session.join("session.json");
         runtime::write_json(&meta_path, &metadata)?;
@@ -404,6 +444,16 @@ mod tests {
 
         let proof = source(&session)?;
         verify(&session, &proof)?;
+        let prior_home = home.with_file_name("prior-home");
+        fs::rename(&home, &prior_home)?;
+        fs::rename(&forged, &home)?;
+        assert!(
+            source(&session).is_err(),
+            "first offer trusted a replacement HOME"
+        );
+        fs::rename(&home, &forged)?;
+        fs::rename(prior_home, &home)?;
+
         let mut supplied = proof.clone();
         supplied["home"] = json!(forged);
         supplied["transcript"] = json!(log_at(&forged));
@@ -419,6 +469,21 @@ mod tests {
         assert!(verify(&session, &proof).is_err());
 
         let proof = source(&session)?;
+        let prior_session = session.with_file_name("prior-reservation");
+        fs::rename(&session, &prior_session)?;
+        runtime::private_dir(&session)?;
+        for name in [
+            "owner.json",
+            "exit.json",
+            "session.json",
+            "observation.json",
+        ] {
+            fs::copy(prior_session.join(name), session.join(name))?;
+        }
+        assert!(verify(&session, &proof).is_err());
+        fs::remove_dir_all(&session)?;
+        fs::rename(prior_session, &session)?;
+
         let old_project = project.with_file_name("prior-project");
         fs::rename(&project, &old_project)?;
         fs::create_dir(&project)?;
