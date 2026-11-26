@@ -98,7 +98,7 @@ func worktreeListed(t *testing.T, repoDir, dir string) bool {
 func TestCreateMakesWorktreeAndBranch(t *testing.T) {
 	repo := newGitRepo(t)
 
-	dir, err := Create(repo, "sess1", "Fix Login Flow")
+	dir, err := Create(repo, "sess1", "Fix Login Flow", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestCreateRejectsPathTraversalID(t *testing.T) {
 	repo := newGitRepo(t)
 
 	for _, id := range []string{"..", "../evil", "a/../../b", "/etc/passwd", ""} {
-		dir, err := Create(repo, id, "ignored")
+		dir, err := Create(repo, id, "ignored", nil)
 		if err == nil {
 			t.Errorf("Create(%q): want error, got dir %q", id, dir)
 		}
@@ -144,7 +144,7 @@ func TestCreateInNonRepoDirErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	got, err := Create(dir, "sess1", "named")
+	got, err := Create(dir, "sess1", "named", nil)
 	if err == nil {
 		t.Fatalf("Create in a non-repo dir: want error, got dir %q", got)
 	}
@@ -159,13 +159,13 @@ func TestCreateInNonRepoDirErrors(t *testing.T) {
 func TestCreateCollisionOnSecondCall(t *testing.T) {
 	repo := newGitRepo(t)
 
-	if _, err := Create(repo, "sess1", "Same Name"); err != nil {
+	if _, err := Create(repo, "sess1", "Same Name", nil); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
 	// A second Create for the SAME id, without an intervening Remove, collides on
 	// both the existing worktree directory and the existing branch. It must fail
 	// clearly rather than silently reusing or corrupting the first worktree.
-	dir, err := Create(repo, "sess1", "Same Name")
+	dir, err := Create(repo, "sess1", "Same Name", nil)
 	if err == nil {
 		t.Fatalf("second Create(sess1): want error, got dir %q", dir)
 	}
@@ -180,11 +180,11 @@ func TestCreateCollisionOnSecondCall(t *testing.T) {
 func TestCreateSameNameUsesSessionIDToAvoidCollision(t *testing.T) {
 	repo := newGitRepo(t)
 
-	first, err := Create(repo, "sess1", "Same Name")
+	first, err := Create(repo, "sess1", "Same Name", nil)
 	if err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	second, err := Create(repo, "sess2", "Same Name")
+	second, err := Create(repo, "sess2", "Same Name", nil)
 	if err != nil {
 		t.Fatalf("second Create with same name: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestCreateSameNameUsesSessionIDToAvoidCollision(t *testing.T) {
 
 func TestRemoveTearsDownWorktree(t *testing.T) {
 	repo := newGitRepo(t)
-	dir, err := Create(repo, "sess1", "Fix Login Flow")
+	dir, err := Create(repo, "sess1", "Fix Login Flow", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRemoveTearsDownWorktree(t *testing.T) {
 
 func TestRemoveKeepsCompatibilityWithIDOnlyWorktrees(t *testing.T) {
 	repo := newGitRepo(t)
-	dir, err := Create(repo, "sess1", "")
+	dir, err := Create(repo, "sess1", "", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestSlugsCapBytesWithoutSplittingUnicode(t *testing.T) {
 func TestReservedCheckoutUsesOnlyRegisteredOriginalBranchAndPath(t *testing.T) {
 	repo := newGitRepo(t)
 	const id = "liveworker123456"
-	first, err := Create(repo, id, "review")
+	first, err := Create(repo, id, "review", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

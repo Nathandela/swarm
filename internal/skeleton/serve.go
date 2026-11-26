@@ -1536,7 +1536,7 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 			return existing, nil
 		}
 	}
-	return worktree.CreateChecked(spec.Cwd, id, spec.Name, check)
+	return worktree.Create(spec.Cwd, id, spec.Name, check)
 }
 
 // preDeleteWorktree tears down a worktree-isolated session's worktree on delete.

@@ -173,15 +173,9 @@ func matchesCandidate(root, path, friendly, unique string) bool {
 // swarm/<name-slug>-<id>. If that friendly directory is occupied by another
 // same-named session, this session falls back to <name-slug>-<id>. An unnamed
 // session retains the established id-only form. id is validated before anything
-// touches git or disk, so a rejected id never creates so much as the .swarm
-// directory.
-func Create(repoDir, id, name string) (string, error) {
-	return CreateChecked(repoDir, id, name, nil)
-}
-
-// CreateChecked applies the caller's policy to the physical destination before
-// claiming it or updating Git.
-func CreateChecked(repoDir, id, name string, allow func(string) error) (string, error) {
+// touches git or disk. An optional policy checks the physical destination
+// before it is claimed.
+func Create(repoDir, id, name string, allow func(string) error) (string, error) {
 	if !validID(id) {
 		return "", fmt.Errorf("worktree: invalid session id %q", id)
 	}

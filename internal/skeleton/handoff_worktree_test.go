@@ -267,7 +267,7 @@ func TestHandoffFromAWorktreeUsesTheSourcesCommit(t *testing.T) {
 	withTemporaryRoots(t, t.TempDir())
 	src, repo := runningGitSource(t, "worktree-src")
 	var err error
-	src.AgentCwd, err = worktree.Create(repo, src.ID, "source")
+	src.AgentCwd, err = worktree.Create(repo, src.ID, "source", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

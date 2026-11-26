@@ -10,7 +10,7 @@ import (
 
 func TestCreateUsesPrimaryPlacementAndLegacySourceCommit(t *testing.T) {
 	repo := newGitRepo(t)
-	parent, err := Create(repo, "parent-id", "parent")
+	parent, err := Create(repo, "parent-id", "parent", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestCreateUsesPrimaryPlacementAndLegacySourceCommit(t *testing.T) {
 	if err := os.Symlink(deep, alias); err != nil {
 		t.Fatal(err)
 	}
-	destination, err := Create(alias, "sibling-id", "sibling")
+	destination, err := Create(alias, "sibling-id", "sibling", nil)
 	if err != nil || destination != worktreeDir(repo, "sibling") {
 		t.Fatalf("flattened destination = %q, %v", destination, err)
 	}
@@ -59,11 +59,11 @@ func TestCreateUsesPrimaryPlacementAndLegacySourceCommit(t *testing.T) {
 
 func TestRemoveOwnedSiblingAfterSourceDisappearsAndRejectReplacement(t *testing.T) {
 	repo := newGitRepo(t)
-	parent, err := Create(repo, "parent-id", "parent")
+	parent, err := Create(repo, "parent-id", "parent", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := Create(parent, "child-id", "child")
+	child, err := Create(parent, "child-id", "child", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRemoveOwnedSiblingAfterSourceDisappearsAndRejectReplacement(t *testing.
 	if err := RemoveAt(parent, child, "child-id"); err != nil {
 		t.Fatal(err)
 	}
-	replacement, err := Create(repo, "other-id", "child")
+	replacement, err := Create(repo, "other-id", "child", nil)
 	if err != nil || replacement != child {
 		t.Fatalf("replacement = %q, %v", replacement, err)
 	}
@@ -97,7 +97,7 @@ func TestCreateChecksPhysicalDestinationAndRefusesOccupiedFallback(t *testing.T)
 	}
 	denied := errors.New("outside allowed roots")
 	want := worktreeDir(repo, "same")
-	if _, err := CreateChecked(src, "id", "same", func(path string) error {
+	if _, err := Create(src, "id", "same", func(path string) error {
 		if path != want {
 			t.Fatalf("policy received %q, want %q", path, want)
 		}
@@ -113,7 +113,7 @@ func TestCreateChecksPhysicalDestinationAndRefusesOccupiedFallback(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	if _, err := Create(src, "id", "same"); !errors.Is(err, os.ErrExist) {
+	if _, err := Create(src, "id", "same", nil); !errors.Is(err, os.ErrExist) {
 		t.Fatalf("occupied fallback = %v", err)
 	}
 	if branchExists(t, repo, "swarm/same-id") {
@@ -128,7 +128,7 @@ func TestCreateRefusesDestinationRedirectedIntoLinkedCheckout(t *testing.T) {
 	if err := os.Symlink(external, filepath.Join(repo, ".swarm")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(repo, "id", "name"); err == nil {
+	if _, err := Create(repo, "id", "name", nil); err == nil {
 		t.Fatal("created a checkout recursively through a destination alias")
 	}
 	if _, err := os.Stat(filepath.Join(external, "worktrees")); !os.IsNotExist(err) {
@@ -140,7 +140,7 @@ func TestCreateRefusesRedirectInstalledDuringPolicyCheck(t *testing.T) {
 	repo := newGitRepo(t)
 	external := filepath.Join(t.TempDir(), "linked")
 	runGit(t, repo, "worktree", "add", "-qb", "external", external, "HEAD")
-	if _, err := CreateChecked(repo, "id", "name", func(string) error {
+	if _, err := Create(repo, "id", "name", func(string) error {
 		return os.Symlink(external, filepath.Join(repo, ".swarm"))
 	}); err == nil {
 		t.Fatal("created a checkout after its policy destination was redirected")
@@ -152,7 +152,7 @@ func TestCreateRefusesRedirectInstalledDuringPolicyCheck(t *testing.T) {
 
 func TestRemoveRetainsIndependentRepositoryWithinWorktree(t *testing.T) {
 	repo := newGitRepo(t)
-	parent, err := Create(repo, "parent-id", "parent")
+	parent, err := Create(repo, "parent-id", "parent", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

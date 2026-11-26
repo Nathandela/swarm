@@ -27,7 +27,9 @@ import (
 )
 
 func main() {
-    fn := worktree.Create
+    fn := func(cwd, id, name string) (string, error) {
+        return worktree.Create(cwd, id, name)
+    }
     if os.Args[1] == "reserve" {
         fn = worktree.ReservedCheckout
     }
@@ -52,6 +54,9 @@ EOF
     go build -mod=mod -o "$2" .
 )
 build_probe "$baseline_source" before
+sed 's/return worktree.Create(cwd, id, name)/return worktree.Create(cwd, id, name, nil)/' \
+    "$probe_dir/main.go" > "$probe_dir/candidate.go.txt"
+mv "$probe_dir/candidate.go.txt" "$probe_dir/main.go"
 build_probe "$candidate_source" after
 ```
 
@@ -167,10 +172,10 @@ swarm spawn --cli codex --dir "$repo" --name parent --worktree --prompt "$prompt
 (cd "$child" && SWARM_SESSION_ID="$child_id" swarm handoff --cli codex --name grandchild --supervision none --context-file "$context")
 ```
 
-The final binary SHA-256 was `c1c3d2ddb58c12df02d41721000d9681c8f5cc3ae12225e9cc3de99c83aa8700`. The final repeat reproduced the candidate outcomes for all three providers. In the final Codex run the parent, child, and grandchild had commits `3ad1313`, `58b49fb`, and `65f513a`. The VM `tf_nathan` rejected the available SSH identity. Remaining authenticated coverage is tracked in `agents-tracker-5ygz`.
+The native rerun binary SHA-256 was `c1c3d2ddb58c12df02d41721000d9681c8f5cc3ae12225e9cc3de99c83aa8700`. It reproduced the candidate outcomes for all three providers. In that Codex run the parent, child, and grandchild had commits `3ad1313`, `58b49fb`, and `65f513a`. The reachability gate subsequently required removal of the unused creation wrapper. The VM `tf_nathan` rejected the available SSH identity. Remaining authenticated coverage is tracked in `agents-tracker-5ygz`.
 
 ## Repository checks
 
 The Go build, vet, and lint gates passed. The entire worktree test package passed under the race detector. Focused race-enabled checks also passed in daemon, protocol, and skeleton, including both remote destination policy routes. A final CLI inventory run against the isolated provider fixture completed and listed all three sibling checkouts with their exact Swarm owners.
 
-The first `go test ./... -timeout 35m` run encountered daemon startup and fixture deadlines and permission expectations under the launch shell's `0077` umask. Serial reruns with standard fixture permissions cleared those failures. The inventory test continued to hit its 15-second deadline from the launch checkout, which shares 195 Git registrations. An overlay restoring upstream `7f67c067` Go sources reproduced the same failure from the same directory. The final binary's test passed from a neutral disposable directory. The remaining suite issue is tracked in `agents-tracker-icxe`.
+The first `go test ./... -timeout 35m` run encountered daemon startup and fixture deadlines and permission expectations under the launch shell's `0077` umask. The full skeleton package passed. Serial reruns with standard fixture permissions cleared the startup, terminal, and file-mode failures. The reachability test also passed after the unused wrapper was removed. The inventory test continued to hit its 15-second deadline from the launch checkout, which shares 195 Git registrations. An overlay restoring upstream `7f67c067` Go sources reproduced the same failure from the same directory. The candidate test passed from a neutral disposable directory. The remaining suite issue is tracked in `agents-tracker-icxe`.
