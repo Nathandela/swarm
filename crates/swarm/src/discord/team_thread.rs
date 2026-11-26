@@ -88,7 +88,6 @@ impl Route {
         }
         const ADMIN: u64 = 1 << 3;
         const TEXT: u64 = (1 << 10) | (1 << 16) | (1 << 38);
-        const MANAGE_THREADS: u64 = 1 << 34;
         let bot = cfg.text("application_id");
         for user in std::iter::once(bot).chain(users.iter().copied()) {
             if !snowflake(user) {
@@ -112,7 +111,7 @@ impl Route {
             if bits & ADMIN == 0 && bits & TEXT != TEXT {
                 return Ok(false);
             }
-            if thread["type"] == 12 && bits & (ADMIN | MANAGE_THREADS) == 0 {
+            if thread["type"] == 12 {
                 let Some(row) = get(&format!("/channels/{}/thread-members/{user}", self.thread))?
                 else {
                     return Ok(false);
@@ -280,6 +279,52 @@ pub(super) fn ingest(
 mod tests {
     use super::*;
     use crate::supervisor::runtime;
+
+    #[test]
+    fn private_membership_is_required_even_for_moderators_and_the_bot() {
+        let cfg = Config(
+            json!({"mode":"teammate","application_id":"3","guild_ids":["1"],
+            "team_discussion":{"guild_id":"1","thread_id":"2"}}),
+        );
+        let route = Route::configured(&cfg).unwrap().unwrap();
+        let verify = |kind, missing: &str| {
+            route
+                .verify(
+                    &cfg,
+                    |path| {
+                        let row = match path {
+                            "/channels/2" => {
+                                json!({"id":"2","guild_id":"1","parent_id":"4","type":kind,
+                    "thread_metadata":{"archived":false,"locked":false}})
+                            }
+                            "/channels/4" => json!({"id":"4","guild_id":"1","type":0}),
+                            _ if path.starts_with("/guilds/1/members/") => {
+                                let id = path.rsplit('/').next().unwrap();
+                                json!({"user":{"id":id,"bot":id=="3"}})
+                            }
+                            _ if path.contains("/permissions/member/") => {
+                                json!({"permissions":"8"})
+                            }
+                            _ if path.starts_with("/channels/2/thread-members/") => {
+                                let id = path.rsplit('/').next().unwrap();
+                                if id == missing {
+                                    return Ok(None);
+                                }
+                                json!({"id":"2","user_id":id})
+                            }
+                            _ => panic!("unexpected lookup {path}"),
+                        };
+                        Ok(Some(row))
+                    },
+                    &["9"],
+                )
+                .unwrap()
+        };
+        assert!(verify(12, ""));
+        assert!(!verify(12, "3"));
+        assert!(!verify(12, "9"));
+        assert!(verify(11, "9"));
+    }
 
     #[test]
     fn linked_thread_uses_the_original_participant_and_native_custody() {
