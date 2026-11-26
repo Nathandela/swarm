@@ -26,6 +26,9 @@ pub(super) fn run(place: &Place, cfg: &Config, unattended: bool) -> io::Result<(
     }
     let (_lease, _app_lease, listener) = place.claim(cfg)?;
     let bridge = Bridge::new(place.dir.join("bridge.sock"), listener)?;
+    if cfg.managed() {
+        super::unit::ensure_supervisor(cfg, unattended)?;
+    }
     let inbox = Inbox::open(&place.dir, cfg)?;
     let api = Discord::connect(cfg)?;
     api.verify_app(cfg)?;

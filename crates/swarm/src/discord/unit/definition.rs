@@ -1,14 +1,10 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    str,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Platform {
-    Launchd,
-    Systemd,
-}
+pub(super) use crate::service_unit::Platform;
+use crate::service_unit::{systemd_string, xml_text};
 
 fn safe(path: &Path) -> bool {
     path.is_absolute()
@@ -45,10 +41,10 @@ pub(super) fn render(platform: Platform, binary: &Path, place: &Path) -> io::Res
     Ok(match platform {
         Platform::Launchd => format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>com.swarm.discord</string>\n<key>ProgramArguments</key><array><string>{}</string><string>discord</string><string>run</string><string>--state-dir</string><string>{}</string><string>--unattended</string></array>\n<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>\n<key>StandardOutPath</key><string>{}</string><key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
-            xml_escape(b),
-            xml_escape(p),
-            xml_escape(l),
-            xml_escape(l)
+            xml_text(b),
+            xml_text(p),
+            xml_text(l),
+            xml_text(l)
         ),
         Platform::Systemd => {
             if l.trim_end() != l || l.ends_with('\\') {
@@ -68,108 +64,80 @@ pub(super) fn render(platform: Platform, binary: &Path, place: &Path) -> io::Res
     })
 }
 
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\'', "&apos;")
-        .replace('"', "&quot;")
-}
-fn systemd_quote(s: &str) -> String {
-    format!(
-        "\"{}\"",
-        s.replace('%', "%%")
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-    )
+fn systemd_quote(value: &str) -> String {
+    format!("\"{}\"", systemd_string(value))
 }
 
-// Only accept a complete stock unit; partial matches could authorize deleting a user's unit.
 pub(super) fn bound_place(platform: Platform, body: &str) -> io::Result<PathBuf> {
-    let place = match platform {
+    let (binary, place) = match platform {
         Platform::Launchd => {
-            let start = "<key>ProgramArguments</key><array><string>";
-            let rest = body.strip_prefix("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>com.swarm.discord</string>\n").and_then(|s| s.strip_prefix(start)).ok_or_else(invalid)?;
-            let (_, rest) = rest.split_once("</string><string>discord</string><string>run</string><string>--state-dir</string><string>").ok_or_else(invalid)?;
-            let (p, suffix) = rest.split_once("</string><string>--unattended</string></array>\n<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>\n<key>StandardOutPath</key><string>").ok_or_else(invalid)?;
-            let (log, suffix) = suffix
-                .split_once("</string><key>StandardErrorPath</key><string>")
+            let line = body
+                .lines()
+                .find_map(|line| line.strip_prefix("<key>ProgramArguments</key><array><string>"))
                 .ok_or_else(invalid)?;
-            let (log2, tail) = suffix
-                .split_once("</string>\n</dict></plist>\n")
+            let (binary, rest) = line.split_once("</string><string>discord</string><string>run</string><string>--state-dir</string><string>").ok_or_else(invalid)?;
+            let place = rest
+                .strip_suffix("</string><string>--unattended</string></array>")
                 .ok_or_else(invalid)?;
-            if !tail.is_empty() || log != log2 || !log.ends_with("/connector.log") {
-                return Err(invalid());
-            }
-            xml_unescape(p)?
+            (xml_unescape(binary)?, xml_unescape(place)?)
         }
         Platform::Systemd => {
-            let start = "[Unit]\nDescription=Swarm Discord\nStartLimitIntervalSec=0\n[Service]\nExecStart=:";
-            let rest = body.strip_prefix(start).ok_or_else(invalid)?;
-            let (_, rest) = rest
-                .split_once(" discord run --state-dir ")
+            let line = body
+                .lines()
+                .find_map(|line| line.strip_prefix("ExecStart=:"))
                 .ok_or_else(invalid)?;
-            let (place, rest) = rest
-                .split_once(" --unattended\nRestart=always\nRestartSec=10\nStandardOutput=append:")
-                .ok_or_else(invalid)?;
-            let (log, rest) = rest
-                .split_once("\nStandardError=append:")
-                .ok_or_else(invalid)?;
-            if !rest.ends_with("\n[Install]\nWantedBy=default.target\n")
-                || !rest.starts_with(log)
-                || log != &rest[..log.len()]
-                || !log.ends_with("/connector.log")
-            {
+            let (binary, rest) = argument(line)?;
+            let (place, rest) = argument(
+                rest.strip_prefix(" discord run --state-dir ")
+                    .ok_or_else(invalid)?,
+            )?;
+            if rest != " --unattended" {
                 return Err(invalid());
             }
-            if place.starts_with('"') && place.ends_with('"') {
-                systemd_unquote(&place[1..place.len() - 1])?
-            } else {
-                return Err(invalid());
-            }
+            (binary, place)
         }
     };
-    let p = PathBuf::from(place);
-    if !safe(&p) {
+    let place = PathBuf::from(place);
+    if render(platform, Path::new(&binary), &place)? != body {
         return Err(invalid());
     }
-    Ok(p)
+    Ok(place)
 }
 
-fn xml_unescape(s: &str) -> io::Result<String> {
-    let mut out = s.to_owned();
-    for (from, to) in [
-        ("&amp;", "&"),
-        ("&lt;", "<"),
-        ("&gt;", ">"),
-        ("&apos;", "'"),
-        ("&quot;", "\""),
-    ] {
-        out = out.replace(from, to);
+fn xml_unescape(mut text: &str) -> io::Result<String> {
+    let mut value = String::new();
+    while let Some((head, tail)) = text.split_once('&') {
+        value.push_str(head);
+        let (entity, rest) = tail.split_once(';').ok_or_else(invalid)?;
+        value.push(match entity {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "#34" => '"',
+            "#39" => '\'',
+            _ => return Err(invalid()),
+        });
+        text = rest;
     }
-    if out.contains('&') {
-        return Err(invalid());
-    }
-    Ok(out)
+    value.push_str(text);
+    Ok(value)
 }
-fn systemd_unquote(s: &str) -> io::Result<String> {
-    let mut out = String::new();
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('\\') => out.push('\\'),
-                Some('"') => out.push('"'),
+
+fn argument(text: &str) -> io::Result<(String, &str)> {
+    let mut chars = text.strip_prefix('"').ok_or_else(invalid)?.chars();
+    let mut value = String::new();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Ok((value, chars.as_str())),
+            '\\' => match chars.next() {
+                Some(escaped @ ('\\' | '"')) => value.push(escaped),
                 _ => return Err(invalid()),
-            }
-        } else if c == '"' {
-            return Err(invalid());
-        } else {
-            out.push(c);
+            },
+            '%' if chars.next() != Some('%') => return Err(invalid()),
+            other => value.push(other),
         }
     }
-    let out = out.replace("%%", "%");
-    Ok(out)
+    Err(invalid())
 }
 
 #[cfg(test)]
@@ -193,6 +161,27 @@ mod tests {
             assert!(bound_place(platform, &format!("{body}evil")).is_err());
         }
     }
+    #[test]
+    fn native_unit_bytes_match_the_pinned_go_renderer() {
+        use sha2::{Digest, Sha256};
+        let exe = Path::new(r#"/t/agency's "p" & 50%"#);
+        let place = Path::new(r#"/t/quote &amp; "x" %back\place"#);
+        for (platform, digest) in [
+            (
+                Platform::Launchd,
+                "3055cf9b48ef83fc61271df05a877d9172253847912eb1d4a142c127de184e54",
+            ),
+            (
+                Platform::Systemd,
+                "ee31bc9899454cf9f89b97f028c624767e87c80aabf34cea122c42b0c4a0d198",
+            ),
+        ] {
+            let body = render(platform, exe, place).unwrap();
+            assert_eq!(format!("{:x}", Sha256::digest(body.as_bytes())), digest);
+            assert_eq!(bound_place(platform, &body).unwrap(), place);
+        }
+    }
+
     #[test]
     fn rejects_unsafe_paths_and_foreign_bodies() {
         assert!(path(Platform::Launchd, Path::new("relative")).is_err());

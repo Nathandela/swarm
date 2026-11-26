@@ -276,6 +276,23 @@ impl Place {
         Ok(PathBuf::from(value))
     }
 
+    pub(super) fn bound(&self, cfg: &Config) -> io::Result<Self> {
+        let supervisor = match cfg.0["supervisor"]["state_dir"].as_str() {
+            Some(path) => absolute(Path::new(path))?,
+            None => self.supervisor.clone(),
+        };
+        if !self.explicit && supervisor != self.supervisor {
+            return Err(invalid(
+                "selected connector belongs to a different supervisor",
+            ));
+        }
+        Ok(Self {
+            dir: self.dir.clone(),
+            supervisor,
+            explicit: self.explicit,
+        })
+    }
+
     pub(super) fn load(&self) -> io::Result<Config> {
         let meta = fs::symlink_metadata(&self.dir)?;
         // SAFETY: geteuid takes no arguments.

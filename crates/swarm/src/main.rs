@@ -14,6 +14,7 @@ mod providers;
 mod refresh;
 mod release;
 mod schedule;
+mod service_unit;
 mod setup_trust;
 mod shim;
 mod socket;
