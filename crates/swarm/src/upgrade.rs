@@ -30,6 +30,19 @@ pub(crate) fn identify() -> io::Result<Option<(PathBuf, PathBuf)>> {
         Err(error) => return Err(error),
         Ok(_) => drop(owner_file(&marker, false)?),
     }
+    // Darwin can report the launch symlink. A switch between exec and
+    // canonicalization must never grant the old image the new writer lease.
+    let build = format!(
+        "{}-{}",
+        option_env!("SWARM_BUILD_VERSION").unwrap_or("dev"),
+        option_env!("SWARM_BUILD_COMMIT").unwrap_or("dev")
+    );
+    if generation
+        .file_name()
+        .is_none_or(|name| name != build.as_str())
+    {
+        return Err(invalid("managed slot does not match the running build"));
+    }
     for dir in [root, releases, generation] {
         let meta = fs::symlink_metadata(dir)?;
         if !meta.is_dir()
@@ -70,6 +83,9 @@ pub(crate) struct WriterLease {
 
 impl Drop for WriterLease {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         if let Some(marker) = self.unfinished.take() {
             let _ = fs::remove_file(&marker);
             let _ = File::open(marker.parent().unwrap()).and_then(|dir| dir.sync_all());
@@ -246,7 +262,10 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> u8 {
     });
     match parsed {
         Ok([]) => {}
-        Err(problem) if problem.is_empty() => {
+        Err(problem) => {
+            if !problem.is_empty() {
+                eprintln!("{problem}");
+            }
             eprintln!("{USAGE}");
             return 2;
         }
