@@ -1006,6 +1006,10 @@ while read -r line; do :; done
             if wait_ready.recv().is_err() {
                 return;
             }
+            send(&mut socket, json!({"op":1}));
+            assert_eq!(recv(&mut socket), json!({"op":1,"d":2}));
+            // Consent must be issued in a later millisecond than the applied roster.
+            thread::sleep(Duration::from_millis(2));
             let id =
                 |at: u64, sequence: u64| (((at - 1_420_070_400_000) << 22) | sequence).to_string();
             let at = crate::ipc::spawn::now_ms();
