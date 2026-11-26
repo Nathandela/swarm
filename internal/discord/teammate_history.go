@@ -489,6 +489,14 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 		if personal {
 			return fmt.Errorf("%w: %w", errPersonalHistoryRepair, errPersonalHistoryPermission)
 		}
+		// Without history nothing can be accounted for, so ask the thread to restate.
+		if b.Opened {
+			d := b.TeammateDiscussion
+			d.Gap = epoch
+			if err := t.queueGap(d); err != nil {
+				return err
+			}
+		}
 		return errors.New("discord: cannot repair thread context without history permission")
 	}
 	if personal {
@@ -501,7 +509,15 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 			return e
 		}
 		upper, low := b.RepairUpper, ""
+		missed := false
 		for _, m := range rows {
+			if !missed && b.Opened && snowflakeLess(b.RepairLower, m.ID) && t.admissibleHuman(m) {
+				known, e := t.service.Store.teammateKnownMessage(b.InstallationID, m.ID)
+				if e != nil {
+					return e
+				}
+				missed = !known
+			}
 			if before == "" && snowflakeLess(upper, m.ID) {
 				upper = m.ID
 			}
@@ -510,12 +526,26 @@ func (t *teammateConnector) repair(ctx context.Context, b teammateBinding, epoch
 			}
 		}
 		done := len(rows) < 100 || !snowflakeLess(b.RepairLower, low)
+		if missed {
+			b.GapMissed = epoch
+		}
+		// Queue before recording the repair so a failed write is retried, not lost.
+		if done && b.GapMissed == epoch {
+			d := b.TeammateDiscussion
+			d.Gap = epoch
+			if err = t.queueGap(d); err != nil {
+				return err
+			}
+		}
 		err = t.service.Store.teammateChangeBinding(b.TeammateDiscussion, func(current *teammateBinding) {
 			if current.RepairTargetEpoch != epoch {
 				return
 			}
 			current.RepairUpper = upper
 			current.RepairAfter = low
+			if missed {
+				current.GapMissed = epoch
+			}
 			if done {
 				current.RepairEpoch = epoch
 				current.RepairAfter, current.RepairUpper, current.RepairLower = "", "", ""
@@ -604,4 +634,15 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 		*authenticatedRoute = route
 	}
 	return nil
+}
+
+// A message the Gateway delivered has an ingress record, or a guard once compacted.
+func (s *Store) teammateKnownMessage(install, id string) (bool, error) {
+	known := false
+	err := s.db.View(func(tx *bolt.Tx) error {
+		key := teammateKey(install, id)
+		known = tx.Bucket([]byte(teammateIngressBucket)).Get(key) != nil || tx.Bucket([]byte(teammateIngressGuardBucket)).Get(key) != nil
+		return nil
+	})
+	return known, err
 }
