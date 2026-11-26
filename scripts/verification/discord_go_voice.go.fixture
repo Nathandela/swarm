@@ -636,8 +636,59 @@ func FixtureDamageGuildNative(dir, message, change string) error {
 	}
 	if canonical != dir || filepath.Base(connector) != "connector" ||
 		filepath.Dir(fixture) != tmp || !strings.HasPrefix(filepath.Base(fixture), "gp-") ||
-		message != "701" || (change != "0" && change != "+" && change != "nonce") {
+		message != "701" || (change != "0" && change != "+" && change != "nonce" && change != "conversation-type") {
 		return ErrInvalid
+	}
+	if change == "conversation-type" {
+		db, err := bolt.Open(filepath.Join(dir, "voice.db"), 0, &bolt.Options{Timeout: time.Second, OpenFile: openInventoryLedger})
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		return db.Update(func(tx *bolt.Tx) error {
+			st, err := readState(tx)
+			if err != nil {
+				return err
+			}
+			for _, a := range st.Admissions {
+				if a.ConversationID != st.CurrentConversation || a.Origin == nil || a.Origin.MessageID != message ||
+					a.Origin.InstallationID != "fixture-teammate" || a.Phase != "executing" || !a.SourceCutover {
+					continue
+				}
+				header, err := readHeader(tx)
+				if err != nil {
+					return err
+				}
+				root := tx.Bucket([]byte("controller"))
+				records := root.Bucket([]byte("records"))
+				k := []byte("conversations\x00" + st.CurrentConversation)
+				old := records.Get(k)
+				var row map[string]json.RawMessage
+				if err := json.Unmarshal(old, &row); err != nil {
+					return err
+				}
+				row["last_speech_epoch"] = json.RawMessage(`{}`)
+				raw, err := json.Marshal(row)
+				if err != nil {
+					return err
+				}
+				xorRecord(&header.RecordHash, k, old)
+				xorRecord(&header.RecordHash, k, raw)
+				header.LogicalBytes += len(raw) - len(old)
+				if err := records.Put(k, raw); err != nil {
+					return err
+				}
+				state, err := json.Marshal(header)
+				if err != nil {
+					return err
+				}
+				if err := root.Put([]byte("state"), state); err != nil {
+					return err
+				}
+				return root.Put([]byte("digest"), []byte(hashBytes(state)))
+			}
+			return ErrNotFound
+		})
 	}
 	store, err := OpenStore(dir)
 	if err != nil {

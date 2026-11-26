@@ -10,9 +10,8 @@ use bbolt_rs::BucketApi;
 use serde::Deserialize;
 use std::path::Path;
 
-#[cfg(test)]
-#[path = "publication_fixture.rs"]
-pub(super) mod publication_fixture;
+#[path = "publication.rs"]
+pub(super) mod publication;
 
 const TOOL: &str = "swarm_discussion_history";
 const CAPS: [&str; 2] = ["manager-provenance", "message-origin"];

@@ -12,6 +12,11 @@ use std::time::Duration;
 const API: &str = "https://discord.com/api/v10";
 const MAX_RESPONSE: u64 = 1 << 20;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static LOOPBACK_FIXTURE_PORT: std::cell::Cell<Option<u16>> = const { std::cell::Cell::new(None) };
+}
+
 pub(super) struct Discord {
     agent: ureq::Agent,
     authorization: String,
@@ -32,6 +37,10 @@ pub(super) enum ThreadPost {
 
 impl Discord {
     pub(super) fn connect(cfg: &Config) -> io::Result<Self> {
+        #[cfg(test)]
+        if let Some(port) = LOOPBACK_FIXTURE_PORT.get() {
+            return Self::loopback_fixture(cfg, port);
+        }
         let token = load_token(Path::new(cfg.text("token_file")))?;
         let authorization = format!("Bot {token}");
         let config = ureq::Agent::config_builder()
@@ -162,6 +171,14 @@ impl Discord {
             })
             .map(str::to_owned)
             .ok_or_else(|| invalid("invalid Discord bot username"))
+    }
+
+    pub(super) fn verify_credential(&self, cfg: &Config) -> io::Result<()> {
+        let token = load_token(Path::new(cfg.text("token_file")))?;
+        if self.authorization.strip_prefix("Bot ") != Some(token.as_str()) {
+            return Err(invalid("the original Discord credential changed"));
+        }
+        Ok(())
     }
 
     pub(super) fn owner_history(

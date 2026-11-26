@@ -643,23 +643,50 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         else:
             command = [rust_test, *rust_args]
             process_env = rust_env(f"publish-{phase}")
+            if phase == "stage":
+                for probe in ("dry-run", "wrong-message"):
+                    checked = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
+                    assert checked.returncode == 0 and (voice.read_bytes(), connector.read_bytes()) == original, checked.stdout + checked.stderr
+                print("PASS explicit stage dry-run and wrong message ID made no write", flush=True)
+                with sock.with_name("controller.lock").open("rb") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    invoke("guild-malform-timestamp", voice.parent, "701", "conversation-type")
+                damaged = voice.read_bytes()
+                try:
+                    go_read = subprocess.run([fixture, "guild-publication", voice.parent], env=env, capture_output=True, timeout=5)
+                    assert go_read.returncode != 0 and b"corrupt" in go_read.stderr, go_read.stderr
+                    for probe in ("malformed", "malformed-dry-run"):
+                        denied = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
+                        assert denied.returncode == 0 and (voice.read_bytes(), connector.read_bytes()) == (damaged, original[1]), denied.stdout + denied.stderr
+                finally:
+                    voice.write_bytes(original[0])
+                print("PASS Go and Rust reject a malformed typed Voice row without further writes", flush=True)
         with subprocess.Popen(command, env=process_env, text=True, stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             lines, reader = lines_from(child.stdout)
             log = []
+            saved_token = None
             def collect(marker):
                 while not lines.empty():
                     log.append(lines.get_nowait())
                 return any(marker in line for line in log)
             try:
-                await_value(lambda: sock.exists() if phase == "go" else collect("Serving the isolated original guild publication call."))
+                if phase == "go":
+                    await_value(lambda: sock.exists())
+                elif phase == "observer":
+                    await_value(lambda: collect("Serving original public-thread history"))
+                else:
+                    await_value(lambda: collect("Waiting for the original guild final publication call."))
+                if phase == "stage":
+                    with voice.open("rb") as pin:
+                        fcntl.flock(pin, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 if phase != "go":
                     empty = dict(version=1, conversation_id=start["binding"]["conversation_id"],
                                  session_id=start["binding"]["session"].split("/", 1)[1],
                                  call=dict(name="publish", arguments=PUBLICATION, meta={}))
                     assert manager_request(sock, auth.read_text(), json.dumps(empty, separators=(",", ":")).encode()) == {"error":"unconfirmed"}
                 release_model.set()
-                if phase == "recipient":
+                if phase in ("recipient", "observer"):
                     await_value(lambda: tool_output)
                     assert "manager action is unconfirmed" in json.dumps(tool_output), tool_output
                     stop_connector(place)
@@ -671,13 +698,36 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         stop_connector(place)
                     elif phase == "edit":
                         rest.messages["701"]["content"] = "Edited after genuine publish proof."
+                    elif phase == "revoked":
+                        permissions[0] = False
+                    elif phase == "credential":
+                        token = Path(json.loads((place / "config.json").read_bytes())["token_file"])
+                        saved_token = token, token.read_bytes()
+                        token.write_text("synthetic-replacement-token\n")
                     elif phase == "closed":
-                        interrupt_history_call(env, start["binding"], turn, live_call)
+                        final_read, release_read = Event(), Event()
+                        def hold_source_read(route):
+                            if route == "/channels/401/messages/500":
+                                final_read.set()
+                                assert release_read.wait(timeout=8)
+                        rest.before_response = hold_source_read
                     child.stdin.write("continue\n")
                     child.stdin.flush()
+                    if phase == "closed":
+                        try:
+                            assert final_read.wait(timeout=5)
+                            interrupt_history_call(env, start["binding"], turn, live_call)
+                        finally:
+                            rest.before_response = None
+                            release_read.set()
                 expected = {"before-commit":87, "after-commit":88}.get(phase, 0)
                 assert child.wait(timeout=10) == expected, log
+                if phase == "closed":
+                    await_value(lambda: collect("Rechecked the complete original publication source."))
             finally:
+                permissions[0] = True
+                if saved_token is not None:
+                    saved_token[0].write_bytes(saved_token[1])
                 if child.poll() is None:
                     child.terminate()
                     child.wait(timeout=8)
@@ -1174,7 +1224,7 @@ if __name__ == "__main__":
         print("PASS Go and Rust staged the same scoped final publication fields", flush=True)
     elif len(sys.argv) == 6 and sys.argv[5].startswith("--native-publication-"):
         phase = sys.argv[5].removeprefix("--native-publication-")
-        assert phase in ("go", "stage", "before-commit", "after-commit", "stop", "edit", "closed", "recipient")
+        assert phase in ("go", "stage", "before-commit", "after-commit", "stop", "edit", "closed", "recipient", "observer", "revoked", "credential")
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True,
                     native_publication=phase)

@@ -110,14 +110,13 @@ fn native_proof(
         .map(|(_, turn)| turn)
 }
 
-pub(in crate::discord) fn prove_live_call(
+pub(in crate::discord) fn resolve_live_call(
     owner: &mut crate::ipc::Client,
     request: &Value,
     tool: &str,
     args: &Value,
     meta: &Value,
-    vm: bool,
-) -> io::Result<(Value, String)> {
+) -> io::Result<String> {
     let admission = &request["manager_admission"];
     let coordinate = provenance::coordinates(&admission["binding"], meta)?;
     let mut args = args.clone();
@@ -138,6 +137,19 @@ pub(in crate::discord) fn prove_live_call(
     {
         return Err(invalid());
     }
+    Ok(turn.to_owned())
+}
+
+pub(in crate::discord) fn prove_live_call(
+    owner: &mut crate::ipc::Client,
+    request: &Value,
+    tool: &str,
+    args: &Value,
+    meta: &Value,
+    vm: bool,
+) -> io::Result<(Value, String)> {
+    let admission = &request["manager_admission"];
+    let turn = resolve_live_call(owner, request, tool, args, meta)?;
     let runtime = owner.request_body(
         json!({
             "op":"manager_runtime","session_id":request["session"],"body_version":1,
@@ -158,7 +170,7 @@ pub(in crate::discord) fn prove_live_call(
     {
         return Err(invalid());
     }
-    Ok((native.clone(), turn.to_owned()))
+    Ok((native.clone(), turn))
 }
 
 struct Speech<'a> {
@@ -307,7 +319,6 @@ fn stage_speech<'tx>(
     Ok((result, true))
 }
 
-#[cfg(test)]
 pub(in crate::discord) fn stage_guild_speech<'tx>(
     tx: &mut impl TxRwApi<'tx>,
     voice: prepare::Voice,

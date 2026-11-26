@@ -40,6 +40,10 @@ enum Mode<'a> {
         dry_run: bool,
         before_commit: fn(),
     },
+    StagePublication {
+        message: &'a str,
+        dry_run: bool,
+    },
 }
 
 pub(super) fn run(place: &Place, cfg: &Config, capture_once: bool) -> io::Result<()> {
@@ -75,6 +79,19 @@ pub(super) fn admit_ingress(place: &Place, message: &str, dry_run: bool) -> io::
             dry_run,
             before_commit: || {},
         },
+    )?;
+    Ok(true)
+}
+
+pub(super) fn stage_publication(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
+    let cfg = place.load()?;
+    let api = Discord::connect(&cfg)?;
+    continue_without_gateway(
+        place,
+        &cfg,
+        &api,
+        message,
+        Mode::StagePublication { message, dry_run },
     )?;
     Ok(true)
 }
@@ -157,7 +174,10 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     if cfg.0 != place.load()?.0 || !verify_config()? {
         return Err(invalid("original connector configuration changed"));
     }
-    let changing = matches!(mode, Mode::Prepare { .. } | Mode::Admit { .. });
+    let changing = matches!(
+        mode,
+        Mode::Prepare { .. } | Mode::Admit { .. } | Mode::StagePublication { .. }
+    );
     if changing {
         prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
     }
@@ -167,6 +187,14 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         let tx = db.begin().map_err(io::Error::other)?;
         let (pending, native_preparation) = match mode {
             Mode::Observe => (history::accepted(&tx, cfg)?, false),
+            Mode::StagePublication { message, .. } => {
+                let accepted = history::accepted(&tx, cfg)?
+                    .filter(|pending| pending.candidate.route["message_id"] == message)
+                    .ok_or_else(|| {
+                        invalid("requires the exact original accepted teammate message")
+                    })?;
+                (Some(accepted), false)
+            }
             Mode::Admit { message, .. } => (Some(admit::pending(&tx, cfg, message)?), false),
             Mode::Prepare { message, .. } => match capture::pending(&tx, cfg) {
                 Ok(pending) => (pending, false),
@@ -177,7 +205,8 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
             },
             Mode::Capture => (capture::pending(&tx, cfg)?, false),
         };
-        let history_service = matches!(mode, Mode::Observe) && pending.is_some();
+        let history_service =
+            matches!(mode, Mode::Observe | Mode::StagePublication { .. }) && pending.is_some();
         let (route, guard) = read_scope_for_history(&tx, cfg, pending.as_ref(), history_service)?;
         if changing || history_service {
             prepare::verify_ledger(&tx, cfg, &route, &guard)?;
@@ -193,6 +222,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         Mode::Capture => "retained_teammate_capture_once",
         Mode::Prepare { .. } => "retained_teammate_preparing",
         Mode::Admit { .. } => "retained_teammate_admitting",
+        Mode::StagePublication { .. } => "retained_teammate_staging_publication",
     };
     let status = StatusSocket::start(place, cfg, Some(connector_state))?;
     let verify_pins = || {
@@ -204,7 +234,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         Ok(())
     };
     api.verify_app(cfg)?;
-    if matches!(mode, Mode::Observe)
+    if matches!(mode, Mode::Observe | Mode::StagePublication { .. })
         && let (Some(pending), Some(binding)) = (&pending, &binding)
     {
         prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
@@ -225,18 +255,18 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
             }
             Ok(history::Scope { input, key })
         };
-        #[cfg(test)]
-        if let Ok(phase) = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE")
-            && phase.starts_with("publish-")
-        {
-            return history::publication_fixture::serve(
+        if let Mode::StagePublication { dry_run, .. } = mode {
+            return history::publication::serve(
                 place,
                 cfg,
                 binding,
                 &status,
-                &phase,
+                dry_run,
                 recheck,
-                verify_pins,
+                || {
+                    verify_pins()?;
+                    api.verify_credential(cfg)
+                },
             );
         }
         return history::serve(place, cfg, binding, &status, recheck, |cursor| {
@@ -622,6 +652,35 @@ pub(super) fn native_prepare_witness() {
         .unwrap()
         .parse()
         .unwrap();
+    if phase.starts_with("publish-") {
+        isolated_guild_fixture(&place, &cfg).unwrap();
+        super::rest::LOOPBACK_FIXTURE_PORT.set(Some(port));
+        let mut args = if phase == "publish-observer" {
+            vec!["run", "--observe-retained-teammate"]
+        } else {
+            let message = if phase == "publish-wrong-message" {
+                "702"
+            } else {
+                "701"
+            };
+            vec!["migrate-state", "--stage-teammate-publication", message]
+        };
+        if phase.ends_with("dry-run") {
+            args.push("--dry-run");
+        }
+        let code = super::run(&args.into_iter().map(str::to_owned).collect::<Vec<_>>());
+        super::rest::LOOPBACK_FIXTURE_PORT.set(None);
+        assert_eq!(
+            code,
+            match phase.as_str() {
+                "publish-stage" | "publish-observer" | "publish-dry-run" => 0,
+                "publish-before-commit" | "publish-after-commit" =>
+                    panic!("the commit fixture did not exit"),
+                _ => 1,
+            }
+        );
+        return;
+    }
     let api = Discord::loopback_fixture(&cfg, port).unwrap();
     match phase.as_str() {
         "history-watch"
@@ -632,13 +691,6 @@ pub(super) fn native_prepare_witness() {
         | "history-watch-pages"
         | "history-watch-pages-revoked"
         | "history-watch-pages-closed"
-        | "publish-stage"
-        | "publish-before-commit"
-        | "publish-after-commit"
-        | "publish-stop"
-        | "publish-edit"
-        | "publish-closed"
-        | "publish-recipient"
         | "history-refuse" => {
             let result = observe(
                 &place,
@@ -650,7 +702,7 @@ pub(super) fn native_prepare_witness() {
                     panic!("the running history witness cannot open Gateway")
                 },
             );
-            if matches!(phase.as_str(), "history-refuse" | "publish-recipient") {
+            if phase == "history-refuse" {
                 assert!(result.is_err())
             } else {
                 result.unwrap()
@@ -874,6 +926,42 @@ pub(super) fn native_prepare_witness() {
         }
         phase => panic!("unknown guild test phase {phase}"),
     }
+}
+
+#[cfg(test)]
+fn publication_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let Ok(phase) = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE") else {
+        return Ok(());
+    };
+    if !phase.starts_with("publish-") {
+        return Ok(());
+    }
+    isolated_guild_fixture(place, cfg)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(place.supervisor_root().join("rust-guild-publish-call"))?
+        .write_all(raw)?;
+    if phase != "publish-stage" {
+        wait_at_test_boundary("holding supervisor-proven publication call")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn publication_commit_fixture(place: &Place, cfg: &Config, before: bool) -> io::Result<()> {
+    let phase = if before {
+        "publish-before-commit"
+    } else {
+        "publish-after-commit"
+    };
+    if std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE").as_deref() == Ok(phase) {
+        isolated_guild_fixture(place, cfg)?;
+        std::process::exit(if before { 87 } else { 88 });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

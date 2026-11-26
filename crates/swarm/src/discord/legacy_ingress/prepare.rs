@@ -57,15 +57,68 @@ impl Voice {
             .ok_or_else(invalid)
     }
 
-    #[cfg(test)]
+    pub(in crate::discord) fn guild_publication_header(&self) -> io::Result<&Value> {
+        let nonzero = |v: &Value| v.as_u64().is_some_and(|n| n > 0);
+        let text = |v: &Value| v.as_str().is_some_and(|s| !s.is_empty());
+        let allowed = |row: &Value, fields: &[&str]| {
+            row.as_object()
+                .is_some_and(|m| m.keys().all(|k| fields.contains(&k.as_str())))
+        };
+        let c = &self.conversation;
+        let b = &c["binding"];
+        // These are the Go v0.29.26 rows we copy. Unused optional fields are omitted by Go.
+        const BINDING: [&str; 9] = [
+            "conversation_id",
+            "provider",
+            "session_id",
+            "session_instance",
+            "native_session_id",
+            "native_generation",
+            "observation_generation",
+            "login_epoch",
+            "generation",
+        ];
+        if !allowed(b, &BINDING)
+            || !BINDING[..8].iter().all(|name| text(&b[name]))
+            || b["generation"].as_u64().is_none()
+            || !c.as_object().is_some_and(|m| {
+                m.iter().all(|(k, v)| match k.as_str() {
+                    "binding" => true,
+                    "manager_generation" | "last_speech_epoch" | "last_output" => nonzero(v),
+                    "last_admission" | "retired_through" => v.as_u64().is_some(),
+                    "project" => text(v),
+                    "external_observed" => v == true,
+                    _ => false,
+                })
+            })
+            || !allowed(
+                &self.header,
+                &[
+                    "version",
+                    "generation",
+                    "current_conversation",
+                    "logical_bytes",
+                    "records",
+                    "record_hash",
+                ],
+            )
+            || !nonzero(&self.header["generation"])
+            || !self.header["logical_bytes"]
+                .as_u64()
+                .is_some_and(|n| n > 0 && n <= 64 << 20)
+        {
+            return Err(io::Error::other(
+                "unqualified original guild Voice header or conversation",
+            ));
+        }
+        Ok(&self.header)
+    }
+
     pub(super) fn executing_guild_receipt(self) -> io::Result<Receipt> {
+        self.guild_publication_header()?;
         let admission = self.queued.ok_or_else(invalid)?;
         let binding = self.conversation["binding"].clone();
-        if admission["phase"] != "executing"
-            || admission["source_cutover"] != true
-            || !(self.conversation["last_speech_epoch"].is_null()
-                || self.conversation["last_speech_epoch"].as_u64().is_some())
-        {
+        if admission["phase"] != "executing" || admission["source_cutover"] != true {
             return Err(invalid());
         }
         let raw = go_bytes(&admission)?;

@@ -22,6 +22,15 @@ pub(super) struct Input {
     project_identity: (u64, u64),
 }
 
+impl Input {
+    pub(super) fn verify_checkout(&self) -> io::Result<()> {
+        if checkout_identity(&self.project)? != self.project_identity {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn authority(cfg: &Config, actor: &str) -> &'static str {
     if actor == cfg.text("owner_id") {
         "owner_direct"
