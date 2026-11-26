@@ -1,5 +1,6 @@
 mod attach;
 mod automation;
+mod context_settings;
 mod handoff;
 mod keys;
 mod launch;
@@ -21,7 +22,7 @@ use automation::Automation;
 use handoff::Handoff;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
-use navigation::{Focus, GROUPS, ORDERS, Row, board_capacity, board_first, capacity, usable};
+use navigation::{Focus, Row, board_capacity, board_first, capacity, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -39,6 +40,7 @@ const ROSTER_CAPS: &[&str] = &[
     "opencode-observation",
     "resume-relocate",
     handoff::CAP,
+    context_settings::CAP,
     CATALOG_CAP,
     CATALOG_CONTROL,
     MANUAL_CAP,
@@ -63,6 +65,7 @@ fn board(path: &Path) -> io::Result<()> {
     let mut client = connect(path)?;
     let mut board = Board {
         hands_off: client.supports(handoff::CAP),
+        context_owner: context_settings::Owner::from_connection(path, &client),
         ..Board::default()
     };
     match Layout::load() {
@@ -84,15 +87,35 @@ fn board(path: &Path) -> io::Result<()> {
     let mut mouse_enabled = true;
     let mut previous_menu = None;
     let mut previous_editor = None;
-    let mut previous_options: Option<((u16, u16), String)> = None;
+    let mut previous_options = None;
     let mut retry = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
-        match &mut board.modal {
-            Some(Modal::Launch(form)) => needs_paint |= form.update_detection(),
-            Some(Modal::Handoff(form)) => needs_paint |= form.update_detection(),
-            _ => {}
+        let saved_layout = match &mut board.modal {
+            Some(Modal::Launch(form)) => {
+                needs_paint |= form.update_detection();
+                None
+            }
+            Some(Modal::Handoff(form)) => {
+                needs_paint |= form.update_detection();
+                None
+            }
+            Some(Modal::Options(form)) => match form.poll() {
+                context_settings::Update::Pending => None,
+                context_settings::Update::Changed => {
+                    needs_paint = true;
+                    None
+                }
+                context_settings::Update::Saved => Some(form.draft),
+            },
+            _ => None,
+        };
+        if let Some(layout) = saved_layout {
+            board.modal = None;
+            board.apply_layout(layout, dimensions.1);
+            board.persist_layout(layout);
+            needs_paint = true;
         }
         let spinner = (clock.elapsed().as_millis() / 90) as usize % 10;
         let second = clock.elapsed().as_secs();
@@ -131,19 +154,12 @@ fn board(path: &Path) -> io::Result<()> {
             }
             let menu = board.menu_frame(geometry);
             let editor = board.editor_frame(geometry);
-            let tiny_options = board
-                .tiny_options_field(geometry)
-                .map(|field| (geometry, field));
+            let options = board.options_frame(geometry);
             let mut display = String::new();
             if let Some(frame) = &menu {
                 frame.paint(&mut display, previous_menu.as_ref());
-            } else if let (Some((next_size, next)), Some((previous_size, previous))) =
-                (&tiny_options, &previous_options)
-                && next_size == previous_size
-            {
-                if next != previous {
-                    display.push_str(next);
-                }
+            } else if let Some(frame) = &options {
+                frame.paint(&mut display, previous_options.as_ref());
             } else if !editor
                 .as_ref()
                 .is_some_and(|frame| frame.paint_change(previous_editor.as_ref(), &mut display))
@@ -153,7 +169,7 @@ fn board(path: &Path) -> io::Result<()> {
             output.write_all(display.as_bytes())?;
             previous_menu = menu;
             previous_editor = editor;
-            previous_options = tiny_options;
+            previous_options = options;
             output.flush()?;
         }
         needs_paint = false;
@@ -176,6 +192,10 @@ fn board(path: &Path) -> io::Result<()> {
                     Err(_) => connection = None,
                 }
                 if connection.is_none() {
+                    board.context_owner = None;
+                    if let Some(Modal::Options(form)) = &mut board.modal {
+                        form.disconnected();
+                    }
                     board.notice = "daemon connection lost · reconnecting".to_owned();
                     retry = Instant::now() + delay;
                     needs_paint = true;
@@ -186,6 +206,10 @@ fn board(path: &Path) -> io::Result<()> {
                 Ok(client) => {
                     board.notice.clear();
                     board.hands_off = client.supports(handoff::CAP);
+                    board.context_owner = context_settings::Owner::from_connection(path, &client);
+                    if let Some(Modal::Options(form)) = &mut board.modal {
+                        form.reconnected(board.context_owner.as_ref());
+                    }
                     connection = Some(client);
                     delay = Duration::from_secs(1);
                 }
@@ -213,11 +237,7 @@ fn board(path: &Path) -> io::Result<()> {
                     retry = Instant::now();
                     delay = Duration::from_secs(1);
                 }
-                Action::SaveLayout(layout) => {
-                    if let Err(error) = layout.save() {
-                        board.notice = format!("board layout: {error}");
-                    }
-                }
+                Action::SaveLayout(layout) => board.persist_layout(layout),
                 Action::Attach { id, name } => {
                     if connection.is_some() {
                         board.attach(path, &id, &name, &mut output)?;
@@ -334,6 +354,7 @@ struct Board {
     columns: u16,
     spinner: usize,
     hands_off: bool,
+    context_owner: Option<context_settings::Owner>,
     second: u64,
     selected: String,
     focused_section: Option<String>,
@@ -378,11 +399,7 @@ enum Modal {
         id: String,
         cwd: Editor,
     },
-    Options {
-        draft: Layout,
-        focus: usize,
-        manager: Option<options::Manager>,
-    },
+    Options(Box<options::Form>),
     More {
         target: String,
         running: bool,
@@ -584,11 +601,10 @@ impl Board {
                 self.notice.clear();
             }
             Key::Text('o') => {
-                self.modal = Some(Modal::Options {
-                    draft: self.layout,
-                    focus: 0,
-                    manager: options::Manager::open(),
-                });
+                self.modal = Some(Modal::Options(Box::new(options::Form::new(
+                    self.layout,
+                    self.context_owner.clone(),
+                ))));
                 self.notice.clear();
             }
             Key::Text('a') => {
@@ -684,6 +700,19 @@ impl Board {
         Action::None
     }
 
+    fn apply_layout(&mut self, layout: Layout, rows: u16) {
+        self.layout = layout;
+        self.rebuild_sections();
+        self.reveal_focus(rows);
+        self.notice.clear();
+    }
+
+    fn persist_layout(&mut self, layout: Layout) {
+        if let Err(error) = layout.save() {
+            self.notice = format!("board layout: {error}");
+        }
+    }
+
     fn update_modal(
         &mut self,
         mut modal: Modal,
@@ -730,40 +759,10 @@ impl Board {
                 self.modal = Some(modal);
                 return action;
             }
-            Modal::Options {
-                draft,
-                focus,
-                manager,
-            } => {
-                let fields = if manager.is_some() { 4 } else { 3 };
-                match key {
-                    Key::Up => *focus = (*focus + fields - 1) % fields,
-                    Key::Down | Key::Tab => *focus = (*focus + 1) % fields,
-                    other if *focus == 3 => {
-                        if let Some(manager) = manager {
-                            manager.update(other, geometry);
-                        }
-                    }
-                    Key::Left | Key::Right if *focus == 2 => {
-                        draft.touch_back = !draft.touch_back;
-                    }
-                    Key::Left | Key::Right => {
-                        let (selected, len) = if *focus == 0 {
-                            (&mut draft.group, GROUPS.len())
-                        } else {
-                            (&mut draft.order, ORDERS.len())
-                        };
-                        let offset = if matches!(key, Key::Left) { len - 1 } else { 1 };
-                        *selected = (*selected + offset) % len;
-                    }
-                    Key::Enter if options::fits(geometry) => {
-                        self.layout = *draft;
-                        self.rebuild_sections();
-                        self.reveal_focus(rows);
-                        self.notice.clear();
-                        return Action::SaveLayout(*draft);
-                    }
-                    _ => {}
+            Modal::Options(form) => {
+                if form.input(key, geometry, online) {
+                    self.apply_layout(form.draft, rows);
+                    return Action::SaveLayout(form.draft);
                 }
                 Action::None
             }
@@ -1288,29 +1287,11 @@ impl Board {
         self.inline_session_row(target, geometry).is_some()
     }
 
-    fn tiny_options_field(&self, geometry: (u16, u16)) -> Option<String> {
-        let Some(Modal::Options {
-            draft,
-            focus,
-            manager,
-        }) = &self.modal
-        else {
+    fn options_frame(&self, geometry: (u16, u16)) -> Option<options::Frame> {
+        let Some(Modal::Options(form)) = &self.modal else {
             return None;
         };
-        if !self.notice.is_empty() || !usable(geometry) || options::fits(geometry) {
-            return None;
-        }
-        let mut field = String::new();
-        options::view(
-            &mut field,
-            geometry.0,
-            geometry.1,
-            *draft,
-            *focus,
-            manager.as_ref(),
-            true,
-        );
-        Some(field)
+        (self.notice.is_empty() && usable(geometry)).then(|| form.frame(geometry))
     }
 
     fn editor_frame(&self, geometry: (u16, u16)) -> Option<session_form::EditorFrame> {
@@ -1386,21 +1367,7 @@ impl Board {
                     "enter relocate · esc cancel",
                 );
             }
-            Some(Modal::Options {
-                draft,
-                focus,
-                manager,
-            }) => {
-                options::view(
-                    &mut screen,
-                    cols,
-                    rows,
-                    *draft,
-                    *focus,
-                    manager.as_ref(),
-                    false,
-                );
-            }
+            Some(Modal::Options(form)) => form.frame((cols, rows)).paint(&mut screen, None),
             Some(Modal::More { .. }) => {
                 self.build_menu_frame((cols, rows))
                     .expect("More open")
