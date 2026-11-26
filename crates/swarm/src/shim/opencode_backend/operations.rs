@@ -328,9 +328,9 @@ impl Backend {
         {
             return Ok(None);
         }
-        let state = field(&record["receipt"], "state");
+        let needs_admission = record["receipt"]["state"] == "outcome_unknown";
         let mut receipt = record["receipt"].clone();
-        if state == "outcome_unknown" {
+        if needs_admission {
             receipt["state"] = json!("native_accepted");
             receipt["native_message_id"] = json!(input);
             receipt["native_input_id"] = json!(input);
@@ -344,30 +344,29 @@ impl Backend {
             receipt["selection_basis"] = json!("native_message_receipt");
             receipt["selection_message_id"] = json!(input);
         }
-        let native_input = json!({
+        let mut next = record.clone();
+        next["native_input"] = json!({
             "id":input,"session":root,"created_ms":at,"agent":info["agent"],
             "model":receipt["model"],"text_hash":record["text_hash"],
         });
-        let outcome = find_terminal(root, input, at, |before| {
-            let snapshot = self.snapshot(created, 50, before)?;
-            let status = super::status(&snapshot, root);
-            if status["Turn"] != "idle" || status["Interaction"] != "none" {
-                return Err(io::Error::other("OpenCode native work is still active"));
-            }
-            Ok(snapshot)
-        });
-        let mut next = record.clone();
-        if let Some((state, native_message)) = outcome {
+        // Persist exact admission before waiting for a separate terminal history read.
+        if !needs_admission {
+            let Some((state, native_message)) = find_terminal(root, input, at, |before| {
+                let snapshot = self.snapshot(created, 50, before)?;
+                let status = super::status(&snapshot, root);
+                if status["Turn"] != "idle" || status["Interaction"] != "none" {
+                    return Err(io::Error::other("OpenCode native work is still active"));
+                }
+                Ok(snapshot)
+            }) else {
+                return Ok(None);
+            };
             receipt["state"] = json!(state);
             receipt["native_turn_id"] = json!(native_message);
             receipt["outcome_source"] = json!("reconciled_snapshot");
             next["terminal_proof"] = json!({"state":state,"assistant":native_message,"parent":row["info"]["id"],"session":row["info"]["sessionID"]});
         }
-        if record["receipt"] == receipt {
-            return Ok(None);
-        }
         next["receipt"] = receipt;
-        next["native_input"] = native_input;
         Ok(Some(next))
     }
     pub(super) fn checkpoint_prompt(&self, created: u64) -> io::Result<()> {
@@ -697,6 +696,114 @@ fn dispatch_observation(reply: &io::Result<Value>, matches: impl FnOnce(&Value) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operation_status_saves_native_admission_without_a_snapshot() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let dir = crate::test_temp::root()
+            .join(format!("oc-admit-{}", &runtime::random_id().unwrap()[..8]));
+        runtime::private_dir(&dir).unwrap();
+        let socket = dir.join("p");
+        let listener = runtime::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let root = "ses_012345678900";
+        let input = "msg_012345678900";
+        let operation = "semantic:123:0123456789abcdef0123456789abcdef";
+        let session = "fixture-session";
+        let token = "fixture-token";
+        let binding = json!({"version":1,"workerID":"worker","rootID":root,"directory":"/fixture",
+            "socketPath":socket,"token":token,"nativeCreatedAtMS":123,
+            "sessionInstance":"a".repeat(32),"backendGeneration":"a".repeat(32)});
+        runtime::write_json(&dir.join("opencode-native.json"), &binding).unwrap();
+        let backend =
+            Backend::new(binding.clone(), "1.19.3", std::process::id(), &dir, token).unwrap();
+        let mut receipt = receipts::base(&binding, operation, session);
+        receipt["state"] = json!("outcome_unknown");
+        receipt["native_session_id"] = json!(root);
+        let text = "exact synthetic input";
+        let record = json!({"token":token,"receipt":receipt,"kind":"prompt","dispatch_kind":"prompt",
+            "intent":"b".repeat(64),"request_hash":"c".repeat(64),"target":root,"issued_ms":124,
+            "message_id":input,"text_hash":codex_receipt::hash(text)});
+        receipts::save(&dir, operation, &record).unwrap();
+
+        let row = json!({"info":{"id":input,"sessionID":root,"role":"user","time":{"created":125},
+            "agent":"build","model":{"providerID":"fixture","modelID":"model"}},
+            "parts":[{"id":"prt_fixture","messageID":input,"sessionID":root,"type":"text","text":text}]});
+        let message = format!("GET /message?messageID={input} HTTP/1.1\r\n");
+        let assistant = "msg_012345678901";
+        let mut terminal = binding;
+        terminal["hierarchyComplete"] = json!(true);
+        terminal["statuses"] = json!({});
+        terminal["permissions"] = json!([]);
+        terminal["questions"] = json!([]);
+        terminal["descendants"] = json!([]);
+        terminal["nextCursor"] = json!("");
+        terminal["messages"] = json!([{"info":{"id":assistant,"sessionID":root,"role":"assistant",
+            "parentID":input,"time":{"created":126,"completed":127},"finish":"stop"},"parts":[]}, row]);
+        const SNAPSHOT: &str = "GET /snapshot?limit=50&before= HTTP/1.1\r\n";
+        let message_request = message.clone();
+        let (stop, finished) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut routes = Vec::new();
+            while finished.try_recv() == Err(mpsc::TryRecvError::Empty) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(accepted) => accepted,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(error) => panic!("bridge fixture: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(runtime::IO_TIMEOUT)).unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request = line.clone();
+                while line != "\r\n" {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                }
+                let (status, body) = if request == message_request {
+                    ("200 OK", row.to_string())
+                } else if request == SNAPSHOT && routes.len() == 2 {
+                    ("200 OK", terminal.to_string())
+                } else {
+                    ("503 Service Unavailable", "{}".into())
+                };
+                routes.push(request);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            routes
+        });
+        let result = backend.operation(session, operation, "prompt", None);
+        let saved = receipts::read(&dir, token, session, operation);
+        let terminal = backend.operation(session, operation, "prompt", None);
+        stop.send(()).unwrap();
+        let routes = server.join().unwrap();
+        let saved = saved.unwrap().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+
+        assert_eq!(routes, [message.as_str(), message.as_str(), SNAPSHOT]);
+        assert_eq!(result.unwrap().unwrap(), saved["receipt"]);
+        assert_eq!(saved["receipt"]["state"], "native_accepted");
+        assert_eq!(saved["receipt"]["native_input_id"], input);
+        assert_eq!(
+            saved["receipt"]["selection_basis"],
+            "native_message_receipt"
+        );
+        assert!(saved["terminal_proof"].is_null());
+        let terminal = terminal.unwrap().unwrap();
+        assert_eq!(terminal["state"], "completed");
+        assert_eq!(terminal["native_turn_id"], assistant);
+    }
 
     #[test]
     fn dispatch_observation_preserves_only_correlated_native_diagnostics() {
