@@ -63,7 +63,7 @@ pub(super) fn retry_due(
     api: &Discord,
 ) -> io::Result<Option<Value>> {
     let now = crate::ipc::spawn::now_ms();
-    if !inbox.thread_retry_due(now) {
+    if !inbox.thread_throttle_due(now) {
         return Ok(None);
     }
     let plan = inbox.thread_creation().unwrap().clone();
@@ -81,7 +81,11 @@ pub(super) fn retry_due(
     if !authorize(cfg, guild, parent, message, lookup)?
         .is_some_and(|(current, can_create)| current == plan && can_create)
     {
-        inbox.thread_retry_at(None)?;
+        inbox.retire_throttled_thread(&plan, now)?;
+        return Ok(None);
+    }
+    if !inbox.thread_retry_due(now) {
+        inbox.thread_retry_at(Some(now.saturating_add(60_000)))?;
         return Ok(None);
     }
     attempt(cfg, inbox, api, &plan, None)
@@ -188,8 +192,11 @@ fn provision(
         Post::Acknowledged(observed) if !exact(&observed, plan) => {
             return Err(invalid("Discord create response named a different thread"));
         }
-        Post::RateLimited(delay) if delay > 0 && delay <= 120_000 => {
-            inbox.thread_retry_at(Some(clock().saturating_add(delay)))?;
+        Post::RateLimited(delay) => {
+            inbox.record_thread_throttle(
+                clock().saturating_add(delay.max(1)),
+                (1..=120_000).contains(&delay),
+            )?;
             return Ok(None);
         }
         _ => {}
@@ -279,6 +286,57 @@ mod tests {
     use super::*;
     use crate::supervisor::runtime;
     use std::cell::Cell;
+
+    #[test]
+    fn revoked_throttled_opener_releases_the_slot_but_uncertain_write_cannot() {
+        let dir = std::env::temp_dir().join(format!(
+            "swarm-thread-revoke-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&dir).unwrap();
+        let cfg = Config(
+            json!({"mode":"teammate","installation_id":"test","application_id":"3","owner_id":"4"}),
+        );
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let plan = json!({"guild_id":"1","parent_id":"2","message_id":"9","actor_id":"4","revision":"a".repeat(64)});
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || 100,
+            || Post::RateLimited(200),
+            || panic!("definitive throttle"),
+        )
+        .unwrap();
+        assert!(inbox.retire_throttled_thread(&plan, 299).is_err());
+        let mut another = plan.clone();
+        another["message_id"] = json!("10");
+        assert!(inbox.retire_throttled_thread(&another, 300).is_err());
+        inbox.retire_throttled_thread(&plan, 300).unwrap();
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        assert!(inbox.thread_creation().is_none());
+        provision(
+            &mut inbox,
+            &another,
+            None,
+            || 301,
+            || Post::Unconfirmed,
+            || Ok(None),
+        )
+        .unwrap();
+        assert!(inbox.retire_throttled_thread(&another, u64::MAX).is_err());
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || 302,
+            || panic!("uncertain create still controls slot"),
+            || Ok(None),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn definitive_cooldown_retry_is_durable_and_switches_to_read_only_on_lost_reply() {
