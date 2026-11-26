@@ -326,13 +326,21 @@ fn scope(place: &Place, message: &str) -> io::Result<Config> {
 }
 
 fn retained_config(place: &Place) -> io::Result<Config> {
+    let cfg = personal_enrollment(place)?;
+    match fs::symlink_metadata(place.dir.join("bridge.sock")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(cfg),
+        Err(error) => Err(error),
+        Ok(_) => Err(invalid()),
+    }
+}
+
+fn personal_enrollment(place: &Place) -> io::Result<Config> {
     let cfg = place.load()?;
     verify_controls_place(place, &cfg)?;
     if cfg.text("mode") != "personal"
         || cfg.text("project_access") == "vm"
         || !cfg.0["calls"].is_null()
         || !cfg.0["previous_supervisor"].is_null()
-        || place.dir.join("bridge.sock").symlink_metadata().is_ok()
     {
         return Err(invalid());
     }
@@ -349,9 +357,23 @@ struct ConnectorLease {
 
 impl ConnectorLease {
     fn open(place: &Place, cfg: &Config, expected: &fs::Metadata) -> io::Result<Self> {
+        Self::acquire(place, cfg, expected, false)
+    }
+
+    fn acquire(
+        place: &Place,
+        cfg: &Config,
+        expected: &fs::Metadata,
+        foreground: bool,
+    ) -> io::Result<Self> {
         let configuration = place.lock()?;
         let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
-        if retained_config(place)?.0 != cfg.0 {
+        let current = if foreground {
+            personal_enrollment(place)?
+        } else {
+            retained_config(place)?
+        };
+        if current.0 != cfg.0 {
             return Err(invalid());
         }
         let source = place.dir.join("discord.db");
@@ -1259,6 +1281,7 @@ mod tests {
             current: Value,
             second: Value,
             posts: std::cell::Cell<u32>,
+            status: PathBuf,
             acknowledge: bool,
             close_first: std::sync::mpsc::SyncSender<()>,
         }
@@ -1285,6 +1308,9 @@ mod tests {
                 }
             }
             fn post(&self, _: &Config, nonce: &str, body: &str) -> Post {
+                let status = super::super::local::call(&self.status, "status", "", None).unwrap();
+                assert_eq!(status["connected"], true);
+                assert_eq!(status["installation_id"], "fixture-personal");
                 assert_eq!(body, "Verified native final reply.");
                 let count = self.posts.get() + 1;
                 self.posts.set(count);
@@ -1310,9 +1336,13 @@ mod tests {
             current: current.clone(),
             second: second.clone(),
             posts: std::cell::Cell::new(0),
+            status: place.dir.clone(),
             acknowledge: std::env::var_os("SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK").is_none(),
             close_first,
         };
+        // An interrupted foreground process leaves this private pathname behind.
+        let dormant = runtime::bind(&place.dir.join("bridge.sock")).unwrap();
+        drop(dormant);
         let source = place.dir.join("discord.db");
         use super::super::gateway;
         let worker = |frames: Vec<Value>, done: std::sync::mpsc::Receiver<()>| {
@@ -1370,6 +1400,8 @@ mod tests {
         }
         let result = service::with(&place, &room, Some(2), |cfg| {
             assert!(open_bolt(&source, 64 << 20).is_err());
+            let status = super::super::local::call(&place.dir, "status", "", None).unwrap();
+            assert_eq!(status["connected"], false);
             if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
                 let other = Command::new(fixture)
                     .arg("activate")
@@ -1395,6 +1427,7 @@ mod tests {
             peer.join().unwrap();
         }
         assert!(sockets.is_empty());
+        assert!(!place.dir.join("bridge.sock").exists());
         if room.acknowledge {
             assert!(result.unwrap());
         } else {

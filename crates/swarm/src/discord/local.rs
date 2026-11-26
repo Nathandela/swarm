@@ -56,7 +56,7 @@ pub(super) fn call_until(
     exchange(dir, operation, query, request, end, true)
 }
 
-fn connect_available(path: &Path) -> io::Result<UnixStream> {
+pub(super) fn connect_available(path: &Path) -> io::Result<UnixStream> {
     let bytes = path.as_os_str().as_bytes();
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if bytes.len() >= address.sun_path.len() || bytes.contains(&0) {

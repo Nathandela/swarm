@@ -283,7 +283,10 @@ pub(in crate::discord) fn run(place: &Place, message: &str, dry_run: bool) -> io
 }
 
 fn prepared_config(place: &Place, message: &str) -> io::Result<Config> {
-    let cfg = scope(place, message)?;
+    if !snowflake(message) {
+        return Err(invalid());
+    }
+    let cfg = personal_enrollment(place)?;
     if !cfg.0["projects"].is_null()
         && !cfg.0["projects"]
             .as_object()
@@ -363,6 +366,9 @@ pub(super) fn with(
     fetch: impl FnOnce(&Config, &str) -> io::Result<Value>,
 ) -> io::Result<bool> {
     let cfg = prepared_config(place, message)?;
+    if retained_config(place)?.0 != cfg.0 {
+        return Err(invalid());
+    }
     let source = place.dir.join("discord.db");
     if dry_run {
         let (_pin, db) = open_bolt(&source, 64 << 20)?;

@@ -124,6 +124,112 @@ impl Drop for Bridge {
     }
 }
 
+struct StatusSocket {
+    socket: PathBuf,
+    inode: (u64, u64),
+    connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop: std::sync::mpsc::Sender<()>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StatusSocket {
+    fn start(place: &Place, cfg: &Config) -> io::Result<Self> {
+        let socket = place.dir.join("bridge.sock");
+        match fs::symlink_metadata(&socket) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(previous) => {
+                use std::os::unix::fs::FileTypeExt;
+                if !previous.file_type().is_socket()
+                    || previous.nlink() != 1
+                    || previous.uid() != unsafe { libc::geteuid() }
+                    || previous.mode() & 0o777 != 0o600
+                {
+                    return Err(invalid());
+                }
+                match crate::discord::local::connect_available(&socket) {
+                    Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                        let current = fs::symlink_metadata(&socket)?;
+                        if (previous.dev(), previous.ino()) != (current.dev(), current.ino()) {
+                            return Err(invalid());
+                        }
+                        fs::remove_file(&socket)?;
+                    }
+                    _ => return Err(invalid()),
+                }
+            }
+        }
+        let listener = runtime::bind(&socket)?;
+        let meta = fs::symlink_metadata(&socket)?;
+        listener.set_nonblocking(true)?;
+        let (stop, exit) = std::sync::mpsc::channel();
+        let connected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let live = connected.clone();
+        let mut initial = cfg.status();
+        let worker = std::thread::spawn(move || {
+            loop {
+                use std::sync::mpsc::RecvTimeoutError;
+                match exit.recv_timeout(Duration::from_millis(20)) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+                    Err(RecvTimeoutError::Timeout) => {}
+                }
+                let Ok((mut stream, _)) = listener.accept() else {
+                    continue;
+                };
+                use std::io::BufRead;
+                let mut line = String::new();
+                let deadline = Instant::now() + Duration::from_millis(250);
+                let mut reader = std::io::BufReader::new(
+                    crate::socket::DeadlineReader(&stream, deadline).take(512),
+                );
+                if reader.read_line(&mut line).is_err()
+                    || !matches!(
+                        line.as_str(),
+                        "GET /status HTTP/1.0\r\n" | "GET /status HTTP/1.1\r\n"
+                    )
+                {
+                    let _ =
+                        stream.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                    continue;
+                }
+                initial["connected"] = json!(live.load(std::sync::atomic::Ordering::Acquire));
+                let Ok(body) = serde_json::to_vec(&initial) else {
+                    continue;
+                };
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+                let _ = write!(stream, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n", body.len())
+                .and_then(|_| stream.write_all(&body));
+            }
+        });
+        Ok(Self {
+            socket,
+            inode: (meta.dev(), meta.ino()),
+            connected,
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn online(&self, value: bool) {
+        self.connected
+            .store(value, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl Drop for StatusSocket {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        if fs::symlink_metadata(&self.socket)
+            .is_ok_and(|meta| (meta.dev(), meta.ino()) == self.inode)
+        {
+            let _ = fs::remove_file(&self.socket);
+        }
+    }
+}
+
 fn enrolled_dm<'a>(cfg: &Config, message: &'a Value) -> Option<&'a str> {
     let id = message["id"].as_str().filter(|id| snowflake(id))?;
     if message["author"]["id"] != cfg.text("owner_id")
@@ -167,7 +273,7 @@ impl Room for Discord {
 }
 
 pub(in crate::discord) fn run(place: &Place) -> io::Result<bool> {
-    let cfg = retained_config(place)?;
+    let cfg = personal_enrollment(place)?;
     let api = Discord::connect(&cfg)?;
     with(place, &api, None, |cfg| {
         let (mut socket, mut cursor) = gateway::open(cfg)?;
@@ -184,10 +290,10 @@ pub(super) fn with<ReadEvent>(
 where
     ReadEvent: FnMut() -> io::Result<Option<Value>>,
 {
-    let cfg = retained_config(place)?;
+    let cfg = personal_enrollment(place)?;
     let source = place.dir.join("discord.db");
     let expected = fs::symlink_metadata(&source)?;
-    let mut lease = ConnectorLease::open(place, &cfg, &expected)?;
+    let mut lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
     let boundary = {
         let tx = lease.db.begin().map_err(io::Error::other)?;
         let key = format!(
@@ -203,9 +309,11 @@ where
         }
         boundary.parse::<u64>().map_err(io::Error::other)?
     };
+    let status = StatusSocket::start(place, &cfg)?;
     room.verify(&cfg)?;
     let mut event = open(&cfg)?;
     let mut pending = history_backlog(room, &cfg, boundary)?;
+    status.online(true);
     let mut handled = 0;
     let mut through = boundary;
     let mut reconnects = 0;
@@ -222,9 +330,11 @@ where
                 Ok(None) => {}
                 Err(_) if reconnects < 2 => {
                     reconnects += 1;
+                    status.online(false);
                     room.verify(&cfg)?;
                     event = open(&cfg)?;
                     pending = history_backlog(room, &cfg, through)?;
+                    status.online(true);
                 }
                 Err(error) => return Err(error),
             }
