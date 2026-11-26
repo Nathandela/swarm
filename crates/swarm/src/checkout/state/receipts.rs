@@ -47,7 +47,7 @@ fn read_bucket<'tx>(bucket: &impl BucketApi<'tx>, end: Instant) -> io::Result<Bu
     Ok(rows)
 }
 
-pub(crate) fn open_bolt(path: &Path, max: u64) -> io::Result<(File, impl DbApi)> {
+pub(crate) fn open_bolt(path: &Path, max: u64) -> io::Result<(File, impl DbApi + use<>)> {
     let file = private_file(path, max)?;
     if file.metadata()?.len() < 4096 {
         return Err(io::Error::other("incomplete bbolt file"));

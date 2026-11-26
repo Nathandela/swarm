@@ -21,6 +21,7 @@ mod dispatcher;
 mod gateway;
 mod guild;
 mod legacy_discussions;
+mod legacy_ingress;
 mod legacy_state;
 mod local;
 mod mail_wake;
@@ -340,7 +341,7 @@ impl<'a> Request<'a> {
             }
             "migrate-state" => {
                 flags = &["dry-run", "rollback", "controls"];
-                &[]
+                &["settle-personal-ingress"]
             }
             "migrate-supervisor" => {
                 flags = &["dry-run"];
@@ -472,6 +473,12 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     match req.command {
         "connect" => return connect(req, place),
         "migrate-state" => {
+            if let Some(message) = req.get("settle-personal-ingress") {
+                if req.on("controls") || req.on("rollback") {
+                    return Err(invalid("select one migration operation"));
+                }
+                return legacy_ingress::settle(&place, message, req.on("dry-run"));
+            }
             return legacy_state::migrate(
                 &place,
                 req.on("dry-run"),

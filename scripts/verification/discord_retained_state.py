@@ -203,6 +203,35 @@ def inspect(go, rust, fixture, base):
     pending_database = (controls / "discord.db").read_bytes()
     assert not json.loads(run(rust, old_env, *route_args, "--dry-run", code=1))["eligible"]
     assert (controls / "discord.db").read_bytes() == pending_database
+    for phase in ("prepared", "executing", "running"):
+        recovery = base / ("recovery-" + phase)
+        run(fixture, old_env, "create", recovery, original, "personal", "true")
+        run(fixture, old_env, "bind", recovery, "existing-dm", "400")
+        run(fixture, old_env, "voice-ingress", recovery, "existing-dm", "701", phase)
+        original_db = recovery / "discord.db"
+        voice_db, = (recovery / "discussions").glob("*/voice.db")
+        before = original_db.read_bytes()
+        voice_bytes = voice_db.read_bytes()
+        command = ["discord", "migrate-state", "--settle-personal-ingress", "701"]
+        code = int(phase == "prepared")
+        run(rust, old_env, *command, "--dry-run", code=code)
+        assert original_db.read_bytes() == before
+        with voice_db.open("rb") as voice_writer:
+            fcntl.flock(voice_writer, fcntl.LOCK_EX)
+            run(rust, old_env, *command, code=1)
+        assert original_db.read_bytes() == before
+        result = run(rust, old_env, *command, code=code)
+        if not code:
+            assert f"Native phase remains {phase}." in result
+        after = original_db.read_bytes()
+        assert (after == before) == (phase == "prepared")
+        run(rust, old_env, *command, code=code)
+        assert original_db.read_bytes() == after
+        pending = run(fixture, old_env, "ingress", recovery, "existing-dm", "701", "replay").strip()
+        assert pending == ("1" if phase == "prepared" else "0")
+        assert voice_db.read_bytes() == voice_bytes
+        phase_result = run(fixture, old_env, "voice-phase", voice_db.parent, "701").strip()
+        assert phase_result == f"{phase} {str(phase != 'prepared').lower()}"
     print("PASS Go-made Discord personal/team retained evidence, rollback, and verified original/default supervisor split")
 
 

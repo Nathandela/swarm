@@ -72,6 +72,21 @@ fn scoped(cfg: &Config, route: &Route) -> bool {
         }
 }
 
+pub(super) fn operation(installation: &str, message: &str) -> io::Result<String> {
+    // Original installations and Discord snowflakes use identical Go/Rust JSON encoding.
+    if !installation
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+    {
+        return Err(io::Error::other("invalid original Discord installation ID"));
+    }
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&[installation, message])?)
+    );
+    Ok(format!("da_{}", &digest[..32]))
+}
+
 pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) -> io::Result<()> {
     let invalid = || io::Error::other("unqualified original discussion or replay index");
     let discussions = tx.bucket(b"teammate_discussions").ok_or_else(invalid)?;
@@ -82,14 +97,6 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
     let guards = tx.bucket(b"teammate_ingress_guard").ok_or_else(invalid)?;
     let meta = tx.bucket(b"teammate_meta").ok_or_else(invalid)?;
     let install = cfg.text("installation_id");
-    // Original Go installations and owner IDs use ASCII tokens. Limit the
-    // cross-language digest to that identical json.Marshal encoding.
-    if !install
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
-    {
-        return Err(invalid());
-    }
     let prefix = format!("{install}\0");
     let mut routes = BTreeMap::new();
     for (n, (key, raw)) in discussions.iter_entries().enumerate() {
@@ -139,13 +146,7 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
             return Err(invalid());
         }
         let row: Guard = serde_json::from_slice(raw).map_err(|_| invalid())?;
-        let operation = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&[
-                install,
-                row.route.message_id.as_str()
-            ])?)
-        );
+        let operation = operation(install, &row.route.message_id)?;
         if key != format!("{prefix}{}", row.route.message_id).as_bytes()
             || !scoped(cfg, &row.route)
             || !snowflake(&row.actor_id)
@@ -156,7 +157,7 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
                 && (!routes.get(&row.discussion_id).is_some_and(|binding| {
                     binding.guild_id == row.route.guild_id
                         && binding.channel_id == row.route.channel_id
-                }) || row.operation_id != format!("da_{}", &operation[..32])
+                }) || row.operation_id != operation
                     || row.revision.len() != 64
                     || !row
                         .revision

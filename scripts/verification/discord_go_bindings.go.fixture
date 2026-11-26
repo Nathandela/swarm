@@ -4,6 +4,7 @@ package discord
 import (
 	"path/filepath"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -46,4 +47,27 @@ func (s *Store) FixtureIngress(d TeammateDiscussion, owner, id, action string) (
 		}
 	}
 	return len(pending), nil
+}
+
+// FixturePendingPersonal uses the original connector's sending transaction but
+// leaves ingress settlement to the migration candidate.
+func (s *Store) FixturePendingPersonal(d TeammateDiscussion, owner, id string) (schema.MessageOrigin, error) {
+	route := d.Route
+	route.MessageID = id
+	actor := Actor{ID: owner, Name: "offline fixture"}
+	record := teammateCandidate{Route: route, Author: actor}
+	if err := s.teammateRecord(d.InstallationID, "synthetic-gateway", 1, []teammateCandidate{record}, false); err != nil {
+		return schema.MessageOrigin{}, err
+	}
+	pending, _, err := s.teammatePendingSnapshot(d.InstallationID)
+	if err != nil {
+		return schema.MessageOrigin{}, err
+	}
+	op, rev := "da_"+digest([]string{d.InstallationID, id})[:32], digest(id)
+	admission := &TeammateAdmission{Discussion: d, OperationID: op, Revision: rev,
+		Author: actor, Route: route, Authority: AuthorityOwnerDirect, InvokerID: owner, Sequence: pending[0].Sequence}
+	origin := schema.MessageOrigin{Kind: string(admission.Authority), InstallationID: d.InstallationID,
+		DiscussionID: d.ID, RequestID: op, ActorID: owner, ActorName: actor.Name, RequesterID: owner,
+		ChannelID: route.ChannelID, MessageID: id, Revision: rev}
+	return origin, s.teammateCandidateChange(d.InstallationID, pending[0], StateSending, "", admission)
 }

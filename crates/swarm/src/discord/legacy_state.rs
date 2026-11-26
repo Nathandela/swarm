@@ -437,7 +437,7 @@ pub(super) fn migrate(
     Ok(result["eligible"] == true && result["state"] != "changed")
 }
 
-fn verify_controls_place(place: &Place, cfg: &Config) -> io::Result<()> {
+pub(super) fn verify_controls_place(place: &Place, cfg: &Config) -> io::Result<()> {
     let root = fs::canonicalize(place.supervisor_root())?;
     if !cfg.enabled()
         || !cfg.managed()
@@ -451,7 +451,27 @@ fn verify_controls_place(place: &Place, cfg: &Config) -> io::Result<()> {
     Ok(())
 }
 
-fn bounded_writer(pin: fs::File) -> io::Result<(fs::File, Bolt)> {
+pub(super) fn writable_pin(path: &Path) -> io::Result<fs::File> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let info = file.metadata()?;
+    if !info.is_file()
+        || info.nlink() != 1
+        || info.mode() & 0o077 != 0
+        || info.uid() != unsafe { libc::geteuid() }
+        || !(4096..=64 << 20).contains(&info.len())
+    {
+        return Err(io::Error::other(
+            "expected a bounded private original database",
+        ));
+    }
+    Ok(file)
+}
+
+pub(super) fn bounded_writer(pin: fs::File) -> io::Result<(fs::File, Bolt)> {
     let (send, recv) = std::sync::mpsc::sync_channel(1);
     // Bolt::open waits for the flock. Keep that wait bounded at this CLI entry
     // point, and do not let the waiting thread perform any mutation.
@@ -533,20 +553,9 @@ pub(super) fn audience(
         ));
     }
     let path = place.dir.join("discord.db");
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&path)?;
+    let file = writable_pin(&path)?;
     let pinned = file.metadata()?;
-    if !pinned.is_file()
-        || pinned.nlink() != 1
-        || pinned.mode() & 0o077 != 0
-        || pinned.uid() != unsafe { libc::geteuid() }
-        || !(4096..=64 << 20).contains(&pinned.len())
-        || anchor["database_device"] != pinned.dev()
-        || anchor["database_inode"] != pinned.ino()
-    {
+    if anchor["database_device"] != pinned.dev() || anchor["database_inode"] != pinned.ino() {
         return Err(io::Error::other("original connector database lost custody"));
     }
     let (pin, mut db) = bounded_writer(file)?;
