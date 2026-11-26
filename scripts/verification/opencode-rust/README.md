@@ -121,3 +121,11 @@ preflight deadlines and check the terminal no-effect behavior.
 The test pauses only the TUI whose PID and birth match the private
 worker record. It checks the actual OpenCode database and fixture model
 requests independently of the Swarm receipt before accepting replay.
+
+### Lost terminal event
+
+The failed macOS native 24-hour run at `7202a48dd1eca0bb1c9f3ff422291ca7f871e74a` finished 255 marked turns. For turn 256, the Go-independent Rust prompt receipt stayed `native_accepted` after both native input requests resolved. The retained OpenCode SQLite database and WAL show the exact admitted user message and its terminal assistant reply. Native completion did not reach the durable Swarm receipt. The earlier worker relied on an individual SSE update or an explicit operation status query to do that reconciliation.
+
+To reproduce the receipt boundary, archive the source under a scratch directory and run `python3 scripts/verification/opencode-rust/drop_terminal_events.py SCRATCH/crates/swarm/assets/opencode/tui.mjs` from the checkout. Build that scratch copy. The injection drops only assistant terminal SSE notifications and records the exact dropped message IDs. It leaves native provider writes and snapshots intact. Stage `terminal_checkpoint.py` with the ordinary loopback scripts and pass `--terminal-checkpoint missing` to the baseline, or `--terminal-checkpoint recovered` to the corrected build.
+
+The fixture holds the model reply until the operation has an acknowledged input. It checks the actual native assistant result and the suppressed event ID, then reads the durable receipt directly. The corrected shim must record the exact terminal response before the first status query. Retrying the same operation must return that receipt with one native user message. No deadlines were raised and no uncertain effect was replayed.

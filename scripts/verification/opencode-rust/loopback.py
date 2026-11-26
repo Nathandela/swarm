@@ -26,6 +26,7 @@ parser.add_argument('--source')
 parser.add_argument('--native', type=Path)
 parser.add_argument('--mixed', action='store_true')
 parser.add_argument('--hands-off', action='store_true')
+parser.add_argument('--terminal-checkpoint', choices=('missing', 'recovered'))
 parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
                     help='pause the verified native TUI across one preflight deadline')
 parser.add_argument('--check-arguments', action='store_true')
@@ -77,6 +78,7 @@ if args.mixed:
     env['PATH'] = f"{bin_dir}:{env['PATH']}"
 
 request_log=[]
+terminal_release=threading.Event()
 class Fixture(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -107,6 +109,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         request_log.append({'names':len(names),'actions':[name for name,_ in actions],
                             'marker': marker.group() if marker else None,
                             'primary': bool(names) and not any(m['role']=='tool' for m in after)})
+        if args.terminal_checkpoint and 'RUST_TERMINAL_GAP' in prompt and names:
+            assert terminal_release.wait(12), 'fixture did not release the admitted native turn'
         now=int(time.time())
         if incoming.get('stream'):
             self.send_response(200)
@@ -225,6 +229,10 @@ try:
     def ready():
         return next((item for item in output('ls','--json') if item['id']==row and item['status']['Turn']=='idle'),None)
     wait(ready)
+    if args.terminal_checkpoint:
+        from terminal_checkpoint import rehearse
+        rehearse(args.terminal_checkpoint, root, row, output, history, wait, terminal_release)
+        sys.exit(0)
     before=history()
     assert any(m['info']['role']=='user' for m in before['history']), before
     if args.hands_off:
