@@ -56,6 +56,9 @@ func (s *Store) FixtureIngress(d TeammateDiscussion, owner, id, action string) (
 	// An ordinary message dispatch has its channel and guild, without a parent.
 	route.ParentID = ""
 	record := teammateCandidate{Route: route, Author: Actor{ID: owner}}
+	if action == "edit" {
+		record.Edited = true
+	}
 	if err := s.teammateRecord(d.InstallationID, "synthetic-gateway", 1, []teammateCandidate{record}, false); err != nil {
 		return 0, err
 	}

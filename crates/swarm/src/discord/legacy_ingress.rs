@@ -897,6 +897,7 @@ fn capture_under_lease(
         &mut binding,
         json!({"guild_id":"","channel_id":channel,"message_id":message}),
         json!({"id":actor,"name":name}),
+        None,
     )?;
     tx.commit().map_err(io::Error::other)?;
     println!("Captured the personal DM in the original Go ingress queue.");
@@ -909,6 +910,7 @@ pub(super) fn write_pending_ingress<'tx>(
     binding: &mut Value,
     route: Value,
     author: Value,
+    capture_revision: Option<&str>,
 ) -> io::Result<()> {
     let install = cfg.text("installation_id");
     let key = format!("{install}\0{}", field(&route, "message_id"));
@@ -925,10 +927,11 @@ pub(super) fn write_pending_ingress<'tx>(
         {
             return Err(invalid());
         }
-        let captured = json!({"Route":route,"Author":author,"Opening":false,"Edited":false,"Deleted":false,
-            "Mutation":0,"Sequence":n,"State":"prepared","Error":"","Admission":null});
         ingress
-            .put(key, serde_json::to_vec(&captured)?)
+            .put(
+                key,
+                pending_ingress_row(&route, &author, n, capture_revision)?,
+            )
             .map_err(io::Error::other)?;
         n
     };
@@ -947,6 +950,20 @@ pub(super) fn write_pending_ingress<'tx>(
         .put(b"active_ingress_count", 1u64.to_be_bytes())
         .map_err(io::Error::other)?;
     Ok(())
+}
+
+pub(super) fn pending_ingress_row(
+    route: &Value,
+    author: &Value,
+    sequence: u64,
+    capture_revision: Option<&str>,
+) -> io::Result<Vec<u8>> {
+    let mut row = json!({"Route":route,"Author":author,"Opening":false,"Edited":false,"Deleted":false,
+        "Mutation":0,"Sequence":sequence,"State":"prepared","Error":"","Admission":null});
+    if let Some(revision) = capture_revision {
+        row["CaptureRevision"] = json!(revision);
+    }
+    Ok(serde_json::to_vec(&row)?)
 }
 
 fn require_repaired<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, binding: &Value) -> io::Result<()> {

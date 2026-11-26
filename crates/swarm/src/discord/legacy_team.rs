@@ -1,4 +1,4 @@
-//! Gateway custody of one settled original Go thread.
+//! Gateway custody and capture of one original Go thread.
 mod capture;
 use super::{
     config::{Config, LockDescription, Place, invalid, open_owner_file},
@@ -73,19 +73,25 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     }
     let source = place.dir.join("discord.db");
     let (pin, db) = open_bolt(&source, 64 << 20)?;
-    let (route, guard) = read_scope(&db.begin().map_err(io::Error::other)?, cfg)?;
-    if capture_once {
-        capture::binding(&db.begin().map_err(io::Error::other)?, cfg, &route, &guard)?;
-    }
+    let (route, guard, pending) = {
+        let tx = db.begin().map_err(io::Error::other)?;
+        let pending = if capture_once {
+            capture::pending(&tx, cfg)?
+        } else {
+            None
+        };
+        let (route, guard) = read_scope(&tx, cfg, pending.as_ref())?;
+        if capture_once {
+            capture::binding(&tx, cfg, &route, &guard, pending.as_ref())?;
+        }
+        (route, guard, pending)
+    };
     let connector_state = if capture_once {
         "retained_teammate_capture_once"
     } else {
         "retained_teammate_read_only"
     };
     let status = StatusSocket::start(place, cfg, Some(connector_state))?;
-    api.verify_app(cfg)?;
-    let mut event = open(cfg)?;
-    verify_boundary(api, cfg, &route, &guard)?;
     let verify_pins = || {
         if !legacy_state::unchanged(&pin, &source)? || !verify_config()? {
             return Err(invalid(
@@ -94,6 +100,17 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         }
         Ok(())
     };
+    api.verify_app(cfg)?;
+    if let Some(pending) = pending {
+        capture::verify_pending(api, cfg, &route, &guard, &pending)?;
+        verify_pins()?;
+        if !status.stopping() {
+            println!("Verified that the original captured thread message is still prepared.");
+        }
+        return Ok(());
+    }
+    let mut event = open(cfg)?;
+    verify_boundary(api, cfg, &route, &guard)?;
     verify_pins()?;
     status.online(true);
     let mut next_authority_check = Instant::now() + recheck_interval;
@@ -148,20 +165,30 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     Ok(())
 }
 
-fn read_scope<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<(Route, Guard)> {
+fn read_scope<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    pending: Option<&capture::Pending>,
+) -> io::Result<(Route, Guard)> {
     let mut inventory = legacy_state::inventory(cfg);
     legacy_state::scan(
         tx,
         &mut inventory,
         Instant::now() + Duration::from_secs(10),
         true,
+        pending.map(|row| (row.ingress_key.as_slice(), row.pending_key.as_slice())),
     )?;
     if inventory.unresolved != 0 || !inventory.issues.is_empty() {
         return Err(invalid(
             "observer requires a settled original connector ledger",
         ));
     }
-    legacy_discussions::verify(tx, cfg, cfg.text("daemon_socket"))?;
+    legacy_discussions::verify(
+        tx,
+        cfg,
+        cfg.text("daemon_socket"),
+        u64::from(pending.is_some()),
+    )?;
     legacy_discussions::observer_scope(tx)
 }
 
@@ -318,6 +345,7 @@ fn verify_event(cfg: &Config, route: &Route, guard: &Guard, frame: &Value) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bbolt_rs::{BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
@@ -366,11 +394,11 @@ mod tests {
             }
             if let Some((fault, _)) = &capture_case {
                 let fault = *fault;
-                responses.extend([
+                let authority = [
                     responses[1].clone(),
                     responses[2].clone(),
                     responses[3].clone(),
-                ]);
+                ];
                 let mut latest = responses[4].1.as_array().unwrap().clone();
                 latest.insert(
                     0,
@@ -378,23 +406,29 @@ mod tests {
                     "content":"one plain follow-up","type":0,"mention_everyone":false,"mentions":[],
                     "mention_roles":[],"attachments":[]}),
                 );
-                if fault == "wrong source" {
-                    latest[0]["author"]["id"] = json!("201");
+                match fault {
+                    "wrong source" => latest[0]["author"]["id"] = json!("201"),
+                    "restart edited" => latest[0]["content"] = json!("changed before restart"),
+                    "restart deleted" => {
+                        latest.remove(0);
+                    }
+                    _ => {}
                 }
+                if fault.starts_with("restart ") {
+                    responses.truncate(1);
+                }
+                responses.extend(authority.clone());
                 responses.push(("/channels/401/messages?limit=20", json!(latest)));
 
-                if fault != "wrong source" {
-                    responses.extend([
-                        responses[1].clone(),
-                        responses[2].clone(),
-                        responses[3].clone(),
-                    ]);
-                    if fault == "withdrawn" {
+                if !matches!(fault, "wrong source" | "restart deleted") {
+                    responses.extend(authority);
+                    if matches!(fault, "withdrawn" | "restart withdrawn") {
                         responses.last_mut().unwrap().1["permissions"] = json!("0");
                     }
                 }
             }
             if let Some((fault, _)) = &capture_case
+                && !fault.starts_with("restart ")
                 && !matches!(*fault, "wrong source" | "withdrawn")
             {
                 responses.extend([
@@ -699,10 +733,89 @@ mod tests {
         );
         let preserved = read_original();
         assert_eq!(&preserved[1..], &protected[1..]);
-        assert!(observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened).is_err());
-        assert_eq!(read_original(), preserved);
+        let saved = || {
+            let (_pin, db) = open_bolt(&dir.join("discord.db"), 64 << 20).unwrap();
+            let tx = db.begin().unwrap();
+            let key = format!("{}\0{}", cfg.text("installation_id"), "503");
+            let ingress = tx.bucket(b"teammate_ingress").unwrap();
+            serde_json::from_slice::<Value>(ingress.get(key.as_bytes()).unwrap()).unwrap()
+        };
+        let captured = saved();
+        assert!(captured["CaptureRevision"].as_str().is_some());
+        let copy = root.join("copy");
+        runtime::private_dir(&copy).unwrap();
+        fs::copy(dir.join("config.json"), copy.join("config.json")).unwrap();
+        let copied_source = copy.join("discord.db");
+        fs::copy(dir.join("discord.db"), &copied_source).unwrap();
+        let raw = captured.to_string();
+        let prefix = raw.strip_suffix('}').unwrap();
+        for (raw, field, go_value) in [
+            (
+                format!(r#"{prefix},"deleted":true}}"#),
+                "Deleted",
+                json!(true),
+            ),
+            (
+                format!(r#"{prefix},"state":"sending"}}"#),
+                "State",
+                json!("sending"),
+            ),
+            (
+                format!(r#"{{"Deleted":true,{}"#, &raw[1..]),
+                "Deleted",
+                json!(false),
+            ),
+        ] {
+            {
+                let (_, mut db) = legacy_state::bounded_writer(
+                    legacy_state::writable_pin(&copied_source).unwrap(),
+                )
+                .unwrap();
+                let mut tx = db.begin_rw().unwrap();
+                let key = format!("{}\0{}", cfg.text("installation_id"), "503");
+                tx.bucket_mut(b"teammate_ingress")
+                    .unwrap()
+                    .put(key, raw)
+                    .unwrap();
+                tx.commit().unwrap();
+            }
+            let opaque = fs::read(&copied_source).unwrap();
+            let reopened: Value =
+                serde_json::from_str(&go(&["ingress-state", copy.to_str().unwrap(), "existing"]))
+                    .unwrap();
+            assert_eq!(reopened["pending"][0][field], go_value);
+            let (_pin, db) = open_bolt(&copied_source, 64 << 20).unwrap();
+            assert!(capture::pending(&db.begin().unwrap(), &cfg).is_err());
+            assert_eq!(fs::read(&copied_source).unwrap(), opaque);
+        }
+        for trial in [
+            "restart valid",
+            "restart edited",
+            "restart deleted",
+            "restart withdrawn",
+        ] {
+            let rest = TcpListener::bind("127.0.0.1:0").unwrap();
+            let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
+            let server = rest_fixture(rest, None, Some((trial, dir.join("discord.db"))));
+            let result = observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened);
+            assert_eq!(result.is_ok(), trial == "restart valid", "{result:?}");
+            server.join().unwrap();
+            assert_eq!(read_original(), preserved);
+            go(&["bridge-lease", p]);
+        }
         assert_eq!(go(&["ingress", p, "existing", "501", "replay"]).trim(), "1");
         assert_eq!(go(&["ingress", p, "existing", "503", "replay"]).trim(), "1");
+        assert_eq!(saved(), captured);
+        assert_eq!(go(&["ingress", p, "existing", "503", "edit"]).trim(), "1");
+        let rewritten = saved();
+        assert_eq!(rewritten["Sequence"], captured["Sequence"]);
+        assert_eq!(rewritten["Mutation"], 1);
+        assert!(rewritten["CaptureRevision"].is_null());
+        assert!(observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened).is_err());
+        assert_eq!(go(&["ingress", p, "existing", "503", "settle"]).trim(), "1");
+        assert_eq!(go(&["ingress", p, "existing", "503", "replay"]).trim(), "0");
+        assert_eq!(go(&["ingress", p, "existing", "505", "replay"]).trim(), "1");
+        assert!(observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened).is_err());
         assert_eq!(go(&["traffic-read", p, "sent"]).trim(), "sent");
         fs::remove_dir_all(root).unwrap();
     }

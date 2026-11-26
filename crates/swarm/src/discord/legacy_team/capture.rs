@@ -13,6 +13,7 @@ pub(super) fn binding<'tx>(
     cfg: &Config,
     route: &Route,
     guard: &Guard,
+    pending: Option<&Pending>,
 ) -> io::Result<Value> {
     let install = cfg.text("installation_id");
     let key = format!("{install}\0{}", route.channel_id);
@@ -40,7 +41,9 @@ pub(super) fn binding<'tx>(
         || saved["RepairLower"].as_str() != Some("")
         || saved["RepairAfter"].as_str() != Some("")
         || saved["Boundary"] != guard.route.message_id
-        || meta.get(b"active_ingress_count") != Some([0; 8].as_slice())
+        || meta.get(b"active_ingress_count")
+            != Some(u64::from(pending.is_some()).to_be_bytes().as_slice())
+        || pending.is_some_and(|row| saved["LastIngressSequence"] != row.sequence)
         || checkpoint["Error"].as_str() != Some("")
         || !checkpoint["WorkerMailIssue"].is_null()
             && checkpoint["WorkerMailIssue"].as_str() != Some("")
@@ -55,6 +58,83 @@ pub(super) struct Candidate {
     route: Value,
     author: Value,
     revision: String,
+}
+
+pub(super) struct Pending {
+    pub(super) ingress_key: Vec<u8>,
+    pub(super) pending_key: Vec<u8>,
+    sequence: u64,
+    candidate: Candidate,
+}
+
+pub(super) fn pending<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Option<Pending>> {
+    let ingress = tx.bucket(b"teammate_ingress").ok_or_else(denied)?;
+    let Some((key, raw)) = ingress.iter_entries().next() else {
+        return Ok(None);
+    };
+    if raw.len() > 1 << 20 {
+        return Err(denied());
+    }
+    let row: Value = serde_json::from_slice(raw)?;
+    let sequence = row["Sequence"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .ok_or_else(denied)?;
+    let revision = field(&row, "CaptureRevision");
+    let install = cfg.text("installation_id");
+    let route = &row["Route"];
+    let message = field(route, "message_id");
+    let route = json!({"guild_id":field(route,"guild_id"),"channel_id":field(route,"channel_id"),"message_id":message});
+    let author = json!({"id":field(&row["Author"],"id"),"name":field(&row["Author"],"name")});
+    let pending_key = [install.as_bytes(), b"\0", &sequence.to_be_bytes()].concat();
+    if key != format!("{install}\0{message}").as_bytes()
+        || !super::super::config::snowflake(message)
+        || revision.len() != 64
+        || !revision
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        // Go accepts duplicate and case-aliased members. Require exactly what this writer emits.
+        || raw != super::super::legacy_ingress::pending_ingress_row(
+            &route, &author, sequence, Some(revision),
+        )?
+        || tx
+            .bucket(b"teammate_pending")
+            .ok_or_else(denied)?
+            .get(&pending_key)
+            != Some(key)
+        || tx
+            .bucket(b"teammate_ingress_guard")
+            .ok_or_else(denied)?
+            .get(key)
+            .is_some()
+    {
+        return Err(denied());
+    }
+    Ok(Some(Pending {
+        ingress_key: key.to_vec(),
+        pending_key,
+        sequence,
+        candidate: Candidate {
+            route,
+            author,
+            revision: revision.to_owned(),
+        },
+    }))
+}
+
+pub(super) fn verify_pending(
+    api: &Discord,
+    cfg: &Config,
+    route: &Route,
+    guard: &Guard,
+    pending: &Pending,
+) -> io::Result<()> {
+    let saved = &pending.candidate;
+    let hint = json!({"id":saved.route["message_id"],"author":saved.author});
+    if read_source(api, cfg, route, guard, &hint)? != *saved {
+        return Err(denied());
+    }
+    Ok(())
 }
 
 pub(super) fn read_source(
@@ -137,11 +217,11 @@ pub(super) fn commit(
     }
     let (pin, mut db) = legacy_state::bounded_writer(open)?;
     let mut tx = db.begin_rw().map_err(io::Error::other)?;
-    let (fresh_route, fresh_guard) = read_scope(&tx, cfg)?;
+    let (fresh_route, fresh_guard) = read_scope(&tx, cfg, None)?;
     if fresh_route != *route || fresh_guard != *guard {
         return Err(denied());
     }
-    let mut saved = binding(&tx, cfg, route, guard)?;
+    let mut saved = binding(&tx, cfg, route, guard, None)?;
     let id = format!(
         "{}\0{}",
         cfg.text("installation_id"),
@@ -163,6 +243,7 @@ pub(super) fn commit(
         &mut saved,
         captured.route,
         captured.author,
+        Some(&captured.revision),
     )?;
     tx.commit().map_err(io::Error::other)
 }

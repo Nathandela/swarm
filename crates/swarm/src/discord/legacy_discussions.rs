@@ -124,7 +124,12 @@ pub(super) fn observer_scope<'tx>(tx: &impl TxApi<'tx>) -> io::Result<(Route, Gu
     Ok((binding.route, boundary))
 }
 
-pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) -> io::Result<()> {
+pub(super) fn verify<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    old_socket: &str,
+    expected_pending: u64,
+) -> io::Result<()> {
     let invalid = || io::Error::other("unqualified original discussion or replay index");
     let discussions = tx.bucket(b"teammate_discussions").ok_or_else(invalid)?;
     let ids = tx.bucket(b"teammate_discussion_ids").ok_or_else(invalid)?;
@@ -214,7 +219,7 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
         if n >= 64 || raw.len() > 1 << 20 {
             return Err(invalid());
         }
-        if key == b"active_ingress_count" && raw == [0; 8] {
+        if key == b"active_ingress_count" && raw == expected_pending.to_be_bytes() {
             continue;
         }
         if key == format!("{prefix}checkpoint").as_bytes() {
