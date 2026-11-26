@@ -63,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -557,8 +557,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
     if tmux is not None:
         if form_grid:
             launch_grid_witness(root, roster, start, tmux)
-        elif board_grid:
-            roster_grid_witness(root, cli, roster, start, tmux)
+        elif board_grid or menu_grid:
+            roster_grid_witness(root, cli, roster, start, tmux, menu_grid)
         else:
             grid_witness(root, cli, roster, start, tmux)
         return
@@ -825,7 +825,7 @@ def launch_grid_witness(root, roster, start, tmux):
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
 
 
-def roster_grid_witness(root, cli, roster, start, tmux):
+def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
     (root / "effects/board-events").touch()
     daemon = start()
     ids = {}
@@ -872,10 +872,15 @@ def roster_grid_witness(root, cli, roster, start, tmux):
         return {"ansi_base64": base64.b64encode(raw).decode(), "cells": resolve_cells(raw, cols, height),
                 "terminal_modes": dict(zip(TMUX_MODES, modes, strict=True))}
 
-    def capture(cols, height, fragment):
+    def capture(cols, height, fragment, *, menu=False):
         def observed():
             frame = snapshot(cols, height)
             text = "\n".join("".join(cell[0] for cell in row) for row in frame["cells"]).lower()
+            if menu:
+                footer = text.splitlines()[-1].rstrip()
+                expected = "[down (↓)]" if cols == 24 else "[back (esc)] [up (↑)] [down (↓)]"
+                if not text.startswith("more · ") or footer != expected:
+                    return None
             if fragment in ("more", "options"):
                 return frame if fragment in text.splitlines()[0].strip() else None
             if fragment.startswith("selected:"):
@@ -886,6 +891,74 @@ def roster_grid_witness(root, cli, roster, start, tmux):
 
     def key(*names):
         run("send-keys", "-t", "roster:0.0", *names)
+
+    def close_fixture():
+        for name in ("amber", "teal", "violet"):
+            assert cli("kill", ids[name]).returncode == 0
+        daemon.terminate()
+        daemon.wait(timeout=5)
+
+    if menu_grid:
+        def click(x, y):
+            press = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
+            run("send-keys", "-H", "-t", "roster:0.0", *(f"{byte:02x}" for byte in press))
+
+        def button(grid, text):
+            for y, row in enumerate(grid["cells"], 1):
+                line = "".join(cell[0] for cell in row)
+                if text in line:
+                    return line.index(text) + 1, y
+            raise AssertionError(f"Missing {text} in the captured menu")
+
+        def collect(binary):
+            frames = []
+            for cols, height in ((120, 24), (80, 24), (40, 8), (24, 4)):
+                run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
+                    "-c", root / "work", root / "bin" / binary)
+                capture(cols, height, "selected:amber")
+                key("m")
+                initial = capture(cols, height, "selected:open (", menu=True)
+                click(*button(initial, "[Down (↓)]"))
+                after_down = capture(cols, height, "selected:rename (", menu=True)
+                # A press outside the action's rectangle cannot activate a command.
+                _, action_row = button(after_down, "▌ [Rename (e)]")
+                click(cols, action_row)
+                outside = capture(cols, height, "selected:rename (", menu=True)
+                click(*button(after_down, "[Up (↑)]"))
+                after_up = capture(cols, height, "selected:open (", menu=True)
+                resized = None
+                if (cols, height) == (80, 24):
+                    key("Down")
+                    capture(cols, height, "selected:rename (", menu=True)
+                    run("resize-window", "-t", "roster:0", "-x", "24", "-y", "4")
+                    resized = capture(24, 4, "selected:rename (", menu=True)
+                    click(*button(resized, "[Back (esc)]"))
+                    capture(24, 4, "selected:amber")
+                else:
+                    click(*button(after_up, "[Back (esc)]"))
+                    capture(cols, height, "selected:amber")
+                frames.append({"cols":cols, "rows":height, "more":initial, "down":after_down,
+                               "up":after_up, "outside":outside, "resized":resized})
+                run("kill-session", "-t", "roster")
+            return frames
+
+        expected = collect("reference-board")
+        actual = collect("board")
+        differences = []
+        for left, right in zip(expected, actual, strict=True):
+            for view in ("more", "down", "up", "outside", "resized"):
+                if left[view] is None:
+                    assert right[view] is None
+                    continue
+                first = compare_projection(left[view], right[view])
+                if first is not None:
+                    differences.append({"cols":left["cols"], "rows":left["rows"], "frame":view,
+                                        "difference":first})
+        close_fixture()
+        p.write_json(root / "grid.json", {"menu_reference":expected, "menu_candidate":actual,
+            "fixture_ids":ids, "fixture_cwd":str(root / "work"), "first_divergence":differences[0] if differences else None,
+            "differences":differences})
+        return
 
     frames = []
     for cols, height in ((120, 24), (80, 24), (40, 8), (24, 4)):
@@ -925,10 +998,7 @@ def roster_grid_witness(root, cli, roster, start, tmux):
         frames.append(case)
         run("kill-session", "-t", "roster")
 
-    for name in ("amber", "teal", "violet"):
-        assert cli("kill", ids[name]).returncode == 0
-    daemon.terminate()
-    daemon.wait(timeout=5)
+    close_fixture()
     p.write_json(root / "grid.json", {"roster_frames":frames, "roster":state,
                                       "form_cwd":str(root / "work"), "first_divergence":None})
 
@@ -983,7 +1053,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -1005,6 +1075,10 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             dest.chmod(0o700)
         if terminal_reply is not None:
             shutil.copyfile(terminal_reply, root / "effects/terminal-mouse-reply")
+        if reference_board is not None:
+            target = root / "bin/reference-board"
+            shutil.copyfile(reference_board, target)
+            target.chmod(0o700)
         p.table()
         command = [*p.guard(root), sys.executable, root / "bin/test_board.py", "_inside", root]
         if handoff:
@@ -1021,6 +1095,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                 command.append("--form-grid")
             elif board_grid:
                 command.append("--board-grid")
+            elif reference_board is not None:
+                command.append("--menu-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
@@ -1036,6 +1112,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             receipt["tmux"] = subprocess.check_output([tmux, "-V"], text=True).strip()
             receipt["board_sha256"] = p.hash_file(client)
             receipt["supervisor_sha256"] = p.hash_file(supervisor)
+            if reference_board is not None:
+                receipt["reference_board_sha256"] = p.hash_file(reference_board)
             p.write_json(evidence, receipt, replace=False)
             if receipt["first_divergence"] is not None:
                 raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
@@ -1050,11 +1128,12 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         shutil.rmtree(root)
     exercise = ("attached CLI button, native mouse and terminal restoration" if touch else
                 "supervised and hands-off handoff" if handoff else
+                "paired More menu grids" if reference_board else
                 "comparative roster grids" if board_grid else
                 "comparative launch-form grids" if form_grid else
                 "local automation CLI and owner dashboard catalog/disconnect" if automations else
                 "running-session cycling" if cycle else "board launch, attach and live reattach")
-    print(f"{exercise} {'captured' if form_grid or board_grid else 'passed'}; cleanup {cleanup}")
+    print(f"{exercise} {'captured' if form_grid or board_grid or reference_board else 'passed'}; cleanup {cleanup}")
 
 
 if __name__ == "__main__":
@@ -1068,7 +1147,8 @@ if __name__ == "__main__":
         mode = sys.argv[3] if len(sys.argv) >= 4 else None
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
-                sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back")
+                sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
+                sys.argv[-1] == "--menu-grid")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -1086,14 +1166,16 @@ if __name__ == "__main__":
         parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
         grids = parser.add_mutually_exclusive_group()
         grids.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
+        grids.add_argument("--reference-board", type=p.binary_path,
+                           help="compare the More menu with this board using the same public owner and IDs")
         grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        if (args.form_grid or args.board_grid) and not args.tmux:
-            parser.error("--form-grid requires --tmux")
+        if (args.form_grid or args.board_grid or args.reference_board) and not args.tmux:
+            parser.error("grid checks require --tmux")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply)
+            args.terminal_mouse_reply, args.reference_board)

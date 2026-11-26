@@ -3,6 +3,7 @@ mod automation;
 mod handoff;
 mod keys;
 mod launch;
+mod menu;
 mod navigation;
 mod options;
 mod preferences;
@@ -79,6 +80,8 @@ fn board(path: &Path) -> io::Result<()> {
     let mut keys = Keys::default();
     let mut raw_input = [0; 4096];
     let mut needs_paint = true;
+    let mut mouse_enabled = true;
+    let mut previous_menu = None;
     let mut retry = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
@@ -102,12 +105,32 @@ fn board(path: &Path) -> io::Result<()> {
         board.second = second;
         if dimensions != geometry || needs_paint {
             if dimensions != geometry {
+                board.reflow_more(geometry.0, dimensions);
                 geometry = dimensions;
                 board.columns = geometry.0;
                 board.press = None;
                 board.reveal_focus(geometry.1);
             }
-            output.write_all(board.view(geometry).as_bytes())?;
+            let wants_mouse = board.wants_mouse(connection.is_some());
+            if mouse_enabled != wants_mouse {
+                let mode = if wants_mouse {
+                    "\x1b[?1002h\x1b[?1006h"
+                } else {
+                    "\x1b[?1002l\x1b[?1006l"
+                };
+                output.write_all(mode.as_bytes())?;
+                board.press = None;
+                mouse_enabled = wants_mouse;
+            }
+            let menu = board.menu_frame(geometry);
+            if let Some(frame) = &menu {
+                let mut display = String::new();
+                frame.paint(&mut display, previous_menu.as_ref());
+                output.write_all(display.as_bytes())?;
+            } else {
+                output.write_all(board.view(geometry).as_bytes())?;
+            }
+            previous_menu = menu;
             output.flush()?;
         }
         needs_paint = false;
@@ -175,6 +198,7 @@ fn board(path: &Path) -> io::Result<()> {
                 Action::Attach { id, name } => {
                     if connection.is_some() {
                         board.attach(path, &id, &name, &mut output)?;
+                        previous_menu = None;
                     }
                     // Bytes from the initiating key batch belong to the board.
                     break;
@@ -304,6 +328,7 @@ enum Hit {
         target: String,
         running: bool,
     },
+    MenuControl(char),
     Menu {
         index: usize,
         key: char,
@@ -495,16 +520,23 @@ impl Board {
                 let row = self.row().filter(|_| self.visible(rows));
                 let target = row.map(|row| field(row, "id")).unwrap_or("").to_owned();
                 let running = row.is_some_and(running);
-                let selected = self
-                    .menu(&target, running)
+                let entries = self.menu(&target, running, geometry.0);
+                let mut selected = entries
                     .iter()
                     .position(|entry| entry.1.is_some())
                     .unwrap_or(0);
+                let mut top = 0;
+                menu::reveal(
+                    &mut selected,
+                    &mut top,
+                    entries.len(),
+                    menu::capacity(geometry),
+                );
                 self.modal = Some(Modal::More {
                     target,
                     running,
                     selected,
-                    top: selected.saturating_sub(capacity(rows) - 1),
+                    top,
                 });
             }
             Key::Text('n' | 'o') | Key::Enter | Key::CtrlX | Key::Text('e' | 't' | 'r' | 'h') => {
@@ -702,8 +734,9 @@ impl Board {
                 selected,
                 top,
             } => {
-                let entries = self.menu(target, *running);
-                let step = capacity(rows) as isize;
+                let entries = self.menu(target, *running, geometry.0);
+                let budget = menu::capacity(geometry);
+                let step = budget as isize;
                 *selected = (*selected).min(entries.len() - 1);
                 let delta = match key {
                     Key::Up | Key::Text('k') => -1,
@@ -719,18 +752,23 @@ impl Board {
                         .saturating_add(delta)
                         .clamp(0, entries.len() as isize - 1)
                         as usize;
-                    *top = (*top)
-                        .min(*selected)
-                        .max((*selected + 1).saturating_sub(capacity(rows)));
+                    menu::reveal(selected, top, entries.len(), budget);
                 } else if usable(geometry) {
                     let chosen = match key {
-                        Key::Enter => entries[*selected].1,
+                        Key::Enter if (*top..*top + budget).contains(selected) => {
+                            entries[*selected].1
+                        }
+                        Key::Enter => {
+                            menu::reveal(selected, top, entries.len(), budget);
+                            None
+                        }
                         Key::CtrlX => Some('x'),
-                        Key::Text(ch) => Some(ch),
+                        Key::Text(ch) if ch != 'x' => Some(ch),
                         _ => None,
                     };
                     if let Some(chosen) = chosen
                         && entries.iter().any(|entry| entry.1 == Some(chosen))
+                        && (online || matches!(chosen, 'q' | 'a'))
                     {
                         return self.command(
                             match chosen {
@@ -803,40 +841,60 @@ impl Board {
         action
     }
 
-    fn menu(&self, target: &str, expected_running: bool) -> Vec<(String, Option<char>)> {
+    fn menu(&self, target: &str, expected_running: bool, cols: u16) -> Vec<(String, Option<char>)> {
         let mut entries = Vec::new();
         if let Some(row) = self.by_id(target) {
-            for (key, value) in [
-                ("Name", name(row)),
-                ("State", field(row, "group")),
-                ("Agent", field(row, "agent")),
-                ("Directory", field(row, "cwd")),
-                ("ID", target),
+            let state = roster::status(row, false);
+            let mut context = vec![
+                format!("Name: {}", name(row)),
+                format!("State: {state}"),
+                format!("Agent: {}", field(row, "agent")),
+                format!("Repo: {}", field(row, "cwd")),
+                format!("ID: {target}"),
+            ];
+            for (property, label) in [
+                ("backend_plan_error", "No backend"),
+                ("resume_error", "Resume failed"),
             ] {
-                entries.push((format!("{key} · {value}"), None));
+                let reason = field(row, property);
+                if !reason.is_empty() {
+                    context.push(format!("{label}: {reason}"));
+                }
             }
+            if row["supervision_pending"] == true {
+                let parent = field(row, "spawned_from");
+                let pending = self.rows.iter().any(|session| {
+                    let id = field(session, "id").rsplit('/').next().unwrap_or("");
+                    id == parent && running(session)
+                });
+                context.push(if pending {
+                    "Supervision: supervisor pending".into()
+                } else {
+                    "Supervision: supervisor gone".into()
+                });
+            }
+            entries.extend(
+                context
+                    .iter()
+                    .flat_map(|text| menu::wrap(text, cols.saturating_sub(2)))
+                    .map(|text| (text, None)),
+            );
             let unchanged = running(row) == expected_running;
-            if unchanged && expected_running {
+            if unchanged && (expected_running || scheduled_review(row)) {
                 entries.push(("Open".into(), Some('⏎')));
             }
             if !linked_dispatcher(row) {
-                if unchanged
-                    && !expected_running
-                    && matches!(field(row, "agent"), "agy" | "opencode")
-                {
+                entries.extend([("Rename".into(), Some('e')), ("Tag".into(), Some('t'))]);
+                if unchanged && !expected_running && !scheduled_review(row) && resumable(row) {
                     entries.push(("Resume".into(), Some('r')));
                 }
-                entries.extend([
-                    ("Rename".into(), Some('e')),
-                    ("Tag".into(), Some('t')),
-                    ("Handoff".into(), Some('h')),
-                ]);
-                if !field(row, "cwd").is_empty() {
-                    entries.push(("Schedule in this directory".into(), Some('c')));
-                }
+                entries.push(("Handoff".into(), Some('h')));
                 if unchanged {
                     let label = if expected_running { "Kill" } else { "Delete" };
                     entries.push((label.into(), Some('x')));
+                }
+                if !field(row, "cwd").is_empty() {
+                    entries.push(("Schedule in this directory".into(), Some('c')));
                 }
             }
             if !unchanged {
@@ -846,13 +904,37 @@ impl Board {
             entries.push(("Target disappeared".into(), None));
         }
         entries.extend([
+            ("Automations".into(), Some('a')),
             ("New".into(), Some('n')),
             ("Options".into(), Some('o')),
-            ("Automations".into(), Some('a')),
             ("Attention".into(), Some('g')),
             ("Quit".into(), Some('q')),
         ]);
         entries
+    }
+
+    fn reflow_more(&mut self, previous_cols: u16, geometry: (u16, u16)) {
+        let Some(Modal::More {
+            target,
+            running,
+            selected,
+            ..
+        }) = &self.modal
+        else {
+            return;
+        };
+        let key = self
+            .menu(target, *running, previous_cols)
+            .get(*selected)
+            .and_then(|entry| entry.1);
+        let entries = self.menu(target, *running, geometry.0);
+        let position = key.and_then(|key| entries.iter().position(|entry| entry.1 == Some(key)));
+        if let Some(Modal::More { selected, top, .. }) = &mut self.modal {
+            if let Some(position) = position {
+                *selected = position;
+            }
+            menu::reveal(selected, top, entries.len(), menu::capacity(geometry));
+        }
     }
 
     fn buttons(&self, cols: u16, rows: u16) -> Vec<(&'static str, char)> {
@@ -922,11 +1004,24 @@ impl Board {
             ..
         }) = &self.modal
         {
-            if !(2..rows).contains(&event.y) {
+            for item in menu::controls(geometry) {
+                if event.y == item.y
+                    && (item.x..item.x + item.text.width() as u16).contains(&event.x)
+                {
+                    return Some(Hit::MenuControl(item.key));
+                }
+            }
+            if !(2..2 + menu::capacity(geometry) as u16).contains(&event.y) || event.x < 3 {
                 return None;
             }
             let index = *top + usize::from(event.y - 2);
-            let key = self.menu(target, *was_running).get(index)?.1?;
+            let entries = self.menu(target, *was_running, cols);
+            let (text, key) = entries.get(index)?;
+            let key = (*key)?;
+            let width = menu::button(text, key).width() as u16;
+            if event.x >= 3 + width {
+                return None;
+            }
             return Some(Hit::Menu {
                 index,
                 key,
@@ -960,13 +1055,13 @@ impl Board {
             .map(|focus| Hit::Row(focus, matches!(row, Row::Session(row) if running(row))))
     }
 
+    fn wants_mouse(&self, online: bool) -> bool {
+        matches!(self.modal, Some(Modal::Automation(_)))
+            || online && matches!(self.modal, None | Some(Modal::More { .. }))
+    }
+
     fn mouse(&mut self, event: Mouse, geometry: (u16, u16), online: bool) -> Action {
-        if self
-            .modal
-            .as_ref()
-            .is_some_and(|modal| !matches!(modal, Modal::More { .. }))
-            || !usable(geometry)
-        {
+        if !online || !matches!(self.modal, None | Some(Modal::More { .. })) || !usable(geometry) {
             self.press = None;
             return Action::None;
         }
@@ -980,16 +1075,21 @@ impl Board {
                 } else {
                     board_first(geometry.1)
                 };
-                if (first..geometry.1).contains(&event.y) {
+                let end = if self.modal.is_some() {
+                    2 + menu::capacity(geometry) as u16
+                } else {
+                    geometry.1
+                };
+                if (first..end).contains(&event.y) {
                     let down = event.action == MouseAction::WheelDown;
                     if let Some(Modal::More {
                         target, running, ..
                     }) = &self.modal
                     {
                         let max = self
-                            .menu(target, *running)
+                            .menu(target, *running, geometry.0)
                             .len()
-                            .saturating_sub(capacity(geometry.1));
+                            .saturating_sub(menu::capacity(geometry));
                         if let Some(Modal::More { top, .. }) = &mut self.modal {
                             *top = scroll(*top, down).min(max);
                         }
@@ -1042,6 +1142,14 @@ impl Board {
                             };
                             return self.update(key, geometry, online);
                         }
+                        Hit::MenuControl(key) => {
+                            let key = match key {
+                                '↑' => Key::Up,
+                                '↓' => Key::Down,
+                                _ => Key::Escape,
+                            };
+                            return self.update(key, geometry, online);
+                        }
                         Hit::Menu { index, .. } => {
                             if let Some(Modal::More { selected, .. }) = &mut self.modal {
                                 *selected = index;
@@ -1054,6 +1162,40 @@ impl Board {
             }
         }
         Action::None
+    }
+
+    fn menu_frame(&self, geometry: (u16, u16)) -> Option<menu::Frame> {
+        if self.notice.is_empty() && usable(geometry) {
+            self.build_menu_frame(geometry)
+        } else {
+            None
+        }
+    }
+
+    fn build_menu_frame(&self, geometry: (u16, u16)) -> Option<menu::Frame> {
+        let Some(Modal::More {
+            target,
+            running,
+            selected,
+            top,
+        }) = &self.modal
+        else {
+            return None;
+        };
+        let title = if let Some(row) = self.by_id(target) {
+            format!("More · {} · {}", name(row), roster::status(row, false))
+        } else if target.is_empty() {
+            "More".into()
+        } else {
+            "More · target disappeared".into()
+        };
+        Some(menu::Frame::new(
+            geometry,
+            &title,
+            self.menu(target, *running, geometry.0),
+            *selected,
+            *top,
+        ))
     }
 
     fn view(&self, (cols, rows): (u16, u16)) -> String {
@@ -1086,37 +1228,10 @@ impl Board {
             Some(Modal::Options { draft, focus }) => {
                 options::view(&mut screen, cols, rows, *draft, *focus);
             }
-            Some(Modal::More {
-                target,
-                running,
-                selected,
-                top,
-            }) => {
-                form_header(&mut screen, cols, "More");
-                for (index, (text, key)) in self
-                    .menu(target, *running)
-                    .into_iter()
-                    .enumerate()
-                    .skip(*top)
-                    .take(capacity(rows))
-                {
-                    let mark = if index == *selected { "▌" } else { " " };
-                    let label = key.map_or_else(|| text.clone(), |ch| format!("[{text} ({ch})]"));
-                    line(
-                        &mut screen,
-                        (index - top) as u16 + 2,
-                        cols,
-                        "",
-                        &format!("{mark} {label}"),
-                    );
-                }
-                line(
-                    &mut screen,
-                    rows,
-                    cols,
-                    "\x1b[2m",
-                    "↑↓ move · enter select · esc back",
-                );
+            Some(Modal::More { .. }) => {
+                self.build_menu_frame((cols, rows))
+                    .expect("More open")
+                    .paint(&mut screen, None);
             }
             Some(Modal::Edit { tag, draft, .. }) => {
                 form_header(
