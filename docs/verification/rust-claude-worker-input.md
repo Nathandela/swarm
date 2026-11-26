@@ -32,3 +32,18 @@ Six isolated enrolled worker runs per host completed the original prompt envelop
 | --- | --- |
 | Darwin enrolled runs, ordered list of six log digests | `13471f458b9993e8047e23676440b8e0f6a35c729b766160cd3dc5a518d96c4e` |
 | Linux enrolled runs and focused file-mode tests | `b226aff0f3b69bdc5bad61586b47008d8b0ef50b785289c8a397be12692216a6` |
+
+## Linux x86_64 Claude Code 2.1.332
+
+The Linux x86_64 witness mounted the installed Claude Code 2.1.332 executable read-only in a private network namespace and supplied only loopback inference and synthetic Discord authority. The personal DM and enrolled guild thread each delivered one native message after local denial of the pending Bash request. Withdrawing the guild audience rejected the receipt, and the next native model request contained the local operator's follow-up and no withdrawn text. All three runs preserved the permission dialog until the local denial, kept the sentinel absent, and retired native readiness on `/clear`.
+
+The enrolled manager used the same installed release to receive the original envelope, prove the native main-loop MCP tool call, and publish the expected reply. The private broker descriptor records the exact admitted release. Both sender and guard must report that release, even when both versions are individually qualified for the host. The Linux test exercised this distinction by attempting to join a 2.1.329 broker with 2.1.332 roles.
+
+The installed x86_64 executable SHA-256 was `a2df1f41bb00250992926420d0063f89b127cb81abdd284dbefb80c50ff1d026`. The Rust candidate SHA-256 was `36c09cbf196995cdb576ec30f0d219a981d4aa1b1c1149b58e0dd48ebe171988`.
+
+| Linux fixture log | SHA-256 |
+| --- | --- |
+| Personal worker | `9baf58e23837bc84a82bb50910e860a127ccdd14e066aee154d03fceb4dd97ed` |
+| Enrolled guild worker | `01bae57bd2762574b6c294a11417495c94fc50455ace0f44f6ac869fb3b631bd` |
+| Withdrawn guild worker | `c25b3117e45ff9e4400c69125429340902dc393142f2b33adc35fdf81fc3abb3` |
+| Enrolled manager | `16f0b00d2aa745b8e51c79ca107a167e0a3d88fc5354c97eb19efbc20fbc0268` |

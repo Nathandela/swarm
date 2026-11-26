@@ -14,7 +14,6 @@ use std::{
 };
 use subtle::ConstantTimeEq;
 
-const VERSION: &str = "2.1.329";
 const SENDER: &str = "swarm-native-input";
 const HEARTBEAT: Duration = Duration::from_secs(2);
 const HANDOFF: Duration = Duration::from_secs(3);
@@ -26,7 +25,8 @@ const TIMED_SUBMIT: &str = r#"if (!Number.isSafeInteger(message.expires_ms) || D
         const pending = $.prompt.submit({ text: message.text });"#;
 
 pub(crate) fn qualified(version: &str) -> bool {
-    version == VERSION
+    version == "2.1.329"
+        || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && version == "2.1.332")
 }
 
 #[derive(Clone, PartialEq, serde::Deserialize)]
@@ -85,6 +85,7 @@ pub(crate) struct Broker {
     token: String,
     auth: String,
     generation: String,
+    provider_version: String,
     session: String,
     manager: Value,
     sender_name: String,
@@ -100,6 +101,7 @@ impl Broker {
         argv: &mut Vec<String>,
     ) -> io::Result<Arc<Self>> {
         let provider = &config["provider"];
+        let provider_version = field(provider, "version");
         let token = field(config, "token");
         let manager = &config["manager"];
         let installation = if manager.is_null() {
@@ -109,7 +111,7 @@ impl Broker {
         };
         let supervisor = dir.parent().and_then(Path::parent).ok_or_else(refused)?;
         if provider["name"] != "claude"
-            || !qualified(field(provider, "version"))
+            || !qualified(provider_version)
             || if manager.is_null() {
                 !crate::discord::worker_installation_enrolled(
                     supervisor,
@@ -142,7 +144,7 @@ impl Broker {
             &descriptor,
             &json!({
                 "socket_path":socket,"token":auth.strip_prefix("Bearer "),
-                "generation":generation,"provider_version":VERSION,"sender_name":sender_name,
+                "generation":generation,"provider_version":provider_version,"sender_name":sender_name,
                 "manager_conversation_id":manager["launch"]["manager"]["conversation_id"],
                 "native_turns":!manager.is_null(),
             }),
@@ -193,6 +195,7 @@ impl Broker {
             token: token.into(),
             auth,
             generation,
+            provider_version: provider_version.into(),
             manager: manager.clone(),
             sender_name,
             joined: Mutex::new(Joined::default()),
@@ -400,7 +403,7 @@ impl Broker {
         if req["generation"] != self.generation
             || !claude::canonical_id(&worker.native_session_id)
             || !claude::canonical_id(&worker.generation)
-            || !qualified(&worker.version)
+            || worker.version != self.provider_version
         {
             return Err(refused());
         }
@@ -706,7 +709,7 @@ mod tests {
         let mut sender = Worker {
             native_session_id: "2eb27cbe-8007-4ff3-b852-c92b77bbd112".into(),
             generation: "9ee3ad51-2785-46aa-a173-9da51d2c61fd".into(),
-            version: VERSION.into(),
+            version: "2.1.329".into(),
         };
         let mut state = Joined {
             sender: Some((sender.clone(), Instant::now())),
@@ -722,6 +725,46 @@ mod tests {
         assert_eq!(state.ready(), Some(sender.native_session_id.as_str()));
         state.revoked = true;
         assert_eq!(state.ready(), None);
+    }
+
+    #[test]
+    fn worker_handshake_requires_the_bound_release() {
+        assert!(qualified("2.1.329"));
+        assert_eq!(
+            qualified("2.1.332"),
+            cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        );
+        assert!(!qualified("2.1.333"));
+
+        let broker = Arc::new(Broker {
+            dir: PathBuf::new(),
+            supervisor: PathBuf::new(),
+            owner_socket: String::new(),
+            installation: String::new(),
+            token: String::new(),
+            auth: String::new(),
+            generation: "broker".into(),
+            provider_version: "2.1.329".into(),
+            session: String::new(),
+            manager: Value::Null,
+            sender_name: SENDER.into(),
+            joined: Mutex::new(Joined::default()),
+            progress: Condvar::new(),
+        });
+        let request = |version: &str| {
+            json!({
+                "generation":broker.generation,
+                "worker":{
+                    "native_session_id":"2eb27cbe-8007-4ff3-b852-c92b77bbd112",
+                    "generation":"9ee3ad51-2785-46aa-a173-9da51d2c61fd",
+                    "version":version,
+                },
+            })
+        };
+        for role in ["/guard", "/exchange"] {
+            assert!(broker.exchange(role, &request("2.1.332")).is_err());
+        }
+        assert!(broker.exchange("/guard", &request("2.1.329")).is_ok());
     }
 
     #[test]

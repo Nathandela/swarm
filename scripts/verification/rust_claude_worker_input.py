@@ -167,6 +167,8 @@ def verify(swarm, installed, root, model, producer_test, guild):
             until(modal, "native permission dialog")
             target = lambda: wire(dict(op="semantic_target", session_id=sid)).get("semantic_target_instance")
             instance = until(target, "sender and guard native custody")
+            descriptor = next(state.rglob(f"{sid.split('/')[-1]}/claude-input.json"))
+            assert json.loads(descriptor.read_text())["provider_version"] == version
             operation = f"semantic:{time.time_ns() // 1_000_000}:{secrets.token_hex(16)}"
             message_id = "401"
             source_text = "synthetic owner source"

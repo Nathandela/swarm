@@ -296,6 +296,7 @@ mod observation_tests {
 
 pub(crate) fn scheduled(version: &str) -> bool {
     version == "2.1.329"
+        || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && version == "2.1.332")
 }
 
 pub(crate) fn new_conversation() -> io::Result<String> {

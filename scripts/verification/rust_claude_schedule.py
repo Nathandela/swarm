@@ -24,7 +24,7 @@ from pathlib import Path
 import sys
 import tty
 if "--version" in sys.argv:
-    print("2.1.329 (Claude Code)")
+    print(__VERSION__ + " (Claude Code)")
     sys.exit(0)
 tty.setraw(0)
 cols, rows = os.get_terminal_size(0)
@@ -237,7 +237,7 @@ def verify(swarm, installed, root):
                     until(lambda: all(row["status"]["Process"] == "exited"
                                       for row in json.loads(run("ls", "--json").stdout)))
                     claude.rename(claude.with_name("claude-installed"))
-                    claude.write_text(f"#!{sys.executable}\n" + LATE_MODAL)
+                    claude.write_text(f"#!{sys.executable}\n" + LATE_MODAL.replace("__VERSION__", repr(version)))
                     claude.chmod(0o700)
                     late = root / "late"
                     late.mkdir(mode=0o700)
