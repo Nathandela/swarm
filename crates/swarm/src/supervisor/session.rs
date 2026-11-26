@@ -150,6 +150,9 @@ impl Prepared {
             }
         }
         scope["account_home"] = json!(home);
+        if claude {
+            providers::claude::verify_manager_origin(&scope, &self.cwd)?;
+        }
         self.manager = scope;
         Ok(())
     }

@@ -625,6 +625,18 @@ mod tests {
         );
         let place = root.join("s/discord");
         let cfg = Config(runtime::read_json(&place.join("config.json")).unwrap());
+        let fault = std::env::var("SWARM_CLAUDE_MANAGER_FIXTURE_PROJECT_FAULT").unwrap_or_default();
+        if fault == "before" {
+            assert!(
+                super::super::dispatcher::Dispatcher::open(&cfg, &place)
+                    .unwrap()
+                    .is_none()
+            );
+            let legacy = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS).unwrap();
+            assert!(!legacy.supports("manager-launch"));
+            assert!(!root.join(".fixture-provider-executed").is_file());
+            return;
+        }
         let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &place)
             .unwrap()
             .expect("Claude owner supervisor capability");
@@ -694,6 +706,31 @@ mod tests {
         };
         let session = field(&runtime["binding"], "session");
         let instance = field(&runtime["binding"], "session_instance");
+        if fault == "after" {
+            let config = root.join("work/.claude");
+            runtime::private_dir(&config).unwrap();
+            runtime::write_json(
+                &config.join("settings.local.json"),
+                &json!({"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:3"}}),
+            )
+            .unwrap();
+            assert!(manager.runtime(session, instance, &launch).is_err());
+            inbox.admit(&source).unwrap().unwrap();
+            assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
+            assert!(inbox.manager()["input"].is_null());
+            assert!(api.posts.borrow().is_empty());
+            let local = session.rsplit('/').next().unwrap();
+            let evidence = runtime::read_json(
+                &root
+                    .join("s/rust-v1")
+                    .join(local)
+                    .join("manager-proof.json"),
+            )
+            .unwrap();
+            assert_eq!(evidence["evidence"]["observed_turn"], false);
+            assert_eq!(evidence["evidence"]["prepared"], json!({}));
+            return;
+        }
         let mut terminal = Client::dial(Path::new(cfg.text("daemon_socket")), &["attach"]).unwrap();
         let lease = terminal.request("attach", Some(session), "lease").unwrap();
         let snapshot_len = lease["snapshot_len"].as_u64().unwrap() as usize;

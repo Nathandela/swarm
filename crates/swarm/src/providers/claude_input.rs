@@ -212,15 +212,15 @@ impl Broker {
             .ok_or_else(refused)
     }
 
-    fn verify_manager_account(&self) -> io::Result<()> {
-        let home = Path::new(field(&self.manager, "account_home"));
-        if self.manager["account"] != claude::manager_account(home)? {
-            return Err(refused());
-        }
-        Ok(())
+    fn verify_manager_origin(&self) -> io::Result<()> {
+        claude::verify_manager_origin(
+            &self.manager,
+            Path::new(field(&self.manager["launch"], "cwd")),
+        )
     }
 
     pub(crate) fn manager_snapshot(&self) -> io::Result<Value> {
+        self.verify_manager_origin()?;
         let joined = self.joined.lock().unwrap();
         joined.ready().ok_or_else(refused)?;
         let proof = joined.proof.as_ref().ok_or_else(refused)?;
@@ -288,7 +288,7 @@ impl Broker {
         let root = self.dir.parent().ok_or_else(refused)?;
         receipt::verify_binding(root, operation, session, &instance, &intent)?;
         if manager {
-            self.verify_manager_account()?;
+            self.verify_manager_origin()?;
             let _effect = crate::discord::lock_manager_mail_effect(&self.manager)?;
             let admission = &composer["manager_admission"];
             let proof = joined.proof.as_mut().ok_or_else(refused)?;
@@ -426,8 +426,11 @@ impl Broker {
             if joined.ready().is_none() {
                 return Err(refused());
             }
+            if path == "/manager-tool" {
+                self.verify_manager_origin()?;
+            }
             if path == "/manager-prompt" {
-                self.verify_manager_account()?;
+                self.verify_manager_origin()?;
                 let input = field(req, "text");
                 let (operation, entry) = joined
                     .operations

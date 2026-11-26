@@ -200,7 +200,8 @@ def verify(swarm, provider, test, root, server):
     shutil.copyfile(provider, native)
     native.chmod(0o700)
     wrapper = tools / "claude"
-    wrapper.write_text("#!/bin/sh\n" + f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{server.server_port}\n"
+    provider_exec = root / ".fixture-provider-executed"
+    wrapper.write_text("#!/bin/sh\n: >" + shlex.quote(str(provider_exec)) + "\n" + f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{server.server_port}\n"
                        + "export CLAUDE_SECURESTORAGE_CONFIG_DIR=" + shlex.quote(str(home / ".claude")) + "\n"
                        + "export CLAUDE_CODE_TMPDIR=" + shlex.quote(str(root)) + " TMPDIR=" + shlex.quote(str(root)) + "\n"
                        + "export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_MAX_RETRIES=0 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n"
@@ -219,6 +220,12 @@ def verify(swarm, provider, test, root, server):
         env["SWARM_CLAUDE_MANAGER_FIXTURE_FORWARDED"] = server.forwarded
     version = subprocess.check_output(guarded([str(wrapper), "--version"], root, [server.server_port]),
                                       env=env, text=True).split()[0]
+    provider_exec.unlink()
+    if server.project_fault:
+        env["SWARM_CLAUDE_MANAGER_FIXTURE_PROJECT_FAULT"] = server.project_fault
+    if server.project_fault == "before":
+        (project/".claude").mkdir(mode=0o700)
+        save(project/".claude/settings.local.json",dict(env=dict(ANTHROPIC_BASE_URL="http://127.0.0.1:3")))
     save(home / ".claude.json", dict(hasCompletedOnboarding=True, lastOnboardingVersion=version,
          theme="dark", oauthAccount=dict(accountUuid="synthetic-account", organizationUuid="synthetic-org",
                                         emailAddress="synthetic@example.invalid"),
@@ -281,14 +288,18 @@ def verify(swarm, provider, test, root, server):
                 assert ordinary.returncode == 0, ordinary.stderr
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
                                 "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
-            expected_posts = 0 if server.forwarded == "revoked" or server.deleted else (2 if server.park else 1)
+            if server.project_fault:
+                assert not server.seen_tools
+                assert provider_exec.is_file() == (server.project_fault == "after")
+            expected_posts = 0 if server.forwarded == "revoked" or server.deleted or server.project_fault else (2 if server.park else 1)
             assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
             assert not server.forwarded or server.forwarded_checked.is_file()
             assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
-            print(json.dumps(dict(version=version, private_loopback=True, original_envelope=True,
-                                  exact_main_mcp_tool=True, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
+            print(json.dumps(dict(version=version, private_loopback=True, original_envelope=bool(server.seen_tools),
+                                  exact_main_mcp_tool=not server.project_fault, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
                                   vm_native_worker_launch=server.vm, vm_worktree_files=server.worktree,
                                   enrolled_typed_launch=server.enrolled,
+                                  project_authority_fault=server.project_fault,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
             log.flush()
@@ -339,6 +350,7 @@ if __name__ == "__main__":
     modes.add_argument("--vm-worktree", action="store_true")
     modes.add_argument("--enrolled", action="store_true")
     modes.add_argument("--enrolled-deleted", action="store_true")
+    modes.add_argument("--project-fault", choices=("before","after"))
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
@@ -350,6 +362,7 @@ if __name__ == "__main__":
         server.worktree = args.vm_worktree
         server.enrolled = args.enrolled or args.enrolled_deleted
         server.deleted = args.enrolled_deleted
+        server.project_fault = args.project_fault
         server.forwarded = args.forwarded
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:

@@ -19,6 +19,8 @@ impl Session {
             "supervisor_socket",
             "call_place",
             "projects",
+            "claude_home",
+            "project_authority",
         ] {
             if current[key] != self.manager[key] {
                 return Err(refuse("manager enrollment is no longer current"));
@@ -27,19 +29,14 @@ impl Session {
         let bridge = &self.manager["launch"]["manager"];
         let credential =
             crate::manager_mcp::read_credential(Path::new(field(bridge, "auth_file")))?;
-        if self.manager["credential_hash"] != codex_receipt::hash(&credential)
-            || self.manager["account"]
-                != match self.agent.as_str() {
-                    "claude" => crate::providers::claude::manager_account(Path::new(field(
-                        &self.manager,
-                        "account_home",
-                    )))?,
-                    _ => manager::account(Path::new(field(&self.manager, "account_home")))?,
-                }
-        {
-            return Err(refuse("manager bridge or account custody was replaced"));
+        if self.manager["credential_hash"] != codex_receipt::hash(&credential) {
+            return Err(refuse("manager bridge custody was replaced"));
         }
         if self.agent == "claude" {
+            crate::providers::claude::verify_manager_origin(
+                &self.manager,
+                self.verify_effective()?,
+            )?;
             let reply = self.status_exchange(&json!({"type":"claude_manager_proof"}))?;
             let evidence = &reply["evidence"];
             let binding = &evidence["binding"];
@@ -55,6 +52,11 @@ impl Session {
                 return Err(refuse("Claude manager native custody changed"));
             }
             return Ok(evidence.clone());
+        }
+        if self.manager["account"]
+            != manager::account(Path::new(field(&self.manager, "account_home")))?
+        {
+            return Err(refuse("manager account custody was replaced"));
         }
         self.dial()?;
         let owner = runtime::read_json(&self.dir.join("manager-binding.json"))?;

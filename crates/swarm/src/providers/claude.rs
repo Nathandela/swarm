@@ -550,6 +550,21 @@ pub(crate) fn manager_account(home: &std::path::Path) -> io::Result<String> {
     Ok(text_hash(&current.to_string()))
 }
 
+pub(crate) fn verify_manager_origin(scope: &Value, cwd: &std::path::Path) -> io::Result<()> {
+    use crate::ipc::field;
+    let home = std::path::Path::new(field(scope, "account_home"));
+    if scope["launch"]["agent"] != "claude"
+        || scope["claude_home"] != serde_json::json!(home)
+        || scope["launch"]["cwd"] != serde_json::json!(cwd)
+        || scope["account"] != manager_account(home)?
+    {
+        return Err(io::Error::other(
+            "Claude manager origin or account custody changed",
+        ));
+    }
+    verify_project_authority(home, cwd, &scope["project_authority"])
+}
+
 fn read_private_optional(path: &std::path::Path) -> io::Result<Value> {
     read_owned_config(path, false)
 }

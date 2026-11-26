@@ -135,9 +135,18 @@ fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
             "qualified Rust manager requires an active enrolled discussion",
         ));
     }
-    if cfg.text("manager_cli") == "claude" {
-        crate::providers::claude_manager_runtime(Path::new(cfg.text("work_dir")))?;
-    }
+    let claude_origin = if cfg.text("manager_cli") == "claude" {
+        let cwd = Path::new(cfg.text("work_dir"));
+        let home = ipc::env_path("HOME")
+            .ok_or_else(|| invalid("Claude manager HOME is missing"))?
+            .canonicalize()?;
+        // Reject authority overrides before probing or launching the provider.
+        let authority = crate::providers::claude::project_authority(&home, cwd)?;
+        crate::providers::claude_manager_runtime(cwd)?;
+        Some((home, authority))
+    } else {
+        None
+    };
     let owner = manager::Manager::new(cfg)?;
     let bridge = std::fs::canonicalize(directory)?.join("manager-v1");
     let mut scope = json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
@@ -145,6 +154,10 @@ fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
         "owner_id":cfg.text("owner_id"),"channel_id":owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
     if !owner.guild().is_empty() {
         scope["guild_id"] = json!(owner.guild());
+    }
+    if let Some((home, authority)) = claude_origin {
+        scope["claude_home"] = json!(home);
+        scope["project_authority"] = authority;
     }
     if cfg.0["projects"].is_object() {
         scope["projects"] = cfg.0["projects"].clone();

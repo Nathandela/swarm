@@ -442,6 +442,16 @@ impl State {
         } else {
             handoff::bind(self, &request)?
         };
+        if let Some(scope) = managed
+            .as_ref()
+            .filter(|scope| scope["launch"]["agent"] == "claude")
+        {
+            crate::providers::claude::verify_project_authority(
+                std::path::Path::new(field(scope, "claude_home")),
+                std::path::Path::new(field(&scope["launch"], "cwd")),
+                &scope["project_authority"],
+            )?;
+        }
         let mut prepared = Session::prepare(&bound)?;
         if let Some(scope) = mailbox {
             prepared.bind_mail(scope);

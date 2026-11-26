@@ -186,16 +186,21 @@ fn serve(dir: &Path) -> io::Result<()> {
         let auth = Path::new(field(&scope["launch"]["manager"], "auth_file"));
         let credential = crate::manager_mcp::read_credential(auth)?;
         use sha2::{Digest, Sha256};
-        if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes()))
-            || scope["account"]
-                != if scope["launch"]["agent"] == "claude" {
-                    providers::claude::manager_account(Path::new(field(scope, "account_home")))?
-                } else {
-                    crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
-                }
+        if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes())) {
+            return Err(io::Error::other(
+                "manager bridge custody changed before exec",
+            ));
+        }
+        if scope["launch"]["agent"] == "claude" {
+            providers::claude::verify_manager_origin(
+                scope,
+                Path::new(field(&scope["launch"], "cwd")),
+            )?;
+        } else if scope["account"]
+            != crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
         {
             return Err(io::Error::other(
-                "manager launch custody changed before exec",
+                "manager account custody changed before exec",
             ));
         }
         crate::supervisor::manager::mcp_args(scope, field(&config, "id"))?
@@ -459,10 +464,13 @@ fn serve(dir: &Path) -> io::Result<()> {
             let cwd=Path::new(working_dir);
             let profile=&config["claude_profile"];
             let home=Path::new(field(profile,"home"));
+            if !scope.is_null() {
+                providers::claude::verify_manager_origin(scope,cwd)?;
+            }
             if let Ok(authority)=providers::claude::project_authority(home,cwd) {
                 runtime::write_json(&dir.join("claude-authority.json"),
                     &json!({"token":token,"home":home,"cwd":cwd,"authority":authority}))?;
-            } else if config["claude_resume"].is_object() || config["lineage"]["hands_off"].is_object() {
+            } else if !scope.is_null() || config["claude_resume"].is_object() || config["lineage"]["hands_off"].is_object() {
                 return Err(io::Error::other("Claude project authority cannot be proved before exec"));
             }
         }
