@@ -16,6 +16,7 @@ use std::{
 };
 
 const MAX_RESPONSE: u64 = 2 << 20;
+const MAX_SNAPSHOT_REJECTION: u64 = 8 << 10;
 const URL: &str = "http://127.0.0.1";
 
 pub(super) struct Backend {
@@ -56,6 +57,15 @@ impl Backend {
     }
 
     fn http(&self, route: &str, body: Option<&Value>) -> io::Result<Value> {
+        self.bridge_request(route, body, None)
+    }
+
+    fn bridge_request(
+        &self,
+        route: &str,
+        body: Option<&Value>,
+        snapshot_created: Option<u64>,
+    ) -> io::Result<Value> {
         let agent = self
             .socket
             .agent(if matches!(route, "/ready" | "/ack" | "/dispatchDigest") {
@@ -86,19 +96,45 @@ impl Backend {
             }
             _ => io::Error::other("OpenCode bridge request failed"),
         })?;
-        if !response.status().is_success() {
-            return Err(io::Error::other(format!(
-                "OpenCode bridge HTTP {}",
-                response.status()
-            )));
+        let status = response.status();
+        let rejected = || io::Error::other(format!("OpenCode bridge HTTP {status}"));
+        let snapshot_rejection = snapshot_created.filter(|_| {
+            status.as_u16() == 422
+                && response
+                    .headers()
+                    .get("content-type")
+                    .is_some_and(|value| value.as_bytes() == b"application/json")
+        });
+        if !status.is_success() && snapshot_rejection.is_none() {
+            return Err(rejected());
         }
+        let limit = if snapshot_rejection.is_some() {
+            MAX_SNAPSHOT_REJECTION
+        } else {
+            MAX_RESPONSE
+        };
         let mut bytes = Vec::new();
-        response
+        let read = response
             .into_body()
             .into_reader()
-            .take(MAX_RESPONSE + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_RESPONSE {
+            .take(limit + 1)
+            .read_to_end(&mut bytes);
+        if let Some(created) = snapshot_rejection {
+            if read.is_ok()
+                && bytes.len() as u64 <= limit
+                && let Ok(body) = serde_json::from_slice::<Value>(&bytes)
+                && self.matches(&body, created)
+                && body["status"] == "rejected"
+                && let Some(reason) = snapshot_rejection_reason(&body)
+            {
+                return Err(io::Error::other(format!(
+                    "OpenCode bridge HTTP {status} ({reason})"
+                )));
+            }
+            return Err(rejected());
+        }
+        read?;
+        if bytes.len() as u64 > limit {
             return Err(io::Error::other(
                 "OpenCode bridge output exceeds size limit",
             ));
@@ -361,7 +397,11 @@ impl Backend {
             .replace('+', "%2B")
             .replace('/', "%2F")
             .replace('=', "%3D");
-        let snapshot = self.http(&format!("/snapshot?limit={limit}&before={before}"), None)?;
+        let snapshot = self.bridge_request(
+            &format!("/snapshot?limit={limit}&before={before}"),
+            None,
+            Some(created),
+        )?;
         if !self.matches(&snapshot, created)
             || snapshot["hierarchyComplete"] != true
             || !valid_statuses(&snapshot["statuses"])
@@ -387,6 +427,21 @@ impl Backend {
             &json!({"token":self.token,"status":status,"reason":error.map(ToString::to_string),"observed_ms":crate::ipc::spawn::now_ms()}),
         )
     }
+}
+
+fn snapshot_rejection_reason(body: &Value) -> Option<&'static str> {
+    [
+        "native_deadline",
+        "native_read_failed",
+        "native_binding_mismatch",
+        "native_shape",
+        "request_scope_unknown",
+        "scope_limit",
+        "response_oversized",
+        "page_invalid",
+    ]
+    .into_iter()
+    .find(|reason| *reason == field(body, "reason"))
 }
 
 fn event(reader: &mut impl BufRead) -> io::Result<Value> {
@@ -502,6 +557,101 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn snapshot_reports_only_a_bounded_correlated_bridge_reason() {
+        let dir =
+            crate::test_temp::root().join(format!("oc-{}", &runtime::random_id().unwrap()[..12]));
+        runtime::private_dir(&dir).unwrap();
+        let socket = dir.join("p");
+        let listener = runtime::bind(&socket).unwrap();
+        let created = 123;
+        let body = json!({
+            "version": 1, "workerID": "worker", "sessionInstance": "instance",
+            "backendGeneration": "generation", "rootID": "ses_0123456789",
+            "directory": "/private-fixture", "nativeCreatedAtMS": created,
+            "status": "rejected", "reason": "native_deadline"
+        });
+        let mut binding = body.clone();
+        binding["socketPath"] = json!(socket);
+        binding["token"] = json!("fixture-token");
+        let backend =
+            Backend::new(binding, "1.19.3", std::process::id(), &dir, "fixture-token").unwrap();
+
+        let replace = |key: &str, value| {
+            let mut changed = body.clone();
+            changed[key] = value;
+            changed
+        };
+        const SNAPSHOT: &str = "/snapshot?limit=1&before=";
+        const JSON: &str = "application/json";
+        let oversized = replace(
+            "padding",
+            json!("a".repeat(MAX_SNAPSHOT_REJECTION as usize)),
+        );
+        let cases = [
+            (SNAPSHOT, JSON, body.clone()),
+            (SNAPSHOT, JSON, replace("reason", json!("untrusted detail"))),
+            (
+                SNAPSHOT,
+                JSON,
+                replace("nativeCreatedAtMS", json!(created + 1)),
+            ),
+            (
+                SNAPSHOT,
+                JSON,
+                replace("backendGeneration", json!("other-generation")),
+            ),
+            (SNAPSHOT, JSON, replace("status", json!("admitted"))),
+            (SNAPSHOT, "text/plain", body.clone()),
+            (SNAPSHOT, JSON, oversized),
+            ("/ready", JSON, body),
+        ];
+        let server = thread::spawn(move || {
+            for (route, content_type, payload) in cases {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(runtime::IO_TIMEOUT)).unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(line, format!("GET {route} HTTP/1.1\r\n"));
+                loop {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let payload = payload.to_string();
+                let response = format!(
+                    "HTTP/1.1 422 Unprocessable Entity\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                if let Err(error) = stream.write_all(response.as_bytes()) {
+                    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                }
+            }
+        });
+        let generic = "OpenCode bridge HTTP 422 Unprocessable Entity";
+        assert_eq!(
+            backend.snapshot(created, 1, "").unwrap_err().to_string(),
+            format!("{generic} (native_deadline)")
+        );
+        for case in 0..6 {
+            assert_eq!(
+                backend.snapshot(created, 1, "").unwrap_err().to_string(),
+                generic,
+                "rejected case {case}"
+            );
+        }
+        assert_eq!(
+            backend.http("/ready", None).unwrap_err().to_string(),
+            generic
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn absent_native_status_is_idle_but_malformed_status_is_unqualified() {
