@@ -53,11 +53,11 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
     launcher_sha = file_sha(launcher)
     started = time.monotonic()
     deadline = started + args.duration
-    stop_requested = False
+    stop_signal = None
 
-    def cancelled(_signal, _frame):
-        nonlocal stop_requested
-        stop_requested = True
+    def cancelled(number, _frame):
+        nonlocal stop_signal
+        stop_signal = signal.Signals(number).name
 
     signal.signal(signal.SIGTERM, cancelled)
     signal.signal(signal.SIGINT, cancelled)
@@ -122,6 +122,20 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         return tuple(history[field] for field in
                      ('native_session_id', 'native_created_at_ms', 'session_instance')), history['history']
 
+    def completed_initial_input():
+        key, messages = conversation()
+        user = opening['bridge_receipt']['messageID']
+        assert key == tuple(opening['identity'][field] for field in
+                            ('rootID', 'nativeCreatedAtMS', 'sessionInstance')), key
+        assert user
+        if not any(m['info']['id'] == user and m['info']['role'] == 'user' for m in messages):
+            return None
+        if not any(m['info']['role'] == 'assistant' and m['info'].get('parentID') == user
+                   and m['info'].get('finish') == 'stop' and m['info'].get('time', {}).get('completed')
+                   for m in messages):
+            return None
+        return key if idle() else None
+
     try:
         daemon = start()
         owned['daemon'] = daemon.pid, birth(daemon.pid)
@@ -131,21 +145,23 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         rows = output('ls', '--json')
         assert len(rows) == 1, rows
         session = rows[0]['id']
-        wait(idle, 30)
         state = root / 'state/rust-v1' / session.split('/')[-1]
         identity_path = state / 'owner.json'
         registry = json.loads(identity_path.read_text())
         owned['shim'] = registry['pid'], registry['birth']
         owned['provider'] = registry['worker_pid'], registry['worker_birth']
         atomic_json(root / 'owned.json', owned)
-        key, _ = conversation()
+        opening = json.loads((state / 'opencode-initial.json').read_text())
+        assert opening['state'] == 'native_accepted', opening['state']
+        # The launch receipt proves native admission. Roster idle can still predate the initial completion.
+        key = wait(completed_initial_input, 30)
         assert all(key), key
         if mixed:
             mixed.start()
             atomic_json(root / 'owned.json', owned)
         monitor('native_ready')
 
-        while not stop_requested and (time.monotonic() < deadline or result['inputs'] == 0):
+        while stop_signal is None and (time.monotonic() < deadline or result['inputs'] == 0):
             index = result['inputs'] + 1
             marker = f'RUST_SOAK_{index:06}'
             text = f'{marker}. Reply fixture only.'
@@ -233,12 +249,12 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
                     mixed.rejoined()
                 monitor('rejoined')
             pause_until = min(time.monotonic() + args.interval, deadline)
-            while not stop_requested and time.monotonic() < pause_until:
+            while stop_signal is None and time.monotonic() < pause_until:
                 if mixed:
                     mixed.tick()
                 time.sleep(min(0.25, max(0, pause_until - time.monotonic())))
 
-        assert not stop_requested, 'workload stopped by signal'
+        assert stop_signal is None, f'workload stopped by {stop_signal}'
         result['live_elapsed_seconds'] = round(time.monotonic() - started, 3)
         assert result['live_elapsed_seconds'] >= args.duration
         assert len(turn_ids) == len(effect_counts) == result['inputs'] and all(n == 1 for n in effect_counts.values())
