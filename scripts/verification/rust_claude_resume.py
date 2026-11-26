@@ -23,7 +23,7 @@ from rust_claude_worker_input import Provider, save
 TASK = "Reply with a short synthetic test answer."
 
 
-def verify(swarm, installed, root, server, worktree=False):
+def verify(swarm, installed, root, server, worktree=False, through_board=False):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     for directory in (home, work, state, tools, home / ".claude"):
         directory.mkdir(mode=0o700)
@@ -134,7 +134,31 @@ def verify(swarm, installed, root, server, worktree=False):
                 finally:
                     config.unlink()
                     if not existed: directory.rmdir()
-            resumed=wire(launch)
+            if through_board:
+                shutil.copy2(fixtures.__file__, tools / "driver")
+                board = fixtures.Board(guard([staged]), root, env)
+                try:
+                    board.wait_bytes(b"resume fixture")
+                    board.send(b"r")
+
+                    def successor():
+                        board.drain()
+                        return next((r for r in json.loads(cli("ls", "--json")) if r.get("resumed_from") == original), None)
+
+                    row = eventually(successor, "successor from ordinary board resume")
+                    resumed = {"op": "launch", "session": row}
+                    board.wait_bytes(b"Claude Code")
+                    mark = len(board.capture)
+                    board.send(b"\x11")
+                    board.wait_bytes(b"resume fixture", mark)
+                    board.send(b"\x1b[27u")
+                    fixtures.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "board exit")
+                    assert board.child.returncode == 0
+                    print("The board resumed the selected Claude session and returned from its PTY")
+                finally:
+                    board.close()
+            else:
+                resumed=wire(launch)
             assert resumed["op"]=="launch",resumed
             assert resumed["session"]["resumed_from"]==original
             assert resumed["session"]["cwd"]==str(effective)
@@ -220,6 +244,7 @@ if __name__=="__main__":
     parser.add_argument("--candidate",required=True,type=fixtures.binary_path)
     parser.add_argument("--provider",required=True,type=fixtures.binary_path)
     parser.add_argument("--worktree",action="store_true")
+    parser.add_argument("--board", action="store_true", help="resume using the ordinary dashboard action")
     args=parser.parse_args()
     root=Path(tempfile.mkdtemp(prefix="cr-",dir=Path("/tmp").resolve()))
     server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Provider)
@@ -230,7 +255,7 @@ if __name__=="__main__":
     thread.start()
     success=False
     try:
-        verify(args.candidate,args.provider,root,server,args.worktree)
+        verify(args.candidate,args.provider,root,server,args.worktree,args.board)
         assert not server.sentinel.exists()
         success=True
     finally:

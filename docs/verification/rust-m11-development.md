@@ -37,7 +37,14 @@ minute completions, including deletion of the proved stopped scheduled
 session while retaining schedule history. Read each queue's `status.json`,
 its active stage's `heartbeat.json`, and its immutable `result.json` after
 completion. The native queue sequences real 1h, 24h and 72h stages. Each
-mixed queue runs a separate 24h stage. These elapsed-duration gates are open.
+mixed queue runs a separate 24h stage.
+
+The macOS OpenCode one-hour stage passed after 3,600.006 seconds with
+341 terminal receipts, 138 decisions and 17 daemon crash recoveries.
+Maximum dispatch was 2.162 seconds and maximum rejoin was 0.389 seconds.
+Process cleanup passed. The result SHA-256 is
+`b36a824fec606597a1f9175ff91410b5dd91a12f2d8dba67634838825010e0fe`.
+The longer stages and final-candidate measurements remain open.
 
 ## Linux interruption and controlled recovery
 
