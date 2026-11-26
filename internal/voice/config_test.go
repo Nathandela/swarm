@@ -115,7 +115,10 @@ func TestPrivateVoiceFilesRejectLinksAndPublicSecrets(t *testing.T) {
 			case "hardlink":
 				err = os.Link(target, path)
 			case "public":
-				err = os.WriteFile(path, []byte("test-secret"), 0644)
+				if err := os.WriteFile(path, []byte("test-secret"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				err = os.Chmod(path, 0644)
 			case "fifo":
 				err = syscall.Mkfifo(path, 0600)
 			}

@@ -67,6 +67,9 @@ func TestUpgradeLogRefusesUnsafeTargets(t *testing.T) {
 			if err := os.WriteFile(target, []byte("keep"), 0644); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Chmod(target, 0644); err != nil {
+				t.Fatal(err)
+			}
 			switch kind {
 			case "symlink":
 				if err := os.Symlink(target, path); err != nil {

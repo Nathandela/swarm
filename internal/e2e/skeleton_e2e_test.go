@@ -3,17 +3,6 @@
 // protocol.Client against the fake agent, including the headline kill -9 survival
 // demo. These are the milestone's acceptance tests.
 //
-// RED STATE — "assembly not built": these tests COMPILE (every referenced symbol
-// exists today) but FAIL AT RUNTIME because `swarm daemon` (cmd/swarm.runDaemon)
-// does not yet stand up the client protocol on its socket — it only opens
-// daemon.Open, whose socket speaks the Epic 5 four-byte version handshake. So
-// protocol.Dial cannot complete a handshake and startDaemon times out. They turn
-// green when runDaemon performs the full assembly (see internal/skeleton): serve
-// protocol.Serve(FromDaemon(core)) on the daemon socket, run the status engine,
-// and route hook posts — AND resolves the reserved walking-skeleton agent "fake"
-// (SWARM_FAKE_AGENT_BIN) to the swarm-fake-agent binary so a session can be
-// launched through the client before any real adapter exists (Epic 9/11).
-//
 // PINNED assembly env knobs runDaemon must honor (flagged in the handoff):
 //   - SWARM_DAEMON_STATE / _SOCK / _LOCK / _LOG   (already defined: daemon.Env*)
 //   - SWARM_FAKE_AGENT_BIN                          NEW: dev/test-only fake-agent path
@@ -86,8 +75,7 @@ func newDaemonEnv(t *testing.T) daemonEnv {
 
 // startDaemon spawns a real `swarm daemon` subprocess and waits until its socket
 // answers the FULL client protocol handshake (proof the assembly is serving). It
-// returns the running command; the caller kills it. On timeout it fails with the
-// assembly-not-built diagnosis.
+// returns the running command and registers cleanup.
 func startDaemon(t *testing.T, env daemonEnv) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command(swarmBin, "daemon")
@@ -98,11 +86,15 @@ func startDaemon(t *testing.T, env daemonEnv) *exec.Cmd {
 		"SWARM_DAEMON_LOG="+env.log,
 		envFakeAgentBin+"="+fakeAgentBin,
 	)
-	logf, _ := os.Create(filepath.Join(env.stateDir, "daemon.stdio"))
-	if logf != nil {
-		cmd.Stdout, cmd.Stderr = logf, logf
+	stdio := filepath.Join(env.stateDir, "daemon.stdio")
+	logf, err := os.OpenFile(stdio, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open daemon stdio log: %v", err)
 	}
-	if err := cmd.Start(); err != nil {
+	cmd.Stdout, cmd.Stderr = logf, logf
+	err = cmd.Start()
+	_ = logf.Close()
+	if err != nil {
 		t.Fatalf("start swarm daemon: %v", err)
 	}
 	t.Cleanup(func() {
@@ -111,16 +103,18 @@ func startDaemon(t *testing.T, env daemonEnv) *exec.Cmd {
 	})
 
 	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		c, err := protocol.Dial(env.sock, []string{"attach", "subscribe"})
 		if err == nil {
 			_ = c.Close()
 			return cmd
 		}
+		lastErr = err
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("swarm daemon never served the client protocol on %s within 10s "+
-		"(the daemon assembly is not built: runDaemon must stand up protocol.Serve + engine + hook routing)", env.sock)
+	log, logErr := os.ReadFile(stdio)
+	t.Fatalf("swarm daemon never served the client protocol on %s within 10s: %v; daemon stdio (read error %v):\n%s", env.sock, lastErr, logErr, log)
 	return nil
 }
 

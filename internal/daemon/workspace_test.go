@@ -22,14 +22,8 @@ func TestLaunchRefusesWorkspaceInsideStateBeforeReservation(t *testing.T) {
 	if err := os.Symlink(workspace, alias); err != nil {
 		t.Fatal(err)
 	}
-	current, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relativeAlias, err := filepath.Rel(current, alias)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(filepath.Dir(alias))
+	relativeAlias := filepath.Base(alias)
 	for _, cwd := range []string{cfg.StateDir, workspace, alias, alias + "/..", relativeAlias + "/.."} {
 		if _, err := d.Launch(LaunchSpec{Cwd: cwd}); err == nil || !strings.Contains(err.Error(), "inside Swarm state") {
 			t.Fatalf("state workspace %q was not refused: %v", cwd, err)

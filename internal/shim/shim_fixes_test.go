@@ -55,14 +55,14 @@ import (
 func main() {
 	if os.Getenv("F1_ROLE") == "child" {
 		signal.Ignore(syscall.SIGTERM)
-		if os.Getenv("F1_CHILD_GATE") == "1" {
+		fmt.Printf("CHILD_PID\t%d\n", os.Getpid())
+		if os.Getenv("F1_LEADER") == "exit" {
 			fmt.Println("CHILD_WAITING")
 			var release [1]byte
 			if _, err := io.ReadFull(os.Stdin, release[:]); err != nil || release[0] != '\n' {
 				os.Exit(2)
 			}
 		}
-		fmt.Printf("CHILD_PID\t%d\n", os.Getpid())
 		if fd, _ := strconv.Atoi(os.Getenv("F1_READY_FD")); fd > 0 {
 			ready := os.NewFile(uintptr(fd), "f1-ready")
 			_, _ = ready.Write([]byte{1})
@@ -103,7 +103,7 @@ func main() {
 	_ = readyW.Close()
 	_ = readyR.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var ready [1]byte
-	if os.Getenv("F1_CHILD_GATE") == "1" {
+	if os.Getenv("F1_LEADER") == "exit" {
 		fmt.Println("PARENT_WAITING")
 	}
 	if _, err := io.ReadFull(readyR, ready[:]); err != nil {
@@ -113,8 +113,6 @@ func main() {
 	_ = readyR.Close()
 	fmt.Printf("PARENT_PID\t%d\n", os.Getpid())
 	if os.Getenv("F1_LEADER") == "exit" {
-		ms, _ := strconv.Atoi(os.Getenv("F1_EXIT_MS"))
-		time.Sleep(time.Duration(ms) * time.Millisecond)
 		os.Exit(0) // natural exit while the child still holds the PTY
 	}
 	io.Copy(io.Discard, os.Stdin) // cooperative: default TERM disposition ends this
@@ -232,14 +230,18 @@ func TestF1_TermIgnoringChildKilledAfterLeaderCooperates(t *testing.T) {
 // hangs on the unconditional PTY-EOF wait.
 func TestF1_NaturalExitWithLingeringChildStillFinalizes(t *testing.T) {
 	grace := 800 * time.Millisecond
-	cfg := f1Config(t, grace, "F1_LEADER=exit", "F1_EXIT_MS=400")
+	cfg := f1Config(t, grace, "F1_LEADER=exit")
 	ch := runShimAsync(cfg)
 
 	c := dialShim(t, cfg.SocketPath)
 	c.startReader()
 	c.hello(shimwire.Version)
 	c.attach()
+	// Both processes must reach the gate before the client releases the child.
+	c.waitObserved("PARENT_WAITING", 5*time.Second)
+	c.waitObserved("CHILD_WAITING", 5*time.Second)
 	childPID := f1WaitPID(t, c, "CHILD_PID", 5*time.Second)
+	c.writeDataIn([]byte("\n"))
 
 	r := waitRun(t, ch, 10*time.Second) // must return; pre-fix this hangs
 	if r.err != nil {
@@ -248,38 +250,9 @@ func TestF1_NaturalExitWithLingeringChildStillFinalizes(t *testing.T) {
 	if r.exit != 0 {
 		t.Errorf("Run agentExit = %d, want 0 (leader exited 0 naturally)", r.exit)
 	}
-	if !processGone(childPID, 3*time.Second) {
-		t.Errorf("lingering child %d survived — the group was not killed after the bounded EOF wait", childPID)
-	}
 	ei := readExitInfo(t, cfg.SessionDir)
 	if ei.ExitCode != 0 || ei.ExitSignal != "" {
 		t.Errorf("exit.json = {code:%d sig:%q}, want {0 \"\"}", ei.ExitCode, ei.ExitSignal)
-	}
-	if tail := readTranscript(t, cfg.SessionDir); !strings.Contains(tail, "CHILD_PID") {
-		t.Errorf("identity tail missing the child's output: %q", tail)
-	}
-}
-
-// The F1 helper must not start the natural-exit countdown until its stubborn child has
-// actually entered main and published its PID. exec.Cmd.Start proves only that the kernel
-// created the process; under a saturated race suite the leader can otherwise exit and the
-// shim can finish its bounded EOF wait/KILL before the child is ever scheduled, making the
-// containment test fail on missing setup evidence rather than on production behavior.
-func TestF1_FixtureWaitsForChildReadinessBeforeNaturalExit(t *testing.T) {
-	cfg := f1Config(t, 200*time.Millisecond, "F1_LEADER=exit", "F1_CHILD_GATE=1")
-	ch := runShimAsync(cfg)
-
-	c := dialShim(t, cfg.SocketPath)
-	c.startReader()
-	c.hello(shimwire.Version)
-	c.attach()
-	c.waitObserved("PARENT_WAITING", 5*time.Second)
-	c.waitObserved("CHILD_WAITING", 5*time.Second)
-	c.writeDataIn([]byte("\n"))
-
-	r := waitRun(t, ch, 5*time.Second)
-	if r.err != nil || r.exit != 0 {
-		t.Errorf("Run = {exit:%d err:%v}, want natural exit 0", r.exit, r.err)
 	}
 	tail := readTranscript(t, cfg.SessionDir)
 	childLine, _, parentSeen := strings.Cut(tail, "PARENT_PID\t")
@@ -287,12 +260,11 @@ func TestF1_FixtureWaitsForChildReadinessBeforeNaturalExit(t *testing.T) {
 	if !parentSeen || child == nil {
 		t.Fatalf("expected child readiness before parent exit in transcript %q", tail)
 	}
-	childPID, err := strconv.Atoi(child[1])
-	if err != nil || childPID <= 0 {
-		t.Fatalf("invalid child PID %q", child[1])
+	if childPID <= 0 || child[1] != strconv.Itoa(childPID) {
+		t.Fatalf("transcript child PID %q does not match attached child PID %d", child[1], childPID)
 	}
-	if !processGone(childPID, time.Second) {
-		t.Errorf("fixture child %d survived finalization", childPID)
+	if !processGone(childPID, 3*time.Second) {
+		t.Errorf("lingering child %d survived the bounded EOF wait", childPID)
 	}
 }
 

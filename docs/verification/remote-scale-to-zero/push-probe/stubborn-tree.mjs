@@ -1,11 +1,13 @@
 import {spawn} from 'node:child_process';
-import {writeFileSync} from 'node:fs';
+import {renameSync, writeFileSync} from 'node:fs';
 
 if (process.argv[2] === 'grandchild') {
   process.on('SIGINT', () => {});
   process.on('SIGTERM', () => {});
-  // Signal readiness only after the handlers that deliberately ignore cleanup exist.
-  writeFileSync(process.argv[3], String(process.pid));
+  // Publish a complete PID only after the handlers that ignore cleanup exist.
+  const pidFile = process.argv[3];
+  writeFileSync(`${pidFile}.tmp`, String(process.pid));
+  renameSync(`${pidFile}.tmp`, pidFile);
   setInterval(() => {}, 1000);
 } else {
   spawn(process.execPath, [import.meta.filename, 'grandchild', process.argv[2]], {

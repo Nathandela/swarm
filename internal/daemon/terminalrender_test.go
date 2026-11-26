@@ -205,32 +205,27 @@ func TestRenderLoop_InitialStatePreservedAcrossLiveFrame(t *testing.T) {
 	assertSanitized(t, renders)
 }
 
-// TestRenderLoop_TerminatesWhenDisallowed pins Blocker 1a: an IDLE peek (no output ever
-// arrives) must still terminate PROMPTLY once its stillAllowed predicate flips false (the
-// kill switch went OFF mid-peek). The pre-fix loop only re-checked the switch on an EMISSION,
-// so the ticker branch rendered nothing on an idle stream and the loop parked forever — the
-// render goroutine and its read-only tap lingered until the connection dropped. The ticker
-// branch must now check stillAllowed() EVERY tick, before the drain, and return when it is
-// false, so an idle peek terminates within the poll interval.
+// An idle watch must stop on the render loop's own clock when it loses authority (ADR-017 T4-b).
 func TestRenderLoop_TerminatesWhenDisallowed(t *testing.T) {
 	frames := make(chan []byte) // never fed, never closed: an IDLE peek parks on the ticker
 	stream := &stubTerminalStream{snap: snapBytes(t, 80, 24, nil), frames: frames}
 
 	var allowed atomic.Bool
 	allowed.Store(true)
-	var c collector
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ready := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		RenderTerminalView(ctx, "idle", "", stream, allowed.Load, c.push)
-		close(done)
+		defer close(done)
+		RenderTerminalView(ctx, "idle", "inst-a", stream, allowed.Load, func(TerminalView) { close(ready) })
 	}()
 
-	// Let the loop settle on the ticker (no frames to render), then revoke the peek. No
-	// frame ever arrives, so ONLY a per-tick liveness check can unblock the loop.
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle render loop did not emit its initial snapshot")
+	}
 	allowed.Store(false)
 
 	select {

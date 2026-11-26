@@ -644,7 +644,10 @@ func TestStoreRejectsForeignHardlinkWithoutMutation(t *testing.T) {
 	if e := os.Mkdir(state, 0700); e != nil {
 		t.Fatal(e)
 	}
-	if e := os.WriteFile(foreign, []byte("foreign data"), 0644); e != nil {
+	if e := os.WriteFile(foreign, []byte("foreign data"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Chmod(foreign, 0644); e != nil {
 		t.Fatal(e)
 	}
 	if e := os.Link(foreign, filepath.Join(state, "discord.db")); e != nil {

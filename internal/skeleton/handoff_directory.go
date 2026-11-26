@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -50,8 +49,15 @@ func refuseTemporaryHandoffWorktree(spec daemon.LaunchSpec) error {
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return nil
 	}
-	for _, path := range []string{spec.Cwd, filepath.Join(spec.Cwd, ".swarm", "worktrees")} {
-		// Resolve existing ancestors too: the worktree root may not exist yet.
+	root, err := worktree.DestinationRoot(spec.Cwd)
+	if err != nil {
+		return fmt.Errorf("handoff: %w", err)
+	}
+	return refuseTemporaryHandoffPaths(spec.Cwd, root)
+}
+
+func refuseTemporaryHandoffPaths(paths ...string) error {
+	for _, path := range paths {
 		resolved, err := canonicalCleanupPath(path)
 		if err != nil {
 			return fmt.Errorf("handoff: resolve worktree destination: %w", err)

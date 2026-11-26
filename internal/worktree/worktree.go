@@ -7,7 +7,6 @@ package worktree
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,10 +21,8 @@ import (
 // in full; only the cosmetic name prefix is truncated.
 const maxSlugBytes = 128
 
-// createMu makes the friendly unsuffixed path selection atomic for launches
-// handled by the daemon. Swarm has one daemon per machine, so this covers two
-// same-named launches arriving concurrently without introducing repo lock files.
-var createMu sync.Mutex
+// workspaceMu serializes creation with teardown in this supervisor.
+var workspaceMu sync.Mutex
 
 // validID reports whether id is safe to use as a path component and as a git
 // branch-name suffix (ADR-004); it delegates to persist.ValidID, the single
@@ -88,7 +85,6 @@ func slugs(id, name string) (dirSlug, branchSlug string) {
 	return prefix, branchPrefix + "-" + id
 }
 
-// worktreeRoot is the only directory RemoveAt is allowed to target beneath.
 func worktreeRoot(repoDir string) string {
 	return filepath.Join(repoDir, ".swarm", "worktrees")
 }
@@ -101,8 +97,8 @@ func worktreeDir(repoDir, slug string) string {
 // IsRepo reports whether dir is inside a git work tree, the condition under which
 // Create can isolate a session there. A missing directory or a failing git is false.
 func IsRepo(dir string) bool {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
+	out, err := gitValue(dir, "rev-parse", "--is-inside-work-tree")
+	return err == nil && out == "true"
 }
 
 // ReservedCheckout recovers the exact registered checkout when a supervisor
@@ -112,25 +108,28 @@ func ReservedCheckout(repoDir, id, name string) (string, error) {
 		return "", fmt.Errorf("invalid worktree session ID %q", id)
 	}
 	friendly, unique := slugs(id, name)
-	root, err := filepath.EvalSymlinks(repoDir)
-	if err != nil {
-		return "", err
-	}
 	ref := "refs/heads/swarm/" + unique
 	// for-each-ref prints the registered checkout, including paths containing newlines.
-	raw, err := exec.Command("git", "-C", root, "for-each-ref", "--format=%(refname)%00%(worktreepath)", ref).Output()
+	raw, err := gitValue(repoDir, "for-each-ref", "--format=%(refname)%00%(worktreepath)", ref)
 	if err != nil {
 		return "", err
 	}
-	if len(raw) == 0 {
+	if raw == "" {
 		return "", nil
 	}
-	refName, path, ok := strings.Cut(strings.TrimSuffix(string(raw), "\n"), "\x00")
+	refName, path, ok := strings.Cut(raw, "\x00")
 	if !ok || refName != ref {
 		return "", fmt.Errorf("unexpected registered branch for %q", id)
 	}
-	if path != worktreeDir(root, friendly) && path != worktreeDir(root, unique) {
-		return "", fmt.Errorf("reserved worker branch has moved to %q", path)
+	legacy, _ := resolveRoot(repoDir)
+	if !matchesCandidate(legacy, path, friendly, unique) {
+		root, err := DestinationRoot(repoDir)
+		if err != nil {
+			return "", err
+		}
+		if !matchesCandidate(root, path, friendly, unique) {
+			return "", fmt.Errorf("reserved worker branch has moved to %q", path)
+		}
 	}
 	actual, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -140,10 +139,6 @@ func ReservedCheckout(repoDir, id, name string) (string, error) {
 		return "", fmt.Errorf("reserved checkout %q is redirected", path)
 	}
 	// A stale Git registration can survive a plain directory move and path reuse.
-	gitValue := func(dir string, args ...string) (string, error) {
-		raw, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
-		return strings.TrimSuffix(string(raw), "\n"), err
-	}
 	head, err := gitValue(path, "symbolic-ref", "-q", "HEAD")
 	if err != nil || head != ref {
 		return "", fmt.Errorf("reserved checkout HEAD does not match %s", ref)
@@ -152,15 +147,25 @@ func ReservedCheckout(repoDir, id, name string) (string, error) {
 	if err != nil || top != path {
 		return "", fmt.Errorf("registered worker checkout %q is unavailable", path)
 	}
-	sourceCommon, err := gitValue(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	sourceCommon, err := commonDir(repoDir)
 	if err != nil {
 		return "", err
 	}
-	common, err := gitValue(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := commonDir(path)
 	if err != nil || common != sourceCommon {
 		return "", fmt.Errorf("reserved checkout %q has another owning repository", path)
 	}
+	if owner, err := recordedOwner(path); err != nil && !os.IsNotExist(err) {
+		return "", err
+	} else if err == nil && owner != id {
+		return "", fmt.Errorf("reserved checkout %q is owned by another session", path)
+	}
 	return path, nil
+}
+
+func matchesCandidate(root, path, friendly, unique string) bool {
+	return root != "" && filepath.Dir(path) == root &&
+		(filepath.Base(path) == friendly || filepath.Base(path) == unique)
 }
 
 // Create makes an isolated git worktree for session id. When name has usable
@@ -168,72 +173,209 @@ func ReservedCheckout(repoDir, id, name string) (string, error) {
 // swarm/<name-slug>-<id>. If that friendly directory is occupied by another
 // same-named session, this session falls back to <name-slug>-<id>. An unnamed
 // session retains the established id-only form. id is validated before anything
-// touches git or disk, so a rejected id never creates so much as the .swarm
-// directory.
-func Create(repoDir, id, name string) (string, error) {
+// touches git or disk. An optional policy checks the physical destination
+// before it is claimed.
+func Create(repoDir, id, name string, allow func(string) error) (string, error) {
 	if !validID(id) {
 		return "", fmt.Errorf("worktree: invalid session id %q", id)
 	}
-	if out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--is-inside-work-tree").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("worktree: %s is not a git repository: %w\n%s", repoDir, err, out)
-	}
-
-	createMu.Lock()
-	defer createMu.Unlock()
-
-	dirComponent, branchComponent := slugs(id, name)
-	dir := worktreeDir(repoDir, dirComponent)
-	if _, err := os.Lstat(dir); err == nil {
-		dirComponent = branchComponent
-		dir = worktreeDir(repoDir, dirComponent)
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("worktree: inspect candidate path %s: %w", dir, err)
-	}
-	branch := "swarm/" + branchComponent
-	out, err := exec.Command("git", "-C", repoDir, "worktree", "add", "-b", branch, dir, "HEAD").CombinedOutput()
+	source, err := filepath.EvalSymlinks(repoDir)
 	if err != nil {
+		return "", err
+	}
+	workspaceMu.Lock()
+	defer workspaceMu.Unlock()
+	root, err := DestinationRoot(source)
+	if err != nil {
+		return "", err
+	}
+	friendly, unique := slugs(id, name)
+	dir := filepath.Join(root, friendly)
+	if allow != nil {
+		if err := allow(dir); err != nil {
+			return "", err
+		}
+		if current, err := DestinationRoot(source); err != nil || current != root {
+			return "", fmt.Errorf("worktree: destination changed during policy validation: %q", root)
+		}
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	// An atomic directory claim also coordinates independent supervisors.
+	err = os.Mkdir(dir, 0o755)
+	if os.IsExist(err) && friendly != unique {
+		dir = filepath.Join(root, unique)
+		if allow != nil {
+			if err := allow(dir); err != nil {
+				return "", err
+			}
+		}
+		err = os.Mkdir(dir, 0o755)
+	}
+	if err != nil {
+		return "", fmt.Errorf("worktree: claim %q: %w", dir, err)
+	}
+	claim, err := os.Lstat(dir)
+	if err != nil {
+		return "", err
+	}
+	// A checkout can rename or redirect its workspace while we are claiming it.
+	removeClaim := func() {
+		if info, err := os.Lstat(dir); err == nil && os.SameFile(claim, info) {
+			_ = os.Remove(dir)
+		}
+	}
+	if physical, err := filepath.EvalSymlinks(dir); err != nil || physical != dir {
+		removeClaim()
+		return "", fmt.Errorf("worktree: claimed destination %q was redirected", dir)
+	}
+	out, err := gitCommand(source, "worktree", "add", "-b", "swarm/"+unique, dir, "HEAD").CombinedOutput()
+	if err != nil {
+		removeClaim()
 		return "", fmt.Errorf("worktree: git worktree add %s: %w\n%s", dir, err, out)
+	}
+	marker, err := ownerMarker(dir)
+	if err == nil {
+		err = os.WriteFile(marker, []byte(id), 0o600)
+	}
+	if err != nil {
+		return "", fmt.Errorf("worktree: cannot record owner of %q; checkout retained: %w", dir, err)
 	}
 	return dir, nil
 }
 
-// Remove tears down session id's worktree under repoDir: `git worktree remove
-// --force` followed by `git worktree prune` (R-3). Removing an unknown session
-// errors.
+func ownerMarker(cwd string) (string, error) {
+	admin, err := gitValue(cwd, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	common, err := commonDir(cwd)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Dir(admin) != filepath.Join(common, "worktrees") {
+		return "", fmt.Errorf("worktree: %q has an unexpected Git administrative directory %q", cwd, admin)
+	}
+	return filepath.Join(admin, "swarm-session"), nil
+}
+
+func recordedOwner(cwd string) (string, error) {
+	marker, err := ownerMarker(cwd)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(marker)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxSlugBytes {
+		return "", fmt.Errorf("worktree: invalid owner record in %q", marker)
+	}
+	data, err := os.ReadFile(marker)
+	return string(data), err
+}
+
+// Remove tears down an older worktree recorded only by session id.
 func Remove(repoDir, id string) error {
 	if !validID(id) {
 		return fmt.Errorf("worktree: invalid session id %q", id)
 	}
 
-	return RemoveAt(repoDir, worktreeDir(repoDir, id))
+	return RemoveAt(repoDir, worktreeDir(repoDir, id), id)
 }
 
 // RemoveAt tears down the exact worktree path persisted in Meta.AgentCwd. It
-// accepts only a direct child of <repoDir>/.swarm/worktrees, so corrupt or
-// malicious metadata cannot make teardown remove an arbitrary path. Remove is
-// retained for sessions created by older versions, whose id was their path.
-func RemoveAt(repoDir, dir string) error {
-	rootAbs, err := filepath.Abs(worktreeRoot(repoDir))
+// accepts the canonical placement and the original cwd-relative layout.
+func RemoveAt(repoDir, dir, id string) error {
+	if !validID(id) {
+		return fmt.Errorf("worktree: invalid session id %q", id)
+	}
+	workspaceMu.Lock()
+	defer workspaceMu.Unlock()
+	info, err := os.Lstat(dir)
 	if err != nil {
-		return fmt.Errorf("worktree: resolve worktree root: %w", err)
+		return err
 	}
-	dirAbs, err := filepath.Abs(dir)
+	if !info.IsDir() {
+		return fmt.Errorf("worktree: %q is not a physical checkout directory", dir)
+	}
+	path, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return fmt.Errorf("worktree: resolve worktree path: %w", err)
+		return err
 	}
-	if filepath.Dir(filepath.Clean(dirAbs)) != filepath.Clean(rootAbs) || filepath.Base(dirAbs) == "." {
-		return fmt.Errorf("worktree: path %q is not a direct child of %s", dir, rootAbs)
+	top, err := gitValue(path, "rev-parse", "--show-toplevel")
+	if err != nil || top != path {
+		return fmt.Errorf("worktree: %q is not the root of a Git checkout", path)
 	}
-	if fi, err := os.Lstat(dirAbs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("worktree: path %q is a symlink", dir)
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("worktree: inspect path %q: %w", dir, err)
+	paths, err := registeredPaths(path)
+	if err != nil {
+		return err
 	}
-	if out, err := exec.Command("git", "-C", repoDir, "worktree", "remove", "--force", dirAbs).CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree: git worktree remove %s: %w\n%s", dirAbs, err, out)
+	registrations := 0
+	for _, candidate := range paths[1:] {
+		if candidate == path {
+			registrations++
+		} else if isWithin(path, candidate) || sameAncestor(path, candidate) {
+			return fmt.Errorf("worktree: %q contains a registered Git worktree %q; checkout retained", path, candidate)
+		}
 	}
-	if out, err := exec.Command("git", "-C", repoDir, "worktree", "prune").CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree: git worktree prune: %w\n%s", err, out)
+	if registrations != 1 {
+		return fmt.Errorf("worktree: %q does not have exactly one linked checkout registration", path)
+	}
+	if owner, err := recordedOwner(path); err == nil {
+		if owner != id {
+			return fmt.Errorf("worktree: %q is owned by another session", path)
+		}
+	} else if os.IsNotExist(err) {
+		branch, err := gitValue(path, "symbolic-ref", "--quiet", "HEAD")
+		name, swarmBranch := strings.CutPrefix(branch, "refs/heads/swarm/")
+		if err != nil || !swarmBranch || (name != id && !strings.HasSuffix(name, "-"+id)) {
+			return fmt.Errorf("worktree: cannot verify ownership of legacy checkout %q", path)
+		}
+	} else {
+		return err
+	}
+
+	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+		// A flattened child can outlast its source.
+		root, err := DestinationRoot(path)
+		if err != nil {
+			return err
+		}
+		if filepath.Dir(path) != root {
+			return fmt.Errorf("worktree: %q is outside the verified destination %q", path, root)
+		}
+	} else {
+		sourceCommon, sourceErr := commonDir(repoDir)
+		targetCommon, targetErr := commonDir(path)
+		if sourceErr != nil || targetErr != nil || sourceCommon != targetCommon {
+			return fmt.Errorf("worktree: %q does not belong to the source Git repository", path)
+		}
+		legacy, _ := resolveRoot(repoDir)
+		if filepath.Dir(path) != legacy {
+			root, err := DestinationRoot(repoDir)
+			if err != nil {
+				return err
+			}
+			if filepath.Dir(path) != root {
+				return fmt.Errorf("worktree: %q is outside the verified destination %q", path, root)
+			}
+		}
+	}
+	if err := filepath.WalkDir(path, func(child string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() == ".git" && filepath.Dir(child) != path {
+			return fmt.Errorf("worktree: %q contains another Git checkout at %q; checkout retained", path, filepath.Dir(child))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if out, err := gitCommand(path, "worktree", "remove", "--force", path).CombinedOutput(); err != nil {
+		return fmt.Errorf("worktree: git worktree remove %s: %w\n%s", path, err, out)
 	}
 	return nil
 }

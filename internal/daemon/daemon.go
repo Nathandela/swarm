@@ -171,6 +171,9 @@ type ResumeSourceFence struct {
 }
 
 type LaunchSpec struct {
+	// CheckWorktreeDestination is a host-side check on the physical checkout path.
+	CheckWorktreeDestination func(string) error `json:"-"`
+
 	WorkerParentInputHash   string `json:"-"`
 	WorkerParentShimPID     int    `json:"-"`
 	WorkerParentShimStart   int64  `json:"-"`

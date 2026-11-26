@@ -177,7 +177,7 @@ func TestDeleteDiscussionRemovesOwnedWorktree(t *testing.T) {
 	root := endedCodexSource("root", map[string]string{protocol.OptionWorktree: "true"})
 	root.Cwd = repo
 	var err error
-	root.AgentCwd, err = worktree.Create(repo, root.ID, "cleanup")
+	root.AgentCwd, err = worktree.Create(repo, root.ID, "cleanup", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

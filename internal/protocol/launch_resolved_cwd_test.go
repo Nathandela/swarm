@@ -33,6 +33,7 @@ func TestPolicy_LaunchUsesResolvedCwd(t *testing.T) {
 
 	req := policyLaunchReq(t)
 	req.Cwd = link
+	req.Worktree = true
 	rc.writeControl(remoteLaunchControl(rep.EndpointID, req))
 	if got := rc.readControl(); got.Op == OpError {
 		t.Fatalf("remote launch via an in-root symlink refused: %q / %q (it resolves inside the root, so it must be allowed)", got.Error, got.ErrorCode)
@@ -45,5 +46,9 @@ func TestPolicy_LaunchUsesResolvedCwd(t *testing.T) {
 	want := mustResolve(t, link) // == target
 	if specs[0].Cwd != want {
 		t.Fatalf("shim launch spec cwd = %q; want the RESOLVED path %q (ADR-007 D8: the checked path must be the used path, not the unresolved symlink %q)", specs[0].Cwd, want, link)
+	}
+	check := specs[0].CheckWorktreeDestination
+	if check == nil || check(filepath.Join(want, "worktree")) != nil || check(filepath.Dir(root)) == nil {
+		t.Fatal("remote launch did not carry the allowed-roots check to worktree placement")
 	}
 }

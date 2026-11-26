@@ -54,11 +54,12 @@ func startSmokeDaemon(t *testing.T, swarmBin, fakeAgentBin string) []string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "d.sock")
+	logPath := filepath.Join(dir, "d.log")
 	env := []string{
 		"SWARM_DAEMON_STATE=" + dir,
 		"SWARM_DAEMON_SOCK=" + sock,
 		"SWARM_DAEMON_LOCK=" + filepath.Join(dir, "d.lock"),
-		"SWARM_DAEMON_LOG=" + filepath.Join(dir, "d.log"),
+		"SWARM_DAEMON_LOG=" + logPath,
 		"SWARM_DAEMON_REMOTE_SOCK=", // an unpaired fixture must not bind the enclosing daemon's remote socket
 		envFakeAgentBin + "=" + fakeAgentBin,
 	}
@@ -85,7 +86,8 @@ func startSmokeDaemon(t *testing.T, swarmBin, fakeAgentBin string) []string {
 		dialErr = err
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("smoke daemon never served %s within 10s: %v", sock, dialErr)
+	log, logErr := os.ReadFile(logPath)
+	t.Fatalf("smoke daemon never served %s within 10s: %v\ndaemon log (read error %v):\n%s", sock, dialErr, logErr, tail(string(log), 40))
 	return nil
 }
 

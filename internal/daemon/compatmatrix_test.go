@@ -66,13 +66,13 @@ func spawnShimBin(t *testing.T, bin, stateDir, id string) (shimPID, agentPID int
 		t.Fatalf("start shim %s: %v", bin, err)
 	}
 	shimPID = cmd.Process.Pid
-	agentPID = readPIDFile(t, pidFile)
-	waitFile(t, sock, pollTimeout) // the shim binds async; wait until it is servable
 	t.Cleanup(func() {
 		killTree(agentPID)
 		killTree(shimPID)
 		_, _ = cmd.Process.Wait()
 	})
+	agentPID = readPIDFile(t, pidFile)
+	waitFile(t, sock, pollTimeout) // the shim binds async; wait until it is servable
 	return shimPID, agentPID
 }
 

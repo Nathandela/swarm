@@ -28,11 +28,11 @@ func TestLaunchRollback_CompensatesPreLaunchWorktree(t *testing.T) {
 
 	cfg := daemonConfig(t)
 	cfg.PreLaunch = func(id string, spec LaunchSpec) (string, error) {
-		return worktree.Create(spec.Cwd, id, spec.Name)
+		return worktree.Create(spec.Cwd, id, spec.Name, nil)
 	}
 	cfg.PreDelete = func(m persist.Meta) error {
 		if m.AgentCwd != "" {
-			return worktree.RemoveAt(m.Cwd, m.AgentCwd)
+			return worktree.RemoveAt(m.Cwd, m.AgentCwd, m.ID)
 		}
 		return worktree.Remove(m.Cwd, m.ID)
 	}

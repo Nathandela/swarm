@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 func buildBinary(t *testing.T, out, pkg string) {
@@ -33,15 +34,14 @@ func buildBinary(t *testing.T, out, pkg string) {
 	}
 }
 
-// buildRoleBinaries builds swarm + the fake agent into a temp dir.
+var roleBinaries testbin.Binaries
+
 func buildRoleBinaries(t *testing.T) (swarmBin, fakeAgent string) {
 	t.Helper()
-	dir := t.TempDir()
-	swarmBin = filepath.Join(dir, "swarm")
-	fakeAgent = filepath.Join(dir, "swarm-fake-agent")
-	buildBinary(t, swarmBin, "github.com/Nathandela/swarm/cmd/swarm")
-	buildBinary(t, fakeAgent, "github.com/Nathandela/swarm/cmd/swarm-fake-agent")
-	return swarmBin, fakeAgent
+	roleBinaries.Build(t, "sw", func(t *testing.T, err error) {
+		t.Fatalf("build role binaries: %v", err)
+	})
+	return roleBinaries.Swarm, roleBinaries.FakeAgent
 }
 
 // writeLaunchConfig writes a shim launch config that runs the fake agent through

@@ -644,6 +644,12 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 				d.putMem(previousMeta)
 				return persist.Meta{}, fmt.Errorf("daemon: original reserved checkout unavailable: %w", errors.Join(ErrLaunchOutcomeUnknown, err, cerr))
 			}
+			if spec.CheckWorktreeDestination != nil {
+				if err := spec.CheckWorktreeDestination(path); err != nil {
+					d.putMem(previousMeta)
+					return persist.Meta{}, err
+				}
+			}
 		}
 		// Keep the original isolated checkout and its contents when repairing a reservation.
 		spec.Cwd, m.AgentCwd = previousCwd, previousCwd

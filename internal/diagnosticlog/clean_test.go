@@ -16,6 +16,9 @@ func TestCleanExistingPreviewIsReadOnly(t *testing.T) {
 	if err := os.WriteFile(path, []byte(data), 0640); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
 	beforeInfo, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +51,9 @@ func TestCleanExistingApplyTruncatesSameInodeWithoutChangingMode(t *testing.T) {
 	dir := privateTestDir(t)
 	path := filepath.Join(dir, "daemon.log")
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", MaxBytes+1)), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0640); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.Stat(path)

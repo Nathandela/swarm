@@ -115,6 +115,8 @@ func TestCheckoutInventoryDiscoversLiveDescendantAndHiddenResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_DIR", filepath.Join(ext, ".git"))
+	cwd := inventoryTempDir(t)
+	t.Chdir(cwd)
 	before, err := os.Stat(filepath.Join(repo, ".git", "worktrees"))
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +124,9 @@ func TestCheckoutInventoryDiscoversLiveDescendantAndHiddenResume(t *testing.T) {
 	report, code := readCheckoutInventory(t)
 	if code != 0 || !report.Complete {
 		t.Fatalf("inventory incomplete: %+v", report)
+	}
+	if path := inventoryPath(t, report, cwd); path.GitKind != "outside_git" {
+		t.Fatalf("current directory classified as %+v", path)
 	}
 	linked := inventoryPath(t, report, worktree)
 	if linked.GitKind != "linked" || linked.Repo != repo || linked.Worktree != worktree || linked.Branch != "refs/heads/independent" || len(linked.References) != 3 {

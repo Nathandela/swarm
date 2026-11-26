@@ -210,6 +210,7 @@ func (cc *clientConn) handleSessionLaunch(c Control) {
 		OperationID:   c.OperationID,
 		InitialPrompt: req.InitialPrompt,
 	}
+	spec.CheckWorktreeDestination = lp.RemoteLaunchAllowed
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
 		// Round-4 fix-pack, MAJOR 2: an UNDECIDABLE launch is not a refusal. The daemon

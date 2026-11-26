@@ -71,6 +71,8 @@ var remoteForbiddenOptions = map[string]string{
 	"sandbox":                      "danger-full-access", // codex adapter full-access (codex.go:89)
 }
 
+var errWorktreePolicy = errors.New("worktree destination violates remote launch policy")
+
 // daemonLaunchSpec builds the DaemonAPI launch spec from a validated request,
 // applying the server-side env allowlist (S-6). Argv composition is the adapter's
 // job (Epic 9), so it is left empty here. On the remote tier the client env is DROPPED
@@ -1767,6 +1769,7 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// tier). ADR-007 D8 (finding D): the RESOLVED real path the policy checked must be the path
 	// the shim uses, so a symlink validated here cannot be re-pointed before the launch.
 	var resolvedCwd string
+	var checkWorktreeDestination func(string) error
 	if cc.srv.remoteTier {
 		lp, ok := cc.launchPolicy()
 		if !ok {
@@ -1783,6 +1786,12 @@ func (cc *clientConn) handleLaunch(c Control) {
 			return
 		}
 		resolvedCwd = resolved
+		checkWorktreeDestination = func(path string) error {
+			if err := lp.RemoteLaunchAllowed(path); err != nil {
+				return fmt.Errorf("%w: %v", errWorktreePolicy, err)
+			}
+			return nil
+		}
 	}
 	if req.Agent == "" || len(req.Agent) > maxAgentLen {
 		cc.replyError("launch: invalid agent")
@@ -1853,11 +1862,16 @@ func (cc *clientConn) handleLaunch(c Control) {
 	}
 	if resolvedCwd != "" {
 		spec.Cwd = resolvedCwd // ADR-007 D8 (finding D): use the RESOLVED path the policy validated
+		spec.CheckWorktreeDestination = checkWorktreeDestination
 	}
 	m, err := cc.srv.d.Launch(spec)
 	if err != nil {
 		if c.Op == OpOwnerLaunch {
 			cc.ownerLaunchError(err)
+			return
+		}
+		if errors.Is(err, errWorktreePolicy) {
+			cc.replyErrorCode("launch: "+err.Error(), CodePolicy)
 			return
 		}
 		cc.replyError("launch: " + err.Error())
