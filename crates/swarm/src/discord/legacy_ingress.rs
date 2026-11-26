@@ -1581,11 +1581,12 @@ mod tests {
             assert!(activation::migrate(&place, false, false, true).unwrap());
         }
         let run = service::with(&place, &api, None, |_| Ok(|| Ok(None)));
-        assert!(
-            run.unwrap_err()
-                .to_string()
-                .contains("remains for the Go scheduler")
-        );
+        let error = run.unwrap_err();
+        if std::env::var_os("SWARM_TEST_DISCORD_INVALID_QUEUED_OPERATION").is_some() {
+            assert!(error.to_string().contains("unqualified"));
+        } else {
+            assert!(error.to_string().contains("remains for the Go scheduler"));
+        }
         assert!(activation::migrate(&place, false, true, true).unwrap());
         assert!(!activation::selected(&place).unwrap());
     }

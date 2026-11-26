@@ -316,6 +316,27 @@ func FixtureQueuedFileWitness(dir, settings, message string) (schema.MessageOrig
 
 // FixturePreparedQueuedWake reads the original Go scheduler records after a
 // Rust-prepared wake. It checks the old prompt builder and immutable file.
+// FixtureReplacePreparedOperation changes only a disposable Go wake using the
+// original Go transaction and checksum writer.
+func FixtureReplacePreparedOperation(dir, conversation, session, instance, attempt, noteID, operation string) error {
+	store, err := OpenStore(dir)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	id := "worker-message-" + hashValue([]string{session, instance, attempt, noteID})
+	return store.update(func(st *State) error {
+		k := key(conversation, id)
+		wake, ok := st.Wakes[k]
+		if !ok || wake.State != "prepared" || wake.Admission != 0 {
+			return ErrStale
+		}
+		wake.OperationID = operation
+		putRecord(st, "wakes", &st.Wakes, k, wake)
+		return nil
+	})
+}
+
 func FixturePreparedQueuedWake(dir, settings, conversation, session, instance, attempt, noteID string, pending bool) (string, [][]byte, error) {
 	db, err := bolt.Open(filepath.Join(dir, "voice.db"), 0, &bolt.Options{
 		ReadOnly: true, Timeout: time.Second, OpenFile: openInventoryLedger,
@@ -338,7 +359,7 @@ func FixturePreparedQueuedWake(dir, settings, conversation, session, instance, a
 	worker := st.Workers[key(conversation, key(session, instance))]
 	if event.ID != id || !event.WorkerMessage || event.WakeID != id || event.AttemptID != attempt ||
 		wake.ID != id || wake.State != "prepared" || wake.Admission != 0 || wake.NativeInputID != "" ||
-		!protocol.SemanticOperationReplayable(wake.OperationID, time.Now()) ||
+		!validFixtureSemanticSyntax(wake.OperationID) ||
 		!worker.supervisorMailbox() || worker.AttemptID != attempt || worker.SessionInstance != instance ||
 		worker.ParentInputHash == "" || worker.Admission == 0 {
 		return "", nil, ErrStale
@@ -380,4 +401,9 @@ func FixturePreparedQueuedWake(dir, settings, conversation, session, instance, a
 	}
 	data, err := workermail.ReadFile(settings, binding, noteID, source.Files[0].ID)
 	return wake.OperationID, [][]byte{data}, err
+}
+
+func validFixtureSemanticSyntax(value string) bool {
+	_, ok := protocol.SemanticOperationIssuedAt(value)
+	return ok
 }

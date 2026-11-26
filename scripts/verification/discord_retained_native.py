@@ -307,7 +307,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             if is_worker:
                 worker_release.wait(timeout=90)
             return None
-        if mode in ("pending-file", "prepare-queued", "prepare-queued-crash") and is_worker:
+        if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged") and is_worker:
             pending_ready.set()
             assert allow_pending.wait(timeout=90)
         field = "cmd" if shell == "exec_command" else "command"
@@ -329,7 +329,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                 ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop, parent_fence],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
-                    started = pending_ready if mode in ("pending-file", "prepare-queued", "prepare-queued-crash") else waiting
+                    started = pending_ready if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged") else waiting
                     deadline = time.monotonic() + 80
                     while not started.wait(0.2) and ctl.poll() is None:
                         if time.monotonic() > deadline:
@@ -342,7 +342,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                     stop.touch()
                     _stdout, stderr = ctl.communicate(timeout=15)
                     assert ctl.returncode == 0, stderr
-                    if mode in ("pending-file", "prepare-queued", "prepare-queued-crash"):
+                    if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged"):
                         ledger, = (place / "discussions").glob("*/voice.db")
                         original_ledgers = ((place / "discord.db").read_bytes(),ledger.read_bytes())
                         allow_pending.set()
@@ -369,13 +369,27 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             verify_args = ("vm-read-prepared-queued-wake",ledger.parent,base/"state",
                                            note["Discussion"],note["Session"],note["Instance"],note["Attempt"],note["ID"])
                             prior = None
-                            if mode == "prepare-queued-crash":
+                            if mode in ("prepare-queued-crash", "prepare-malformed", "prepare-aged"):
                                 fault_env = queued_env | {"SWARM_TEST_DISCORD_QUEUE_EXIT_AFTER_VOICE":"1"}
                                 fault = subprocess.run(rust_args,env=fault_env,capture_output=True,text=True,timeout=30)
                                 assert fault.returncode == 87, (fault.stdout,fault.stderr)
                                 prior=json.loads(run(fixture,env,*verify_args,"pending"))
+                                if mode in ("prepare-malformed", "prepare-aged"):
+                                    replacement = "semantic:1:" + "a" * 32 if mode == "prepare-aged" else "semantic:0:" + "a" * 32
+                                    run(fixture,env,"vm-replace-prepared-queued-operation",ledger.parent,
+                                        note["Discussion"],note["Session"],note["Instance"],note["Attempt"],note["ID"],replacement)
+                                    prior["Operation"] = replacement
                                 voice_after_prepare = ledger.read_bytes()
+                            if mode == "prepare-malformed":
+                                queued_env["SWARM_TEST_DISCORD_INVALID_QUEUED_OPERATION"] = "1"
+                                old_mailbox = (base/"state/dispatcher-mail.db").read_bytes()
                             run(rust_test,queued_env,*rust_args[1:])
+                            if mode == "prepare-malformed":
+                                assert (base/"state/dispatcher-mail.db").read_bytes() == old_mailbox
+                                assert ledger.read_bytes() == voice_after_prepare
+                                assert (place/"discord.db").read_bytes() == original_ledgers[0]
+                                assert posts == []
+                                return
                             prepared=json.loads(run(fixture,env,*verify_args,"ingested"))
                             assert prepared["Operation"].startswith("semantic:")
                             assert list(map(base64.b64decode,prepared["Files"])) == [original_bytes]
@@ -508,7 +522,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             if mode == "pending-file":

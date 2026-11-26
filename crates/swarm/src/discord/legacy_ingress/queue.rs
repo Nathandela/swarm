@@ -290,6 +290,20 @@ fn record_key(table: &str, conversation: &str, id: &str) -> io::Result<Vec<u8>> 
     Ok(format!("{table}\0{}", serde_json::to_string(&[conversation, id])?).into_bytes())
 }
 
+pub(super) fn semantic_issued_at(operation: &str) -> Option<u64> {
+    let (millis, nonce) = operation.strip_prefix("semantic:")?.split_once(':')?;
+    if millis.len() > 13
+        || nonce.len() != 32
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let issued: u64 = millis.parse().ok()?;
+    (issued > 0 && issued.to_string() == millis).then_some(issued)
+}
+
 pub(super) fn prepare(
     place: &Place,
     cfg: &Config,
@@ -387,7 +401,7 @@ pub(super) fn prepare(
             || saved["conversation_id"] != *conversation
             || saved["id"] != *event_id
             || saved["event_id"] != *event_id
-            || field(&saved, "operation_id").is_empty()
+            || semantic_issued_at(field(&saved, "operation_id")).is_none()
         {
             return Err(invalid());
         }
@@ -427,4 +441,31 @@ fn wake_request(event: &Value) -> io::Result<Value> {
         return Err(invalid());
     }
     Ok(json!({"text":text}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn original_semantic_operation_checks_syntax_independently_of_age() {
+        let nonce = "1234567890abcdef1234567890abcdef";
+        assert_eq!(semantic_issued_at(&format!("semantic:1:{nonce}")), Some(1));
+        assert_eq!(
+            semantic_issued_at(&format!("semantic:1795690628240:{nonce}")),
+            Some(1795690628240)
+        );
+        for malformed in [
+            format!("launch:1:{nonce}"),
+            format!("semantic:0:{nonce}"),
+            format!("semantic:01:{nonce}"),
+            format!("semantic:+1:{nonce}"),
+            format!("semantic:10000000000000:{nonce}"),
+            format!("semantic:1:{}", nonce.to_uppercase()),
+            format!("semantic:1:{nonce}:1"),
+            "semantic:1:a1".into(),
+        ] {
+            assert_eq!(semantic_issued_at(&malformed), None, "{malformed}");
+        }
+    }
 }
