@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run the Rust dispatcher against installed Claude and a synthetic loopback model."""
 import argparse
+import base64
+import hashlib
 import http.server
 import json
 import os
@@ -29,10 +31,22 @@ class Model(http.server.BaseHTTPRequestHandler):
         content = json.dumps(request.get("messages", []))
         main = "[SWARM_MANAGER_INPUT_V1:" in content and "mcp__swarm_voice__publish" in tools
         wake = main and "Fixture worker retained across parking." in content
+        forwarded = main and self.server.forwarded and "Visible forwarded fixture quote" in content
+        data = b"a,b\n1,2\n"
+        read_attachment = forwarded and "toolu_fixture_forwarded_read" not in content
         read_note = wake and "toolu_fixture_swarm_read_note" not in content
         call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
-        publish = main and not read_note and call_id not in content
-        tool = publish or read_note
+        may_publish = not forwarded or self.server.forwarded == "allowed"
+        if forwarded and not read_attachment:
+            received = base64.b64encode(data).decode() in content
+            if self.server.forwarded == "allowed":
+                assert received, "the model did not receive the authorized pinned bytes"
+            else:
+                assert not received and "Manager request was not confirmed." in content, \
+                    "the changed forwarded receipt was not refused"
+            self.server.forwarded_checked.write_text("classified")
+        publish = main and not read_note and not read_attachment and may_publish and call_id not in content
+        tool = publish or read_note or read_attachment
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
         message = dict(id="msg_fixture", type="message", role="assistant", model=model,
@@ -50,12 +64,20 @@ class Model(http.server.BaseHTTPRequestHandler):
                 return
             self.server.main_requests.append((publish, content, tools))
         if tool:
-            name = "swarm_read_note" if read_note else "publish"
-            block = dict(type="tool_use", name=f"mcp__swarm_voice__{name}",
-                         id="toolu_fixture_swarm_read_note" if read_note else call_id, input={})
-            args = {} if read_note else dict(
-                output_id="native-parked" if wake else "native-claude", sequence=1, final=True,
-                text="Restored worker note reached Claude." if wake else "Bounded native Claude reply.")
+            if read_attachment:
+                name, call = "swarm_read_attachment", "toolu_fixture_forwarded_read"
+                args = dict(id="421", sha256=hashlib.sha256(data).hexdigest(), offset=0)
+                if self.server.forwarded == "revoked":
+                    self.server.revoke.write_text("changed")
+            elif read_note:
+                name, call, args = "swarm_read_note", "toolu_fixture_swarm_read_note", {}
+            else:
+                name, call = "publish", call_id
+                text = "Restored worker note reached Claude." if wake else (
+                    "Read the pinned forwarded file." if forwarded else "Bounded native Claude reply.")
+                args = dict(output_id="native-parked" if wake else "native-claude",
+                            sequence=1, final=True, text=text)
+            block = dict(type="tool_use", name=f"mcp__swarm_voice__{name}", id=call, input={})
             delta = dict(type="input_json_delta", partial_json=json.dumps(args))
         else:
             block = dict(type="text", text="")
@@ -83,6 +105,8 @@ class Model(http.server.BaseHTTPRequestHandler):
 
 def verify(swarm, provider, test, root, server):
     server.release = root / ".fixture-release-turn"
+    server.revoke = root / ".fixture-hide-forward"
+    server.forwarded_checked = root / ".fixture-forwarded-checked"
     check_guards(root, [server.server_port])
     home, project, tools, state = [root / name for name in ("h", "work", "bin", "s")]
     place = state / "discord"
@@ -105,6 +129,8 @@ def verify(swarm, provider, test, root, server):
                SWARM_CLAUDE_MANAGER_FIXTURE_BINARY=str(swarm))
     if server.park:
         env["SWARM_CLAUDE_MANAGER_FIXTURE_PARK"] = "1"
+    if server.forwarded:
+        env["SWARM_CLAUDE_MANAGER_FIXTURE_FORWARDED"] = server.forwarded
     version = subprocess.check_output(guarded([str(wrapper), "--version"], root, [server.server_port]),
                                       env=env, text=True).split()[0]
     save(home / ".claude.json", dict(hasCompletedOnboarding=True, lastOnboardingVersion=version,
@@ -132,11 +158,13 @@ def verify(swarm, provider, test, root, server):
                 time.sleep(0.05)
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
                                 "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
-            assert sum(1 for publish, _, _ in server.main_requests if publish) == (2 if server.park else 1)
+            expected_posts = 0 if server.forwarded == "revoked" else (2 if server.park else 1)
+            assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
+            assert not server.forwarded or server.forwarded_checked.is_file()
             assert all("Bash" not in tools for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=True,
-                                  exact_main_mcp_tool=True, observed_reply=True, disabled_shell_tools=True,
-                                  parked_worker_return=server.park)))
+                                  exact_main_mcp_tool=True, observed_reply=expected_posts > 0, disabled_shell_tools=True,
+                                  parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
             log.flush()
             log.seek(0)
@@ -177,12 +205,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ("swarm", "claude", "test"):
         parser.add_argument(arg, type=Path)
-    parser.add_argument("--park", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--park", action="store_true")
+    modes.add_argument("--forwarded", choices=("allowed", "revoked"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
         server.main_requests = []
         server.park = args.park
+        server.forwarded = args.forwarded
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             verify(args.swarm.resolve(), args.claude.resolve(), args.test.resolve(), Path(name).resolve(), server)

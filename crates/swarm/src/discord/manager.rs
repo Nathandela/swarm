@@ -430,11 +430,23 @@ mod tests {
         source: Value,
         posts: std::cell::RefCell<Vec<(String, String)>>,
         file_ack: std::cell::RefCell<Value>,
+        forwarded_revocation: Option<std::path::PathBuf>,
     }
 
     impl super::super::dispatcher::Audience for FixtureAudience {
         fn current(&self, _cfg: &Config, id: &str) -> io::Result<Option<Value>> {
-            Ok((self.source["id"] == id).then(|| self.source.clone()))
+            Ok((self.source["id"] == id).then(|| {
+                let mut source = self.source.clone();
+                if self
+                    .forwarded_revocation
+                    .as_ref()
+                    .is_some_and(|marker| marker.is_file())
+                {
+                    source["message_snapshots"][0]["message"]["content"] =
+                        json!("Changed forwarded content");
+                }
+                source
+            }))
         }
 
         fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -482,13 +494,32 @@ mod tests {
             .unwrap()
             .expect("Claude owner supervisor capability");
         let mut inbox = super::super::receipt::Inbox::open(&place, &cfg).unwrap();
-        let source = json!({"id":"401","channel_id":"400","author":{"id":"300","bot":false},
+        let forwarded = std::env::var("SWARM_CLAUDE_MANAGER_FIXTURE_FORWARDED").unwrap_or_default();
+        let mut source = json!({"id":"401","channel_id":"400","author":{"id":"300","bot":false},
             "type":0,"content":"Use the approved publish tool with the bounded answer.","attachments":[]});
+        if !forwarded.is_empty() {
+            source["content"] = json!("");
+            source["message_reference"] = json!({"type":1,"channel_id":"901","message_id":"991"});
+            source["message_snapshots"] = json!([{"message":{"content":"Visible forwarded fixture quote","attachments":[{
+                "id":"421","filename":"data.csv","size":8,
+                "url":"https://cdn.discordapp.com/attachments/400/421/data.csv?sig=fixture"
+            }]}}]);
+            let files = super::super::received_files::fixture_capture_bytes(
+                &place,
+                &source,
+                "400",
+                b"a,b\n1,2\n",
+            )
+            .unwrap();
+            assert_eq!(files[0]["forwarded"], true);
+        }
         inbox.checkpoint("400").unwrap();
         let api = FixtureAudience {
             source: source.clone(),
             posts: Default::default(),
             file_ack: Default::default(),
+            forwarded_revocation: (forwarded == "revoked")
+                .then(|| root.join(".fixture-hide-forward")),
         };
         let launch = dispatcher.scope(&cfg)["launch"].clone();
         let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
@@ -536,6 +567,10 @@ mod tests {
         let limit = std::time::Instant::now() + std::time::Duration::from_secs(35);
         loop {
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            if forwarded == "revoked" && root.join(".fixture-forwarded-checked").is_file() {
+                assert!(api.posts.borrow().is_empty());
+                return;
+            }
             if !api.posts.borrow().is_empty() {
                 break;
             }
@@ -553,7 +588,14 @@ mod tests {
         }
         let posts = api.posts.borrow();
         assert_eq!(posts.len(), 1);
-        assert_eq!(posts[0].1, "Bounded native Claude reply.");
+        assert_eq!(
+            posts[0].1,
+            if forwarded.is_empty() {
+                "Bounded native Claude reply."
+            } else {
+                "Read the pinned forwarded file."
+            }
+        );
         let entry = inbox.publication(&posts[0].0);
         assert_eq!(entry["rest_acknowledged"], true);
         assert_eq!(entry["proof"]["binding"]["provider"], "claude");
@@ -972,6 +1014,7 @@ mod tests {
                     source,
                     posts: std::cell::RefCell::new(Vec::new()),
                     file_ack: Default::default(),
+                    forwarded_revocation: None,
                 };
                 let local = id.split_once('/').unwrap().1;
                 let mut retained_worker = None;
@@ -1382,6 +1425,7 @@ mod tests {
                             source: withdrawal,
                             posts: Default::default(),
                             file_ack: Default::default(),
+                            forwarded_revocation: None,
                         };
                         dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
                         assert_eq!(inbox.manager()["input"]["composer"], refused);
@@ -1403,6 +1447,7 @@ mod tests {
                                 source: replacement.clone(),
                                 posts: Default::default(),
                                 file_ack: Default::default(),
+                                forwarded_revocation: None,
                             };
                             inbox.admit(&replacement).unwrap().unwrap();
                             dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
