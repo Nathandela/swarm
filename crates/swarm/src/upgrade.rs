@@ -1,6 +1,6 @@
 //! A managed installation holds a shared lease before any command can reach a writer.
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -26,9 +26,34 @@ pub(crate) fn identify() -> io::Result<Option<(PathBuf, PathBuf)>> {
         .ok_or_else(|| invalid("invalid release root"))?;
     let marker = root.join(".swarm-managed");
     match fs::symlink_metadata(&marker) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A damaged managed prefix must never turn an inactive slot into an unmanaged writer.
+            for name in [
+                "writers.lock",
+                "admin.lock",
+                "routes",
+                "inflight",
+                "effects",
+                "current",
+            ] {
+                match fs::symlink_metadata(root.join(name)) {
+                    Ok(_) => return Err(invalid("managed installation marker is missing")),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            return Ok(None);
+        }
         Err(error) => return Err(error),
-        Ok(_) => drop(owner_file(&marker, false)?),
+        Ok(_) => {
+            let mut version = Vec::new();
+            owner_file(&marker, false)?
+                .take(3)
+                .read_to_end(&mut version)?;
+            if version != b"1\n" {
+                return Err(invalid("invalid managed installation marker"));
+            }
+        }
     }
     // Darwin can report the launch symlink. A switch between exec and
     // canonicalization must never grant the old image the new writer lease.
