@@ -47,11 +47,18 @@ fn array(value: &Value) -> io::Result<&[Value]> {
 fn personal_guild_text_and_attachment() -> io::Result<()> {
     let read_only = std::env::var_os("SWARM_LIVE_RECHECK_ONLY").is_some();
     let expected_bot = configured("SWARM_LIVE_BOT_NAME")?;
-    let expected_guild = configured("SWARM_LIVE_GUILD_NAME")?;
+    let expected_guild = (!read_only)
+        .then(|| configured("SWARM_LIVE_GUILD_NAME"))
+        .transpose()?;
     let root = PathBuf::from(configured("SWARM_LIVE_EVIDENCE_DIR")?).canonicalize()?;
     runtime::private_dir(&root)?;
     let receipt = root.join("transport.json");
     let _lease = runtime::lock(&root.join("transport.lock"))?;
+    let saved = match runtime::read_json(&receipt) {
+        Ok(value) => Some(value),
+        Err(error) if !read_only && error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
     let place = Place::resolve(None)?;
     let cfg = place.load()?;
     let api = Discord::connect(&cfg)?;
@@ -70,24 +77,37 @@ fn personal_guild_text_and_attachment() -> io::Result<()> {
     };
     active()?;
     let enrolled = api.request("/users/@me/guilds", None)?;
-    let guild = id(only(
-        array(&enrolled)?
-            .iter()
-            .filter(|row| row["name"] == expected_guild),
-    )?)?;
+    let guild = id(only(array(&enrolled)?.iter().filter(|row| {
+        if let Some(name) = &expected_guild {
+            row["name"] == *name
+        } else {
+            saved
+                .as_ref()
+                .is_some_and(|value| row["id"] == value["guild"])
+        }
+    }))?)?;
     let verify_guild = || -> io::Result<()> {
         let live = api.request(&format!("/guilds/{guild}"), None)?;
-        if live["id"] != guild || live["name"] != expected_guild || live["owner_id"] != owner {
+        if live["id"] != guild
+            || expected_guild
+                .as_ref()
+                .is_some_and(|name| live["name"] != *name)
+            || live["owner_id"] != owner
+        {
             return Err(invalid("guild is not owned by the enrolled human"));
         }
         Ok(())
     };
     verify_guild()?;
     let channels = api.request(&format!("/guilds/{guild}/channels"), None)?;
-    let parent =
-        id(only(array(&channels)?.iter().filter(|row| {
-            row["guild_id"] == guild && row["type"] == 0
-        }))?)?;
+    let parent = id(only(array(&channels)?.iter().filter(|row| {
+        row["guild_id"] == guild
+            && row["type"] == 0
+            && (!read_only
+                || saved
+                    .as_ref()
+                    .is_some_and(|value| row["id"] == value["parent"]))
+    }))?)?;
     let rights = api.request(
         &format!("/channels/{parent}/permissions/member/{app}"),
         None,
@@ -100,12 +120,11 @@ fn personal_guild_text_and_attachment() -> io::Result<()> {
     if bits & 8 == 0 && bits & required != required {
         return Err(invalid("private test thread permissions are unavailable"));
     }
-    let mut state = match runtime::read_json(&receipt) {
-        Ok(saved) => saved,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+    let mut state = match saved {
+        Some(value) => value,
+        None => {
             json!({"guild":guild,"parent":parent,"app":app,"name":format!("swarm-transport-{}", &runtime::random_id()?[..12])})
         }
-        Err(error) => return Err(error),
     };
     if state["guild"] != guild || state["parent"] != parent || state["app"] != app {
         return Err(invalid("fixture evidence belongs to another placement"));

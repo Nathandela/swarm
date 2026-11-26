@@ -13,4 +13,4 @@ export SWARM_LIVE_BOT_NAME SWARM_LIVE_GUILD_NAME SWARM_LIVE_EVIDENCE_DIR
 cargo test --locked --bin swarm discord::rest::live_transport::personal_guild_text_and_attachment -- --exact --ignored --nocapture
 ```
 
-Set `SWARM_LIVE_RECHECK_ONLY=1` and reuse the evidence directory to verify the recorded messages and archived thread without issuing a Discord write. Voice requires consent from every participant at the time of the call.
+Set `SWARM_LIVE_RECHECK_ONLY=1` and reuse the evidence directory to verify the recorded messages and archived thread without issuing a Discord write. This mode uses the exact saved guild and parent IDs. The enrolled application and current guild owner must still match. The November 26 recheck verified both original messages and the original CSV digest while the existing Gateway stayed connected. Its receipt bytes stayed unchanged. Voice requires consent from every participant at the time of the call.
