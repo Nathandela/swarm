@@ -18,6 +18,13 @@ const BRIDGE_ENV: &str = "SWARM_TEAMMATE_WORKER_BRIDGE";
 const SESSION_ENV: &str = "SWARM_SESSION_ID";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const USAGE: &str = "swarm teammate message --text TEXT [--kind needs-input|complete] [--id MESSAGE_ID]\nswarm teammate message --kind complete --file PATH [--file PATH ...] [--text CAPTION] [--id MESSAGE_ID]\nswarm teammate receipt --id MESSAGE_ID\nswarm teammate reply --id MESSAGE_ID [--wait 90s]\nswarm dispatcher-guide    read the dispatcher workflow";
+const MESSAGE_HELP: &str = concat!(
+    "Usage of teammate message:\n",
+    "  -file value\n    \tattach a file from this worker's checkout, such as PDF, image, CSV, Office, ZIP or text; programs, scripts and web pages are refused (repeatable, up to 10 files, 8 MiB total)\n",
+    "  -id string\n    \tmessage ID from the original attempt when retrying\n",
+    "  -kind string\n    \tneeds-input or complete\n",
+    "  -text string\n    \tmessage to your own manager\n",
+);
 
 pub(crate) fn valid_text(text: &str) -> bool {
     !text.trim().is_empty() && text.len() <= 4096 && !text.contains('\0')
@@ -89,7 +96,11 @@ pub(crate) fn run(args: &[String]) -> u8 {
     });
     match result {
         Err(err) if err.is_empty() => {
-            println!("{USAGE}");
+            if action == "message" {
+                eprint!("{MESSAGE_HELP}");
+            } else {
+                println!("{USAGE}");
+            }
             return 0;
         }
         Err(err) => {
@@ -102,15 +113,17 @@ pub(crate) fn run(args: &[String]) -> u8 {
         }
         _ => {}
     }
-    if action == "message"
-        && (!valid_kind(kind)
-            || text.is_empty() && files.is_empty()
-            || !files.is_empty() && kind != "complete")
-    {
-        eprintln!(
-            "teammate: provide --text TEXT or attach a file with --kind complete --file PATH"
-        );
-        return 2;
+    if action == "message" {
+        if !valid_kind(kind) || text.is_empty() && files.is_empty() {
+            eprintln!(
+                "teammate: provide --text TEXT or attach a file with --kind complete --file PATH"
+            );
+            return 2;
+        }
+        if !files.is_empty() && kind != "complete" {
+            eprintln!("teammate: files require --kind complete");
+            return 2;
+        }
     }
     if action != "message" && id.is_empty() {
         eprintln!("teammate: expected {action} --id MESSAGE_ID");

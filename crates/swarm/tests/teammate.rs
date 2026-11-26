@@ -30,6 +30,38 @@ fn a_scheduled_worker_without_a_manager_is_directed_to_schedule_complete() {
     );
 }
 
+#[test]
+fn worker_file_help_and_kind_refusal_match_go() {
+    for flag in ["-h", "--help"] {
+        let output = Command::new(support::executable())
+            .args(["teammate", "message", flag])
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        let help = String::from_utf8(output.stderr).unwrap();
+        assert!(help.starts_with("Usage of teammate message:\n"));
+        assert!(help.contains("PDF, image, CSV, Office, ZIP or text"));
+        assert!(help.contains("repeatable, up to 10 files, 8 MiB total"));
+    }
+    let output = Command::new(support::executable())
+        .args([
+            "teammate",
+            "message",
+            "--kind",
+            "needs-input",
+            "--file",
+            "report.txt",
+        ])
+        .env_clear()
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"teammate: files require --kind complete\n");
+}
+
 fn frame(stream: &mut impl Read) -> Value {
     let mut size = [0; 4];
     stream.read_exact(&mut size).unwrap();
