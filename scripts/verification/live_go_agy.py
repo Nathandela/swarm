@@ -17,7 +17,7 @@ from rust_agy_handoff import HandoffModel, eventually
 from stopped_go_state import daemon, disk, fixture_env, listed, owner, private, refused
 
 
-def rehearse(go, rust, native, root):
+def rehearse(go, rust, native, root, cold=False):
     home, work, tools, state = (root / name for name in ("home", "work", "bin", "state"))
     for path in (home, work, tools, state):
         path.mkdir(mode=0o700)
@@ -62,6 +62,7 @@ def rehearse(go, rust, native, root):
 
     go, rust = bounded(go, "go"), bounded(rust, "rust")
     active = None
+    rust_held = None
 
     def visible(env):
         return "\n".join(snapshot(env, active)["lines"])
@@ -145,8 +146,60 @@ def rehearse(go, rust, native, root):
             eventually(lambda: disk(session / "meta.json")["status"]["Process"] == "exited", "native agy exit")
             assert disk(session / "meta.json")["conversation_id"] == thread
         print("same session, native conversation and PTY across Go → Rust → Go", flush=True)
+        if cold:
+            cold_prompt = "AGY_RUST_CREATED_FOR_GO_24F4"
+            with daemon(rust, rust_env, root / "rust-create.log"):
+                created = owner(rust_env, {"op":"launch", "launch":request | {
+                    "name":"Rust-created agy", "initial_prompt":"Please reply with the fixture summary. " + cold_prompt
+                }}, timeout=30)
+                assert created["op"] == "launch", created
+                rust_held = active = created["session"]["id"]
+                local = active.split("/")[-1]
+                candidate_state = state / "rust-v1" / local
+                original = transcript_for(cold_prompt)
+                native_id = original.parents[2].name
+                assert native_id != thread
+            export = [rust, "daemon", "export-stopped-go"]
+            live_refusal = subprocess.run(export, env=rust_env, capture_output=True, timeout=12)
+            assert live_refusal.returncode and b"live or uncertain Rust shim" in live_refusal.stderr, live_refusal
+            with daemon(rust, rust_env, root / "rust-drain.log"):
+                input_bytes(rust_env, b"/exit", enter=True)
+                eventually(lambda: (candidate_state / "go-stop-proof.json").exists()
+                           and any(row["id"] == active and row["status"]["Process"] == "exited"
+                                   for row in listed(rust_env)), "proved Rust agy stop")
+            rust_held = None
+            original_hold = original.with_name("unpublished-fixture.jsonl")
+            original.rename(original_hold)
+            try:
+                result = subprocess.run(export, env=rust_env, capture_output=True, timeout=12)
+                assert result.returncode and not (state / local).exists(), result
+            finally:
+                original_hold.rename(original)
+            subprocess.run(export, env=rust_env, check=True, timeout=12)
+            assert not (state / local / "shim-launch.json").exists()
+            with daemon(go, go_env, root / "go-native-resume.log"):
+                offered = owner(go_env, {"op":"launch","launch":request | {
+                    "name":"Restored Rust agy", "initial_prompt":"",
+                    "options":{"resume_from": active}
+                }}, timeout=40)
+                assert offered["op"] == "launch", offered
+                active = offered["session"]["id"]
+                session = state / active.split("/")[-1]
+                resumed_prompt = "AGY_PINNED_GO_RESUMED_RUST_24F5"
+                eventually(lambda: "trust the contents" in visible(go_env) or "Antigravity" in visible(go_env),
+                           "restored native terminal")
+                if "trust the contents" in visible(go_env):
+                    input_bytes(go_env, b"\r")
+                input_bytes(go_env, resumed_prompt.encode(), enter=True)
+                assert transcript_for(resumed_prompt) == original
+                input_bytes(go_env, b"/exit", enter=True)
+                eventually(lambda: (session / "exit.json").exists(), "restored agy stopped")
+            print("pinned Go resumed the stopped Rust-created agy conversation", flush=True)
     finally:
-        if active and not (session / "exit.json").exists():
+        if rust_held:
+            with daemon(rust, rust_env, root / "rust-cleanup.log"):
+                assert owner(rust_env, {"op":"kill", "session_id":rust_held})["op"] == "ok"
+        if active and not rust_held and not (session / "exit.json").exists():
             with daemon(go, go_env, root / "cleanup.log"):
                 assert owner(go_env, {"op":"kill", "session_id":active})["op"] == "ok"
                 eventually(lambda: (session / "exit.json").exists(), "fixture cleanup")
@@ -156,4 +209,4 @@ def rehearse(go, rust, native, root):
 
 if __name__ == "__main__":
     os.umask(0o077)
-    rehearse(*(Path(arg).resolve(strict=True) for arg in sys.argv[1:]))
+    rehearse(*(Path(arg).resolve(strict=True) for arg in sys.argv[1:5]), cold="--cold" in sys.argv[5:])

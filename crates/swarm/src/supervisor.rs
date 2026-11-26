@@ -250,7 +250,10 @@ impl State {
         if self.stopped_go.is_some()
             && (managed.is_some()
                 || mailbox.is_some()
-                || !matches!(field(&request["launch"], "agent"), "claude" | "claude-code")
+                || !matches!(
+                    field(&request["launch"], "agent"),
+                    "claude" | "claude-code" | "agy"
+                )
                 || request["launch"]["worktree"] == true
                 || [
                     "resume_from",
@@ -265,7 +268,7 @@ impl State {
                     .any(|key| !field(&request["launch"], key).is_empty()))
         {
             return Err(io::Error::other(
-                "stopped rollback supports ordinary, non-worktree Claude launches",
+                "stopped rollback supports fresh ordinary, non-worktree Claude or agy launches",
             ));
         }
         if managed.is_some()

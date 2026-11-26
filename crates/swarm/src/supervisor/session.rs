@@ -56,7 +56,9 @@ pub(super) struct Prepared {
 
 impl Prepared {
     pub(super) fn bind_go_rollback(&mut self, request: &Value) -> io::Result<()> {
-        if self.provider.agent != "claude"
+        if !matches!(self.provider.agent, "claude" | "agy")
+            || !self.agy_launch["options"]["resume_conversation_id"].is_null()
+            || !self.agy_launch["resumed_from"].is_null()
             || self.isolated
             || self.lineage != json!({})
             || !self.manager.is_null()
@@ -66,7 +68,7 @@ impl Prepared {
             || !self.resume.is_null()
         {
             return Err(io::Error::other(
-                "stopped rollback supports ordinary, non-worktree Claude launches",
+                "stopped rollback supports fresh ordinary, non-worktree Claude or agy launches",
             ));
         }
         self.go_rollback = json!({"schema":1, "options":request["launch"]["options"],

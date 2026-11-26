@@ -41,16 +41,21 @@ pub(in crate::supervisor) fn run() -> io::Result<()> {
         .map(|dir| {
             let attempt = validate(&dir)?;
             let plan = attempt.plan(&root_dir, &imported, deleted.contains(&attempt.id))?;
-            Ok((attempt, plan))
+            let proof = if matches!(plan, Plan::Stage(_)) {
+                attempt.agy_resume_proof()?
+            } else {
+                None
+            };
+            Ok((attempt, plan, proof))
         })
         .collect::<io::Result<Vec<_>>>()?;
     // Verify all rows before taking publication action on any.
-    for (attempt, plan) in prepared {
+    for (attempt, plan, proof) in prepared {
         if !same_file(&root_dir.metadata()?, &fs::symlink_metadata(&root)?) {
             return Err(io::Error::other("rollback root changed while exporting"));
         }
         if let Plan::Stage(intent) = plan {
-            attempt.export(&root_dir, intent)?;
+            attempt.export(&root_dir, intent, proof.as_ref())?;
         }
         root_dir.sync_all()?;
         let marker = attempt.marker();
@@ -178,8 +183,10 @@ fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
         || config["id"] != id
         || !runtime::valid_id(ipc::field(&config, "token"))
         || config["go_rollback"]["schema"] != 1
-        || config["provider"]["name"] != "claude"
+        || !matches!(ipc::field(&config["provider"], "name"), "claude" | "agy")
         || config["provider"]["mode"] != "classic"
+        || !config["agy_launch"]["options"]["resume_conversation_id"].is_null()
+        || !config["agy_launch"]["resumed_from"].is_null()
         || !config["manager"].is_null()
         || !config["mailbox"].is_null()
         || !config["claude_resume"].is_null()
@@ -363,7 +370,35 @@ impl Attempt {
         Ok(Plan::Stage(intent))
     }
 
-    fn export(&self, root: &File, intent: Option<Intent>) -> io::Result<()> {
+    fn agy_resume_proof(&self) -> io::Result<Option<Value>> {
+        if self.meta["agent_type"] != "agy" {
+            return Ok(None);
+        }
+        let proof = crate::providers::agy::handoff::source(&self.dir)?;
+        let home = Path::new(ipc::field(&proof, "home"));
+        if std::env::var_os("HOME").as_deref() != Some(home.as_os_str())
+            || !self.meta["env"].as_array().is_some_and(|env| {
+                env.iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(|entry| entry.strip_prefix("HOME="))
+                    .eq([ipc::field(&proof, "home")])
+            })
+            || proof["conversation"] != self.meta["conversation_id"]
+            || proof["cwd"] != self.meta["cwd"]
+        {
+            return Err(io::Error::other(
+                "agy rollback requires the bound source home and conversation",
+            ));
+        }
+        Ok(Some(proof))
+    }
+
+    fn export(
+        &self,
+        root: &File,
+        intent: Option<Intent>,
+        agy_proof: Option<&Value>,
+    ) -> io::Result<()> {
         let source = reopen_dir(&self.dir)?;
         let mut intent = match intent {
             Some(intent) => intent,
@@ -438,6 +473,9 @@ impl Attempt {
         }
         staging.sync_all()?;
         verify_stage()?;
+        if let Some(proof) = agy_proof {
+            crate::providers::agy::handoff::verify(&self.dir, proof)?;
+        }
         let dest = CString::new(self.id.as_str())?;
         let source_fd = source.as_raw_fd();
         let root_fd = root.as_raw_fd();
@@ -511,9 +549,15 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
         .ok_or_else(|| io::Error::other("Rust launch has no observed process exit"))?;
     let observation = runtime::read_json(&dir.join("observation.json"))?;
     let conversation = &observation["conversation_id"];
-    if observation["token"] != token
-        || crate::providers::claude::conversation_id(&json!({"session_id":conversation})).is_none()
-    {
+    let agent = ipc::field(&config["provider"], "name");
+    let valid_conversation = if agent == "agy" {
+        conversation
+            .as_str()
+            .is_some_and(crate::providers::codex_receipt::canonical_thread)
+    } else {
+        crate::providers::claude::conversation_id(&json!({"session_id":conversation})).is_some()
+    };
+    if observation["token"] != token || !valid_conversation {
         return Err(io::Error::other(format!(
             "Rust provider conversation identity unavailable for {id}"
         )));
@@ -525,7 +569,7 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
         id: id.into(),
         token: token.into(),
         meta: json!({
-            "schema_version":1, "id":id, "agent_type":"claude", "name":config["name"],
+            "schema_version":1, "id":id, "agent_type":agent, "name":config["name"],
             "name_set_at":config["name_set_at"].as_str().or_else(|| created.as_str()),
             "tag":config["tag"], "cwd":config["cwd"], "agent_cwd":"",
             "launch_options":config["go_rollback"]["options"], "env":config["go_rollback"]["env"],
