@@ -1,4 +1,6 @@
 mod handoff;
+pub(crate) mod mail;
+pub(crate) mod mail_store;
 pub(crate) mod manager;
 mod pilot_journal;
 mod reliable;
@@ -178,6 +180,7 @@ impl State {
         request: &Value,
         caps: &[&str],
         managed: Option<Value>,
+        mailbox: Option<Value>,
     ) -> io::Result<Arc<Session>> {
         if managed.is_some()
             && runtime::launch_env(&request["launch"]["env"])
@@ -258,8 +261,15 @@ impl State {
             }
             session.expand_agy_resume(&mut request, &source)?;
         }
-        let (bound, source) = handoff::bind(self, &request)?;
+        let (bound, source) = if mailbox.is_some() {
+            (request, None)
+        } else {
+            handoff::bind(self, &request)?
+        };
         let mut prepared = Session::prepare(&bound)?;
+        if let Some(scope) = mailbox {
+            prepared.bind_mail(scope);
+        }
         if let Some(scope) = managed.as_ref() {
             if source.is_some() {
                 return Err(io::Error::other(
@@ -580,7 +590,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
-            worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
+            *cap == crate::teammate::MAIL_CAP
+                || worker_origin_available
+                    && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
                 || guild_worker_available && *cap == "worker-discord-guild-origin-v1"
                 || manager_available
                     && matches!(
@@ -731,7 +743,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     .and_then(|v| reply(&writer, state, v))
             }
             "launch" => {
-                let message = match state.reserve(&request,&caps,None) {
+                let message = match state.reserve(&request,&caps,None,None) {
                     Err(e) => {
                         json!({"op":"error","error_code":"invalid_field","error":e.to_string()})
                     }
@@ -789,6 +801,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
+            "worker_mail" if caps.contains(&crate::teammate::MAIL_CAP) => mail::request(state,&request).and_then(|body| reply(&writer,state,body)),
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");
@@ -1109,13 +1122,13 @@ mod manager_reservation_tests {
             .unwrap()
             .push(json!("OPENAI_API_KEY=fixture-secret"));
         let err = isolated
-            .reserve(&wrong_account, &[], Some(scope.clone()))
+            .reserve(&wrong_account, &[], Some(scope.clone()), None)
             .err()
             .unwrap();
         assert!(err.to_string().contains("API-key account substitution"));
         assert!(!err.to_string().contains("fixture-secret"));
         let reserved = isolated
-            .reserve(&request, &[], Some(scope.clone()))
+            .reserve(&request, &[], Some(scope.clone()), None)
             .unwrap();
         let id = reserved.id.clone();
         drop(isolated);
@@ -1129,10 +1142,14 @@ mod manager_reservation_tests {
         };
         let mut distinct = scope.clone();
         distinct["launch_operation"] = json!("another-operation");
-        assert!(recovered().reserve(&request, &[], Some(distinct)).is_err());
+        assert!(
+            recovered()
+                .reserve(&request, &[], Some(distinct), None)
+                .is_err()
+        );
         assert_eq!(
             recovered()
-                .reserve(&request, &[], Some(scope.clone()))
+                .reserve(&request, &[], Some(scope.clone()), None)
                 .unwrap()
                 .id,
             id
@@ -1144,14 +1161,18 @@ mod manager_reservation_tests {
         fs::remove_file(marker).unwrap();
         assert_eq!(
             recovered()
-                .reserve(&request, &[], Some(scope.clone()))
+                .reserve(&request, &[], Some(scope.clone()), None)
                 .unwrap()
                 .id,
             id
         );
 
         fs::write(root.join(&id).join("claimed"), b"").unwrap();
-        assert!(recovered().reserve(&request, &[], Some(scope)).is_err());
+        assert!(
+            recovered()
+                .reserve(&request, &[], Some(scope), None)
+                .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

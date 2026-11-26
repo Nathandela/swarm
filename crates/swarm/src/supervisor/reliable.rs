@@ -155,8 +155,18 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
         scope["launch_operation"] = json!(id);
         scope["request_hash"] = json!(hash);
     }
+    let mailbox = match super::mail::launch_scope(state, &launch, caps, id) {
+        Ok(scope) => scope,
+        Err(err) => return Ok(refusal(id, "invalid_field", &err.to_string())),
+    };
+    if mailbox.is_some() {
+        launch
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("dispatcher_proof");
+    }
     let is_manager = managed.is_some();
-    let session = match state.reserve(&json!({"launch":launch}), caps, managed) {
+    let session = match state.reserve(&json!({"launch":launch}), caps, managed, mailbox) {
         Ok(s) => s,
         Err(e) => return Ok(refusal(id, "invalid_field", &format!("launch: {e}"))),
     };

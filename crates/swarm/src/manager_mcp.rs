@@ -70,15 +70,23 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                     "properties":{"output_id":{"type":"string"},"sequence":{"type":"integer","const":1},
                         "text":{"type":"string"},"final":{"type":"boolean","const":true}},
                     "required":["output_id","sequence","text","final"]}
+            },{
+                "name":"swarm_read_note","description":"List worker notes for the active turn, or ingest one exact selected note.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"},"session":{"type":"string"},"session_instance":{"type":"string"}}}
+            },{
+                "name":"swarm_reply","description":"Answer a needs-input worker note bound to the active turn.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"},"session":{"type":"string"},"session_instance":{"type":"string"},"text":{"type":"string"}},"required":["text"]}
             }]}}),
             Some("tools/call") => {
                 let params = &request["params"];
-                let reply = if params["name"] == "publish"
-                    && params["arguments"].is_object()
+                let reply = if matches!(
+                    params["name"].as_str(),
+                    Some("publish" | "swarm_read_note" | "swarm_reply")
+                ) && params["arguments"].is_object()
                     && params["_meta"].is_object()
                 {
                     let call = json!({"version":1,"conversation_id":conversation,"session_id":session,
-                        "call":{"name":"publish","arguments":params["arguments"],"meta":params["_meta"]}});
+                        "call":{"name":params["name"],"arguments":params["arguments"],"meta":params["_meta"]}});
                     bridge_call(socket, &credential, &call)
                 } else {
                     Err(refusal("unsupported or unproved manager tool call"))

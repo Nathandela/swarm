@@ -38,3 +38,25 @@ A guild worker uses connector-owned REST checks immediately before the native wr
 Hermes v0.22.5 loopback probe of the pinned Rust lane. Session, profile,
 operation and admission identifiers are redacted. In particular the epoch is
 a positive number and the queued execution generation is explicitly null.
+
+## Ordinary worker mailbox
+
+The text fixture launches a real Rust worker through the owner protocol. The
+worker CLI queues a question, the active manager reads the bound mailbox and
+replies through its authenticated tool, and the worker reads the answer back.
+An exact launch retry returns the same worker, a wrong proof is refused,
+and a repeated question or reply read preserves its original receipt.
+
+Build the fake app-server from the f266 source as above, using
+`codex-worker-mail.patch` instead of `codex-manager.patch`. Run the native Rust
+oracle with `SWARM_NATIVE_MAIL_FIXTURE=1`, `SWARM_FAKE_CODEX_MANAGER_PROOF=1`,
+and the resulting fake app-server as `SWARM_FAKE_CODEX`.
+
+For the storage comparison, copy
+`scripts/verification/worker_mail_oracle/main.go` into the pinned Go source
+under the same relative path and build it there. Run
+`SWARM_GO_WORKER_MAIL_FIXTURE=/path/to/oracle cargo test --locked -p swarm go_and_rust_share_worker_notes -- --ignored`.
+The fixture shares one isolated bbolt file across sequential Go and Rust operations.
+
+The text path supports worker notes and answers during the proved parent turn.
+Post-turn manager wake and file-bearing notes have separate qualification.

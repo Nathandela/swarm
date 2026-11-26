@@ -161,6 +161,23 @@ fn serve(dir: &Path) -> io::Result<()> {
         Command::new(executable)
     };
     let mut environment = runtime::launch_env(&Value::Null);
+    let owner_socket = field(&bootstrap, "owner_socket");
+    if !owner_socket.is_empty() && (!config["manager"].is_null() || !config["mailbox"].is_null()) {
+        environment.push(("SWARM_DAEMON_SOCK".into(), owner_socket.into()));
+        environment.push(("SWARM_SESSION_ID".into(), field(&config, "id").into()));
+        if !config["manager"].is_null() {
+            environment.push((
+                "SWARM_DISPATCHER_SPAWN_PROOF".into(),
+                crate::supervisor::mail::proof(token, "spawn"),
+            ));
+        } else {
+            environment.push((crate::teammate::SOCKET_ENV.into(), owner_socket.into()));
+            environment.push((
+                crate::teammate::PROOF_ENV.into(),
+                crate::supervisor::mail::proof(token, "worker"),
+            ));
+        }
+    }
     if provider["name"] == "hermes" {
         environment.extend(native::origins(&Value::Null, hermes_native)?);
     }
