@@ -122,6 +122,16 @@ impl Manager {
         Ok(session.clone())
     }
 
+    pub(super) fn can_recover_quota(&self) -> bool {
+        let caps = [
+            "manager-retire",
+            "manager-retire-resume-v1",
+            crate::supervisor::manager::QUOTA_RETIRE_CAP,
+        ];
+        Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)
+            .is_ok_and(|client| self.cfg.check_supervisor(&client, &caps).is_ok())
+    }
+
     pub(super) fn can_retire(&self) -> bool {
         let caps = ["manager-retire", "manager-retire-resume-v1"];
         Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)
@@ -129,17 +139,18 @@ impl Manager {
     }
 
     pub(super) fn retirement(&self, checkpoint: &Value, status_only: bool) -> io::Result<String> {
-        let mut client = Client::dial(
-            Path::new(self.cfg.text("daemon_socket")),
-            &["manager-retire"],
-        )?;
-        self.cfg.check_supervisor(&client, &["manager-retire"])?;
+        let request = &checkpoint["request"];
+        let mut caps = vec!["manager-retire"];
+        if request["replacement"] == crate::supervisor::manager::QUOTA_REPLACEMENT {
+            caps.push(crate::supervisor::manager::QUOTA_RETIRE_CAP);
+        }
+        let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
         let op = if status_only {
             "manager_retire_status"
         } else {
             "manager_retire"
         };
-        let request = &checkpoint["request"];
         let session = &request["binding"]["session"];
         let id = &checkpoint["operation_id"];
         let reply = client.request_body(
@@ -1507,6 +1518,167 @@ mod tests {
                 forged["text"] = json!("fabricated Discord text");
                 let err = manager.send(&operation, &forged).unwrap_err();
                 assert!(err.to_string().contains("exact connector cutover"));
+            }
+            if std::env::var_os("SWARM_MANAGER_QUOTA_FIXTURE").is_some() {
+                assert!(rust.is_some(), "quota fixture requires the Rust supervisor");
+                drop(_listener);
+                let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &enrollment)
+                    .unwrap()
+                    .unwrap();
+                let fake = FixtureAudience {
+                    source,
+                    posts: Default::default(),
+                    file_ack: Default::default(),
+                    forwarded_revocation: None,
+                    source_deletion: None,
+                };
+                fs::write(root.join(".fixture-quota"), "").unwrap();
+                manager.send(&operation, &composer).unwrap();
+                let local = id.split_once('/').unwrap().1;
+                let observation = state.join("rust-v1").join(local).join("observation.json");
+                let deadline = Instant::now() + Duration::from_secs(8);
+                while !runtime::read_json(&observation)
+                    .is_ok_and(|view| view["requests_available"] == true)
+                {
+                    assert!(Instant::now() < deadline, "Codex observer did not join");
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                fs::write(root.join(".fixture-quota-fail"), "").unwrap();
+                loop {
+                    if let Ok(current) = manager.runtime(id, instance, &request)
+                        && current["provider_exhausted"] == true
+                    {
+                        assert_eq!(current["ready_for_input"], false);
+                        assert_eq!(
+                            current["retirement_ready"],
+                            false,
+                            "{current} {:?}",
+                            runtime::read_json(&observation)
+                        );
+                        assert_eq!(
+                            current["turn"]["native_input_id"],
+                            composer["manager_admission"]["nonce"]
+                        );
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "exact quota evidence did not arrive"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert!(dispatcher.tick(&cfg, &mut inbox, &fake).is_err());
+                assert!(inbox.manager()["retirement"].is_null());
+                assert_eq!(inbox.manager()["input"]["operation"], operation);
+                let old = observation.parent().unwrap();
+                let old_meta = runtime::read_json(&old.join("session.json")).unwrap();
+                let mut attached = std::os::unix::net::UnixStream::connect(old.join("p")).unwrap();
+                attached
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                runtime::write_control(
+                    &mut attached,
+                    &json!({"type":"hello",
+                    "wire_version":runtime::SHIM_VERSION,"token":old_meta["token"]}),
+                )
+                .unwrap();
+                assert_eq!(
+                    runtime::read_control(&mut attached).unwrap()["type"],
+                    "hello"
+                );
+                runtime::write_control(&mut attached, &json!({"type":"attach"})).unwrap();
+                assert_eq!(
+                    runtime::read_control(&mut attached).unwrap()["type"],
+                    "snapshot_info"
+                );
+                fs::write(root.join(".fixture-quota-clear"), "").unwrap();
+                let deadline = Instant::now() + Duration::from_secs(8);
+                while !manager
+                    .runtime(id, instance, &request)
+                    .is_ok_and(|status| status["retirement_ready"] == true)
+                {
+                    assert!(Instant::now() < deadline, "native request did not clear");
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                let checkpoint = inbox.manager()["retirement"].clone();
+                assert!(checkpoint.is_object());
+                assert!(dispatcher.tick(&cfg, &mut inbox, &fake).is_err());
+                assert_eq!(manager.retirement(&checkpoint, true).unwrap(), "unknown");
+                assert!(!old.join("exit.json").exists());
+                drop(attached);
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while inbox.manager()["generation"] == 1 {
+                    let tick = dispatcher.tick(&cfg, &mut inbox, &fake);
+                    assert!(
+                        Instant::now() < deadline,
+                        "old manager did not retire: {tick:?}"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                assert!(inbox.manager()["session"].is_null());
+                assert_eq!(manager.retirement(&checkpoint, true).unwrap(), "retired");
+                let auth_file = native_home.join("auth.json");
+                let original = runtime::read_json(&auth_file).unwrap();
+                let mut changed = original.clone();
+                changed["tokens"]["account_id"] = json!("another-fixture-account");
+                runtime::write_json(&auth_file, &changed).unwrap();
+                let denied = dispatcher.tick(&cfg, &mut inbox, &fake).unwrap_err();
+                assert!(
+                    denied.to_string().contains("different native account"),
+                    "{denied}"
+                );
+                assert!(inbox.manager()["session"].is_null());
+                runtime::write_json(&auth_file, &original).unwrap();
+                loop {
+                    let tick = dispatcher.tick(&cfg, &mut inbox, &fake);
+                    let current = inbox.manager();
+                    if current["generation"] == 2 && current["binding"].is_object() {
+                        assert_ne!(current["session"], id);
+                        assert_eq!(
+                            current["binding"]["login_epoch"],
+                            native["binding"]["login_epoch"]
+                        );
+                        assert_eq!(
+                            current["binding"]["native_session_id"],
+                            native["binding"]["native_session_id"]
+                        );
+                        assert_eq!(
+                            current["history"][0]["exhausted_input"]["operation"],
+                            operation
+                        );
+                        assert_eq!(
+                            current["history"][0]["exhausted_input"]["composer"],
+                            composer
+                        );
+                        assert!(current["input"].is_null());
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "quota recovery timed out: {tick:?} {current}"
+                    );
+                    std::thread::sleep(Duration::from_millis(75));
+                }
+                assert_eq!(
+                    manager
+                        .dial()
+                        .unwrap()
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .filter(
+                            |row| row["role"] == "manager" && row["status"]["Process"] == "running"
+                        )
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    fs::read_to_string(root.join(".fixture-quota-starts")).unwrap(),
+                    "start\n"
+                );
+                assert!(fake.posts.borrow().is_empty());
+                return;
             }
             let park_fixture = std::env::var_os("SWARM_NATIVE_MAIL_PARK_FIXTURE").is_some();
             let wake_fixture =

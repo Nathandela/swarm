@@ -224,11 +224,11 @@ impl Dispatcher {
             state["binding"] = status["binding"].clone();
             inbox.set_manager(state.clone())?;
         }
-        if state["binding"] != status["binding"]
-            || status["turn"]["externally_steered"] == true
-            || status["provider_exhausted"] == true
-        {
+        if state["binding"] != status["binding"] || status["turn"]["externally_steered"] == true {
             return Err(invalid("native manager requires owner reconciliation"));
+        }
+        if status["provider_exhausted"] == true {
+            return self.checkpoint_quota(inbox, state, &status);
         }
         self.advance_worker_send(cfg, inbox, api, &mut state)?;
         if !state["input"].is_null() {
@@ -433,19 +433,86 @@ impl Dispatcher {
         if since.elapsed() < Duration::from_secs(120) || !self.owner.can_retire() {
             return Ok(());
         }
-        let mut state = inbox.manager().clone();
+        self.checkpoint_retirement(inbox, inbox.manager().clone(), status, None)
+    }
+
+    fn checkpoint_quota(
+        &self,
+        inbox: &mut Inbox,
+        mut state: Value,
+        status: &Value,
+    ) -> io::Result<()> {
+        let turn = &status["turn"];
+        let input = &state["input"];
+        if !quota_input_settled(&state, turn) || !inbox.pending_publications().is_empty() {
+            return Err(invalid(
+                "Codex quota exhausted with unresolved dispatcher effects",
+            ));
+        }
+        if status["retirement_ready"] != true || !self.owner.can_recover_quota() {
+            return Err(invalid(
+                "Codex quota exhausted without quiescent native retirement proof",
+            ));
+        }
+        for action in state["worker_actions"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(_, action)| action)
+            .filter(|action| action["kind"].is_null())
+        {
+            if self
+                .owner
+                .enrolled_worker(field(&state, "session"), action, false)?["state"]
+                != "created"
+            {
+                return Err(invalid(
+                    "Codex quota exhausted with an unconfirmed worker launch",
+                ));
+            }
+        }
+        if input.is_object() && input["turn_id"].is_null() {
+            // Mark the original source accepted from the same correlated runtime proof.
+            let source = field(input, "source_id").to_owned();
+            state["input"]["turn_id"] = turn["native_turn_id"].clone();
+            if state["input"]["worker_wake"].is_null() {
+                inbox.settled_input(&source, state.clone())?;
+            } else {
+                inbox.set_manager(state.clone())?;
+            }
+        }
+        self.checkpoint_retirement(
+            inbox,
+            state,
+            status,
+            Some(crate::supervisor::manager::QUOTA_REPLACEMENT),
+        )
+    }
+
+    fn checkpoint_retirement(
+        &self,
+        inbox: &mut Inbox,
+        mut state: Value,
+        status: &Value,
+        replacement: Option<&str>,
+    ) -> io::Result<()> {
         let checkpoint = hash(&json!([
             state["binding"],
             state["generation"],
             status["turn"],
             operation("retire")?
         ]))?;
-        let request = json!({"binding":state["binding"],"generation":state["generation"],
+        let mut request = json!({"binding":state["binding"],"generation":state["generation"],
             "checkpoint":checkpoint,"expected_turn":status["turn"]});
+        if let Some(reason) = replacement {
+            request["replacement"] = json!(reason);
+        }
         let id = crate::supervisor::manager::retirement_id(&request)?;
         state["retirement"] = json!({"operation_id":id,"request":request});
-        inbox.set_manager(state)?;
-        Ok(())
+        if replacement.is_some() {
+            state["retirement"]["exhausted_input"] = state["input"].take();
+        }
+        inbox.set_manager(state)
     }
 
     fn resume_parked(
@@ -457,19 +524,30 @@ impl Dispatcher {
     ) -> io::Result<()> {
         let checkpoint = &state["retirement"];
         let phase = self.owner.retirement(checkpoint, true)?;
+        let quota =
+            checkpoint["request"]["replacement"] == crate::supervisor::manager::QUOTA_REPLACEMENT;
+        if quota && phase != "retired" {
+            self.owner.retirement(checkpoint, false)?;
+            return Ok(());
+        }
         if matches!(phase.as_str(), "prepared" | "uncertain") {
             let _ = self.owner.retirement(checkpoint, false);
             return Ok(());
         }
-        let binding = &state["binding"];
-        let root = self.owner.supervisor_root()?;
-        let queued = inbox.next_prepared().is_some()
-            || voice && inbox.prepared_voice().is_some()
-            || !mail_store::pending(&root, field(binding, "conversation_id"), 0, |note| {
-                inbox.worker_mail_anchor(binding, note).is_some()
-                    && mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
-            })?
-            .is_empty();
+        let queued = if quota {
+            true
+        } else {
+            let binding = &state["binding"];
+            let root = self.owner.supervisor_root()?;
+            inbox.next_prepared().is_some()
+                || voice && inbox.prepared_voice().is_some()
+                || !mail_store::pending(&root, field(binding, "conversation_id"), 0, |note| {
+                    inbox.worker_mail_anchor(binding, note).is_some()
+                        && mail_wake::key(note)
+                            .is_ok_and(|key| state["worker_wakes"][key].is_null())
+                })?
+                .is_empty()
+        };
         if phase == "unknown" {
             if queued {
                 let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
@@ -495,6 +573,10 @@ impl Dispatcher {
             .and_then(|n| n.checked_add(1))
             .ok_or_else(|| invalid("manager generation exceeded"))?;
         let previous = checkpoint["request"].clone();
+        let mut retained = previous.clone();
+        if quota {
+            retained["exhausted_input"] = checkpoint["exhausted_input"].clone();
+        }
         let history = &mut state["history"];
         if history.is_null() {
             *history = json!([]);
@@ -502,7 +584,7 @@ impl Dispatcher {
         history
             .as_array_mut()
             .ok_or_else(|| invalid("manager retirement history changed"))?
-            .push(previous.clone());
+            .push(retained);
         state["generation"] = json!(generation);
         state["resume_request"] = previous;
         state["session"] = Value::Null;
@@ -1269,6 +1351,31 @@ impl Dispatcher {
         inbox.prepare_publication(&nonce, publication, state)?;
         Ok(json!({"output_id":output,"state":inbox.publication(&nonce)["state"]}))
     }
+}
+
+fn quota_input_settled(state: &Value, turn: &Value) -> bool {
+    let input = &state["input"];
+    let admission = &input["composer"]["manager_admission"];
+    let origin = &input["composer"]["origin"];
+    // Preserve the original file selection and voice admission until their effects can be reconciled.
+    let exact_input = input.is_null()
+        || admission["binding"] == state["binding"]
+            && admission["nonce"] == turn["native_input_id"]
+            && admission["expected_external_input"] == turn["external_input"]
+            && (input["turn_id"].is_null() || input["turn_id"] == turn["native_turn_id"])
+            && input["final_nonce"].is_null()
+            && input["selected_note"].is_null()
+            && origin["voice"].is_null()
+            && input["worker_wake"]["voice_origin"].is_null();
+    exact_input
+        && !state["worker_actions"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(_, action)| {
+                action["kind"] == "send"
+                    && !matches!(field(action, "state"), "native_accepted" | "rejected")
+            })
 }
 
 fn settle_worker_send(action: &mut Value, result: Value) {

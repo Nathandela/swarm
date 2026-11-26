@@ -9,6 +9,8 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 
 pub(crate) const NATIVE_CLI_CAP: &str = "manager-native-cli";
+pub(crate) const QUOTA_RETIRE_CAP: &str = "manager-quota-retire-v1";
+pub(crate) const QUOTA_REPLACEMENT: &str = "provider_exhausted";
 
 pub(crate) fn retirement_id(request: &Value) -> io::Result<String> {
     let mut binding = serde_json::Map::new();
@@ -38,8 +40,14 @@ pub(crate) fn retirement_id(request: &Value) -> io::Result<String> {
             normalized.insert(key.into(), turn[key].clone());
         }
     }
-    let canonical = json!({"binding":binding,"generation":request["generation"],
-        "checkpoint":request["checkpoint"],"expected_turn":normalized});
+    let mut canonical = json!({});
+    if !request["replacement"].is_null() {
+        canonical["replacement"] = request["replacement"].clone();
+    }
+    canonical["binding"] = json!(binding);
+    canonical["generation"] = request["generation"].clone();
+    canonical["checkpoint"] = request["checkpoint"].clone();
+    canonical["expected_turn"] = json!(normalized);
     Ok(format!(
         "manager-retire:{:x}",
         Sha256::digest(serde_json::to_vec(&canonical)?)
@@ -98,6 +106,22 @@ pub(super) fn launch_scope(state: &State, launch: &Value) -> io::Result<Value> {
     scope["credential_hash"] = json!(format!("{:x}", Sha256::digest(credential.as_bytes())));
     scope["endpoint_id"] = json!(state.endpoint);
     Ok(scope)
+}
+
+pub(crate) fn ambient_codex_account(scope: &Value) -> io::Result<()> {
+    let home = Path::new(field(scope, "account_home"));
+    let ambient_home = std::env::var_os("HOME");
+    if ambient_home.as_deref().map(Path::new) != Some(home)
+        || ["OPENAI_API_KEY", "CODEX_HOME"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        || scope["account"] != account(home)?
+    {
+        return Err(refusal(
+            "quota recovery requires its original ambient Codex account",
+        ));
+    }
+    crate::providers::codex::refuse_unqualified_origin(&Value::Null)
 }
 
 pub(crate) fn account(home: &Path) -> io::Result<String> {

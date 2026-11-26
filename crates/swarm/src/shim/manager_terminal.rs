@@ -27,6 +27,9 @@ pub(super) fn write(state: &State, bytes: &[u8]) -> io::Result<()> {
         state.terminal_input.store(true, super::Ordering::Release);
         return pty::input(&state.master, bytes);
     }
+    if state.dir.join("manager-retire.json").try_exists()? {
+        return Err(io::Error::other("manager retirement owns the terminal"));
+    }
     let mut input = state.manager_terminal.lock().unwrap();
     let path = state.dir.join(FILE);
     // Persist before the PTY write, whose failure may still mean bytes arrived.
