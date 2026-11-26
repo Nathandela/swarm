@@ -220,12 +220,7 @@ fn bridge_call(socket: &Path, credential: &str, call: &Value) -> io::Result<Valu
     stream.write_all(headers.as_bytes())?;
     stream.write_all(&body)?;
     let mut output = Vec::new();
-    let budget = if call["name"] == "swarm_create" && call["arguments"]["agent"] == "codex" {
-        crate::ipc::launch_timeout("codex") + Duration::from_secs(2)
-    } else {
-        Duration::from_secs(5)
-    };
-    DeadlineReader(&stream, Instant::now() + budget)
+    DeadlineReader(&stream, Instant::now() + response_budget(call))
         .take(16_385)
         .read_to_end(&mut output)?;
     let separator = output
@@ -244,6 +239,16 @@ fn bridge_call(socket: &Path, credential: &str, call: &Value) -> io::Result<Valu
     Ok(result["data"].clone())
 }
 
+fn response_budget(request: &Value) -> Duration {
+    let call = &request["call"];
+    if call["name"] == "swarm_create"
+        && let Some(agent @ ("codex" | "claude")) = call["arguments"]["agent"].as_str()
+    {
+        return crate::ipc::launch_timeout(agent) + Duration::from_secs(2);
+    }
+    Duration::from_secs(5)
+}
+
 fn refusal(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
@@ -254,6 +259,19 @@ mod tests {
     use crate::supervisor::runtime;
     use std::io::BufReader;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn enrolled_create_has_time_to_finish_launching() {
+        let mut request = json!({"version":1,"conversation_id":"discord-teammate-dt_fixture",
+            "session_id":"local","call":{"name":"swarm_create","arguments":{"agent":"codex"},
+            "meta":{"threadId":"native","callId":"observed"}}});
+        assert_eq!(response_budget(&request), Duration::from_secs(102));
+        request["call"]["arguments"]["agent"] = json!("claude");
+        assert_eq!(response_budget(&request), Duration::from_secs(12));
+        request["call"]["arguments"]["agent"] = json!("codex");
+        request["call"]["name"] = json!("swarm_status");
+        assert_eq!(response_budget(&request), Duration::from_secs(5));
+    }
 
     #[test]
     fn private_bridge_preserves_exact_call_coordinates_and_refuses_replaced_socket() {

@@ -2,6 +2,7 @@
 """Run the Rust dispatcher against installed Claude and a synthetic loopback model."""
 import argparse
 import base64
+from contextlib import ExitStack
 import hashlib
 import http.server
 import json
@@ -11,11 +12,13 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 from native_fixture_sandbox import guarded, check_guards
+from parity_runtime import fixtures
 from rust_claude_worker_input import save
 
 
@@ -27,9 +30,35 @@ def tool_result(request, identifier):
 
 def mcp_object(result):
     content = result.get("content", [])
-    if isinstance(content, str):
-        return json.loads(content)
-    return json.loads(next(block["text"] for block in content if block.get("type") == "text"))
+    assert not result.get("is_error"), f"MCP tool returned an error: {str(content)[:512]}"
+    text = content if isinstance(content, str) else next(
+        (block.get("text", "") for block in content if block.get("type") == "text"), ""
+    )
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise AssertionError(f"MCP tool returned non-JSON text: {text[:512]}") from error
+
+
+def wait_for_claude_worker_close(root, cwd, receipt):
+    worker = root / "s/rust-v1" / receipt["session"].split("/")[-1]
+    project = root / "h/.claude/projects" / re.sub(r"[^a-zA-Z0-9]", "-", str(cwd))
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        try:
+            observation = json.loads((worker / "observation.json").read_text())
+            conversation = observation.get("conversation_id")
+            if conversation and observation["status"]["Turn"] == "idle":
+                transcript = (project / f"{conversation}.jsonl").read_bytes()
+                for line in transcript.rpartition(b"\n")[0].splitlines():
+                    row = json.loads(line)
+                    if (row.get("type") == "system" and row.get("subtype") == "turn_duration"
+                            and row.get("sessionId") == conversation and row.get("cwd") == str(cwd)):
+                        return
+        except FileNotFoundError:
+            pass
+        time.sleep(0.05)
+    raise AssertionError("the exact Claude worker never recorded native turn completion")
 
 
 class Model(http.server.BaseHTTPRequestHandler):
@@ -118,6 +147,11 @@ class Model(http.server.BaseHTTPRequestHandler):
                          if (item := tool_result(request, f"toolu_fixture_send_read_{i}"))]
             attempts = [tool_result(request,f"toolu_fixture_enrolled_read_{i}") for i in range(5)]
             reads = [mcp_object(item) for item in attempts if item]
+            if reads and not self.server.codex:
+                receipt = mcp_object(created)
+                assert all(reads[-1][key] == receipt[key]
+                           for key in ("session", "session_instance", "attempt_id", "job_id"))
+                assert reads[0]["state"] == "pending", reads[0]
             after = tool_result(request,"toolu_fixture_enrolled_next")
             post_delete_status = tool_result(request,"toolu_fixture_deleted_status")
             post_delete_create = tool_result(request,"toolu_fixture_deleted_create")
@@ -176,6 +210,9 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert "Manager request was not confirmed." in json.dumps(wrong)
                 assert len(reads) < len(attempts), "native enrolled worker never provided a scoped result"
                 receipt = mcp_object(created)
+                if reads and not self.server.codex:
+                    self.server.claude_worker_pending.set()
+                    wait_for_claude_worker_close(self.server.release.parent, self.server.approved, receipt)
                 structured = ("swarm_read",f"toolu_fixture_enrolled_read_{len(reads)}",
                     dict(session=receipt["session"],session_instance=receipt["session_instance"],
                          source="native",job_id=receipt["job_id"],attempt_id=receipt["attempt_id"]))
@@ -304,6 +341,9 @@ class Model(http.server.BaseHTTPRequestHandler):
                                               stop_sequence=None), usage=usage)),
             ("message_stop", {}),
         ]
+        if (self.server.enrolled and not self.server.deleted and not self.server.codex and not main
+                and "Wait for the synthetic structured worker fixture." in content):
+            assert self.server.claude_worker_pending.wait(12), "manager never observed a pending Claude result"
         if self.server.park and main and not wake and not tool:
             end = time.monotonic() + 12
             while not self.server.release.is_file() and time.monotonic() < end:
@@ -316,8 +356,56 @@ class Model(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
 
 
+def macos_worker_command(root, state, executable, port):
+    from macos_codex_fixture import Guard
+
+    # A fixed rendezvous limits the sandbox to the single fixture worker's socket.
+    endpoint = root / "fixture-codex.sock"
+    guard = Guard(root, state, port, False, endpoints=[endpoint], codex_binary=executable)
+    launcher = f"""
+from pathlib import Path
+import os, re, sys
+
+args = sys.argv[1:]
+executable = {str(executable)!r}
+if args[:2] == ["app-server", "--listen"]:
+    requested = Path(args[2].removeprefix("unix://"))
+    if (not args[2].startswith("unix://") or requested.name != "b"
+        or requested.parent.parent != Path({str(state / "rust-v1")!r})
+        or not re.fullmatch("[0-9a-f]{{24}}", requested.parent.name)
+        or requested.parent.resolve(strict=True) != requested.parent):
+        raise ValueError("Codex requested a socket outside the fixture worker state")
+    requested.symlink_to({str(endpoint)!r})
+    args[2] = {f"unix://{endpoint}"!r}
+os.execv(executable, [executable, *args])
+"""
+    return guard, [sys.executable, "-c", launcher]
+
+
+def stop_fixture_sessions(roster, stop):
+    failures = {}
+    requested = set()
+    deadline = time.monotonic() + 15
+    while True:
+        survivors = [row["id"] for row in roster() if row["status"]["Process"] != "exited"]
+        if not survivors:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Owned fixture sessions survived: {survivors}; stop errors: {failures}")
+        for session in survivors:
+            if session in requested:
+                continue
+            try:
+                stop(session)
+                requested.add(session)
+            except (OSError, subprocess.SubprocessError) as error:
+                failures[session] = (getattr(error, "stderr", None) or str(error))[:512]
+        time.sleep(0.1)
+
+
 def verify(swarm, provider, test, root, server):
     server.release = root / ".fixture-release-turn"
+    server.claude_worker_pending = threading.Event()
     server.revoke = root / ".fixture-hide-forward"
     server.forwarded_checked = root / ".fixture-forwarded-checked"
     check_guards(root, [server.server_port])
@@ -325,6 +413,10 @@ def verify(swarm, provider, test, root, server):
     place = state / "discord"
     for directory in (home, project, tools, state, home / ".claude", place):
         directory.mkdir(mode=0o700)
+    staged_swarm = tools / "swarm"
+    shutil.copyfile(swarm, staged_swarm)
+    staged_swarm.chmod(0o700)
+    swarm = staged_swarm
     native = tools / "native-claude"
     shutil.copyfile(provider, native)
     native.chmod(0o700)
@@ -363,12 +455,12 @@ def verify(swarm, provider, test, root, server):
          refreshToken="synthetic-refresh", expiresAt=int(time.time() * 1000) + 3600000,
          scopes=["user:inference", "user:profile"], subscriptionType="max", rateLimitTier="default_claude_max_5x")))
     access = {}
+    mac_guard = None
     if server.vm:
         child = root / "child"
         child.mkdir(mode=0o700)
         document = child / "delegation.md"
         document.write_text("Wait for the synthetic worker fixture.")
-        (tools / "swarm").symlink_to(swarm)
         if server.worktree:
             git = lambda *args: subprocess.run(
                 guarded(["/usr/bin/git", "-C", str(child), *args], root, [server.server_port]),
@@ -398,11 +490,15 @@ def verify(swarm, provider, test, root, server):
             profile["projects"][str(directory)] = dict(hasTrustDialogAccepted=True)
         save(profile_path, profile)
         if server.codex:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_CODEX"] = "1"
             local_codex = tools / "native-codex"
             shutil.copyfile(server.codex, local_codex)
             local_codex.chmod(0o700)
+            command = [str(local_codex)]
+            if sys.platform == "darwin":
+                mac_guard, command = macos_worker_command(root, state, local_codex, server.server_port)
             codex_wrapper = tools / "codex"
-            codex_wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(str(local_codex))
+            codex_wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command)
                + ' "$@" 2>>' + shlex.quote(str(root / "codex.log")) + "\n")
             codex_wrapper.chmod(0o700)
             native_home = home / ".codex"
@@ -433,8 +529,15 @@ def verify(swarm, provider, test, root, server):
          name="Claude Fixture", application_id="200", owner_id="300", dm_channel_id="400",
          token_file=str(marker), daemon_socket=str(endpoint), work_dir=str(project),
          manager_cli="claude", **access, supervisor=dict(state_dir=str(state), lock=str(root/"lock"), log=str(root/"daemon.log"))))
-    run = lambda argv: guarded([str(x) for x in argv], root, [server.server_port])
-    with (root / "daemon.log").open("w+") as log:
+    def run(argv):
+        args = [str(x) for x in argv]
+        if mac_guard:
+            return ["/usr/bin/sandbox-exec", "-f", str(mac_guard.seatbelt), *args]
+        return guarded(args, root, [server.server_port])
+
+    with (root / "daemon.log").open("w+") as log, ExitStack() as cleanup:
+        if mac_guard:
+            cleanup.callback(mac_guard.close)
         daemon = subprocess.Popen(run([swarm, "daemon"]), cwd=project, env=env, stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 5
@@ -452,10 +555,11 @@ def verify(swarm, provider, test, root, server):
             if server.enrolled:
                 ordinary = subprocess.run(run([swarm,"spawn","--cli","claude","--worktree=false",
                                                "--dir",str(server.unapproved),"--prompt","Unrelated synthetic worker."]),
-                                          cwd=project,env=env,capture_output=True,text=True,timeout=8)
+                                          cwd=project,env=env,capture_output=True,text=True,timeout=15)
                 assert ordinary.returncode == 0, ordinary.stderr
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
-                                "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
+                                "--ignored", "--nocapture"]), cwd=project, env=env, check=True,
+                           timeout=145 if server.codex else 75 if server.park else 48)
             if server.project_fault or server.vm_revoked:
                 assert not server.seen_tools
                 assert provider_exec.is_file() == (server.project_fault == "after" or server.vm_revoked)
@@ -505,24 +609,28 @@ def verify(swarm, provider, test, root, server):
                 print(evidence.read_text())
             raise
         finally:
+            observed = {}
             def roster():
                 response = subprocess.run(run([swarm, "ls", "--json"]), cwd=project, env=env,
                                           capture_output=True, text=True, timeout=4)
                 response.check_returncode()
                 return json.loads(response.stdout)
             try:
+                fixtures.owned(root, None, observed)
                 if daemon.poll() is None:
-                    for row in roster():
-                        subprocess.run(run([swarm, "kill", row["id"]]), cwd=project,
-                                       env=env, capture_output=True, timeout=5, check=True)
-                    deadline = time.monotonic() + 8
-                    while any(row["status"]["Process"] != "exited" for row in roster()):
-                        assert time.monotonic() < deadline, "owned Claude shim exit was not observed"
-                        time.sleep(0.05)
+                    def stop(session_id):
+                        subprocess.run(run([swarm, "kill", session_id]), cwd=project,
+                                       env=env, capture_output=True, text=True, timeout=12, check=True)
+
+                    stop_fixture_sessions(roster, stop)
             finally:
-                if daemon.poll() is None:
-                    daemon.terminate()
-                    daemon.wait(timeout=5)
+                try:
+                    if daemon.poll() is None:
+                        daemon.terminate()
+                        daemon.wait(timeout=5)
+                finally:
+                    cleanup = fixtures.reap(root, None, observed)
+                    assert not cleanup["remaining"], cleanup
 
 
 

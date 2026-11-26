@@ -21,7 +21,7 @@ RUST_ID = "c0d3c01dc0d3c01dc0d3c01d"
 
 
 class Guard:
-    def __init__(self, root, state, port, cold, *, endpoints=None, extra_ports=()):
+    def __init__(self, root, state, port, cold, *, endpoints=None, extra_ports=(), codex_binary=None):
         self.tools = root / "bin"
         namespace = Path("/tmp").resolve() / f"codex-daemon-{os.geteuid()}"
         metadata = namespace.lstat()
@@ -58,7 +58,7 @@ class Guard:
             ]
         self.seatbelt = root / "codex.sb"
         self.seatbelt.write_text("\n".join(rules))
-        subprocess.run(["/usr/bin/codesign", "--verify", self.tools / "codex"], check=True)
+        subprocess.run(["/usr/bin/codesign", "--verify", codex_binary or self.tools / "codex"], check=True)
 
     def wrap(self, binary, label):
         wrapper = self.tools / label

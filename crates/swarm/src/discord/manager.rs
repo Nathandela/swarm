@@ -942,7 +942,12 @@ mod tests {
                 .contains("account custody changed"),
             "manager did not specifically refuse the changed OAuth organization"
         );
-        let limit = std::time::Instant::now() + std::time::Duration::from_secs(35);
+        let round = if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_CODEX").is_some() {
+            crate::ipc::launch_timeout("codex") + std::time::Duration::from_secs(25)
+        } else {
+            std::time::Duration::from_secs(35)
+        };
+        let limit = std::time::Instant::now() + round;
         loop {
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
             if root.join(".fixture-enrolled-deleted-checked").is_file() {
