@@ -410,6 +410,22 @@ impl Place {
         Ok(cfg)
     }
 
+    pub(super) fn link_automatic(&self, cfg: &Config, route: Value) -> io::Result<Config> {
+        let _locks = self.lock()?;
+        let current = self.load()?;
+        self.ensure_owned(&current)?;
+        if current.0 != cfg.0 || !current.enabled() || !current.0["team_discussion"].is_null() {
+            return Err(invalid(
+                "connector changed during automatic thread readback",
+            ));
+        }
+        let mut updated = current;
+        updated.0["team_discussion"] = route;
+        updated.validate()?;
+        runtime::write_json(&self.dir.join(CONFIG), &updated.0)?;
+        Ok(updated)
+    }
+
     pub(super) fn probe_gateway(&self, cfg: &Config) -> io::Result<&'static str> {
         if let Ok(status) = super::local::call(&self.dir, "status", "", None)
             && status["connected"] == true

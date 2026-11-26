@@ -29,6 +29,7 @@ mod rest;
 mod service;
 mod team_history;
 mod team_thread;
+mod thread_creation;
 mod worker;
 mod worker_proof;
 

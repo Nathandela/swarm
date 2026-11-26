@@ -140,6 +140,7 @@ impl Inbox {
             || self.data["team_discussion"] != route.identity()
             || source["id"].as_str().is_some_and(|id| {
                 !self.has_team_source(id)
+                    && !(route.starter.is_some() && id == route.thread)
                     && id
                         .parse::<u64>()
                         .is_ok_and(|id| id <= boundary(&self.data["team_consent_floor"]))
@@ -460,6 +461,23 @@ impl Inbox {
             self.save(next)?;
         }
         Ok(())
+    }
+
+    pub(super) fn thread_creation(&self) -> Option<&Value> {
+        self.data["thread_creation"]
+            .is_object()
+            .then(|| &self.data["thread_creation"])
+    }
+
+    pub(super) fn reserve_thread(&mut self, plan: Value) -> io::Result<()> {
+        if self.thread_creation().is_some() || !self.data["team_discussion"].is_null() {
+            return Err(invalid(
+                "connector already has its thread creation boundary",
+            ));
+        }
+        let mut next = self.data.clone();
+        next["thread_creation"] = plan;
+        self.save(next)
     }
 
     pub(super) fn team_cursor(&self) -> Option<&str> {

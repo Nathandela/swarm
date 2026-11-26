@@ -145,6 +145,15 @@ fn run_guild(
     if inbox.cursor().is_none() {
         inbox.checkpoint("")?;
     }
+    use super::dispatcher::Audience;
+    if cfg.0["team_discussion"].is_null()
+        && let Some(route) = super::thread_creation::recover(cfg, &inbox, &api)?
+    {
+        let next = place.link_automatic(cfg, route)?;
+        drop(inbox);
+        let inbox = Inbox::open(&place.dir, &next)?;
+        return run_guild(place, &next, bridge, inbox, api);
+    }
     let _guild_authority = {
         let verifier = Discord::connect(cfg)?;
         super::worker_proof::Service::bind(
@@ -161,6 +170,15 @@ fn run_guild(
     let mut guild_events = std::collections::VecDeque::new();
     let thread = super::team_thread::Route::configured(cfg)?
         .map(|route| super::team_thread::ThreadAudience { route, api: &api });
+    if let Some(thread) = &thread
+        && thread.route.starter.is_some()
+        && inbox.manager().is_null()
+        && !inbox.has_team_source(&thread.route.thread)
+        && let Some(source) = thread.current(cfg, &thread.route.thread)?
+        && super::team_thread::explicit(cfg, &source)
+    {
+        thread.admit(&mut inbox, &source)?;
+    }
     let dispatcher = if thread.is_some() {
         super::dispatcher::Dispatcher::open(cfg, &place.dir)?
     } else {
@@ -249,6 +267,17 @@ fn run_guild(
                 continue;
             }
         };
+        if thread.is_none()
+            && worker_send.is_none()
+            && let Some(route) = super::thread_creation::ingest(cfg, &mut inbox, &api, &event)?
+        {
+            let next = place.link_automatic(cfg, route)?;
+            drop(driver);
+            drop(_guild_authority);
+            drop(inbox);
+            let inbox = Inbox::open(&place.dir, &next)?;
+            return run_guild(place, &next, bridge, inbox, api);
+        }
         if let Some(flight) = &worker_send {
             use super::worker_proof::Invalidation;
             match super::worker_proof::invalidates(
