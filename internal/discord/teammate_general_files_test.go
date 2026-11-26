@@ -120,3 +120,34 @@ func TestTeammateFilePublicationRejectsUnsafeFileSets(t *testing.T) {
 		})
 	}
 }
+
+// A size refusal is a definite non-delivery: it must not hold the thread as "unconfirmed".
+func TestTeammateFilePublicationTooLargeForDiscordIsNotUncertain(t *testing.T) {
+	ctx := context.Background()
+	data := [][]byte{[]byte("PK\x03\x04synthetic")}
+	p := TeammatePublication{ID: "big", AdmissionID: "input", Body: "Deck", Files: []schema.PublicationFile{
+		outboxTestFile("f", "deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", data[0]),
+	}}
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		if outboxTestScope(w, r, true) {
+			return
+		}
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = io.WriteString(w, `{"message":"Request entity too large","code":40005}`)
+	})
+	d := bindFileOutboxTest(t, c)
+	c.manager = &fileOutboxTestManager{data: data}
+	if err := c.queuePublication(ctx, d, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendPending(ctx, d); err == nil {
+		t.Fatal("refused upload reported success")
+	}
+	outs, err := c.service.Store.teammateOutputs("install", d.ID)
+	if err != nil || len(outs) != 1 {
+		t.Fatal(outs, err)
+	}
+	if outs[0].Chunks[0].State != StatePrepared || !strings.Contains(outs[0].Error, "too large") {
+		t.Fatalf("state=%s error=%q", outs[0].Chunks[0].State, outs[0].Error)
+	}
+}

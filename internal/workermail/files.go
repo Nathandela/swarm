@@ -56,11 +56,15 @@ func CaptureFiles(checkout string, paths []string) ([]FileSubmission, error) {
 		if err != nil || !filepath.IsAbs(path) || !filepath.IsLocal(relative) || len(path) > 4096 {
 			return nil, errors.New("worker files: all files must be inside your checkout")
 		}
-		name := filepath.Base(relative)
+		original := filepath.Base(relative)
+		name := discordSafeName(original)
 		folded := strings.ToLower(name)
-		if name == "." || len(name) > 128 || !utf8.ValidString(name) || strings.TrimSpace(name) != name ||
-			strings.ContainsRune(name, '\\') || strings.ContainsFunc(name, unicode.IsControl) || seen[folded] {
+		if original == "." || len(original) > 128 || !utf8.ValidString(original) || strings.TrimSpace(original) != original ||
+			strings.ContainsRune(original, '\\') || strings.ContainsFunc(original, unicode.IsControl) || seen[folded] {
 			return nil, errors.New("worker files: use distinct file names of at most 128 bytes, without surrounding spaces")
+		}
+		if secretFileName(original) {
+			return nil, errors.New("worker files: " + original + " looks like a secret or hidden file and stays on the VM")
 		}
 		seen[folded] = true
 		data, err := readWorkerFile(root, relative, schema.MaxPublicationFileBytes-total)
@@ -138,6 +142,27 @@ func readWorkerFile(root *os.Root, path string, remaining int) ([]byte, error) {
 		return nil, errors.New("worker files: the file changed or could not be read; retry after writing it")
 	}
 	return data, nil
+}
+
+// Discord rewrites other characters in attachment names, which would break the
+// receipt's name match. Send a name it keeps: runs of other characters become "_".
+func discordSafeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r < 128 && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '-' || r == '_') {
+			b.WriteRune(r)
+		} else if !strings.HasSuffix(b.String(), "_") {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// ponytail: name-based guard against the common secret files; content scanning is out of scope.
+func secretFileName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, ".") || strings.HasPrefix(lower, "id_rsa") || strings.HasPrefix(lower, "id_ed25519") || strings.HasPrefix(lower, "id_ecdsa") ||
+		slices.Contains(strings.Fields(".pem .key .p12 .pfx .kdbx .keystore .jks"), filepath.Ext(lower))
 }
 
 // Office and archive formats are ZIP containers: the bytes must agree with the name.

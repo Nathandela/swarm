@@ -829,6 +829,11 @@ func (t *teammateConnector) sendOutput(ctx context.Context, install string, out 
 				c.State = StatePrepared
 			}
 			p.Error = err.Error()
+			// Discord refused the whole request, so nothing was posted.
+			if teammateAPIStatus(err, http.StatusRequestEntityTooLarge) {
+				c.State = StatePrepared
+				p.Error = "Discord refused these files as too large. They stay on the VM; share them another way."
+			}
 			return nil
 		})
 		if finishErr != nil {

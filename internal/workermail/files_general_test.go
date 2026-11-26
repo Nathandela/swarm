@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,7 +37,7 @@ func TestCaptureWorkerFilesAcceptsGeneralFilesWithHonestTypes(t *testing.T) {
 		name, contentType string
 		data              []byte
 	}{
-		{"Quarterly deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", syntheticZip(t, "[Content_Types].xml", "ppt/presentation.xml")},
+		{"Quarterly_deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", syntheticZip(t, "[Content_Types].xml", "ppt/presentation.xml")},
 		{"memo.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", syntheticZip(t, "[Content_Types].xml", "word/document.xml")},
 		{"model.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", syntheticZip(t, "[Content_Types].xml", "xl/workbook.xml")},
 		{"bundle.zip", "application/zip", syntheticZip(t, "a.txt")},
@@ -47,7 +48,7 @@ func TestCaptureWorkerFilesAcceptsGeneralFilesWithHonestTypes(t *testing.T) {
 	}
 	var paths []string
 	for _, f := range files {
-		path := filepath.Join(checkout, f.name)
+		path := filepath.Join(checkout, strings.Replace(f.name, "_", " ", 1))
 		if err := os.WriteFile(path, f.data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -78,6 +79,52 @@ func TestCaptureWorkerFilesRejectsDisguisedAndRunnableFiles(t *testing.T) {
 	} {
 		path := filepath.Join(checkout, name)
 		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := CaptureFiles(checkout, []string{path}); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// Discord rewrites unusual characters in attachment names, so Swarm sends a name it will keep.
+func TestCaptureWorkerFilesUsesDiscordSafeNames(t *testing.T) {
+	checkout := canonicalTestCheckout(t)
+	for in, want := range map[string]string{
+		"Résumé (v2).docx":     "R_sum_v2_.docx",
+		"Quarterly deck.pptx":  "Quarterly_deck.pptx",
+		"plain-name_1.2.txt":   "plain-name_1.2.txt",
+		"données été 2026.csv": "donn_es_t_2026.csv",
+	} {
+		data := []byte("column,value\nsynthetic,1\n")
+		if strings.HasSuffix(in, ".docx") || strings.HasSuffix(in, ".pptx") {
+			data = syntheticZip(t, "[Content_Types].xml")
+		}
+		path := filepath.Join(checkout, in)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := CaptureFiles(checkout, []string{path})
+		if err != nil || got[0].file.Name != want {
+			t.Errorf("%q: got %+v, %v", in, got, err)
+		}
+	}
+	a, b := filepath.Join(checkout, "a b.txt"), filepath.Join(checkout, "a_b.txt")
+	for _, p := range []string{a, b} {
+		if err := os.WriteFile(p, []byte("synthetic"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := CaptureFiles(checkout, []string{a, b}); err == nil {
+		t.Error("names that collide once made Discord-safe were accepted")
+	}
+}
+
+func TestCaptureWorkerFilesRefusesSecretLookingFiles(t *testing.T) {
+	checkout := canonicalTestCheckout(t)
+	for _, name := range []string{".env", "id_rsa", "server.pem", "tls.key", "cert.p12"} {
+		path := filepath.Join(checkout, name)
+		if err := os.WriteFile(path, []byte("synthetic"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := CaptureFiles(checkout, []string{path}); err == nil {
