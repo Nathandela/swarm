@@ -28,7 +28,7 @@ The signed development archive from `cb630ec5` also passed managed installation,
 
 ## Initial fleet round, 25 November 2026
 
-This branch is under development. The production Go reference is v0.29.22; the additional Discord call reference is da7b9f2d. The evidence below applies to an isolated Mac or Linux fixture. Production release, migration of existing sessions and real provider/Discord behavior have separate gates in the [roadmap](../specifications/rust-migration/README.md).
+This branch is under development. The active production Go oracle is v0.29.23 at `edee76a0745152594d162b64de273f8d53a6d5c2`; the independent additional Discord call oracle remains `da7b9f2dfa7e2c6960bd860a72459c0448845c82`. Historical v0.29.22 artifacts and observations below remain pinned to their original release. The evidence below applies to an isolated Mac or Linux fixture. Production release, migration of existing sessions and real provider/Discord behavior have separate gates in the [roadmap](../specifications/rust-migration/README.md).
 
 | Exercise | Observations |
 |---|---|

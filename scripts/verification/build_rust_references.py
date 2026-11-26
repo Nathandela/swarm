@@ -16,7 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS = {
-    "main": "f26648d69086e329132ac7849954d2f29a895387",
+    "main": "edee76a0745152594d162b64de273f8d53a6d5c2",
     "calls": "da7b9f2dfa7e2c6960bd860a72459c0448845c82",
 }
 

@@ -20,6 +20,22 @@ fn frame(stream: &mut impl Read) -> Value {
     assert_eq!(buffer[0], 1);
     serde_json::from_slice(&buffer[1..]).unwrap()
 }
+
+#[test]
+fn dispatcher_guide_explains_mailbox_fallback_and_preserves_spawn_route() {
+    let output = Command::new(support::executable())
+        .arg("dispatcher-guide")
+        .env_clear()
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let guide = String::from_utf8(output.stdout).unwrap();
+    assert!(guide.contains("Start work with ordinary swarm spawn on this supervisor."));
+    assert!(guide.contains("Use swarm teammate message for worker notifications."));
+    assert!(guide.contains("explain that automatic updates are unavailable."));
+    assert!(guide.contains("Direct swarm message and swarm send text to the dispatcher cannot deliver worker updates."));
+}
+
 fn write_frame(stream: &mut impl Write, body: Value) {
     let body = serde_json::to_vec(&body).unwrap();
     stream
