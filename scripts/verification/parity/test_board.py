@@ -221,7 +221,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         assert refusal["op"] == "error" and shown(job)["state"] == "active"
 
         def quit_board(board):
-            board.send(b"\x1b[27u\x1b[27u")
+            board.send(b"\x1b[27u\x1b[27u\x1b[27u")
             def exited():
                 board.drain()
                 return board.child.poll() is not None
@@ -247,7 +247,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
                 board.wait_bytes(landmark, start)
 
             step(b"\x1b[D", b"Status")
-            step(b"\x1b[D", b"[New (n)]")
+            step(b"\x1b[27u", b"[New (n)]")
             step(b"\x1b[<0;2;24M\x1b[<0;2;24m", b"New automation")
             step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
                  b"\x1b[B\x15claude\r", b"Status")
@@ -288,7 +288,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             step(b"m", b"More")
             step(b"a", b"Revised from board")
             offset = len(board.capture)
-            step(b"\x1b[F\r", b"Status")
+            step(b"\t\r", b"Status")
             board.wait_bytes(f"Run recorded · {first['id']} · exhausted".encode(), offset)
             step(b"r", b"Run recorded")
             assert [run["id"] for run in history_for(created_id)] == [first["id"]]

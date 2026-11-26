@@ -754,10 +754,10 @@ impl Board {
         if let Some(mut modal) = self.modal.take() {
             if key == Key::Escape
                 && let Modal::Automation(view) = &mut modal
-                && view.cancel()
+                && let Some(action) = view.back(online)
             {
                 self.modal = Some(modal);
-                return Action::None;
+                return action;
             }
             if (key == Key::Escape
                 && !matches!(&modal, Modal::Handoff(form) if form.confirm_pending()))

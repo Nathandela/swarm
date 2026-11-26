@@ -129,23 +129,23 @@ impl Automation {
         }
     }
 
-    pub(super) fn cancel(&mut self) -> bool {
+    pub(super) fn back(&mut self, online: bool) -> Option<Action> {
         self.press = None;
         if self.enabling.is_some() {
-            return true;
+            return Some(Action::None);
         }
         if self.enable_confirmation {
             self.enable_confirmation = false;
             self.error.clear();
-            return true;
+            return Some(Action::None);
         }
-        let cancelled = self.draft.take().is_some()
-            || self.archive.take().is_some()
-            || self.run.take().is_some();
-        if cancelled {
+        if self.draft.take().is_some() || self.archive.take().is_some() || self.run.take().is_some()
+        {
             self.error.clear();
+            return Some(Action::None);
         }
-        cancelled
+        (online && matches!(self.records, Some(Records::Get(_))))
+            .then_some(Action::Catalog(Read::List))
     }
 
     fn buttons(&self, (cols, rows): (u16, u16)) -> Vec<Button> {
@@ -520,6 +520,9 @@ impl Automation {
                 self.selected = match key {
                     Key::Up | Key::Text('k') => self.selected.saturating_sub(1),
                     Key::Down | Key::Text('j') => self.selected.saturating_add(1),
+                    Key::Tab if matches!(records, Some(Records::List(_))) => {
+                        self.selected.saturating_add(1)
+                    }
                     Key::PageUp => self.selected.saturating_sub(step),
                     Key::PageDown => self.selected.saturating_add(step),
                     Key::Home => 0,
