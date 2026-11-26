@@ -202,6 +202,37 @@ def rehearse(go, rust, root, version, cold=False):
             rust_held = None
             active = None
 
+            hermes = tools / "hermes"
+            hermes.write_text('#!/bin/sh\n[ "$*" = "chat --cli" ] || exit 2\nexec /bin/sleep 120\n')
+            hermes.chmod(0o700)
+            with daemon(go, go_env, root / "go-hermes.log"):
+                created_hermes = owner(go_env, {"op":"launch", "launch":launch | {
+                    "agent":"hermes", "name":"Retained Go Hermes terminal fixture",
+                }}, timeout=30)
+                assert created_hermes["op"] == "launch", created_hermes
+                hermes_id = created_hermes["session"]["id"]
+                hermes_state = state / hermes_id.split("/")[-1]
+                hermes_meta = hermes_state / "meta.json"
+                assert owner(go_env, {"op":"kill","session_id":hermes_id})["op"] == "ok"
+                until(lambda: disk(hermes_meta)["status"]["Process"] == "exited", "stopped Go Hermes fixture")
+                assert (hermes_state / "exit.json").is_file()
+                assert not disk(hermes_meta).get("cli_identity") and not disk(hermes_meta).get("hermes_native")
+                assert identities() == identity
+
+            marker = candidate_state / "go-rollback-published.json"
+            try:
+                assert not (state / local).exists() and not marker.exists()
+                refusal = subprocess.run(export, env=rust_env, capture_output=True, timeout=12)
+                assert refusal.returncode and b"use the original Go supervisor" in refusal.stderr, refusal
+                assert not (state / local).exists() and not marker.exists()
+                assert identities() == identity
+            finally:
+                with daemon(go, go_env, root / "go-hermes-cleanup.log"):
+                    assert owner(go_env, {"op":"delete","session_id":hermes_id})["op"] == "ok"
+                    assert {row["id"] for row in listed(go_env)} == {go_held}
+                assert not hermes_state.exists()
+            print("retained Go Hermes blocked mixed-root export before publication", flush=True)
+
             auth = home / ".codex/auth.json"
             saved_auth = auth.read_bytes()
             try:
