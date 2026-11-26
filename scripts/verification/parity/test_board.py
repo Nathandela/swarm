@@ -282,7 +282,7 @@ fi
                 p.wait_for(status_processes.exists, "held timer status")
                 board.send(b"\x1b[<0;4;2M\x1b[<32;5;2M\x1b[<0;4;2m")
                 board.send(b"\x1b[<0;4;2M\x1b[<0;4;2m")
-                board.wait_bytes(b"Status")
+                board.wait_bytes(b"Automations / Fixture automation")
                 since = len(board.capture)
                 board.send(b"\x1b[27u")
                 board.wait_bytes(cadence, since)
@@ -317,7 +317,7 @@ fi
 
             since = len(board.capture)
             board.send(b"\r")
-            board.wait_bytes(b"Status", since)
+            board.wait_bytes(b"Automations / Fixture automation", since)
             board.send(b"h")
             board.wait_bytes(b"No runs for this automation")
 
@@ -326,14 +326,14 @@ fi
                 board.send(keys)
                 board.wait_bytes(landmark, start)
 
-            step(b"\x1b[D", b"Status")
+            step(b"\x1b[D", b"Automations / Fixture automation")
             step(b"\x1b[27u", b"[New (n)]")
             step(b"v", b"No jobs in this view.")
             step(b"\r", b"No jobs in this view.")
             step(b"v", b"Fixture automation")
             step(b"\x1b[<0;2;24M\x1b[<0;2;24m", b"New automation")
             step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
-                 b"\x1b[B\x15claude\r", b"Status")
+                 b"\x1b[B\x15claude\r", b"Automations / Created from board")
             jobs = json.loads(cli("schedule", "list", "--json").stdout)
             created, = [record for record in jobs if record["spec"]["name"] == "Created from board"]
             assert created["state"] == "paused"
@@ -346,7 +346,7 @@ fi
             assert edited["revision_id"] != created["revision_id"]
             step(b"p", b"Edit automation")
             assert shown(created_id) == edited
-            step(b"\x1b[27u", b"Status")
+            step(b"\x1b[27u", b"Automations / Revised from board")
             resumed = cli("schedule", "resume", created_id)
             assert resumed.returncode == 0 and shown(created_id)["state"] == "active"
             manual = {"op":"schedule_board_manual", "schedule_id":created_id,
@@ -386,7 +386,8 @@ fi
             step(b"m", b"More")
             step(b"a", b"Revised from board")
             offset = len(board.capture)
-            step(b"\t\r", b"Status")
+            revised_detail = b"Automations / Revised from board"
+            step(b"\t\r", revised_detail)
             board.wait_bytes(f"Run recorded · {first['id']} · exhausted".encode(), offset)
             step(b"r", b"Run recorded")
             assert [run["id"] for run in history_for(created_id)] == [first["id"]]
@@ -401,7 +402,7 @@ fi
             step(b"\r", b"Automation run")
             step(b"\x1b[D", "Open (⏎)".encode())
             step(b"\x1b[D", b"Revised from board")
-            step(b"p", "Status · paused".encode())
+            step(b"p", b" paused\x1b[")
             assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
             schedule_db = root / "state/schedules/state.db"
             before_archive = schedule_db.read_bytes()
@@ -409,7 +410,7 @@ fi
             assert schedule_db.read_bytes() == before_archive
             step(b"\r", b"Archive Revised from board?")
             assert schedule_db.read_bytes() == before_archive
-            step(b"\x1b[27u", b"Status")
+            step(b"\x1b[27u", revised_detail)
             assert schedule_db.read_bytes() == before_archive
             step(b"x", b"Archive Revised from board?")
             assert schedule_db.read_bytes() == before_archive
@@ -422,7 +423,7 @@ fi
             before_resize = len(board.capture)
             board.resize(40, 8)
             board.wait_bytes(b"[esc] [y]", before_resize)
-            step(b"y", b"Status")
+            step(b"y", revised_detail)
             board.resize(80, 24)
             assert shown(created_id)["state"] == "archived"
             assert shown(job)["state"] == "active"
@@ -430,16 +431,16 @@ fi
 
             archived_catalog = schedule_db.read_bytes()
             step(b"\x1b[27u", b"[Active (v)]")
-            step(b"\r", "Status · archived".encode())
+            step(b"\r", b" archived\x1b[")
             step(b"h", "Open (⏎)".encode())
             run_id = history_for(created_id)[0]["id"]
             assert run_id in ids
             step(b"\r", f"Run · {run_id}".encode())
             step(b"\x1b[D", "Open (⏎)".encode())
-            step(b"\x1b[D", "Status · archived".encode())
+            step(b"\x1b[D", revised_detail)
             step(b"\x1b[27u", b"[Active (v)]")
             step(b"v", b"[Archived (v)]")
-            step(b"\x1b[<0;4;2M\x1b[<0;4;2m", "Status · active".encode())
+            step(b"\x1b[<0;4;2M\x1b[<0;4;2m", b"Automations / Fixture automation")
             assert schedule_db.read_bytes() == archived_catalog
 
             daemon.terminate()

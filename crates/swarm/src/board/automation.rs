@@ -89,6 +89,7 @@ pub(super) struct Automation {
     records: Option<Records>,
     error: String,
     selected: usize,
+    detail_top: usize,
     archived: bool,
     timer_request: Option<u64>,
     timer_status: String,
@@ -152,6 +153,7 @@ impl Automation {
                 self.records = Some(records);
                 self.run = None;
                 self.selected = 0;
+                self.detail_top = 0;
             }
             Err(error) => {
                 self.disconnect_timer_owner();
@@ -166,7 +168,8 @@ impl Automation {
     }
 
     pub(super) fn receive_timer_status(&mut self, generation: u64, status: String) -> bool {
-        if self.timer_request != Some(generation) || !matches!(self.records, Some(Records::List(_)))
+        if self.timer_request != Some(generation)
+            || !matches!(self.records, Some(Records::List(_) | Records::Get(_)))
         {
             return false;
         }
@@ -378,7 +381,7 @@ impl Automation {
             match &self.records {
                 Some(Records::List(_)) => &list_controls,
                 Some(Records::Get(job)) if job.state == "archived" => {
-                    &[("History", 'h'), ("List", '←'), ("Back", '⎋')]
+                    &[("History", 'h'), ("Back", '⎋')]
                 }
                 Some(Records::Get(_)) if self.manual.as_ref().is_some_and(|run| !run.pending) => &[
                     ("New run", 'R'),
@@ -401,11 +404,10 @@ impl Automation {
                 ],
                 Some(Records::Get(job)) if job.state == "paused" => &[
                     ("Edit", 'e'),
-                    ("Enable", 'p'),
+                    ("Enable…", 'p'),
                     ("Run now", 'r'),
                     ("History", 'h'),
                     ("Archive", 'x'),
-                    ("List", '←'),
                     ("Back", '⎋'),
                 ],
                 Some(Records::Get(_)) => &[
@@ -414,7 +416,6 @@ impl Automation {
                     ("Run now", 'r'),
                     ("History", 'h'),
                     ("Archive", 'x'),
-                    ("List", '←'),
                     ("Back", '⎋'),
                 ],
                 Some(Records::History(_)) => &[("Open", '⏎'), ("Detail", '←'), ("Back", '⎋')],
@@ -504,6 +505,10 @@ impl Automation {
         let count = match &self.records {
             Some(Records::List(_)) => self.visible_jobs().count(),
             Some(Records::History(items)) => items.len(),
+            Some(Records::Get(job)) => {
+                let count = self.detail_rows(job, geometry.0).len();
+                return (self.detail_start(count, budget), budget, count);
+            }
             _ => 0,
         };
         ((self.selected + 1).saturating_sub(budget), budget, count)
@@ -556,9 +561,13 @@ impl Automation {
                                 draft.focus = index;
                                 index + 1 == FIELDS.len()
                             } else {
-                                let selected = self.selected == index;
+                                let activate = self.selected == index
+                                    && matches!(
+                                        self.records,
+                                        Some(Records::List(_) | Records::History(_))
+                                    );
                                 self.selected = index;
-                                selected
+                                activate
                             }
                         }
                     };
@@ -778,15 +787,14 @@ impl Automation {
                 let count = match records {
                     Some(Records::List(_)) => self.visible_jobs().count(),
                     Some(Records::History(items)) => items.len(),
+                    Some(Records::Get(job)) => self.detail_rows(job, geometry.0).len(),
                     _ => 0,
                 };
                 let step = self.body_capacity(geometry);
                 self.selected = match key {
-                    Key::Up | Key::Text('k') => self.selected.saturating_sub(1),
+                    Key::Up | Key::BackTab | Key::Text('k') => self.selected.saturating_sub(1),
                     Key::Down | Key::Text('j') => self.selected.saturating_add(1),
-                    Key::Tab if matches!(records, Some(Records::List(_))) => {
-                        self.selected.saturating_add(1)
-                    }
+                    Key::Tab => self.selected.saturating_add(1),
                     Key::PageUp => self.selected.saturating_sub(step),
                     Key::PageDown => self.selected.saturating_add(step),
                     Key::Home => 0,
@@ -794,6 +802,9 @@ impl Automation {
                     _ => self.selected,
                 }
                 .min(count.saturating_sub(1));
+                if matches!(records, Some(Records::Get(_))) {
+                    self.detail_top = self.detail_start(count, step);
+                }
                 Action::None
             }
         }
@@ -818,6 +829,53 @@ impl Automation {
         } else {
             format!("{title} · Timer {}", self.timer_status)
         }
+    }
+
+    fn detail_rows(&self, job: &Job, cols: u16) -> Vec<String> {
+        let mut lines = Vec::new();
+        if !self.timer_status.is_empty() {
+            lines.push(format!("Timer · {}", self.timer_status));
+        }
+        lines.extend([
+            job.state.clone(),
+            list_cadence(&job.spec.calendar),
+            format!("Directory · {}", job.directory()),
+            format!("Workspace · {}", job.spec.workspace),
+            format!("Authority · {}", job.spec.authority),
+            format!("Agent order · {}", job.agents().join(" → ")),
+            String::new(),
+        ]);
+        lines.push(job.spec.prompt.clone());
+        let width = usize::from(cols.saturating_sub(2).max(1));
+        let mut rows = Vec::new();
+        for line in lines.iter().flat_map(|text| text.split('\n')) {
+            let mut cells = 0;
+            let mut row = String::new();
+            for cluster in line.graphemes(true) {
+                let tab = cluster == "\t";
+                let size = if tab { 0 } else { cluster.width() };
+                if cells + size.max(usize::from(tab)) > width {
+                    rows.push(std::mem::take(&mut row));
+                    cells = 0;
+                }
+                if tab {
+                    row.push_str("    ");
+                } else {
+                    row.extend(cluster.chars().map(terminal_char));
+                }
+                cells += size;
+            }
+            rows.push(row);
+        }
+        rows
+    }
+
+    fn detail_start(&self, count: usize, budget: usize) -> usize {
+        let selected = self.selected.min(count.saturating_sub(1));
+        self.detail_top
+            .min(count.saturating_sub(budget))
+            .min(selected)
+            .max((selected + 1).saturating_sub(budget))
     }
 
     pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
@@ -901,11 +959,16 @@ impl Automation {
             self.footer(output, cols, rows);
             return;
         }
-        if matches!(&self.records, Some(Records::List(_))) {
-            let title = self.list_title(cols);
-            line(output, 1, cols, ACCENT, &truncation(&title, cols));
-        } else {
-            form_header(output, cols, "Automations");
+        match &self.records {
+            Some(Records::List(_)) => {
+                let title = self.list_title(cols);
+                line(output, 1, cols, ACCENT, &truncation(&title, cols));
+            }
+            Some(Records::Get(job)) => {
+                let title = list_label(&format!("Automations / {}", job.name()), cols.into());
+                let _ = write!(output, "\x1b[1;1H{ACCENT}{title}{PLAIN}\x1b[K");
+            }
+            _ => form_header(output, cols, "Automations"),
         }
         let items = match &self.records {
             Some(Records::List(_)) => {
@@ -925,12 +988,7 @@ impl Automation {
                 }
                 items
             }
-            Some(Records::Get(job)) => vec![
-                job.name().to_owned(),
-                format!("Status · {}", job.state),
-                format!("Directory · {}", job.directory()),
-                format!("Agents · {}", job.agents().join(" → ")),
-            ],
+            Some(Records::Get(job)) => self.detail_rows(job, cols),
             Some(Records::History(runs)) if runs.is_empty() => {
                 vec!["No runs for this automation".into()]
             }
@@ -942,11 +1000,16 @@ impl Automation {
             None => Vec::new(),
         };
         let capacity = self.body_capacity((cols, rows));
-        let start = (self.selected + 1).saturating_sub(capacity);
+        let detail = matches!(&self.records, Some(Records::Get(_)));
+        let start = if detail {
+            self.detail_start(items.len(), capacity)
+        } else {
+            (self.selected + 1).saturating_sub(capacity)
+        };
         for (index, text) in items.iter().enumerate().skip(start).take(capacity) {
-            let selected = index == self.selected;
+            let selected = index == self.selected.min(items.len().saturating_sub(1));
             let row = (index - start) as u16 + 2;
-            if matches!(&self.records, Some(Records::List(_))) {
+            if detail || matches!(&self.records, Some(Records::List(_))) {
                 write_list_row(output, row, cols, text, selected);
             } else {
                 let marker = if selected { "▌" } else { " " };
@@ -1280,6 +1343,45 @@ mod pointer_tests {
         view.expect_timer_status(2, Some("owner".into()));
         assert!(view.receive_timer_status(2, "installed, active".into()));
         assert!(!view.buttons(compact).iter().any(|button| button.key == 'i'));
+    }
+
+    #[test]
+    fn detail_keeps_prompt_paragraphs_and_reveals_the_selected_line() {
+        let job: Job = serde_json::from_value(serde_json::json!({
+            "id":"job","revision_id":"revision","state":"paused",
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+            "spec":{"name":"Fixture","directory":"/fixture","workspace":"directory",
+                "authority":"agent-default","agents":["claude","codex"],
+                "calendar":{"kind":"daily","time_zone":"UTC","time":"09:00"},
+                "prompt":"A continuation that needs two labels.\n\nEnd\tmarker."}
+        }))
+        .unwrap();
+        let mut view = Automation::default();
+        view.expect_timer_status(1, Some("owner".into()));
+        view.receive(Ok(Records::Get(Box::new(job.clone()))));
+        assert!(view.receive_timer_status(1, "not installed, inactive".into()));
+        assert!(
+            !view
+                .buttons((80, 24))
+                .iter()
+                .any(|button| button.key == 'i')
+        );
+        let expected = view.detail_rows(&job, 24);
+        assert_eq!(
+            expected[..3],
+            ["Timer · not installed,", " inactive", "paused"]
+        );
+        assert_eq!(expected[expected.len() - 2..], ["", "End    marker."]);
+        let geometry = (24, 8);
+        let capacity = view.body_capacity(geometry);
+        view.update(Key::End, geometry);
+        let (top, _, _) = view.rows_at(geometry);
+        assert_eq!(top, expected.len() - capacity);
+        view.update(Key::BackTab, geometry);
+        assert_eq!(view.selected, expected.len() - 2);
+        assert_eq!(view.rows_at(geometry).0, top);
+        view.update(Key::Home, geometry);
+        assert_eq!(view.rows_at(geometry).0, 0);
     }
 
     #[test]
