@@ -444,7 +444,11 @@ func main() {
 		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
 		check(err)
 		if action == "publication-queue" {
-			check(store.FixtureQueueFinal(row, os.Args[4], len(os.Args) == 6 && os.Args[5] == "attachment"))
+			var attachment string
+			if len(os.Args) == 6 {
+				attachment = os.Args[5]
+			}
+			check(store.FixtureQueueFinal(row, os.Args[4], attachment))
 		} else if action == "publication-payload" || action == "publication-damage" {
 			size, err := store.FixtureFinalPayload(row, action == "publication-damage")
 			check(err)

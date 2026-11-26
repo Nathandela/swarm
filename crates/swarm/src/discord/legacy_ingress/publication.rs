@@ -1,7 +1,7 @@
 //! Deliver one already authorized, plain Go personal outbox record.
 use super::*;
 use crate::discord::rest::{Discord, Post};
-use crate::supervisor::mail_files::{Captured, Descriptor};
+use crate::supervisor::mail_files::{self, Captured, Descriptor};
 use jiff::Timestamp;
 
 const EMPTY_TIME: &str = "0001-01-01T00:00:00Z";
@@ -126,40 +126,24 @@ fn payload<'tx>(tx: &impl TxApi<'tx>, key: &[u8], metadata: &Value) -> io::Resul
     }
     let list = metadata
         .as_array()
-        .filter(|files| !files.is_empty() && files.len() <= 10)
+        .filter(|files| (1..=mail_files::MAX_FILES).contains(&files.len()))
         .ok_or_else(invalid)?;
     let bucket = tx.bucket(b"teammate_file_payloads").ok_or_else(invalid)?;
     let mut bytes = bucket
         .get(key)
-        .filter(|raw| raw.len() <= 8 << 20)
+        .filter(|raw| raw.len() <= mail_files::MAX_BYTES)
         .ok_or_else(invalid)?;
     let mut ids = std::collections::BTreeSet::new();
     let mut names = std::collections::BTreeSet::new();
     let mut captures = Vec::with_capacity(list.len());
     for raw in list {
         let file: Descriptor = serde_json::from_value(raw.clone())?;
+        let (part, remaining) = bytes.split_at_checked(file.size).ok_or_else(invalid)?;
         if *raw != serde_json::to_value(&file)?
-            || file.size == 0
-            || file.id.is_empty()
-            || file.id.len() > 128
-            || !file.id.bytes().all(|b| (33..=126).contains(&b))
-            || file.name.is_empty()
-            || file.name.len() > 160
-            || file.name.trim() != file.name
-            || matches!(file.name.as_str(), "." | "..")
-            || file.name.contains(['/', '\\'])
-            || file.name.chars().any(char::is_control)
-            || !matches!(
-                file.content_type.as_str(),
-                "image/png" | "image/jpeg" | "text/csv" | "application/pdf"
-            )
+            || !mail_files::verify_publication(&file, part)
             || !ids.insert(file.id.clone())
             || !names.insert(file.name.to_lowercase())
         {
-            return Err(invalid());
-        }
-        let (part, remaining) = bytes.split_at_checked(file.size).ok_or_else(invalid)?;
-        if file.sha256 != format!("{:x}", Sha256::digest(part)) {
             return Err(invalid());
         }
         captures.push(Captured {
@@ -570,6 +554,177 @@ fn attachment_ack(expected: &[Captured], value: &Value) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    #[ignore = "requires the exact Go general-files Discord fixture"]
+    fn pinned_go_general_files_send_attachment_only_with_exact_multipart_and_nonce() {
+        use std::{
+            io::{BufRead, BufReader, Read, Write},
+            net::TcpListener,
+            time::Duration,
+        };
+
+        let fixture = std::env::var_os("SWARM_TEST_GO_GENERAL_DISCORD_FIXTURE").unwrap();
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("dg-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let path = root.join("fixture");
+        let p = path.to_str().unwrap();
+        let call = |args: &[&str]| {
+            let output = Command::new(&fixture).args(args).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        call(&["create", p, root.to_str().unwrap(), "personal", "true"]);
+        call(&["bind", p, "original-room", "400"]);
+        call(&[
+            "voice-ingress",
+            p,
+            "original-room",
+            "701",
+            "attachment-only-final",
+        ]);
+        let queue = ["publication-queue", p, "original-room", "701", "general"];
+        call(&queue);
+        let place = Place::for_supervisor(&root).unwrap();
+        assert!(settle(&place, "701", false).unwrap());
+        let source = path.join("discord.db");
+        let original = fs::read(&source).unwrap();
+        let nonce = call(&["publication-read", p, "original-room"]);
+        let nonce = nonce.trim().strip_prefix("prepared ").unwrap();
+        assert!(
+            with(&place, "fixture-final", true, |_| {
+                Ok(|_: &Publication| panic!("dry run opened outbound transport"))
+            })
+            .unwrap()
+        );
+        assert_eq!(fs::read(&source).unwrap(), original);
+        call(&["publication-damage", p, "original-room"]);
+        let damaged = fs::read(&source).unwrap();
+        assert!(
+            with(
+                &place,
+                "fixture-final",
+                false,
+                |_| -> io::Result<fn(&Publication) -> Post> {
+                    panic!("damaged Go payload opened outbound transport")
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&source).unwrap(), damaged);
+        fs::write(&source, &original).unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let posted_nonce = nonce.to_owned();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line, "POST /api/v10/channels/400/messages HTTP/1.1\r\n");
+            let mut size = None;
+            let mut boundary = None;
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let (name, value) = line.trim_end().split_once(": ").unwrap();
+                match name.to_ascii_lowercase().as_str() {
+                    "content-length" => size = Some(value.parse().unwrap()),
+                    "content-type" => {
+                        boundary = value
+                            .strip_prefix("multipart/form-data; boundary=")
+                            .map(str::to_owned)
+                    }
+                    _ => {}
+                }
+            }
+            let mut data = vec![0; size.unwrap()];
+            reader.read_exact(&mut data).unwrap();
+            let body = String::from_utf8(data).unwrap();
+            let boundary = format!("--{}", boundary.unwrap());
+            let parts: Vec<_> = body.split(&boundary).collect();
+            assert_eq!(parts.len(), 6);
+            let appears: Value =
+                serde_json::from_str(parts[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(appears["content"], "");
+            assert_eq!(appears["nonce"], posted_nonce);
+            assert_eq!(appears["enforce_nonce"], true);
+            assert_eq!(appears["allowed_mentions"]["parse"], json!([]));
+            let expected = [
+                (
+                    "R_sum_v2_.docx",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "PK\x03\x04fixture-document",
+                ),
+                (
+                    "notes.txt",
+                    "text/plain; charset=utf-8",
+                    "synthetic notes\n",
+                ),
+                ("still.webp", "image/webp", "RIFF1234WEBPVP8 "),
+            ];
+            let attachments: Vec<_> = expected
+                .iter()
+                .enumerate()
+                .map(|(i, (name, mime, bytes))| {
+                    assert_eq!(appears["attachments"][i], json!({"id":i,"filename":name}));
+                    let (head, content) = parts[i + 2].split_once("\r\n\r\n").unwrap();
+                    assert!(head.contains(&format!("name=\"files[{i}]\"; filename=\"{name}\"")));
+                    assert!(
+                        head.lines()
+                            .any(|line| line == format!("Content-Type: {mime}"))
+                    );
+                    assert_eq!(content.strip_suffix("\r\n").unwrap(), *bytes);
+                    json!({"id":(901 + i).to_string(),"filename":name,"size":bytes.len()})
+                })
+                .collect();
+            let reply = json!({"id":"900","channel_id":"400","author":{"id":"100"},"content":"","nonce":posted_nonce,
+                "attachments":attachments}).to_string();
+            write!(reader.get_mut(), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
+        });
+        assert!(
+            with(&place, "fixture-final", false, |cfg| {
+                let api = Discord::loopback_fixture(cfg, port)?;
+                let cfg = cfg.clone();
+                Ok(move |out: &Publication| {
+                    api.post_publication(&cfg, &out.nonce, &out.body, &out.files)
+                })
+            })
+            .unwrap()
+        );
+        server.join().unwrap();
+        let durable = fs::read(&source).unwrap();
+        assert!(
+            with(&place, "fixture-final", false, |_| {
+                Ok(|_: &Publication| panic!("settled notice replayed its POST"))
+            })
+            .unwrap()
+        );
+        assert_eq!(fs::read(&source).unwrap(), durable);
+        assert_eq!(
+            call(&["publication-read", p, "original-room"]).trim(),
+            format!("sent {nonce}")
+        );
+        assert_eq!(
+            call(&["publication-payload", p, "original-room"]).trim(),
+            "0"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     #[ignore = "requires the pinned original Go Discord fixture"]

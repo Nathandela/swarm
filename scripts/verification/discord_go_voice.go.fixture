@@ -114,6 +114,19 @@ func (d *DiscussionController) FixtureStopBeforeGuildSend(ctx context.Context, m
 	return fixtureGuildBeforeSend{ctx, cancel, d.store, message}, cancel, nil
 }
 
+func FixtureGeneralPublicationFiles() ([]schema.PublicationFile, [][]byte) {
+	data := [][]byte{[]byte("PK\x03\x04fixture-document"), []byte("synthetic notes\n"), []byte("RIFF1234WEBPVP8 ")}
+	names := []string{"R_sum_v2_.docx", "notes.txt", "still.webp"}
+	types := []string{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain; charset=utf-8", "image/webp"}
+	files := make([]schema.PublicationFile, len(data))
+	for i, raw := range data {
+		digest := fmt.Sprintf("%x", sha256.Sum256(raw))
+		files[i] = schema.PublicationFile{ID: fmt.Sprintf("%x", sha256.Sum256([]byte(names[i]+"\x00"+digest))),
+			Name: names[i], ContentType: types[i], Size: int64(len(raw)), SHA256: digest}
+	}
+	return files, data
+}
+
 func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase, project string) error {
 	store, err := OpenStore(dir)
 	if err != nil {
@@ -213,6 +226,16 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 		}
 		publication.DiscussionFiles = string(raw)
 	}
+	if phase == "attachment-only-final" {
+		files, _ := FixtureGeneralPublicationFiles()
+		raw, err := json.Marshal(files)
+		if err != nil {
+			return err
+		}
+		publication.Text = ""
+		publication.DiscussionFiles = string(raw)
+	}
+
 	_, err = store.PublishSpeech(binding, permit, publication)
 	if err != nil || phase == "unexported-final" {
 		return err

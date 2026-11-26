@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 )
 
@@ -17,6 +18,7 @@ func main() {
 		Binding        workermail.Binding
 		ID, Kind, Text string
 		FileID         string
+		Paths          []string
 	}
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -26,7 +28,21 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "submit":
-		out, err = workermail.Submit(os.Args[2], input.Binding, input.ID, input.Kind, input.Text, true)
+		var files []workermail.FileSubmission
+		if len(input.Paths) > 0 {
+			files, err = workermail.CaptureFiles(input.Binding.Project, input.Paths)
+		}
+		if err == nil {
+			var note workermail.Note
+			note, err = workermail.Submit(os.Args[2], input.Binding, input.ID, input.Kind, input.Text, true, files...)
+			out = note
+			if len(files) != 0 {
+				out = struct {
+					workermail.Note
+					Files []schema.PublicationFile
+				}{note, note.Files}
+			}
+		}
 	case "lookup":
 		out, err = workermail.Lookup(os.Args[2], input.Binding, input.ID)
 	case "read-file":

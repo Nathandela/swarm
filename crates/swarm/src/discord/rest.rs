@@ -3,7 +3,7 @@
 mod live_transport;
 
 use super::config::{Config, invalid, load_token, snowflake};
-use crate::supervisor::mail_files::Captured;
+use crate::supervisor::mail_files::{self, Captured};
 use serde_json::{Value, json};
 use std::io;
 use std::path::Path;
@@ -320,6 +320,21 @@ fn file_multipart(
     if nonce.len() != 24 || !nonce.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(invalid("invalid publication attachment nonce"));
     }
+    let mut bytes = 0;
+    let mut names = std::collections::HashSet::new();
+    let mut ids = std::collections::HashSet::new();
+    if files.is_empty()
+        || files.len() > mail_files::MAX_FILES
+        || files.iter().any(|file| {
+            bytes += file.data.len();
+            bytes > mail_files::MAX_BYTES
+                || !ids.insert(&file.file.id)
+                || !names.insert(file.file.name.to_lowercase())
+                || !mail_files::verify_publication(&file.file, &file.data)
+        })
+    {
+        return Err(invalid("invalid publication attachment set"));
+    }
     payload["attachments"] = json!(
         files
             .iter()
@@ -531,6 +546,7 @@ server.listen(0,'127.0.0.1',()=>console.log(server.address().port));"#;
     #[test]
     fn attachments_form_uses_one_correlated_payload_and_exact_parts() {
         use crate::supervisor::mail_files::Descriptor;
+        use sha2::Digest;
         let nonce = "0123456789abcdef01234567";
         let data = format!("row,swarm-{nonce}-0\n").into_bytes();
         let files = [Captured {
@@ -538,7 +554,7 @@ server.listen(0,'127.0.0.1',()=>console.log(server.address().port));"#;
                 id: "file".into(),
                 name: "sample\"data.csv".into(),
                 content_type: "text/csv".into(),
-                sha256: String::new(),
+                sha256: format!("{:x}", sha2::Sha256::digest(&data)),
                 size: data.len(),
             },
             data: data.clone(),

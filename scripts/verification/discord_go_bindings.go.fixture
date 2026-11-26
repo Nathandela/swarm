@@ -133,10 +133,16 @@ func (s *Store) FixturePersonalGap(installation string) error {
 	})
 }
 
-func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string, attached bool) error {
+func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source, attachment string) error {
 	publication := TeammatePublication{ID: "fixture-final", Body: "Original final personal reply.",
 		AdmissionID: "da_" + digest([]string{d.InstallationID, source})[:32], Sequence: 1}
-	if attached {
+	if attachment == "general" {
+		files, data := voice.FixtureGeneralPublicationFiles()
+		publication.Body = ""
+		publication.Files = files
+		return s.teammateQueueOutput(d, publication, time.Now().UTC(), data...)
+	}
+	if attachment == "attachment" {
 		data := []byte("header,value\nfixture,1\n")
 		publication.Files = []schema.PublicationFile{{ID: "original-file", Name: "fixture.csv", ContentType: "text/csv",
 			SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Size: int64(len(data))}}

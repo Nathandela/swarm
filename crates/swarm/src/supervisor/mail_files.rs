@@ -6,8 +6,8 @@ use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path};
 
-pub(super) const MAX_FILES: usize = 10;
-pub(super) const MAX_BYTES: usize = 8 << 20;
+pub(crate) const MAX_FILES: usize = 10;
+pub(crate) const MAX_BYTES: usize = 8 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Descriptor {
@@ -77,7 +77,7 @@ pub(super) fn capture(
             .ok_or_else(|| {
                 io::Error::other("worker files: all files must be inside your checkout")
             })?;
-        let name = relative
+        let original = relative
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| {
@@ -85,15 +85,27 @@ pub(super) fn capture(
                     && name.trim() == *name
                     && !name.contains('\\')
                     && !name.chars().any(char::is_control)
-                    && seen.insert(name.to_lowercase())
             })
-            .ok_or_else(|| io::Error::other("worker files: use distinct safe file names"))?;
+            .ok_or_else(|| {
+                io::Error::other("worker files: use safe file names of at most 128 bytes")
+            })?;
+        let name = discord_name(original);
+        if secret_path(relative) || secret_path(Path::new(&name)) {
+            return Err(io::Error::other(format!(
+                "worker files: {original} looks like a secret or hidden file and stays on the VM"
+            )));
+        }
+        if !seen.insert(name.to_ascii_lowercase()) {
+            return Err(io::Error::other(format!(
+                "worker files: two files would both be named {name} in Discord; rename one"
+            )));
+        }
         let parent = descend(
             root.try_clone()?,
             relative.parent().unwrap_or(Path::new("")),
         )?;
         let open_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        let file: File = openat(&parent, name, open_flags, Mode::empty())?.into();
+        let file: File = openat(&parent, original, open_flags, Mode::empty())?.into();
         let before = file.metadata()?;
         // SAFETY: geteuid takes no arguments.
         if !before.is_file()
@@ -118,15 +130,16 @@ pub(super) fn capture(
         {
             return Err(io::Error::other("worker files: file changed while reading"));
         }
-        let content_type = content_type(name, &data)
-            .ok_or_else(|| io::Error::other("worker files: expected PNG, JPEG, PDF or CSV"))?;
+        let content_type = content_type(&name, &data).ok_or_else(|| {
+            io::Error::other(format!("worker files: {original} was refused. Use an approved format whose contents match its extension"))
+        })?;
         let sha256 = format!("{:x}", Sha256::digest(&data));
         let id = format!("{:x}", Sha256::digest(format!("{name}\0{sha256}")));
         remaining -= data.len();
         files.push(Captured {
             file: Descriptor {
                 id,
-                name: name.into(),
+                name,
                 content_type: content_type.into(),
                 sha256,
                 size: data.len(),
@@ -137,32 +150,128 @@ pub(super) fn capture(
     Ok(files)
 }
 
-pub(super) fn verify(file: &Descriptor, data: &[u8]) -> bool {
+fn discord_name(original: &str) -> String {
+    let mut name = String::with_capacity(original.len());
+    for ch in original.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            name.push(ch);
+        } else if !name.ends_with('_') {
+            name.push('_');
+        }
+    }
+    name
+}
+
+fn secret_path(path: &Path) -> bool {
+    if path
+        .components()
+        .any(|part| part.as_os_str().as_encoded_bytes().starts_with(b"."))
+    {
+        return true;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    // Match Go's simple Unicode lowercase, including I with dot above.
+    let name: String = name
+        .chars()
+        .filter_map(|ch| ch.to_lowercase().next())
+        .collect();
+    [
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        "credential",
+        "secret",
+        "token",
+        "private_key",
+        ".env",
+        ".pem",
+        ".key",
+    ]
+    .iter()
+    .any(|secret| name.contains(secret))
+}
+
+fn legacy_type(content_type: &str) -> bool {
+    matches!(
+        content_type,
+        "image/png" | "image/jpeg" | "text/csv" | "application/pdf"
+    )
+}
+
+pub(crate) fn verify_publication(file: &Descriptor, data: &[u8]) -> bool {
     let name = &file.name;
-    !name.is_empty()
-        && name.len() <= 128
+    !file.id.is_empty()
+        && file.id.len() <= 128
+        && file.id.bytes().all(|b| (33..=126).contains(&b))
+        && !name.is_empty()
+        && name.len() <= 160
         && name.trim() == name
+        && !matches!(name.as_str(), "." | "..")
         && !name.contains(['/', '\\'])
         && !name.chars().any(char::is_control)
         && !data.is_empty()
         && data.len() == file.size
         && data.len() <= MAX_BYTES
-        && content_type(name, data) == Some(&file.content_type)
         && file.sha256 == format!("{:x}", Sha256::digest(data))
-        && file.id == format!("{:x}", Sha256::digest(format!("{name}\0{}", file.sha256)))
+        // Keep previously authorized v0.29.25 names and IDs in their original receipts.
+        && (legacy_type(&file.content_type) || name.len() <= 128
+            && discord_name(name) == *name
+            && !secret_path(Path::new(name))
+            && content_type(name, data) == Some(&file.content_type))
+}
+
+pub(super) fn verify(file: &Descriptor, data: &[u8]) -> bool {
+    verify_publication(file, data)
+        && file.name.len() <= 128
+        && content_type(&file.name, data) == Some(&file.content_type)
+        && file.id
+            == format!(
+                "{:x}",
+                Sha256::digest(format!("{}\0{}", file.name, file.sha256))
+            )
 }
 
 fn content_type(name: &str, data: &[u8]) -> Option<&'static str> {
-    match Path::new(name)
-        .extension()?
-        .to_str()?
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    let ext = Path::new(name).extension()?.to_str()?.to_ascii_lowercase();
+    let zip = data.starts_with(b"PK\x03\x04");
+    const PROGRAMS: &[&[u8]] = &[
+        b"MZ",
+        b"\x7fELF",
+        b"\xfe\xed\xfa",
+        b"\xcf\xfa\xed\xfe",
+        b"\xce\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+    ];
+    match ext.as_str() {
         "png" if data.starts_with(b"\x89PNG\r\n\x1a\n") => Some("image/png"),
         "jpeg" | "jpg" if data.starts_with(b"\xff\xd8\xff") => Some("image/jpeg"),
+        "gif" if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") => Some("image/gif"),
+        "webp" if data.starts_with(b"RIFF") && data.get(8..14) == Some(b"WEBPVP") => {
+            Some("image/webp")
+        }
         "pdf" if data.starts_with(b"%PDF-") => Some("application/pdf"),
         "csv" if csv(data) => Some("text/csv"),
+        "zip" if zip => Some("application/zip"),
+        "docx" if zip => {
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        }
+        "xlsx" if zip => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "pptx" if zip => {
+            Some("application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        }
+        "odt" if zip => Some("application/vnd.oasis.opendocument.text"),
+        "ods" if zip => Some("application/vnd.oasis.opendocument.spreadsheet"),
+        "odp" if zip => Some("application/vnd.oasis.opendocument.presentation"),
+        "txt" | "md" | "json" | "log" | "yaml" | "yml" | "tsv"
+            if !data.contains(&0) && std::str::from_utf8(data).is_ok() =>
+        {
+            Some("text/plain; charset=utf-8")
+        }
+        "bin" | "dat" if !PROGRAMS.iter().any(|magic| data.starts_with(magic)) => {
+            Some("application/octet-stream")
+        }
         _ => None,
     }
 }
@@ -274,5 +383,191 @@ mod tests {
         fs::write(&csv, b"\"unfinished")?;
         assert!(capture(&root, identity, &paths).is_err());
         fs::remove_dir_all(&scratch)
+    }
+    #[test]
+    #[ignore = "requires the exact Go general-files mailbox oracle"]
+    fn go_general_files_match_captured_metadata_and_fail_before_mailbox_writes() -> io::Result<()> {
+        use base64::Engine;
+        use serde_json::{Value, json};
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+
+        let go = std::env::var_os("SWARM_GO_WORKER_MAIL_FIXTURE").unwrap();
+        let scratch = std::env::temp_dir().join(super::super::runtime::random_id()?);
+        super::super::runtime::private_dir(&scratch)?;
+        let scratch = scratch.canonicalize()?;
+        let checkout = scratch.join("checkout");
+        let go_root = scratch.join("go");
+        let rust_root = scratch.join("rust");
+        for path in [&checkout, &go_root, &rust_root] {
+            super::super::runtime::private_dir(path)?;
+        }
+        let metadata = checkout.metadata()?;
+        let identity = (metadata.dev(), metadata.ino());
+        let binding = json!({
+            "Discussion":"discussion","Parent":"manager","Session":"endpoint/worker",
+            "Instance":"instance","Attempt":"attempt","Agent":"codex","Project":checkout,
+            "ParentInputHash":"owned-input"
+        });
+        let run = |action: &str, request: Value| -> io::Result<std::process::Output> {
+            let mut command = Command::new(&go)
+                .arg(action)
+                .arg(&go_root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            write!(command.stdin.take().unwrap(), "{request}")?;
+            command.wait_with_output()
+        };
+        let prepare = |name: &str, bytes: &[u8]| -> io::Result<String> {
+            let path = checkout.join(name);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(&path, bytes)?;
+            Ok(path.to_str().unwrap().to_owned())
+        };
+        let cases: &[(&str, &str, &[u8])] = &[
+            ("Résumé (v2).docx", "R_sum_v2_.docx", b"PK\x03\x04fixture"),
+            (
+                "Quarterly deck.PPTX",
+                "Quarterly_deck.PPTX",
+                b"PK\x03\x04slides",
+            ),
+            ("model.xlsx", "model.xlsx", b"PK\x03\x04model"),
+            ("bundle.zip", "bundle.zip", b"PK\x03\x04zip"),
+            ("source.odt", "source.odt", b"PK\x03\x04odt"),
+            ("source.ods", "source.ods", b"PK\x03\x04ods"),
+            ("source.odp", "source.odp", b"PK\x03\x04odp"),
+            ("日本語.csv", "_.csv", b"field,value\n"),
+            ("nested/result--!_.gif", "result--__.gif", b"GIF89aframe"),
+            ("still.webp", "still.webp", b"RIFF\x10\x00\x00\x00WEBPVP8 "),
+            ("notes.md", "notes.md", b"# fixture\n"),
+            ("notes.json", "notes.json", br#"{"fixture":true}"#),
+            ("notes.log", "notes.log", b"fixture\n"),
+            ("notes.yaml", "notes.yaml", b"fixture: yes\n"),
+            ("notes.yml", "notes.yml", b"fixture: yes\n"),
+            ("notes.tsv", "notes.tsv", b"field\tvalue\n"),
+            ("plain-name_1.2.txt", "plain-name_1.2.txt", b"fixture\n"),
+            ("opaque.bin", "opaque.bin", b"\x00\x01\xff"),
+            ("opaque.dat", "opaque.dat", b"\x00\x12\xfe"),
+        ];
+        for (batch, cases) in cases.chunks(MAX_FILES).enumerate() {
+            let names = cases
+                .iter()
+                .map(|(name, _, data)| prepare(name, data))
+                .collect::<io::Result<Vec<_>>>()?;
+            let paths: Vec<_> = names.iter().map(String::as_str).collect();
+            let id = format!("fixture-{batch}");
+            let expected = run(
+                "submit",
+                json!({"binding":binding,"id":id,"kind":"complete","paths":paths}),
+            )?;
+            assert!(
+                expected.status.success(),
+                "{}",
+                String::from_utf8_lossy(&expected.stderr)
+            );
+            let expected: Value = serde_json::from_slice(&expected.stdout)?;
+            let files = capture(&checkout, identity, &paths)?;
+            let actual = super::super::mail_store::submit(
+                &rust_root, &binding, &id, "complete", "", true, &files,
+            )?;
+            assert_eq!(actual["Files"], expected["Files"]);
+            assert_eq!(actual["Text"], expected["Text"]);
+            for (file, (_, want, bytes)) in files.iter().zip(cases) {
+                assert_eq!(file.file.name, *want);
+                assert_eq!(&file.data, bytes);
+                let response = run(
+                    "read-file",
+                    json!({"binding":binding,"id":id,"FileID":file.file.id}),
+                )?;
+                assert!(
+                    response.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&response.stderr)
+                );
+                let encoded: String = serde_json::from_slice(&response.stdout)?;
+                assert_eq!(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(encoded)
+                        .unwrap(),
+                    *bytes
+                );
+            }
+        }
+
+        let rust_mail = rust_root.join("dispatcher-mail.db");
+        let go_mail = go_root.join("dispatcher-mail.db");
+        let saved_rust = fs::read(&rust_mail)?;
+        let saved_go = fs::read(&go_mail)?;
+        let reject = |names: &[&str]| -> io::Result<()> {
+            let go = run(
+                "submit",
+                json!({"binding":binding,"id":"refused","kind":"complete","paths":names}),
+            )?;
+            assert!(!go.status.success(), "{names:?}");
+            let rust = capture(&checkout, identity, names).and_then(|files| {
+                super::super::mail_store::submit(
+                    &rust_root, &binding, "refused", "complete", "", true, &files,
+                )
+            });
+            assert!(rust.is_err(), "{names:?}");
+            assert_eq!(fs::read(&go_mail)?, saved_go);
+            assert_eq!(fs::read(&rust_mail)?, saved_rust);
+            Ok(())
+        };
+        for (denied, data) in [
+            ("deck.docx", b"not a ZIP".as_slice()),
+            ("archive.zip", b"plain text"),
+            ("image.gif", b"%PDF-1.7"),
+            ("image.webp", b"RIFF0000WEBPXX"),
+            ("program.bin", b"\x7fELFfixture"),
+            ("program.dat", b"MZfixture"),
+            ("macro.xlsm", b"PK\x03\x04fixture"),
+            ("run.sh", b"echo fixture"),
+            ("page.html", b"<html>fixture</html>"),
+            ("text.txt", b"text\x00binary"),
+            ("text.md", b"\xff"),
+            ("token.json", b"{}"),
+            ("private_key.txt", b"fixture"),
+            (".hidden/readme.txt", b"fixture"),
+            ("zero\u{200b}.env", b"fixture"),
+            ("İD_RSA.txt", b"fixture"),
+            ("empty.txt", b""),
+            ("no-extension", b"fixture"),
+        ] {
+            reject(&[&prepare(denied, data)?])?;
+        }
+        let collision = [
+            prepare("a b.txt", b"first")?,
+            prepare("A_b.TXT", b"second")?,
+        ];
+        reject(&[&collision[0], &collision[1]])?;
+        let names = (0..=MAX_FILES)
+            .map(|i| prepare(&format!("{i}.txt"), b"fixture"))
+            .collect::<io::Result<Vec<_>>>()?;
+        reject(&names.iter().map(String::as_str).collect::<Vec<_>>())?;
+        let big = prepare("large.bin", b"x")?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&big)?
+            .set_len(MAX_BYTES as u64)?;
+        reject(&[&big, &prepare("extra.bin", b"x")?])?;
+        let exact = capture(&checkout, identity, &[&big])?;
+        assert_eq!(exact[0].file.size, MAX_BYTES);
+        let go_exact = run(
+            "submit",
+            json!({"binding":binding,"id":"exact-limit","kind":"complete","paths":[big]}),
+        )?;
+        assert!(
+            go_exact.status.success(),
+            "{}",
+            String::from_utf8_lossy(&go_exact.stderr)
+        );
+        let go_exact: Value = serde_json::from_slice(&go_exact.stdout)?;
+        assert_eq!(go_exact["Files"][0], serde_json::to_value(&exact[0].file)?);
+        fs::remove_dir_all(scratch)
     }
 }
