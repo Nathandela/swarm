@@ -10,6 +10,7 @@ mod hook;
 mod ipc;
 mod manager_mcp;
 mod providers;
+mod refresh;
 mod release;
 mod schedule;
 mod setup_trust;
@@ -96,6 +97,7 @@ fn main() -> ExitCode {
         Some("--pilot") => ipc::pilot::run(&args[1..], true),
         Some("pilot") => ipc::pilot::run(&args[1..], false),
         Some("daemon") => supervisor::run(&args[1..]),
+        Some(verb @ ("refresh" | "relogin")) => refresh::run(verb, &args[1..]),
         Some("hook") => hook::run(&args[1..]),
         Some("native-input") => providers::agy_input::cli(&args[1..]),
         Some("shim") => shim::run(&args[1..]),
