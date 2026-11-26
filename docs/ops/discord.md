@@ -123,6 +123,64 @@ Only deliberately published manager replies and clarifications appear in the thr
 
 Use `swarm discord disconnect` to stop the connector. To go back to the legacy directory, run `swarm discord connect --mode legacy --owner-id OWNER_USER_ID --install`. Check the saved channel/user scope before bringing the legacy behavior back online. The old commands below describe that mode.
 
+### Submit from a local service
+
+External input is off by default. For a server teammate installation, an operator
+can add one `external_input` enrollment to the connector configuration.
+
+```json
+{
+  "external_input": {
+    "guild_id": "1000",
+    "channel_id": "2000",
+    "webhook_id": "3000",
+    "project": "docs",
+    "token_file": "/absolute/path/to/external-input-token"
+  }
+}
+```
+
+Use the server and text channel already enrolled for the teammate, a webhook
+the operator controls, and a name from `projects`. The private token file
+contains a distinct high-entropy bearer of at least 32 characters. Restart the
+connector to apply its configuration.
+
+The connector exposes `external-input.sock` in its private state directory.
+Send `POST /admissions` with `Authorization: Bearer <token>` and these JSON
+fields.
+
+| Field | Value |
+| --- | --- |
+| `event_id` | Stable caller event ID, 1–128 ASCII letters, digits, underscores or dashes |
+| `message_id` | ID of the webhook message in the configured parent channel |
+| `content_sha256` | Lowercase SHA-256 of the exact Discord message content, including line breaks |
+| `text` | Initial task text, up to 1,000 UTF-8 bytes |
+| `expires_at` | RFC 3339 timestamp up to ten minutes ahead |
+
+Use `GET /admissions?event_id=<id>` with the same bearer to recover a receipt.
+The receipt reports `event_id`, `state`, and the `discussion_id` and
+`thread_id` once known. Identical replays return the current receipt. A different
+payload with the same key, or a second use of the same announcement, returns
+`409`. A missing receipt returns `404`.
+
+Swarm verifies the webhook and content before dispatch. It opens or recovers the
+thread from the original announcement and uses the existing teammate manager,
+supervisor and configured provider. The discussion stays on the enrolled
+project and uses scoped manager tools. Participants can follow up in the same
+thread using the usual teammate rules.
+
+A receipt can be `queued`, `dispatching`, `accepted` or `blocked`.
+`accepted` means the native runtime accepted the initial input. Poll the same
+key after a lost response. An undispatched input expires at its original
+deadline, and accepting a retry never extends it. Once an operation has
+started, Swarm reconciles its native receipt before deciding whether it can
+dispatch. Task success and Discord publication have their own evidence.
+
+Give the submitting service access only to this socket and its bearer. Protect
+the owner-control socket, setup credentials and state from agent processes.
+Project pinning restricts Swarm's manager tools. Use an OS execution boundary
+when the native processes require different filesystem or network permissions.
+
 ## Set up a place
 
 Create a bot application in the [Discord Developer Portal](https://discord.com/developers/applications). Choose its public bot name there and your local integration label below. Enable **Message Content Intent** on the Bot page: joined-thread context needs ordinary message text. Discord requires this setting for privileged message content; larger verified applications may also need Discord approval. See [Gateway intents](https://docs.discord.com/developers/events/gateway#message-content-intent).

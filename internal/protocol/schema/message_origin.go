@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// MessageOrigin records human provenance independently of the transport's source.
+// MessageOrigin records input provenance independently of the transport's source.
 // External context grants no owner authority; endorsement names the owner who accepted it.
 type MessageOrigin struct {
 	Kind           string `json:"kind"`

@@ -41,6 +41,8 @@ type Config struct {
 	ReceptionistCLI    string              `json:"receptionist_cli"`
 	ReceptionistModel  string              `json:"receptionist_model"`
 	WorkDir            string              `json:"work_dir"`
+
+	ExternalInput *ExternalInputConfig `json:"external_input,omitempty"`
 }
 
 // SupervisorPaths retain the operator's chosen place when the user service starts after logout.
@@ -207,6 +209,13 @@ func (c Config) Validate() error {
 		if !filepath.IsAbs(p) || !validText(p, 4096) {
 			return errors.New("discord: invalid config path")
 		}
+	}
+	if e := c.ExternalInput; e != nil && (c.Mode != "teammate" ||
+		!snowflake(e.GuildID) || !snowflake(e.ChannelID) || !snowflake(e.WebhookID) ||
+		!containsID(c.GuildIDs, e.GuildID) || len(c.ChannelIDs) > 0 && !containsID(c.ChannelIDs, e.ChannelID) ||
+		c.Projects[e.Project] == "" || !validStatePath(e.TokenFile) ||
+		filepath.Clean(e.TokenFile) == filepath.Clean(c.TokenFile)) {
+		return errors.New("discord: external input requires an enrolled server, channel and project, and a distinct credential")
 	}
 	for _, s := range []string{c.ReceptionistCLI, c.ReceptionistModel} {
 		if s != "" && !validText(s, 256) {

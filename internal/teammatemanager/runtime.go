@@ -189,8 +189,9 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 		}
 		return opened, nil
 	}
+	vmProjectAccess := r.vmProjectAccess && bound.FixedProject == ""
 	if skipDormant && r.dormant[id] {
-		if !r.vmProjectAccess || settings == "" {
+		if !vmProjectAccess || settings == "" {
 			return nil, nil
 		}
 		notes, err := workermail.Pending(settings, voice.DiscussionConversationPrefix+id)
@@ -205,7 +206,15 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	cfg := r.cfg
 	cfg.DaemonSocket = socket
 	cfg.ConversationID += id
-	if r.vmProjectAccess {
+	projectEnrolled := r.projectEnrolled
+	if bound.FixedProject != "" {
+		if !r.projectEnrolled(bound.FixedProject) {
+			return nil, voice.ErrInvalid
+		}
+		cfg.WorkDir = bound.FixedProject
+		projectEnrolled = func(project string) bool { return project == bound.FixedProject && r.projectEnrolled(project) }
+	}
+	if vmProjectAccess {
 		if _, err := r.attachmentDirectory(id); err != nil {
 			return nil, err
 		}
@@ -216,9 +225,9 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 	}
 	entry := &discussion{socket: filepath.Join(socketDir, "bridge.sock"), reader: reader, id: id, users: 1}
 	manager, err := voice.OpenDiscussion(r.ctx, filepath.Join(r.dir, id), socketDir, endpoint, cfg, voice.DiscussionScope{
-		ManagerSettingsDir: settings, VMProjectAccess: r.vmProjectAccess,
+		ManagerSettingsDir: settings, VMProjectAccess: vmProjectAccess,
 		DiscussionID: bound.ID, InstallationID: bound.InstallationID, GuildID: bound.Route.GuildID, DMOwnerID: r.dmOwner, ThreadID: bound.Route.ChannelID,
-		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyRecipient: entry.verifyRecipient, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: r.projectEnrolled,
+		History: entry.read, ConfirmedDelivery: entry.confirmedDelivery, VerifyAudience: entry.verifyAudience, VerifyOrigin: entry.verifyOrigin, VerifyRecipient: entry.verifyRecipient, VerifyGrant: entry.verifyGrant, ExpectsReply: entry.expectsReply, ProjectEnrolled: projectEnrolled,
 	})
 	if err != nil {
 		return nil, err
@@ -232,7 +241,7 @@ func (r *Runtime) discussion(bound discord.TeammateDiscussion, reader discord.Te
 
 // AttachmentDirectory uses the same verified discussion identity as the manager bridge.
 func (r *Runtime) AttachmentDirectory(b discord.TeammateDiscussion) (string, error) {
-	if !r.vmProjectAccess || b.InstallationID != r.cfg.PlaceID || b.ID == "" || b.Route.ChannelID == "" {
+	if !r.vmProjectAccess || b.FixedProject != "" || b.InstallationID != r.cfg.PlaceID || b.ID == "" || b.Route.ChannelID == "" {
 		return "", voice.ErrInvalid
 	}
 	endpoint, _, _, err := r.supervisorForDiscussion(b)
@@ -370,6 +379,9 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 	err = entry.voice.Admit(ctx, voice.DiscussionInput{
 		ExpectReply: input.ExpectReply || input.RequireMention || input.Discussion.Route.GuildID == "", Origin: discussionOrigin(input), Answer: answer, QuestionID: input.QuestionID, QuestionHash: input.QuestionHash, Supersedes: input.Supersedes,
 		Project: func(selected string) (string, bool) {
+			if input.Discussion.FixedProject != "" {
+				return input.Discussion.FixedProject, true
+			}
 			project := r.resolveProject(selected, input.Text, projectHistory(page, input.Route.MessageID))
 			wording := projectWords(input.Text)
 			explicit, count := r.namedProject(wording)
@@ -691,12 +703,12 @@ func attachmentInstruction(manifest string) string {
 
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
-	if r.vmProjectAccess {
+	if r.vmProjectAccess && input.Discussion.FixedProject == "" {
 		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the worker with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask bound workers for explicit needs-input and completion notes with swarm teammate message, then return after dispatch. For an existing session without a mailbox for this discussion, inspect it on request and explain that automatic notifications are unavailable. Never tell workers to send text directly to the dispatcher session.\n")
 	} else {
 		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
 	}
-	if len(r.projects) > 1 && !r.vmProjectAccess {
+	if len(r.projects) > 1 && !r.vmProjectAccess && input.Discussion.FixedProject == "" {
 		names := make([]string, 0, len(r.projects))
 		for name := range r.projects {
 			names = append(names, name)
@@ -757,7 +769,11 @@ func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateH
 		Author                   discord.Actor
 		MessageID, ReplyTo, Text string
 	}{input.Author, input.Route.MessageID, input.ReplyTo, input.Text})
-	fmt.Fprintf(&msg, "Current human instruction (JSON) %s", body)
+	sourceLabel := "Current human instruction"
+	if input.Route == input.Discussion.Starter && input.Discussion.FixedProject != "" {
+		sourceLabel = "Current external service instruction"
+	}
+	fmt.Fprintf(&msg, "%s (JSON) %s", sourceLabel, body)
 	return msg.String()
 }
 

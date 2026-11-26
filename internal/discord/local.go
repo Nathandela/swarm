@@ -358,10 +358,14 @@ func (s *Service) resumeTeammateManual(ctx context.Context, input LocalTeammateR
 
 // ServeLocal exposes the connector only through an owner-private Unix socket.
 func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
+	return serveLocalSocket(ctx, stateDir, "bridge", http.HandlerFunc(s.localHandler))
+}
+
+func serveLocalSocket(ctx context.Context, stateDir, name string, handler http.Handler) error {
 	if err := privateDir(stateDir); err != nil {
 		return err
 	}
-	lock, err := openStoreFile(filepath.Join(stateDir, "bridge.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := openStoreFile(filepath.Join(stateDir, name+".lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
@@ -370,7 +374,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 		return errors.New("discord: local service already running")
 	}
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
-	path := filepath.Join(stateDir, "bridge.sock")
+	path := filepath.Join(stateDir, name+".sock")
 	if info, e := os.Lstat(path); e == nil {
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || info.Mode()&os.ModeSocket == 0 || stat.Nlink != 1 || stat.Uid != uint32(os.Getuid()) {
@@ -412,7 +416,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 	if err = os.Chmod(path, 0600); err != nil {
 		return err
 	}
-	server := &http.Server{Handler: http.HandlerFunc(s.localHandler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 35 * time.Second, MaxHeaderBytes: 8192, BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 35 * time.Second, MaxHeaderBytes: 8192, BaseContext: func(net.Listener) context.Context { return ctx }}
 	defer func() { _ = server.Close() }()
 	stopped := make(chan struct{})
 	go func() {

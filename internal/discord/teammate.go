@@ -70,6 +70,7 @@ type TeammateDiscussion struct {
 	SupervisorSocket   string `json:"supervisor_socket,omitempty"`
 	Route, Starter     Route
 	ParentAnchor       string
+	FixedProject       string `json:"fixed_project,omitempty"`
 	Gap                uint64
 }
 

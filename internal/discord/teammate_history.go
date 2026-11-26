@@ -557,10 +557,12 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 	if err != nil {
 		return err
 	}
+	eventID := record.ExternalEventID
 	if a := record.Admission; a != nil {
 		if a.Discussion.ID != d.ID || a.Discussion.Route != d.Route || a.OperationID != q.AdmissionID ||
 			a.Revision != q.Revision || a.Author.ID != q.AuthorID || record.Deleted ||
-			record.State != StateSending && record.State != teammateStateAccepted && record.State != StateSent {
+			record.State != StateSending && record.State != teammateStateAccepted && record.State != StateSent ||
+			eventID != "" && record.Edited {
 			return ErrTeammateSourceChanged
 		}
 		if q.Source == "grant" && record.State != StateSent {
@@ -580,6 +582,10 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 			guard.Revision != q.Revision || guard.ActorID != q.AuthorID || guard.LastChange == "deleted" {
 			return ErrTeammateSourceChanged
 		}
+		eventID = guard.ExternalEventID
+		if eventID != "" && guard.LastChange != "" {
+			return ErrTeammateSourceChanged
+		}
 		record.Admission = &TeammateAdmission{Route: guard.Route, Author: Actor{ID: guard.ActorID}, RequireMention: guard.RequireMention}
 	}
 	route := record.Admission.Route
@@ -589,6 +595,29 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 	}
 	if err = t.checkDiscussion(ctx, d); err != nil {
 		return err
+	}
+	if eventID != "" {
+		external, err := t.service.Store.externalRecord(d.InstallationID, eventID)
+		if err != nil {
+			return err
+		}
+		if d.FixedProject != external.Scope.Project || external.Receipt.DiscussionID != d.ID || external.Receipt.ThreadID != d.Route.ChannelID ||
+			external.Hash != q.Revision || external.Scope.WebhookID != q.AuthorID {
+			return ErrTeammateSourceChanged
+		}
+		if _, err = t.externalAnchor(ctx, route, external, q.Source == "admission"); err != nil {
+			if permanentExternalSource(err) {
+				return ErrTeammateSourceChanged
+			}
+			return err
+		}
+		if expects != nil {
+			*expects = true
+		}
+		if authenticatedRoute != nil {
+			*authenticatedRoute = route
+		}
+		return nil
 	}
 	m, err := t.readAdmissionSource(ctx, record)
 	if err != nil {

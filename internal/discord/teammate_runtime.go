@@ -20,6 +20,7 @@ type teammateConnector struct {
 	manager   TeammateManager
 	cursorKey []byte
 	wake      chan struct{}
+	external  externalInputScope
 }
 
 func (t *teammateConnector) signal() {
@@ -257,6 +258,9 @@ func teammateRevision(m *discordgo.Message) string {
 }
 
 func (t *teammateConnector) process(ctx context.Context, c teammateCandidate) error {
+	if c.ExternalEventID != "" {
+		return t.processExternal(ctx, c)
+	}
 	cfg := t.service.Config
 	store := t.service.Store
 	var a TeammateAdmission
@@ -417,6 +421,9 @@ func (t *teammateConnector) saveAdmissionPhase(c teammateCandidate, phase string
 func (t *teammateConnector) reconcileAccepted(ctx context.Context, c teammateCandidate) error {
 	if c.Admission == nil || c.State != teammateStateAccepted {
 		return ErrInvalid
+	}
+	if c.ExternalEventID != "" {
+		return t.processExternal(ctx, c)
 	}
 	state, err := t.manager.AdmissionState(ctx, *c.Admission)
 	if err != nil {
@@ -767,6 +774,10 @@ func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, 
 		return err
 	}
 	t := &teammateConnector{service: s, client: c, manager: m, cursorKey: key, wake: make(chan struct{}, 1)}
+	bearer, err := t.externalInputAuth()
+	if err != nil {
+		return err
+	}
 	c.onDispatch = t.gateway
 	if s.Config.Mode == "personal" {
 		c.UsePersonalDMs()
@@ -777,7 +788,7 @@ func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, 
 			return err
 		}
 	}
-	failures := make(chan error, 3)
+	failures := make(chan error, 4)
 	c.OnError = func(err error) { failures <- err }
 	var tasks sync.WaitGroup
 	defer func() { cancel(); _ = c.Close(); tasks.Wait() }()
@@ -788,7 +799,15 @@ func runTeammateConnected(parent context.Context, s *Service, c *DiscordClient, 
 	if err = c.Open(ctx); err != nil {
 		return err
 	}
+	if bearer != "" {
+		tasks.Go(func() {
+			failures <- serveLocalSocket(ctx, s.StateDir, externalInputSocket, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.externalHandler(bearer, w, r)
+			}))
+		})
+	}
 	tasks.Go(func() { failures <- t.run(ctx) })
+
 	select {
 	case <-ctx.Done():
 		return nil

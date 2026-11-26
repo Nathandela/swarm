@@ -39,6 +39,8 @@ type teammateCandidate struct {
 	State         string
 	Error         string
 	Admission     *TeammateAdmission
+
+	ExternalEventID string `json:",omitempty"`
 }
 
 type teammateIngressGuard struct {
@@ -46,6 +48,8 @@ type teammateIngressGuard struct {
 	Route                                                     Route
 	ActorID, OperationID, Revision, DiscussionID, Disposition string
 	LastChange                                                string
+
+	ExternalEventID string `json:",omitempty"`
 }
 
 type teammateBinding struct {
@@ -356,7 +360,8 @@ func (s *Store) teammateBind(binding teammateBinding) error {
 		var old teammateBinding
 		err := teammateGet(b, key, &old)
 		if err == nil {
-			if old.ID != binding.ID || old.Route != binding.Route {
+			if old.ID != binding.ID || old.Route != binding.Route || old.FixedProject != binding.FixedProject ||
+				binding.FixedProject != "" && old.Starter != binding.Starter {
 				return ErrConflict
 			}
 			return teammateActivate(tx, &old)
@@ -582,6 +587,9 @@ func (s *Store) teammateCandidateChange(installation string, prior teammateCandi
 		if state == StateSent || state == StateFailed {
 			return teammateSettleCandidate(tx, installation, key, record, state)
 		}
+		if err := updateExternalReceipt(tx, installation, record); err != nil {
+			return err
+		}
 		return putJSON(tx, teammateIngressBucket, key, record)
 	})
 }
@@ -607,7 +615,11 @@ func teammateIngressCount(tx *bolt.Tx, delta int) error {
 }
 
 func teammateSettleCandidate(tx *bolt.Tx, install string, key []byte, record teammateCandidate, state string) error {
-	guard := teammateIngressGuard{Route: record.Route, ActorID: record.Author.ID, Disposition: state}
+	record.State = state
+	if err := updateExternalReceipt(tx, install, record); err != nil {
+		return err
+	}
+	guard := teammateIngressGuard{Route: record.Route, ActorID: record.Author.ID, Disposition: state, ExternalEventID: record.ExternalEventID}
 	if record.Admission != nil {
 		guard.OperationID, guard.Revision, guard.DiscussionID = record.Admission.OperationID, record.Admission.Revision, record.Admission.Discussion.ID
 		guard.RequireMention = record.Admission.RequireMention
