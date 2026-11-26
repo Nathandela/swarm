@@ -176,9 +176,11 @@ fn stage_records<'tx>(
         || records
             .get(&key("closed_turns", &conversation, turn)?)
             .is_some()
-        || records
-            .iter_entries()
-            .any(|(k, _)| k.starts_with(b"publications\0"))
+        || records.iter_entries().any(|(key, raw)| {
+            key.starts_with(b"publications\0")
+                && !serde_json::from_slice::<Value>(raw)
+                    .is_ok_and(|row| row["admission"] != seq && row["exported"] == true)
+        })
         || original.admission["settled_at"] != EMPTY_TIME
         || original.admission["native_binding_retired"] == true
         || original.admission["recovery_only"] == true
@@ -385,4 +387,121 @@ pub(super) fn accept(
     }
     acknowledge_export(cfg, lease, candidate, &output)?;
     Ok(output)
+}
+
+pub(super) fn complete(
+    place: &Place,
+    cfg: &Config,
+    lease: &ConnectorLease,
+    candidate: &Candidate,
+) -> io::Result<()> {
+    let (directory, id, endpoint) = voice_location(place, cfg, &candidate.binding)?;
+    let path = directory.join("voice.db");
+    let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
+    let tx = db.begin_rw().map_err(io::Error::other)?;
+    let mut original = inspect_voice(
+        &tx,
+        &id,
+        &candidate.origin,
+        cfg.text("manager_cli"),
+        &endpoint,
+    )?;
+    let request = &original.admission["request"];
+    let admission = &request["manager_admission"];
+    let turn = field(&original.admission, "native_turn_id").to_owned();
+    let conversation = field(&original.binding, "conversation_id").to_owned();
+    let seq = original.admission["sequence"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    if original.admission["phase"] != "running"
+        || original.admission["source_cutover"] != true
+        || original.admission["settled_at"] != EMPTY_TIME
+        || turn.is_empty()
+        || original.conversation["last_admission"] != seq
+        || original.conversation["retired_through"]
+            .as_u64()
+            .and_then(|n| n.checked_add(1))
+            != Some(seq)
+    {
+        return Err(invalid());
+    }
+    let caps = ["manager-provenance"];
+    let (mut owner, _) = super::super::migrate_supervisor::verified_owner(
+        place.supervisor_root(),
+        Path::new(cfg.text("daemon_socket")),
+        Path::new(field(&cfg.0["supervisor"], "lock")),
+        &caps,
+    )?;
+    cfg.check_supervisor(&owner, &caps)?;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let reply = owner.request_body(
+            json!({
+                "op":"manager_input_status","session_id":request["session"],"body_version":1,
+                "manager_input_status_request":admission
+            }),
+            "manager_input_status",
+        )?;
+        let observed = &reply["manager_input_status"];
+        if reply["endpoint_id"] != owner.endpoint()
+            || reply["session_id"] != request["session"]
+            || observed["native_input_id"] != admission["nonce"]
+            || observed["native_turn_id"] != turn
+            || observed["externally_steered"] == true
+            || observed["external_input"] != admission["expected_external_input"]
+        {
+            return Err(invalid());
+        }
+        match field(observed, "state") {
+            "completed" => break,
+            "running" if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            _ => {
+                return Err(io::Error::other(
+                    "original native turn remains unresolved after Discord acknowledgement",
+                ));
+            }
+        }
+    }
+    let permit_key = key("permits", &conversation, &turn)?;
+    let closed = key("closed_turns", &conversation, &turn)?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    let mut permit: Value = serde_json::from_slice(records.get(&permit_key).ok_or_else(invalid)?)?;
+    if permit["conversation_id"] != conversation
+        || permit["admission"] != seq
+        || permit["native_turn_id"] != turn
+        || permit["native_input_id"] != admission["nonce"]
+        || permit["revoked"] != false
+        || records.get(&closed).is_some()
+        || records.iter_entries().any(|(key, _)| {
+            [b"actions\0".as_slice(), b"requests\0", b"wakes\0"]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+        })
+        || !identity(&pin, &path)?
+        || !lease.source_unchanged()?
+    {
+        return Err(invalid());
+    }
+    permit["revoked"] = json!(true);
+    original.admission["phase"] = json!("completed");
+    original.admission["settled_at"] = json!(Timestamp::now().to_string());
+    original
+        .admission
+        .as_object_mut()
+        .ok_or_else(invalid)?
+        .shift_remove("reply_check_after");
+    original.conversation["retired_through"] = json!(seq);
+    let changes = [
+        (
+            format!("conversations\0{conversation}").into_bytes(),
+            original.conversation,
+        ),
+        (original.key, original.admission),
+        (permit_key, permit),
+        (closed, json!(true)),
+    ];
+    apply_voice(tx, original.header, &changes)
 }

@@ -169,7 +169,7 @@ impl Room for Discord {
 pub(in crate::discord) fn run(place: &Place) -> io::Result<bool> {
     let cfg = retained_config(place)?;
     let api = Discord::connect(&cfg)?;
-    with(place, &api, |cfg| {
+    with(place, &api, None, |cfg| {
         let (mut socket, mut cursor) = gateway::open(cfg)?;
         Ok(move || cursor.event(&mut socket))
     })
@@ -178,6 +178,7 @@ pub(in crate::discord) fn run(place: &Place) -> io::Result<bool> {
 pub(super) fn with<ReadEvent>(
     place: &Place,
     room: &impl Room,
+    limit: Option<usize>,
     open: impl FnOnce(&Config) -> io::Result<ReadEvent>,
 ) -> io::Result<bool>
 where
@@ -213,55 +214,85 @@ where
             "the original personal boundary is absent from the visible Discord history page",
         ));
     }
-    let mut pending = history
+    let mut pending: std::collections::BTreeSet<_> = history
         .iter()
         .filter_map(|row| enrolled_dm(&cfg, row))
-        .filter(|id| id.parse::<u64>().is_ok_and(|n| n > boundary));
-    let first = pending.next().map(str::to_owned);
-    if pending.next().is_some() {
-        return Err(io::Error::other(
-            "multiple newer owner DMs require original Go history repair",
-        ));
-    }
-    let message = if let Some(message) = first {
-        message
-    } else {
+        .filter_map(|id| id.parse::<u64>().ok())
+        .filter(|id| *id > boundary)
+        .collect();
+    let mut handled = 0;
+    let mut through = boundary;
+    loop {
+        let sequence = loop {
+            if let Some(id) = pending.pop_first() {
+                break id;
+            }
+            if let Some(frame) = event()? {
+                queue_event(&cfg, &frame, through, &mut pending)?;
+            }
+        };
+        let message = sequence.to_string();
+        let fetch = || room.message(&cfg, &message);
+        capture_under_lease(&cfg, &message, &mut lease, |_, _| fetch())?;
+        prepare::under_lease(place, &cfg, &message, &mut lease, |_, _| fetch())?;
+        let row = pending_dispatch(&lease.db, &cfg, &message)?;
+        let bridge = Bridge::open(place, &cfg, &row)?;
+        dispatch_under_lease(place, &cfg, &message, &mut lease, |_| fetch())?;
+        settle_under_lease(place, &cfg, &message, &mut lease)?;
+        let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            if let Some(frame) = event()?
-                && frame["t"] == "MESSAGE_CREATE"
-                && let Some(message) = enrolled_dm(&cfg, &frame["d"])
-                && message.parse::<u64>().is_ok_and(|n| n > boundary)
-            {
-                break message.to_owned();
+            if Instant::now() >= deadline {
+                return Err(io::Error::other(
+                    "the original native manager has no verified final publication",
+                ));
+            }
+            if let Some(id) = bridge.accept(place, &cfg, &mut lease, &row, fetch)? {
+                publication::under_lease(place, &cfg, &id, &mut lease, |cfg| {
+                    room.verify(cfg)?;
+                    let scope = cfg.clone();
+                    Ok(move |row: &publication::Publication| {
+                        room.post(&scope, &row.nonce, &row.body)
+                    })
+                })?;
+                manager_publication::complete(place, &cfg, &lease, &row)?;
+                break;
+            }
+            if let Some(frame) = event()? {
+                if matches!(field(&frame, "t"), "MESSAGE_UPDATE" | "MESSAGE_DELETE")
+                    && frame["d"]["id"] == message
+                {
+                    return Err(io::Error::other(
+                        "owner source changed during the retained native turn",
+                    ));
+                }
+                queue_event(&cfg, &frame, sequence, &mut pending)?;
             }
         }
-    };
-    let fetch = || room.message(&cfg, &message);
-    capture_under_lease(&cfg, &message, &mut lease, |_, _| fetch())?;
-    prepare::under_lease(place, &cfg, &message, &mut lease, |_, _| fetch())?;
-    let row = pending_dispatch(&lease.db, &cfg, &message)?;
-    let bridge = Bridge::open(place, &cfg, &row)?;
-    dispatch_under_lease(place, &cfg, &message, &mut lease, |_| fetch())?;
-    settle_under_lease(place, &cfg, &message, &mut lease)?;
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while Instant::now() < deadline {
-        if let Some(id) = bridge.accept(place, &cfg, &mut lease, &row, fetch)? {
-            return publication::under_lease(place, &cfg, &id, &mut lease, |cfg| {
-                room.verify(cfg)?;
-                let scope = cfg.clone();
-                Ok(move |row: &publication::Publication| room.post(&scope, &row.nonce, &row.body))
-            });
-        }
-        if let Some(frame) = event()?
-            && matches!(field(&frame, "t"), "MESSAGE_UPDATE" | "MESSAGE_DELETE")
-            && frame["d"]["id"] == message
-        {
-            return Err(io::Error::other(
-                "owner source changed during the retained native turn",
-            ));
+        handled += 1;
+        through = sequence;
+        if limit == Some(handled) {
+            return Ok(true);
         }
     }
-    Err(io::Error::other(
-        "the original native manager has no verified final publication",
-    ))
+}
+
+fn queue_event(
+    cfg: &Config,
+    frame: &Value,
+    through: u64,
+    pending: &mut std::collections::BTreeSet<u64>,
+) -> io::Result<()> {
+    if frame["t"] == "MESSAGE_CREATE"
+        && let Some(id) = enrolled_dm(cfg, &frame["d"])
+        && let Ok(id) = id.parse::<u64>()
+        && id > through
+    {
+        pending.insert(id);
+    }
+    if pending.len() > 100 {
+        return Err(io::Error::other(
+            "retained personal input backlog requires original Go history repair",
+        ));
+    }
+    Ok(())
 }

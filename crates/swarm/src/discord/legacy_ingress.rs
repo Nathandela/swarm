@@ -1257,6 +1257,7 @@ mod tests {
         use super::super::rest::Post;
         struct Room {
             current: Value,
+            second: Value,
             posts: std::cell::Cell<u32>,
             acknowledge: bool,
         }
@@ -1273,14 +1274,18 @@ mod tests {
                 ])
             }
             fn message(&self, _: &Config, id: &str) -> io::Result<Value> {
-                assert_eq!(id, "701");
-                Ok(self.current.clone())
+                match id {
+                    "701" => Ok(self.current.clone()),
+                    "702" => Ok(self.second.clone()),
+                    _ => Err(invalid()),
+                }
             }
             fn post(&self, _: &Config, nonce: &str, body: &str) -> Post {
                 assert_eq!(body, "Verified native final reply.");
-                assert_eq!(self.posts.replace(1), 0);
+                let count = self.posts.get() + 1;
+                self.posts.set(count);
                 if self.acknowledge {
-                    Post::Acknowledged(json!({"id":"900","channel_id":"400",
+                    Post::Acknowledged(json!({"id":(899+count).to_string(),"channel_id":"400",
                         "author":{"id":"100"},"content":body,"nonce":nonce}))
                 } else {
                     Post::Unconfirmed
@@ -1290,8 +1295,12 @@ mod tests {
         let place = Place::for_supervisor(Path::new(&root)).unwrap();
         let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
             "content":"Retained real native loopback input.", "type":0, "attachments":[]});
+        let mut second = current.clone();
+        second["id"] = json!("702");
+        second["content"] = json!("Second retained real native loopback input.");
         let room = Room {
             current: current.clone(),
+            second: second.clone(),
             posts: std::cell::Cell::new(0),
             acknowledge: std::env::var_os("SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK").is_none(),
         };
@@ -1330,10 +1339,15 @@ mod tests {
                 json!({"op":0,"s":3,"t":"MESSAGE_CREATE","d":current}),
             )
             .unwrap();
+            gateway::send(
+                &mut socket,
+                json!({"op":0,"s":4,"t":"MESSAGE_CREATE","d":second}),
+            )
+            .unwrap();
             done.recv_timeout(std::time::Duration::from_secs(40))
                 .unwrap();
         });
-        let result = service::with(&place, &room, |cfg| {
+        let result = service::with(&place, &room, Some(2), |cfg| {
             assert!(open_bolt(&source, 64 << 20).is_err());
             if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
                 let other = Command::new(fixture)
@@ -1361,7 +1375,7 @@ mod tests {
                     .contains("outcome remains unresolved")
             );
         }
-        assert_eq!(room.posts.get(), 1);
+        assert_eq!(room.posts.get(), if room.acknowledge { 2 } else { 1 });
         let cfg = place.load().unwrap();
         let request = {
             let (_pin, db) = open_bolt(&source, 64 << 20).unwrap();
@@ -1376,7 +1390,12 @@ mod tests {
             let (directory, id, endpoint) = voice_location(&place, &cfg, &saved).unwrap();
             let (_pin, _db, receipt) =
                 controller(&directory, &id, &origin, "codex", &endpoint).unwrap();
-            assert_eq!(receipt.admission["phase"], "running");
+            let phase = if room.acknowledge {
+                "completed"
+            } else {
+                "running"
+            };
+            assert_eq!(receipt.admission["phase"], phase);
             assert_eq!(receipt.admission["source_cutover"], true);
             receipt.admission["request"].clone()
         };

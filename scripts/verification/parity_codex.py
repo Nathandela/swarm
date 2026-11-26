@@ -69,7 +69,7 @@ def model_fixture(root, alternate_check, guard_check=False, native_publication=F
                     usage={"input_tokens":82_000 if high else 10,"output_tokens":4,"total_tokens":82_004 if high else 14,
                            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
             ]
-            if native_publication and index == 1:
+            if native_publication and index % 2 == 1:
                 names = [(tool.get("name"), child.get("name"))
                          for tool in body.get("tools",[]) for child in tool.get("tools",[])
                          if child.get("name") == "publish"]
@@ -77,7 +77,7 @@ def model_fixture(root, alternate_check, guard_check=False, native_publication=F
                 namespace, name = names[0]
                 arguments = json.dumps(dict(output_id="retained-final",sequence=1,
                                             text="Verified native final reply.",final=True))
-                item = dict(type="function_call",id="fixture-function-1",call_id="fixture-call-1",
+                item = dict(type="function_call",id=f"fixture-function-{index}",call_id=f"fixture-call-{index}",
                             namespace=namespace,name=name,arguments=arguments,status="completed")
                 events = [
                     ("response.created", {"response":response.copy()}),

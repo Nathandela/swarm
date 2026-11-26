@@ -50,7 +50,8 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
                 if not acknowledge:
                     test_env["SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK"] = "1"
                 run(rust_test, test_env, "retained_original_go_native_manager_roundtrip", "--nocapture")
-                await_value(lambda: len(calls) >= 2)
+                inference_calls = 4 if acknowledge else 2
+                await_value(lambda: len(calls) >= inference_calls)
                 reopened = json.loads(run(fixture, env, "activate", place, "original-room"))
                 # Opening the Go voice database advances its controller generation.
                 # The supervisor process, PTY, account, native observation and session
@@ -58,13 +59,18 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
                 assert reopened.pop("generation") == binding.pop("generation") + 1
                 assert reopened == binding
                 assert auth.read_bytes() == original_credential
-                assert len(calls) == 2
+                assert len(calls) == inference_calls
                 states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
-                state, = states
-                phase, export, nonce = state.split()
-                assert (phase, export) == ("sent" if acknowledge else "uncertain", "true")
-                assert len(nonce) == 24
+                assert len(states) == (2 if acknowledge else 1)
+                nonces = set()
+                for state in states:
+                    phase, export, nonce = state.split()
+                    assert (phase, export) == ("sent" if acknowledge else "uncertain", "true")
+                    assert len(nonce) == 24 and nonce not in nonces
+                    nonces.add(nonce)
                 assert run(fixture, env, "ingress", place, "original-room", "701", "replay").strip() == "0"
+                if acknowledge:
+                    assert run(fixture, env, "ingress", place, "original-room", "702", "replay").strip() == "0"
             except Exception:
                 print("Pinned Go supervisor log:", (base / "go.log").read_text()[-8000:], file=sys.stderr)
                 for row in listed(env):

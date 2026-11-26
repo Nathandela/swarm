@@ -89,6 +89,37 @@ fn read_voice<'tx>(
             admissions += 1;
             continue;
         }
+        if key.starts_with(b"closed_turns\0") && value == true {
+            let id: [String; 2] = serde_json::from_slice(&key[b"closed_turns\0".len()..])?;
+            if id[0] == conversation && !id[1].is_empty() {
+                continue;
+            }
+        }
+        let turn = field(&value, "native_turn_id");
+        if value["conversation_id"] == conversation && !turn.is_empty() {
+            let turn_key = serde_json::to_string(&[conversation.as_str(), turn])?;
+            let closed = format!("closed_turns\0{turn_key}");
+            if records.get(closed.as_bytes()) == Some(b"true".as_slice()) {
+                if key.starts_with(b"permits\0") && value["revoked"] == true {
+                    continue;
+                }
+                if key.starts_with(b"publications\0")
+                    && value["exported"] == true
+                    && value["final"] == true
+                    && !field(&value, "id").is_empty()
+                    && [
+                        "discussion_projects",
+                        "discussion_attempts",
+                        "discussion_files",
+                        "recipient_id",
+                    ]
+                    .iter()
+                    .all(|key| value[*key].is_null() || value[*key] == "")
+                {
+                    continue;
+                }
+            }
+        }
         // Avoid giving a second scheduler custody of other unresolved work.
         return Err(invalid());
     }
@@ -351,6 +382,29 @@ pub(super) fn with(
     under_lease(place, &cfg, message, &mut lease, fetch)
 }
 
+fn no_pending_output<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<()> {
+    let outbox = tx.bucket(b"teammate_outbox").ok_or_else(invalid)?;
+    let prefix = format!("{}\0", cfg.text("installation_id"));
+    for (count, (key, raw)) in outbox.iter_entries().enumerate() {
+        if count >= 2048 || !key.starts_with(prefix.as_bytes()) || raw.len() > 1 << 20 {
+            return Err(invalid());
+        }
+        let row: Value = serde_json::from_slice(raw)?;
+        if row["Route"]["channel_id"] != cfg.text("dm_channel_id")
+            || row["Route"]["guild_id"] != ""
+            || row["ExportAck"] != true
+            || !row["Chunks"].as_array().is_some_and(|parts| {
+                !parts.is_empty() && parts.iter().all(|part| part["state"] == "sent")
+            })
+        {
+            return Err(io::Error::other(
+                "original Go outbox contains unconfirmed effects",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn under_lease(
     place: &Place,
     cfg: &Config,
@@ -362,6 +416,7 @@ pub(super) fn under_lease(
         return Err(invalid());
     }
     let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
+    no_pending_output(&tx, cfg)?;
     let input = fetch(cfg, message)?;
     let text = input["content"]
         .as_str()
