@@ -630,7 +630,12 @@ mod tests {
                         }
                         _ => panic!("unexpected request {request}"),
                     };
-                    write!(socket, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.to_string().len()).unwrap();
+                    let body = body.to_string();
+                    let response = format!(
+                        "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket.write_all(response.as_bytes()).unwrap();
                 }
                 posts
             });
