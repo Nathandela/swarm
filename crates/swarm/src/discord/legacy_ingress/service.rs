@@ -407,11 +407,18 @@ impl<R: Room> VmRelay<'_, R> {
     ) -> io::Result<Option<Value>> {
         let bridge = Bridge::open(self.place, self.cfg, self.binding)?;
         opened();
-        if let Some(prepared) = self.prepared.take() {
-            if stopped()? {
-                return Ok(None);
-            }
-            queue::dispatch(self.place, self.cfg, lease, prepared, self.room)?;
+        if let Some(prepared) = self.prepared.take()
+            && (stopped()?
+                || !queue::dispatch(
+                    self.place,
+                    self.cfg,
+                    lease,
+                    prepared,
+                    self.room,
+                    &mut stopped,
+                )?)
+        {
+            return Ok(None);
         }
         let until = Instant::now() + Duration::from_secs(30);
         while Instant::now() < until {
@@ -564,7 +571,7 @@ where
                     }
                     queue_event(&cfg, &frame, boundary, &mut pending)?;
                 }
-                Ok(false)
+                Ok(status.stopping())
             },
         )?;
         let Some(output) = result else {

@@ -1356,10 +1356,13 @@ mod tests {
         let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
         let marker = root.join("rust-wake-ready");
         let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
-        if matches!(
-            deliver.as_str(),
-            "ordinary-sent" | "ordinary-mixed" | "ordinary-replace" | "ordinary-fresh"
-        ) {
+        let blocked = deliver.strip_prefix("ordinary-fence-");
+        if blocked.is_some()
+            || matches!(
+                deliver.as_str(),
+                "ordinary-sent" | "ordinary-mixed" | "ordinary-replace" | "ordinary-fresh"
+            )
+        {
             let mixed = deliver == "ordinary-mixed";
             let command = |args: &[&str]| {
                 use super::super::{Request, execute};
@@ -1417,6 +1420,28 @@ mod tests {
                 }
                 panic!("ordinary service did not own the old native wake bridge");
             });
+            let shutdown = (blocked == Some("stop")).then(|| {
+                let root = root.to_owned();
+                let dir = place.dir.clone();
+                let installation = cfg.text("installation_id").to_owned();
+                std::thread::spawn(move || {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                    while !root.join("rust-dispatch-runtime-blocked").exists() {
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    let stopped = crate::discord::local::call_until(
+                        &dir,
+                        "shutdown",
+                        "",
+                        Some((&installation, &json!({}))),
+                        deadline,
+                    )
+                    .unwrap();
+                    assert_eq!(stopped["stopped"], true);
+                    fs::write(root.join("rust-dispatch-runtime-resume"), b"ready").unwrap();
+                })
+            });
             let mut left = Some(left);
             let run = service::with(&place, &api, Some(if mixed { 2 } else { 1 }), |cfg| {
                 use super::super::gateway;
@@ -1428,7 +1453,14 @@ mod tests {
             finish.send(()).unwrap();
             gateway.join().unwrap();
             notify.join().unwrap();
-            assert!(run.unwrap());
+            if let Some(shutdown) = shutdown {
+                shutdown.join().unwrap();
+            }
+            if matches!(blocked, Some("edit" | "delete")) {
+                assert!(run.is_err(), "withdrawn parent should hold dispatch");
+            } else {
+                assert!(run.unwrap());
+            }
             if mixed {
                 let (_pin, db) = open_bolt(&place.dir.join("discord.db"), 64 << 20).unwrap();
                 assert!(matches!(

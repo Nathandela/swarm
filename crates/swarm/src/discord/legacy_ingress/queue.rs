@@ -474,7 +474,8 @@ pub(super) fn dispatch(
     lease: &ConnectorLease,
     prepared: Prepared,
     room: &impl service::Room,
-) -> io::Result<()> {
+    mut stopped: impl FnMut() -> io::Result<bool>,
+) -> io::Result<bool> {
     let issued = semantic_issued_at(&prepared.operation).ok_or_else(invalid)?;
     let fresh_operation = || {
         let now = crate::ipc::spawn::now_ms();
@@ -486,14 +487,17 @@ pub(super) fn dispatch(
         ));
     }
     let origin = &prepared.parent["origin"];
-    room.verify(cfg)?;
-    let current = room.message(cfg, &prepared.parent_message)?;
-    if !current["message_snapshots"].is_null()
-        || original_revision(&current, origin)? != origin["revision"]
-    {
-        return Err(invalid());
-    }
-    current_turn_enrollment(place, cfg)?;
+    let verify_source = || {
+        room.verify(cfg)?;
+        let current = room.message(cfg, &prepared.parent_message)?;
+        if !current["message_snapshots"].is_null()
+            || original_revision(&current, origin)? != origin["revision"]
+        {
+            return Err(invalid());
+        }
+        current_turn_enrollment(place, cfg)
+    };
+    verify_source()?;
     supervisor::mail_store::verify_original_ingested_file(
         place.supervisor_root(),
         &prepared.note,
@@ -659,6 +663,18 @@ pub(super) fn dispatch(
         "manager_runtime_request":{"session_instance":instance}}),
         "manager_runtime",
     )?;
+    #[cfg(test)]
+    if std::env::var_os("SWARM_TEST_DISCORD_DISPATCH_BLOCK_RUNTIME").is_some() {
+        let root = place.supervisor_root();
+        fs::write(root.join("rust-dispatch-runtime-blocked"), b"ready")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !root.join("rust-dispatch-runtime-resume").exists() {
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::other("dispatch runtime fixture did not resume"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
     let current = &runtime["manager_runtime"];
     if current["binding"] != native
         || current["native_cli"] != true
@@ -718,6 +734,13 @@ pub(super) fn dispatch(
     wake["admission"] = json!(seq);
     wake["state"] = json!("admitted");
     wake["native_input_id"] = json!(nonce);
+    if stopped()? {
+        return Ok(false);
+    }
+    verify_source()?;
+    if stopped()? {
+        return Ok(false);
+    }
     manager_publication::apply_voice(
         tx,
         header,
@@ -727,18 +750,23 @@ pub(super) fn dispatch(
             (wake_key.clone(), wake.clone()),
         ],
     )?;
-    current_turn_enrollment(place, cfg)?;
-    if !fresh_operation() {
-        return Err(io::Error::other(
-            "the original prepared semantic operation is outside its replay window",
-        ));
-    }
     supervisor::mail_store::verify_original_ingested_file(
         place.supervisor_root(),
         &prepared.note,
         prepared.mailbox_identity,
     )?;
-    current_turn_enrollment(place, cfg)?;
+    if stopped()? {
+        return Ok(false);
+    }
+    verify_source()?;
+    if stopped()? {
+        return Ok(false);
+    }
+    if !fresh_operation() {
+        return Err(io::Error::other(
+            "the original prepared semantic operation is outside its replay window",
+        ));
+    }
     let reply = owner.exchange(
         json!({"op":"semantic_send","session_id":req["session"],"body_version":1,
         "operation_id":prepared.operation,"composer_send":req}),
@@ -792,7 +820,8 @@ pub(super) fn dispatch(
         admission["native_turn_id"] = json!(turn);
     }
     wake["state"] = json!("native_input");
-    manager_publication::apply_voice(tx, header, &[(admission_key, admission), (wake_key, wake)])
+    manager_publication::apply_voice(tx, header, &[(admission_key, admission), (wake_key, wake)])?;
+    Ok(true)
 }
 
 #[cfg(test)]

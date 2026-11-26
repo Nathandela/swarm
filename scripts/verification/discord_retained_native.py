@@ -39,7 +39,7 @@ def activate_original(fixture, env, place):
     raise AssertionError("original Go manager never became ready")
 
 
-def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
+def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False, change_source=None):
     posts = []
     app_reads = 0
     messages = {
@@ -82,7 +82,15 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
                 else:
                     self.payload([messages["702"], messages["701"]] if posts else [messages["501"]])
             elif self.path.startswith("/api/v10/channels/400/messages/"):
-                self.payload(messages[self.path.rsplit("/", 1)[1]])
+                message = self.path.rsplit("/", 1)[1]
+                change = change_source() if message == "701" and change_source else None
+                if change == "delete":
+                    self.send_error(404)
+                elif change == "edit":
+                    self.payload(messages[message] | {"content": "withdrawn original prompt",
+                                 "edited_timestamp": "2026-11-26T00:00:00Z"})
+                else:
+                    self.payload(messages[message])
             else:
                 self.send_error(404)
 
@@ -248,6 +256,12 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     file_sha = hashlib.sha256(original_bytes).hexdigest()
     file_id = hashlib.sha256(f"completion.csv\0{file_sha}".encode()).hexdigest()
 
+    worker_wake_requests = []
+    mode_fence = mode.removeprefix("ordinary-fence-") if mode.startswith("ordinary-fence-") else ""
+    fresh = mode == "ordinary-fresh" or bool(mode_fence)
+    queued = fresh or mode in ("pending-file", "prepare-queued", "prepare-queued-crash",
+                               "prepare-malformed", "prepare-aged")
+
     def choose(body):
         observed = json.dumps(body["input"], ensure_ascii=False)
         tool_outputs.extend(item["output"] for item in body["input"]
@@ -264,6 +278,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             return namespace, name, dict(output_id="retained-text-after-file",sequence=1,
                                          text="Verified native final reply.",final=True)
         if "Worker message and identity" in observed:
+            worker_wake_requests.append(observed)
             names = [(tool.get("name"), child.get("name"))
                      for tool in body.get("tools", []) for child in tool.get("tools", [])
                      if child.get("name") == "publish"]
@@ -307,14 +322,16 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             if is_worker:
                 worker_release.wait(timeout=90)
             return None
-        if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh") and is_worker:
+        if queued and is_worker:
             pending_ready.set()
             assert allow_pending.wait(timeout=90)
         field = "cmd" if shell == "exec_command" else "command"
         return None, shell, {field: command}
 
+    source_change = threading.Event()
     model, _ = model_fixture(base, False, fixture_tool=choose)
     discord, posts = discord_fixture(mode != "uncertain", wake=True,
+                                     change_source=lambda: mode_fence if source_change.is_set() else None,
                                      expected_file=original_bytes, revoke=mode == "revoked")
     try:
         place = base / "connector"
@@ -327,29 +344,29 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                 initial = activate_original(fixture, env, place)
                 assert initial["native_cli"] is True
                 go_args = [fixture,"vm-controller-run",place,"original-room","701",stop,parent_fence]
-                if mode == "ordinary-fresh":
+                if fresh:
                     go_args.append("completed-parent")
                 ctl = subprocess.Popen(go_args,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                 try:
-                    started = pending_ready if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh") else waiting
+                    started = pending_ready if queued else waiting
                     deadline = time.monotonic() + 80
                     while not started.wait(0.2):
                         if time.monotonic() > deadline or (
-                            ctl.poll() is not None and not (mode == "ordinary-fresh" and parent_fence.exists())
+                            ctl.poll() is not None and not (fresh and parent_fence.exists())
                         ):
                             break
                     assert started.is_set(), (selected, model.history, listed(env),
                                               tool_outputs[-4:],
                                               ctl.stderr.read() if ctl.poll() is not None else "running")
                     await_value(lambda: parent_fence.exists() or ctl.poll() is not None)
-                    if mode == "ordinary-fresh":
+                    if fresh:
                         assert parent_fence.exists()
                     else:
                         assert ctl.poll() is None, ctl.communicate()
                         stop.touch()
                     _stdout, stderr = ctl.communicate(timeout=15)
                     assert ctl.returncode == 0, stderr
-                    if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh"):
+                    if queued:
                         ledger, = (place / "discussions").glob("*/voice.db")
                         original_ledgers = ((place / "discord.db").read_bytes(),ledger.read_bytes())
                         allow_pending.set()
@@ -370,10 +387,43 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         run(rust_test,queued_env,"native_go_queued_file_owner_inspection_is_read_only","--nocapture")
                         assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
                         assert posts == []
-                        if mode == "ordinary-fresh":
+                        if fresh:
                             rust_env = env | {"SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT":str(base / "state"),
                                 "SWARM_TEST_DISCORD_REST_PORT":str(discord.server_port), "SWARM_TEST_DISCORD_WAKE_DELIVERY":mode}
                             release.set()
+                            if mode_fence:
+                                rust_env["SWARM_TEST_DISCORD_DISPATCH_BLOCK_RUNTIME"] = "1"
+                                blocked = base / "state/rust-dispatch-runtime-blocked"
+                                resume = base / "state/rust-dispatch-runtime-resume"
+                                args = [rust_test, "retained_original_go_stages_native_vm_file_call", "--nocapture"]
+                                with subprocess.Popen(args, env=rust_env, stdout=subprocess.PIPE,
+                                                      stderr=subprocess.STDOUT, text=True) as test:
+                                    await_value(lambda: blocked.exists() or test.poll() is not None)
+                                    assert blocked.exists(), test.communicate(timeout=5)
+                                    if mode_fence != "stop":
+                                        source_change.set()
+                                        resume.touch()
+                                    output, _ = test.communicate(timeout=25)
+                                    assert test.returncode == 0, output
+                                receipt = json.loads(run(fixture, env, "vm-read-prepared-queued-wake",
+                                    ledger.parent, base / "state", note["Discussion"], note["Session"],
+                                    note["Instance"], note["Attempt"], note["ID"], "ingested"))
+                                assert receipt["Operation"].startswith("semantic:")
+                                missing = owner(env, {
+                                    "op": "semantic_status", "session_id": initial["session_id"],
+                                    "operation_id": receipt["Operation"],
+                                }, caps=("semantic-send",))
+                                assert missing["op"] == "error" and missing["error"] == (
+                                    "semantic receipt: semantic operation does not belong to this session"), missing
+                                assert list(map(base64.b64decode, receipt["Files"])) == [original_bytes]
+                                assert posts == [] and file_calls == []
+                                assert worker_wake_requests == []
+                                assert (place / "discord.db").read_bytes() == original_ledgers[0]
+                                reopened = activate_original(fixture, env, place)
+                                assert reopened.pop("generation") > initial.pop("generation")
+                                assert reopened == initial
+                                print(f"{mode}: source/cancel fence preserved original Go operation, zero supervisor semantic sends, native turns and POSTs")
+                                return
                             try:
                                 run(rust_test,rust_env,"retained_original_go_stages_native_vm_file_call","--nocapture")
                             except AssertionError as error:
@@ -548,7 +598,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh", "ordinary-fence-edit", "ordinary-fence-delete", "ordinary-fence-stop")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             if mode == "pending-file":
