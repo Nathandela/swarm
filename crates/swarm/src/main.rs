@@ -17,6 +17,7 @@ mod shim;
 mod socket;
 mod supervisor;
 mod teammate;
+mod upgrade;
 mod workspace;
 
 use std::io::{self, IsTerminal, Write};
@@ -41,6 +42,37 @@ fn guide(args: &[String]) -> u8 {
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|s| s == "upgrade") {
+        return ExitCode::from(upgrade::run(&args[1..]));
+    }
+    let read_only = args.first().is_some_and(|arg| {
+        [
+            "--help",
+            "-h",
+            "help",
+            "version",
+            "--version",
+            "doctor",
+            "release-info",
+            "release-check-media",
+            "dispatcher-guide",
+        ]
+        .iter()
+        .any(|name| arg == *name)
+    });
+    let inventory = args.first().is_some_and(|arg| arg == "checkout")
+        && args.get(1).is_some_and(|arg| arg == "inventory");
+    let _installation = if read_only || inventory {
+        None
+    } else {
+        match upgrade::writer(&args) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("swarm: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
     if args.first().is_some_and(|s| s == "setup-trust") {
         return ExitCode::from(setup_trust::run(&args[1..]));
     }

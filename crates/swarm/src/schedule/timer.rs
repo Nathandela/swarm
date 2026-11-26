@@ -481,7 +481,7 @@ fn versioned(path: &str) -> Option<&str> {
 }
 
 fn stable_executable() -> Result<String> {
-    let exe = env::current_exe()?;
+    let exe = crate::upgrade::launcher()?;
     let exe_str = safe_path(&exe)?;
     let info = fs::metadata(&exe)?;
     if !info.is_file() || info.mode() & 0o111 == 0 {
