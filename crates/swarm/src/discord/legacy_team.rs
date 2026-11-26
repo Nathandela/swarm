@@ -465,7 +465,7 @@ pub(super) fn native_prepare_witness() {
             prepare_with(&place, &cfg, &api, "701", false).unwrap();
             std::process::exit(75);
         }
-        "voice-storage" | "voice-storage-and-exit" => {
+        "voice-storage" | "voice-storage-and-exit" | "voice-storage-refuse-alias" => {
             use bbolt_rs::BucketApi;
             let evidence: Value =
                 serde_json::from_str(&std::env::var("SWARM_TEST_DISCORD_VOICE_EVIDENCE").unwrap())
@@ -523,15 +523,21 @@ pub(super) fn native_prepare_witness() {
                 serde_json::to_value(prepare::ready_discussion(&binding).unwrap()).unwrap(),
                 evidence["binding"]
             );
-            super::legacy_ingress::prepare::guild_storage_witness(
+            let stored = super::legacy_ingress::prepare::guild_storage_witness(
                 &place,
                 &cfg,
                 &evidence["binding"],
                 origin,
-                std::path::Path::new(evidence["copy"].as_str().unwrap()),
                 phase == "voice-storage-and-exit",
-            )
-            .unwrap();
+            );
+            if phase == "voice-storage-refuse-alias" {
+                assert_eq!(
+                    stored.unwrap_err().to_string(),
+                    "unqualified fixture Voice copy"
+                );
+            } else {
+                stored.unwrap();
+            }
         }
         "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
         "refuse" => assert!(prepare_with(&place, &cfg, &api, "701", false).is_err()),

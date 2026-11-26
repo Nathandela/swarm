@@ -241,8 +241,23 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     assert receipt["op"] == "error", receipt
                     print("PASS Go reopened after Rust's connector commit and persisted its exact native preparation without sending", flush=True)
                     original_stores = (voice.read_bytes(), (place / "discord.db").read_bytes())
-                    evidence = {"origin": prepared["origin"], "binding": a["Discussion"], "copy": str(voice_copy)}
+                    evidence = {"origin": prepared["origin"], "binding": a["Discussion"]}
                     unstaged = voice_copy.read_bytes()
+                    with tempfile.TemporaryDirectory(prefix="gp-outside-", dir=base.parent) as outside:
+                        outside = Path(outside)
+                        backup = base / "voice-copy-real"
+                        voice_copy.parent.rename(backup)
+                        try:
+                            foreign = outside / "voice.db"
+                            shutil.copy2(backup / "voice.db", foreign)
+                            voice_copy.parent.symlink_to(outside, target_is_directory=True)
+                            rust("voice-storage-refuse-alias", evidence)
+                            assert foreign.read_bytes() == unstaged and native(foreign)["sequence"] == 0
+                        finally:
+                            if voice_copy.parent.is_symlink():
+                                voice_copy.parent.unlink()
+                            backup.rename(voice_copy.parent)
+                    print("PASS Rust refused an aliased Voice copy outside the fixture without writes", flush=True)
                     rust("voice-storage-and-exit", evidence)
                     assert voice_copy.read_bytes() == unstaged and native(voice_copy)["sequence"] == 0
                     print("PASS Go reopened the disposable Voice ledger after an exit before commit", flush=True)

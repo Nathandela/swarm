@@ -440,14 +440,52 @@ pub(in crate::discord) fn guild_storage_witness(
     cfg: &Config,
     saved: &Value,
     origin: &Value,
-    copy: &Path,
     exit_before_commit: bool,
 ) -> io::Result<()> {
+    let unqualified = || io::Error::other("unqualified fixture Voice copy");
+    let root = place.supervisor_root();
+    let fixture = root.parent().ok_or_else(unqualified)?;
+    if root != fixture.join("state")
+        || fixture.parent() != Some(fs::canonicalize("/tmp")?.as_path())
+        || !fixture
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("gp-"))
+        || fs::canonicalize(fixture)? != fixture
+        || place.dir != fixture.join("connector")
+        || cfg.text("installation_id") != "fixture-teammate"
+    {
+        return Err(unqualified());
+    }
+    let copy_dir = fixture.join("voice-copy");
+    let directory_meta = fs::symlink_metadata(&copy_dir)?;
+    if !directory_meta.is_dir()
+        || directory_meta.mode() & 0o777 != 0o700
+        || directory_meta.uid() != unsafe { libc::geteuid() }
+        || fs::canonicalize(&copy_dir)? != copy_dir
+    {
+        return Err(unqualified());
+    }
+    let copy = copy_dir.join("voice.db");
     let (directory, id, endpoint) = voice_location(place, cfg, saved)?;
-    let (_pin, _db, oracle) = controller(&directory, &id, origin, cfg, &endpoint)?;
+    let (pin, _db, oracle) = controller(&directory, &id, origin, cfg, &endpoint)?;
     validate_prepared(&oracle, cfg)?;
     activation::verify_idle_manager(place, cfg, &directory, &id, &oracle.binding)?;
-    let (_copy_pin, mut db) = bounded_writer(writable_pin(copy)?)?;
+    let original = pin.metadata()?;
+    let candidate = fs::symlink_metadata(&copy)?;
+    if !candidate.is_file()
+        || (original.dev(), original.ino()) == (candidate.dev(), candidate.ino())
+    {
+        return Err(unqualified());
+    }
+    let file = writable_pin(&copy)?;
+    let opened = file.metadata()?;
+    if (opened.dev(), opened.ino()) != (candidate.dev(), candidate.ino())
+        || fs::canonicalize(&copy_dir)? != copy_dir
+    {
+        return Err(unqualified());
+    }
+    let (_copy_pin, mut db) = bounded_writer(file)?;
     let mut tx = db.begin_rw().map_err(io::Error::other)?;
     let mut initial = read_voice(&tx, &id, cfg, &endpoint)?;
     if initial.conversation["binding"] != oracle.binding {
