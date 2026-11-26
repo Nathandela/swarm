@@ -64,7 +64,11 @@ pub(crate) fn run(args: &[String]) -> u8 {
         eprintln!("usage: swarm daemon");
         return 2;
     }
-    match serve() {
+    let Some(configured) = ipc::env_path("SWARM_DAEMON_STATE") else {
+        eprintln!("daemon: not implemented");
+        return 1;
+    };
+    match serve(configured) {
         Ok(()) => 0,
         Err(err) => {
             eprintln!("daemon: serve: {err}");
@@ -441,10 +445,7 @@ pub(crate) fn endpoint(root: &std::path::Path) -> String {
     )
 }
 
-fn serve() -> io::Result<()> {
-    let configured = ipc::env_path("SWARM_DAEMON_STATE").ok_or_else(|| {
-        io::Error::other("SWARM_DAEMON_STATE is required for the isolated Rust runtime")
-    })?;
+fn serve(configured: PathBuf) -> io::Result<()> {
     runtime::private_dir(&configured)?;
     let root = fs::canonicalize(configured)?;
     let canonical_lock = root.join("daemon.lock");
