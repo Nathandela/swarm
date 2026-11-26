@@ -19,6 +19,7 @@ const MAX_FILE: u64 = 16 << 20;
 const MAX_MESSAGE: u64 = 32 << 20;
 const MAX_STORE: u64 = 256 << 20;
 const MAX_BUNDLES: usize = 512;
+pub(super) const PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data):\n";
 
 struct Attachment {
     id: String,
@@ -98,21 +99,20 @@ fn download(attachment: &Attachment) -> io::Result<Vec<u8>> {
         .timeout_global(Some(Duration::from_secs(20)))
         .build()
         .new_agent();
-    let response = agent
-        .get(&attachment.url)
-        .call()
-        .map_err(|error| match error {
-            ureq::Error::StatusCode(403 | 404) => {
-                invalid("Discord attachment is no longer available")
-            }
-            _ => io::Error::other("Discord attachment download unavailable"),
-        })?;
+    fetch(&agent, &attachment.url, attachment.size)
+}
+
+pub(super) fn fetch(agent: &ureq::Agent, url: &str, size: u64) -> io::Result<Vec<u8>> {
+    let response = agent.get(url).call().map_err(|error| match error {
+        ureq::Error::StatusCode(403 | 404) => invalid("Discord attachment is no longer available"),
+        _ => io::Error::other("Discord attachment download unavailable"),
+    })?;
     if response.status() != 200
         || response
             .headers()
             .get("content-length")
             .is_some_and(|length| {
-                length.to_str().ok().and_then(|length| length.parse().ok()) != Some(attachment.size)
+                length.to_str().ok().and_then(|length| length.parse().ok()) != Some(size)
             })
     {
         return Err(invalid("Discord CDN returned an unexpected body length"));
@@ -121,19 +121,25 @@ fn download(attachment: &Attachment) -> io::Result<Vec<u8>> {
     response
         .into_body()
         .into_reader()
-        .take(attachment.size + 1)
+        .take(size + 1)
         .read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
-pub(super) fn capture(place: &Path, source: &Value, channel: &str) -> io::Result<Vec<Value>> {
-    capture_with(place, source, channel, download)
+pub(super) fn capture(
+    place: &Path,
+    source: &Value,
+    channel: &str,
+    manifest_budget: usize,
+) -> io::Result<Vec<Value>> {
+    capture_with(place, source, channel, manifest_budget, download)
 }
 
 fn capture_with(
     place: &Path,
     source: &Value,
     channel: &str,
+    manifest_budget: usize,
     mut fetch: impl FnMut(&Attachment) -> io::Result<Vec<u8>>,
 ) -> io::Result<Vec<Value>> {
     let files = source["attachments"]
@@ -176,26 +182,18 @@ fn capture_with(
             .collect::<Vec<_>>()
     ]))?;
     let root = fs::canonicalize(place)?.join("received-files-v1");
-    runtime::private_dir(&root)?;
     let target = root.join(source_key);
+    let preview = attachments
+        .iter()
+        .map(|file| entry(file, &target, &"0".repeat(64)))
+        .collect::<Vec<_>>();
+    if serde_json::to_vec(&preview)?.len() > manifest_budget {
+        return Err(invalid("received attachments cannot fit the native prompt"));
+    }
+    runtime::private_dir(&root)?;
+    let (count, used) = scan_store(&root)?;
     if target.exists() {
         return verify(&target, &attachments);
-    }
-    let mut count = 0;
-    let mut used = 0_u64;
-    for directory in fs::read_dir(&root)? {
-        let directory = directory?;
-        if !directory.file_type()?.is_dir() {
-            return Err(invalid("invalid attachment store member"));
-        }
-        count += 1;
-        for entry in fs::read_dir(directory.path())? {
-            let meta = fs::symlink_metadata(entry?.path())?;
-            if !meta.is_file() {
-                return Err(invalid("invalid attachment store file"));
-            }
-            used = used.saturating_add(meta.len());
-        }
     }
     if count >= MAX_BUNDLES || used.saturating_add(total).saturating_add(8192) > MAX_STORE {
         return Err(invalid(
@@ -221,10 +219,11 @@ fn capture_with(
             owned.write_all(&bytes)?;
             owned.sync_all()?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o400))?;
-            manifest.push(
-                json!({"id":file.id,"filename":file.filename,"size":file.size,
-                "sha256":format!("{:x}",Sha256::digest(&bytes)),"path":target.join(label)}),
-            );
+            manifest.push(entry(
+                file,
+                &target,
+                &format!("{:x}", Sha256::digest(&bytes)),
+            ));
         }
         runtime::write_json(&staging.join("manifest.json"), &json!(manifest))?;
         File::open(&staging)?.sync_all()?;
@@ -236,6 +235,52 @@ fn capture_with(
         let _ = fs::remove_dir_all(staging);
     }
     result
+}
+
+fn entry(file: &Attachment, bundle: &Path, digest: &str) -> Value {
+    json!({"id":file.id,"filename":file.filename,"size":file.size,"sha256":digest,
+        "path":bundle.join(format!("{}.bin",file.id))})
+}
+
+fn scan_store(root: &Path) -> io::Result<(usize, u64)> {
+    let mut count = 0;
+    let mut used = 0_u64;
+    for (index, directory) in fs::read_dir(root)?.enumerate() {
+        if index >= MAX_BUNDLES + 8 {
+            return Err(invalid("oversized received attachment store"));
+        }
+        let directory = directory?;
+        let path = directory.path();
+        existing_private(&path)?;
+        let staging = directory
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_prefix(".stage-"))
+            .is_some_and(runtime::valid_id);
+        let mut bytes = 0_u64;
+        for (index, file) in fs::read_dir(&path)?.enumerate() {
+            let file = file?;
+            let meta = fs::symlink_metadata(file.path())?;
+            if index >= 12
+                || !meta.is_file()
+                || meta.uid() != runtime::uid()
+                || meta.mode() & 0o077 != 0
+                || meta.nlink() != 1
+            {
+                return Err(invalid("unexpected received attachment store member"));
+            }
+            bytes = bytes.saturating_add(meta.len());
+        }
+        if staging {
+            // The connector holds the sole place writer lease. A staging directory
+            // is never referenced by a prepared or accepted source.
+            fs::remove_dir_all(path)?;
+        } else {
+            count += 1;
+            used = used.saturating_add(bytes);
+        }
+    }
+    Ok((count, used))
 }
 
 fn verify(target: &Path, attachments: &[Attachment]) -> io::Result<Vec<Value>> {
@@ -340,6 +385,39 @@ fn verify_file(path: &Path, size: u64, digest: &Value) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn oversized_prompt_creates_no_bundle_and_abandoned_stage_reclaims_safely() {
+        let place = std::env::temp_dir().join(format!(
+            "swarm-attach-budget-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&place).unwrap();
+        let source = json!({"id":"11","author":{"id":"15"},"attachments":[{"id":"22","filename":"a.csv",
+            "size":4,"url":"https://cdn.discordapp.com/attachments/33/22/a.csv"}]});
+        assert!(
+            capture_with(&place, &source, "33", 4, |_| panic!(
+                "overflow reached download"
+            ))
+            .is_err()
+        );
+        let root = place.join("received-files-v1");
+        assert!(!root.exists());
+        let abandoned = root.join(format!(".stage-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&abandoned).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(abandoned.join("22.bin"))
+            .unwrap()
+            .write_all(b"partial")
+            .unwrap();
+        capture_with(&place, &source, "33", usize::MAX, |_| Ok(b"a,b\n".to_vec())).unwrap();
+        assert!(!abandoned.exists());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(place).unwrap();
+    }
+
+    #[test]
     fn attachment_only_dm_reaches_native_cutover_with_exact_pinned_bytes() {
         use super::super::{config::Config, receipt::Inbox};
         let place = std::env::temp_dir().join(format!(
@@ -354,7 +432,7 @@ mod tests {
         );
         let source = json!({"id":"11","author":{"id":"15"},"channel_id":"33","type":0,"content":"",
             "attachments":[{"id":"22","filename":"data.csv","size":4,"url":"https://cdn.discordapp.com/attachments/33/22/data.csv?sig=fixture"}]});
-        capture_with(&place, &source, "33", |_| Ok(b"a,b\n".to_vec())).unwrap();
+        capture_with(&place, &source, "33", usize::MAX, |_| Ok(b"a,b\n".to_vec())).unwrap();
         let mut inbox = Inbox::open(&place, &cfg).unwrap();
         inbox.checkpoint("10").unwrap();
         let receipt = inbox.admit(&source).unwrap().unwrap();
@@ -392,7 +470,7 @@ mod tests {
         runtime::private_dir(&place).unwrap();
         let mut source = json!({"id":"11","author":{"id":"15"},"attachments":[{"id":"22",
             "filename":"report one.csv","size":4,"url":"https://cdn.discordapp.com/attachments/33/22/report%20one.csv?sig=first"}]});
-        let files = capture_with(&place, &source, "33", |file| {
+        let files = capture_with(&place, &source, "33", usize::MAX, |file| {
             assert_eq!(file.id, "22");
             Ok(b"a,b\n".to_vec())
         })
@@ -401,7 +479,7 @@ mod tests {
         source["attachments"][0]["url"] =
             json!("https://cdn.discordapp.com/attachments/33/22/report%20one.csv?sig=second");
         assert_eq!(
-            capture_with(&place, &source, "33", |_| panic!(
+            capture_with(&place, &source, "33", usize::MAX, |_| panic!(
                 "replay attempted redownload"
             ))
             .unwrap(),
@@ -416,7 +494,7 @@ mod tests {
         ] {
             source["attachments"][0]["url"] = json!(url);
             assert!(
-                capture_with(&place, &source, "33", |_| panic!(
+                capture_with(&place, &source, "33", usize::MAX, |_| panic!(
                     "unsafe URL reached transport"
                 ))
                 .is_err()

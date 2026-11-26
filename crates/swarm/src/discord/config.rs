@@ -159,8 +159,10 @@ impl Place {
             if id == installation || row["application_id"] != cfg.text("application_id") {
                 continue;
             }
-            let old = Self::registered_entry(&self.supervisor, id, row).ok();
-            if old.is_some_and(|(_, cfg)| cfg.enabled()) {
+            let (_, old) = Self::registered_entry(&self.supervisor, id, row).map_err(|_| {
+                invalid("Discord app has another enrollment whose custody is unverified")
+            })?;
+            if old.enabled() {
                 return Err(invalid("Discord app already has another enabled connector"));
             }
         }
@@ -895,6 +897,13 @@ mod registry_tests {
         assert!(duplicate.register(&cfg).is_err());
         assert!(Place::for_installation(&dir, "conflict").is_err());
         runtime::write_json(&a.dir.join(OWNER), &json!("wrong")).unwrap();
+        assert!(
+            duplicate
+                .register(&cfg)
+                .unwrap_err()
+                .to_string()
+                .contains("unverified")
+        );
         assert!(Place::for_installation(&dir, "first").is_err());
         assert_eq!(Place::enrolled(&dir).unwrap().len(), 1);
         fs::remove_dir_all(dir).unwrap();

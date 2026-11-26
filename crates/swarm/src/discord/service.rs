@@ -224,6 +224,17 @@ fn run_guild(
                 .discussion_ready
                 .store(!inbox.manager()["binding"].is_null(), Ordering::Release);
         }
+        if thread.is_none()
+            && worker_send.is_none()
+            && let Some(route) = super::thread_creation::retry_due(cfg, &mut inbox, &api)?
+        {
+            let next = place.link_automatic(cfg, route)?;
+            drop(driver);
+            drop(_guild_authority);
+            drop(inbox);
+            let inbox = Inbox::open(&place.dir, &next)?;
+            return run_guild(place, &next, bridge, inbox, api);
+        }
         let event = match driver.inbound.recv_timeout(Duration::from_millis(200)) {
             Ok(Ok(Ingress::Discord(event))) => event,
             Ok(Ok(Ingress::Transcript(origin, text))) => {

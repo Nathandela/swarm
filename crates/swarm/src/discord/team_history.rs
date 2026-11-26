@@ -16,10 +16,18 @@ pub(super) fn repair(
     inbox: &mut Inbox,
     thread: &ThreadAudience<'_>,
 ) -> io::Result<()> {
+    repair_with(cfg, inbox, thread, |before| thread.history(cfg, before))
+}
+
+fn repair_with(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    thread: &impl Audience,
+    page: impl FnMut(&str) -> io::Result<Vec<Value>>,
+) -> io::Result<()> {
     let cursor = inbox.team_cursor().map(parse).transpose()?;
     let pending = inbox.pending_team();
-    let lower = cursor.map(|cursor| pending.first().map_or(cursor, |id| (*id).min(cursor)));
-    let rows = gather(lower, |before| thread.history(cfg, before))?;
+    let rows = gather(cursor, page)?;
     let newest = rows
         .last_key_value()
         .map(|(id, _)| id.to_string())
@@ -117,6 +125,71 @@ fn parse(id: &str) -> io::Result<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn ancient_pending_source_is_rechecked_without_paging_to_it() {
+        use super::super::{rest::Post, team_thread::Route};
+        use crate::supervisor::{mail_files::Captured, runtime};
+        use std::cell::RefCell;
+        struct Fixture<'a> {
+            route: &'a Route,
+            fetched: RefCell<Vec<String>>,
+        }
+        impl Audience for Fixture<'_> {
+            fn current(&self, _: &Config, id: &str) -> io::Result<Option<Value>> {
+                self.fetched.borrow_mut().push(id.into());
+                Ok(Some(
+                    json!({"id":id,"guild_id":"1","channel_id":"2","author":{"id":"4"},
+                    "content":"message","attachments":[],"type":0}),
+                ))
+            }
+            fn verify(&self, _: &Config) -> io::Result<()> {
+                Ok(())
+            }
+            fn admit(&self, inbox: &mut Inbox, row: &Value) -> io::Result<Option<Value>> {
+                inbox.admit_team(self.route, row)
+            }
+            fn post(&self, _: &Config, _: &str, _: &str, _: &[Captured]) -> Post {
+                panic!("repair does not post")
+            }
+        }
+        let dir =
+            std::env::temp_dir().join(format!("swarm-old-guild-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&dir).unwrap();
+        let cfg = Config(
+            json!({"mode":"teammate","installation_id":"test","application_id":"3","owner_id":"4",
+            "guild_ids":["1"],"team_discussion":{"guild_id":"1","thread_id":"2"}}),
+        );
+        let route = Route::configured(&cfg).unwrap().unwrap();
+        let fixture = Fixture {
+            route: &route,
+            fetched: RefCell::new(Vec::new()),
+        };
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        inbox.checkpoint("").unwrap();
+        let old = fixture.current(&cfg, "1").unwrap().unwrap();
+        fixture.admit(&mut inbox, &old).unwrap().unwrap();
+        fixture.fetched.borrow_mut().clear();
+        inbox.checkpoint_team("900").unwrap();
+        let mut calls = 0;
+        repair_with(&cfg, &mut inbox, &fixture, |before| {
+            calls += 1;
+            let interval = match before {
+                "" => 901..=1000,
+                "901" => 801..=900,
+                _ => panic!("paged below saved frontier"),
+            };
+            Ok(interval
+                .map(|id| json!({"id":id.to_string(),"author":{"id":"3","bot":true}}))
+                .collect())
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(&*fixture.fetched.borrow(), &["1"]);
+        assert_eq!(inbox.team_cursor(), Some("1000"));
+        assert!(inbox.pending_team().contains(&1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn bounded_pages_reach_the_saved_frontier_without_duplicate_history() {
         let page = |range: std::ops::RangeInclusive<u64>| {

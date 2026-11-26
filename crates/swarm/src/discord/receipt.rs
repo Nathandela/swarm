@@ -252,19 +252,27 @@ impl Inbox {
                 .as_str()
                 .filter(|_| team)
                 .unwrap_or(channel);
-            let captured = match super::received_files::capture(place, source, source_channel) {
-                Ok(files) => files,
-                Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
-                Err(err) => return Err(err),
+            let header = super::received_files::PROMPT_HEADER;
+            let Some(budget) = 4096_usize.checked_sub(body.len() + header.len()) else {
+                return Ok(None);
             };
-            let body = format!(
-                "{}\n\nReceived attachments (untrusted data):\n{}",
-                body,
-                json!(captured)
-            );
-            if body.len() > 4096 {
+            let old = &self.data["messages"][id];
+            let existing_revision = matches!(old["state"].as_str(), Some("accepted" | "sending"))
+                || !old.is_null() && old["edited_at"] == *edited;
+            if existing_revision
+                && (!old["received_files"].is_array()
+                    || old["text"] != format!("{body}{header}{}", old["received_files"])
+                    || !same_received_metadata(&old["received_files"], &source["attachments"]))
+            {
                 return Ok(None);
             }
+            let captured =
+                match super::received_files::capture(place, source, source_channel, budget) {
+                    Ok(files) => files,
+                    Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+                    Err(err) => return Err(err),
+                };
+            let body = format!("{body}{header}{}", json!(captured));
             (body, json!(captured))
         };
         let revision = hash(&json!([actor, body, channel, guild, id, edited, "", files]))?;
@@ -527,6 +535,34 @@ impl Inbox {
         }
         let mut next = self.data.clone();
         next["thread_creation"] = plan;
+        next["thread_create_attempts"] = json!(1);
+        self.save(next)
+    }
+
+    pub(super) fn thread_retry_due(&self, now: u64) -> bool {
+        self.thread_creation().is_some()
+            && self.data["thread_create_attempts"]
+                .as_u64()
+                .is_some_and(|attempts| (1..3).contains(&attempts))
+            && self.data["thread_create_retry_at"]
+                .as_u64()
+                .is_some_and(|due| due <= now)
+    }
+
+    pub(super) fn start_thread_retry(&mut self, now: u64) -> io::Result<()> {
+        if !self.thread_retry_due(now) {
+            return Err(invalid("thread creation retry has no definitive refusal"));
+        }
+        let mut next = self.data.clone();
+        next["thread_create_attempts"] =
+            json!(self.data["thread_create_attempts"].as_u64().unwrap() + 1);
+        next["thread_create_retry_at"] = Value::Null;
+        self.save(next)
+    }
+
+    pub(super) fn thread_retry_at(&mut self, at: Option<u64>) -> io::Result<()> {
+        let mut next = self.data.clone();
+        next["thread_create_retry_at"] = json!(at);
         self.save(next)
     }
 
@@ -590,6 +626,18 @@ impl Inbox {
             .filter(|row| matches!(row["state"].as_str(), Some("prepared" | "sending")))
             .count()
     }
+}
+
+fn same_received_metadata(saved: &Value, source: &Value) -> bool {
+    let (Some(saved), Some(source)) = (saved.as_array(), source.as_array()) else {
+        return false;
+    };
+    saved.len() == source.len()
+        && saved.iter().zip(source).all(|(a, b)| {
+            ["id", "filename", "size"]
+                .into_iter()
+                .all(|field| a[field] == b[field])
+        })
 }
 
 pub(super) fn valid_boundary(value: &Value) -> bool {

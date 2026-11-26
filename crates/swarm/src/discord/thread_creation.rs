@@ -3,7 +3,7 @@ use super::{
     config::{Config, invalid, snowflake},
     guild,
     receipt::{Inbox, hash},
-    rest::Discord,
+    rest::{Discord, Post},
     team_thread,
 };
 use serde_json::{Value, json};
@@ -46,6 +46,54 @@ pub(super) fn ingest(
     ) else {
         return Ok(None);
     };
+    let lookup = |path: &str| guild::lookup(api, path);
+    let Some((plan, can_create)) = authorize(cfg, guild, parent, id, lookup)? else {
+        return Ok(None);
+    };
+    let prior = readback(cfg, &plan, lookup)?;
+    if prior.is_none() && !can_create {
+        return Ok(None);
+    }
+    attempt(cfg, inbox, api, &plan, prior)
+}
+
+pub(super) fn retry_due(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    api: &Discord,
+) -> io::Result<Option<Value>> {
+    let now = crate::ipc::spawn::now_ms();
+    if !inbox.thread_retry_due(now) {
+        return Ok(None);
+    }
+    let plan = inbox.thread_creation().unwrap().clone();
+    let lookup = |path: &str| guild::lookup(api, path);
+    if let Some(route) = readback(cfg, &plan, lookup)? {
+        return Ok(Some(route));
+    }
+    let (Some(guild), Some(parent), Some(message)) = (
+        id(&plan["guild_id"]),
+        id(&plan["parent_id"]),
+        id(&plan["message_id"]),
+    ) else {
+        return Err(invalid("invalid persisted thread retry scope"));
+    };
+    if !authorize(cfg, guild, parent, message, lookup)?
+        .is_some_and(|(current, can_create)| current == plan && can_create)
+    {
+        inbox.thread_retry_at(None)?;
+        return Ok(None);
+    }
+    attempt(cfg, inbox, api, &plan, None)
+}
+
+fn authorize(
+    cfg: &Config,
+    guild: &str,
+    parent: &str,
+    id: &str,
+    lookup: impl Fn(&str) -> io::Result<Option<Value>>,
+) -> io::Result<Option<(Value, bool)>> {
     if !allowed(cfg, "guild_ids", guild)
         || cfg.0["channel_ids"]
             .as_array()
@@ -53,7 +101,6 @@ pub(super) fn ingest(
     {
         return Ok(None);
     }
-    let lookup = |path: &str| guild::lookup(api, path);
     let Some(channel) = lookup(&format!("/channels/{parent}"))? else {
         return Ok(None);
     };
@@ -61,7 +108,7 @@ pub(super) fn ingest(
         return Ok(None);
     }
     let bot = cfg.text("application_id");
-    let capacity = permissions(lookup, parent, bot)?;
+    let capacity = permissions(&lookup, parent, bot)?;
     const RIGHTS: u64 = (1 << 10) | (1 << 16) | (1 << 38);
     if capacity & (1 << 3) == 0 && capacity & RIGHTS != RIGHTS {
         return Ok(None);
@@ -85,56 +132,67 @@ pub(super) fn ingest(
     {
         return Ok(None);
     }
-    let actor_rights = permissions(lookup, parent, actor)?;
+    let actor_rights = permissions(&lookup, parent, actor)?;
     const ACTOR: u64 = (1 << 10) | (1 << 11) | (1 << 16);
     if actor_rights & (1 << 3) == 0 && actor_rights & ACTOR != ACTOR {
         return Ok(None);
     }
     let plan = json!({"guild_id":guild,"parent_id":parent,"message_id":id,"actor_id":actor,
         "revision":revision(&source)?});
+    Ok(Some((plan, capacity & ((1 << 3) | (1 << 35)) != 0)))
+}
+
+fn attempt(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    api: &Discord,
+    plan: &Value,
+    prior: Option<Value>,
+) -> io::Result<Option<Value>> {
+    let parent = id(&plan["parent_id"]).ok_or_else(|| invalid("invalid thread parent"))?;
+    let message = id(&plan["message_id"]).ok_or_else(|| invalid("invalid thread opener"))?;
     let name = format!(
         "{} discussion",
         cfg.text("name").chars().take(40).collect::<String>()
     );
-    let prior = readback(cfg, &plan, lookup)?;
-    if prior.is_some() || capacity & ((1 << 3) | (1 << 35)) != 0 {
-        provision(
-            inbox,
-            &plan,
-            prior,
-            || {
-                api.request(
-                    &format!("/channels/{parent}/messages/{id}/threads"),
-                    Some(&json!({"name":name})),
-                )
-            },
-            || readback(cfg, &plan, lookup),
-        )
-    } else {
-        Ok(None)
-    }
+    provision(
+        inbox,
+        plan,
+        prior,
+        crate::ipc::spawn::now_ms,
+        || api.create_public_thread(parent, message, &name),
+        || readback(cfg, plan, |path| guild::lookup(api, path)),
+    )
 }
 
 fn provision(
     inbox: &mut Inbox,
     plan: &Value,
     prior: Option<Value>,
-    post: impl FnOnce() -> io::Result<Value>,
+    clock: impl Fn() -> u64,
+    post: impl FnOnce() -> Post,
     read: impl FnOnce() -> io::Result<Option<Value>>,
 ) -> io::Result<Option<Value>> {
-    if inbox.thread_creation().is_some() {
-        return read();
+    let now = clock();
+    match inbox.thread_creation() {
+        None => inbox.reserve_thread(plan.clone())?,
+        Some(saved) if saved == plan && inbox.thread_retry_due(now) => {
+            inbox.start_thread_retry(now)?
+        }
+        Some(_) => return read(),
     }
-    // Recording a possible external write precedes issuing it. If it is ever
-    // uncertain, only a GET for the Discord-defined thread ID can settle it.
-    inbox.reserve_thread(plan.clone())?;
     if prior.is_some() {
         return Ok(prior);
     }
-    if let Ok(observed) = post()
-        && !exact(&observed, plan)
-    {
-        return Err(invalid("Discord create response named a different thread"));
+    match post() {
+        Post::Acknowledged(observed) if !exact(&observed, plan) => {
+            return Err(invalid("Discord create response named a different thread"));
+        }
+        Post::RateLimited(delay) if delay > 0 && delay <= 120_000 => {
+            inbox.thread_retry_at(Some(clock().saturating_add(delay)))?;
+            return Ok(None);
+        }
+        _ => {}
     }
     read()
 }
@@ -223,6 +281,73 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
+    fn definitive_cooldown_retry_is_durable_and_switches_to_read_only_on_lost_reply() {
+        let dir = std::env::temp_dir().join(format!(
+            "swarm-thread-rate-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&dir).unwrap();
+        let cfg = Config(
+            json!({"mode":"teammate","installation_id":"test","application_id":"3","owner_id":"4"}),
+        );
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let plan = json!({"guild_id":"1","parent_id":"2","message_id":"9","actor_id":"4","revision":"a".repeat(64)});
+        let clock = Cell::new(100);
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || clock.get(),
+            || {
+                clock.set(125);
+                Post::RateLimited(200)
+            },
+            || panic!("known refusal"),
+        )
+        .unwrap();
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        assert!(!inbox.thread_retry_due(324));
+        assert!(inbox.thread_retry_due(325));
+        let mut other = plan.clone();
+        other["message_id"] = json!("10");
+        provision(
+            &mut inbox,
+            &other,
+            None,
+            || 325,
+            || panic!("other message retry"),
+            || Ok(None),
+        )
+        .unwrap();
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || 325,
+            || {
+                let state = runtime::read_json(&dir.join("rust-text-v1.json")).unwrap();
+                assert!(state["thread_create_retry_at"].is_null());
+                assert_eq!(state["thread_create_attempts"], 2);
+                Post::Unconfirmed
+            },
+            || Ok(None),
+        )
+        .unwrap();
+        assert!(!inbox.thread_retry_due(u64::MAX));
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || u64::MAX,
+            || panic!("uncertain writes may not repeat"),
+            || Ok(None),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn lost_thread_creation_receipt_is_read_back_without_another_write() {
         let dir =
             std::env::temp_dir().join(format!("swarm-thread-{}", runtime::random_id().unwrap()));
@@ -237,13 +362,14 @@ mod tests {
             &mut inbox,
             &plan,
             None,
+            || 1,
             || {
                 assert_eq!(
                     runtime::read_json(&dir.join("rust-text-v1.json")).unwrap()["thread_creation"],
                     plan
                 );
                 create_calls.set(create_calls.get() + 1);
-                Err(io::Error::other("lost create reply"))
+                Post::Unconfirmed
             },
             || Ok(None),
         )
@@ -251,7 +377,7 @@ mod tests {
         assert!(result.is_none());
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        let route = provision(&mut inbox,&plan,None,||panic!("uncertain writes may not repeat"),|| {
+        let route = provision(&mut inbox,&plan,None,||120_001,||panic!("uncertain writes may not repeat"),|| {
             readback(&cfg,&plan,|path| {
                 let value=match path {
                     "/channels/9"=>json!({"type":11,"id":"9","guild_id":"1","parent_id":"2","thread_metadata":{"archived":false,"locked":false}}),

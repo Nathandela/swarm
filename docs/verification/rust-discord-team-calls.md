@@ -36,3 +36,11 @@ An unbound enrolled teammate connector can bind one ordinary public thread from 
 A supervisor keeps independently enrolled Discord places in a private registry. Choosing a different default place leaves prior identities enrolled. Native manager effects resolve the exact enrolled bridge, and worker input verifies its explicit installation. An independent application lease prevents two Gateway owners for one app under the same supervisor.
 
 Direct received attachments in a verified personal DM or linked team discussion are restricted to the original Discord CDN channel and attachment coordinates. The connector sends no bot credentials to the CDN. It pins the complete bytes under the original message and attachment identity, checks the digest immediately before native admission, and retains the exact snapshot across signed URL changes. The fixture rejects foreign CDN authorities, unrelated source coordinates, modified bytes, and writable snapshots. Forwarded snapshots and broader provider-specific attachment read grants remain outside this increment.
+
+## Guild review regressions
+
+Reconnect collects timeline pages only to the saved history cursor. Older pending admissions use individual verified message reads, so an old request beyond the four-page timeline bound cannot block a recent repair.
+
+An explicit HTTP 429 can defer one exact opener, with no more than three create attempts and a recorded cooldown measured from the response. Retry verifies the same opener, current permissions, and the absence of the expected thread. Once deployed work might have crossed the network, recovery uses thread readback only. A local HTTPS fixture exercises the actual HTTP classification, a dropped response and unauthenticated attachment download.
+
+A competing same-app registration must prove that the earlier place is disabled. Missing or altered earlier custody holds enrollment. Received-file admission verifies the rendered native prompt size before CDN traffic or filesystem staging. It reclaims only bounded, private abandoned staging directories under the sole writer lease. Complete snapshots continue to count toward the storage limit and malformed storage fails closed.
