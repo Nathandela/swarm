@@ -18,7 +18,7 @@ def run(bin, env, *args):
     return result.stdout
 
 
-def exercise(go, fixture, codex, rust_test, base):
+def exercise(go, fixture, codex, rust_test, base, acknowledge):
     assert os.environ.get("SWARM_NATIVE_FIXTURE_OS_ISOLATED") == "1"
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
     for part in ("home", "home/.codex", "bin", "work", "state"):
@@ -27,7 +27,7 @@ def exercise(go, fixture, codex, rust_test, base):
     env = fixture_env(base, base / "state", base / "bin")
     env["PATH"] += ":/usr/sbin:/sbin"
     env["TERM"] = "xterm-256color"
-    source, calls = model_fixture(base, False)
+    source, calls = model_fixture(base, False, native_publication=True)
     try:
         place = base / "connector"
         run(fixture, env, "create", place, base / "state", "personal", "true", base / "work")
@@ -47,8 +47,10 @@ def exercise(go, fixture, codex, rust_test, base):
                 assert calls == []
                 test_env = env | {"SWARM_TEST_DISCORD_ACTIVE_ROOT": str(base / "state"),
                                   "SWARM_TEST_DISCORD_ACTIVE_FIXTURE": fixture}
+                if not acknowledge:
+                    test_env["SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK"] = "1"
                 run(rust_test, test_env, "retained_original_go_native_manager_roundtrip", "--nocapture")
-                await_value(lambda: len(calls) >= 1)
+                await_value(lambda: len(calls) >= 2)
                 reopened = json.loads(run(fixture, env, "activate", place, "original-room"))
                 # Opening the Go voice database advances its controller generation.
                 # The supervisor process, PTY, account, native observation and session
@@ -56,7 +58,12 @@ def exercise(go, fixture, codex, rust_test, base):
                 assert reopened.pop("generation") == binding.pop("generation") + 1
                 assert reopened == binding
                 assert auth.read_bytes() == original_credential
-                assert len(calls) == 1
+                assert len(calls) == 2
+                states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
+                state, = states
+                phase, export, nonce = state.split()
+                assert (phase, export) == ("sent" if acknowledge else "uncertain", "true")
+                assert len(nonce) == 24
                 assert run(fixture, env, "ingress", place, "original-room", "701", "replay").strip() == "0"
             except Exception:
                 print("Pinned Go supervisor log:", (base / "go.log").read_text()[-8000:], file=sys.stderr)
@@ -74,6 +81,7 @@ def exercise(go, fixture, codex, rust_test, base):
 
 if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
-    with tempfile.TemporaryDirectory(prefix="dn-", dir="/tmp") as directory:
-        exercise(go, fixture, codex, rust_test, Path(directory))
-    print("PASS Rust drove one installed native Codex turn through the retained Go manager binding")
+    for acknowledge in (True, False):
+        with tempfile.TemporaryDirectory(prefix="dn-", dir="/tmp") as directory:
+            exercise(go, fixture, codex, rust_test, Path(directory), acknowledge)
+    print("PASS retained Go manager: real Codex through Rust Gateway, authenticated final, and acknowledged or uncertain downgrade")

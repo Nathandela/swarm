@@ -10,12 +10,12 @@ fn digest(value: &Value) -> io::Result<String> {
     Ok(format!("{:x}", Sha256::digest(body.as_bytes())))
 }
 
-struct Publication {
+pub(super) struct Publication {
     key: Vec<u8>,
     row: Value,
     binding: Value,
-    nonce: String,
-    body: String,
+    pub(super) nonce: String,
+    pub(super) body: String,
 }
 
 fn publication<'tx>(
@@ -277,7 +277,7 @@ where
     under_lease(place, &cfg, id, &mut lease, authorize)
 }
 
-fn under_lease<F>(
+pub(super) fn under_lease<F>(
     place: &Place,
     cfg: &Config,
     id: &str,

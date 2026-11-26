@@ -2,6 +2,7 @@
 package discord
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -95,4 +96,22 @@ func (s *Store) FixtureFinalState(d TeammateDiscussion) (string, string, error) 
 		return "", "", err
 	}
 	return output.Chunks[0].State, output.Chunks[0].ID, nil
+}
+
+func (s *Store) FixtureOutputPhases(d TeammateDiscussion) ([]string, error) {
+	var phases []string
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(teammateOutboxBucket))
+		return teammateEach(bucket, d.InstallationID+"\x00"+d.ID, func(key, _ []byte) error {
+			var row teammateOutput
+			if err := teammateGet(bucket, key, &row); err != nil {
+				return err
+			}
+			for _, chunk := range row.Chunks {
+				phases = append(phases, fmt.Sprintf("%s %t %s", chunk.State, row.ExportAck, chunk.ID))
+			}
+			return nil
+		})
+	})
+	return phases, err
 }

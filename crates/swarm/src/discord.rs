@@ -354,7 +354,7 @@ impl<'a> Request<'a> {
                 &["from-state-dir", "from-socket", "from-lock", "from-log"]
             }
             "run" => {
-                flags = &["unattended"];
+                flags = &["unattended", "retained-personal"];
                 &[]
             }
             "status" | "stop-call" | "disconnect" | "include" | "exclude" => &[],
@@ -529,6 +529,12 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         return Ok(true);
     }
     match req.command {
+        "run" if req.on("retained-personal") && !req.on("unattended") => {
+            return legacy_ingress::service::run(&place);
+        }
+        "run" if req.on("retained-personal") => {
+            return Err(invalid("retained personal handoff runs in the foreground"));
+        }
         "run" => service::run(&place, &cfg)?,
         "status" => {
             let status = local::call(&place.dir, "status", "", None)

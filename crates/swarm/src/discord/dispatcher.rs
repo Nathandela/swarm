@@ -949,6 +949,15 @@ impl Drop for Dispatcher {
 }
 
 fn read_tool(stream: &std::os::unix::net::UnixStream, credential: &str) -> io::Result<Value> {
+    Ok(serde_json::from_slice(&read_tool_bytes(
+        stream, credential,
+    )?)?)
+}
+
+pub(super) fn read_tool_bytes(
+    stream: &std::os::unix::net::UnixStream,
+    credential: &str,
+) -> io::Result<Vec<u8>> {
     let mut reader =
         BufReader::new(DeadlineReader(stream, Instant::now() + Duration::from_secs(2)).take(8193));
     let mut line = String::new();
@@ -1002,7 +1011,7 @@ fn read_tool(stream: &std::os::unix::net::UnixStream, credential: &str) -> io::R
         .set_limit(remaining.saturating_add(size as u64));
     let mut body = vec![0; size];
     reader.read_exact(&mut body)?;
-    Ok(serde_json::from_slice(&body)?)
+    Ok(body)
 }
 
 fn auth_file(path: &Path) -> io::Result<String> {

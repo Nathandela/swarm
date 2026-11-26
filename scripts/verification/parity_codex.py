@@ -23,7 +23,7 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root, alternate_check, guard_check=False):
+def model_fixture(root, alternate_check, guard_check=False, native_publication=False):
     replies = []
     history=[]
     release_pressure=threading.Event()
@@ -69,6 +69,26 @@ def model_fixture(root, alternate_check, guard_check=False):
                     usage={"input_tokens":82_000 if high else 10,"output_tokens":4,"total_tokens":82_004 if high else 14,
                            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
             ]
+            if native_publication and index == 1:
+                names = [(tool.get("name"), child.get("name"))
+                         for tool in body.get("tools",[]) for child in tool.get("tools",[])
+                         if child.get("name") == "publish"]
+                assert len(names) == 1, [(tool.get("type"),tool.get("name")) for tool in body.get("tools",[])]
+                namespace, name = names[0]
+                arguments = json.dumps(dict(output_id="retained-final",sequence=1,
+                                            text="Verified native final reply.",final=True))
+                item = dict(type="function_call",id="fixture-function-1",call_id="fixture-call-1",
+                            namespace=namespace,name=name,arguments=arguments,status="completed")
+                events = [
+                    ("response.created", {"response":response.copy()}),
+                    ("response.output_item.added", {"output_index":0,"item":dict(item,arguments="",status="in_progress")}),
+                    ("response.function_call_arguments.delta", {"item_id":item["id"],"output_index":0,"delta":arguments}),
+                    ("response.function_call_arguments.done", {"item_id":item["id"],"output_index":0,"arguments":arguments}),
+                    ("response.output_item.done", {"output_index":0,"item":item}),
+                    ("response.completed", {"response":dict(response,status="completed",output=[item],
+                        usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
+                               "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
+                ]
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream")
             self.end_headers()
