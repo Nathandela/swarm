@@ -194,8 +194,12 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         manager.write_text(f"""#!/bin/sh
 {check}
 if test -f "$HOME/hold-status"; then
-    : > "$HOME/status-started"
+    /bin/sleep 60 &
+    child=$!
+    printf '%s %s\n' "$$" "$child" > "$HOME/status-started"
     while test -f "$HOME/hold-status"; do /bin/sleep .02; done
+    kill "$child" 2>/dev/null || :
+    wait "$child" 2>/dev/null || :
     {active}
 else
     {inactive}
@@ -203,6 +207,21 @@ fi
 """)
         manager.chmod(0o700)
         held_status = root / "home/hold-status"
+        status_processes = root / "home/status-started"
+
+        def held_processes():
+            def started():
+                if not status_processes.exists():
+                    return None
+                pids = tuple(map(int, status_processes.read_text().split()))
+                births = {pid: p.generation(pid) for pid in pids}
+                return births if len(births) == 2 and all(births.values()) else None
+            return p.wait_for(started, "held timer manager and descendant")
+
+        def wait_status_exit(births):
+            p.wait_for(lambda: all(p.generation(pid) != birth for pid, birth in births.items()),
+                       "timer manager and descendant reaped")
+
         daemon = start()
         listing = cli("schedule", "list", "--json")
         assert listing.returncode == 0 and json.loads(listing.stdout) is None, listing.stderr
@@ -260,7 +279,7 @@ fi
                 board.send(b"a")
                 cadence = "active · Fixture automation · 2099-01-01 01:00 · UTC (fixed)".encode()
                 board.wait_bytes(cadence)
-                p.wait_for((root / "home/status-started").exists, "held timer status")
+                p.wait_for(status_processes.exists, "held timer status")
                 board.send(b"\x1b[<0;4;2M\x1b[<32;5;2M\x1b[<0;4;2m")
                 board.send(b"\x1b[<0;4;2M\x1b[<0;4;2m")
                 board.wait_bytes(b"Status")
@@ -272,8 +291,30 @@ fi
                 board.wait_bytes(cadence, since)
             finally:
                 held_status.unlink(missing_ok=True)
-            board.wait_bytes("Automations · Timer not installed, inactive".encode(), since)
+            idle_timer = "Automations · Timer not installed, inactive".encode()
+            board.wait_bytes(idle_timer, since)
             assert b"Timer not installed, active" not in board.capture
+
+            timer_catalog = root / "state/schedules/state.db"
+            before_probe = timer_catalog.read_bytes()
+            status_processes.unlink(missing_ok=True)
+            held_status.touch()
+            try:
+                since = len(board.capture)
+                starting_timeout = time.monotonic()
+                board.send(b"r")
+                timed_out = held_processes()
+                board.wait_bytes("Automations · Timer status unavailable".encode(), since)
+                wait_status_exit(timed_out)
+                timed_out_after = time.monotonic() - starting_timeout
+                assert held_status.exists()
+            finally:
+                held_status.unlink(missing_ok=True)
+            since = len(board.capture)
+            board.send(b"r")
+            board.wait_bytes(idle_timer, since)
+            assert timer_catalog.read_bytes() == before_probe
+
             since = len(board.capture)
             board.send(b"\r")
             board.wait_bytes(b"Status", since)
@@ -320,7 +361,22 @@ fi
                 return single if single["state"] == "exhausted" and rejected == ["rejected"] else None
             first = p.wait_for(recorded_without_ack, "durable outcome without manual run ACK")
             assert first["manual"] is True
-            quit_board(board)
+            step(b"\x1b[27u", b"[Refresh (r)]")
+            status_processes.unlink(missing_ok=True)
+            held_status.touch()
+            try:
+                board.send(b"r")
+                cancelled = held_processes()
+                cancelling = time.monotonic()
+                quit_board(board)
+                cancelled_after = time.monotonic() - cancelling
+                assert cancelled_after < 2, "board waited for timer deadline at quit"
+                wait_status_exit(cancelled)
+                assert held_status.exists()
+                print(f"timer lifecycle: held reader timed out in {timed_out_after:.2f}s, "
+                      f"refresh recovered, quit cancelled held group in {cancelled_after:.2f}s")
+            finally:
+                held_status.unlink(missing_ok=True)
             board.close()
             daemon.kill()
             daemon.wait(timeout=5)

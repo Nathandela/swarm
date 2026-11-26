@@ -5,18 +5,24 @@ use std::{
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Write},
     os::{
-        fd::AsRawFd,
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+        fd::{AsRawFd, OwnedFd},
+        unix::{
+            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+            net::UnixStream,
+            process::CommandExt,
+        },
     },
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 const LABEL: &str = "com.swarm.schedule";
 const TIMER: &str = "swarm-schedule.timer";
 const SERVICE: &str = "swarm-schedule.service";
 
-pub(super) fn command(verb: &str) -> Result<Option<String>> {
+fn local_manager<'a>(run: &'a Run<'a>) -> Result<Manager<'a>> {
     let home = home()?;
     safe_path(&home)?;
     let platform = match env::consts::OS {
@@ -37,12 +43,16 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
             vec![dir.join(SERVICE), dir.join(TIMER)]
         }
     };
-    let run = |name: &str, args: &[&str]| Command::new(name).args(args).env("LC_ALL", "C").output();
-    let manager = Manager {
+    Ok(Manager {
         platform,
         paths,
-        run: &run,
-    };
+        run,
+    })
+}
+
+pub(super) fn command(verb: &str) -> Result<Option<String>> {
+    let run = |name: &str, args: &[&str]| Command::new(name).args(args).env("LC_ALL", "C").output();
+    let manager = local_manager(&run)?;
     match verb {
         "status" => Ok(Some(manager.status()?)),
         "install" => {
@@ -67,7 +77,7 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
                 .iter()
                 .map(|(key, path)| Ok((*key, safe_path(path)?)))
                 .collect::<Result<Vec<_>>>()?;
-            manager.change(Some(render(platform, &exe, &env)))?;
+            manager.change(Some(render(manager.platform, &exe, &env)))?;
             Ok(None)
         }
         "uninstall" => {
@@ -76,6 +86,88 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
         }
         _ => unreachable!(),
     }
+}
+
+pub(super) fn board_status(cancel: &AtomicBool) -> Result<String> {
+    let run = |name: &str, args: &[&str]| status_output(name, args, cancel);
+    local_manager(&run)?.status()
+}
+
+fn status_pipe() -> io::Result<(UnixStream, Stdio)> {
+    let (reader, writer) = UnixStream::pair()?;
+    reader.set_nonblocking(true)?;
+    Ok((reader, Stdio::from(OwnedFd::from(writer))))
+}
+
+fn read_status(pipe: &mut UnixStream, bytes: &mut Vec<u8>) -> io::Result<bool> {
+    let mut buffer = [0; 4096];
+    match pipe.read(&mut buffer) {
+        Ok(0) => Ok(false),
+        Ok(count) => {
+            if bytes.len() + count > 64 * 1024 {
+                return Err(io::Error::other("timer manager output exceeds 64 KiB"));
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+fn status_output(name: &str, args: &[&str], cancel: &AtomicBool) -> io::Result<Output> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    if cancel.load(Ordering::Relaxed) {
+        return Err(io::ErrorKind::Interrupted.into());
+    }
+    let (mut stdout, child_stdout) = status_pipe()?;
+    let (mut stderr, child_stderr) = status_pipe()?;
+    let mut child = Command::new(name)
+        .args(args)
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(child_stdout)
+        .stderr(child_stderr)
+        .process_group(0)
+        .spawn()?;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let completed = (|| -> io::Result<()> {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            let read_stdout = read_status(&mut stdout, &mut out)?;
+            let read_stderr = read_status(&mut stderr, &mut err)?;
+            if !read_stdout && !read_stderr {
+                if crate::supervisor::runtime::child_exited(&child)? {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    })();
+    // The unreaped child anchors the dedicated group, including inherited pipes.
+    if unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) } < 0 {
+        let _ = child.kill();
+    }
+    let status = child.wait();
+    completed?;
+    let status = status?;
+    while read_status(&mut stdout, &mut out)? | read_status(&mut stderr, &mut err)? {
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+    }
+    Ok(Output {
+        status,
+        stdout: out,
+        stderr: err,
+    })
 }
 
 type Run<'a> = dyn Fn(&str, &[&str]) -> io::Result<Output> + 'a;

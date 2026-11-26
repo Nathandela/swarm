@@ -6,14 +6,40 @@ use crate::schedule::{
     Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
     automation_timer_status,
 };
-use std::{fmt::Write as _, io, path::Path, sync::mpsc};
+use std::{
+    fmt::Write as _,
+    io,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread::{self, JoinHandle},
+};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Default)]
 pub(super) struct TimerStatusProbe {
     generation: u64,
-    pending: Option<(u64, mpsc::Receiver<String>)>,
+    pending: Option<StatusRead>,
+}
+
+struct StatusRead {
+    generation: u64,
+    result: mpsc::Receiver<String>,
+    cancel: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl Drop for StatusRead {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 impl TimerStatusProbe {
@@ -26,21 +52,28 @@ impl TimerStatusProbe {
     }
 
     fn start(&mut self) {
-        let (send, receive) = mpsc::channel();
-        self.pending = Some((self.generation, receive));
-        std::thread::spawn(move || {
-            let _ = send.send(automation_timer_status());
+        let (send, result) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker = thread::spawn(move || {
+            let _ = send.send(automation_timer_status(&worker_cancel));
+        });
+        self.pending = Some(StatusRead {
+            generation: self.generation,
+            result,
+            cancel,
+            worker: Some(worker),
         });
     }
 
     pub(super) fn poll(&mut self) -> Option<(u64, String)> {
-        let (generation, receive) = self.pending.as_ref()?;
-        let status = match receive.try_recv() {
+        let pending = self.pending.as_ref()?;
+        let status = match pending.result.try_recv() {
             Ok(status) => status,
             Err(mpsc::TryRecvError::Empty) => return None,
             Err(mpsc::TryRecvError::Disconnected) => "status unavailable".into(),
         };
-        let generation = *generation;
+        let generation = pending.generation;
         self.pending = None;
         if generation != self.generation {
             // Refreshes can supersede a slow manager read without starting more children.
