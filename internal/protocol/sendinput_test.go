@@ -592,6 +592,20 @@ func TestSendInput_TextAtTheBoundAccepted(t *testing.T) {
 // TestSendInput_NonRunningSessionRefused: a session that cannot receive input is refused
 // with nothing written and no stream opened. An exited session and an id no session has
 // are the same case to the caller — there is nothing to steer.
+func TestSendInput_DispatcherTextRequiresDiscussionRoute(t *testing.T) {
+	f := newSendFixture(t)
+	meta := statusMeta("sess1", status.TurnIdle, status.InteractionNone)
+	meta.Role = "manager"
+	meta.ManagerConversationID = "discord-teammate-discussion"
+	f.d.setMetas(meta)
+	if got := f.send(&SendInputReq{Text: "worker progress", Submit: true}); got.Op != OpError || !strings.Contains(got.Error, "swarm teammate message") {
+		t.Fatalf("dispatcher text did not receive an actionable refusal: %+v", got)
+	}
+	if n := f.d.attachCount(); n != 0 {
+		t.Fatalf("refused dispatcher text opened %d upstream streams", n)
+	}
+}
+
 func TestSendInput_NonRunningSessionRefused(t *testing.T) {
 	cases := []struct {
 		name  string

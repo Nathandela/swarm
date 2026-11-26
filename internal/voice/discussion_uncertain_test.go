@@ -20,7 +20,7 @@ func TestDiscussionUnconfirmedEffectReportsFirstAdmissionWithoutResending(t *tes
 	d := &DiscussionController{controller: c, store: store, now: time.Now, cfg: Config{ConversationID: b.ConversationID}}
 	native.status.Turn.ExternalInput++
 	var paused *DiscussionInputHold
-	if err := d.Sync(t.Context(), nil); !errors.Is(err, ErrDiscussionNativeProofHeld) || !errors.As(err, &paused) || paused.AdmissionID != "first" || len(native.sent) != 0 {
+	if err := d.Sync(t.Context(), nil); !errors.Is(err, ErrDiscussionDirectInputHeld) || !errors.As(err, &paused) || paused.AdmissionID != "first" || len(native.sent) != 0 {
 		t.Fatalf("queued owner input silently held by manual scheduling pause: %v", err)
 	}
 	if err := c.ResumeManual(t.Context(), native.status.Turn.ExternalInput); err != nil {

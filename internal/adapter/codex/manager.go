@@ -17,15 +17,19 @@ func managerFlags(manager *adapter.ManagerSpec) []string {
 	if manager == nil {
 		return nil
 	}
+	var flags []string
+	if manager.Discord {
+		flags = append(flags, "-c", "notice.hide_rate_limit_model_nudge=true")
+	}
 	args, _ := json.Marshal(manager.Args)
 	if manager.NativeCLI {
 		var approvals []string
 		for _, tool := range adapter.DiscordTransportTools() {
 			approvals = append(approvals, tool+`={approval_mode="approve"}`)
 		}
-		return []string{"-c", "mcp_servers.swarm_voice={command=" + strconv.Quote(manager.Command) + ",args=" + string(args) + `,env_vars=["SWARM_SESSION_ID"],env={SWARM_MANAGER_VM_CLI="1"},required=true,tools={` + strings.Join(approvals, ",") + "}}"}
+		return append(flags, "-c", "mcp_servers.swarm_voice={command="+strconv.Quote(manager.Command)+",args="+string(args)+`,env_vars=["SWARM_SESSION_ID"],env={SWARM_MANAGER_VM_CLI="1"},required=true,tools={`+strings.Join(approvals, ",")+"}}")
 	}
-	return []string{"-c", "mcp_servers.swarm_voice={command=" + strconv.Quote(manager.Command) + ",args=" + string(args) + `,env_vars=["SWARM_SESSION_ID"],required=true}`, "-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`}
+	return append(flags, "-c", "mcp_servers.swarm_voice={command="+strconv.Quote(manager.Command)+",args="+string(args)+`,env_vars=["SWARM_SESSION_ID"],required=true}`, "-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`)
 }
 
 func managerOverride(value string) bool {

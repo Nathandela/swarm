@@ -1,12 +1,41 @@
 package codex
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/pelletier/go-toml/v2"
 )
+
+func TestDispatcherKeepsCurrentModelWithoutPrompt(t *testing.T) {
+	const override = "notice.hide_rate_limit_model_nudge=true"
+	for _, manager := range []*adapter.ManagerSpec{nil, {Command: "/private/swarm"}, {Discord: true, Command: "/private/swarm"}, {Discord: true, NativeCLI: true, Command: "/private/swarm"}} {
+		for _, resume := range []bool{false, true} {
+			var argv []string
+			var err error
+			if resume {
+				argv, err = New().Resume(adapter.ResumeSpec{Manager: manager, ConversationID: "019a056e-f192-7961-84cc-b4fa60e47aee"})
+			} else {
+				argv, err = New().Command(adapter.LaunchSpec{Manager: manager})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			src, _ := adapter.AsBackendSource(New())
+			plan, _ := src.Backend(adapter.BackendSpec{SocketPath: "/tmp/sock", AgentArgv: argv})
+			frontend := argv[1:]
+			if plan.AgentCommandArgs != nil {
+				frontend = plan.AgentCommandArgs
+			}
+			want := manager != nil && manager.Discord
+			if index := slices.Index(frontend, override); (index > 0 && frontend[index-1] == "-c") != want || slices.Contains(plan.Args, override) {
+				t.Fatalf("resume=%t dispatcher=%t: frontend=%q backend=%q", resume, want, frontend, plan.Args)
+			}
+		}
+	}
+}
 
 func TestManagerMCPAndFullPolicyReachCodexBackendForFreshAndResume(t *testing.T) {
 	manager := &adapter.ManagerSpec{Command: "/private/space 'quote;$()/swarm", Args: []string{"voice", "mcp", "--socket", "/private/s 'x;$/voice.sock", "--auth-file", "/private/s 'x;$/auth", "--conversation", "conversation-1"}}

@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/submitframe"
 )
@@ -114,8 +115,8 @@ func (cc *clientConn) handleSendInput(c Control) {
 		cc.replyErrorCode("send_input: "+why, CodeInvalidField)
 		return
 	}
-	if !cc.srv.sessionRunning(local) {
-		cc.replyError("send_input: session " + strconv.Quote(local) + " is not running")
+	if err := cc.srv.checkSendInputTarget(local, c.SendInput); err != nil {
+		cc.replyError("send_input: " + err.Error())
 		return
 	}
 	if err := cc.srv.sendMessage(local, frames, sendInputSubmits(c.SendInput), sendInputPastes(c.SendInput)); err != nil {
@@ -139,8 +140,8 @@ func (s *Server) SendInput(local string, req SendInputReq) error {
 	if why != "" {
 		return fmt.Errorf("send_input: %s", why)
 	}
-	if !s.sessionRunning(local) {
-		return fmt.Errorf("send_input: session %s is not running", strconv.Quote(local))
+	if err := s.checkSendInputTarget(local, &req); err != nil {
+		return fmt.Errorf("send_input: %w", err)
 	}
 	return s.sendMessage(local, frames, sendInputSubmits(&req), sendInputPastes(&req))
 }
@@ -195,16 +196,17 @@ func sendInputFrames(req *SendInputReq) ([][]byte, string) {
 	return frames, ""
 }
 
-// sessionRunning reports whether the session can receive input at all. An exited or lost
-// session and an id no session has are the same case to the caller: there is nothing to
-// steer, and the refusal must precede any write.
-func (s *Server) sessionRunning(local string) bool {
+func (s *Server) checkSendInputTarget(local string, req *SendInputReq) error {
 	for _, m := range s.d.List() {
-		if m.ID == local {
-			return m.Status.Process == status.ProcessRunning
+		if m.ID != local || m.Status.Process != status.ProcessRunning {
+			continue
 		}
+		if req.Text != "" && schema.IsDiscordManager(m.Role, m.ManagerConversationID) {
+			return errors.New("use Discord or a bound worker note (swarm teammate message) to contact this dispatcher, or attach for manual input")
+		}
+		return nil
 	}
-	return false
+	return fmt.Errorf("session %s is not running", strconv.Quote(local))
 }
 
 // sendMessage writes one message's frames to a session's shim, atomically against

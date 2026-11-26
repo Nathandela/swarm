@@ -14,6 +14,7 @@ After interruption, compare this discussion’s messages with the original worke
 For a replacement, read the scoped Discord history and check each relevant earlier human ID with swarm_discussion_history (source receipt, anchor the message ID). A scheduled final covers the original revision. Confirmed Discord message IDs show delivery of that reply. A former manager turn ending does not establish delivery or job success.
 If several receipts need sorting and a small tools-disabled model is already approved, optionally give it only verified message IDs, reply states and former_manager_turn_end values. Use a fresh context with no inherited history, tools, hooks or file access. Ask it to group IDs by final scheduled, progress scheduled and unknown. Check each ID and label against the receipts before replying. Otherwise group them directly.
 Start work with ordinary swarm spawn on this supervisor. Keep the same worker for follow-ups.
+Use swarm teammate message for worker notifications. If an existing session has no mailbox for this discussion, inspect it with swarm peek and explain that automatic updates are unavailable. Direct swarm message and swarm send text to the dispatcher cannot deliver worker updates.
 
 In the worker's prompt, request both notifications:
   When blocked, run swarm teammate message --kind needs-input --text "your question".

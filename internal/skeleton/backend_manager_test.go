@@ -11,6 +11,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/shim"
 	"os"
 	"path/filepath"
@@ -19,6 +20,18 @@ import (
 	"testing"
 	"time"
 )
+
+func TestDispatcherRejectsUnadmittedSemanticInput(t *testing.T) {
+	sk, binding, _ := newCodexManagerSendRigForConversation(t, schema.DiscussionConversationPrefix+"dispatcher")
+	req := protocol.ComposerSendReq{Session: "machine/" + binding.Session, Text: "worker progress"}
+	code, err := sk.semanticSendTransactional("machine", "fixture", req, func() error {
+		t.Fatal("unadmitted dispatcher input reached the write boundary")
+		return nil
+	})
+	if code != protocol.CodeStructuredUnsupported || err == nil || !strings.Contains(err.Error(), "swarm teammate message") {
+		t.Fatalf("bare semantic input did not receive an actionable refusal: %s %v", code, err)
+	}
+}
 
 func codexProofFixture() managerproof.Binding {
 	return managerproof.Binding{Session: "manager", SessionInstance: "instance", ConversationID: "conversation", Provider: "codex", NativeSessionID: "01a1bc58-3571-7452-bd5c-348fe1b9d7ff", NativeGeneration: "actual-process-generation", ObservationGeneration: "observation-generation", LoginEpoch: "account"}
