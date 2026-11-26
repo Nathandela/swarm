@@ -1,6 +1,6 @@
 # Providers, orchestration and daily work
 
-The reference is the behavior reachable at Git revision `f26648d6`. An adapter reporting an installed version, a provider accepting an operation, and a real native conversation completing that operation are three separate observations. Qualify each operation independently. Existing evidence below is a starting corpus for the Rust work. All acceptance runs described here are future gates.
+The historical behavior corpus in this chapter uses Git revision `f26648d6` (v0.29.22). Qualify current behavior against shipping Go v0.29.24. An adapter reporting an installed version, a provider accepting an operation, and a real native conversation completing that operation are three separate observations. Qualify each operation independently. [Reference pins](README.md#pin-the-two-references)
 
 ## A worker's identity and its capabilities
 

@@ -1,6 +1,6 @@
 # Terminal, session runtime and continuity
 
-This chapter defines acceptance for the migration branch against Go main at `f26648d6`. A user can start a discussion, leave it running, restart the supervisor, find the same discussion, and reconnect to the same live terminal. That journey is the first integration slice. The built program is the oracle where early specifications and shipped behavior differ. Cross-language test combinations below are proposed qualification work.
+This chapter defines acceptance against shipping Go v0.29.24 at `a716dd50a5faf746ce6f0831fc31d0d73b06ffeb`. Historical source links point to the v0.29.22 contract at `f26648d6`. A user can start a discussion, leave it running, restart the supervisor, find the same discussion, and reconnect to the same live terminal. That journey is the first integration slice. The built program determines the contract when early specifications differ from shipped behavior. [Reference pins](README.md#pin-the-two-references)
 
 ## Ownership and failure boundaries
 
