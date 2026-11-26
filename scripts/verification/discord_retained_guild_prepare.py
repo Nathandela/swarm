@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+from queue import Queue
 import shutil
 import signal
 import socket
@@ -108,7 +109,46 @@ def stop_connector(place):
         assert json.loads(raw.split(b"\r\n\r\n", 1)[1]) == {"stopped": True}
 
 
-def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False, prepare_native=False):
+def lines_from(stream):
+    lines = Queue()
+    def read_output():
+        for line in stream:
+            lines.put(line)
+    worker = Thread(target=read_output, daemon=True)
+    worker.start()
+    return lines, worker
+
+
+def refused_bridge_tool(go, env, socket_path, auth_file, conversation, local):
+    command = [go, "voice", "mcp", "--socket", socket_path, "--auth-file", auth_file,
+               "--conversation", conversation]
+    with subprocess.Popen(command, env=env | {"SWARM_SESSION_ID": local}, text=True,
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        replies, output = lines_from(child.stdout)
+        def send(method, params, id=None):
+            message = dict(jsonrpc="2.0", method=method, params=params)
+            if id is not None:
+                message["id"] = id
+            child.stdin.write(json.dumps(message) + "\n")
+            child.stdin.flush()
+        try:
+            send("initialize", {"protocolVersion":"2024-11-05", "capabilities":{},
+                                "clientInfo":{"name":"private bridge fixture", "version":"1"}}, 1)
+            assert json.loads(replies.get(timeout=5))["id"] == 1
+            send("notifications/initialized", {})
+            send("tools/call", {"name":"swarm_discussion_history", "arguments":{}}, 2)
+            answer = json.loads(replies.get(timeout=8))
+            assert answer["id"] == 2 and answer["result"]["isError"], answer
+            assert "manager action is unconfirmed" in json.dumps(answer["result"]), answer
+        finally:
+            child.stdin.close()
+            child.wait(timeout=8)
+            output.join(timeout=3)
+            assert child.returncode == 0, child.stderr.read()
+
+
+def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False,
+            prepare_native=False, native_bridge=False):
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
@@ -119,6 +159,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         (settings / "starting-prompt").chmod(0o600)
     env = fixture_env(base, base / "state", base / "bin")
     env["TERM"] = "xterm-256color"
+    if native_bridge:
+        env["SWARM_NATIVE_FIXTURE_HOST_NETNS"] = os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"]
     if interrupt:
         for namespace in ("net", "pid"):
             name = f"SWARM_NATIVE_FIXTURE_HOST_{namespace.upper()}NS"
@@ -192,6 +234,60 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 child.wait(timeout=15)
                 output.join(timeout=5)
             assert child.returncode == 0, "".join(log)
+
+    def bridge_custody(start, voice):
+        with subprocess.Popen([rust_test, *rust_args], env=rust_env("native-bridge-hold"), text=True,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            lines, output = lines_from(child.stdout)
+            def marker(expected):
+                while line := lines.get(timeout=10):
+                    if expected in line:
+                        return
+            try:
+                marker("holding the original prepared controller bridge")
+                sock = Path(start["bridge_socket"])
+                auth = Path(start["auth_file"])
+                binding = start["binding"]
+                local = binding["session"].split("/", 1)[1]
+                with sock.with_name("controller.lock").open("rb") as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        raise AssertionError("original Go controller lease was available during Rust ownership")
+                assert auth == voice.with_name("bridge.auth") and sock.stat().st_mode & 0o777 == 0o600
+                request = json.dumps(dict(version=1, conversation_id=binding["conversation_id"], session_id=local,
+                    call=dict(name="swarm_discussion_history", arguments={}))).encode()
+                with socket.socket(socket.AF_UNIX) as peer:
+                    peer.settimeout(3)
+                    peer.connect(str(sock))
+                    peer.sendall((f"POST /manager/call HTTP/1.0\r\nHost: voice\r\nAuthorization: Bearer {'0' * 64}\r\n"
+                                  f"Content-Type: application/json\r\nContent-Length: {len(request)}\r\n\r\n").encode() + request)
+                    assert b'"error":"unconfirmed"' in peer.makefile("rb").read()
+                original = auth.with_name("bridge.auth.fixture-original")
+                auth.rename(original)
+                try:
+                    auth.write_bytes(original.read_bytes())
+                    auth.chmod(0o600)
+                    refused_bridge_tool(go, env, sock, auth, binding["conversation_id"], local)
+                finally:
+                    original.replace(auth)
+                refused_bridge_tool(go, env, sock, auth, binding["conversation_id"], "fixture-other-session")
+                refused_bridge_tool(go, env, sock, auth, binding["conversation_id"], local)
+                marker("withheld native input and original Go tool calls")
+                assert calls == [] and posts == []
+                stop_connector(place)
+                child.stdin.write("continue\n")
+                child.stdin.flush()
+                assert child.wait(timeout=10) == 0 and not sock.exists()
+                with sock.with_name("controller.lock").open("rb") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=8)
+                output.join(timeout=3)
     try:
         invoke("create", place, base / "state", "teammate", "true", base / "work")
         invoke("bind-thread", place, "original-room", "401", "399")
@@ -380,6 +476,11 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         assert voice.read_bytes() == persisted and native(voice) == prepared
                         assert connector.read_bytes() == source_bytes and pending() == [sending]
                         assert calls == [] and posts == []
+                        if native_bridge:
+                            bridge_custody(start, voice)
+                            assert voice.read_bytes() == persisted and connector.read_bytes() == source_bytes
+                            assert runtime()["binding"] == start["binding"] and calls == [] and posts == []
+                            print("PASS signed Go MCP reached the original Rust-held bridge; stop released custody with both ledgers unchanged", flush=True)
                 invoke("guild-advance", place, go_port, "accept")
                 accepted, = pending()
                 assert accepted["State"] == "accepted" and accepted["Admission"] == a
@@ -580,11 +681,12 @@ if __name__ == "__main__":
             second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True)
         assert first == second, (first, second)
         print("PASS Rust and Go matched the authenticated starter/history prompt byte-for-byte and omitted reply wait", flush=True)
-    elif len(sys.argv) == 6 and sys.argv[5] == "--native-prepare-rollback":
+    elif len(sys.argv) == 6 and sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody"):
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             first = witness(Path(root).resolve(), *sys.argv[1:4], queue_only=True, prepare_native=True)
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
-            second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True)
+            second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True,
+                             native_bridge=sys.argv[5] == "--native-bridge-custody")
         assert first == second, (first, second)
         print("PASS exact native request rendering and one Go-owned rollback send", flush=True)
     else:

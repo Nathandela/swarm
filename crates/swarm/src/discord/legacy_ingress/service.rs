@@ -1,9 +1,9 @@
 //! An original personal enrollment under a single stopped-connector handoff.
+use super::bridge::{Custody, ToolSocket};
 use super::*;
-use crate::discord::{dispatcher::read_tool_bytes, gateway, rest::Discord};
+use crate::discord::{gateway, rest::Discord};
 use std::{
     io::{Read, Write},
-    os::unix::net::UnixListener,
     time::{Duration, Instant},
 };
 
@@ -36,50 +36,13 @@ struct Final {
     file_ids: Option<Vec<String>>,
 }
 
-struct Bridge {
-    listener: UnixListener,
-    socket: PathBuf,
-    identity: (u64, u64),
-    credential: String,
-    _lock: fs::File,
+fn bridge_custody(place: &Place, cfg: &Config, binding: &Value) -> io::Result<Custody> {
+    let (directory, id, _) = voice_location(place, cfg, binding)?;
+    Custody::claim(&directory, &id, false)
 }
 
-impl Bridge {
-    fn open(place: &Place, cfg: &Config, binding: &Value) -> io::Result<Self> {
-        let (directory, id, _) = voice_location(place, cfg, binding)?;
-        let auth = open_owner_file(&directory.join("bridge.auth"))?;
-        let mut credential = String::new();
-        auth.take(65).read_to_string(&mut credential)?;
-        if credential.len() != 64
-            || !credential
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
-            return Err(invalid());
-        }
-        let root = fs::canonicalize("/tmp")?
-            .join(format!("swarm-dm-{}", unsafe { libc::getuid() }))
-            .join(&id[..32]);
-        if fs::canonicalize(&root)? != root {
-            return Err(invalid());
-        }
-        runtime::private_dir(&root)?;
-        let lock = runtime::lock(&root.join("controller.lock"))?;
-        let socket = root.join("bridge.sock");
-        runtime::reclaim_socket(&socket)?;
-        let listener = runtime::bind(&socket)?;
-        let metadata = fs::symlink_metadata(&socket)?;
-        listener.set_nonblocking(true)?;
-        Ok(Self {
-            listener,
-            socket,
-            identity: (metadata.dev(), metadata.ino()),
-            credential,
-            _lock: lock,
-        })
-    }
-
-    fn accept(
+impl ToolSocket<'_> {
+    fn accept_publication(
         &self,
         place: &Place,
         cfg: &Config,
@@ -99,39 +62,10 @@ impl Bridge {
         &self,
         handle: impl FnOnce(Value) -> io::Result<Value>,
     ) -> io::Result<Option<String>> {
-        let mut connection = match self.listener.accept() {
-            Ok((connection, _)) => connection,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        let result = read_tool_bytes(&connection, &self.credential).and_then(|raw| {
-            let request: ManagerRequest = serde_json::from_slice(&raw)?;
-            let request = serde_json::to_value(request)?;
-            handle(request)
-        });
-        let output = result
-            .as_ref()
-            .ok()
-            .map(|value| field(value, "id").to_owned());
-        let reply = match result {
-            Ok(value) => json!({"data":value}),
-            Err(_) => json!({"error":"unconfirmed"}),
-        };
-        let bytes = serde_json::to_vec(&reply)?;
-        connection.set_write_timeout(Some(Duration::from_secs(2)))?;
-        let _ = write!(connection,"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n",bytes.len())
-            .and_then(|_| connection.write_all(&bytes));
-        Ok(output)
-    }
-}
-
-impl Drop for Bridge {
-    fn drop(&mut self) {
-        if fs::symlink_metadata(&self.socket)
-            .is_ok_and(|meta| (meta.dev(), meta.ino()) == self.identity)
-        {
-            let _ = fs::remove_file(&self.socket);
-        }
+        self.accept(|raw| {
+            let request: ManagerRequest = serde_json::from_slice(raw)?;
+            handle(serde_json::to_value(request)?)
+        })
     }
 }
 
@@ -429,7 +363,8 @@ impl<R: Room> VmRelay<'_, R> {
         opened: impl FnOnce(),
         mut stopped: impl FnMut() -> io::Result<bool>,
     ) -> io::Result<Option<Value>> {
-        let bridge = Bridge::open(self.place, self.cfg, self.binding)?;
+        let custody = bridge_custody(self.place, self.cfg, self.binding)?;
+        let bridge = custody.listen()?;
         opened();
         if let Some(prepared) = self.prepared.take()
             && (stopped()?
@@ -647,7 +582,8 @@ where
             return Ok(true);
         }
         let row = pending_dispatch(&lease.db, &cfg, &message)?;
-        let bridge = Bridge::open(place, &cfg, &row.binding)?;
+        let custody = bridge_custody(place, &cfg, &row.binding)?;
+        let bridge = custody.listen()?;
         dispatch_under_lease(place, &cfg, &message, &mut lease, |_| fetch())?;
         settle_under_lease(place, &cfg, &message, &mut lease)?;
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -660,7 +596,7 @@ where
                     "the original native manager has no verified final publication",
                 ));
             }
-            if let Some(id) = bridge.accept(place, &cfg, &mut lease, &row, fetch)? {
+            if let Some(id) = bridge.accept_publication(place, &cfg, &mut lease, &row, fetch)? {
                 publication::under_lease(place, &cfg, &id, &mut lease, |cfg| {
                     room.verify(cfg)?;
                     let scope = cfg.clone();

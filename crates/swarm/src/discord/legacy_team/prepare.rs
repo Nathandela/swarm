@@ -1,6 +1,9 @@
 //! Give Go the original connector's sending row while leaving its controller untouched.
 use super::*;
-use crate::discord::{legacy_discussions::operation, legacy_ingress};
+use crate::discord::{
+    legacy_discussions::operation,
+    legacy_ingress::{self, bridge::Custody},
+};
 use crate::ipc::field;
 use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
 use serde::{Deserialize, Serialize};
@@ -151,10 +154,7 @@ pub(super) struct Manager {
     pub(super) binding: Value,
     pub(super) generation: u64,
     voice: Option<File>,
-    auth: File,
-    auth_hash: String,
-    socket: PathBuf,
-    controller: LockDescription,
+    pub(super) controller: Custody,
 }
 
 impl Manager {
@@ -165,33 +165,8 @@ impl Manager {
         queued: Option<(&Value, bool)>,
     ) -> io::Result<Self> {
         let (directory, id, endpoint) = legacy_ingress::voice_location(place, cfg, discussion)?;
-        let root = fs::canonicalize("/tmp")?
-            .join(format!("swarm-dm-{}", unsafe { libc::getuid() }))
-            .join(&id[..32]);
-        if fs::canonicalize(&root)? != root {
-            return Err(unavailable());
-        }
-        runtime::private_dir(&root)?;
-        let socket = root.join("bridge.sock");
-        let lock = root.join("controller.lock");
-        let saved = open_owner_file(&lock)?.metadata()?;
-        let controller = LockDescription(runtime::lock(&lock)?);
-        let held = controller.0.metadata()?;
-        if (saved.dev(), saved.ino()) != (held.dev(), held.ino()) {
-            return Err(unavailable());
-        }
+        let controller = Custody::claim(&directory, &id, true)?;
         open_owner_file(&directory.join("voice.initialized"))?;
-        let auth = open_owner_file(&directory.join("bridge.auth"))?;
-        let mut credential = Vec::new();
-        (&auth).take(65).read_to_end(&mut credential)?;
-        if credential.len() != 64
-            || !credential
-                .iter()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
-        {
-            return Err(unavailable());
-        }
-        let auth_hash = format!("{:x}", Sha256::digest(credential));
         let (voice, db) = open_bolt(&directory.join("voice.db"), 64 << 20)?;
         let state = legacy_ingress::prepare::read_voice_with_queue(
             &db.begin().map_err(io::Error::other)?,
@@ -209,9 +184,6 @@ impl Manager {
             binding,
             generation,
             voice: Some(voice),
-            auth,
-            auth_hash,
-            socket,
             controller,
         };
         manager.verify(place, cfg)?;
@@ -246,21 +218,10 @@ impl Manager {
         if !legacy_state::unchanged(
             self.voice.as_ref().ok_or_else(unavailable)?,
             &self.directory.join("voice.db"),
-        )? || !legacy_state::unchanged(&self.auth, &self.directory.join("bridge.auth"))?
-            || legacy_state::file_digest(
-                &open_owner_file(&self.directory.join("bridge.auth"))?,
-                64,
-                Instant::now() + Duration::from_secs(1),
-            )? != self.auth_hash
-            || !legacy_state::unchanged(
-                &self.controller.0,
-                &self.socket.with_file_name("controller.lock"),
-            )?
-            || !matches!(fs::symlink_metadata(&self.socket), Err(e) if e.kind() == io::ErrorKind::NotFound)
-        {
+        )? {
             return Err(unavailable());
         }
-        Ok(())
+        self.controller.verify_stopped()
     }
 }
 

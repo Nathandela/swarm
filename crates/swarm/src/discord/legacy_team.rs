@@ -613,7 +613,7 @@ pub(super) fn native_prepare_witness() {
             })
         })
         .unwrap(),
-        "prepare" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
+        "prepare" | "native-bridge-hold" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
         "prepare-and-exit" => {
             prepare_with(&place, &cfg, &api, "701", false).unwrap();
             std::process::exit(75);
@@ -784,6 +784,75 @@ pub(super) fn native_prepare_witness() {
         }
         phase => panic!("unknown guild test phase {phase}"),
     }
+}
+
+#[cfg(test)]
+fn hold_prepared_bridge<'a>(
+    place: &Place,
+    cfg: &Config,
+    manager: &prepare::Manager,
+    guard_commit: impl FnOnce() -> io::Result<std::sync::MutexGuard<'a, ()>>,
+) -> io::Result<()> {
+    use std::{io::Write, os::unix::fs::MetadataExt};
+    let outer = std::env::var("SWARM_NATIVE_FIXTURE_HOST_NETNS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|inode| *inode != 0)
+        .ok_or_else(|| invalid("the native bridge fixture requires a private network namespace"))?;
+    if std::fs::metadata("/proc/self/ns/net")?.ino() == outer
+        || cfg.text("installation_id") != "fixture-teammate"
+        || place
+            .supervisor_root()
+            .parent()
+            .map(|root| root.join("connector"))
+            .as_ref()
+            != Some(&place.dir)
+    {
+        return Err(invalid("unqualified native bridge fixture"));
+    }
+    let session = manager.binding["session_id"]
+        .as_str()
+        .and_then(|id| id.split_once('/'))
+        .ok_or_else(|| invalid("original manager session is unavailable"))?
+        .1;
+    let bridge = manager.controller.listen()?;
+    println!("holding the original prepared controller bridge");
+    io::stdout().flush()?;
+    // This witness has no admitted native turn and cannot authorize a tool call.
+    let until = Instant::now() + Duration::from_secs(20);
+    let mut wrong_session = 0;
+    let mut original_session = 0;
+    while wrong_session == 0 || original_session == 0 {
+        if Instant::now() >= until {
+            return Err(invalid(
+                "the signed Go bridge client did not reach the fixture",
+            ));
+        }
+        bridge.accept(|raw| {
+            let req: Value = serde_json::from_slice(raw)?;
+            assert_eq!(req["version"], 1);
+            assert_eq!(req["conversation_id"], manager.binding["conversation_id"]);
+            assert_eq!(req["call"]["name"], "swarm_discussion_history");
+            if req["session_id"] == session {
+                original_session += 1;
+            } else {
+                assert_eq!(req["session_id"], "fixture-other-session");
+                wrong_session += 1;
+            }
+            Err(invalid(
+                "prepared native requests have no observed manager call",
+            ))
+        })?;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!((wrong_session, original_session), (1, 1));
+    wait_at_test_boundary("withheld native input and original Go tool calls")?;
+    assert_eq!(
+        guard_commit().unwrap_err().to_string(),
+        "original connector stopped before Voice commit"
+    );
+    drop(bridge);
+    manager.verify_pins()
 }
 
 #[cfg(test)]

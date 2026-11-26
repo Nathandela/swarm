@@ -1,5 +1,6 @@
 //! Settle a Go personal ingress candidate from the original voice controller's cutover receipt.
 pub(super) mod activation;
+pub(super) mod bridge;
 mod grants;
 pub(super) mod manager_publication;
 pub(super) mod prepare;

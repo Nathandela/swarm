@@ -119,6 +119,14 @@ pub(super) fn advance<'a>(
         }
         manager.verify_pins()?;
         verify_settings()?;
+        #[cfg(test)]
+        if action.native
+            && existing
+            && std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE").as_deref()
+                == Ok("native-bridge-hold")
+        {
+            return super::hold_prepared_bridge(place, cfg, &manager, guard_commit);
+        }
         println!(
             "{}",
             match (action.native, existing) {
