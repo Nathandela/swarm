@@ -70,6 +70,9 @@ class Model(http.server.BaseHTTPRequestHandler):
             replay = tool_result(request,"toolu_fixture_enrolled_replay")
             status = tool_result(request,"toolu_fixture_enrolled_status")
             listed = tool_result(request,"toolu_fixture_enrolled_list")
+            wrong = tool_result(request,"toolu_fixture_enrolled_wrong_instance")
+            attempts = [tool_result(request,f"toolu_fixture_enrolled_read_{i}") for i in range(5)]
+            reads = [mcp_object(item) for item in attempts if item]
             after = tool_result(request,"toolu_fixture_enrolled_next")
             post_delete_status = tool_result(request,"toolu_fixture_deleted_status")
             post_delete_create = tool_result(request,"toolu_fixture_deleted_create")
@@ -109,8 +112,20 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert len(workers) == 1 and workers[0]["session"] == mcp_object(created)["session"]
                 structured = ("swarm_list","toolu_fixture_enrolled_next",
                               dict(limit=1,after_session_id=workers[0]["session"]))
-            else:
+            elif not wrong:
                 assert mcp_object(after)["workers"] == []
+                structured = ("swarm_read","toolu_fixture_enrolled_wrong_instance",
+                    dict(session=mcp_object(created)["session"],session_instance="wrong-incarnation"))
+            elif not reads or reads[-1]["state"] == "pending":
+                assert "Manager request was not confirmed." in json.dumps(wrong)
+                assert len(reads) < len(attempts), "native enrolled worker never provided a scoped result"
+                receipt = mcp_object(created)
+                structured = ("swarm_read",f"toolu_fixture_enrolled_read_{len(reads)}",
+                    dict(session=receipt["session"],session_instance=receipt["session_instance"]))
+            else:
+                assert reads[-1]["state"] == "completed"
+                assert reads[-1]["text"] == "Fixture"
+                assert reads[-1]["native_input_message_id"] and reads[-1]["native_result_message_id"]
         call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
         may_publish = not forwarded or self.server.forwarded == "allowed"
         if forwarded and not read_attachment:
@@ -263,6 +278,11 @@ def verify(swarm, provider, test, root, server):
         server.unapproved = root / "unapproved"
         server.approved.mkdir(mode=0o700)
         server.unapproved.mkdir(mode=0o700)
+        profile_path = home / ".claude.json"
+        profile = json.loads(profile_path.read_text())
+        for directory in (server.approved, server.unapproved):
+            profile["projects"][str(directory)] = dict(hasTrustDialogAccepted=True)
+        save(profile_path, profile)
         access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
         if server.deleted:

@@ -98,6 +98,12 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                 "inputSchema":{"type":"object","additionalProperties":false,"properties":{
                     "limit":{"type":"integer","minimum":0,"maximum":50},"after_session_id":{"type":"string"}
                 }}
+            },{
+                "name":"swarm_read","description":"Read the exact qualified native worker result for the selected session incarnation.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                    "session":{"type":"string"},"session_instance":{"type":"string"},
+                    "limit":{"type":"integer","minimum":1,"maximum":2048},"source":{"type":"string"}
+                },"required":["session","session_instance"]}
             }]}}),
             Some("tools/call") => {
                 let params = &request["params"];
@@ -111,6 +117,7 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                             | "swarm_create"
                             | "swarm_status"
                             | "swarm_list"
+                            | "swarm_read"
                     )
                 ) && params["arguments"].is_object()
                     && params["_meta"].is_object()
@@ -141,7 +148,7 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
             tools.retain(|tool| {
                 !matches!(
                     tool["name"].as_str(),
-                    Some("swarm_create" | "swarm_status" | "swarm_list")
+                    Some("swarm_create" | "swarm_status" | "swarm_list" | "swarm_read")
                 )
             });
         }

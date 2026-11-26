@@ -1237,6 +1237,16 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
+            "manager_worker_read" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
+                state.session(&request).and_then(|manager| {
+                    let call=&request["manager_worker_read"];
+                    let context=manager.enrolled_tool_context(&request,call,"swarm_read")?;
+                    let args=&call["arguments"];
+                    let target=state.session(&json!({"session_id":args["session"]}))?;
+                    let result=target.enrolled_worker_result(&context,args)?;
+                    reply(&writer,state,json!({"op":"manager_worker_read","session_id":request["session_id"],
+                        "worker_result":result}))
+                }),
             "manager_worker_action" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
                 state.session(&request).and_then(|session| {
                     let (launch, association) = session.enrolled_worker_action(&request)?;

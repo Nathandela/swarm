@@ -154,30 +154,23 @@ impl Session {
         Ok(data)
     }
 
-    pub(in crate::supervisor) fn enrolled_worker_action(
+    pub(in crate::supervisor) fn enrolled_tool_context(
         &self,
         request: &Value,
-    ) -> io::Result<(Value, Value)> {
+        call: &Value,
+        tool: &str,
+    ) -> io::Result<Value> {
         let session = field(request, "session_id");
-        let action = &request["manager_worker_action"];
         let data = crate::discord::connector_intent(&self.manager)?;
         let state = &data["manager"];
         let input = &state["input"];
-        let call = &action["call"];
-        let key = field(action, "key");
         if self.manager["launch"]["manager"]["native_cli"] == true
             || request["body_version"] != 1
-            || action["operation_id"] != request["operation_id"]
             || state["session"] != session
-            || !input["worker_wake"].is_null()
             || !input["turn_id"].is_string()
-            || input["worker_actions"][key] != *action
-            || call["name"] != "swarm_create"
-            || call["arguments"] != action["arguments"]
+            || call["name"] != tool
         {
-            return Err(refuse(
-                "enrolled worker action lacks exact connector custody",
-            ));
+            return Err(refuse("enrolled worker tool lacks exact connector custody"));
         }
         let evidence = self.native_manager_proof(session)?;
         let mut arguments = call["arguments"].clone();
@@ -185,8 +178,8 @@ impl Session {
         let proof = codex_proof::resolve(
             &evidence,
             &json!({
-                "binding":input["composer"]["manager_admission"]["binding"],
-                "tool_name":"swarm_create","arguments_hash":crate::discord::enrolled_worker::arguments_hash(&arguments)?,
+                "binding":input["composer"]["manager_admission"]["binding"],"tool_name":tool,
+                "arguments_hash":crate::discord::enrolled_worker::arguments_hash(&arguments)?,
                 "host_meta":call["meta"]
             }),
         )?;
@@ -194,10 +187,97 @@ impl Session {
             || proof["native_input_id"] != input["composer"]["manager_admission"]["nonce"]
         {
             return Err(refuse(
-                "worker launch is outside the current enrolled native admission",
+                "worker operation is outside the current enrolled native admission",
+            ));
+        }
+        Ok(state.clone())
+    }
+
+    pub(in crate::supervisor) fn enrolled_worker_action(
+        &self,
+        request: &Value,
+    ) -> io::Result<(Value, Value)> {
+        let action = &request["manager_worker_action"];
+        let call = &action["call"];
+        let state = self.enrolled_tool_context(request, call, "swarm_create")?;
+        let input = &state["input"];
+        if action["operation_id"] != request["operation_id"]
+            || !input["worker_wake"].is_null()
+            || input["worker_actions"][field(action, "key")] != *action
+            || call["arguments"] != action["arguments"]
+        {
+            return Err(refuse(
+                "enrolled worker action does not match its persisted launch intent",
             ));
         }
         crate::discord::enrolled_worker::launch(&self.manager, input, action)
+    }
+
+    pub(in crate::supervisor) fn enrolled_worker_result(
+        &self,
+        state: &Value,
+        args: &Value,
+    ) -> io::Result<Value> {
+        let instance = codex_receipt::provider_instance(&self.agent, &self.token);
+        let actions = &state["worker_actions"];
+        let child = &self.mailbox;
+        let budget = args["limit"].as_u64().unwrap_or(2048);
+        if self.agent != "claude"
+            || child["structured"] != true
+            || args["session_instance"] != instance
+            || child["discussion"] != state["binding"]["conversation_id"]
+            || !actions.as_object().is_some_and(|actions| {
+                actions.values().any(|action| {
+                    action["operation_id"] == child["attempt"]
+                        && action["arguments"]["cwd"] == child["project"]
+                })
+            })
+            || args.as_object().is_none_or(|args| {
+                args.iter().any(|(key, val)| match key.as_str() {
+                    "session" | "session_instance" => !val.is_string(),
+                    "limit" => !val.is_u64(),
+                    "source" => val != "",
+                    _ => true,
+                })
+            })
+            || !(1..=2048).contains(&budget)
+        {
+            return Err(refuse("no exact enrolled Claude worker result grant"));
+        }
+        let cwd = self.verify_effective()?;
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        let saved = &meta["claude_profile"];
+        let home = Path::new(field(saved, "home"));
+        let profile = crate::providers::claude::profile(
+            &runtime::launch_env(&Value::Null),
+            &Value::Null,
+            &saved["options"],
+        )?;
+        if meta["token"] != self.token
+            || ["home", "home_id", "origin", "settings"]
+                .iter()
+                .any(|key| profile[*key] != saved[*key])
+        {
+            return Err(refuse("Claude enrolled worker profile changed"));
+        }
+        let mut result = match self.claude_conversation() {
+            Ok(id) => {
+                self.claude_project_authority(home, cwd)?;
+                crate::providers::claude::worker_result::read(
+                    home,
+                    cwd,
+                    &id,
+                    &child["prompt_hash"],
+                    budget as usize,
+                )?
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => json!({"state":"pending"}),
+            Err(error) => return Err(error),
+        };
+        result["session"] = args["session"].clone();
+        result["session_instance"] = json!(instance);
+        result["attempt_id"] = child["attempt"].clone();
+        Ok(result)
     }
 
     pub(super) fn check_manager_input(

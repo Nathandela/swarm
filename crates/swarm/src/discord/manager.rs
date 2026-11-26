@@ -392,6 +392,30 @@ impl Manager {
         Ok(proof.clone())
     }
 
+    pub(super) fn enrolled_read(&self, session: &str, call: &Value) -> io::Result<Value> {
+        let mut caps = CAPS.to_vec();
+        caps.push(super::enrolled_worker::CAP);
+        let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
+        let reply = client
+            .request_body(
+                json!({"op":"manager_worker_read","body_version":1,
+            "session_id":session,"manager_worker_read":call}),
+                "manager_worker_read",
+            )
+            .map_err(|_| invalid("enrolled native worker result is unavailable"))?;
+        self.verify_endpoint(&client, &reply)?;
+        let result = &reply["worker_result"];
+        if reply["session_id"] != session
+            || result["session"] != call["arguments"]["session"]
+            || result["session_instance"] != call["arguments"]["session_instance"]
+            || !matches!(field(result, "state"), "pending" | "completed")
+        {
+            return Err(invalid("uncorrelated enrolled worker result"));
+        }
+        Ok(result.clone())
+    }
+
     pub(super) fn enrolled_roster(&self, actions: &Value, args: &Value) -> io::Result<Value> {
         let fields = args
             .as_object()

@@ -1,3 +1,4 @@
+pub(crate) mod worker_result;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::io::{self, Read};

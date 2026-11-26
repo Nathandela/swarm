@@ -176,6 +176,7 @@ impl Ledger {
                                     | "swarm_create"
                                     | "swarm_status"
                                     | "swarm_list"
+                                    | "swarm_read"
                             )
                             && valid(id) =>
                     {

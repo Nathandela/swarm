@@ -89,6 +89,7 @@ pub(crate) fn launch(scope: &Value, input: &Value, action: &Value) -> io::Result
         "worktree":args["worktree"]==true,"cols":120,"rows":32,"spawned_from":parent,"spawn_intent":"delegate"});
     let child = json!({"discussion":binding["conversation_id"],"parent":parent,
         "parent_incarnation":binding["session_instance"],"parent_input_hash":mail::parent_hash(nonce),
-        "attempt":operation,"project":cwd,"structured":true});
+        "attempt":operation,"project":cwd,"structured":true,
+        "prompt_hash":codex_receipt::hash(field(&launch,"initial_prompt"))});
     Ok((launch, child))
 }

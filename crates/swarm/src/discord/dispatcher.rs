@@ -816,6 +816,9 @@ impl Dispatcher {
             }
             return self.owner.enrolled_worker(&session, action, false);
         }
+        if tool == "swarm_read" {
+            return self.owner.enrolled_read(&session, call);
+        }
         if !input["worker_wake"].is_null() {
             return Err(invalid(
                 "worker creation requires a current human Discord admission",
@@ -872,6 +875,7 @@ impl Dispatcher {
                     | "swarm_create"
                     | "swarm_status"
                     | "swarm_list"
+                    | "swarm_read"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -886,7 +890,10 @@ impl Dispatcher {
         let call = &request["call"];
         let mut args = call["arguments"].clone();
         let tool = field(call, "name");
-        if matches!(tool, "swarm_create" | "swarm_status" | "swarm_list") {
+        if matches!(
+            tool,
+            "swarm_create" | "swarm_status" | "swarm_list" | "swarm_read"
+        ) {
             return self.enrolled_worker_tool(cfg, inbox, api, state, call);
         }
         if tool == "swarm_read_attachment" {
