@@ -18,7 +18,7 @@ fn key(table: &str, conversation: &str, suffix: &str) -> io::Result<Vec<u8>> {
     Ok(format!("{table}\0{id}").into_bytes())
 }
 
-fn apply_voice<'tx>(
+pub(super) fn apply_voice<'tx>(
     mut tx: impl TxRwApi<'tx>,
     mut header: Value,
     changes: &[(Vec<u8>, Value)],
@@ -204,10 +204,15 @@ fn stage_records<'tx>(
     original.conversation["last_output"] = json!(output);
     let permit = json!({"conversation_id":conversation,"admission":seq,
         "native_input_id":nonce,"native_turn_id":turn,"epoch":epoch,"revoked":false});
-    let result = json!({"id":pub_ref,"conversation_id":conversation,"admission":seq,
+    let mut result = json!({"id":pub_ref,"conversation_id":conversation,"admission":seq,
         "speech_epoch":epoch,"native_turn_id":turn,"sequence":1,"output_sequence":output,
         "text":text,"text_hash":format!("{:x}",Sha256::digest(text.as_bytes())),"final":true,"speak":true,
         "discussion_source":{"admission_id":origin["request_id"]}});
+    let project = field(&original.admission, "project");
+    if !project.is_empty() {
+        result["discussion_projects"] =
+            json!(crate::ipc::escape_json(serde_json::to_string(&[project])?));
+    }
     let changes = [
         (
             format!("conversations\0{conversation}").into_bytes(),

@@ -107,14 +107,10 @@ pub(super) fn read_voice<'tx>(
                     && value["exported"] == true
                     && value["final"] == true
                     && !field(&value, "id").is_empty()
-                    && [
-                        "discussion_projects",
-                        "discussion_attempts",
-                        "discussion_files",
-                        "recipient_id",
-                    ]
-                    .iter()
-                    .all(|key| value[*key].is_null() || value[*key] == "")
+                    && grants::publication_projects(cfg, &value["discussion_projects"]).is_ok()
+                    && ["discussion_attempts", "discussion_files", "recipient_id"]
+                        .iter()
+                        .all(|key| value[*key].is_null() || value[*key] == "")
                 {
                     continue;
                 }
@@ -149,7 +145,7 @@ pub(super) fn read_voice<'tx>(
         || state["parked"] == true
         || state["needs_handoff"] == true
         || !state["retirement"].is_null()
-        || !field(&state, "project").is_empty()
+        || (!field(&state, "project").is_empty() && !grants::project(cfg, field(&state, "project")))
     {
         return Err(invalid());
     }
@@ -168,6 +164,7 @@ fn make_admission(
     author: &Value,
     text: &str,
     settings: &str,
+    project: &str,
 ) -> io::Result<(Vec<u8>, Value)> {
     let raw_text = String::from_utf8(go_bytes(
         &json!({"Author": author, "MessageID":origin["message_id"], "ReplyTo":"", "Text":text}),
@@ -178,11 +175,10 @@ fn make_admission(
         "Current human instruction (JSON) "
     );
     let prompt = format!("{instructions}{raw_text}");
+    let selected = String::from_utf8(go_bytes(&json!(project))?).map_err(io::Error::other)?;
     let native_text = crate::manager_prompt::render(
         settings,
-        &format!(
-            "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action.\n{prompt}"
-        ),
+        &format!("Approved project for new work {selected}\n{prompt}"),
     )?;
     let n = voice.conversation["last_admission"]
         .as_u64()
@@ -209,7 +205,7 @@ fn make_admission(
     let key = format!("admissions\0{id}").into_bytes();
     let mut admission = json!({
         "origin":origin, "reply_tracked":true, "reply_check_after":now / 1000 + 30,
-        "human_reply":text,
+        "human_reply":text, "project":project,
         "phase":"prepared", "source_id":format!("discussion:{}",field(origin,"request_id")),
         "conversation_id":conversation,"sequence":n,"input_text":prompt,"operation_id":operation,
         "native_input_id":nonce,"settled_at":"0001-01-01T00:00:00Z",
@@ -287,13 +283,7 @@ fn prepared_config(place: &Place, message: &str) -> io::Result<Config> {
         return Err(invalid());
     }
     let cfg = personal_enrollment(place)?;
-    if !cfg.0["projects"].is_null()
-        && !cfg.0["projects"]
-            .as_object()
-            .is_some_and(|map| map.is_empty())
-    {
-        return Err(invalid());
-    }
+    grants::single_project(&cfg)?;
     Ok(cfg)
 }
 
@@ -437,7 +427,7 @@ pub(super) fn under_lease(
     let (voice_pin, mut voice_db) = bounded_writer(writable_pin(&voice_path)?)?;
     let mut voice_tx = voice_db.begin_rw().map_err(io::Error::other)?;
     if let Ok(prior) = inspect_voice(&voice_tx, &id, &origin, cfg.text("manager_cli"), &endpoint) {
-        validate_prepared(&prior)?;
+        validate_prepared(&prior, cfg)?;
         if value(&tx, "teammate_ingress", &key)?.is_some_and(|saved| saved["State"] == "sending") {
             println!("The original Go voice controller already has this prepared input.");
             return Ok(true);
@@ -446,8 +436,15 @@ pub(super) fn under_lease(
     }
     let mut voice = read_voice(&voice_tx, &id, cfg, &endpoint)?;
     let settings = crate::manager_prompt::load(place.supervisor_root())?;
-    let (voice_key, admission) =
-        make_admission(&mut voice, &origin, &row["Author"], text, &settings)?;
+    let project = grants::single_project(cfg)?;
+    let (voice_key, admission) = make_admission(
+        &mut voice,
+        &origin,
+        &row["Author"],
+        text,
+        &settings,
+        &project,
+    )?;
     tx.bucket_mut(b"teammate_ingress")
         .ok_or_else(invalid)?
         .put(&key, go_bytes(&row)?)

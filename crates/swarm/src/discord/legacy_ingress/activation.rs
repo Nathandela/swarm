@@ -156,10 +156,7 @@ pub(in crate::discord) fn migrate(
         return Ok(true);
     }
     let cfg = personal_enrollment(place)?;
-    if !cfg.0["projects"].is_null() && !cfg.0["projects"].as_object().is_some_and(|p| p.is_empty())
-    {
-        return Err(invalid());
-    }
+    grants::single_project(&cfg)?;
     let source = place.dir.join("discord.db");
     let expected = fs::symlink_metadata(&source)?;
     if dry_run {

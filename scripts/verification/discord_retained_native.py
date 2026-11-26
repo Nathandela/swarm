@@ -91,6 +91,8 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
     try:
         place = base / "connector"
         run(fixture, env, "create", place, base / "state", "personal", "true", base / "work")
+        if acknowledge:
+            run(fixture, env, "project", place, base / "work")
         run(fixture, env, "bind", place, "original-room", "400")
         assert run(fixture, env, "ingress", place, "original-room", "501", "settle").strip() == "1"
         with daemon(go, env, base / "go.log"):

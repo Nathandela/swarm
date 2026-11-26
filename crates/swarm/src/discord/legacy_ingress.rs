@@ -567,31 +567,7 @@ fn original_revision(message: &Value, origin: &Value) -> io::Result<String> {
     Ok(format!("{:x}", Sha256::digest(canonical.as_bytes())))
 }
 
-fn prepare_cutover(receipt: &mut Receipt) -> io::Result<Vec<u8>> {
-    receipt.admission["phase"] = json!("executing");
-    receipt.admission["source_cutover"] = json!(true);
-    let raw = crate::ipc::escape_json(serde_json::to_string(&receipt.admission)?).into_bytes();
-    let old = record_hash(&receipt.key, &receipt.raw);
-    let new = record_hash(&receipt.key, &raw);
-    let mut sum: [u8; 32] = serde_json::from_value(receipt.header["record_hash"].clone())?;
-    for n in 0..sum.len() {
-        sum[n] ^= old[n] ^ new[n];
-    }
-    let bytes = receipt.header["logical_bytes"]
-        .as_u64()
-        .ok_or_else(invalid)?
-        .checked_sub(receipt.raw.len() as u64)
-        .and_then(|n| n.checked_add(raw.len() as u64))
-        .ok_or_else(invalid)?;
-    if bytes > 64 << 20 {
-        return Err(invalid());
-    }
-    receipt.header["logical_bytes"] = json!(bytes);
-    receipt.header["record_hash"] = json!(sum);
-    Ok(raw)
-}
-
-fn validate_prepared(receipt: &Receipt) -> io::Result<()> {
+fn validate_prepared(receipt: &Receipt, cfg: &Config) -> io::Result<()> {
     let admission = &receipt.admission;
     let active = &receipt.conversation;
     let request = &admission["request"];
@@ -609,8 +585,9 @@ fn validate_prepared(receipt: &Receipt) -> io::Result<()> {
         )
         || admission["recovery_only"] == true
         || admission["native_binding_retired"] == true
-        || admission["project_explicit"] == true
-        || !field(admission, "project").is_empty()
+        || !matches!(admission["project_explicit"], Value::Bool(_) | Value::Null)
+        || (!field(admission, "project").is_empty()
+            && field(admission, "project") != grants::single_project(cfg)?)
         || !field(admission, "waiting_on_input").is_empty()
         || active["scheduler_paused"] == true
         || active["custody_lost"] == true
@@ -641,20 +618,19 @@ fn validate_prepared(receipt: &Receipt) -> io::Result<()> {
     Ok(())
 }
 
-fn persist_cutover<'tx>(mut tx: impl TxRwApi<'tx>, receipt: &mut Receipt) -> io::Result<()> {
-    let body = prepare_cutover(receipt)?;
-    let header = serde_json::to_vec(&receipt.header)?;
-    {
-        let mut root = tx.bucket_mut(b"controller").ok_or_else(invalid)?;
-        root.bucket_mut(b"records")
-            .ok_or_else(invalid)?
-            .put(&receipt.key, body)
-            .map_err(io::Error::other)?;
-        root.put(b"state", &header).map_err(io::Error::other)?;
-        root.put(b"digest", format!("{:x}", Sha256::digest(&header)))
-            .map_err(io::Error::other)?;
+fn persist_cutover<'tx>(tx: impl TxRwApi<'tx>, receipt: &mut Receipt) -> io::Result<()> {
+    receipt.admission["phase"] = json!("executing");
+    receipt.admission["source_cutover"] = json!(true);
+    let mut records = vec![(receipt.key.clone(), receipt.admission.clone())];
+    if !field(&receipt.admission, "project").is_empty() {
+        receipt.conversation["project"] = receipt.admission["project"].clone();
+        let conversation = field(&receipt.binding, "conversation_id");
+        records.push((
+            format!("conversations\0{conversation}").into_bytes(),
+            receipt.conversation.clone(),
+        ));
     }
-    tx.commit().map_err(io::Error::other)
+    manager_publication::apply_voice(tx, receipt.header.clone(), &records)
 }
 
 pub(super) fn dispatch(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
@@ -681,7 +657,7 @@ fn dispatch_with(
             cfg.text("manager_cli"),
             &endpoint,
         )?;
-        validate_prepared(&receipt)?;
+        validate_prepared(&receipt, &cfg)?;
         println!("Verified a prepared original personal DM with no native cutover recorded.");
         return Ok(true);
     }
@@ -712,7 +688,7 @@ fn dispatch_under_lease(
         cfg.text("manager_cli"),
         &endpoint,
     )?;
-    validate_prepared(&receipt)?;
+    validate_prepared(&receipt, cfg)?;
     let voice_identity = voice_pin.metadata()?;
     drop(voice_db);
     drop(voice_pin);
@@ -726,7 +702,7 @@ fn dispatch_under_lease(
     }
     let tx = writer.begin_rw().map_err(io::Error::other)?;
     let mut read = inspect_voice(&tx, &id, &c.origin, cfg.text("manager_cli"), &endpoint)?;
-    validate_prepared(&read)?;
+    validate_prepared(&read, cfg)?;
     if read.raw != receipt.raw {
         return Err(invalid());
     }
@@ -784,7 +760,7 @@ fn dispatch_under_lease(
     {
         return Err(invalid());
     }
-    validate_prepared(&read)?;
+    validate_prepared(&read, cfg)?;
     let operation = field(&read.admission, "operation_id").to_owned();
     persist_cutover(tx, &mut read)?;
     let reply = owner
@@ -1510,6 +1486,12 @@ mod tests {
                 "running"
             };
             assert_eq!(receipt.admission["phase"], phase);
+            assert_eq!(receipt.admission["project"], cfg.text("work_dir"));
+            assert_eq!(receipt.conversation["project"], cfg.text("work_dir"));
+            assert!(
+                field(&receipt.admission["request"], "text")
+                    .contains("Approved project for new work")
+            );
             assert_eq!(receipt.admission["source_cutover"], true);
             receipt.admission["request"].clone()
         };

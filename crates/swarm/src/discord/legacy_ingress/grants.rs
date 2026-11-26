@@ -20,6 +20,28 @@ pub(super) fn project(cfg: &Config, root: &str) -> bool {
     }
 }
 
+pub(super) fn single_project(cfg: &Config) -> io::Result<String> {
+    let selected = match cfg.0["projects"].as_object() {
+        Some(projects) if projects.len() == 1 => projects
+            .values()
+            .next()
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?,
+        Some(projects) if !projects.is_empty() => {
+            return Err(io::Error::other(
+                "multiple original projects require the full retained project selector",
+            ));
+        }
+        _ => cfg.text("work_dir"),
+    };
+    let root = fs::canonicalize(selected)?;
+    let root = root.to_str().ok_or_else(invalid)?;
+    if !project(cfg, root) {
+        return Err(invalid());
+    }
+    Ok(root.to_owned())
+}
+
 fn list(value: &Value) -> io::Result<Vec<String>> {
     match value {
         Value::Null => Ok(Vec::new()),
@@ -39,6 +61,17 @@ fn list(value: &Value) -> io::Result<Vec<String>> {
     }
 }
 
+pub(super) fn publication_projects(cfg: &Config, value: &Value) -> io::Result<()> {
+    for root in list(value)? {
+        if !project(cfg, &root) {
+            return Err(io::Error::other(
+                "the original publication project is no longer enrolled",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn output<'tx>(
     records: &impl BucketApi<'tx>,
     cfg: &Config,
@@ -47,13 +80,7 @@ pub(super) fn output<'tx>(
     discussion: &str,
     publication: &Value,
 ) -> io::Result<()> {
-    for root in list(&publication["discussion_projects"])? {
-        if !project(cfg, &root) {
-            return Err(io::Error::other(
-                "the original publication project is no longer enrolled",
-            ));
-        }
-    }
+    publication_projects(cfg, &publication["discussion_projects"])?;
     let mut attempts = list(&publication["discussion_attempts"])?;
     let direct = field(&publication["discussion_source"], "attempt_id");
     if !direct.is_empty() {
