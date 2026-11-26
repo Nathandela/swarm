@@ -1,0 +1,23 @@
+{
+  "source_commit": "947a5e48ceaaeb398caa4547c0d219838824ed91",
+  "approval_id": "1575388077306810399",
+  "platform": "Darwin arm64",
+  "mode": "skew",
+  "daemon_version": "0.29.23-rc.10",
+  "board_version": "0.29.23-rc.2",
+  "version_notice": "daemon 0.29.23-rc.10 differs from swarm 0.29.23-rc.2",
+  "daemon_still_running": true,
+  "worker_identity": {
+    "pid": 9886,
+    "birth": [1795673469, 356176]
+  },
+  "same_worker": true,
+  "first_divergence": null,
+  "board_sha256": "2ece26353a0b95178bc68c503b79b280d0609e398ad60f49c5caec13b63a68a5",
+  "owner_sha256": "12aa1aff83464b1dfb66da660aacf99ff147b92a26d8b29acdd3fb3bf4d9ed17",
+  "cleanup": {
+    "reaped": 1,
+    "removed_sockets": 2,
+    "remaining": []
+  }
+}

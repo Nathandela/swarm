@@ -33,6 +33,11 @@ scripts/verification/parity/test_board.py \
   --board /absolute/path/to/rust/swarm
 ```
 
+`test_version_board.py --mode skew` runs two Rust builds with
+`SWARM_BUILD_VERSION=0.29.23-rc.10` for the supervisor and `0.29.23-rc.2` for
+the board. It verifies the newer-daemon notice, unchanged daemon and worker
+PID/birth, and live fixture input after attach.
+
 Use the pinned Go supervisor and then the Rust candidate supervisor. The witness gives Linux a single private namespace for the entire arm so killing the daemon alone cannot end the shim's namespace.
 
 Pass `--cycle` to drive two running sessions through Ctrl+N, Kitty Ctrl+P, legacy Ctrl+P, detach and reattach. The driver checks each unique echo through the public `peek` command, the complete worker input log and the restored terminal settings. Both Go/Go and Rust/Rust passed this exercise on macOS arm64 and Linux x86_64.

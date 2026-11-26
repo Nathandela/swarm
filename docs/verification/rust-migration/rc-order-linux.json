@@ -1,0 +1,23 @@
+{
+  "source_commit": "947a5e48ceaaeb398caa4547c0d219838824ed91",
+  "approval_id": "1575388077306810399",
+  "platform": "Linux x86_64",
+  "mode": "skew",
+  "daemon_version": "0.29.23-rc.10",
+  "board_version": "0.29.23-rc.2",
+  "version_notice": "daemon 0.29.23-rc.10 differs from swarm 0.29.23-rc.2",
+  "daemon_still_running": true,
+  "worker_identity": {
+    "pid": 14,
+    "birth": "111623007"
+  },
+  "same_worker": true,
+  "first_divergence": null,
+  "board_sha256": "02f95687ce5d39e1b6134061e1136c09ff76a0c144a42bd517bd5578e094f9fe",
+  "owner_sha256": "c4e19f9aad6ff0bf4a754f01c062afc84577916d046d589c9b2c4fc363651a30",
+  "cleanup": {
+    "reaped": 2,
+    "removed_sockets": 2,
+    "remaining": []
+  }
+}
