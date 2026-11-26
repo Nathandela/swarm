@@ -652,7 +652,7 @@ mod tests {
     use crate::supervisor::runtime;
     use std::fs::{self, File, OpenOptions};
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -921,9 +921,27 @@ mod tests {
         let original = runtime::read_json(&credentials).unwrap();
         let mut changed = original.clone();
         changed["oauthAccount"]["organizationUuid"] = json!("different-org");
-        runtime::write_json(&credentials, &changed).unwrap();
-        assert!(manager.runtime(session, instance, &launch).is_err());
+        let home = credentials.parent().unwrap();
+        let permissions = fs::metadata(home).unwrap().permissions();
+        // Hold the synthetic account in place while native Claude can refresh its settings.
+        fs::set_permissions(home, fs::Permissions::from_mode(0o500)).unwrap();
+        let mismatched = (|| -> io::Result<Value> {
+            let mut file = OpenOptions::new().write(true).open(&credentials)?;
+            file.set_permissions(fs::Permissions::from_mode(0o400))?;
+            file.set_len(0)?;
+            serde_json::to_writer(&mut file, &changed)?;
+            file.sync_data()?;
+            manager.runtime(session, instance, &launch)
+        })();
+        fs::set_permissions(home, permissions).unwrap();
         runtime::write_json(&credentials, &original).unwrap();
+        assert!(
+            mismatched
+                .unwrap_err()
+                .to_string()
+                .contains("account custody changed"),
+            "manager did not specifically refuse the changed OAuth organization"
+        );
         let limit = std::time::Instant::now() + std::time::Duration::from_secs(35);
         loop {
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
