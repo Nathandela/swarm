@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"mime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -62,13 +63,17 @@ func publicationFileBytes(files []schema.PublicationFile) (int, error) {
 	return total, nil
 }
 
+// Any one canonical media type, except web content a browser would render or run.
 func publicationFileType(value string) bool {
-	switch value {
-	case "image/png", "image/jpeg", "text/csv", "application/pdf":
-		return true
-	default:
+	kind, params, err := mime.ParseMediaType(value)
+	if err != nil || len(value) > 127 || mime.FormatMediaType(kind, params) != value {
 		return false
 	}
+	switch kind {
+	case "text/html", "application/xhtml+xml", "image/svg+xml", "text/javascript", "application/javascript":
+		return false
+	}
+	return true
 }
 
 func matchesPublicationFile(f schema.PublicationFile, raw []byte) bool {

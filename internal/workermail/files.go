@@ -69,7 +69,7 @@ func CaptureFiles(checkout string, paths []string) ([]FileSubmission, error) {
 		}
 		contentType := workerFileType(name, data)
 		if contentType == "" {
-			return nil, errors.New("worker files: supported file types are PNG, JPEG, PDF and CSV")
+			return nil, errors.New("worker files: " + name + " was refused: its contents do not match its extension, or it is a program, script or web page")
 		}
 		total += len(data)
 		sum := sha256.Sum256(data)
@@ -140,9 +140,31 @@ func readWorkerFile(root *os.Root, path string, remaining int) ([]byte, error) {
 	return data, nil
 }
 
+// Office and archive formats are ZIP containers: the bytes must agree with the name.
+var zipFileTypes = map[string]string{
+	".zip":  "application/zip",
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+// Files that run or render active content on a reader's machine stay on the VM.
+// ponytail: extension denylist; add content sniffing for executables if a bypass matters.
+var blockedFileExts = strings.Fields(".exe .dll .com .bat .cmd .msi .scr .ps1 .psm1 .vbs .js .mjs .jar .apk .app .dmg .pkg .deb .rpm .sh .bash .zsh .reg .lnk .html .htm .xhtml .svg .docm .xlsm .pptm")
+
 func workerFileType(name string, data []byte) string {
 	detected := http.DetectContentType(data)
-	switch strings.ToLower(filepath.Ext(name)) {
+	ext := strings.ToLower(filepath.Ext(name))
+	if kind, ok := zipFileTypes[ext]; ok {
+		if bytes.HasPrefix(data, []byte("PK\x03\x04")) {
+			return kind
+		}
+		return ""
+	}
+	if slices.Contains(blockedFileExts, ext) {
+		return ""
+	}
+	switch ext {
 	case ".png":
 		if detected == "image/png" {
 			return detected
@@ -175,6 +197,12 @@ func workerFileType(name string, data []byte) string {
 			}
 			hasRecords = true
 		}
+	default:
+		// Anything else travels as an opaque download under its own name.
+		if detected == "text/plain; charset=utf-8" && utf8.Valid(data) && bytes.IndexByte(data, 0) < 0 {
+			return detected
+		}
+		return "application/octet-stream"
 	}
 	return ""
 }

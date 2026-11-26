@@ -58,7 +58,7 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	text := fs.String("text", "", "message to your own manager")
 	id := fs.String("id", "", "message ID from the original attempt when retrying")
 	var files []string
-	fs.Func("file", "attach a PNG, JPEG, PDF or CSV from this worker's checkout (repeatable, up to 8 MiB total)", func(path string) error {
+	fs.Func("file", "attach a file from this worker's checkout, such as PDF, image, CSV, Office, ZIP or text; programs, scripts and web pages are refused (repeatable, up to 10 files, 8 MiB total)", func(path string) error {
 		if path == "" || len(files) >= schema.MaxPublicationFiles {
 			return errors.New("provide 1 to 10 file paths")
 		}
