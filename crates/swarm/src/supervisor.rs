@@ -1,3 +1,4 @@
+mod claude_takeover;
 mod handoff;
 pub(crate) mod manager;
 mod pilot_journal;
@@ -356,13 +357,32 @@ impl State {
 
     fn reserve_prepared_bound(
         &self,
-        mut prepared: session::Prepared,
+        prepared: session::Prepared,
         scheduled: bool,
         source: Option<(String, String)>,
         managed: Option<Value>,
         predecessor: Option<Arc<Session>>,
     ) -> io::Result<Arc<Session>> {
-        let _reservation = self.launch_gate.lock().unwrap();
+        let reservation = self.launch_gate.lock().unwrap();
+        self.reserve_locked(
+            prepared,
+            scheduled,
+            source,
+            managed,
+            predecessor,
+            &reservation,
+        )
+    }
+
+    fn reserve_locked(
+        &self,
+        mut prepared: session::Prepared,
+        scheduled: bool,
+        source: Option<(String, String)>,
+        managed: Option<Value>,
+        predecessor: Option<Arc<Session>>,
+        _reservation: &std::sync::MutexGuard<'_, ()>,
+    ) -> io::Result<Arc<Session>> {
         if let Some((local, instance)) = source {
             if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
                 s.incarnation() == instance
@@ -729,7 +749,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "subscribe"
                         | "owner-launch"
                         | "hands-off-handoff"
-                        | "claude-external-resume-v1"
+                        | "claude-batch-takeover-v1"
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"
@@ -959,22 +979,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
-            "claude_external_preflight" if caps.contains(&"claude-external-resume-v1") => (|| {
-                let launch=&request["launch"];
-                if launch["agent"]!="claude" {
-                    return Err(io::Error::other("Claude preflight requires a Claude launch"));
-                }
-                let preview=Session::prepare_claude_external(launch,false)?;
-                let id=field(&preview.claude_resume,"conversation_id");
-                let _gate=state.launch_gate.lock().unwrap();
-                if state.sessions.read().unwrap().values().any(|row|row.owns_claude_conversation(id))
-                    || state.sessions.read().unwrap().values().filter(|row|row.is_live()).count()>=SESSION_LIMIT
-                    || scheduling::conflict(state,&preview.cwd,false).is_some()
-                {
-                    return Err(io::Error::other("Claude preflight found an active writer, capacity or workspace conflict"));
-                }
-                reply(&writer,state,json!({"op":"claude_external_preflight","conversation_id":id}))
-            })(),
+            "claude_batch_takeover" if caps.contains(&"claude-batch-takeover-v1") => {
+                claude_takeover::acquire(state,&request).and_then(|results|{
+                    reply(&writer,state,json!({"op":"claude_batch_takeover","results":results}))
+                })
+            },
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");

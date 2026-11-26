@@ -23,7 +23,7 @@ from rust_claude_worker_input import Provider, save
 TASK = "Reply with a short synthetic test answer."
 
 
-def verify(swarm, installed, root, server, worktree=False, external=False, go_owner=None):
+def verify(swarm, installed, root, server, worktree=False, external=False, go_owner=None, capacity=False):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     for directory in (home, work, state, tools, home / ".claude"):
         directory.mkdir(mode=0o700)
@@ -52,10 +52,12 @@ def verify(swarm, installed, root, server, worktree=False, external=False, go_ow
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1",
         CLAUDE_CODE_TMPDIR=str(root), CLAUDE_CODE_MAX_RETRIES="0")))
     check_guards(root,[server.server_port])
-    def cli(*args,expected=0,overrides=None):
+    def cli(*args,expected=0,overrides=None,error_contains=None):
         run = subprocess.run(guard([staged,*args]), env={**env,**(overrides or {})}, cwd=work,
                              capture_output=True, timeout=50 if args[0]=="reattach" else 15)
         assert run.returncode==expected,(args,run.stderr.decode(errors="replace"))
+        if error_contains is not None:
+            assert error_contains in run.stderr,(args,run.stderr)
         return run.stdout
 
     def wire(req, caps=()):
@@ -95,6 +97,73 @@ def verify(swarm, installed, root, server, worktree=False, external=False, go_ow
                     assert result.returncode==0,(args,result.stdout,result.stderr)
                     return result.stdout
                 native_cli("--bg","--name","External fixture",TASK)
+                if capacity:
+                    native_cli("--bg","--name","Second external fixture",TASK)
+                    def live_native():
+                        rows=json.loads(native_cli("agents","--json","--all"))
+                        return [row["sessionId"] for row in rows if row.get("kind")=="background"
+                                and row.get("state") not in ("done","stopped","complete","completed","failed","cancelled","canceled")]
+                    natives=eventually(lambda: live_native() if len(live_native())==2 else None,
+                                       "two real live Claude Agent View sources",timeout=30)
+                    for native in natives:
+                        eventually(lambda: any(b"Synthetic native input processed" in p.read_bytes()
+                            for p in (home/".claude/projects").rglob(f"{native}.jsonl")),
+                            "native source has a real reply",timeout=20)
+                    agy=tools/"agy"
+                    agy.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo 1.1.0; exit 0; fi\nexec /bin/sleep 1000\n')
+                    agy.chmod(0o700)
+                    occupied=[]
+                    for i in range(63):
+                        result=wire(dict(agent="agy",name=f"Capacity {i}",cwd=str(work)))
+                        assert result["op"]=="launch",result
+                        occupied.append(result["session"]["id"])
+                    roster=json.loads(cli("ls","--json"))
+                    assert len([row for row in roster if row["status"]["Process"]=="running"])==63
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        error_contains=b"batch exceeds available session capacity")
+                    assert set(live_native())==set(natives)
+                    cli("kill",occupied.pop())
+                    eventually(lambda: sum(row["status"]["Process"]=="running" for row in json.loads(cli("ls","--json")))==62,
+                               "exactly two available owner slots")
+                    race=root/"race"
+                    race.mkdir(mode=0o700)
+                    wrapper=race/"claude"
+                    stopping=race/"stopping"
+                    release=race/"release"
+                    wrapper.write_text(f"""#!/bin/sh
+if [ "$1" = daemon ] && [ "$2" = stop ]; then
+  touch '{stopping}'
+  while [ ! -f '{release}' ]; do /bin/sleep 0.05; done
+fi
+exec '{binary}' "$@"
+""")
+                    wrapper.chmod(0o700)
+                    request=subprocess.Popen(guard([staged,"reattach","--cli","claude","--all","--take-over"]),
+                        env={**env,"PATH":f"{race}:{env['PATH']}"},cwd=work,
+                        stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                    outcome=[]
+                    contender=threading.Thread(target=lambda:outcome.append(
+                        wire(dict(agent="agy",name="Competing launch",cwd=str(work)))),daemon=True)
+                    try:
+                        eventually(stopping.exists,"owner holds admission during native stop")
+                        contender.start()
+                        time.sleep(0.3)
+                        assert not outcome
+                    finally:
+                        release.touch()
+                    acquired,err=request.communicate(timeout=45)
+                    assert request.returncode==0,err
+                    contender.join(timeout=12)
+                    assert len(outcome)==1 and outcome[0]["op"]=="error" and "session limit" in outcome[0]["error"],outcome
+                    assert acquired.count(b"reattached")==2 and not live_native(),acquired
+                    roster=json.loads(cli("ls","--json"))
+                    assert sum(row["status"]["Process"]=="running" for row in roster)==64
+                    for row in roster:
+                        if row["status"]["Process"]=="running":
+                            cli("kill",row["id"])
+                    print("63/64 preserved both native sources; at 62/64 takeover reserved both slots ahead of a competing launch")
+                    return
+
                 def original():
                     rows=json.loads(native_cli("agents","--json","--all"))
                     return next((row for row in rows if row.get("kind")=="background" and row.get("sessionId")),None)
@@ -169,6 +238,11 @@ esac
                                for row in rows)
                 initial_turns=turn_count(before)
                 assert initial_turns>=1
+                if go_owner and live:
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        error_contains=b"cannot reserve the whole Claude takeover batch")
+                    assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                    native_cli("daemon","stop","--any")
                 imported=cli("reattach","--cli","claude","--all","--take-over")
                 row,=json.loads(cli("ls","--json"))
                 identity=row["id"]
@@ -329,6 +403,7 @@ if __name__=="__main__":
     parser.add_argument("--worktree",action="store_true")
     parser.add_argument("--external",action="store_true")
     parser.add_argument("--go-owner",type=fixtures.binary_path)
+    parser.add_argument("--capacity",action="store_true")
     args=parser.parse_args()
     root=Path(tempfile.mkdtemp(prefix="cr-",dir=Path("/tmp").resolve()))
     server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Provider)
@@ -339,7 +414,7 @@ if __name__=="__main__":
     thread.start()
     success=False
     try:
-        verify(args.candidate,args.provider,root,server,args.worktree,args.external,args.go_owner)
+        verify(args.candidate,args.provider,root,server,args.worktree,args.external,args.go_owner,args.capacity)
         assert not server.sentinel.exists()
         success=True
     finally:

@@ -36,10 +36,10 @@ pub(super) struct Prepared {
     tag: String,
     cols: u16,
     rows: u16,
-    provider: LaunchPlan,
+    pub(super) provider: LaunchPlan,
     pub(super) resume: Value,
     pub(super) claude_resume: Value,
-    claude_profile: Value,
+    pub(super) claude_profile: Value,
     pub(super) codex_resume: Value,
     codex_options: Value,
     agy_launch: Value,
@@ -2107,6 +2107,11 @@ impl Session {
         }
         *current = (next, now());
         true
+    }
+
+    pub(super) fn may_occupy_slot(&self) -> bool {
+        // A lost transport can reconcile to Running during another admission.
+        self.state.lock().unwrap().0 != Phase::Exited
     }
 
     pub(super) fn is_live(&self) -> bool {

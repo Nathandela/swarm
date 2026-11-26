@@ -810,3 +810,27 @@ pub(crate) fn verify_project_authority(
     }
     Ok(())
 }
+
+pub(crate) fn background_inventory(
+    rows: &[Value],
+) -> io::Result<std::collections::BTreeMap<String, (String, bool)>> {
+    let mut seen = std::collections::BTreeMap::new();
+    for row in rows.iter().filter(|row| row["kind"] == "background") {
+        let id = crate::ipc::field(row, "sessionId");
+        if seen
+            .insert(
+                id.to_owned(),
+                (
+                    crate::ipc::field(row, "cwd").to_owned(),
+                    agent_view_settled(row),
+                ),
+            )
+            .is_some()
+        {
+            return Err(io::Error::other(format!(
+                "ambiguous Claude background conversation {id}"
+            )));
+        }
+    }
+    Ok(seen)
+}

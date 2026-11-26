@@ -48,6 +48,7 @@ pub fn run(args: &[String]) -> i32 {
         "reattach" => &[
             "external-resume",
             "claude-external-resume-v1",
+            "claude-batch-takeover-v1",
             "context-guard-settings",
         ],
         "requests" | "decide" => &["native-requests-v1"],
