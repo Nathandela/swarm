@@ -12,6 +12,79 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub(crate) const MAX_BYTES: usize = 8 << 20;
 
+pub(crate) fn database_identity(profile: &Value) -> io::Result<Value> {
+    let home = Path::new(field(profile, "HOME"));
+    let data = field(profile, "XDG_DATA_HOME");
+    let base = if data.is_empty() {
+        home.join(".local/share")
+    } else {
+        PathBuf::from(data)
+    };
+    let path = base.join("opencode/opencode.db");
+    if !path.is_absolute() || path.canonicalize()? != path {
+        return Err(io::Error::other(
+            "OpenCode original native database is unproved",
+        ));
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)?;
+    let stat = file.metadata()?;
+    let current = path.symlink_metadata()?;
+    // SAFETY: geteuid reads the current effective UID only.
+    if !stat.is_file()
+        || stat.uid() != unsafe { libc::geteuid() }
+        || stat.nlink() != 1
+        || stat.mode() & 0o022 != 0
+        || (stat.dev(), stat.ino()) != (current.dev(), current.ino())
+    {
+        return Err(io::Error::other(
+            "OpenCode original native database is unproved",
+        ));
+    }
+    let created = database_birth(&file)?;
+    Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()],"created":created}))
+}
+
+#[cfg(target_os = "linux")]
+fn database_birth(file: &fs::File) -> io::Result<Value> {
+    use std::{mem::MaybeUninit, os::fd::AsRawFd};
+    let mut info = MaybeUninit::<libc::statx>::uninit();
+    // SAFETY: the empty path selects the open fd and info points to a full statx buffer.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_statx,
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH,
+            libc::STATX_BTIME,
+            info.as_mut_ptr(),
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the kernel initialized info on successful return.
+    let info = unsafe { info.assume_init() };
+    if info.stx_mask & libc::STATX_BTIME == 0 || info.stx_btime.tv_sec <= 0 {
+        return Err(io::Error::other(
+            "OpenCode database birth time is unavailable",
+        ));
+    }
+    Ok(json!([info.stx_btime.tv_sec, info.stx_btime.tv_nsec]))
+}
+
+#[cfg(target_os = "macos")]
+fn database_birth(file: &fs::File) -> io::Result<Value> {
+    let born = file
+        .metadata()?
+        .created()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?;
+    Ok(json!([born.as_secs(), born.subsec_nanos()]))
+}
+
 pub(crate) fn validate(data: &Value, id: &Value) -> io::Result<()> {
     let info = &data["info"];
     if info["id"] != id["rootID"]
@@ -208,9 +281,10 @@ pub(crate) fn publish(
     }
     let cwd = Path::new(field(id, "directory"));
     let info = cwd.metadata()?;
+    let database = opencode::receipts::native(source_dir, token)?["nativeDatabase"].clone();
     let proof = json!({"kind":"opencode","source_agent":"opencode","source_dir":source_dir,"instance":codex_receipt::instance(token),
         "cwd":cwd,"cwd_identity":[info.dev(),info.ino()],"transcript":path,
-        "artifact_identity":physical,"digest":hash,"native_identity":id,"conversation":id["rootID"]});
+        "artifact_identity":physical,"digest":hash,"native_database":database,"native_identity":id,"conversation":id["rootID"]});
     verify_artifact(&proof)?;
     Ok((path, proof))
 }
@@ -256,6 +330,15 @@ pub(crate) fn verify_artifact(proof: &Value) -> io::Result<()> {
         return Err(io::Error::other("OpenCode managed source metadata changed"));
     }
     let native = opencode::receipts::native(source, token)?;
+    let database = &native["nativeDatabase"];
+    if proof["native_database"] != *database
+        || !database.is_null() && database_identity(&source_meta["opencode_profile"])? != *database
+    {
+        return Err(io::Error::other(
+            "OpenCode original native database changed before handoff",
+        ));
+    }
+
     let id = &proof["native_identity"];
     if [
         "rootID",
@@ -284,6 +367,7 @@ pub(crate) fn verify_artifact(proof: &Value) -> io::Result<()> {
         || proof["cwd_identity"] != json!([info.dev(), info.ino()])
         || data["swarm_provenance"]["identity"] != *id
         || data["swarm_provenance"]["truncated"] != false
+        || data["swarm_provenance"]["source"] == "native_cli_export" && database.is_null()
     {
         return Err(io::Error::other(
             "OpenCode handoff source artifact or checkout changed",

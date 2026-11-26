@@ -2,11 +2,11 @@
 set -eu
 umask 077
 if [ "$#" -lt 2 ]; then
-  printf '%s\n' 'usage: run-linux.sh /dev/shm/oc.RANDOM fresh-run-name [loopback flags]' >&2
+  printf '%s\n' 'usage: run-linux.sh /tmp/oc.RANDOM or /dev/shm/oc.RANDOM fresh-run-name [loopback flags]' >&2
   exit 2
 fi
 probe_root=$1
-case "$probe_root" in /dev/shm/oc.*) ;; *) exit 2 ;; esac
+case "$probe_root" in /tmp/oc.*|/dev/shm/oc.*) ;; *) exit 2 ;; esac
 native=$(readlink -f "$HOME/.local/bin/opencode")
 run_name=$2
 case "$run_name" in ""|.*|*/*) exit 2 ;; esac

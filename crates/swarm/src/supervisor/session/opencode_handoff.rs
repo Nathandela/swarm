@@ -3,7 +3,7 @@ use crate::{ipc::field, providers::opencode_handoff as history};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -159,7 +159,6 @@ impl Session {
     }
 
     fn stopped_opencode_handoff(&self, meta: &Value, id: &Value) -> io::Result<Value> {
-        use std::os::unix::fs::MetadataExt;
         let profile = &meta["opencode_profile"];
         let supplied = json!(
             profile
@@ -173,24 +172,10 @@ impl Session {
         if opencode::profile(&profile_env) != *profile {
             return Err(io::Error::other("OpenCode original native profile changed"));
         }
-        let home = Path::new(field(profile, "HOME"));
-        let data = field(profile, "XDG_DATA_HOME");
-        let data_root = if data.is_empty() {
-            home.join(".local/share")
-        } else {
-            PathBuf::from(data)
-        };
-        let database = data_root.join("opencode/opencode.db");
-        let db = database.symlink_metadata()?;
-        // SAFETY: geteuid reads the current effective uid only.
-        if !db.is_file()
-            || db.uid() != unsafe { libc::geteuid() }
-            || db.nlink() != 1
-            || db.mode() & 0o022 != 0
-            || database.canonicalize()? != database
-        {
+        let database = self.opencode_native()?["nativeDatabase"].clone();
+        if database.is_null() || history::database_identity(profile)? != database {
             return Err(io::Error::other(
-                "OpenCode original native database is unproved",
+                "OpenCode original native database is unproved or changed since native binding",
             ));
         }
         let exe = Path::new(field(&meta["provider"], "executable"));
@@ -208,9 +193,8 @@ impl Session {
             field(id, "rootID"),
             field(&meta["provider"], "version"),
         )?;
-        let current = fs::symlink_metadata(&database)?;
         if &providers::identity(exe)? != original
-            || (db.dev(), db.ino()) != (current.dev(), current.ino())
+            || history::database_identity(profile)? != database
             || !self.opencode_stopped()?
         {
             return Err(io::Error::other(

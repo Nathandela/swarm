@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -279,6 +280,18 @@ try:
             assert handoff()['op']=='error'
         finally:
             live.chmod(0o600)
+        database=root/'data/opencode/opencode.db'
+        stale=root/'live-native-backup.sqlite'
+        with sqlite3.connect(f'file:{database}?mode=ro',uri=True) as source, sqlite3.connect(stale) as target:
+            source.backup(target)
+        observed=output('message',row,'--text','RUST_HANDOFF_AFTER_BACKUP. Reply fixture only.')
+        assert observed['state'] in ('native_accepted','completed'),observed
+        def after_backup():
+            page=history()
+            return page if ('RUST_HANDOFF_AFTER_BACKUP' in json.dumps(page['history'])
+                and sum(item['info']['role']=='assistant' for item in page['history'])>=2
+                and ready()) else None
+        before=wait(after_backup)
         owner_data=json.loads((root/'state/rust-v1'/row.split('/')[-1]/'owner.json').read_text())
         cli('kill',row)
         def gone():
@@ -287,7 +300,6 @@ try:
             return False
         wait(gone)
         wait(lambda:any(entry['id']==row and entry['status']['Process']=='exited' for entry in output('ls','--json')))
-        database=root/'data/opencode/opencode.db'
         mode=database.stat().st_mode & 0o777
         database.chmod(0o660)
         try:
@@ -295,8 +307,18 @@ try:
             assert refused['op']=='error' and 'database is unproved' in refused['error'],refused
         finally:
             database.chmod(mode)
+        original=database.with_name('verified-original.db')
+        database.rename(original)
+        stale.chmod(0o600)
+        stale.rename(database)
+        try:
+            refused=handoff()
+            assert refused['op']=='error' and 'changed since native binding' in refused['error'],refused
+        finally:
+            database.rename(stale)
+            original.rename(database)
         verify_success('native_cli_export','fixture','build',{'model':'fixture/fixture','agent':'build'})
-        print('native running and stopped handoff, owner-only artifact, inherited and explicit successor selection verified',flush=True)
+        print('native running/stopped handoff, sealed artifact and real stale database substitution verified',flush=True)
         sys.exit(0)
     assert resume_request(env, row, root/'project')['op'] == 'error'
     if args.digest_pause:
