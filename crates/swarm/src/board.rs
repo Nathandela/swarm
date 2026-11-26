@@ -8,6 +8,7 @@ mod navigation;
 mod options;
 mod preferences;
 mod roster;
+mod session_form;
 mod term;
 mod touch;
 
@@ -82,6 +83,7 @@ fn board(path: &Path) -> io::Result<()> {
     let mut needs_paint = true;
     let mut mouse_enabled = true;
     let mut previous_menu = None;
+    let mut previous_editor = None;
     let mut retry = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
@@ -93,7 +95,11 @@ fn board(path: &Path) -> io::Result<()> {
         }
         let spinner = (clock.elapsed().as_millis() / 90) as usize % 10;
         let second = clock.elapsed().as_secs();
-        if board.modal.is_none() && !board.rows.is_empty() {
+        if !board.rows.is_empty()
+            && (board.modal.is_none()
+                || matches!(&board.modal, Some(Modal::Edit { id, .. } | Modal::Confirm { id, .. })
+                    if board.inline_session_form(id, geometry)))
+        {
             needs_paint |= board.second != second
                 || board.spinner != spinner
                     && board
@@ -123,14 +129,19 @@ fn board(path: &Path) -> io::Result<()> {
                 mouse_enabled = wants_mouse;
             }
             let menu = board.menu_frame(geometry);
+            let editor = board.editor_frame(geometry);
+            let mut display = String::new();
             if let Some(frame) = &menu {
-                let mut display = String::new();
                 frame.paint(&mut display, previous_menu.as_ref());
-                output.write_all(display.as_bytes())?;
-            } else {
-                output.write_all(board.view(geometry).as_bytes())?;
+            } else if !editor
+                .as_ref()
+                .is_some_and(|frame| frame.paint_change(previous_editor.as_ref(), &mut display))
+            {
+                display = board.view(geometry);
             }
+            output.write_all(display.as_bytes())?;
             previous_menu = menu;
+            previous_editor = editor;
             output.flush()?;
         }
         needs_paint = false;
@@ -199,6 +210,7 @@ fn board(path: &Path) -> io::Result<()> {
                     if connection.is_some() {
                         board.attach(path, &id, &name, &mut output)?;
                         previous_menu = None;
+                        previous_editor = None;
                     }
                     // Bytes from the initiating key batch belong to the board.
                     break;
@@ -305,6 +317,7 @@ fn connect(path: &Path) -> io::Result<Client> {
 #[derive(Default)]
 struct Board {
     rows: Vec<Value>,
+    roster_revision: u64,
     columns: u16,
     spinner: usize,
     hands_off: bool,
@@ -366,10 +379,10 @@ enum Modal {
         id: String,
         tag: bool,
         draft: Editor,
+        top: usize,
     },
     Confirm {
         id: String,
-        name: String,
         running: bool,
         top: usize,
     },
@@ -443,6 +456,7 @@ impl Board {
         let mut rows = client.sessions()?;
         rows.retain(|row| !field(row, "id").is_empty() && row["roster_hidden"] != true);
         self.rows = rows;
+        self.roster_revision = self.roster_revision.wrapping_add(1);
         self.rebuild_sections();
         Ok(())
     }
@@ -637,6 +651,7 @@ impl Board {
                         id: id.to_owned(),
                         tag,
                         draft: Editor::new(field(row, if tag { "tag" } else { "name" })),
+                        top: 0,
                     });
                 }
             }
@@ -644,7 +659,6 @@ impl Board {
                 if let Some(row) = self.by_id(id).filter(|row| !linked_dispatcher(row)) {
                     self.modal = Some(Modal::Confirm {
                         id: id.to_owned(),
-                        name: name(row).to_owned(),
                         running: running(row),
                         top: 0,
                     });
@@ -785,9 +799,32 @@ impl Board {
                 }
                 Action::None
             }
-            Modal::Edit { id, tag, draft } => {
-                if matches!(key, Key::Enter) {
-                    if online && usable(geometry) && self.by_id(id).is_some() {
+            Modal::Edit {
+                id,
+                tag,
+                draft,
+                top,
+            } => {
+                let inline = self.inline_session_form(id, geometry);
+                let row = self.by_id(id);
+                let sheet = (!inline).then(|| {
+                    session_form::Sheet::new(
+                        geometry,
+                        id,
+                        row,
+                        session_form::Kind::Edit {
+                            tag: *tag,
+                            editor: draft,
+                        },
+                    )
+                });
+                if sheet.as_ref().is_some_and(|sheet| sheet.scroll(top, &key)) {
+                    Action::None
+                } else if matches!(key, Key::Enter) {
+                    if online
+                        && row.is_some()
+                        && sheet.as_ref().is_none_or(|sheet| sheet.can_submit(*top))
+                    {
                         let (op, key, text) = if *tag {
                             ("set_tag", "tag", draft.text.trim())
                         } else {
@@ -797,40 +834,47 @@ impl Board {
                         message[key] = json!(text);
                         return Action::Request(message, "ok");
                     }
+                    Action::None
                 } else {
                     draft.apply(key);
+                    Action::None
                 }
-                Action::None
             }
             Modal::Confirm {
                 id,
-                name,
                 running: was_running,
                 top,
             } => {
-                let words = confirm_lines(name, *was_running, geometry.0);
-                let last = words.len().saturating_sub(capacity(rows));
-                *top = (*top).min(last);
-                match key {
-                    Key::Text('n') => return Action::None,
-                    Key::Up | Key::PageUp => *top = top.saturating_sub(1),
-                    Key::Down | Key::PageDown | Key::Tab => *top = (*top + 1).min(last),
-                    Key::Home => *top = 0,
-                    Key::End => *top = last,
-                    Key::Text('y') | Key::CtrlX if online && usable(geometry) && *top == last => {
-                        if self
-                            .by_id(id)
-                            .is_some_and(|row| running(row) == *was_running)
-                        {
-                            let op = if *was_running { "kill" } else { "delete" };
-                            return Action::Request(json!({"op":op,"session_id":id}), "ok");
-                        }
-                        self.notice = "Target changed; reopen confirmation".into();
-                        return Action::None;
-                    }
-                    _ => {}
+                let row = self.by_id(id);
+                let inline = self.inline_session_form(id, geometry);
+                let sheet = (!inline).then(|| {
+                    session_form::Sheet::new(
+                        geometry,
+                        id,
+                        row,
+                        session_form::Kind::Confirm {
+                            running: *was_running,
+                        },
+                    )
+                });
+                if key == Key::Text('n') {
+                    return Action::None;
                 }
-                Action::None
+                if sheet.as_ref().is_some_and(|sheet| sheet.scroll(top, &key)) {
+                    Action::None
+                } else if online
+                    && matches!(key, Key::Text('y') | Key::CtrlX)
+                    && sheet.as_ref().is_none_or(|sheet| sheet.can_submit(*top))
+                {
+                    if row.is_some_and(|row| running(row) == *was_running) {
+                        let op = if *was_running { "kill" } else { "delete" };
+                        return Action::Request(json!({"op":op,"session_id":id}), "ok");
+                    }
+                    self.notice = "Target changed; reopen confirmation".into();
+                    return Action::None;
+                } else {
+                    Action::None
+                }
             }
         };
         if matches!(action, Action::None) {
@@ -1198,6 +1242,73 @@ impl Board {
         ))
     }
 
+    fn inline_session_row(&self, target: &str, (cols, rows): (u16, u16)) -> Option<(u16, &Value)> {
+        if cols < 64 || rows < 10 {
+            return None;
+        }
+        self.display_rows()
+            .into_iter()
+            .skip(self.top)
+            .take(board_capacity(rows))
+            .enumerate()
+            .find_map(|(index, row)| match row {
+                Row::Session(row) if field(row, "id") == target => {
+                    Some((board_first(rows) + index as u16, row))
+                }
+                _ => None,
+            })
+    }
+
+    fn inline_session_form(&self, target: &str, geometry: (u16, u16)) -> bool {
+        self.inline_session_row(target, geometry).is_some()
+    }
+
+    fn editor_frame(&self, geometry: (u16, u16)) -> Option<session_form::EditorFrame> {
+        let Some(Modal::Edit {
+            id,
+            tag,
+            draft,
+            top,
+        }) = &self.modal
+        else {
+            return None;
+        };
+        if !usable(geometry) || !self.notice.is_empty() {
+            return None;
+        }
+        let inline = self.inline_session_row(id, geometry);
+        let (cols, _) = geometry;
+        let (x, y, style, text) = if let Some((y, row)) = inline {
+            (
+                5,
+                y,
+                roster::BOLD,
+                roster::edit_label(row, draft, *tag, cols),
+            )
+        } else {
+            let (x, text) = session_form::edit_text(draft, *tag, cols);
+            (x, 2, launch::PLAIN, text)
+        };
+        let basis = session_form::EditorBasis {
+            geometry,
+            target: id.clone(),
+            tag: *tag,
+            top: *top,
+            revision: self.roster_revision,
+            tick: (inline.is_some()
+                && self.rows.iter().any(|row| field(row, "group") == "working"))
+            .then_some(self.spinner),
+            second: (inline.is_some() && !roster::compact(cols)).then_some(self.second),
+        };
+        Some(session_form::EditorFrame {
+            basis,
+            x,
+            y,
+            style,
+            text: clip(&text, cols.saturating_sub(x - 1)),
+        })
+    }
+
     fn view(&self, (cols, rows): (u16, u16)) -> String {
         let mut screen = String::from("\x1b[?25l\x1b[0m\x1b[H\x1b[2J");
         if !usable((cols, rows)) {
@@ -1233,46 +1344,39 @@ impl Board {
                     .expect("More open")
                     .paint(&mut screen, None);
             }
-            Some(Modal::Edit { tag, draft, .. }) => {
-                form_header(
-                    &mut screen,
-                    cols,
-                    if *tag { "Edit tag" } else { "Rename session" },
-                );
-                let (text, col) = draft.visible(cols);
-                line(&mut screen, 2, cols, "", &text);
-                let _ = write!(&mut screen, "\x1b[2;{col}H\x1b[?25h");
-                line(
-                    &mut screen,
-                    rows,
-                    cols,
-                    "\x1b[2m",
-                    "enter save · esc cancel",
-                );
-            }
-            Some(Modal::Confirm {
-                name, running, top, ..
+            Some(Modal::Edit {
+                id,
+                tag,
+                draft,
+                top,
             }) => {
-                form_header(
-                    &mut screen,
-                    cols,
-                    if *running {
-                        "Kill session"
-                    } else {
-                        "Delete session"
-                    },
-                );
-                let content = confirm_lines(name, *running, cols);
-                let top = (*top).min(content.len().saturating_sub(capacity(rows)));
-                for (index, text) in content.iter().skip(top).take(capacity(rows)).enumerate() {
-                    line(&mut screen, index as u16 + 2, cols, "", text);
-                }
-                let hint = if top + capacity(rows) < content.len() {
-                    "↓ read · n / esc cancel"
+                if self.inline_session_form(id, (cols, rows)) {
+                    self.roster_view(&mut screen, cols, rows);
                 } else {
-                    "y / ctrl+x confirm · n / esc cancel"
-                };
-                line(&mut screen, rows, cols, "\x1b[2m", hint);
+                    session_form::Sheet::new(
+                        (cols, rows),
+                        id,
+                        self.by_id(id),
+                        session_form::Kind::Edit {
+                            tag: *tag,
+                            editor: draft,
+                        },
+                    )
+                    .paint(&mut screen, *top);
+                }
+            }
+            Some(Modal::Confirm { id, running, top }) => {
+                if self.inline_session_form(id, (cols, rows)) {
+                    self.roster_view(&mut screen, cols, rows);
+                } else {
+                    session_form::Sheet::new(
+                        (cols, rows),
+                        id,
+                        self.by_id(id),
+                        session_form::Kind::Confirm { running: *running },
+                    )
+                    .paint(&mut screen, *top);
+                }
             }
             None => self.roster_view(&mut screen, cols, rows),
         }
@@ -1329,28 +1433,6 @@ fn linked_dispatcher(row: &Value) -> bool {
     field(row, "role") == "dispatcher"
 }
 
-fn confirm_lines(label: &str, running: bool, cols: u16) -> Vec<String> {
-    let verb = if running { "Kill" } else { "Delete" };
-    let text = format!("{verb} {label}?");
-    let mut lines = Vec::new();
-    let mut rest = text.as_str();
-    // Use source character boundaries so even escaped metadata cannot stall wrapping.
-    let limit = usize::from(cols.max(1));
-    while !rest.is_empty() {
-        let mut width = 0;
-        let end = rest
-            .char_indices()
-            .find_map(|(index, ch)| {
-                width += ch.width().unwrap_or(1);
-                (width > limit && index > 0).then_some(index)
-            })
-            .unwrap_or(rest.len());
-        lines.push(rest[..end].to_owned());
-        rest = &rest[end..];
-    }
-    lines
-}
-
 struct Editor {
     text: String,
     cursor: usize,
@@ -1405,20 +1487,6 @@ impl Editor {
             Key::Paste(paste) => self.insert_text(paste.chars().filter(|ch| !ch.is_control())),
             _ => {}
         }
-    }
-
-    fn visible(&self, columns: u16) -> (String, u16) {
-        let mut width = 0;
-        let mut start = self.cursor;
-        for (index, ch) in self.text[..self.cursor].char_indices().rev() {
-            let next = width + ch.width().unwrap_or(1) as u16;
-            if next >= columns {
-                break;
-            }
-            width = next;
-            start = index;
-        }
-        (clip(&self.text[start..], columns), width + 1)
     }
 }
 

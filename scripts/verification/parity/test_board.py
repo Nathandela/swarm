@@ -63,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -372,6 +372,73 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         finally:
             board.close()
 
+    if edit_rows:
+        daemon = start()
+        launched = cli("spawn", "--cli", "claude", "--name", "edit-amber",
+                       "--dir", cwd, "--prompt", "offline fixture")
+        assert launched.returncode == 0, launched.stderr
+        identity = launched.stdout.decode().strip()
+        board = p.Board([str(root / "bin/board")], root, env)
+
+        def session(**expected):
+            current = roster()
+            return bool(current and any(row["id"] == identity and all(row.get(key) == value for key, value in expected.items())
+                                        for row in current[0]))
+
+        def commit(keys, field, value):
+            board.send(keys + b"\r")
+            p.wait_for(lambda: session(**{field: value}), f"{field} persisted through board")
+
+        try:
+            board.wait_bytes(b"edit-amber")
+            offset = len(board.capture)
+            board.send(b"e")
+            board.wait_bytes("█".encode(), offset)
+            board.wait_bytes("type  ←→ move".encode(), offset)
+            commit(b"\x15suffix\x1b[1;9Damber-", "name", "amber-suffix")
+            board.wait_bytes(b"amber-suffix")
+            offset = len(board.capture)
+            board.send(b"t")
+            board.wait_bytes(b"edit tag", offset)
+            commit(b"fixture-tag", "tag", "fixture-tag")
+
+            board.resize(24, 4)
+            offset = len(board.capture)
+            board.send(b"\x18")
+            board.wait_bytes("Resize to 32×8".encode(), offset)
+            board.send(b"y")
+            assert any(row["id"] == identity and row["status"]["Process"] == "running" for row in roster()[0])
+            board.send(b"n")
+            board.wait_bytes(b"amber", offset)
+            board.resize(80, 24)
+            offset = len(board.capture)
+            board.send(b"\x18")
+            board.wait_bytes(b"kill? y/n", offset)
+            board.send(b"n")
+            board.wait_bytes(b"More (m)", offset)
+            assert any(row["id"] == identity and row["status"]["Process"] == "running" for row in roster()[0])
+            offset = len(board.capture)
+            board.send(b"\x18")
+            board.wait_bytes(b"kill? y/n", offset)
+            board.send(b"y")
+            p.wait_for(lambda: session(group="completed"), "kill retained target identity")
+            board.wait_bytes(b"ended", offset)
+
+            offset = len(board.capture)
+            board.send(b"\x18")
+            board.wait_bytes(b"delete? y/n", offset)
+            board.send(b"y")
+            p.wait_for(lambda: roster() == ([],), "deleted target disappeared from actual roster")
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "board exit after edit")
+            assert board.child.returncode == 0
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
+
     if touch:
         daemon = start()
         (root / "effects/touch-native").touch()
@@ -557,8 +624,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
     if tmux is not None:
         if form_grid:
             launch_grid_witness(root, roster, start, tmux)
-        elif board_grid or menu_grid:
-            roster_grid_witness(root, cli, roster, start, tmux, menu_grid)
+        elif board_grid or menu_grid or edit_grid:
+            roster_grid_witness(root, cli, roster, start, tmux, menu_grid, edit_grid)
         else:
             grid_witness(root, cli, roster, start, tmux)
         return
@@ -825,7 +892,7 @@ def launch_grid_witness(root, roster, start, tmux):
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
 
 
-def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
+def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_grid=False):
     (root / "effects/board-events").touch()
     daemon = start()
     ids = {}
@@ -837,6 +904,10 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
     for name, text, event in (("amber", "fixture permission", "PermissionRequest"),
                                ("teal", "fixture busy", "UserPromptSubmit"),
                                ("violet", "fixture review", "Stop")):
+        if edit_grid and name == "teal":
+            # A review row makes the edit compositor independent of the
+            # animation phase. The ordinary roster witness retains Working.
+            text, event = "fixture review", "Stop"
         sent = cli("send", ids[name], "--text", text)
         assert sent.returncode == 0, sent.stderr
         receipt = root / f"effects/event-{event}"
@@ -854,6 +925,8 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
         groups = {row["name"]:row["group"] for row in rows}
         expected = {"amber":"needs_input", "teal":"working",
                     "violet":"ready_for_review", "slate":"completed"}
+        if edit_grid:
+            expected["teal"] = "ready_for_review"
         return rows if groups == expected else None
 
     rows = p.wait_for(grouped, "mixed public roster")
@@ -872,10 +945,12 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
         return {"ansi_base64": base64.b64encode(raw).decode(), "cells": resolve_cells(raw, cols, height),
                 "terminal_modes": dict(zip(TMUX_MODES, modes, strict=True))}
 
-    def capture(cols, height, fragment, *, menu=False):
+    def capture(cols, height, fragment, *, menu=False, form=False):
         def observed():
             frame = snapshot(cols, height)
             text = "\n".join("".join(cell[0] for cell in row) for row in frame["cells"]).lower()
+            if form and frame["terminal_modes"]["mouse_sgr_flag"] != "0":
+                return None
             if menu:
                 footer = text.splitlines()[-1].rstrip()
                 expected = "[down (↓)]" if cols == 24 else "[back (esc)] [up (↑)] [down (↓)]"
@@ -898,7 +973,7 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
         daemon.terminate()
         daemon.wait(timeout=5)
 
-    if menu_grid:
+    if menu_grid or edit_grid:
         def click(x, y):
             press = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
             run("send-keys", "-H", "-t", "roster:0.0", *(f"{byte:02x}" for byte in press))
@@ -910,7 +985,37 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
                     return line.index(text) + 1, y
             raise AssertionError(f"Missing {text} in the captured menu")
 
-        def collect(binary):
+        def collect_edits(binary):
+            frames = []
+            for cols, height in ((80, 24), (40, 8), (24, 4)):
+                run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
+                    "-c", root / "work", root / "bin" / binary)
+                capture(cols, height, "selected:amber")
+                key("e")
+                rename = capture(cols, height, "amber█", form=True)
+                key("C-u")
+                capture(cols, height, "● █" if cols == 80 else "rename  █", form=True)
+                run("send-keys", "-l", "-t", "roster:0.0", "界界X")
+                capture(cols, height, "界界x█", form=True)
+                key("Left")
+                edited = capture(cols, height, "界界█x", form=True)
+                key("Escape")
+                capture(cols, height, "selected:amber")
+                key("t")
+                tag = capture(cols, height, "[█]" if cols == 80 else "tag  █", form=True)
+                key("Escape")
+                capture(cols, height, "selected:amber")
+                key("C-x")
+                confirm = capture(cols, height, "kill? y/n" if cols == 80 else (
+                    "kill this session?" if cols == 40 else "resize to 32"), form=True)
+                key("n")
+                capture(cols, height, "selected:amber")
+                frames.append({"cols":cols, "rows":height, "rename":rename,
+                               "edited":edited, "tag":tag, "confirm":confirm})
+                run("kill-session", "-t", "roster")
+            return frames
+
+        def collect_menu(binary):
             frames = []
             for cols, height in ((120, 24), (80, 24), (40, 8), (24, 4)):
                 run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
@@ -942,11 +1047,12 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
                 run("kill-session", "-t", "roster")
             return frames
 
+        collect = collect_edits if edit_grid else collect_menu
         expected = collect("reference-board")
         actual = collect("board")
         differences = []
         for left, right in zip(expected, actual, strict=True):
-            for view in ("more", "down", "up", "outside", "resized"):
+            for view in (key for key in left if key not in ("cols", "rows")):
                 if left[view] is None:
                     assert right[view] is None
                     continue
@@ -955,7 +1061,8 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False):
                     differences.append({"cols":left["cols"], "rows":left["rows"], "frame":view,
                                         "difference":first})
         close_fixture()
-        p.write_json(root / "grid.json", {"menu_reference":expected, "menu_candidate":actual,
+        prefix = "edit" if edit_grid else "menu"
+        p.write_json(root / "grid.json", {f"{prefix}_reference":expected, f"{prefix}_candidate":actual,
             "fixture_ids":ids, "fixture_cwd":str(root / "work"), "first_divergence":differences[0] if differences else None,
             "differences":differences})
         return
@@ -1053,7 +1160,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -1089,6 +1196,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--cycle")
         elif touch:
             command.append("--touch-back")
+        elif edit_rows:
+            command.append("--edit-rows")
         elif tmux is not None:
             command.append(tmux)
             if form_grid:
@@ -1096,7 +1205,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             elif board_grid:
                 command.append("--board-grid")
             elif reference_board is not None:
-                command.append("--menu-grid")
+                command.append("--edit-grid" if edit_grid else "--menu-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
@@ -1126,8 +1235,10 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("attached CLI button, native mouse and terminal restoration" if touch else
+    exercise = ("rename, tag, cancel, kill and delete through public board" if edit_rows else
+                "attached CLI button, native mouse and terminal restoration" if touch else
                 "supervised and hands-off handoff" if handoff else
+                "paired edit and confirmation grids" if edit_grid else
                 "paired More menu grids" if reference_board else
                 "comparative roster grids" if board_grid else
                 "comparative launch-form grids" if form_grid else
@@ -1148,7 +1259,7 @@ if __name__ == "__main__":
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
                 sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
-                sys.argv[-1] == "--menu-grid")
+                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -1157,6 +1268,8 @@ if __name__ == "__main__":
         modes.add_argument("--tmux", type=p.binary_path)
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--handoff-board", action="store_true", help="exercise supervised and capability-gated hands-off handoff")
+        modes.add_argument("--edit-rows", action="store_true",
+                           help="exercise inline edits and lifecycle confirmation against actual owner state")
         modes.add_argument("--touch-back", action="store_true",
                            help="drive the Options toggle and attached native mouse and footer gestures")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
@@ -1169,13 +1282,17 @@ if __name__ == "__main__":
         grids.add_argument("--reference-board", type=p.binary_path,
                            help="compare the More menu with this board using the same public owner and IDs")
         grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
+        parser.add_argument("--edit-grid", action="store_true",
+                           help="compare edit and confirmation panels with --reference-board")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
         if (args.form_grid or args.board_grid or args.reference_board) and not args.tmux:
             parser.error("grid checks require --tmux")
+        if args.edit_grid and not args.reference_board:
+            parser.error("--edit-grid requires --reference-board")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid)

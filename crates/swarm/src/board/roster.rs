@@ -1,13 +1,15 @@
 use super::{
-    Board, field,
-    launch::{ACCENT, DIM, PLAIN, TITLE, spans},
+    Board, Modal, field,
+    launch::{ACCENT, DIM, PLAIN, TITLE, block_cursor, spans},
     name,
     navigation::{GROUPS, ORDERS, Row, board_capacity, board_first, truncation},
+    session_form::{CONFIRM_HINT, RENAME_HINT, TAG_HINT},
 };
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
-const BOLD: &str = "\x1b[0;1m";
+pub(super) const BOLD: &str = "\x1b[0;1m";
+const ERROR: &str = "\x1b[0;38;5;173m";
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 struct Columns {
@@ -125,11 +127,45 @@ fn elapsed(row: &Value) -> String {
 fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'static str, String)> {
     let group = field(row, "group");
     let style = group_style(group, false);
-    let marker = if selected {
+    let id = field(row, "id");
+    let edit = match &board.modal {
+        Some(Modal::Edit {
+            id: target,
+            tag,
+            draft,
+            ..
+        }) if id == target => Some((*tag, draft)),
+        _ => None,
+    };
+    let confirm = match &board.modal {
+        Some(Modal::Confirm {
+            id: target,
+            running,
+            ..
+        }) if id == target => Some(*running),
+        _ => None,
+    };
+    let prefix: (&str, String) = if let Some(running) = confirm {
+        let prompt = if running { "kill? y/n" } else { "delete? y/n" };
+        let minimum = if compact(cols) {
+            prompt.width() + 12
+        } else {
+            prompt.width() + 1 + 2 + 9 + 17 + 6
+        };
+        (
+            ERROR,
+            if usize::from(cols) < minimum {
+                "?".into()
+            } else {
+                prompt.into()
+            },
+        )
+    } else if selected {
         (ACCENT, "▌".into())
     } else {
         (PLAIN, " ".into())
     };
+    let prefix_width = prefix.1.width() as u16 + 1;
     let icon = match group {
         "needs_input" => "●",
         "working" => SPINNER[board.spinner],
@@ -142,20 +178,37 @@ fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'stat
         label = format!("[manager] {label}");
     }
     let mut spans = vec![
-        marker,
+        prefix,
         (PLAIN, " ".into()),
         (style, icon.into()),
         (PLAIN, " ".into()),
     ];
     if compact(cols) {
-        let budget = cols.saturating_sub(4);
+        let budget = cols.saturating_sub(prefix_width + 2);
         let state = truncation(status(row, true), budget.saturating_sub(5));
         let name_width = budget.saturating_sub(state.width() as u16 + 1);
-        let label = truncation(&label, name_width);
-        let padding = usize::from(name_width).saturating_sub(label.width()) + 1;
-        spans.extend([(BOLD, label), (PLAIN, " ".repeat(padding)), (style, state)]);
+        let original = truncation(&label, name_width);
+        let label = edit.map_or_else(
+            || original.clone(),
+            |(tag, draft)| editor_label(draft, tag, name_width),
+        );
+        let remaining = usize::from(name_width).saturating_sub(label.width()) + 1;
+        // A tag replaces the same visible name cell. Erase the preceding typed
+        // glyphs in that style while leaving the untouched whitespace alone.
+        let styled = if edit.is_some_and(|(tag, _)| tag) {
+            (original.width() + 1)
+                .saturating_sub(label.width())
+                .min(remaining.saturating_sub(1))
+        } else {
+            0
+        };
+        spans.extend([
+            (BOLD, label + &" ".repeat(styled)),
+            (PLAIN, " ".repeat(remaining - styled)),
+            (style, state),
+        ]);
     } else {
-        let widths = columns(cols);
+        let widths = columns(cols.saturating_sub(prefix_width.saturating_sub(2)));
         let cwd = field(row, "cwd");
         let shortened = std::env::var("HOME").ok().and_then(|home| {
             let suffix = cwd.strip_prefix(&home)?;
@@ -163,11 +216,13 @@ fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'stat
         });
         let cwd = shortened.as_deref().unwrap_or(cwd);
         let clipped = |text, width: u16| pad(&super::clip(text, width.saturating_sub(1)), width);
-        let label = super::clip(&label, widths.name.saturating_sub(1));
-        let padding = usize::from(widths.name).saturating_sub(label.width());
+        let label = match edit {
+            Some((_, draft)) => block_cursor(draft, widths.name.saturating_sub(1)),
+            None => truncation(&label, widths.name.saturating_sub(1)),
+        };
+        let padding = " ".repeat(usize::from(widths.name).saturating_sub(label.width()));
+        spans.extend([(BOLD, label), (PLAIN, padding)]);
         spans.extend([
-            (BOLD, label),
-            (PLAIN, " ".repeat(padding)),
             (DIM, clipped(field(row, "agent"), 9)),
             (DIM, clipped(cwd, widths.cwd)),
             (style, pad(status(row, false), 17)),
@@ -178,6 +233,25 @@ fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'stat
         ]);
     }
     spans
+}
+
+fn editor_label(draft: &super::Editor, tag: bool, width: u16) -> String {
+    if tag {
+        format!("[{}]", block_cursor(draft, width.saturating_sub(2).max(1)))
+    } else {
+        block_cursor(draft, width.max(1))
+    }
+}
+
+pub(super) fn edit_label(row: &Value, draft: &super::Editor, tag: bool, cols: u16) -> String {
+    if compact(cols) {
+        let budget = cols.saturating_sub(4);
+        let state = truncation(status(row, true), budget.saturating_sub(5));
+        let width = budget.saturating_sub(state.width() as u16 + 1);
+        editor_label(draft, tag, width)
+    } else {
+        block_cursor(draft, columns(cols).name.saturating_sub(1))
+    }
 }
 
 pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
@@ -243,6 +317,17 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
             }
             Row::Spacer => {}
         }
+    }
+
+    let overlay_hint = match &board.modal {
+        Some(Modal::Edit { tag: true, .. }) => Some(TAG_HINT),
+        Some(Modal::Edit { .. }) => Some(RENAME_HINT),
+        Some(Modal::Confirm { .. }) => Some(CONFIRM_HINT),
+        _ => None,
+    };
+    if let Some(hint) = overlay_hint {
+        super::session_form::footer(screen, height, cols, hint);
+        return;
     }
 
     let mut footer = board
