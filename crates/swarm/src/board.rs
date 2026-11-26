@@ -979,13 +979,7 @@ impl Board {
                 if matches!(key, Key::Enter) && (!online || !Launch::readable(geometry)) {
                     Action::None
                 } else {
-                    match form.update(key, geometry) {
-                        Ok(action) => action,
-                        Err(error) => {
-                            self.notice = error.to_string();
-                            Action::None
-                        }
-                    }
+                    form.update(key, geometry)
                 }
             }
             Modal::Handoff(form) => {
