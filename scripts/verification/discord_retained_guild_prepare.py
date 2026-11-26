@@ -235,7 +235,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 output.join(timeout=5)
             assert child.returncode == 0, "".join(log)
 
-    def bridge_custody(start, voice):
+    def bridge_custody(start, voice, voice_bytes, connector_bytes):
         with subprocess.Popen([rust_test, *rust_args], env=rust_env("native-bridge-hold"), text=True,
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             lines, output = lines_from(child.stdout)
@@ -280,9 +280,15 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 stop_connector(place)
                 child.stdin.write("continue\n")
                 child.stdin.flush()
-                assert child.wait(timeout=10) == 0 and not sock.exists()
-                with sock.with_name("controller.lock").open("rb") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                marker("holding duplicate descriptor after controller release")
+                assert child.poll() is None and not sock.exists()
+                assert voice.read_bytes() == voice_bytes and (place / "discord.db").read_bytes() == connector_bytes
+                assert runtime()["binding"] == start["binding"] and calls == [] and posts == []
+                invoke("guild-advance", place, go_port, "accept")
+                assert child.poll() is None and calls == [] and posts == []
+                child.stdin.write("continue\n")
+                child.stdin.flush()
+                assert child.wait(timeout=10) == 0
             finally:
                 if child.poll() is None:
                     child.terminate()
@@ -477,11 +483,10 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         assert connector.read_bytes() == source_bytes and pending() == [sending]
                         assert calls == [] and posts == []
                         if native_bridge:
-                            bridge_custody(start, voice)
-                            assert voice.read_bytes() == persisted and connector.read_bytes() == source_bytes
-                            assert runtime()["binding"] == start["binding"] and calls == [] and posts == []
-                            print("PASS signed Go MCP reached the original Rust-held bridge; stop released custody with both ledgers unchanged", flush=True)
-                invoke("guild-advance", place, go_port, "accept")
+                            bridge_custody(start, voice, persisted, source_bytes)
+                            print("PASS signed Go MCP reached the original Rust-held bridge; stop kept both ledgers unchanged and Go reacquired despite an open duplicate", flush=True)
+                if not native_bridge:
+                    invoke("guild-advance", place, go_port, "accept")
                 accepted, = pending()
                 assert accepted["State"] == "accepted" and accepted["Admission"] == a
                 row = native(voice)

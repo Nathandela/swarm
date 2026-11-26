@@ -11,7 +11,7 @@ use std::{
 pub(in crate::discord) struct Custody {
     socket: PathBuf,
     root_identity: (u64, u64),
-    lock: fs::File,
+    lock: LockDescription,
     auth_path: PathBuf,
     auth: fs::File,
     credential: String,
@@ -33,9 +33,9 @@ impl Custody {
         let root_identity = identity(&fs::symlink_metadata(&root)?);
         let lock_path = root.join("controller.lock");
         let original = retained.then(|| open_owner_file(&lock_path)).transpose()?;
-        let lock = runtime::lock(&lock_path)?;
+        let lock = LockDescription(runtime::lock(&lock_path)?);
         if let Some(original) = original {
-            let (saved, held) = (original.metadata()?, lock.metadata()?);
+            let (saved, held) = (original.metadata()?, lock.0.metadata()?);
             if (saved.dev(), saved.ino()) != (held.dev(), held.ino()) {
                 return Err(invalid());
             }
@@ -61,7 +61,7 @@ impl Custody {
             || !root.is_dir()
             || root.uid() != runtime::uid()
             || root.mode() & 0o077 != 0
-            || identity(&lock.metadata()?) != identity(&self.lock.metadata()?)
+            || identity(&lock.metadata()?) != identity(&self.lock.0.metadata()?)
             || identity(&auth.metadata()?) != identity(&self.auth.metadata()?)
             || credential(&auth)? != self.credential
         {
@@ -77,6 +77,11 @@ impl Custody {
             return Err(invalid());
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(in crate::discord) fn duplicate_lock_for_test(&self) -> io::Result<fs::File> {
+        self.lock.0.try_clone()
     }
 
     pub(in crate::discord) fn listen(&self) -> io::Result<ToolSocket<'_>> {

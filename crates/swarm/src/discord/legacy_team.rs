@@ -613,7 +613,13 @@ pub(super) fn native_prepare_witness() {
             })
         })
         .unwrap(),
-        "prepare" | "native-bridge-hold" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
+        "prepare" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
+        "native-bridge-hold" => {
+            prepare_with(&place, &cfg, &api, "701", false).unwrap();
+            let duplicate = BRIDGE_LOCK_DUPLICATE.with(|slot| slot.take()).unwrap();
+            wait_at_test_boundary("holding duplicate descriptor after controller release").unwrap();
+            duplicate.metadata().unwrap();
+        }
         "prepare-and-exit" => {
             prepare_with(&place, &cfg, &api, "701", false).unwrap();
             std::process::exit(75);
@@ -787,6 +793,11 @@ pub(super) fn native_prepare_witness() {
 }
 
 #[cfg(test)]
+thread_local! {
+    static BRIDGE_LOCK_DUPLICATE: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
 fn hold_prepared_bridge<'a>(
     place: &Place,
     cfg: &Config,
@@ -852,7 +863,10 @@ fn hold_prepared_bridge<'a>(
         "original connector stopped before Voice commit"
     );
     drop(bridge);
-    manager.verify_pins()
+    manager.verify_pins()?;
+    let duplicate = manager.controller.duplicate_lock_for_test()?;
+    BRIDGE_LOCK_DUPLICATE.with(|slot| *slot.borrow_mut() = Some(duplicate));
+    Ok(())
 }
 
 #[cfg(test)]
