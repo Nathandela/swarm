@@ -594,6 +594,9 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 		return ErrTeammateSourceChanged
 	}
 	if err = t.checkDiscussion(ctx, d); err != nil {
+		if eventID != "" && permanentExternalSource(err) {
+			return ErrTeammateSourceChanged
+		}
 		return err
 	}
 	if eventID != "" {
