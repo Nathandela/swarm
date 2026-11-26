@@ -81,6 +81,7 @@ struct ProviderObservation {
 
 struct ScreenState {
     parser: vt100::Parser,
+    mouse: crate::terminal_mouse::Tracker,
     subscriber: Option<Subscriber>,
 }
 
@@ -618,6 +619,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         master,
         screen: Mutex::new(ScreenState {
             parser: vt100::Parser::new(rows.try_into().unwrap(), cols.try_into().unwrap(), 0),
+            mouse: crate::terminal_mouse::Tracker::new(crate::terminal_mouse::Modes {
+                known: true,
+                ..Default::default()
+            }),
             subscriber: None,
         }),
         control: Mutex::new(0),
@@ -900,6 +905,9 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
         }
         let mut screen = state.screen.lock().unwrap();
         screen.parser.process(&bytes[..n]);
+        // The screen emulator collapses conflicting DEC mouse modes to a single
+        // effective mode. The attach controller also needs the full native mask.
+        let _ = screen.mouse.feed(&bytes[..n], None, |_, _, _| Ok(()));
         if let Some(sub) = &screen.subscriber
             && sub.output.try_send(bytes[..n].to_vec()).is_err()
         {
@@ -1729,7 +1737,7 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
     {
         let mut owner = state.control.lock().unwrap();
         let mut screen = state.screen.lock().unwrap();
-        snap = screen::snapshot(screen.parser.screen())?;
+        snap = screen::snapshot(screen.parser.screen(), screen.mouse.snapshot())?;
         if let Some(previous) = screen.subscriber.replace(Subscriber {
             generation,
             output: tx,

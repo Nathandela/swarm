@@ -17,6 +17,7 @@ mod shim;
 mod socket;
 mod supervisor;
 mod teammate;
+mod terminal_mouse;
 mod upgrade;
 mod workspace;
 

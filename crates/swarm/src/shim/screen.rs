@@ -16,7 +16,7 @@ pub(super) fn terminal(screen: &Screen) -> Value {
     json!({"cols": cols.get(), "rows": rows.get(), "lines": lines})
 }
 
-pub(super) fn snapshot(screen: &Screen) -> io::Result<Vec<u8>> {
+pub(super) fn snapshot(screen: &Screen, mouse: Value) -> io::Result<Vec<u8>> {
     let (rows, cols) = screen.size();
     let (cursor_y, cursor_x) = screen.cursor_position();
     let lines: Vec<_> = (0..rows.get())
@@ -50,7 +50,7 @@ pub(super) fn snapshot(screen: &Screen) -> io::Result<Vec<u8>> {
         "version": 1, "cols": cols.get(), "rows": rows.get(),
         "altScreen": screen.alternate_screen(), "cursorX": cursor_x,
         "cursorY": cursor_y, "cursorVisible": !screen.hide_cursor(), "lines": lines,
-        "inputModes": input_modes(screen),
+        "inputModes": input_modes(screen), "mouse": mouse,
     }))?)
 }
 
@@ -200,7 +200,7 @@ mod tests {
         parser.process(b"\x1b[");
         parser.process("31m年X\u{202e}\x1b[0m".as_bytes());
         let screen = parser.screen();
-        let snap: Value = serde_json::from_slice(&snapshot(screen).unwrap()).unwrap();
+        let snap: Value = serde_json::from_slice(&snapshot(screen, Value::Null).unwrap()).unwrap();
         assert_eq!(snap["lines"][0]["runs"][0]["width"], 3);
         assert_eq!(snap["lines"][0]["runs"][0]["fg"], "#800000");
         assert_eq!(snap["lines"][0]["runs"][0]["text"], "年X ");

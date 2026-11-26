@@ -4,9 +4,11 @@ mod handoff;
 mod keys;
 mod launch;
 mod navigation;
+mod options;
 mod preferences;
 mod roster;
 mod term;
+mod touch;
 
 use crate::ipc::{self, Client, field};
 use crate::schedule::catalog::{
@@ -387,7 +389,7 @@ impl Board {
             });
         loop {
             let (id, label) = &ring[index];
-            match attach::run(path, id, label, output) {
+            match attach::run(path, id, label, self.layout.touch_back, output) {
                 Ok(attach::Exit::Next) => index = (index + 1) % ring.len(),
                 Ok(attach::Exit::Previous) => index = (index + ring.len() - 1) % ring.len(),
                 Ok(attach::Exit::Board) => break,
@@ -669,8 +671,11 @@ impl Board {
             }
             Modal::Options { draft, focus } => {
                 match key {
-                    Key::Up => *focus = (*focus + 1) % 2,
-                    Key::Down | Key::Tab => *focus = (*focus + 1) % 2,
+                    Key::Up => *focus = (*focus + 2) % 3,
+                    Key::Down | Key::Tab => *focus = (*focus + 1) % 3,
+                    Key::Left | Key::Right if *focus == 2 => {
+                        draft.touch_back = !draft.touch_back;
+                    }
                     Key::Left | Key::Right => {
                         let (selected, len) = if *focus == 0 {
                             (&mut draft.group, GROUPS.len())
@@ -680,7 +685,7 @@ impl Board {
                         let offset = if matches!(key, Key::Left) { len - 1 } else { 1 };
                         *selected = (*selected + offset) % len;
                     }
-                    Key::Enter if usable(geometry) => {
+                    Key::Enter if options::fits(geometry) => {
                         self.layout = *draft;
                         self.rebuild_sections();
                         self.reveal_focus(rows);
@@ -1079,30 +1084,7 @@ impl Board {
                 );
             }
             Some(Modal::Options { draft, focus }) => {
-                form_header(&mut screen, cols, "Options");
-                for (index, (label, value)) in [
-                    ("Group", GROUPS[draft.group]),
-                    ("Order", ORDERS[draft.order]),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    let marker = if index == *focus { "▌" } else { " " };
-                    line(
-                        &mut screen,
-                        index as u16 + 2,
-                        cols,
-                        "",
-                        &format!("{marker} {label}  ‹ {value} ›"),
-                    );
-                }
-                line(
-                    &mut screen,
-                    rows,
-                    cols,
-                    "\x1b[2m",
-                    "↑↓ field · ←→ change · enter save · esc cancel",
-                );
+                options::view(&mut screen, cols, rows, *draft, *focus);
             }
             Some(Modal::More {
                 target,
