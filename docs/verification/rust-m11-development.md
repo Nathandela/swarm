@@ -129,6 +129,15 @@ counts, and calibration results are in the local evidence directory
 
 The driver now records explicit commit hashes for both arms. A native macOS calibration paired signed Go v0.29.24 with signed Rust `1ceed43c`, exercised real PTYs in both arms and reported zero survivors. The receipt SHA-256 is `0fd7f8332447c4e8cb01d13d4fbd9cc6bbcea26e5d8914c29eb73912b204a5da`. It used the short smoke sample during development load.
 
+The full loaded macOS arm64 calibration paired signed Go v0.29.24 and signed Rust `52e77ee5`. Each executed 25 alternating first-paint trials at 50 sessions, 1,000 real PTY echo samples, 100 attach cycles and a 60-second idle sample. Other workloads were running. The one-minute load average rose from 5.79 to 8.26. Both arms exceeded the 100 ms first-paint budget. The reaper found zero survivors for either arm. Quiet-host qualification remains open. Raw receipt SHA-256 is `a47755253405e5a0ced0099fa83efe62f322c506e4cc1607c92e94fbce3bc979`.
+
+| Native Mac metric | Signed Go v0.29.24 | Signed Rust `52e77ee5` |
+| --- | ---: | ---: |
+| First paint p95 at 50 sessions | 169.691 ms | 125.538 ms |
+| PTY echo p95 | 0.091 ms | 0.121 ms |
+| Idle CPU as a percent of one core | 1.596% | 0.264% |
+| Daemon plus three shims at idle sample end | 76.578 MiB RSS | 21.109 MiB RSS |
+
 | Evidence | SHA-256 |
 | --- | --- |
 | `performance-macos.json` | `c75ab9a2731e2075a88b5bd4221c3f1563b6bb487a1f6a65121d176d9aa3f9e5` |
@@ -201,3 +210,5 @@ A deterministic bridge control returned HTTP 200 for a vanished question, HTTP 4
 `52e77ee5` retains a static reason from a read-only snapshot's HTTP 422 response after verifying the full expected bridge and native identity. The body limit is 8 KiB. Oversized, non-JSON, mismatched and unrecognized responses keep the generic error. Localhost tests exercise those controls. The exact embedded bridge fixture reproduced `native_deadline` in 4.005 seconds and recovered the same question on a later read. It made no mutations. Admission, replay and time budgets stay separate from this diagnostic.
 
 The signed Linux `52e77ee5` mixed replacement verified its first three completed inputs independently in the native database. Each receipt matched one exact user row, text part and terminal assistant child. At the checkpoint it had five inputs, five attaches, five synthetic Discord readbacks and three scheduled completions. Memory and I/O full pressure at launch was 0.06% and 3.30%, respectively. The 24-hour stage remains in progress. Launch evidence SHA-256 is `34f54a163ab2e3c2ad29dfb72c069c693ea4f07cb14dbdbff2a555ec0079b4db` and the checkpoint receipt SHA-256 is `175347921900d1f8ccd7d685094815b5fee3f0cc1f39ed4ec94a48f5b8f5c5ae`.
+
+A separate untraced native Linux queue started a 24-hour stage and a conditional 72-hour stage on the same exact signed `52e77ee5` release. At its first-three checkpoint, each durable receipt matched exactly one native user row, one text part with the expected hash and a linked terminal assistant child. Memory full pressure was 0.00% and I/O full pressure was 1.36%. The stage is still running. Launch evidence SHA-256 is `5ee8004e91f469ce03629198f92802387aeb734b85be6376de6a6c14947e43f8` and the first-three witness SHA-256 is `306464457ea526d0852e7a9b414000ab32495bca1b1d39a71928c4dec00f3d3a`.

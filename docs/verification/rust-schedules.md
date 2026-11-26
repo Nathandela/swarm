@@ -45,6 +45,12 @@ The broader board fixture initially restarted the owner after it could see a row
 
 Explicit Reconcile now handles that interruption point. If the occurrence is still queued and every prior attempt recorded a definitive refusal, it advances only to the next unused route or records exhaustion. The original occurrence and rejected attempt are preserved. Unknown or dispatching attempts stay pending. The store-reopen test checks fallback with a distinct operation, exhaustion, both uncertain controls and read-only status. Replacing the predicate with the old empty-attempt rule reproduced the stuck queued state.
 
+## Archive confirmation and list navigation
+
+Signed Go v0.29.24 and Rust matched all 6,720 styled cells in six paired archive frames on each native host, including terminal modes and cursor positions at 80×24 and 40×8. Tab selected the next job from the list and Escape returned from job detail to the list. Opening the archive confirmation, pressing Enter or `n`, and cancelling with Escape left the catalog bytes unchanged.
+
+Rust accepts archive approval only after a readable confirmation for the captured job has been flushed at the current terminal size. A single write containing `xy`, or keyboard and mouse confirmation after a shrink to 24×4, left the catalog byte-identical. After a 40×8 repaint, `y` archived exactly the captured job. The broader raw PTY workflow retained its history. Both systems reported zero survivors. The paired receipt SHA-256 is `6f5bf6732bc66a779316d8ef2084f17c48a04e6b874e56b2506baae1c6993443` on macOS and `b6e24c3e577f4ea0af0b5d21742640bab9271b5ca7bb727fdb1f86df927c015a` on Linux.
+
 ```sh
 python3 -Bu scripts/verification/parity/automation_enable.py GO_V0_29_24 --reference-go
 python3 -Bu scripts/verification/parity/automation_enable.py target/debug/swarm
