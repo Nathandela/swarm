@@ -105,6 +105,16 @@ func main() {
 		fmt.Println(count)
 		return
 	}
+	if action == "vm-read-prepared-queued-wake" {
+		operation, payload, err := voice.FixturePreparedQueuedWake(
+			dir, os.Args[3], os.Args[4], os.Args[5], os.Args[6], os.Args[7], os.Args[8], os.Args[9] == "pending")
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(struct {
+			Operation string
+			Files     [][]byte
+		}{operation, payload}))
+		return
+	}
 	if action == "vm-validate-staged-wake" {
 		data, err := voice.FixtureValidateStagedFileWake(dir, os.Args[3])
 		check(err)

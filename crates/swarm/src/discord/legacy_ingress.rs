@@ -1553,7 +1553,8 @@ mod tests {
         };
         assert!(inspect().unwrap());
         assert!(!activation::selected(&place).unwrap());
-        assert!(activation::migrate(&place, true, false, true).is_err());
+        assert!(activation::migrate(&place, true, false, true).unwrap());
+        assert!(!activation::selected(&place).unwrap());
         let original = place.load().unwrap();
         let config_path = place.dir.join("config.json");
         let mut foreign = original.0.clone();
@@ -1562,6 +1563,31 @@ mod tests {
         assert!(inspect().is_err());
         runtime::write_json(&config_path, &original.0).unwrap();
         assert_eq!(snapshot(), before);
+    }
+
+    #[test]
+    fn native_go_queued_file_prepares_old_scheduler_receipt() {
+        let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_QUEUED_FILE_ROOT") else {
+            return;
+        };
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let cfg = place.load().unwrap();
+        let port = std::env::var("SWARM_TEST_DISCORD_REST_PORT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
+        if !activation::selected(&place).unwrap() {
+            assert!(activation::migrate(&place, false, false, true).unwrap());
+        }
+        let run = service::with(&place, &api, None, |_| Ok(|| Ok(None)));
+        assert!(
+            run.unwrap_err()
+                .to_string()
+                .contains("remains for the Go scheduler")
+        );
+        assert!(activation::migrate(&place, false, true, true).unwrap());
+        assert!(!activation::selected(&place).unwrap());
     }
 
     #[test]

@@ -313,3 +313,71 @@ func FixtureQueuedFileWitness(dir, settings, message string) (schema.MessageOrig
 	data, err := workermail.ReadFile(settings, note.Binding, note.ID, note.Files[0].ID)
 	return *origin, note, [][]byte{data}, err
 }
+
+// FixturePreparedQueuedWake reads the original Go scheduler records after a
+// Rust-prepared wake. It checks the old prompt builder and immutable file.
+func FixturePreparedQueuedWake(dir, settings, conversation, session, instance, attempt, noteID string, pending bool) (string, [][]byte, error) {
+	db, err := bolt.Open(filepath.Join(dir, "voice.db"), 0, &bolt.Options{
+		ReadOnly: true, Timeout: time.Second, OpenFile: openInventoryLedger,
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	defer db.Close()
+	var st State
+	if err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		st, err = readState(tx)
+		return err
+	}); err != nil {
+		return "", nil, fmt.Errorf("prepared wake cannot reopen in Go: %w", err)
+	}
+	id := "worker-message-" + hashValue([]string{session, instance, attempt, noteID})
+	event := st.Events[key(conversation, id)]
+	wake := st.Wakes[key(conversation, id)]
+	worker := st.Workers[key(conversation, key(session, instance))]
+	if event.ID != id || !event.WorkerMessage || event.WakeID != id || event.AttemptID != attempt ||
+		wake.ID != id || wake.State != "prepared" || wake.Admission != 0 || wake.NativeInputID != "" ||
+		!protocol.SemanticOperationReplayable(wake.OperationID, time.Now()) ||
+		!worker.supervisorMailbox() || worker.AttemptID != attempt || worker.SessionInstance != instance ||
+		worker.ParentInputHash == "" || worker.Admission == 0 {
+		return "", nil, ErrStale
+	}
+	var source workerNoteMetadata
+	if err := json.Unmarshal(event.Metadata, &source); err != nil {
+		return "", nil, err
+	}
+	if source.Kind != "complete" || source.NoteID != noteID || len(source.Files) != 1 {
+		return "", nil, ErrStale
+	}
+	text, err := workerNoteWakeText(true, source, event.Metadata, protocol.MaxSendInputText)
+	if err != nil {
+		return "", nil, err
+	}
+	var request struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(wake.Request, &request); err != nil {
+		return "", nil, err
+	}
+	if request.Text != text {
+		return "", nil, fmt.Errorf("prepared wake prompt differs from Go: %w", ErrCorrupt)
+	}
+	if hashBytes(wake.Request) != wake.RequestHash {
+		return "", nil, fmt.Errorf("prepared wake request digest differs from Go: %w", ErrCorrupt)
+	}
+	binding := workermail.Binding{Discussion: conversation, Parent: worker.Parent, Session: session, Instance: instance, Attempt: attempt}
+	note, err := workermail.Lookup(settings, binding, noteID)
+	if err != nil {
+		return "", nil, err
+	}
+	expected := "ingested"
+	if pending {
+		expected = "queued"
+	}
+	if note.State != expected || note.ParentInputHash != worker.ParentInputHash {
+		return "", nil, ErrStale
+	}
+	data, err := workermail.ReadFile(settings, binding, noteID, source.Files[0].ID)
+	return wake.OperationID, [][]byte{data}, err
+}

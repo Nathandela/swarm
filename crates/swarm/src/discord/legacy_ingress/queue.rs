@@ -1,7 +1,23 @@
 //! Inspect a single genuine original Go queued file without admitting it.
 use super::*;
+use std::io::Read;
 
-pub(super) fn inspect(place: &Place, cfg: &Config, connector: &impl DbApi) -> io::Result<()> {
+pub(super) struct QueuedFile {
+    input: Value,
+    note: Value,
+    conversation: String,
+    event: String,
+    path: PathBuf,
+    voice_identity: (u64, u64),
+    mailbox_identity: (u64, u64),
+    header: Value,
+}
+
+pub(super) fn inspect(
+    place: &Place,
+    cfg: &Config,
+    connector: &impl DbApi,
+) -> io::Result<QueuedFile> {
     let tx = connector.begin().map_err(io::Error::other)?;
     let scope = format!(
         "{}\0{}",
@@ -36,7 +52,7 @@ pub(super) fn inspect(place: &Place, cfg: &Config, connector: &impl DbApi) -> io
     original_boundary(&tx, cfg, &route)?;
     let (directory, id, endpoint) = voice_location(place, cfg, &route)?;
     let conversation = format!("discord-teammate-{id}");
-    let note =
+    let (note, mailbox_identity) =
         supervisor::mail_store::original_queued_file(place.supervisor_root(), &conversation)?
             .ok_or_else(invalid)?;
     let project = field(&note, "Project");
@@ -80,14 +96,7 @@ pub(super) fn inspect(place: &Place, cfg: &Config, connector: &impl DbApi) -> io
         )
     );
     let event_index = serde_json::to_string(&[conversation.as_str(), event.as_str()])?;
-    if records
-        .get(format!("events\0{event_index}").as_bytes())
-        .is_some()
-    {
-        return Err(io::Error::other(
-            "the original queued worker already has a Voice event",
-        ));
-    }
+    let existing_event = records.get(format!("events\0{event_index}").as_bytes());
     let state: Value = serde_json::from_slice(
         records
             .get(format!("conversations\0{conversation}").as_bytes())
@@ -228,5 +237,194 @@ pub(super) fn inspect(place: &Place, cfg: &Config, connector: &impl DbApi) -> io
     {
         return Err(invalid());
     }
+    if let Some(raw) = existing_event {
+        let previous: Value = serde_json::from_slice(raw)?;
+        let wake = wake::record(&records, "wakes", &[&conversation, &event])?;
+        if previous != event_row(&conversation, &event, &note)?
+            || wake["state"] != "prepared"
+            || wake["id"] != event
+            || wake["event_id"] != event
+            || wake["conversation_id"] != conversation
+            || wake["admission"].as_u64().unwrap_or_default() != 0
+        {
+            return Err(io::Error::other(
+                "the original queued worker already has conflicting Voice state",
+            ));
+        }
+    }
+    let pin = voice_pin.metadata()?;
+    Ok(QueuedFile {
+        input: parent,
+        note,
+        conversation,
+        event,
+        path: voice_path,
+        voice_identity: (pin.dev(), pin.ino()),
+        mailbox_identity,
+        header: parsed,
+    })
+}
+
+fn digest(value: &Value) -> io::Result<String> {
+    let wire = crate::ipc::escape_json(serde_json::to_string(value)?);
+    Ok(format!("{:x}", Sha256::digest(wire.as_bytes())))
+}
+
+fn event_row(conversation: &str, event: &str, note: &Value) -> io::Result<Value> {
+    let job = format!(
+        "vm-child-{}",
+        digest(&json!([conversation, note["Session"]]))?
+    );
+    let cursor = json!({"binding":"","sequence":0});
+    Ok(json!({
+        "worker_message":true,"job_id":job,"attempt_id":note["Attempt"],"id":event,
+        "conversation_id":conversation,"cursor":cursor,"examined_through":cursor,
+        "metadata":{"files":note["Files"],"Session":note["Session"],"Instance":note["Instance"],
+            "Agent":note["Agent"],"Text":note["Text"],"Kind":note["Kind"],"NoteID":note["ID"],
+            "Sequence":note["Sequence"],"Created":note["Created"]},
+        "wake_id":event
+    }))
+}
+
+fn record_key(table: &str, conversation: &str, id: &str) -> io::Result<Vec<u8>> {
+    Ok(format!("{table}\0{}", serde_json::to_string(&[conversation, id])?).into_bytes())
+}
+
+pub(super) fn prepare(
+    place: &Place,
+    cfg: &Config,
+    lease: &ConnectorLease,
+    room: &impl service::Room,
+) -> io::Result<()> {
+    current_turn_enrollment(place, cfg)?;
+    let first = inspect(place, cfg, &lease.db)?;
+    let origin = &first.input["origin"];
+    room.verify(cfg)?;
+    let current = room.message(cfg, field(origin, "message_id"))?;
+    if !current["message_snapshots"].is_null()
+        || original_revision(&current, origin)? != origin["revision"]
+    {
+        return Err(invalid());
+    }
+    let proof = inspect(place, cfg, &lease.db)?;
+    if proof.note != first.note
+        || proof.input != first.input
+        || proof.conversation != first.conversation
+        || proof.voice_identity != first.voice_identity
+        || proof.mailbox_identity != first.mailbox_identity
+        || proof.header != first.header
+    {
+        return Err(invalid());
+    }
+    let (pin, mut db) = bounded_writer(writable_pin(&proof.path)?)?;
+    let current = pin.metadata()?;
+    if (current.dev(), current.ino()) != proof.voice_identity
+        || !identity(&pin, &proof.path)?
+        || !lease.source_unchanged()?
+    {
+        return Err(invalid());
+    }
+    current_turn_enrollment(place, cfg)?;
+    let conversation = &proof.conversation;
+    let event_id = &proof.event;
+    let note = &proof.note;
+    let event = event_row(conversation, event_id, note)?;
+    let event_key = record_key("events", conversation, event_id)?;
+    let wake_key = record_key("wakes", conversation, event_id)?;
+    let worker_index = serde_json::to_string(&[&note["Session"], &note["Instance"]])?;
+    let worker_key = record_key("workers", conversation, &worker_index)?;
+    let worker = json!({
+        "parent_input_hash":note["ParentInputHash"],"mailbox":true,"vm_child":true,
+        "parent":note["Parent"],"project":note["Project"],"attempt_id":note["Attempt"],
+        "job_id":event["job_id"],"conversation_id":conversation,"session":note["Session"],
+        "session_instance":note["Instance"],"admission":proof.input["sequence"],
+        "source_id":"","action_id":""
+    });
+    let request = wake_request(&event)?;
+    let request_hash = digest(&request)?;
+    let mut random = [0u8; 16];
+    fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let nonce: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let operation = format!("semantic:{}:{nonce}", crate::ipc::spawn::now_ms());
+    let wake = json!({"id":event_id,"conversation_id":conversation,"event_id":event_id,
+        "operation_id":operation,"request":request,"request_hash":request_hash,"state":"prepared"});
+    let tx = db.begin_rw().map_err(io::Error::other)?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let current_header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    if current_header != proof.header {
+        return Err(invalid());
+    }
+    let have_worker = if let Some(raw) = records.get(&worker_key) {
+        let previous: Value = serde_json::from_slice(raw)?;
+        if worker
+            .as_object()
+            .ok_or_else(invalid)?
+            .iter()
+            .any(|(field, value)| previous[field] != *value)
+            || !matches!(
+                previous["recovery_required"],
+                Value::Null | Value::Bool(false)
+            )
+            || !matches!(previous["reserved"], Value::Null | Value::Bool(false))
+        {
+            return Err(invalid());
+        }
+        true
+    } else {
+        false
+    };
+    if let Some(raw) = records.get(&event_key) {
+        if !have_worker {
+            return Err(invalid());
+        }
+        let prior: Value = serde_json::from_slice(raw)?;
+        let saved: Value = serde_json::from_slice(records.get(&wake_key).ok_or_else(invalid)?)?;
+        if prior != event
+            || saved["state"] != "prepared"
+            || saved["request"] != request
+            || saved["request_hash"] != request_hash
+            || saved["conversation_id"] != *conversation
+            || saved["id"] != *event_id
+            || saved["event_id"] != *event_id
+            || field(&saved, "operation_id").is_empty()
+        {
+            return Err(invalid());
+        }
+        drop(tx);
+    } else {
+        if records.get(&wake_key).is_some() {
+            return Err(invalid());
+        }
+        let mut changes = vec![(event_key, event), (wake_key, wake)];
+        if !have_worker {
+            changes.push((worker_key, worker));
+        }
+        let mut header = proof.header;
+        header["version"] = json!(4);
+        manager_publication::apply_voice(tx, header, &changes)?;
+    }
+    #[cfg(test)]
+    if std::env::var_os("SWARM_TEST_DISCORD_QUEUE_EXIT_AFTER_VOICE").is_some() {
+        std::process::exit(87);
+    }
+    current_turn_enrollment(place, cfg)?;
+    supervisor::mail_store::acknowledge_original_file(
+        place.supervisor_root(),
+        note,
+        proof.mailbox_identity,
+    )?;
     Ok(())
+}
+
+fn wake_request(event: &Value) -> io::Result<Value> {
+    let wire = crate::ipc::escape_json(serde_json::to_string(&event["metadata"])?);
+    let metadata = wire.replace("[swarm-manager-input", "\\u005bswarm-manager-input");
+    let text = format!(
+        "Message from your delegated worker. The queued receipt delivered the worker’s note to you. Verify its result against the attached launch-turn evidence or inspect the same worker with swarm peek. If only the note is available, attribute the result to the worker. Use publish with final=true during this turn to report the result in Discord, unless this completion already has a final publication. To send the worker's files to Discord, read this exact completion with swarm_read_note and pass the selected IDs as file_ids to publish. Continue only the original authorized task. Worker message and identity: {metadata}"
+    );
+    if text.len() > 4096 - "[SWARM_MANAGER_INPUT_V1:".len() - 64 - "]\n".len() {
+        return Err(invalid());
+    }
+    Ok(json!({"text":text}))
 }

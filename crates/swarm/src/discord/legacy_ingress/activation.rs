@@ -51,6 +51,10 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
     probe(place, cfg, db, false)
 }
 
+pub(super) fn ready_to_run(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<Ready> {
+    probe(place, cfg, db, retained_vm(cfg))
+}
+
 fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> io::Result<Ready> {
     let tx = db.begin().map_err(io::Error::other)?;
     let install = cfg.text("installation_id");
@@ -257,13 +261,13 @@ pub(in crate::discord) fn migrate(
     let record = identity_of(place, &cfg)?;
     if dry_run {
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
-        ready(place, &cfg, &db)?;
+        ready_to_run(place, &cfg, &db)?;
         if identity_of(place, &place.load()?)? != record {
             return Err(invalid());
         }
     } else {
         let lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
-        ready(place, &cfg, &lease.db)?;
+        ready_to_run(place, &cfg, &lease.db)?;
         if !lease.source_unchanged()? || identity_of(place, &place.load()?)? != record {
             return Err(invalid());
         }

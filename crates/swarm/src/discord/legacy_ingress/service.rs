@@ -503,12 +503,7 @@ where
     if retained_vm(&cfg) && wake_intent::reconcile(place, &cfg, &binding, &lease)? {
         return Ok(true);
     }
-    let readiness = activation::ready(place, &cfg, &lease.db)?;
-    if matches!(readiness, activation::Ready::QueuedFile) {
-        return Err(io::Error::other(
-            "the original VM worker has not been admitted",
-        ));
-    }
+    let readiness = activation::ready_to_run(place, &cfg, &lease.db)?;
     let mut next_mail_check = Instant::now();
     let mut check_mail = || {
         if let Some(discussion) = &vm_discussion
@@ -524,6 +519,12 @@ where
     let mut event = open(&cfg)?;
     let mut pending = history_backlog(room, &cfg, boundary)?;
     status.online(true);
+    if matches!(readiness, activation::Ready::QueuedFile) {
+        queue::prepare(place, &cfg, &lease, room)?;
+        return Err(io::Error::other(
+            "the original queued file wake was prepared and remains for the Go scheduler",
+        ));
+    }
     let mut handled = 0;
     if let activation::Ready::AdmittedFile { parent_message } = readiness {
         let result = VmRelay {

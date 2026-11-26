@@ -295,13 +295,16 @@ pub(crate) fn pending(
     Ok(result)
 }
 
-pub(crate) fn original_queued_file(root: &Path, discussion: &str) -> io::Result<Option<Value>> {
+pub(crate) fn original_queued_file(
+    root: &Path,
+    discussion: &str,
+) -> io::Result<Option<(Value, (u64, u64))>> {
     let path = match open_path(root, false) {
         Ok(path) => path,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    let (_pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
+    let (pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
     let tx = db.begin().map_err(io_error)?;
     let pending = tx.bucket(b"pending").ok_or_else(absent)?;
     let mut cursor = pending.cursor();
@@ -359,7 +362,13 @@ pub(crate) fn original_queued_file(root: &Path, discussion: &str) -> io::Result<
     );
     publication_files(&tx, &raw_key, &binding, id, &files, "queued")?;
     note["Files"] = files;
-    Ok(Some(note))
+    let resolved = pin.metadata()?;
+    let current = std::fs::symlink_metadata(path)?;
+    let identity = (resolved.dev(), resolved.ino());
+    if (current.dev(), current.ino()) != identity {
+        return Err(io_error("original pending mailbox identity changed"));
+    }
+    Ok(Some((note, identity)))
 }
 
 pub(crate) fn read_publication_files(root: &Path, source: &Value) -> io::Result<Vec<Captured>> {
@@ -500,6 +509,58 @@ fn open_original_writer(root: &Path, identity: (u64, u64)) -> io::Result<(File, 
         return Err(io_error("original worker mailbox identity changed"));
     }
     Ok((pin, db))
+}
+
+pub(crate) fn acknowledge_original_file(
+    root: &Path,
+    expected: &Value,
+    identity: (u64, u64),
+) -> io::Result<()> {
+    let (_pin, mut db) = open_original_writer(root, identity)?;
+    let id = expected["ID"].as_str().ok_or_else(absent)?;
+    let key = key(expected, id)?;
+    let mut tx = db.begin_rw().map_err(io_error)?;
+    let mut note: Value = serde_json::from_slice(
+        tx.bucket(b"notes")
+            .and_then(|rows| rows.get(&key).map(<[u8]>::to_vec))
+            .as_deref()
+            .ok_or_else(absent)?,
+    )?;
+    let stored = with_files(&tx, &key, note.clone())?;
+    if stored != *expected
+        || note["State"] != "queued"
+        || note["Kind"] != "complete"
+        || note["Settled"] != ZERO
+    {
+        return Err(io_error(
+            "original queued worker file changed before acknowledgment",
+        ));
+    }
+    let order_key = order(&note)?;
+    let pending = tx.bucket(b"pending").ok_or_else(absent)?;
+    if pending.get(order_key.as_slice()) != Some(key.as_slice()) {
+        return Err(absent());
+    }
+    let binding = Value::Object(
+        expected
+            .as_object()
+            .ok_or_else(absent)?
+            .iter()
+            .filter(|(field, _)| *field != "Files")
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect(),
+    );
+    publication_files(&tx, &key, &binding, id, &expected["Files"], "queued")?;
+    note["State"] = json!("ingested");
+    tx.bucket_mut(b"pending")
+        .ok_or_else(absent)?
+        .delete(order_key)
+        .map_err(io_error)?;
+    tx.bucket_mut(b"notes")
+        .ok_or_else(absent)?
+        .put(&key, serde_json::to_vec(&note)?)
+        .map_err(io_error)?;
+    tx.commit().map_err(io_error)
 }
 
 pub(crate) fn release_prepared_publication(
