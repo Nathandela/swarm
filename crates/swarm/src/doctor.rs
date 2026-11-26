@@ -94,7 +94,7 @@ fn daemon(root: &Path, sock: &Path) -> Finding {
         }
     }
 }
-fn resolve(path: &str, name: &str) -> Option<PathBuf> {
+pub(crate) fn resolve(path: &str, name: &str) -> Option<PathBuf> {
     env::split_paths(path)
         .filter(|p| p.is_absolute())
         .map(|p| p.join(name))

@@ -554,7 +554,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
             call_runtime::stop(&place.dir, cfg.text("installation_id"))?;
             println!("Discord calls suspended until restart.");
         }
-        "doctor" => return doctor(&place, &cfg, req.get("channel")),
+        "doctor" => return doctor(&place.bound(&cfg)?, &cfg, req.get("channel")),
         _ => {
             let mut query = String::new();
             let request = match req.command {
@@ -676,6 +676,22 @@ fn doctor(place: &Place, cfg: &Config, channel: Option<&str>) -> io::Result<bool
             .and_then(|client| cfg.check_supervisor(&client, &caps))
             .map(|_| "manager capabilities negotiated"),
     ));
+    match crate::providers::manager_health(cfg.text("manager_cli"), place.supervisor_root()) {
+        Ok((version, login)) => {
+            findings.push(doctor::finding("native manager CLI", Ok(&version)));
+            findings.push(doctor::finding(
+                "native provider login",
+                if login {
+                    Ok("local CLI reports logged in")
+                } else {
+                    Err(io::Error::other(
+                        "native CLI could not confirm its local login; check the provider account",
+                    ))
+                },
+            ));
+        }
+        Err(error) => findings.push(doctor::finding("native manager CLI", Err(error))),
+    }
     let ok = findings.iter().all(|result| result["status"] != "fail");
     println!("{}", serde_json::to_string_pretty(&Value::Array(findings))?);
     Ok(ok)

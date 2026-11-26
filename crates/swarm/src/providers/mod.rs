@@ -171,6 +171,75 @@ pub(crate) fn prepare(
     })
 }
 
+pub(crate) fn manager_version(agent: &str, version: &str) -> bool {
+    match agent {
+        "claude" => claude_input::qualified(version),
+        "codex" => {
+            let mut parts = version.split('.');
+            let Some(major) = parts.next().and_then(|n| n.parse::<u32>().ok()) else {
+                return false;
+            };
+            let Some(minor) = parts.next().and_then(|n| n.parse::<u32>().ok()) else {
+                return false;
+            };
+            parts.next().is_none_or(|n| n.parse::<u32>().is_ok())
+                && parts.next().is_none()
+                && (major, minor) >= (0, 167)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn manager_health(agent: &str, root: &Path) -> io::Result<(String, bool)> {
+    // Login status is an account check. A caller's project settings must not run during diagnosis.
+    let cwd = Path::new("/");
+    let env = crate::supervisor::runtime::launch_env(&Value::Null);
+    let path = env
+        .iter()
+        .find(|(key, _)| key == "PATH")
+        .map_or("", |(_, path)| path);
+    let locate =
+        |path: &str| crate::doctor::resolve(path, agent).and_then(|p| p.canonicalize().ok());
+    let binary = locate(path)
+        .ok_or_else(|| io::Error::other(format!("could not find {agent} on the launch PATH")))?;
+    if let Ok(saved) = crate::environment::load_saved(root) {
+        let path = saved
+            .iter()
+            .find_map(|entry| entry.strip_prefix("PATH="))
+            .unwrap_or("");
+        if locate(path).as_ref() != Some(&binary) {
+            return Err(io::Error::other(
+                "daemon and invoking shell resolve different provider executables; inspect swarm doctor",
+            ));
+        }
+    }
+    let before = identity(&binary)?;
+    let banner = version_banner(agent, &binary, cwd, &env)?;
+    let version = admitted_version(agent, &banner)?;
+    if !manager_version(agent, version) {
+        return Err(io::Error::other(format!(
+            "{agent} version {version:?} is missing or unqualified for manager turns"
+        )));
+    }
+    if before != identity(&binary)? {
+        return Err(io::Error::other(
+            "native manager executable changed during detection",
+        ));
+    }
+    let args = if agent == "claude" {
+        ["auth", "status"]
+    } else {
+        ["login", "status"]
+    };
+    let logged_in = probe_output(&binary, cwd, &env, &args).is_ok();
+    if before != identity(&binary)? {
+        return Err(io::Error::other(
+            "native manager executable changed during detection",
+        ));
+    }
+    Ok((format!("{agent} {version}"), logged_in))
+}
+
 pub(crate) fn claude_manager_runtime(cwd: &Path) -> io::Result<()> {
     static QUALIFIED: std::sync::Mutex<Option<(PathBuf, Value)>> = std::sync::Mutex::new(None);
     let env = crate::supervisor::runtime::launch_env(&Value::Null);

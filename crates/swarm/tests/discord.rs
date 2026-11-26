@@ -493,3 +493,50 @@ fn new_managed_connection_retains_the_historical_vm_default() {
     assert!(connector.join(".rust-vm-manager-grant-v1.json").is_file());
     assert_eq!(json_output(place.run(&["status"]))["project_access"], "vm");
 }
+
+#[test]
+fn doctor_confirms_native_manager_login_only_for_the_selected_executable() {
+    let fixture = Place::new("manager-doctor");
+    let connector = fixture.installed();
+    fs::remove_file(fixture.0.join("token")).unwrap();
+    let bin = fixture.0.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let executable = bin.join("codex");
+    fs::write(&executable, b"#!/bin/sh\ncase \"$*\" in\n--version) echo 'codex-cli 0.170.0';;\n'login status') echo private-fixture-details; echo checked >> \"$HOME/login-probes\";;\n*) exit 1;;\nesac\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let check = || {
+        let output = Command::new(support::executable())
+            .args(["discord", "doctor", "--state-dir"])
+            .arg(&connector)
+            .env_clear()
+            .env("PATH", &bin)
+            .env("HOME", &fixture.0)
+            .env("SWARM_DAEMON_STATE", &fixture.0)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1)); // The deliberately absent bot credential.
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(!text.contains("private-fixture-details"));
+        serde_json::from_str::<Vec<Value>>(&text).unwrap()
+    };
+    let rows = check();
+    assert!(
+        rows.iter()
+            .any(|r| r["check"] == "native manager CLI" && r["detail"] == "codex 0.170.0")
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r["check"] == "native provider login" && r["status"] == "ok")
+    );
+    fixture.private("daemon.env", b"PATH=/no-provider-here\n");
+    let rows = check();
+    assert!(
+        rows.iter()
+            .any(|r| r["check"] == "native manager CLI" && r["status"] == "fail")
+    );
+    assert!(!rows.iter().any(|r| r["check"] == "native provider login"));
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("login-probes")).unwrap(),
+        "checked\n"
+    );
+}

@@ -75,21 +75,8 @@ impl Prepared {
         self.mailbox = scope;
     }
     pub(super) fn bind_manager(&mut self, mut scope: Value) -> io::Result<()> {
-        let version: Vec<_> = self
-            .provider
-            .version
-            .split('.')
-            .map(str::parse::<u32>)
-            .collect::<Result<_, _>>()
-            .map_err(|_| io::Error::other("unqualified manager provider version"))?;
-        let release = (
-            version[0],
-            version.get(1).copied().unwrap_or(0),
-            version.get(2).copied().unwrap_or(0),
-        );
-        let claude = self.provider.agent == "claude"
-            && providers::claude_input::qualified(&self.provider.version);
-        if !claude && (self.provider.agent != "codex" || release < (0, 167, 0)) {
+        let claude = self.provider.agent == "claude";
+        if !providers::manager_version(self.provider.agent, &self.provider.version) {
             return Err(io::Error::other(
                 "manager requires a qualified native-turn runtime",
             ));
