@@ -118,7 +118,9 @@ The isolated Linux `--native-publication-compare` witness runs the staging comma
 
 Pinned Go may retry a plain `sending` or `uncertain` Discord post within its nonce window. The witness reopens Go with the authentic echo and verifies that delivery then makes no further POST. A live Rust sender would need compatible recovery authority to guarantee that rollback does not retransmit after an ambiguous effect.
 
-All seven modes passed together on native Linux x86_64 at `d9577d2f`, with the signed v0.29.26 supervisor and installed Codex. The combined log SHA-256 is `ccaa3752dd6f80629783974097d82bb86f13a68a0f14e16f3ef393dbcf3f5e82`.
+All seven initial modes passed together on native Linux x86_64 at `d9577d2f`, with the signed v0.29.26 supervisor and installed Codex. The initial log SHA-256 is `ccaa3752dd6f80629783974097d82bb86f13a68a0f14e16f3ef393dbcf3f5e82`.
+
+The joined `e531937e` Linux run passed all 12 guild modes and the worker-file rollback. The signed v0.29.26 executable and Codex 0.170.0 ran in fresh private network and process namespaces. The log SHA-256 is `50d8051b8e6904594d77edef1e147afcfd2c264abbab1d9bb1bd8e142c5009fe`. The joined default suites passed 282 on Darwin arm64 and 281 on Linux x86_64 with 26 guarded tests. Log SHA-256 values are `bc37b597a3a164c598164e6efdf3d1e17bb0651c57a31086489917d72752e4e7` and `ba6853f12156503c73713f42ca6b294d2dfe2e13fd8119555725939e9d545054`. Darwin strict Clippy log SHA-256 is `da16a5b754662a6c92751472b551e376422af160491549c4cee7e728cc56204c`.
 
 ### Recovery after an attempted directed reply or worker attachment
 
