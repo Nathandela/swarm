@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 asset = Path(sys.argv[1]).resolve(strict=True)
-scratch = Path(tempfile.gettempdir()).resolve()
-assert asset.is_relative_to(scratch) and asset.name == "tui.mjs", asset
+scratch = (Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve())
+assert asset.name == "tui.mjs" and any(asset.is_relative_to(root) for root in scratch), asset
 source = asset.read_text()
 emit = "  function emit(event) {\n    observeReply(event)\n"
 assert source.count(emit) == 1
