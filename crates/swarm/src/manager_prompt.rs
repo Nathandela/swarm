@@ -10,7 +10,7 @@ const NAME: &str = "starting-prompt";
 const LIMIT: usize = 1024;
 const HEADER: &str = "Current owner settings (supersede earlier settings)\n";
 const INPUT: &str = "\n\nCurrent input\n";
-const VM: &str = "Send messages to this discussion through publish. Use swarm dispatcher-guide before delegating. Use swarm spawn to delegate work in the VM, and inspect the exact worker with swarm peek. Ask workers to use swarm teammate for needs-input and completion notes.\n\n";
+const VM: &str = "Send messages to this discussion through publish. Use swarm dispatcher-guide before delegating. Use swarm spawn to delegate work in the VM, and inspect the exact worker with swarm peek. Ask workers to use swarm teammate for needs-input and completion notes. If an existing session has no mailbox for this discussion, inspect it with swarm peek and explain that automatic updates are unavailable. Never tell workers to send text directly to this dispatcher session.\n\n";
 
 pub(crate) fn input_budget(prompt: &str) -> usize {
     if prompt.is_empty() {
@@ -174,6 +174,8 @@ mod tests {
         let input = "x".repeat(provider_input_budget("claude", prompt, true));
         let rendered = render_dispatch(prompt, &input, true).unwrap();
         assert!(rendered.starts_with("Send messages to this discussion through publish."));
+        assert!(rendered.contains("no mailbox for this discussion"));
+        assert!(rendered.contains("Never tell workers to send text directly to this dispatcher session."));
         assert_eq!(
             rendered.len() + crate::providers::codex_proof::claude::ENVELOPE_OVERHEAD,
             4096
