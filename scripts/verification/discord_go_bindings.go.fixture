@@ -82,6 +82,21 @@ func (s *Store) FixturePendingPersonal(d TeammateDiscussion, owner, id string) (
 	return origin, s.teammateCandidateChange(d.InstallationID, pending[0], StateSending, "", admission)
 }
 
+// FixtureSettleAdmittedParent applies the ordinary connector cutover transition
+// after the original Runtime reported durable native source custody.
+func (s *Store) FixtureSettleAdmittedParent(d TeammateDiscussion, messageID string) error {
+	pending, _, err := s.teammatePendingSnapshot(d.InstallationID)
+	if err != nil {
+		return err
+	}
+	for _, row := range pending {
+		if row.Route.MessageID == messageID && row.Admission != nil && row.Admission.Discussion.ID == d.ID {
+			return s.teammateCandidateChange(d.InstallationID, row, StateSent, "", nil)
+		}
+	}
+	return fmt.Errorf("prepared parent admission is missing")
+}
+
 func (s *Store) FixturePersonalGap(installation string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return teammateCheckpointUpdate(tx, installation, "synthetic-reconnected-gateway", 2, true, "")

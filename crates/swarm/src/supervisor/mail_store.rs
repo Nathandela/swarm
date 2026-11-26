@@ -295,20 +295,26 @@ pub(crate) fn pending(
     Ok(result)
 }
 
-/// Pin the exact proved selection while the Discord outcome remains outstanding.
-pub(crate) fn pin_publication(
-    root: &Path,
-    source: &Value,
-    nonce: &str,
-) -> io::Result<Vec<Captured>> {
+pub(crate) fn read_publication_files(root: &Path, source: &Value) -> io::Result<Vec<Captured>> {
     let binding = &source["binding"];
     let id = source["id"].as_str().ok_or_else(absent)?;
     let key = key(binding, id)?;
-    let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
-    let mut tx = db.begin_rw().map_err(io_error)?;
+    let path = open_path(root, false)?;
+    let (_pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
+    let tx = db.begin().map_err(io_error)?;
+    publication_files(&tx, &key, binding, id, &source["files"])
+}
+
+fn publication_files<'a>(
+    tx: &impl TxApi<'a>,
+    key: &[u8],
+    binding: &Value,
+    id: &str,
+    requested: &Value,
+) -> io::Result<Vec<Captured>> {
     let note: Value = serde_json::from_slice(
         tx.bucket(b"notes")
-            .and_then(|notes| notes.get(&key).map(<[u8]>::to_vec))
+            .and_then(|notes| notes.get(key).map(<[u8]>::to_vec))
             .as_deref()
             .ok_or_else(absent)?,
     )?;
@@ -321,24 +327,13 @@ pub(crate) fn pin_publication(
     {
         return Err(absent());
     }
-    let selected: Vec<Descriptor> = serde_json::from_value(source["files"].clone())?;
+    let selected: Vec<Descriptor> = serde_json::from_value(requested.clone())?;
     if selected.is_empty() || selected.len() > super::mail_files::MAX_FILES {
         return Err(io_error("invalid publication file selection"));
     }
-    let all_files = descriptors(&tx, &key)?;
-    let mut root_bucket = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
-    let mut bucket = root_bucket.bucket_mut(&key).ok_or_else(absent)?;
-    let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
-    let selection: Vec<_> = selected.iter().map(|file| file.id.clone()).collect();
-    if !manifest["Pins"][nonce].is_null() && manifest["Pins"][nonce] != json!(selection) {
-        return Err(io_error("conflicting publication pin"));
-    }
-    if manifest["Pins"]
-        .as_object()
-        .is_some_and(|pins| pins.len() >= 128 && !pins.contains_key(nonce))
-    {
-        return Err(io_error("worker file publication pin limit"));
-    }
+    let all_files = descriptors(tx, key)?;
+    let files_root = tx.bucket(b"note-files").ok_or_else(absent)?;
+    let bucket = files_root.bucket(key).ok_or_else(absent)?;
     let mut total = 0usize;
     let mut files = Vec::with_capacity(selected.len());
     for file in selected {
@@ -363,6 +358,34 @@ pub(crate) fn pin_publication(
             file,
             data: data.to_vec(),
         });
+    }
+    Ok(files)
+}
+
+/// Pin the exact proved selection while the Discord outcome remains outstanding.
+pub(crate) fn pin_publication(
+    root: &Path,
+    source: &Value,
+    nonce: &str,
+) -> io::Result<Vec<Captured>> {
+    let binding = &source["binding"];
+    let id = source["id"].as_str().ok_or_else(absent)?;
+    let key = key(binding, id)?;
+    let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
+    let mut tx = db.begin_rw().map_err(io_error)?;
+    let files = publication_files(&tx, &key, binding, id, &source["files"])?;
+    let mut root_bucket = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
+    let mut bucket = root_bucket.bucket_mut(&key).ok_or_else(absent)?;
+    let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
+    let selection: Vec<_> = files.iter().map(|file| file.file.id.clone()).collect();
+    if !manifest["Pins"][nonce].is_null() && manifest["Pins"][nonce] != json!(selection) {
+        return Err(io_error("conflicting publication pin"));
+    }
+    if manifest["Pins"]
+        .as_object()
+        .is_some_and(|pins| pins.len() >= 128 && !pins.contains_key(nonce))
+    {
+        return Err(io_error("worker file publication pin limit"));
     }
     manifest["Pins"][nonce] = json!(selection);
     bucket

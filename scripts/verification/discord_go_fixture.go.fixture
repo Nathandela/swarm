@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,12 @@ func main() {
 			_, err = workermail.Submit(dir, binding, "fixture-note", "complete", "Fixture file", true, files...)
 			check(err)
 		}
+		return
+	}
+	if action == "vm-read-admitted-wake" {
+		data, err := voice.FixtureAdmittedFileWake(dir, os.Args[3])
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(data))
 		return
 	}
 	if action == "project-access" {
@@ -184,6 +191,66 @@ func main() {
 		binding, err := manager.FixtureActivate(ctx, row)
 		check(err)
 		check(json.NewEncoder(os.Stdout).Encode(binding))
+	case "vm-controller-run":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		if cfg.ProjectAccess != discord.ProjectAccessVM {
+			panic("expected original Go VM enrollment")
+		}
+		origin, err := store.FixturePendingPersonal(row, cfg.OwnerID, os.Args[4])
+		check(err)
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		defer cancel()
+		root := cfg.Supervisor.StateDir
+		manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(root), root, cfg)
+		check(err)
+		defer manager.Close()
+		source := os.Args[4]
+		reader := func(_ context.Context, q discord.TeammateHistoryQuery) (discord.TeammateHistoryPage, error) {
+			switch q.Source {
+			case "audience", "thread":
+				return discord.TeammateHistoryPage{}, nil
+			case "admission", "grant", "expected_reply":
+				if q.AdmissionID == origin.RequestID && q.Revision == origin.Revision &&
+					q.MessageID == source && q.AuthorID == cfg.OwnerID {
+					return discord.TeammateHistoryPage{}, nil
+				}
+			}
+			return discord.TeammateHistoryPage{}, discord.ErrTeammateSourceChanged
+		}
+		route := row.Route
+		route.MessageID = source
+		admission := discord.TeammateAdmission{
+			Discussion: row, OperationID: origin.RequestID, Revision: origin.Revision,
+			Text: "offline original owner prompt", Route: route,
+			Author:    discord.Actor{ID: cfg.OwnerID, Name: origin.ActorName},
+			InvokerID: cfg.OwnerID, Authority: discord.AuthorityOwnerDirect,
+		}
+		check(manager.Admit(ctx, admission, reader))
+		settledParent := false
+		for ctx.Err() == nil {
+			if _, err := os.Stat(os.Args[5]); err == nil {
+				return
+			}
+			err = manager.Sync(ctx, row, reader, func(output discord.TeammatePublication) error {
+				return fmt.Errorf("unexpected original Go publication before rollover: %s", output.ID)
+			})
+			if err != nil && !errors.Is(err, voice.ErrControllerJournalResync) {
+				check(err)
+			}
+			if !settledParent {
+				phase, err := manager.AdmissionState(ctx, admission)
+				check(err)
+				if phase == discord.TeammateAdmissionCutover {
+					check(store.FixtureSettleAdmittedParent(row, source))
+					settledParent = true
+				}
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+		check(ctx.Err())
 	case "publication-queue", "publication-read", "publication-phases", "publication-payload", "publication-damage":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

@@ -6,6 +6,7 @@ pub(super) mod prepare;
 pub(super) mod publication;
 pub(super) mod service;
 pub(super) mod source_attachment;
+mod wake;
 
 use super::{
     config::{Config, Place, open_owner_file, snowflake},
@@ -1317,6 +1318,53 @@ mod tests {
             before,
             [fs::read(&connector).unwrap(), fs::read(&voice).unwrap()]
         );
+    }
+
+    #[test]
+    fn retained_original_go_admitted_file_wake_is_read_only() {
+        let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT") else {
+            return;
+        };
+        use super::super::{Request, execute};
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let files = [
+            place.dir.join("discord.db"),
+            place.supervisor_root().join("dispatcher-mail.db"),
+            fs::read_dir(place.dir.join("discussions"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path()
+                .join("voice.db"),
+        ];
+        let snapshot = || {
+            files
+                .iter()
+                .map(fs::read)
+                .collect::<io::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let before = snapshot();
+        let args = [
+            "migrate-state".to_owned(),
+            "--inspect-personal-vm".to_owned(),
+        ];
+        assert!(execute(&Request::parse(&args).unwrap()).unwrap());
+        assert!(!activation::selected(&place).unwrap());
+        assert_eq!(snapshot(), before);
+
+        let cfg = place.load().unwrap();
+        let project = Path::new(cfg.text("work_dir"));
+        let moved = project.with_extension("moved");
+        let other = project.with_extension("substitute");
+        runtime::private_dir(&other).unwrap();
+        fs::rename(project, &moved).unwrap();
+        std::os::unix::fs::symlink(&other, project).unwrap();
+        assert!(execute(&Request::parse(&args).unwrap()).is_err());
+        fs::remove_file(project).unwrap();
+        fs::rename(moved, project).unwrap();
+        assert_eq!(snapshot(), before);
     }
 
     #[test]
