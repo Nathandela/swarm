@@ -232,6 +232,9 @@ fn board(path: &Path) -> io::Result<()> {
                     form.note_paint(approval);
                 }
             }
+            if let Some(Modal::Automation(view)) = &mut board.modal {
+                view.note_archive_paint(geometry);
+            }
             painted = true;
         }
         needs_paint = false;
@@ -328,9 +331,14 @@ fn board(path: &Path) -> io::Result<()> {
             {
                 continue;
             }
-            let action_geometry = if matches!(&board.modal, Some(Modal::Handoff(_)))
-                && matches!(key, Key::Enter | Key::Text('y'))
-            {
+            let needs_current_size = match (&board.modal, &key) {
+                (Some(Modal::Handoff(_)), Key::Enter | Key::Text('y')) => true,
+                (Some(Modal::Automation(view)), Key::Text('y') | Key::Mouse(_)) => {
+                    view.archive_pending()
+                }
+                _ => false,
+            };
+            let action_geometry = if needs_current_size {
                 term::size()
             } else {
                 geometry

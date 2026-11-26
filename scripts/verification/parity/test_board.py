@@ -307,14 +307,25 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
             schedule_db = root / "state/schedules/state.db"
             before_archive = schedule_db.read_bytes()
-            step(b"x", b"Archive Revised from board?")
+            step(b"xy", b"Archive Revised from board?")
+            assert schedule_db.read_bytes() == before_archive
             step(b"\r", b"Archive Revised from board?")
             assert schedule_db.read_bytes() == before_archive
             step(b"\x1b[27u", b"Status")
             assert schedule_db.read_bytes() == before_archive
             step(b"x", b"Archive Revised from board?")
             assert schedule_db.read_bytes() == before_archive
+            before_resize = len(board.capture)
+            board.resize(24, 4)
+            board.send(b"y")
+            board.wait_bytes(b"[esc] [y]", before_resize)
+            step(b"\x1b[<0;8;4M\x1b[<0;8;4m", b"[esc] [y]")
+            assert schedule_db.read_bytes() == before_archive
+            before_resize = len(board.capture)
+            board.resize(40, 8)
+            board.wait_bytes(b"[esc] [y]", before_resize)
             step(b"y", b"Status")
+            board.resize(80, 24)
             assert shown(created_id)["state"] == "archived"
             assert shown(job)["state"] == "active"
             assert {run["id"] for run in history_for(created_id)} == ids

@@ -15,12 +15,18 @@ pub(super) struct Automation {
     selected: usize,
     job: String,
     draft: Option<Draft>,
-    archive: Option<Change>,
+    archive: Option<ArchivePrompt>,
     enable_confirmation: bool,
     enabling: Option<mpsc::Receiver<io::Result<Option<Records>>>>,
     run: Option<Occurrence>,
     manual: Option<RunState>,
     press: Option<(Mouse, (u16, u16), PointerTarget)>,
+}
+
+struct ArchivePrompt {
+    name: String,
+    change: Change,
+    painted: Option<(u16, u16)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -126,6 +132,16 @@ impl Automation {
                 self.manual = None;
                 self.error = format!("Run status unconfirmed · {error}");
             }
+        }
+    }
+
+    pub(super) fn archive_pending(&self) -> bool {
+        self.archive.is_some()
+    }
+
+    pub(super) fn note_archive_paint(&mut self, geometry: (u16, u16)) {
+        if let Some(archive) = &mut self.archive {
+            archive.painted = Some(geometry);
         }
     }
 
@@ -427,11 +443,15 @@ impl Automation {
             }
             return Action::None;
         }
-        if let Some(change) = self.archive.take() {
-            if key == Key::Text('y') && geometry.0 >= 32 && geometry.1 >= 8 {
-                return Action::ChangeAutomation(change);
+        if let Some(archive) = self.archive.take() {
+            if key == Key::Text('y')
+                && archive.painted == Some(geometry)
+                && geometry.0 >= 32
+                && geometry.1 >= 8
+            {
+                return Action::ChangeAutomation(archive.change);
             }
-            self.archive = Some(change);
+            self.archive = Some(archive);
             return Action::None;
         }
         match (&self.records, key) {
@@ -464,7 +484,11 @@ impl Automation {
                     value,
                 };
                 if key == Key::Text('x') {
-                    self.archive = Some(change);
+                    self.archive = Some(ArchivePrompt {
+                        name: job.name().to_owned(),
+                        change,
+                        painted: None,
+                    });
                     Action::None
                 } else if geometry.0 >= 32 && geometry.1 >= 8 {
                     Action::ChangeAutomation(change)
@@ -578,10 +602,8 @@ impl Automation {
             self.footer(output, cols, rows);
             return;
         }
-        if self.archive.is_some()
-            && let Some(Records::Get(job)) = &self.records
-        {
-            let name = job.name().replace('\n', " ");
+        if let Some(archive) = &self.archive {
+            let name = archive.name.replace('\n', " ");
             let title = truncation(&format!("Archive {name}?"), cols);
             line(output, 1, cols, ACCENT, &title);
             let explanation = truncation(
