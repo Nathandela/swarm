@@ -147,8 +147,31 @@ def refused_bridge_tool(go, env, socket_path, auth_file, conversation, local):
             assert child.returncode == 0, child.stderr.read()
 
 
+def tool_pages(value):
+    if isinstance(value, str):
+        try:
+            return tool_pages(json.loads(value))
+        except ValueError:
+            return []
+    if isinstance(value, dict):
+        if "HighWater" in value and "Messages" in value:
+            return [value]
+        value = list(value.values())
+    return [page for item in value for page in tool_pages(item)] if isinstance(value, list) else []
+
+
+def manager_request(sock, credential, body):
+    with socket.socket(socket.AF_UNIX) as peer:
+        peer.settimeout(5)
+        peer.connect(str(sock))
+        peer.sendall((f"POST /manager/call HTTP/1.0\r\nHost: voice\r\nAuthorization: Bearer {credential}\r\n"
+                      f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body)
+        with peer.makefile("rb") as response:
+            return json.loads(response.read().split(b"\r\n\r\n", 1)[1])
+
+
 def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False,
-            prepare_native=False, native_bridge=False):
+            prepare_native=False, native_bridge=False, native_history=None):
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
@@ -170,13 +193,28 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
             env[name] = str(outer)
     model_started = Event()
     release_model = Event()
+    release_continuation = Event()
+    tool_output = []
     def hold_model(items):
+        if native_history and len(calls) == 2:
+            tool_output.extend(item for item in items if item.get("type") == "function_call_output")
+            assert release_continuation.wait(timeout=25), "fixture never released the native continuation"
+            return "Read the retained history."
         if TEXT not in json.dumps(items):
             raise AssertionError("the native request did not contain the captured guild prompt")
         model_started.set()
         assert release_model.wait(timeout=35), "fixture never released the original model request"
         return "Native loopback reply."
-    source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None)
+    def request_history(body):
+        if len(calls) != 1:
+            return None
+        names = [(tool.get("name"), child.get("name"))
+                 for tool in body.get("tools", []) for child in tool.get("tools", [])
+                 if child.get("name") == "swarm_discussion_history"]
+        namespace, name = names[0]
+        return namespace, name, {}
+    source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None,
+                                 fixture_tool=request_history if native_history else None)
     rest, permissions, wait_for_capture, posts = serve_discord(queue_only)
     go_port = str(rest.server_port)
     place = base / "connector"
@@ -294,6 +332,93 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     child.terminate()
                     child.wait(timeout=8)
                 output.join(timeout=3)
+
+    def running_history(start, voice):
+        connector = place / "discord.db"
+        expected = json.loads(invoke("guild-advance", place, go_port, "history"))
+        exact_voice, exact_connector = voice.read_bytes(), connector.read_bytes()
+        sock = Path(start["bridge_socket"])
+        auth = Path(start["auth_file"])
+        if native_history == "allow":
+            with sock.with_name("controller.lock").open("rb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                invoke("guild-mismatch-nonce", voice.parent, "701")
+            try:
+                inconsistent = voice.read_bytes()
+                rust("history-refuse")
+                assert voice.read_bytes() == inconsistent and connector.read_bytes() == exact_connector
+            finally:
+                voice.write_bytes(exact_voice)
+            print("PASS a different Go-readable Voice nonce was refused unchanged", flush=True)
+        phase = "history-watch" if native_history == "allow" else f"history-watch-{native_history}"
+        with subprocess.Popen([rust_test, *rust_args], env=rust_env(phase), text=True,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            lines, reader = lines_from(child.stdout)
+            log = []
+            def marker(phrase):
+                while True:
+                    line = lines.get(timeout=10)
+                    log.append(line)
+                    if phrase in line:
+                        return
+            try:
+                marker("Serving one history page")
+                if native_history == "allow":
+                    binding = start["binding"]
+                    request = json.dumps(dict(version=1, conversation_id=binding["conversation_id"],
+                        session_id=binding["session"].split("/", 1)[1],
+                        call=dict(name="swarm_discussion_history", arguments={}, meta={})), separators=(",", ":")).encode()
+                    refused = {"error":"unconfirmed"}
+                    assert manager_request(sock, "0" * 64, request) == refused
+                    assert manager_request(sock, auth.read_text(), request.replace(b'"version":1', b'"version":1,"version":1')) == refused
+                    assert manager_request(sock, auth.read_text(), request.replace(b"swarm_discussion_history", b"publish")) == refused
+                release_model.set()
+                source = rest.messages["701"]
+                original = source.copy()
+                original_auth = None
+                if native_history != "allow":
+                    marker("holding supervisor-proven history call")
+                    if native_history == "edit":
+                        source["content"] = "Changed before Rust released the authorized page."
+                        source["edited_timestamp"] = "2024-09-22T10:00:00Z"
+                    elif native_history == "stop":
+                        stop_connector(place)
+                    else:
+                        original_auth = auth.with_name("bridge.auth.fixture-original")
+                        auth.rename(original_auth)
+                        auth.write_bytes(original_auth.read_bytes())
+                        auth.chmod(0o600)
+                    child.stdin.write("continue\n")
+                    child.stdin.flush()
+                await_value(lambda: tool_output)
+                if native_history == "allow":
+                    pages = tool_pages(tool_output)
+                    assert pages == [expected], tool_output
+                    actual = base / "state/rust-guild-history-call"
+                    assert manager_request(sock, auth.read_text(), actual.read_bytes()) == refused
+                    print("PASS malformed JSON, invalid bearer, write tool and exact native call replay disclosed no page", flush=True)
+                else:
+                    assert "manager action is unconfirmed" in json.dumps(tool_output), tool_output
+                    assert not tool_pages(tool_output), tool_output
+                    source.clear()
+                    source.update(original)
+                    if original_auth is not None:
+                        original_auth.replace(auth)
+                assert calls and len(calls) == 2 and posts == []
+                assert voice.read_bytes() == exact_voice and connector.read_bytes() == exact_connector
+                if native_history != "stop":
+                    stop_connector(place)
+                assert child.wait(timeout=10) == 0 and not Path(start["bridge_socket"]).exists()
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=8)
+                reader.join(timeout=3)
+                if child.returncode != 0:
+                    print("".join(log), end="", file=sys.stderr)
+                while not lines.empty():
+                    print(lines.get_nowait(), end="", file=sys.stderr)
+        print(f"PASS real restricted Codex history ({native_history}) with both Go stores unchanged", flush=True)
     try:
         invoke("create", place, base / "state", "teammate", "true", base / "work")
         invoke("bind-thread", place, "original-room", "401", "399")
@@ -623,6 +748,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         finally:
                             connector.write_bytes(actual)
                         print("PASS stale sending connector cannot renew the executing Go native tuple", flush=True)
+                    if native_history:
+                        running_history(start, voice)
                 invoke("guild-advance", place, go_port, "advance")
                 assert pending() == []
                 row = native(voice)
@@ -630,7 +757,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 assert row["origin"]["revision"] == REV and row["origin"]["request_id"] == OP
                 assert len(row["native_input_id"]) == 64 and row["request"]["manager_admission"]["nonce"] == row["native_input_id"]
                 assert row["request"]["session"] == session and row["request"]["session_instance"] == instance
-                await_value(lambda: len(calls) == 1)
+                expected_requests = 2 if native_history else 1
+                await_value(lambda: len(calls) == expected_requests)
                 native_proof = await_value(lambda: native_input(row["native_input_id"]))
                 if interrupt:
                     keys = ("sequence", "source_id", "operation_id", "native_input_id", "request")
@@ -643,12 +771,13 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 invoke("guild-record", place, "original-room", "701", "201", "fixture external")
                 assert pending() == []
                 invoke("guild-advance", place, go_port, "advance")
-                assert native(voice) == row and len(calls) == 1 and posts == []
+                assert native(voice) == row and len(calls) == expected_requests and posts == []
                 assert runtime()["binding"] == start["binding"] and voice.with_name("bridge.auth").read_bytes() == credential
                 if interrupt:
                     release_model.set()
+                    release_continuation.set()
                     completed = await_value(lambda: native_input(row["native_input_id"], "completed"))
-                    assert completed["native_turn_id"] == before["native_turn_id"] and len(calls) == 1 and posts == []
+                    assert completed["native_turn_id"] == before["native_turn_id"] and len(calls) == expected_requests and posts == []
                     print("PASS Go recovered the exact executing operation after SIGKILL at the withheld native acknowledgment", flush=True)
                 if prepare_native:
                     assert request_bytes == invoke("guild-native-request", voice.parent, "701")
@@ -665,6 +794,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         owner(env, {"op": "kill", "session_id": original["id"]})
     finally:
         release_model.set()
+        release_continuation.set()
         rest.shutdown()
         rest.server_close()
         source.shutdown()
@@ -686,12 +816,17 @@ if __name__ == "__main__":
             second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True)
         assert first == second, (first, second)
         print("PASS Rust and Go matched the authenticated starter/history prompt byte-for-byte and omitted reply wait", flush=True)
-    elif len(sys.argv) == 6 and sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody"):
+    elif len(sys.argv) == 6 and (sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody")
+                                 or sys.argv[5].startswith("--native-history")):
+        history = {"--native-history":"allow", "--native-history-edit":"edit", "--native-history-stop":"stop",
+                   "--native-history-credential":"credential"}.get(sys.argv[5])
+        assert history or sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody")
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             first = witness(Path(root).resolve(), *sys.argv[1:4], queue_only=True, prepare_native=True)
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True,
-                             native_bridge=sys.argv[5] == "--native-bridge-custody")
+                             native_bridge=sys.argv[5] == "--native-bridge-custody",
+                             native_history=history)
         assert first == second, (first, second)
         print("PASS exact native request rendering and one Go-owned rollback send", flush=True)
     else:

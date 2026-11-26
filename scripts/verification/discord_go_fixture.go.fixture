@@ -165,7 +165,11 @@ func main() {
 		return
 	}
 	if action == "guild-malform-timestamp" {
-		check(voice.FixtureMalformedGuildTimestamp(dir, os.Args[3], os.Args[4]))
+		check(voice.FixtureDamageGuildNative(dir, os.Args[3], os.Args[4]))
+		return
+	}
+	if action == "guild-mismatch-nonce" {
+		check(voice.FixtureDamageGuildNative(dir, os.Args[3], "nonce"))
 		return
 	}
 	if action == "guild-native" || action == "guild-native-request" {

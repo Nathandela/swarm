@@ -106,13 +106,25 @@ fn native_proof(
     )?;
     cfg.check_supervisor(&owner, &caps)?;
     let request = &receipt.admission["request"];
+    prove_live_call(&mut owner, request, "publish", args, meta, retained_vm(cfg))
+        .map(|(_, turn)| turn)
+}
+
+pub(in crate::discord) fn prove_live_call(
+    owner: &mut crate::ipc::Client,
+    request: &Value,
+    tool: &str,
+    args: &Value,
+    meta: &Value,
+    vm: bool,
+) -> io::Result<(Value, String)> {
     let admission = &request["manager_admission"];
     let coordinate = provenance::coordinates(&admission["binding"], meta)?;
     let mut args = args.clone();
     args.sort_all_objects();
     let answer = owner.request_body(json!({
         "op":"manager_resolve_call","session_id":request["session"],"body_version":1,
-        "manager_call":{"binding":admission["binding"],"tool_name":"publish","arguments_hash":digest(&args)?,"host_meta":meta}
+        "manager_call":{"binding":admission["binding"],"tool_name":tool,"arguments_hash":digest(&args)?,"host_meta":meta}
     }),"manager_resolve_call")?;
     let proof = &answer["manager_call_proof"];
     let turn = field(proof, "native_turn_id");
@@ -134,8 +146,10 @@ fn native_proof(
         "manager_runtime",
     )?;
     let native = &runtime["manager_runtime"];
-    if native["binding"] != admission["binding"]
-        || !native_cli_matches(&native["native_cli"], retained_vm(cfg))
+    if runtime["endpoint_id"] != owner.endpoint()
+        || runtime["session_id"] != request["session"]
+        || native["binding"] != admission["binding"]
+        || !native_cli_matches(&native["native_cli"], vm)
         || native["turn"]["native_input_id"] != admission["nonce"]
         || native["turn"]["native_turn_id"] != turn
         || native["turn"]["state"] != "running"
@@ -144,7 +158,7 @@ fn native_proof(
     {
         return Err(invalid());
     }
-    Ok(turn.to_owned())
+    Ok((native.clone(), turn.to_owned()))
 }
 
 struct Speech<'a> {

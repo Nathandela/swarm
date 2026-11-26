@@ -13,6 +13,7 @@ import (
 	"github.com/Nathandela/swarm/internal/voice"
 
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -409,6 +410,19 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 	}
 	c := pending[0]
 	switch phase {
+	case "history":
+		if c.State != teammateStateAccepted || c.Admission == nil {
+			return ErrConflict
+		}
+		connector.cursorKey, err = s.teammateCursorKey()
+		if err != nil {
+			return err
+		}
+		page, err := connector.history(c.Admission.Discussion, c.Route.MessageID)(ctx, TeammateHistoryQuery{})
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(page)
 	case "stage":
 		if c.State != StatePrepared {
 			return ErrConflict

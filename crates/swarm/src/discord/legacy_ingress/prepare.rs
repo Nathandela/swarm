@@ -171,6 +171,20 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
     endpoint: &str,
     origin: Option<(&Value, bool)>,
 ) -> io::Result<Voice> {
+    let phases = origin.map(|(origin, prepared)| {
+        let phases: &[&str] = if prepared { &["", "prepared"] } else { &[""] };
+        (origin, phases)
+    });
+    read_voice_with_admission(tx, id, cfg, endpoint, phases)
+}
+
+fn read_voice_with_admission<'tx>(
+    tx: &impl TxApi<'tx>,
+    id: &str,
+    cfg: &Config,
+    endpoint: &str,
+    origin: Option<(&Value, &[&str])>,
+) -> io::Result<Voice> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let raw = root.get(b"state").ok_or_else(invalid)?;
     if raw.len() > 4096
@@ -219,7 +233,7 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
             return Err(invalid());
         }
         if key.starts_with(b"admissions\0")
-            && let Some((origin, allow_prepared)) = origin
+            && let Some((origin, phases)) = origin
             && value["origin"]["request_id"] == origin["request_id"]
         {
             let sequence = value["sequence"]
@@ -231,7 +245,10 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
                 || value["origin"] != *origin
                 || value["conversation_id"] != conversation
                 || key != admission_key(&conversation, sequence)?.as_slice()
-                || !(value["phase"].is_null() || allow_prepared && value["phase"] == "prepared")
+                || !(value["phase"].is_null() && phases.contains(&"")
+                    || value["phase"]
+                        .as_str()
+                        .is_some_and(|phase| !phase.is_empty() && phases.contains(&phase)))
                 || value["settled_at"] != "0001-01-01T00:00:00Z"
             {
                 return Err(invalid());
@@ -344,6 +361,42 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
         admissions,
         queued,
     })
+}
+
+pub(in crate::discord) fn read_executing_guild<'tx>(
+    tx: &impl TxApi<'tx>,
+    id: &str,
+    cfg: &Config,
+    endpoint: &str,
+    origin: &Value,
+) -> io::Result<Voice> {
+    read_voice_with_admission(tx, id, cfg, endpoint, Some((origin, &["executing"])))
+}
+
+pub(in crate::discord) fn executing_guild_admission(
+    mut voice: Voice,
+    cfg: &Config,
+    origin: &Value,
+    human: &str,
+    prompt: &str,
+    project: &str,
+    settings: &str,
+) -> io::Result<Value> {
+    let running = voice.queued.as_mut().ok_or_else(invalid)?;
+    if running["phase"] != "executing" || running["source_cutover"] != true {
+        return Err(invalid());
+    }
+    let original = running.clone();
+    // Go changes only these fields when it commits an already-prepared native request.
+    running["phase"] = json!("prepared");
+    running
+        .as_object_mut()
+        .ok_or_else(invalid)?
+        .remove("source_cutover");
+    if !guild_native_ready(&voice, cfg, origin, human, prompt, project, settings)? {
+        return Err(invalid());
+    }
+    Ok(original)
 }
 
 fn admission_key(conversation: &str, sequence: u64) -> io::Result<Vec<u8>> {

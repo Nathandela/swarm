@@ -79,6 +79,11 @@ impl Custody {
         Ok(())
     }
 
+    pub(in crate::discord) fn matches_runtime(&self, runtime: &Value) -> bool {
+        runtime["bridge_socket"].as_str().map(Path::new) == Some(self.socket.as_path())
+            && runtime["auth_file"].as_str().map(Path::new) == Some(self.auth_path.as_path())
+    }
+
     #[cfg(test)]
     pub(in crate::discord) fn duplicate_lock_for_test(&self) -> io::Result<fs::File> {
         self.lock.0.try_clone()
@@ -146,9 +151,25 @@ pub(in crate::discord) struct ToolSocket<'a> {
 }
 
 impl ToolSocket<'_> {
+    fn verify_path(&self) -> io::Result<()> {
+        self.custody.verify_files()?;
+        let metadata = fs::symlink_metadata(&self.custody.socket)?;
+        if identity(&metadata) != self.identity || !owner_socket(&metadata) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
     pub(in crate::discord) fn accept(
         &self,
         handle: impl FnOnce(&[u8]) -> io::Result<Value>,
+    ) -> io::Result<Option<String>> {
+        self.accept_guarded(|raw| Ok((handle(raw)?, ())))
+    }
+
+    pub(in crate::discord) fn accept_guarded<G>(
+        &self,
+        handle: impl FnOnce(&[u8]) -> io::Result<(Value, G)>,
     ) -> io::Result<Option<String>> {
         let mut connection = match self.listener.accept() {
             Ok((connection, _)) => connection,
@@ -156,20 +177,18 @@ impl ToolSocket<'_> {
             Err(error) => return Err(error),
         };
         let result = read_tool_bytes(&connection, &self.custody.credential).and_then(|raw| {
-            self.custody.verify_files()?;
-            let metadata = fs::symlink_metadata(&self.custody.socket)?;
-            if identity(&metadata) != self.identity || !owner_socket(&metadata) {
-                return Err(invalid());
-            }
-            handle(&raw)
+            self.verify_path()?;
+            let response = handle(&raw)?;
+            self.verify_path()?;
+            Ok(response)
         });
         let output = result
             .as_ref()
             .ok()
-            .map(|value| field(value, "id").to_owned());
-        let reply = match result {
-            Ok(value) => json!({"data":value}),
-            Err(_) => json!({"error":"unconfirmed"}),
+            .map(|(value, _)| field(value, "id").to_owned());
+        let (reply, _guard) = match result {
+            Ok((value, guard)) => (json!({"data":value}), Some(guard)),
+            Err(_) => (json!({"error":"unconfirmed"}), None),
         };
         let bytes = serde_json::to_vec(&reply)?;
         connection.set_write_timeout(Some(Duration::from_secs(2)))?;

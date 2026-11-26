@@ -2,6 +2,7 @@
 mod admit;
 mod capture;
 mod gap;
+mod history;
 mod prepare;
 mod render;
 use super::{
@@ -163,9 +164,8 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     let (pin, db) = open_bolt(&source, 64 << 20)?;
     let (route, guard, pending, binding, native_preparation) = {
         let tx = db.begin().map_err(io::Error::other)?;
-        let needs_capture_scope = !matches!(mode, Mode::Observe);
         let (pending, native_preparation) = match mode {
-            Mode::Observe => (None, false),
+            Mode::Observe => (history::accepted(&tx, cfg)?, false),
             Mode::Admit { message, .. } => (Some(admit::pending(&tx, cfg, message)?), false),
             Mode::Prepare { message, .. } => match capture::pending(&tx, cfg) {
                 Ok(pending) => (pending, false),
@@ -176,16 +176,18 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
             },
             Mode::Capture => (capture::pending(&tx, cfg)?, false),
         };
-        let (route, guard) = read_scope(&tx, cfg, pending.as_ref())?;
-        if changing {
+        let history_service = matches!(mode, Mode::Observe) && pending.is_some();
+        let (route, guard) = read_scope_for_history(&tx, cfg, pending.as_ref(), history_service)?;
+        if changing || history_service {
             prepare::verify_ledger(&tx, cfg, &route, &guard)?;
         }
-        let binding = needs_capture_scope
+        let binding = (!matches!(mode, Mode::Observe) || history_service)
             .then(|| capture::binding(&tx, cfg, &route, &guard, pending.as_ref()))
             .transpose()?;
         (route, guard, pending, binding, native_preparation)
     };
     let connector_state = match mode {
+        Mode::Observe if pending.is_some() => "retained_teammate_history",
         Mode::Observe => "retained_teammate_read_only",
         Mode::Capture => "retained_teammate_capture_once",
         Mode::Prepare { .. } => "retained_teammate_preparing",
@@ -201,6 +203,27 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         Ok(())
     };
     api.verify_app(cfg)?;
+    if matches!(mode, Mode::Observe)
+        && let (Some(pending), Some(binding)) = (&pending, &binding)
+    {
+        prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
+        let bound = prepare::ready_discussion(binding)?;
+        return history::serve(place, cfg, binding, &status, || {
+            let tx = db.begin().map_err(io::Error::other)?;
+            if history::accepted(&tx, cfg)?.as_ref() != Some(pending)
+                || capture::binding(&tx, cfg, &route, &guard, Some(pending))? != *binding
+            {
+                return Err(invalid("original teammate source binding changed"));
+            }
+            history::verify_record(&tx, cfg, pending, &bound)?;
+            let input = render::current(api, cfg, &route, &guard, pending, &bound)?;
+            verify_pins()?;
+            if status.stopping() {
+                return Err(invalid("original teammate place stopped"));
+            }
+            Ok(input)
+        });
+    }
     if let Mode::Prepare {
         message, dry_run, ..
     } = mode
@@ -370,6 +393,15 @@ fn read_scope<'tx>(
     cfg: &Config,
     pending: Option<&capture::Pending>,
 ) -> io::Result<(Route, Guard)> {
+    read_scope_for_history(tx, cfg, pending, false)
+}
+
+fn read_scope_for_history<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    pending: Option<&capture::Pending>,
+    history: bool,
+) -> io::Result<(Route, Guard)> {
     let mut inventory = legacy_state::inventory(cfg);
     legacy_state::scan(
         tx,
@@ -395,6 +427,7 @@ fn read_scope<'tx>(
         cfg.text("daemon_socket"),
         u64::from(pending.is_some()),
         settled_gap,
+        history,
     )?;
     Ok((route, guard))
 }
@@ -572,6 +605,27 @@ pub(super) fn native_prepare_witness() {
         .unwrap();
     let api = Discord::loopback_fixture(&cfg, port).unwrap();
     match phase.as_str() {
+        "history-watch"
+        | "history-watch-edit"
+        | "history-watch-stop"
+        | "history-watch-credential"
+        | "history-refuse" => {
+            let result = observe(
+                &place,
+                &cfg,
+                &api,
+                Mode::Observe,
+                RECHECK_INTERVAL,
+                |_| -> io::Result<fn() -> io::Result<Option<Value>>> {
+                    panic!("the running history witness cannot open Gateway")
+                },
+            );
+            if phase == "history-refuse" {
+                assert!(result.is_err())
+            } else {
+                result.unwrap()
+            }
+        }
         "gap-refuse" => {
             assert!(
                 observe(
@@ -793,18 +847,35 @@ pub(super) fn native_prepare_witness() {
 }
 
 #[cfg(test)]
+fn history_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let Ok(phase) = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE") else {
+        return Ok(());
+    };
+    if !phase.starts_with("history-watch") {
+        return Ok(());
+    }
+    isolated_guild_fixture(place, cfg)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(place.supervisor_root().join("rust-guild-history-call"))?
+        .write_all(raw)?;
+    if phase != "history-watch" {
+        wait_at_test_boundary("holding supervisor-proven history call")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 thread_local! {
     static BRIDGE_LOCK_DUPLICATE: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
-fn hold_prepared_bridge<'a>(
-    place: &Place,
-    cfg: &Config,
-    manager: &prepare::Manager,
-    guard_commit: impl FnOnce() -> io::Result<std::sync::MutexGuard<'a, ()>>,
-) -> io::Result<()> {
-    use std::{io::Write, os::unix::fs::MetadataExt};
+fn isolated_guild_fixture(place: &Place, cfg: &Config) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
     let outer = std::env::var("SWARM_NATIVE_FIXTURE_HOST_NETNS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -821,6 +892,18 @@ fn hold_prepared_bridge<'a>(
     {
         return Err(invalid("unqualified native bridge fixture"));
     }
+    Ok(())
+}
+
+#[cfg(test)]
+fn hold_prepared_bridge<'a>(
+    place: &Place,
+    cfg: &Config,
+    manager: &prepare::Manager,
+    guard_commit: impl FnOnce() -> io::Result<std::sync::MutexGuard<'a, ()>>,
+) -> io::Result<()> {
+    use std::io::Write;
+    isolated_guild_fixture(place, cfg)?;
     let session = manager.binding["session_id"]
         .as_str()
         .and_then(|id| id.split_once('/'))

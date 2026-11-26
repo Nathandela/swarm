@@ -17,6 +17,7 @@ pub(super) struct Input {
     pub(super) text: String,
     pub(super) prompt: String,
     pub(super) project: String,
+    pub(super) history_page: Value,
     project_identity: (u64, u64),
 }
 
@@ -143,9 +144,13 @@ pub(super) fn current(
     {
         return Err(unavailable());
     }
-    evidence(route, &source)?;
+    let (_, invoking) = evidence(route, &source)?;
     verify_revision(route, guard, prior)?;
-    let mut rows = [evidence(route, &opening)?, evidence(route, prior)?];
+    let root = evidence(route, &opening)?;
+    let previous = evidence(route, prior)?;
+    let history_page = json!({"Messages":[previous.1, invoking], "Cursor":"", "HighWater":message,
+        "LowWater":guard.route.message_id, "Notice":"", "Starter":root.1, "ReplyChain":null});
+    let mut rows = [root, previous];
     if rows
         .iter()
         .any(|(_, row)| row["author"]["id"] == cfg.text("application_id"))
@@ -169,6 +174,7 @@ pub(super) fn current(
         origin,
         text: text.into(),
         project: project.into(),
+        history_page,
         project_identity,
         prompt: format!(
             "{DISCUSSION_INSTRUCTIONS}Earlier Discord messages for context (JSON) {history}\nEvidence source thread, latest message {message}. The history tool can retrieve remaining pages.\n{body}"

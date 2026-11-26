@@ -350,7 +350,7 @@ fn inspect(
     let effects = scan(&tx, &mut report, end, controls, None, false)?;
     if controls
         && let Err(error) =
-            super::legacy_discussions::verify(&tx, &cfg, cfg.text("daemon_socket"), 0, false)
+            super::legacy_discussions::verify(&tx, &cfg, cfg.text("daemon_socket"), 0, false, false)
     {
         report.issues.push(error.to_string());
     }
@@ -556,7 +556,7 @@ pub(super) fn audience(
         None,
         false,
     )?;
-    super::legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"), 0, false)?;
+    super::legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"), 0, false, false)?;
     if !report.issues.is_empty() || anchor["effects_sha256"] != digest || !unchanged(&pin, &path)? {
         return Err(io::Error::other("original connector effects changed"));
     }

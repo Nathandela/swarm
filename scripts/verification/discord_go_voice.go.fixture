@@ -560,7 +560,7 @@ func FixtureGuildNativeAdmission(dir, message string) (Admission, error) {
 	return out, err
 }
 
-func FixtureMalformedGuildTimestamp(dir, message, prefix string) error {
+func FixtureDamageGuildNative(dir, message, change string) error {
 	canonical, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return err
@@ -573,7 +573,7 @@ func FixtureMalformedGuildTimestamp(dir, message, prefix string) error {
 	}
 	if canonical != dir || filepath.Base(connector) != "connector" ||
 		filepath.Dir(fixture) != tmp || !strings.HasPrefix(filepath.Base(fixture), "gp-") ||
-		message != "701" || (prefix != "0" && prefix != "+") {
+		message != "701" || (change != "0" && change != "+" && change != "nonce") {
 		return ErrInvalid
 	}
 	store, err := OpenStore(dir)
@@ -586,11 +586,30 @@ func FixtureMalformedGuildTimestamp(dir, message, prefix string) error {
 			if row.ConversationID != st.CurrentConversation || row.Origin == nil || row.Origin.MessageID != message {
 				continue
 			}
+			if change == "nonce" {
+				var request protocol.ComposerSendReq
+				if row.Origin.InstallationID != "fixture-teammate" || row.Phase != "executing" || !row.SourceCutover ||
+					json.Unmarshal(row.Request, &request) != nil || request.ManagerAdmission == nil {
+					return ErrInvalid
+				}
+				nonce := strings.Repeat("a", 64)
+				if row.NativeInputID == nonce {
+					nonce = strings.Repeat("b", 64)
+				}
+				request.ManagerAdmission.Nonce = nonce
+				updated, err := json.Marshal(request)
+				if err != nil {
+					return err
+				}
+				row.NativeInputID, row.Request = nonce, updated
+				putRecord(st, "admissions", &st.Admissions, key, row)
+				return nil
+			}
 			if row.Origin.InstallationID != "fixture-teammate" || row.Phase != "prepared" || row.SourceCutover ||
 				!protocol.SemanticOperationReplayable(row.OperationID, time.Now()) {
 				return ErrInvalid
 			}
-			row.OperationID = strings.Replace(row.OperationID, "semantic:", "semantic:"+prefix, 1)
+			row.OperationID = strings.Replace(row.OperationID, "semantic:", "semantic:"+change, 1)
 			if protocol.SemanticOperationReplayable(row.OperationID, time.Now()) {
 				return ErrConflict
 			}
