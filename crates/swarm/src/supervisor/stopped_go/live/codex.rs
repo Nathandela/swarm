@@ -1,14 +1,16 @@
 use super::{Process, read_at};
 use crate::{ipc::field, providers::codex_receipt::canonical_thread, supervisor::runtime};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
-    fs::File,
+    fs::{self, File},
     io,
     os::unix::{
+        ffi::OsStrExt,
         fs::{FileTypeExt, MetadataExt},
         net::UnixStream,
     },
-    path::Path,
+    path::{Path, PathBuf},
     time::Instant,
 };
 use tungstenite::{Message, WebSocket, client::client_with_config, protocol::WebSocketConfig};
@@ -40,15 +42,20 @@ pub(super) fn verify_thread(dir: &Path, backend: &Process, meta: &Value) -> io::
     if !canonical_thread(thread_id) {
         return Err(io::Error::other("Go Codex conversation is unproved"));
     }
-    let path = dir.join("codex.sock");
-    let socket = path.symlink_metadata()?;
-    // The stock native listener can grant group/other read permission. Its
-    // containing directory is already validated as private and physical.
-    if !socket.file_type().is_socket() || socket.uid() != dir.metadata()?.uid() {
-        return Err(io::Error::other("unproven Go Codex backend socket"));
-    }
+    let endpoint = dir.join("codex.sock");
+    let uid = dir.metadata()?.uid();
+    let version = field(&meta["cli_identity"], "version");
+    let (path, socket) = socket_target(&endpoint, uid, version)?;
     backend.matches()?;
-    let stream = UnixStream::connect(path)?;
+    let stream = UnixStream::connect(&path)?;
+    let (confirmed_path, confirmed_socket) = socket_target(&endpoint, uid, version)?;
+    if confirmed_path != path
+        || (confirmed_socket.dev(), confirmed_socket.ino()) != (socket.dev(), socket.ino())
+    {
+        return Err(io::Error::other(
+            "Go Codex backend socket changed during verification",
+        ));
+    }
     stream.set_read_timeout(Some(runtime::IO_TIMEOUT))?;
     stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
     if runtime::peer_pid(&stream)? != backend.pid {
@@ -94,6 +101,39 @@ pub(super) fn verify_thread(dir: &Path, backend: &Process, meta: &Value) -> io::
         return Err(io::Error::other("Go Codex conversation checkout disagrees"));
     }
     backend.matches()
+}
+
+fn socket_target(endpoint: &Path, uid: u32, version: &str) -> io::Result<(PathBuf, fs::Metadata)> {
+    let invalid = || io::Error::other("unproven Go Codex backend socket");
+    let original = endpoint.symlink_metadata()?;
+    if original.uid() != uid {
+        return Err(invalid());
+    }
+    if original.file_type().is_socket() {
+        // The stock direct listener is already inside the validated private session directory.
+        return Ok((endpoint.to_owned(), original));
+    }
+    if !original.is_symlink() || version != "0.172.0" {
+        return Err(invalid());
+    }
+    // Codex 0.172.0 hashes the exact requested pathname and puts a mode-0600
+    // listener into its per-UID private directory. Never connect via a mutable alias.
+    let root = PathBuf::from(format!("/tmp/codex-daemon-{uid}"));
+    let name = format!("{:x}", Sha256::digest(endpoint.as_os_str().as_bytes()));
+    let expected = root.join(name);
+    let directory = root.symlink_metadata()?;
+    if fs::read_link(endpoint)? != expected
+        || !directory.is_dir()
+        || directory.uid() != uid
+        || directory.mode() & 0o777 != 0o700
+    {
+        return Err(invalid());
+    }
+    let socket = expected.symlink_metadata()?;
+    if !socket.file_type().is_socket() || socket.uid() != uid || socket.mode() & 0o777 != 0o600 {
+        return Err(invalid());
+    }
+    Ok((expected, socket))
 }
 
 fn send(wire: &mut WebSocket<UnixStream>, request: Value) -> io::Result<()> {

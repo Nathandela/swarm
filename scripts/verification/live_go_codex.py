@@ -15,13 +15,13 @@ from parity_codex import model_fixture
 from stopped_go_state import await_value, daemon, disk, fixture_env, listed, owner, refused
 
 
-def rehearse(go, rust, root):
+def rehearse(go, rust, root, version):
     root = root.resolve()
     tools, home, state, work = (root / name for name in ("bin", "home", "state", "work"))
     assert (tools / "codex").is_file(), "stage the qualified native executable before running"
     for directory in (home, state, work, home / ".codex"):
         directory.mkdir(mode=0o700)
-    assert subprocess.check_output([tools / "codex", "--version"], env={"HOME":str(home)}).strip() == b"codex-cli 0.151.0"
+    assert subprocess.check_output([tools / "codex", "--version"], env={"HOME":str(home)}).strip() == f"codex-cli {version}".encode()
     prompts = {
         "Go owner warmup": "The original Go turn succeeded.",
         "Rust owner continued the thread": "The Rust bridge turn succeeded.",
@@ -90,6 +90,19 @@ def rehearse(go, rust, root):
             thread = until(lambda: disk(session / "meta.json").get("conversation_id"), "Go bound conversation")
             identity = identities()
             print("initial Go owner recorded thread and three native process identities", flush=True)
+        if version == "0.172.0":
+            alias = session / "codex.sock"
+            target = alias.readlink()
+            alias.unlink()
+            try:
+                alias.symlink_to(target.with_name("f" * 64))
+                refused(rust, rust_env, "unproven Go Codex backend socket")
+                assert observed_prompts == ["Go owner warmup"], observed_prompts
+            finally:
+                alias.unlink()
+                alias.symlink_to(target)
+            assert identities() == identity
+
         metadata = session / "meta.json"
         saved = metadata.read_bytes()
         forged = json.loads(saved)
@@ -133,5 +146,7 @@ def rehearse(go, rust, root):
 if __name__ == "__main__":
     assert sys.platform == "linux", "run in an isolated Linux process and network namespace"
     os.umask(0o077)
-    go, rust, root = (Path(value).resolve() for value in sys.argv[1:])
-    rehearse(go, rust, root)
+    go, rust, root = (Path(value).resolve() for value in sys.argv[1:4])
+    version = sys.argv[4] if len(sys.argv) == 5 else "0.151.0"
+    assert version in ("0.151.0", "0.172.0"), version
+    rehearse(go, rust, root, version)
