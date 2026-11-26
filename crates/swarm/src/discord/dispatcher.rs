@@ -765,7 +765,13 @@ impl Dispatcher {
             Err(err) => return Err(err),
         };
         let body = serde_json::to_vec(&reply)?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        if stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .is_err()
+        {
+            // A departed MCP caller cannot withdraw a persisted tool operation.
+            return Ok(());
+        }
         let _ = write!(
             stream,
             "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -817,7 +823,16 @@ impl Dispatcher {
             return self.owner.enrolled_worker(&session, action, false);
         }
         if tool == "swarm_read" {
-            return self.owner.enrolled_read(&session, call);
+            let mut result = self.owner.enrolled_read(&session, call)?;
+            let anchor = result
+                .as_object_mut()
+                .and_then(|result| result.remove("source_anchor"))
+                .ok_or_else(|| invalid("worker read lacks the original task source"))?;
+            enrolled_source(cfg, inbox, api, &anchor)?;
+            if anchor["composer"]["origin"] != input["composer"]["origin"] {
+                enrolled_source(cfg, inbox, api, input)?;
+            }
+            return Ok(result);
         }
         if !input["worker_wake"].is_null() {
             return Err(invalid(
@@ -842,7 +857,9 @@ impl Dispatcher {
         }
         let mut native_call = call.clone();
         native_call["arguments"] = args.clone();
-        let action = json!({"key":key,"operation_id":operation("launch")?,"arguments":args,"call":native_call});
+        let action = json!({"key":key,"operation_id":operation("launch")?,"arguments":args,
+            "call":native_call,"source_anchor":{"source_id":input["source_id"],
+                "composer":{"origin":input["composer"]["origin"]}}});
         super::enrolled_worker::launch(&self.scope(cfg), input, &action)?;
         state["worker_actions"][&key] = action.clone();
         state["input"]["worker_actions"][&key] = action.clone();

@@ -205,6 +205,9 @@ impl Session {
             || !input["worker_wake"].is_null()
             || input["worker_actions"][field(action, "key")] != *action
             || call["arguments"] != action["arguments"]
+            || action["source_anchor"]
+                != json!({"source_id":input["source_id"],
+                "composer":{"origin":input["composer"]["origin"]}})
         {
             return Err(refuse(
                 "enrolled worker action does not match its persisted launch intent",
@@ -222,29 +225,92 @@ impl Session {
         let actions = &state["worker_actions"];
         let child = &self.mailbox;
         let budget = args["limit"].as_u64().unwrap_or(2048);
-        if self.agent != "claude"
+        let grant = actions.as_object().and_then(|actions| {
+            actions.iter().find(|(_, action)| {
+                action["operation_id"] == child["attempt"]
+                    && action["arguments"]["cwd"] == child["project"]
+                    && action["arguments"]["agent"] == self.agent
+            })
+        });
+        if !matches!(self.agent.as_str(), "claude" | "codex")
             || child["structured"] != true
             || args["session_instance"] != instance
             || child["discussion"] != state["binding"]["conversation_id"]
-            || !actions.as_object().is_some_and(|actions| {
-                actions.values().any(|action| {
-                    action["operation_id"] == child["attempt"]
-                        && action["arguments"]["cwd"] == child["project"]
-                })
+            || grant.is_none_or(|(job, _)| {
+                !field(args, "job_id").is_empty() && args["job_id"] != *job
+                    || !field(args, "attempt_id").is_empty()
+                        && args["attempt_id"] != child["attempt"]
             })
             || args.as_object().is_none_or(|args| {
                 args.iter().any(|(key, val)| match key.as_str() {
                     "session" | "session_instance" => !val.is_string(),
                     "limit" => !val.is_u64(),
-                    "source" => val != "",
+                    "source" => val != "" && val != "native",
+                    "job_id" | "attempt_id" | "native_turn_id" => !val.is_string(),
                     _ => true,
                 })
             })
-            || !(1..=2048).contains(&budget)
+            || !(1..=4096).contains(&budget)
         {
-            return Err(refuse("no exact enrolled Claude worker result grant"));
+            return Err(refuse("no exact enrolled worker result grant"));
         }
         let cwd = self.verify_effective()?;
+        let (job, action) = grant.unwrap();
+        let anchor = &action["source_anchor"];
+        if !anchor["source_id"].is_string() || !anchor["composer"]["origin"].is_object() {
+            return Err(refuse(
+                "original enrolled worker task source is unavailable",
+            ));
+        }
+        if self.agent == "codex" {
+            let profile =
+                runtime::read_json(&self.dir.join("codex-profile.json")).map_err(|error| {
+                    io::Error::other(format!("read Codex enrolled worker profile: {error}"))
+                })?;
+            let stored = &profile["profile"];
+            let current = crate::providers::codex_continuity::profile(
+                &runtime::launch_env(&Value::Null),
+                cwd,
+                &stored["options"],
+            )?;
+            if profile["token"] != self.token || *stored != current {
+                return Err(refuse("Codex enrolled worker profile changed"));
+            }
+            let thread = self.semantic_thread()?;
+            let evidence = if thread.is_empty() {
+                None
+            } else {
+                crate::providers::codex_continuity::worker_turn(
+                    Path::new(field(stored, "native_home")),
+                    cwd,
+                    &thread,
+                    field(child, "prompt_hash"),
+                    None,
+                    budget as usize,
+                )
+                .map_err(|error| io::Error::other(format!("read Codex worker rollout: {error}")))?
+            };
+            let wanted = field(args, "native_turn_id");
+            if !wanted.is_empty() && evidence.as_ref().is_none_or(|row| row["turn_id"] != wanted) {
+                return Err(refuse(
+                    "native turn is outside the enrolled worker's opening intent",
+                ));
+            }
+            if self.semantic_thread()? != thread {
+                return Err(refuse("Codex worker thread changed during the read"));
+            }
+            return Ok(
+                json!({"source":"authorized_worker_turn", "session":args["session"],
+                "session_instance":instance, "job_id":job, "attempt_id":child["attempt"],
+                "state":evidence.as_ref().map_or("pending",|row| field(row,"state")),
+                "evidence":evidence,"source_anchor":anchor}),
+            );
+        }
+        if !field(args, "native_turn_id").is_empty() {
+            return Err(refuse(
+                "Claude worker does not expose a native turn identifier",
+            ));
+        }
         let meta = runtime::read_json(&self.dir.join("session.json"))?;
         let saved = &meta["claude_profile"];
         let home = Path::new(field(saved, "home"));
@@ -277,6 +343,8 @@ impl Session {
         result["session"] = args["session"].clone();
         result["session_instance"] = json!(instance);
         result["attempt_id"] = child["attempt"].clone();
+        result["job_id"] = json!(job);
+        result["source_anchor"] = anchor.clone();
         Ok(result)
     }
 

@@ -102,7 +102,7 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                 "name":"swarm_read","description":"Read the exact qualified native worker result for the selected session incarnation.",
                 "inputSchema":{"type":"object","additionalProperties":false,"properties":{
                     "session":{"type":"string"},"session_instance":{"type":"string"},
-                    "limit":{"type":"integer","minimum":1,"maximum":2048},"source":{"type":"string"}
+                    "limit":{"type":"integer","minimum":1,"maximum":4096},"source":{"type":"string"},"job_id":{"type":"string"},"attempt_id":{"type":"string"},"native_turn_id":{"type":"string"}
                 },"required":["session","session_instance"]}
             }]}}),
             Some("tools/call") => {
@@ -207,7 +207,12 @@ fn bridge_call(socket: &Path, credential: &str, call: &Value) -> io::Result<Valu
     stream.write_all(headers.as_bytes())?;
     stream.write_all(&body)?;
     let mut output = Vec::new();
-    DeadlineReader(&stream, Instant::now() + Duration::from_secs(5))
+    let budget = if call["name"] == "swarm_create" && call["arguments"]["agent"] == "codex" {
+        crate::ipc::launch_timeout("codex") + Duration::from_secs(2)
+    } else {
+        Duration::from_secs(5)
+    };
+    DeadlineReader(&stream, Instant::now() + budget)
         .take(16_385)
         .read_to_end(&mut output)?;
     let separator = output

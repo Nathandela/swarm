@@ -370,6 +370,158 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
     Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()]}))
 }
 
+/// Reads one worker turn by its opening prompt or by an admitted native scope.
+pub(crate) fn worker_turn(
+    home: &Path,
+    cwd: &Path,
+    thread: &str,
+    prompt: &str,
+    target: Option<(&str, &str)>,
+    budget: usize,
+) -> io::Result<Option<Value>> {
+    let anchor = rollout(home, cwd, thread)?;
+    let path = Path::new(field(&anchor, "path"));
+    let file = owned(path)?;
+    let metadata = file.metadata()?;
+    if anchor["identity"] != json!([metadata.dev(), metadata.ino()]) {
+        return Err(io::Error::other("Codex worker rollout was replaced"));
+    }
+    // Keep the scan tied to the initially opened file and the observed byte window.
+    let cap = 64 << 20;
+    let mut reader = BufReader::new(file.take(metadata.len().min(cap)));
+    let evidence = scan_worker_turn(&mut reader, thread, cwd, prompt, target, budget)?;
+    if anchor != rollout(home, cwd, thread)? {
+        return Err(io::Error::other("Codex worker rollout changed"));
+    }
+    if evidence.is_none() && metadata.len() >= cap {
+        return Err(io::Error::other(
+            "Codex worker evidence exceeds the proof limit",
+        ));
+    }
+    Ok(evidence)
+}
+
+fn scan_worker_turn(
+    reader: &mut impl BufRead,
+    thread: &str,
+    cwd: &Path,
+    prompt: &str,
+    target: Option<(&str, &str)>,
+    budget: usize,
+) -> io::Result<Option<Value>> {
+    let invalid = || io::Error::other("invalid Codex worker rollout evidence");
+    let mut bytes = String::new();
+    let mut read = || -> io::Result<Option<Value>> {
+        bytes.clear();
+        (&mut *reader).take((2 << 20) + 1).read_line(&mut bytes)?;
+        if bytes.len() > 2 << 20 {
+            return Err(invalid());
+        }
+        if !bytes.ends_with('\n') {
+            return Ok(None);
+        }
+        if !super::codex_context_guard::unique_keys(&bytes) {
+            return Err(invalid());
+        }
+        Ok(Some(serde_json::from_str(&bytes)?))
+    };
+    let head = read()?.ok_or_else(invalid)?;
+    if head["type"] != "session_meta"
+        || head["payload"]["id"] != thread
+        || head["payload"]["cwd"] != json!(cwd)
+    {
+        return Err(invalid());
+    }
+    let mut active = String::new();
+    let mut matched = false;
+    while let Some(row) = read()? {
+        if row["type"] != "event_msg" {
+            continue;
+        }
+        let p = &row["payload"];
+        let id = field(p, "turn_id");
+        let kind = field(p, "type");
+        let selected = !active.is_empty() && target.is_none_or(|(turn, _)| active == turn);
+        if p.get("thread_id").is_some_and(|v| v != thread) {
+            return Err(invalid());
+        }
+        match kind {
+            "task_started" => {
+                if selected {
+                    return Ok(None);
+                }
+                if !codex_receipt::canonical_thread(id) {
+                    return Err(invalid());
+                }
+                active = id.to_owned();
+            }
+            "item_completed" | "user_message" if selected => {
+                let item = &p["item"];
+                let input_id = target.map(|(_, input)| input);
+                let input = if kind == "user_message" {
+                    let plain = ["images", "file_ids", "local_images", "audio"]
+                        .iter()
+                        .all(|key| {
+                            p[*key].is_null() || p[*key].as_array().is_some_and(Vec::is_empty)
+                        });
+                    (plain && input_id.is_none_or(|input| p["client_id"] == input))
+                        .then(|| field(p, "message"))
+                } else if item["type"] == "UserMessage" {
+                    item["content"]
+                        .as_array()
+                        .filter(|parts| parts.len() == 1)
+                        .and_then(|parts| {
+                            (id == active
+                                && !field(item, "id").is_empty()
+                                && input_id.is_none_or(|input| item["client_id"] == input)
+                                && parts[0]["type"] == "text"
+                                && (parts[0]["text_elements"].is_null()
+                                    || parts[0]["text_elements"]
+                                        .as_array()
+                                        .is_some_and(Vec::is_empty)))
+                            .then(|| field(&parts[0], "text"))
+                        })
+                } else {
+                    continue;
+                };
+                if matched
+                    || !id.is_empty() && id != active
+                    || input
+                        .is_none_or(|text| text.is_empty() || codex_receipt::hash(text) != prompt)
+                {
+                    return Ok(None);
+                }
+                matched = true;
+            }
+            "task_complete" | "turn_aborted" if selected => {
+                if id != active || !matched {
+                    return Ok(None);
+                }
+                let state = if kind == "turn_aborted" {
+                    "interrupted"
+                } else if p["error"].is_null() {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                let text = if state == "completed" {
+                    field(p, "last_agent_message").trim()
+                } else {
+                    ""
+                };
+                let mut end = text.len().min(budget.min(4096));
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                return Ok(Some(json!({"turn_id":id,"state":state,"text":&text[..end],
+                    "text_truncated":end != text.len()})));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
 pub(crate) fn initial_history(home: &Path, cwd: &Path, thread: &str) -> io::Result<Vec<Value>> {
     let anchor = rollout(home, cwd, thread)?;
     let file = owned(Path::new(field(&anchor, "path")))?;
@@ -538,5 +690,69 @@ mod tests {
         std::os::unix::fs::symlink(&saved, &file).unwrap();
         assert!(rollout(&home, &cwd, id).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod worker_turn_tests {
+    use super::*;
+
+    const FIRST: &str = "019c0000-0000-7000-8000-000000000001";
+    const SECOND: &str = "019c0000-0000-7000-8000-000000000002";
+    const THREAD: &str = "019c0000-0000-7000-8000-000000000003";
+
+    fn scan(events: &[Value], target: Option<(&str, &str)>) -> io::Result<Option<Value>> {
+        let home = Path::new("/worker");
+        let mut lines = format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":THREAD,"cwd":home}})
+        );
+        for event in events {
+            lines.push_str(&format!(
+                "{}\n",
+                json!({"type":"event_msg","payload":event})
+            ));
+        }
+        scan_worker_turn(
+            &mut lines.as_bytes(),
+            THREAD,
+            home,
+            &codex_receipt::hash("Approved prompt"),
+            target,
+            4096,
+        )
+    }
+
+    #[test]
+    fn worker_evidence_only_reads_exact_opening_or_admitted_turn() -> io::Result<()> {
+        let first = [
+            json!({"type":"task_started","turn_id":FIRST}),
+            json!({"type":"user_message","message":"Approved prompt"}),
+            json!({"type":"task_complete","turn_id":FIRST,"last_agent_message":"Approved result"}),
+        ];
+        let second = [
+            json!({"type":"task_started","turn_id":SECOND}),
+            json!({"type":"item_completed","turn_id":SECOND,"item":{"id":"candidate","type":"UserMessage",
+                    "client_id":"verified","content":[{"type":"text","text":"Approved prompt"}]}}),
+            json!({"type":"task_complete","turn_id":SECOND,"last_agent_message":"Private result"}),
+        ];
+        let both = [first.clone(), second].concat();
+        assert_eq!(scan(&both, None)?.unwrap()["text"], "Approved result");
+        assert!(scan(&both, Some((SECOND, "wrong")))?.is_none());
+        assert_eq!(
+            scan(&both, Some((SECOND, "verified")))?.unwrap()["turn_id"],
+            SECOND
+        );
+        assert!(scan(&first[..2], None)?.is_none());
+        let mut steered = first.to_vec();
+        steered.insert(
+            2,
+            json!({"type":"user_message","message":"Unrelated steering"}),
+        );
+        assert!(scan(&steered, None)?.is_none());
+        let mut unrelated = both;
+        unrelated[1]["message"] = json!("A different first prompt");
+        assert!(scan(&unrelated, None)?.is_none());
+        Ok(())
     }
 }

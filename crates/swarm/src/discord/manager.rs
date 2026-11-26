@@ -409,7 +409,10 @@ impl Manager {
         if reply["session_id"] != session
             || result["session"] != call["arguments"]["session"]
             || result["session_instance"] != call["arguments"]["session_instance"]
-            || !matches!(field(result, "state"), "pending" | "completed")
+            || !matches!(
+                field(result, "state"),
+                "pending" | "completed" | "interrupted" | "failed"
+            )
         {
             return Err(invalid("uncorrelated enrolled worker result"));
         }
@@ -461,7 +464,7 @@ impl Manager {
             }
             let worker = json!({"session":id,"session_instance":row["worker_instance"],"agent":row["agent"],
                     "name":row["name"],"cwd":row["cwd"],"group":row["group"],
-                    "tracking":{"action_id":reference["key"],"attempt_id":row["worker_attempt"]}});
+                    "tracking":{"action_id":reference["key"],"job_id":reference["key"],"attempt_id":row["worker_attempt"]}});
             let size = serde_json::to_vec(&worker)?.len() + 1;
             if workers.len() >= limit || bytes + size > 8000 {
                 next = workers
@@ -527,6 +530,8 @@ impl Manager {
         result["state"] = json!("created");
         result["session"] = child["id"].clone();
         result["session_instance"] = child["worker_instance"].clone();
+        result["job_id"] = action["key"].clone();
+        result["attempt_id"] = action["operation_id"].clone();
         Ok(result)
     }
 
