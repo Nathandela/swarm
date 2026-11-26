@@ -1,4 +1,5 @@
 mod claude_takeover;
+mod context_guard;
 mod handoff;
 pub(crate) mod mail;
 pub(crate) mod mail_files;
@@ -100,6 +101,7 @@ struct State {
     sessions: RwLock<BTreeMap<String, Arc<Session>>>,
     subscribers: Mutex<Vec<Weak<Subscriber>>>,
     pilot_journal: Option<pilot_journal::Journal>,
+    context_guard: context_guard::Store,
     launch_gate: Mutex<()>,
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
@@ -758,6 +760,7 @@ fn serve(configured: PathBuf) -> io::Result<()> {
     });
     let state = Arc::new(State {
         lock_identity: [lock_meta.dev(), lock_meta.ino()],
+        context_guard: context_guard::Store::open(&root),
         stopped_go,
         handoff_wake,
         pilot_journal,
@@ -893,6 +896,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "owner-launch"
                         | "hands-off-handoff"
                         | "claude-batch-takeover-v1"
+                        | context_guard::CAPABILITY
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"
@@ -1013,6 +1017,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         // Attach can stay open for hours. Its live lease is scoped to the socket.
         let _transaction = (op != "attach").then(|| state.transactions.read().unwrap());
         let result = match op {
+            "context_guard_get" | "context_guard_set" => reply(&writer,state,state.context_guard.request(&request,caps.contains(&context_guard::CAPABILITY))),
             "list" => reply(
                 &writer,
                 state,
@@ -1477,6 +1482,7 @@ mod manager_reservation_tests {
     fn fixture(root: &std::path::Path, rows: BTreeMap<String, Arc<Session>>) -> State {
         State {
             lock_identity: [0, 0],
+            context_guard: context_guard::Store::open(root),
             stopped_go: None,
             handoff_wake: mpsc::sync_channel(1).0,
             schedule_socket: None,
