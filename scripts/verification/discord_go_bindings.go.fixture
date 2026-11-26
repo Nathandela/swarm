@@ -374,7 +374,7 @@ func (s *Store) FixtureGuildGapReceipt(d TeammateDiscussion) ([]byte, error) {
 
 func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager TeammateManager, port, phase string, cursor ...string) error {
 	n, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || n == 0 || cfg.Mode != "teammate" {
+	if err != nil || n == 0 || cfg.Mode != "teammate" && (cfg.Mode != "personal" || !strings.HasPrefix(phase, "publication-")) {
 		return ErrInvalid
 	}
 	client, err := NewDiscordClient("synthetic-unused-credential")
@@ -528,16 +528,20 @@ func (t *teammateConnector) fixtureGuildPublication(ctx context.Context, d Teamm
 			time.Sleep(50 * time.Millisecond)
 		}
 		return ctx.Err()
-	case "publication-serve", "publication-export":
+	case "publication-serve", "publication-export", "publication-serve-directed", "publication-export-directed":
 		var emitted []string
 		staged := errors.New("fixture observed a Go-staged publication")
 		for ctx.Err() == nil {
 			err := t.manager.Sync(ctx, d, t.history(d), func(p TeammatePublication) error {
+				recipient := ""
+				if strings.HasSuffix(phase, "-directed") {
+					recipient = "201"
+				}
 				if p.AdmissionID == "" || p.JobID != "" || p.AttemptID != "" || p.SystemCause != "" ||
-					p.QuestionID != "" || p.RecipientID != "" || len(p.Files) != 0 || len(emitted) != 0 {
+					p.QuestionID != "" || p.RecipientID != recipient || len(p.Files) != 0 || len(emitted) != 0 {
 					return ErrConflict
 				}
-				if phase == "publication-serve" {
+				if strings.HasPrefix(phase, "publication-serve") {
 					return staged
 				}
 				if err := t.queuePublication(ctx, d, p); err != nil {
@@ -572,6 +576,15 @@ func (t *teammateConnector) fixtureGuildPublication(ctx context.Context, d Teamm
 			return ErrInvalid
 		}
 		return t.gateway(gatewayFrame{Type: "MESSAGE_CREATE", Data: json.RawMessage(args[0])}, "")
+	case "publication-file-outbox":
+		outputs, err := store.teammateOutputs(d.InstallationID, d.ID)
+		if err != nil {
+			return err
+		}
+		if len(outputs) != 1 || len(outputs[0].Publication.Files) != 1 || outputs[0].Publication.JobID == "" || outputs[0].Publication.AttemptID == "" {
+			return ErrConflict
+		}
+		return json.NewEncoder(os.Stdout).Encode(outputs[0])
 	case "publication-outbox", "publication-receipt", "publication-compact":
 		if len(args) != 1 || !strings.HasPrefix(args[0], "publication:") {
 			return ErrInvalid

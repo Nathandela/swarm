@@ -28,7 +28,10 @@ REV = hashlib.sha256(json.dumps(["201", TEXT, "401", "300", "701", None, "", Non
 PUBLICATION = dict(output_id="plain-guild-final", sequence=1, text="One retained reply, verified and complete.", final=True)
 
 
-def serve_discord(timestamps=False):
+DIRECTED = "<@201> " + PUBLICATION["text"]
+
+
+def serve_discord(timestamps=False, directed=False, crash=False):
     permissions = [True]
     wait_for_capture = [False]
     attempts = []
@@ -88,6 +91,7 @@ def serve_discord(timestamps=False):
             self.wfile.write(raw)
 
         def do_POST(self):
+            rest.posts_seen += 1
             if not rest.publish:
                 attempts.append(self.path)
                 self.send_error(400)
@@ -95,13 +99,17 @@ def serve_discord(timestamps=False):
             assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
             assert self.path == "/api/v10/channels/401/messages"
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            assert body["content"] == PUBLICATION["text"] and body["enforce_nonce"] is True
+            assert body["content"] == (DIRECTED if directed else PUBLICATION["text"]) and body["enforce_nonce"] is True
             assert body.get("message_reference") is None and body["allowed_mentions"]["parse"] == []
+            if directed:
+                assert body["allowed_mentions"]["users"] == ["201"]
             assert not attempts, "a second POST attempted to replay the original nonce"
             attempts.append(body)
             rest.echo = dict(id="989", type=0, guild_id="300", channel_id="401", nonce=body["nonce"],
                              author=dict(id="100", bot=True), content=body["content"], attachments=[])
             # The synthetic Discord effect has completed; its REST response is lost.
+            if crash:
+                assert rest.drop_ack.wait(20), "fixture never released withheld upload acknowledgment"
             self.close_connection = True
             self.connection.shutdown(socket.SHUT_RDWR)
 
@@ -113,6 +121,8 @@ def serve_discord(timestamps=False):
     rest.messages = messages
     rest.publish = False
     rest.echo = None
+    rest.posts_seen = 0
+    rest.drop_ack = Event()
     Thread(target=rest.serve_forever, daemon=True).start()
     return rest, permissions, wait_for_capture, attempts
 
@@ -274,11 +284,17 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         namespace, name = [(tool.get("name"), child.get("name"))
                            for tool in body.get("tools", []) for child in tool.get("tools", [])
                            if child.get("name") == "publish"][0]
-        args = PUBLICATION if native_publication != "recipient" else PUBLICATION | {"recipient_id":"202", "recipient_message_id":"701"}
+        args = PUBLICATION
+        if native_publication == "recipient":
+            args = PUBLICATION | {"recipient_id":"202", "recipient_message_id":"701"}
+        if (native_publication or "").startswith("go-directed"):
+            args = PUBLICATION | {"recipient_id":"201", "recipient_message_id":"701"}
         return namespace, name, args
     source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None,
                                  fixture_tool=request_history if native_history else request_publication if native_publication else None)
-    rest, permissions, wait_for_capture, posts = serve_discord(queue_only)
+    rest, permissions, wait_for_capture, posts = serve_discord(
+        queue_only, directed=(native_publication or "").startswith("go-directed"),
+        crash=native_publication == "go-directed-crash")
     previous_reads = []
     if paged:
         def old_message(id):
@@ -637,8 +653,11 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         advance = lambda phase, *args: invoke("guild-advance", place, go_port, f"publication-{phase}", *args)
         phase = native_publication
         assert phase is not None and calls and len(calls) == 1 and result() is None and posts == []
-        if phase == "go":
-            command = [fixture, "guild-advance", place, go_port, "publication-serve"]
+        directed = phase.startswith("go-directed")
+        crash = phase == "go-directed-crash"
+        go_owner = phase == "go" or directed
+        if go_owner:
+            command = [fixture, "guild-advance", place, go_port, "publication-serve-directed" if directed else "publication-serve"]
             process_env = env
         else:
             command = [rust_test, *rust_args]
@@ -678,7 +697,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     log.append(lines.get_nowait())
                 return any(marker in line for line in log)
             try:
-                if phase == "go":
+                if go_owner:
                     await_value(lambda: sock.exists())
                 elif phase == "observer":
                     await_value(lambda: collect("Serving original public-thread history"))
@@ -687,7 +706,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 if phase == "stage":
                     with voice.open("rb") as pin:
                         fcntl.flock(pin, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                if phase != "go":
+                if not go_owner:
                     empty = dict(version=1, conversation_id=start["binding"]["conversation_id"],
                                  session_id=start["binding"]["session"].split("/", 1)[1],
                                  call=dict(name="publish", arguments=PUBLICATION, meta={}))
@@ -697,7 +716,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     await_value(lambda: tool_output)
                     assert "manager action is unconfirmed" in json.dumps(tool_output), tool_output
                     stop_connector(place)
-                elif phase not in ("go", "stage"):
+                elif not go_owner and phase != "stage":
                     await_value(lambda: collect("holding supervisor-proven publication call"))
                     live_call = json.loads((base / "state/rust-guild-publish-call").read_bytes())["call"]
                     assert live_call["arguments"] == PUBLICATION
@@ -744,9 +763,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     while not lines.empty():
                         print(lines.get_nowait(), end="", file=sys.stderr)
         assert pending() == original_ingress and posts == []
-        if phase != "go":
+        if not go_owner:
             assert original[1] == connector.read_bytes()
-        if phase not in ("go", "stage", "after-commit"):
+        if not go_owner and phase not in ("stage", "after-commit"):
             assert original[0] == voice.read_bytes() and result() is None
             if phase != "closed":
                 await_value(lambda: tool_output)
@@ -770,30 +789,58 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         assert publication["output_sequence"] == saved["lastOutput"]
         assert json.loads(advance("outbox", expected_id)) is None
         await_value(lambda: tool_output)
-        if phase in ("go", "stage"):
+        if go_owner or phase == "stage":
             assert expected_id in json.dumps(tool_output), tool_output
         else:
             assert expected_id not in json.dumps(tool_output), tool_output
         assert len(calls) == 2 and posts == []
-        if phase != "go":
+        if not go_owner:
             frozen = voice.read_bytes(), connector.read_bytes()
             refused = subprocess.run(command, env=process_env, capture_output=True, timeout=10)
             assert refused.returncode != 0 and (voice.read_bytes(), connector.read_bytes()) == frozen
 
-        advance("export")
+        advance("export-directed" if directed else "export")
         exported = result()
         assert exported["publication"] == publication | {"exported":True}
         outbox = lambda: json.loads(advance("outbox", expected_id))
         prepared = outbox()
         nonce = hashlib.sha256(json.dumps([INSTALL, "original-room", expected_id, 0], separators=(",", ":")).encode()).hexdigest()[:24]
         assert prepared["ExportAck"] and prepared["Route"] == {"guild_id":"300", "channel_id":"401", "parent_id":"399", "message_id":""}, prepared
-        assert prepared["Chunks"] == [{"id":nonce, "body":PUBLICATION["text"], "state":"prepared"}]
+        assert prepared["Chunks"] == [{"id":nonce, "body":DIRECTED if directed else PUBLICATION["text"], "state":"prepared"}]
         assert prepared["Publication"]["AdmissionID"] == OP and prepared["Publication"]["ID"] == expected_id
         rest.publish = True
-        advance("send-lost")
+        if crash:
+            command = [fixture, "guild-advance", place, go_port, "publication-send-lost"]
+            with subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as sender:
+                fd = os.pidfd_open(sender.pid)
+                try:
+                    await_value(lambda: rest.echo is not None or sender.poll() is not None)
+                    assert rest.echo is not None and sender.poll() is None
+                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    assert sender.wait(timeout=5) == -signal.SIGKILL
+                finally:
+                    rest.drop_ack.set()
+                    if sender.poll() is None:
+                        signal.pidfd_send_signal(fd, signal.SIGTERM)
+                        sender.wait(timeout=5)
+                    os.close(fd)
+        else:
+            advance("send-lost")
         uncertain = outbox()
         assert len(posts) == 1 and posts[0]["nonce"] == nonce and rest.echo is not None
-        assert uncertain["Chunks"][0]["state"] == "uncertain" and uncertain["Chunks"][0]["id"] == nonce
+        assert uncertain["Chunks"][0]["state"] == ("sending" if crash else "uncertain")
+        assert uncertain["Chunks"][0]["id"] == nonce
+        if directed:
+            assert publication["recipient_id"] == "201"
+            assert prepared["Publication"]["RecipientID"] == "201" and not prepared["Publication"].get("JobID")
+            assert "original operation will not be repeated" in json.loads(advance("send-lost"))
+            awaiting = outbox()
+            assert awaiting["Chunks"] == [uncertain["Chunks"][0] | {"state":"uncertain"}]
+            assert awaiting["Attempted"] == uncertain["Attempted"] and rest.posts_seen == len(posts) == 1
+            assert "Check the discussion" in awaiting["Error"]
+            assert json.loads(advance("receipt", expected_id)) is None
+            uncertain = awaiting
+            print(f"PASS immediate Go reopen from {'sending' if crash else 'uncertain'} retains directed nonce and makes zero repeated POST", flush=True)
         for echo in (rest.echo | {"author":{"id":"101", "bot":True}}, rest.echo | {"channel_id":"402"},
                      rest.echo | {"content":"not the original body"}, rest.echo | {"nonce":nonce[::-1]}):
             advance("gateway", json.dumps(echo))
@@ -806,6 +853,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         advance("compact", expected_id)
         receipt = json.loads(advance("receipt", expected_id))
         assert outbox() is None and receipt["DiscordMessageIDs"] == ["989"]
+        if directed:
+            print("DIRECTED RECEIPT", json.dumps(dict(publication_id=expected_id, nonce=nonce, receipt=receipt, posts=rest.posts_seen), sort_keys=True), flush=True)
         assert receipt["BodyHash"] == prepared["BodyHash"] and receipt["Route"] == prepared["Route"]
         assert result() == exported and len(posts) == 1 and len(calls) == 2
         release_continuation.set()
@@ -821,7 +870,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         invoke("guild-advance", place, go_port, "advance")
         advance("send")
         assert result() == settled and json.loads(advance("receipt", expected_id)) == receipt
-        assert pending() == [] and len(posts) == 1 and len(calls) == 2
+        assert pending() == [] and rest.posts_seen == len(posts) == 1 and len(calls) == 2
         print(f"PASS guild publish {phase}: current original turn, one Voice receipt and one authenticated Go reply", flush=True)
         return {k: publication[k] for k in ("admission", "sequence", "speech_epoch", "output_sequence", "text_hash", "final", "speak", "discussion_source")}
 
@@ -1231,7 +1280,8 @@ if __name__ == "__main__":
         print("PASS Go and Rust staged the same scoped final publication fields", flush=True)
     elif len(sys.argv) == 6 and sys.argv[5].startswith("--native-publication-"):
         phase = sys.argv[5].removeprefix("--native-publication-")
-        assert phase in ("go", "stage", "before-commit", "after-commit", "stop", "edit", "closed", "recipient", "observer", "revoked", "credential")
+        assert phase in ("go", "go-directed", "go-directed-crash", "stage", "before-commit", "after-commit",
+                         "stop", "edit", "closed", "recipient", "observer", "revoked", "credential")
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True,
                     native_publication=phase)

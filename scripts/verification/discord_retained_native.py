@@ -95,6 +95,7 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False, c
                 self.send_error(404)
 
         def do_POST(self):
+            server.posts_seen += 1
             assert self.path == "/api/v10/channels/400/messages"
             assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
             raw = self.rfile.read(int(self.headers["Content-Length"]))
@@ -122,6 +123,8 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False, c
             nonce = body["nonce"]
             assert len(nonce) == 24 and nonce not in posts
             posts.append(nonce)
+            server.echo = dict(id=str(899 + len(posts)), type=0, channel_id="400", author=dict(id="100", bot=True),
+                               content=body["content"], nonce=nonce, attachments=attachments)
             if acknowledge:
                 self.payload(dict(id=str(899 + len(posts)), channel_id="400", author=dict(id="100"),
                                   content=body["content"], nonce=nonce, attachments=attachments))
@@ -130,6 +133,7 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False, c
                 self.connection.shutdown(socket.SHUT_RDWR)
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.posts_seen = 0
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, posts
 
@@ -523,9 +527,43 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                                 run(rust_test, rust_env | {"SWARM_TEST_DISCORD_EXPECT_WAKE_HOLD": "1"},
                                     "retained_original_go_stages_native_vm_file_call", "--nocapture")
                                 assert len(posts) == 1
-                                run(fixture, env, "vm-resume-publication", place, "original-room", "uncertain")
-                                assert json.loads(run(fixture, env, "publication-phases", place, "original-room")) == phases
-                                assert len(posts) == 1
+                                advance = lambda action, *args: run(fixture, env, "guild-advance", place, discord.server_port, f"publication-{action}", *args)
+                                original = json.loads(advance("file-outbox"))
+                                published = original["Publication"]
+                                assert published["JobID"] and published["AttemptID"] and len(published["Files"]) == 1
+                                publication_id = published["ID"]
+                                outbox = lambda: json.loads(advance("outbox", publication_id))
+                                get_receipt = lambda: json.loads(advance("receipt", publication_id))
+                                assert original["Chunks"][0]["id"] == posts[0] and original["Chunks"][0]["state"] == "uncertain"
+                                assert "original operation will not be repeated" in json.loads(advance("send-lost"))
+                                uncertain = outbox()
+                                assert uncertain["Chunks"] == original["Chunks"] and uncertain["Attempted"] == original["Attempted"]
+                                assert get_receipt() is None and discord.posts_seen == len(posts) == 1
+                                payload, = json.loads(run(fixture, env, "vm-read-staged-publication", place, "original-room", "uncertain"))
+                                assert base64.b64decode(payload) == original_bytes
+                                print("PASS immediately reopened Go file job with zero repeated POST and retained payload", flush=True)
+                                echo = discord.echo
+                                file, = echo["attachments"]
+                                for wrong in (echo | {"author":{"id":"101", "bot":True}},
+                                              echo | {"attachments":[file | {"filename":"other.csv"}]},
+                                              echo | {"attachments":[file | {"size":2}]},
+                                              echo | {"channel_id":"401"}):
+                                    advance("gateway", json.dumps(wrong))
+                                    assert outbox() == uncertain
+                                advance("gateway", json.dumps(echo))
+                                sent = outbox()
+                                assert sent["Chunks"][0]["state"] == "sent" and sent["Chunks"][0]["gateway_seen"] is True
+                                assert json.loads(run(fixture, env, "vm-read-staged-publication", place, "original-room", "sent")) is None
+                                advance("send")
+                                advance("compact", publication_id)
+                                compacted = get_receipt()
+                                assert compacted["DiscordMessageIDs"] == [echo["id"]] and compacted["DiscordAttachmentIDs"] == [file["id"]]
+                                assert compacted["BodyHash"] == original["BodyHash"] and compacted["Route"] == original["Route"]
+                                assert outbox() is None and len(posts) == 1
+                                advance("send")
+                                assert get_receipt() == compacted and discord.posts_seen == len(posts) == 1
+                                print("FILE JOB RECEIPT", json.dumps(dict(publication_id=publication_id, job=published["JobID"], attempt=published["AttemptID"],
+                                      nonce=posts[0], receipt=compacted, posts=discord.posts_seen), sort_keys=True), flush=True)
                                 return
                             states = json.loads(run(fixture,env,"publication-phases",place,"original-room"))
                             assert len(file_calls) == 3 and len(states) == 1 and states[0].startswith("sent true ")
