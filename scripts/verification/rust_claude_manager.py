@@ -36,7 +36,40 @@ class Model(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def codex_reply(self):
+        request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        assert request["model"] == "fixture"
+        self.server.codex_requests.append(request)
+        text = "Codex scoped worker fixture."
+        item = dict(type="message", id="msg_worker", role="assistant", status="completed",
+                    content=[dict(type="output_text", text=text, annotations=[])])
+        response = dict(id="resp_worker", object="response", model="fixture",
+                        created_at=int(time.time()), status="in_progress", output=[])
+        events = [
+            ("response.created", dict(response=response)),
+            ("response.output_item.added", dict(output_index=0, item=item)),
+            ("response.output_text.delta", dict(item_id=item["id"], output_index=0, content_index=0, delta=text)),
+            ("response.output_item.done", dict(output_index=0, item=item)),
+            ("response.completed", dict(response=dict(response, status="completed", output=[item],
+                usage=dict(input_tokens=10, output_tokens=7, total_tokens=17,
+                           input_tokens_details=dict(cached_tokens=0), output_tokens_details=dict(reasoning_tokens=0))))),
+        ]
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        for kind, event in events:
+            self.wfile.write(f"event: {kind}\ndata: {json.dumps(dict(event, type=kind))}\n\n".encode())
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"data":[]}')
+
     def do_POST(self):
+        if self.server.codex and self.path == "/v1/responses":
+            self.codex_reply()
+            return
         if "/messages" not in self.path:
             self.send_error(404)
             return
@@ -71,12 +104,15 @@ class Model(http.server.BaseHTTPRequestHandler):
             status = tool_result(request,"toolu_fixture_enrolled_status")
             listed = tool_result(request,"toolu_fixture_enrolled_list")
             wrong = tool_result(request,"toolu_fixture_enrolled_wrong_instance")
+            wrong_job = tool_result(request,"toolu_fixture_enrolled_wrong_job")
+            exact_turn = tool_result(request,"toolu_fixture_enrolled_exact_turn")
             attempts = [tool_result(request,f"toolu_fixture_enrolled_read_{i}") for i in range(5)]
             reads = [mcp_object(item) for item in attempts if item]
             after = tool_result(request,"toolu_fixture_enrolled_next")
             post_delete_status = tool_result(request,"toolu_fixture_deleted_status")
             post_delete_create = tool_result(request,"toolu_fixture_deleted_create")
-            arguments = dict(action_id="native-enrolled-job",agent="claude",
+            post_delete_read = tool_result(request,"toolu_fixture_deleted_read")
+            arguments = dict(action_id="native-enrolled-job",agent="codex" if self.server.codex else "claude",
                              cwd=str(self.server.approved),prompt="Wait for the synthetic structured worker fixture.")
             if not denied:
                 structured = ("swarm_create","toolu_fixture_off_project",
@@ -102,8 +138,12 @@ class Model(http.server.BaseHTTPRequestHandler):
                                  dict(action_id=mcp_object(created)["action_id"]))
                 elif not post_delete_create:
                     structured = ("swarm_create","toolu_fixture_deleted_create", arguments | dict(action_id="late-action"))
+                elif not post_delete_read:
+                    receipt = mcp_object(created)
+                    structured = ("swarm_read","toolu_fixture_deleted_read",dict(session=receipt["session"],
+                                    session_instance=receipt["session_instance"]))
                 else:
-                    for denied_result in (listed,post_delete_status,post_delete_create):
+                    for denied_result in (listed,post_delete_status,post_delete_create,post_delete_read):
                         assert "Manager request was not confirmed." in json.dumps(denied_result)
                         assert "session_instance" not in json.dumps(denied_result)
                     (self.server.release.parent/".fixture-enrolled-deleted-checked").touch()
@@ -116,16 +156,38 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert mcp_object(after)["workers"] == []
                 structured = ("swarm_read","toolu_fixture_enrolled_wrong_instance",
                     dict(session=mcp_object(created)["session"],session_instance="wrong-incarnation"))
+            elif not wrong_job and self.server.codex:
+                receipt = mcp_object(created)
+                structured = ("swarm_read","toolu_fixture_enrolled_wrong_job",
+                    dict(session=receipt["session"],session_instance=receipt["session_instance"],job_id="wrong-job"))
             elif not reads or reads[-1]["state"] == "pending":
+                if self.server.codex:
+                    assert "Manager request was not confirmed." in json.dumps(wrong_job)
                 assert "Manager request was not confirmed." in json.dumps(wrong)
                 assert len(reads) < len(attempts), "native enrolled worker never provided a scoped result"
                 receipt = mcp_object(created)
                 structured = ("swarm_read",f"toolu_fixture_enrolled_read_{len(reads)}",
-                    dict(session=receipt["session"],session_instance=receipt["session_instance"]))
+                    dict(session=receipt["session"],session_instance=receipt["session_instance"],
+                         source="native",job_id=receipt["job_id"],attempt_id=receipt["attempt_id"]))
             else:
                 assert reads[-1]["state"] == "completed"
-                assert reads[-1]["text"] == "Fixture"
-                assert reads[-1]["native_input_message_id"] and reads[-1]["native_result_message_id"]
+                if self.server.codex:
+                    scoped = reads[-1]
+                    assert scoped["source"] == "authorized_worker_turn"
+                    assert scoped["job_id"] == mcp_object(created)["action_id"]
+                    assert scoped["attempt_id"] == mcp_object(listed)["workers"][0]["tracking"]["attempt_id"]
+                    assert scoped["evidence"]["text"] == "Codex scoped worker fixture."
+                    assert re.fullmatch(r"[a-f0-9-]{36}", scoped["evidence"]["turn_id"])
+                    if not exact_turn:
+                        structured = ("swarm_read","toolu_fixture_enrolled_exact_turn",
+                            dict(session=scoped["session"],session_instance=scoped["session_instance"],
+                                 source="native",job_id=scoped["job_id"],attempt_id=scoped["attempt_id"],
+                                 native_turn_id=scoped["evidence"]["turn_id"]))
+                    else:
+                        assert mcp_object(exact_turn) == scoped
+                else:
+                    assert reads[-1]["text"] == "Fixture"
+                    assert reads[-1]["native_input_message_id"] and reads[-1]["native_result_message_id"]
         call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
         may_publish = not forwarded or self.server.forwarded == "allowed"
         if forwarded and not read_attachment:
@@ -136,7 +198,7 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert not received and "Manager request was not confirmed." in content, \
                     "the changed forwarded receipt was not refused"
             self.server.forwarded_checked.write_text("classified")
-        publish = main and not (self.server.deleted and post_delete_create) and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
+        publish = main and not (self.server.deleted and post_delete_read) and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
         tool = publish or spawn or discover or read_note or read_attachment or structured
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
@@ -283,6 +345,24 @@ def verify(swarm, provider, test, root, server):
         for directory in (server.approved, server.unapproved):
             profile["projects"][str(directory)] = dict(hasTrustDialogAccepted=True)
         save(profile_path, profile)
+        if server.codex:
+            local_codex = tools / "native-codex"
+            shutil.copyfile(server.codex, local_codex)
+            local_codex.chmod(0o700)
+            codex_wrapper = tools / "codex"
+            codex_wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(str(local_codex))
+               + ' "$@" 2>>' + shlex.quote(str(root / "codex.log")) + "\n")
+            codex_wrapper.chmod(0o700)
+            native_home = home / ".codex"
+            native_home.mkdir(mode=0o700)
+            (native_home / "config.toml").write_text(
+                'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+                'cli_auth_credentials_store="file"\n[model_providers.fixture]\nname="fixture"\nwire_api="responses"\n'
+                f'base_url="http://127.0.0.1:{server.server_port}/v1"\nrequires_openai_auth=false\nsupports_websockets=false\n'
+                f'[projects."{server.approved}"]\ntrust_level="trusted"\n'
+                '[tui]\nscreen_reader_detection_done=true\n[tui.model_availability_nux]\n"gpt-6.1-sol"=100\n')
+            (native_home / "config.toml").chmod(0o600)
+            save(native_home / "auth.json", dict(auth_mode="apikey", OPENAI_API_KEY="fixture-only"))
         access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
         if server.deleted:
@@ -323,6 +403,18 @@ def verify(swarm, provider, test, root, server):
                 assert provider_exec.is_file() == (server.project_fault == "after" or server.vm_revoked)
             expected_posts = 0 if server.forwarded == "revoked" or server.deleted or server.project_fault or server.vm_revoked else (2 if server.park else 1)
             assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
+            if server.codex:
+                assert server.codex_requests
+                opening = ("Use this approved project for the delegated task. Report verified results only.\n\n"
+                           "Wait for the synthetic structured worker fixture.")
+                authored = []
+                for path in (home / ".codex" / "sessions").rglob("*.jsonl"):
+                    for raw in path.read_text().splitlines():
+                        row = json.loads(raw)
+                        item = row.get("payload", {}).get("item", {})
+                        if row["type"] == "event_msg" and item.get("type") == "UserMessage":
+                            authored.extend(part.get("text") for part in item["content"])
+                assert authored.count(opening) == 1, "durable native opening was duplicated"
             assert not server.forwarded or server.forwarded_checked.is_file()
             assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=bool(server.seen_tools),
@@ -332,6 +424,8 @@ def verify(swarm, provider, test, root, server):
                                   project_authority_fault=server.project_fault,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
+            if server.codex and (root / "codex.log").is_file():
+                print((root / "codex.log").read_text())
             log.flush()
             log.seek(0)
             print(log.read())
@@ -380,11 +474,12 @@ if __name__ == "__main__":
     modes.add_argument("--vm-worktree", action="store_true")
     modes.add_argument("--vm-revoked", action="store_true")
     modes.add_argument("--enrolled", action="store_true")
+    modes.add_argument("--enrolled-codex", type=Path)
     modes.add_argument("--enrolled-deleted", action="store_true")
     modes.add_argument("--project-fault", choices=("before","after"))
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
+    with tempfile.TemporaryDirectory(prefix="cm-", dir="/tmp") as name, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
         server.main_requests = []
         server.seen_tools = []
@@ -392,7 +487,9 @@ if __name__ == "__main__":
         server.vm = args.vm or args.vm_worktree or args.vm_revoked
         server.vm_revoked = args.vm_revoked
         server.worktree = args.vm_worktree
-        server.enrolled = args.enrolled or args.enrolled_deleted
+        server.enrolled = bool(args.enrolled or args.enrolled_deleted or args.enrolled_codex)
+        server.codex = args.enrolled_codex
+        server.codex_requests = []
         server.deleted = args.enrolled_deleted
         server.project_fault = args.project_fault
         server.forwarded = args.forwarded
