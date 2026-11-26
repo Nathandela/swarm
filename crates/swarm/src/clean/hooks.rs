@@ -1,4 +1,5 @@
 //! Compact Go's closed hook journal only through its certified byte boundary.
+mod recovery;
 use super::{
     Item,
     files::{Directory, unsafe_target},
@@ -8,7 +9,6 @@ use rustix::fs::OFlags;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, Read};
-use std::os::unix::fs::MetadataExt;
 
 const SPOOL: &str = "hooks.spool";
 const PROOF: &str = "hooks.spool.producer";
@@ -40,7 +40,7 @@ struct Cert {
     producer: String,
     sequence: u64,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Proof {
     incarnation: String,
@@ -51,6 +51,8 @@ struct Proof {
     start: u64,
     #[serde(default)]
     closed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rust_clean_pending: Option<recovery::Pending>,
 }
 fn cut(data: &[u8], seq: u64, floor: u64) -> io::Result<usize> {
     if seq == 0 || floor > seq {
@@ -110,8 +112,7 @@ pub(super) fn clean(
                 e
             }
         })?;
-    let mut proof: Proof =
-        serde_json::from_slice(&dir.read(PROOF, 2048)?).map_err(|_| unproven())?;
+    let proof: Proof = serde_json::from_slice(&dir.read(PROOF, 2048)?).map_err(|_| unproven())?;
     if proof.incarnation != cert.incarnation
         || proof.nonce != cert.producer
         || proof.pid <= 0
@@ -159,10 +160,7 @@ pub(super) fn clean(
     }
     let identity: Incarnation =
         serde_json::from_slice(&dir.read(INCARNATION, 1024)?).map_err(|_| unproven())?;
-    if (before.dev(), before.ino()) != (proof.device, proof.inode)
-        || identity.id.trim().is_empty()
-        || identity.adopted_legacy
-        || identity.id != proof.incarnation
+    if identity.id.trim().is_empty() || identity.adopted_legacy || identity.id != proof.incarnation
     {
         return Err(unproven());
     }
@@ -179,50 +177,43 @@ pub(super) fn clean(
             "shim: hook cleanup size limit exceeded",
         ));
     }
-    let end = cut(&bytes, cert.sequence, floor)?;
+    let tx = recovery::Transaction {
+        dir,
+        original: &spool,
+        metadata: &before,
+        bytes: &bytes,
+        sequence: cert.sequence,
+        floor,
+    };
+    let published = tx.published(&proof)?;
+    let end = if published {
+        0
+    } else {
+        cut(&bytes, cert.sequence, floor)?
+    };
+    if end == 0 && !published && proof.rust_clean_pending.is_some() {
+        return Err(unproven());
+    }
     item.eligible(end as u64);
     item.after = Some((&before).into());
-    if !apply || end == 0 {
+    if !apply || end == 0 && !published {
         return Ok(());
     }
-    let old = || {
-        locks()?;
-        let current = dir.verify_file(SPOOL.as_ref(), &spool)?;
-        if current.len() != before.len()
-            || (current.ctime(), current.ctime_nsec()) != (before.ctime(), before.ctime_nsec())
-        {
-            return Err(unproven());
-        }
-        Ok(())
-    };
     let mut changed = false;
-    let result = (|| {
-        // A crash after advancing the floor leaves the original bytes recoverable.
-        dir.replace(
-            FLOOR,
-            cert.sequence.to_string().as_bytes(),
-            &mut changed,
-            old,
-        )?;
-        dir.replace(SPOOL, &bytes[end..], &mut changed, old)?;
-        let new = dir.open_file(SPOOL.as_ref(), OFlags::RDONLY)?;
-        let now = new.metadata()?;
-        proof.device = now.dev();
-        proof.inode = now.ino();
-        dir.replace(PROOF, &serde_json::to_vec(&proof)?, &mut changed, || {
-            locks()?;
-            dir.verify_file(SPOOL.as_ref(), &new)?;
-            Ok(())
-        })?;
-        item.after = Some((&dir.verify_file(SPOOL.as_ref(), &new)?).into());
-        Ok(())
-    })();
+    let result = if published {
+        tx.finish(&proof, &spool, &mut changed, &locks)
+    } else {
+        tx.compact(proof, end, &mut changed, locks)
+    };
     if changed {
         item.changed();
-        if result.is_err() {
-            item.after = None;
-        }
+        item.after = if result.is_ok() {
+            Some((&dir.open_file(SPOOL.as_ref(), OFlags::RDONLY)?.metadata()?).into())
+        } else {
+            None
+        };
     }
+
     result
 }
 #[cfg(test)]
