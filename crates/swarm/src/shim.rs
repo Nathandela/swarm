@@ -1446,7 +1446,11 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
     {
         let reply = field(payload, "last_assistant_message");
         if !reply.is_empty() && reply.len() <= 4096 {
-            capture_pilot_reply(state, reply)?;
+            capture_pilot_item(
+                &state.dir,
+                &state.token,
+                json!({"kind":"agent_message","status":"completed","text":reply}),
+            )?;
         }
     }
     observe_claude_schedule(state, &mut observed, event, payload)?;
@@ -1462,12 +1466,12 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
     runtime::write_control(stream, &json!({"type":"ok"}))
 }
 
-fn capture_pilot_reply(state: &State, text: &str) -> io::Result<()> {
-    let path = state.dir.join("pilot-replies.json");
+fn capture_pilot_item(dir: &Path, token: &str, mut item: Value) -> io::Result<()> {
+    let path = dir.join("pilot-replies.json");
     let mut record = match runtime::read_json(&path) {
-        Ok(record) if record["token"] == state.token => record,
+        Ok(record) if record["token"] == token => record,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            json!({"token":state.token,"next":1,"captures":[]})
+            json!({"token":token,"next":1,"captures":[]})
         }
         Err(err) => return Err(err),
         _ => {
@@ -1487,9 +1491,8 @@ fn capture_pilot_reply(state: &State, text: &str) -> io::Result<()> {
     if captures.len() == 16 {
         captures.remove(0);
     }
-    captures.push(
-        json!({"sequence":next,"item":{"kind":"agent_message","status":"completed","text":text}}),
-    );
+    item["item_id"] = json!(codex_receipt::hash(&format!("pilot:{token}:{next}")));
+    captures.push(json!({"sequence":next,"item":item}));
     record["next"] = json!(next + 1);
     runtime::write_json(&path, &record)
 }

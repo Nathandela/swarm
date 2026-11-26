@@ -249,6 +249,84 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
     Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()]}))
 }
 
+pub(crate) fn initial_history(home: &Path, cwd: &Path, thread: &str) -> io::Result<Vec<Value>> {
+    let anchor = rollout(home, cwd, thread)?;
+    let file = owned(Path::new(field(&anchor, "path")))?;
+    let stat = file.metadata()?;
+    if anchor["identity"] != json!([stat.dev(), stat.ino()]) || stat.len() > 4 << 20 {
+        return Err(io::Error::other(
+            "Codex opening history is outside the bounded proof",
+        ));
+    }
+    let mut output = Vec::new();
+    let mut user = None;
+    let mut assistant = None;
+    let mut turn = String::new();
+    let mut reader = BufReader::new(file.take(4 << 20));
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line)? > 0 && line.last() == Some(&b'\n') {
+        let row: Value = serde_json::from_slice(&line)?;
+        line.clear();
+        if row["type"] != "event_msg" {
+            continue;
+        }
+        let event = &row["payload"];
+        match field(event, "type") {
+            "task_started" => {
+                let next = field(event, "turn_id");
+                let root = field(event, "root_turn_id");
+                if !next.is_empty() && (root.is_empty() || root == next) {
+                    turn = next.to_owned();
+                    user = None;
+                    assistant = None;
+                }
+            }
+            "item_completed"
+                if event["thread_id"] == thread && !turn.is_empty() && event["turn_id"] == turn =>
+            {
+                let item = &event["item"];
+                let Some(parts) = item["content"].as_array() else {
+                    continue;
+                };
+                if parts.len() != 1 {
+                    continue;
+                }
+                let text = field(&parts[0], "text");
+                if text.is_empty() || text.len() > 4096 {
+                    continue;
+                }
+                match (field(item, "type"), field(&parts[0], "type")) {
+                    ("UserMessage", "text") => {
+                        user = Some(
+                            json!({"kind":"user_message","status":"completed","text":text,"turn_id":turn}),
+                        )
+                    }
+                    ("AgentMessage", "Text") => {
+                        assistant = Some(
+                            json!({"kind":"agent_message","status":"completed","text":text,"turn_id":turn}),
+                        )
+                    }
+                    _ => {}
+                }
+            }
+            "task_complete" if !turn.is_empty() && event["turn_id"] == turn => {
+                if assistant
+                    .as_ref()
+                    .is_some_and(|reply| reply["text"] == event["last_agent_message"])
+                {
+                    output.extend(user.take().into_iter().chain(assistant.take()));
+                }
+                turn.clear();
+                if output.len() >= 16 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(output)
+}
+
 pub(crate) fn newer_or_same(current: &str, saved: &str) -> bool {
     crate::providers::claude::release(current)
         .zip(crate::providers::claude::release(saved))

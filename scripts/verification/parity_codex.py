@@ -90,7 +90,7 @@ def model_fixture(root):
     return server,replies,interrupt_open
 
 
-def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False):
+def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False, history_check=False):
     model, replies, interrupt_open = model_fixture(root) if loopback else (None, [], None)
     daemon = None
     previous = {}
@@ -251,6 +251,29 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 invoke("kill", conflict)
                 invoke("watch", conflict, "--until", "completed", "--timeout", "4s")
                 print("one native turn accepted across exact retries and supervisor replacement; cross-session reuse refused")
+            if history_check:
+                def latest():
+                    page = json.loads(invoke("history", identity, "--limit", "1"))
+                    return page if page["journal"] and page["journal"][-1]["item"]["kind"]=="agent_message" else None
+                current = fixtures.wait_for(latest, "durable native history")
+                reply, = current["journal"]
+                assert not current["history_floor"] and reply["item"]["kind"]=="agent_message"
+                assert reply["item"]["text"]=="Native loopback reply."
+                older = json.loads(invoke("history", identity, "--limit", "1", "--before", reply["item"]["item_id"]))
+                user, = older["journal"]
+                assert older["history_floor"] and user["item"]["text"]=="Return the fixed local fixture response."
+                assert user["cursor"] < reply["cursor"]
+                missing = json.loads(invoke("history", identity, "--before", "forged-item"))
+                assert missing["history_floor"] and missing["journal"] == []
+                ctx = json.loads(invoke("--pilot"))["context"]
+                pilot = ("pilot", "--context", ctx)
+                seen = json.loads(invoke(*pilot,"view",identity))["worker_data"]
+                assert seen["source"]=="structured_history" and seen["history"][-1]==reply
+                watched = [json.loads(line) for line in invoke(*pilot,"watch",identity,
+                           "--after",str(user["cursor"]),"--once","--timeout","2s").splitlines()]
+                assert len(watched)==2 and watched[-1]["worker_data"]["item"]==reply["item"],watched
+                invoke(*pilot,"exit")
+                print("owner paginated the retained native turn; Pilot read and replayed the verified reply")
             if interrupt_check:
                 fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
                                   "joined native observation before interrupt")
@@ -376,7 +399,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False, history_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -398,7 +421,7 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback, resume_check, interrupt_check)
+            drive(root, native, guard, loopback, resume_check, interrupt_check, history_check)
         else:
             if resume_check:
                 system = root/"system-policy"
@@ -414,6 +437,8 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
                 command.append("--resume-check")
             if interrupt_check:
                 command.append("--interrupt-check")
+            if history_check:
+                command.append("--history-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -436,16 +461,19 @@ if __name__ == "__main__":
     parser.add_argument("--isolated-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--resume-check",action="store_true")
     parser.add_argument("--interrupt-check",action="store_true")
+    parser.add_argument("--history-check",action="store_true")
     args = parser.parse_args()
     if args.resume_check and not args.loopback_model:
         parser.error("--resume-check requires --loopback-model")
     if args.interrupt_check and (not args.loopback_model or args.resume_check):
         parser.error("--interrupt-check requires a separate --loopback-model run")
+    if args.history_check and not args.loopback_model:
+        parser.error("--history-check requires --loopback-model")
     if args.loopback_model and (not args.native or not sys.platform.startswith("linux")):
         parser.error("--loopback-model requires Linux and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check,args.history_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check,args.history_check)
     else:
         parser.error("--candidate and --provider are required")

@@ -247,6 +247,8 @@ struct Observation {
     scheduled_turn: Option<ScheduledTurn>,
     fresh_no_rollout: bool,
     requests_unverified: bool,
+    pilot_final: Option<Value>,
+    pilot_user: Option<Value>,
     idle: bool,
     ambiguous: bool,
 }
@@ -438,7 +440,99 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
     );
 }
 
+fn capture_history(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
+    if observation.ambiguous || !target.manager.is_null() || target.schedule.is_some() {
+        return;
+    }
+    let params = &message["params"];
+    if observation.thread.is_empty() || params["threadId"] != observation.thread {
+        return;
+    }
+    let item = &params["item"];
+    let text_item = |kind, text: &str| {
+        (!text.is_empty() && text.len() <= 4096).then(|| {
+            json!({
+                "kind":kind,"status":"completed","text":text,"turn_id":observation.turn,
+            })
+        })
+    };
+    let turn = field(&params["turn"], "id");
+    let root = field(&params["turn"], "rootTurnId");
+    let active = |candidate: &Value| {
+        observation
+            .turn
+            .as_deref()
+            .is_some_and(|id| candidate == id)
+    };
+    match field(message, "method") {
+        "turn/started"
+            if !turn.is_empty()
+                && observation.turn.as_deref() != Some(turn)
+                && (root.is_empty() || root == turn) =>
+        {
+            observation.pilot_final = None;
+            observation.pilot_user = None;
+        }
+        "item/completed" if active(&params["turnId"]) => match field(item, "type") {
+            "userMessage" => {
+                let Some(parts) = item["content"].as_array() else {
+                    return;
+                };
+                if parts.len() == 1 && parts[0]["type"] == "text" {
+                    observation.pilot_user = text_item("user_message", field(&parts[0], "text"));
+                }
+            }
+            "agentMessage" if item["phase"].is_null() || item["phase"] == "final_answer" => {
+                observation.pilot_final = text_item("agent_message", field(item, "text"));
+            }
+            _ => {}
+        },
+        "turn/completed" if active(&params["turn"]["id"]) => {
+            let user = observation.pilot_user.take();
+            let reply = observation
+                .pilot_final
+                .take()
+                .filter(|_| params["turn"]["status"] == "completed");
+            for item in user.into_iter().chain(reply) {
+                let _ = super::capture_pilot_item(target.dir, target.token, item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'_>) {
+    if observation.ambiguous
+        || !target.manager.is_null()
+        || target.schedule.is_some()
+        || target
+            .dir
+            .join("pilot-replies.json")
+            .symlink_metadata()
+            .is_ok()
+    {
+        return;
+    }
+    let profile = runtime::read_json(&target.dir.join("codex-profile.json"));
+    let Ok(profile) = profile else { return };
+    if profile["token"] == target.token {
+        let items = crate::providers::codex_continuity::initial_history(
+            Path::new(field(&profile["profile"], "home")),
+            target.cwd,
+            &observation.thread,
+        );
+        if let Ok(items) = items {
+            for item in items {
+                if super::capture_pilot_item(target.dir, target.token, item).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 fn observe_frame(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
+    capture_history(observation, message, target);
     if observation.apply(message, target.cwd) {
         persist_observation(observation, target);
     }
@@ -839,6 +933,7 @@ pub(super) fn observe(
                     {
                         observation.joined = true;
                         observation.missing_rollout = false;
+                        backfill_initial_history(&observation, &target);
                         observation.idle = observation.turn.is_none()
                             && field(&message["result"]["thread"]["status"], "type") == "idle";
                         persist_observation(&observation, &target);

@@ -969,9 +969,20 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer,state,json!({"op":"native_requests","session_id":id,"native_requests_result":result}))
             }),
             "interaction_history" if caps.contains(&"journal") => state.session(&request).and_then(|session| {
+                let history = &request["history"];
+                let limit = history["limit"].as_u64().filter(|limit| *limit > 0)
+                    .ok_or_else(||io::Error::other("history requires a positive page size"))?;
+                let before = field(history,"before_item");
+                if history["session"] != request["session_id"] || history["native"] == true
+                    || !history["worker"].is_null() || !field(history,"native_cursor").is_empty()
+                    || (!history["before_item"].is_null() && !history["before_item"].is_string())
+                    || before.len() > 128
+                {
+                    return Err(io::Error::other("invalid interaction history request"));
+                }
                 state.pilot_refresh(&session);
-                let result=state.journal()?.history(&session.id,request["history"]["limit"].as_u64().unwrap_or(20))?;
-                reply(&writer,state,json!({"op":"interaction_history","journal":result}))
+                let (result,floor)=state.journal()?.history(&session.id,before,limit)?;
+                reply(&writer,state,json!({"op":"interaction_history","session_id":request["session_id"],"journal":result,"history_floor":floor}))
             }),
             "journal_subscribe_from" if caps.contains(&"journal") && caps.contains(&"journal-subscribe-from") => {
                 let rows:Vec<_>=state.sessions.read().unwrap().values().cloned().collect();

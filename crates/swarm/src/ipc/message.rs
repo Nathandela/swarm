@@ -336,3 +336,42 @@ pub(super) fn interrupt(client: &mut Client, args: &[String]) -> CliResult {
         )),
     }
 }
+
+pub(super) fn history(client: &mut Client, args: &[String]) -> CliResult {
+    let Some((session, args)) = args
+        .split_first()
+        .filter(|(id, _)| !id.is_empty() && !id.starts_with('-'))
+    else {
+        return Err((
+            2,
+            "swarm history <session> [--limit <1-20>] [--before <item>]".into(),
+        ));
+    };
+    let mut limit = 20;
+    let mut before = "";
+    let extra = options(args, &["limit", "before"], &[], |name, value| {
+        if name == "before" {
+            before = value;
+        } else {
+            limit = value
+                .parse::<u64>()
+                .ok()
+                .filter(|n| (1..=20).contains(n))
+                .ok_or("history limit must be between 1 and 20")?;
+        }
+        Ok(())
+    })
+    .map_err(|err| (2, err))?;
+    if !extra.is_empty() {
+        return Err((2, "unexpected history arguments".into()));
+    }
+    let reply = client
+        .request_body(
+            json!({"op":"interaction_history","session_id":session,"history":{
+                "session":session,"before_item":before,"limit":limit,
+            }}),
+            "interaction_history",
+        )
+        .map_err(report)?;
+    json_out(&json!({"session":session,"history_floor":reply["history_floor"],"journal":reply["journal"]})).map_err(report)
+}

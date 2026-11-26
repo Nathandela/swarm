@@ -1874,7 +1874,7 @@ impl Session {
     }
 
     pub(super) fn pilot_replies(&self) -> Vec<Value> {
-        if self.agent != "claude" {
+        if self.agent != "claude" && !(self.agent == "codex" && self.owner_interactive) {
             return Vec::new();
         }
         match runtime::read_json(&self.dir.join("pilot-replies.json")) {
