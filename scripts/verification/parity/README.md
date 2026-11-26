@@ -81,6 +81,13 @@ mode differences, including animation, elapsed time and hidden cursor
 positions. The capture and action witness can pass while the comparator still
 reports rendering differences.
 
+For exact More-menu comparisons, pass `--reference-board "$PINNED_GO_SWARM"`
+with `--tmux` and `--grid-evidence`. The reference and candidate use the same
+live owner, fixture identities, and working directory. It compares every
+cell and captured terminal mode on initial display, pointer Up/Down, an
+out-of-target click, and a resize that keeps the selected action. The raw
+paired receipt keeps the actual IDs, fills, and cursor state.
+
 The `--handoff-board` witness drives the supervised form against the exact
 captured idle source, then drives the hands-off form from the same source's
 permission state. With the Go owner it writes one synthetic native transcript,

@@ -83,7 +83,7 @@ fn counts<'a>(rows: impl Iterator<Item = &'a Value>) -> (usize, usize) {
     })
 }
 
-fn status(row: &Value, compact: bool) -> &str {
+pub(super) fn status(row: &Value, compact: bool) -> &str {
     match field(row, "group") {
         "needs_input" => match field(&row["status"], "Interaction") {
             "permission" => "approval",
