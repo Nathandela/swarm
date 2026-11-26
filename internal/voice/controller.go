@@ -143,7 +143,7 @@ func (c *Controller) Tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if c.discussion != nil && status.ProviderExhausted && status.ReadyForInput && !status.Turn.ExternallySteered {
+	if c.discussion != nil && status.ProviderExhausted && !status.Turn.ExternallySteered {
 		return errDiscussionProviderExhausted
 	}
 	if err = c.store.observeController(c.binding, status.Turn.ExternalInput, status.Turn.ExternallySteered && status.Turn.State == "running"); err != nil {

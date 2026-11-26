@@ -42,7 +42,7 @@ Run `swarm dispatcher-guide` for the worker notification and reply workflow. To 
 
 Worker notifications use the discussion's mailbox. An existing ordinary session without that binding can be inspected with `swarm peek`. Attach to the dispatcher for deliberate terminal input. `swarm message` and `swarm send --text` refuse direct dispatcher input.
 
-On launch or resume, a Codex dispatcher keeps its selected model through the optional approaching-limit picker. Swarm sets this for the dispatcher invocation. A hard provider quota still follows the existing quota checks.
+On launch or resume, a Codex dispatcher keeps its selected model through the optional approaching-limit picker. Swarm sets this for the dispatcher invocation. After a verified terminal quota error, Swarm can replace the dispatcher even if Codex leaves its composer unavailable. Queued Discord messages stay with the discussion.
 
 ```sh
 skill_dir="$HOME/.agents/skills/swarm-dispatcher"

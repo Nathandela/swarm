@@ -226,7 +226,9 @@ func (d *Daemon) managerRuntimeContext(ctx context.Context, local, instance, ret
 	result.BridgeSocket = meta.ManagerBridgeSocket
 	result.AuthFile = meta.ManagerAuthFile
 	result.NativeCLI = meta.ManagerNativeCLI
-	result.ProviderExhausted = meta.ManagerQuotaTurn != "" && meta.ManagerQuotaTurn == result.Turn.NativeTurnID && result.Turn.State == "completed" && result.Turn.Reason == "error"
+	// Codex can leave a failed thread in systemError with no ready composer.
+	result.ProviderExhausted = (result.ReadyForInput || result.NativeThreadState == "systemError") &&
+		meta.ManagerQuotaTurn != "" && meta.ManagerQuotaTurn == result.Turn.NativeTurnID && result.Turn.State == "completed" && result.Turn.Reason == "error"
 	return result, nil
 }
 func (d *Daemon) checkedManagerBinding(local string, supplied managerproof.Binding) (managerproof.Status, error) {
