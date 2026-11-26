@@ -93,12 +93,25 @@ impl Board {
     }
 
     fn compare_rows(&self, left: &Value, right: &Value) -> Ordering {
-        match self.layout.order {
-            1 => field(right, "last_activity").cmp(field(left, "last_activity")),
-            2 => field(right, "created_at").cmp(field(left, "created_at")),
-            3 => name(left).to_lowercase().cmp(&name(right).to_lowercase()),
-            _ => Ordering::Equal,
-        }
+        let timestamp = |row: &Value, names: &[&str]| {
+            names
+                .iter()
+                .find_map(|name| field(row, name).parse::<jiff::Timestamp>().ok())
+        };
+        let rank = |row: &Value| super::group_rank(field(row, "group"));
+        rank(left)
+            .cmp(&rank(right))
+            .then_with(|| match self.layout.order {
+                1 => timestamp(right, &["last_activity"]).cmp(&timestamp(left, &["last_activity"])),
+                3 => name(left).to_lowercase().cmp(&name(right).to_lowercase()),
+                0 if self.layout.group == 0 => {
+                    let category = ["group_entered_at", "last_activity", "created_at"];
+                    timestamp(right, &category).cmp(&timestamp(left, &category))
+                }
+                _ => Ordering::Equal,
+            })
+            .then_with(|| timestamp(right, &["created_at"]).cmp(&timestamp(left, &["created_at"])))
+            .then_with(|| field(left, "id").cmp(field(right, "id")))
     }
 
     pub(super) fn section_title(&self, section: &str) -> String {
