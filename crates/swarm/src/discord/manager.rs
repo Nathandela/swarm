@@ -580,6 +580,10 @@ mod tests {
                 let err = manager.send(&operation, &forged).unwrap_err();
                 assert!(err.to_string().contains("exact connector cutover"));
             }
+            let wake_fixture = std::env::var_os("SWARM_NATIVE_MAIL_WAKE_FIXTURE").is_some();
+            if wake_fixture {
+                std::fs::write(root.join(".fixture-mail-wake-enabled"), "").unwrap();
+            }
             manager.send(&operation, &composer).unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
             let turn = loop {
@@ -890,6 +894,70 @@ mod tests {
                 assert_eq!(posts.len(), 1);
                 assert_eq!(posts[0].1, "go-fixture text");
                 assert_eq!(inbox.publication(&posts[0].0)["rest_acknowledged"], true);
+                drop(posts);
+                if wake_fixture {
+                    drop(dispatcher);
+                    std::fs::write(root.join(".fixture-mail-complete"), "").unwrap();
+                    let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &enrollment)
+                        .unwrap()
+                        .unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(8);
+                    let wake = loop {
+                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                        let wake = &inbox.manager()["input"];
+                        if !wake["worker_wake"].is_null() && !wake["turn_id"].is_null() {
+                            break wake.clone();
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "did not observe a mailbox wake: {}",
+                            inbox.manager()
+                        );
+                        std::thread::sleep(Duration::from_millis(30));
+                    };
+                    assert_ne!(wake["turn_id"], turn["native_turn_id"]);
+                    assert_eq!(wake["source_id"], "401");
+                    assert!(field(&wake["composer"], "text").contains("Finished"));
+                    for _ in 0..3 {
+                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                        assert_eq!(inbox.manager()["input"], wake);
+                    }
+                    let mut wake_host = host.clone();
+                    wake_host["callId"] = json!("fixture-wake-read");
+                    wake_host["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
+                    let mut proxy = Command::new(binary)
+                        .arg("manager-mcp")
+                        .arg(&bridge_socket)
+                        .arg(&auth)
+                        .arg(field(&native["binding"], "conversation_id"))
+                        .arg(local)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .spawn()
+                        .unwrap();
+                    writeln!(
+                        proxy.stdin.take().unwrap(),
+                        "{}",
+                        json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                        "params":{"name":"swarm_read_note","arguments":{},"_meta":wake_host}})
+                    )
+                    .unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while proxy.try_wait().unwrap().is_none() {
+                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                        assert!(Instant::now() < deadline, "wake note tool timed out");
+                        std::thread::sleep(Duration::from_millis(15));
+                    }
+                    let response = proxy.wait_with_output().unwrap();
+                    let result: Value = serde_json::from_slice(&response.stdout).unwrap();
+                    assert!(result["result"]["isError"].is_null(), "{result}");
+                    let selected: Value =
+                        serde_json::from_str(field(&result["result"]["content"][0], "text"))
+                            .unwrap();
+                    assert_eq!(selected["id"], wake["worker_wake"]["id"]);
+                    assert_eq!(selected["state"], "ingested");
+                    assert_eq!(fake.posts.borrow().len(), 1);
+                }
             }
             let mut stale = host;
             stale["x-codex-turn-metadata"]["turn_id"] = json!("old-turn");

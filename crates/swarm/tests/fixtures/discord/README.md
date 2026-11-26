@@ -65,3 +65,7 @@ Run `go_reads_the_exact_rust_pinned_worker_files -- --ignored` with the oracle
 above to verify the original immutable bytes through Go's scoped file reader
 after Rust reads the note and the checkout content changes. Post-turn manager
 wake and Discord publication of staged files have separate qualification.
+
+Set `SWARM_NATIVE_MAIL_WAKE_FIXTURE=1` alongside `SWARM_NATIVE_MAIL_FIXTURE=1`
+to close the first native turn, reopen the connector, and verify a queued
+completion starts one distinct manager turn and is ingested by its MCP tool.

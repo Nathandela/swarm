@@ -490,6 +490,14 @@ pub(super) fn hash(value: &Value) -> io::Result<String> {
 }
 
 impl Inbox {
+    pub(super) fn worker_mail_anchor(
+        &self,
+        binding: &Value,
+        note: &Value,
+    ) -> Option<(String, Value)> {
+        super::mail_wake::anchor(&self.data, binding, note)
+    }
+
     pub(super) fn manager(&self) -> &Value {
         &self.data["manager"]
     }

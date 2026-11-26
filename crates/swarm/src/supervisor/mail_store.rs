@@ -230,7 +230,7 @@ pub(super) fn submit(
     Ok(note)
 }
 
-pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value> {
+pub(crate) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value> {
     let key = key(binding, id)?;
     let path = open_path(root, false)?;
     let db = Bolt::open_ro(path).map_err(io_error)?;
@@ -250,7 +250,7 @@ pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
     with_files(&tx, &key, note)
 }
 
-fn pending(
+pub(crate) fn pending(
     root: &Path,
     discussion: &str,
     matches: impl Fn(&Value) -> bool,

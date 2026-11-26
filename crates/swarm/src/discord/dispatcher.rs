@@ -1,8 +1,8 @@
 //! One owner-personal discussion on the native supervisor's exact manager binding.
 use super::config::{Config, invalid};
-use super::manager::Manager;
 use super::receipt::{Inbox, Observation, hash, publication_nonce, verify_publication};
 use super::rest::{Discord, Post};
+use super::{mail_wake, manager::Manager};
 use crate::{ipc::field, socket::DeadlineReader, supervisor::runtime};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
@@ -165,12 +165,31 @@ impl Dispatcher {
                     .readout
                     .try_send(super::call_runtime::Readout::Acknowledge(origin));
             }
+            if phase == "unknown"
+                && !state["input"]["worker_wake"].is_null()
+                && status["ready_for_input"] == true
+            {
+                let input = &state["input"];
+                let id = field(input, "source_id");
+                if let Some(source) = api.current(cfg, id)?
+                    && inbox.admit(&source)?.is_some_and(|current| {
+                        current["state"] == "accepted"
+                            && current["revision"] == input["worker_wake"]["owner_revision"]
+                    })
+                {
+                    // Native preparation is written before the provider effect. Only an
+                    // unprepared wake can repeat, and always with the identical operation.
+                    self.owner
+                        .send(field(input, "operation"), &input["composer"])?;
+                }
+            }
             self.deliver(cfg, inbox, api, &state, millis()?)?;
             if phase == "completed" {
                 let nonce = field(&state["input"], "final_nonce");
-                if !nonce.is_empty() && inbox.publication(nonce)["state"] == "sent" {
+                if nonce.is_empty() || inbox.publication(nonce)["state"] == "sent" {
                     let origin = &state["input"]["composer"]["origin"];
                     if let Some((_, driver)) = calls
+                        && !nonce.is_empty()
                         && origin["voice"].is_object()
                     {
                         let entry = inbox.publication(nonce);
@@ -192,7 +211,7 @@ impl Dispatcher {
             .next_prepared()
             .or_else(|| calls.and_then(|_| inbox.prepared_voice()))
         else {
-            return Ok(());
+            return self.wake_from_mail(cfg, inbox, api, state, &status);
         };
         if status["ready_for_input"] != true
             || !matches!(field(&status["turn"], "state"), "idle" | "completed")
@@ -239,6 +258,65 @@ impl Dispatcher {
         }
     }
 
+    fn wake_from_mail(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        mut state: Value,
+        status: &Value,
+    ) -> io::Result<()> {
+        if status["ready_for_input"] != true
+            || !matches!(field(&status["turn"], "state"), "idle" | "completed")
+        {
+            return Ok(());
+        }
+        let root = self.owner.mail_root()?;
+        let binding = &state["binding"];
+        let parent = field(&state, "session")
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        let notes = crate::supervisor::mail_store::pending(
+            &root,
+            field(binding, "conversation_id"),
+            |note| {
+                note["Parent"] == parent
+                    && mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
+                    && inbox.worker_mail_anchor(binding, note).is_some()
+            },
+        )?;
+        for note in notes {
+            let (id, accepted) = inbox
+                .worker_mail_anchor(binding, &note)
+                .ok_or_else(|| invalid("worker wake has no current owner anchor"))?;
+            let Some(source) = api.current(cfg, &id)? else {
+                continue;
+            };
+            if inbox.admit(&source)?.is_none_or(|current| {
+                current["state"] != "accepted" || current["revision"] != accepted["revision"]
+            }) {
+                continue;
+            }
+            let key = mail_wake::key(&note)?;
+            let accepted_revision = accepted["revision"].clone();
+            let mut wake_input = accepted;
+            wake_input["operation_id"] = json!(format!("mail_{key}"));
+            wake_input["revision"] = json!(key);
+            wake_input["text"] = json!(mail_wake::text(&note));
+            let composer = self.owner.composer(&wake_input, status)?;
+            let semantic = operation("semantic")?;
+            state["input"] = json!({
+                "operation":semantic,"composer":composer,"source_id":id,
+                "worker_wake":{"key":key,"binding":mail_wake::identity(&note),"id":note["ID"],"owner_revision":accepted_revision}
+            });
+            state["worker_wakes"][&key] = json!(true);
+            inbox.set_manager(state)?;
+            return self.owner.send(&semantic, &composer);
+        }
+        Ok(())
+    }
+
     fn reconcile_input(&self, inbox: &mut Inbox, state: &mut Value) -> io::Result<String> {
         let input = &state["input"];
         let observation = self.owner.input_status(&input["composer"])?;
@@ -262,7 +340,11 @@ impl Dispatcher {
             if input["turn_id"].is_null() {
                 let id = field(input, "source_id").to_owned();
                 state["input"]["turn_id"] = json!(native_turn);
-                inbox.settled_input(&id, state.clone())?;
+                if state["input"]["worker_wake"].is_null() {
+                    inbox.settled_input(&id, state.clone())?;
+                } else {
+                    inbox.set_manager(state.clone())?;
+                }
             }
         }
         Ok(phase.to_owned())
@@ -318,7 +400,12 @@ impl Dispatcher {
                     .ok_or_else(|| {
                         invalid("publication source no longer proves native admission")
                     })?;
-                if current["revision"] != origin["revision"] {
+                let expected_revision = if input["worker_wake"].is_null() {
+                    &origin["revision"]
+                } else {
+                    &input["worker_wake"]["owner_revision"]
+                };
+                if current["revision"] != *expected_revision {
                     return Err(invalid("publication source changed after native admission"));
                 }
             }
@@ -435,8 +522,26 @@ impl Dispatcher {
                 .rsplit('/')
                 .next()
                 .unwrap_or_default();
-            let input_hash =
-                super::super::supervisor::mail::parent_hash(field(&proof, "native_input_id"));
+            let input_hash = if input["worker_wake"].is_null() {
+                crate::supervisor::mail::parent_hash(field(&proof, "native_input_id"))
+            } else {
+                let wake = &input["worker_wake"];
+                if args.as_object().is_some_and(|fields| !fields.is_empty())
+                    && (args["id"] != wake["id"]
+                        || !args["session"].is_null()
+                            && args["session"] != wake["binding"]["Session"]
+                        || !args["session_instance"].is_null()
+                            && args["session_instance"] != wake["binding"]["Instance"])
+                {
+                    return Err(invalid(
+                        "worker wake tools require their exact selected note",
+                    ));
+                }
+                args["id"] = wake["id"].clone();
+                args["session"] = wake["binding"]["Session"].clone();
+                args["session_instance"] = wake["binding"]["Instance"].clone();
+                field(&wake["binding"], "ParentInputHash").to_owned()
+            };
             return super::super::supervisor::mail_store::manager_note(
                 &scope,
                 field(&state["binding"], "conversation_id"),

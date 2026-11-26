@@ -457,6 +457,7 @@ fn submit(
             target.manager,
             &action.operation,
             &action.composer,
+            root.parent(),
         )?;
         proof.prepare(&action.operation, nonce, &action.text, external)?;
     }
@@ -481,6 +482,7 @@ fn submit(
             target.manager,
             &action.operation,
             &action.composer,
+            root.parent(),
         )?;
         if action.composer["text"] != action.text || action.composer["session"] != action.session {
             return Err(io::Error::other(
