@@ -435,6 +435,51 @@ impl Session {
         Ok(plan)
     }
 
+    pub(super) fn prepare_claude_external(launch: &Value) -> io::Result<Prepared> {
+        use providers::claude;
+        let options = &launch["options"];
+        let id = field(options, "resume_conversation_id");
+        if !claude::canonical_id(id)
+            || !options.as_object().is_some_and(|opts| opts.len() == 1)
+            || launch.as_object().is_none_or(|keys| {
+                keys.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "agent" | "name" | "cwd" | "env" | "options" | "cols" | "rows"
+                    )
+                })
+            })
+        {
+            return Err(io::Error::other(
+                "invalid external Claude resume parameters",
+            ));
+        }
+        let mut request = launch.clone();
+        request["options"] = Value::Null;
+        let mut prepared = Self::prepare(&json!({"launch":request}))?;
+        if !prepared.claude_profile.is_object() {
+            return Err(io::Error::other(
+                "external Claude resume requires a verified native profile",
+            ));
+        }
+        let home = Path::new(field(&prepared.claude_profile, "home"));
+        let authority = claude::project_authority(home, &prepared.cwd)?;
+        let source = claude::external_proof(
+            &prepared.provider.executable,
+            &prepared.cwd,
+            &prepared.provider.env,
+            home,
+            id,
+        )?;
+        request["claude_retained_conversation"] = json!(id);
+        prepared.provider.argv = claude::argv(&sanitize_name(field(launch, "name")), &request)?;
+        prepared.claude_resume = json!({
+            "conversation_id":id,"transcript":source["transcript"],"project_authority":authority,
+            "external_source":source,
+        });
+        Ok(prepared)
+    }
+
     pub(super) fn prepare_claude_resume(
         &self,
         launch: &Value,

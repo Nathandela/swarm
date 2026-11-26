@@ -548,6 +548,47 @@ pub(crate) fn release(value: &str) -> Option<(u32, u32, u32)> {
     ))
 }
 
+pub(crate) fn agent_view_settled(row: &Value) -> bool {
+    matches!(
+        crate::ipc::field(row, "state")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "done" | "stopped" | "complete" | "completed" | "failed" | "cancelled" | "canceled"
+    )
+}
+
+pub(crate) fn external_proof(
+    executable: &std::path::Path,
+    cwd: &std::path::Path,
+    environment: &[(String, String)],
+    home: &std::path::Path,
+    id: &str,
+) -> io::Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    let rows = super::claude_agent_view(executable, cwd, environment, true)?;
+    let mut matching = rows
+        .into_iter()
+        .filter(|row| row["kind"] == "background" && row["sessionId"] == id);
+    let row = matching
+        .next()
+        .ok_or_else(|| io::Error::other("Claude background conversation is not registered"))?;
+    if matching.next().is_some()
+        || !agent_view_settled(&row)
+        || std::path::Path::new(crate::ipc::field(&row, "cwd")).canonicalize()? != cwd
+    {
+        return Err(io::Error::other(
+            "Claude background conversation is not an exact stopped source",
+        ));
+    }
+    let (path, identity) = transcript(home, cwd, id)?;
+    let stat = path.symlink_metadata()?;
+    if identity != json!([stat.dev(), stat.ino()]) {
+        return Err(io::Error::other("Claude external history changed"));
+    }
+    Ok(json!({"transcript":identity,"size":stat.len(),"mtime":[stat.mtime(),stat.mtime_nsec()]}))
+}
+
 pub(crate) fn transcript(
     home: &std::path::Path,
     cwd: &std::path::Path,
