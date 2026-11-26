@@ -111,7 +111,11 @@ fn read_with(
     if revision(&source, &origin)? != origin["revision"] {
         return Err(invalid());
     }
-    download(&source, channel)
+    let bytes = download(&source, channel)?;
+    if personal_enrollment(place)?.0 != cfg.0 {
+        return Err(invalid());
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

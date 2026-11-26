@@ -588,7 +588,7 @@ fn validate_prepared(receipt: &Receipt, cfg: &Config) -> io::Result<()> {
         || admission["native_binding_retired"] == true
         || !matches!(admission["project_explicit"], Value::Bool(_) | Value::Null)
         || (!field(admission, "project").is_empty()
-            && field(admission, "project") != grants::single_project(cfg)?)
+            && !grants::project(cfg, field(admission, "project")))
         || !field(admission, "waiting_on_input").is_empty()
         || active["scheduler_paused"] == true
         || active["custody_lost"] == true
@@ -760,6 +760,11 @@ fn dispatch_under_lease(
         || !lease.source_unchanged()?
     {
         return Err(invalid());
+    }
+    if personal_enrollment(place)?.0 != cfg.0 {
+        return Err(io::Error::other(
+            "the original personal enrollment changed during dispatch",
+        ));
     }
     validate_prepared(&read, cfg)?;
     let operation = field(&read.admission, "operation_id").to_owned();
@@ -1308,10 +1313,11 @@ mod tests {
         }
         let place = Place::for_supervisor(Path::new(&root)).unwrap();
         let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
-            "content":"Retained real native loopback input.", "type":0, "attachments":[]});
+            "content":"Use project former. Retained real native loopback input.", "type":0, "attachments":[]});
         let mut second = current.clone();
         second["id"] = json!("702");
-        second["content"] = json!("Second retained real native loopback input.");
+        second["content"] =
+            json!("Switch to secondary. Second retained real native loopback input.");
         let (close_first, first_closed) = std::sync::mpsc::sync_channel::<()>(1);
         let (disconnect, stop) = std::sync::mpsc::sync_channel::<()>(1);
         let room = Room {
@@ -1488,7 +1494,12 @@ mod tests {
             };
             assert_eq!(receipt.admission["phase"], phase);
             assert_eq!(receipt.admission["project"], cfg.text("work_dir"));
-            assert_eq!(receipt.conversation["project"], cfg.text("work_dir"));
+            let current_project = if room.acknowledge {
+                field(&cfg.0["projects"], "secondary")
+            } else {
+                cfg.text("work_dir")
+            };
+            assert_eq!(receipt.conversation["project"], current_project);
             assert!(
                 field(&receipt.admission["request"], "text")
                     .contains("Approved project for new work")

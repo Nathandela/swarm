@@ -156,7 +156,7 @@ pub(in crate::discord) fn migrate(
         return Ok(true);
     }
     let cfg = personal_enrollment(place)?;
-    grants::single_project(&cfg)?;
+    grants::enrolled(&cfg)?;
     let source = place.dir.join("discord.db");
     let expected = fs::symlink_metadata(&source)?;
     if dry_run {

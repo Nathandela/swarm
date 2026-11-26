@@ -1,5 +1,6 @@
 //! Current project and settled tool launch checks for original Go publication proofs.
 use super::*;
+use std::collections::BTreeMap;
 
 pub(super) fn project(cfg: &Config, root: &str) -> bool {
     let path = Path::new(root);
@@ -20,26 +21,74 @@ pub(super) fn project(cfg: &Config, root: &str) -> bool {
     }
 }
 
-pub(super) fn single_project(cfg: &Config) -> io::Result<String> {
-    let selected = match cfg.0["projects"].as_object() {
-        Some(projects) if projects.len() == 1 => projects
-            .values()
-            .next()
-            .and_then(Value::as_str)
-            .ok_or_else(invalid)?,
-        Some(projects) if !projects.is_empty() => {
-            return Err(io::Error::other(
-                "multiple original projects require the full retained project selector",
-            ));
+pub(super) fn enrolled(cfg: &Config) -> io::Result<BTreeMap<String, String>> {
+    let mut rows = BTreeMap::new();
+    if let Some(projects) = cfg.0["projects"].as_object() {
+        for (name, path) in projects {
+            let selected = fs::canonicalize(path.as_str().ok_or_else(invalid)?)?;
+            let root = selected.to_str().ok_or_else(invalid)?;
+            let name = name.trim().to_lowercase();
+            if name.is_empty()
+                || !project(cfg, root)
+                || rows.insert(name, root.to_owned()).is_some()
+            {
+                return Err(invalid());
+            }
         }
-        _ => cfg.text("work_dir"),
-    };
-    let root = fs::canonicalize(selected)?;
-    let root = root.to_str().ok_or_else(invalid)?;
-    if !project(cfg, root) {
-        return Err(invalid());
     }
-    Ok(root.to_owned())
+    if rows.is_empty() {
+        let selected = fs::canonicalize(cfg.text("work_dir"))?;
+        let root = selected.to_str().ok_or_else(invalid)?;
+        if !project(cfg, root) {
+            return Err(invalid());
+        }
+        rows.insert(String::new(), root.to_owned());
+    }
+    Ok(rows)
+}
+
+fn words(text: &str) -> String {
+    let text = text.to_lowercase();
+    let parts = text
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    format!(" {} ", parts.join(" "))
+}
+
+pub(super) fn choose(
+    projects: &BTreeMap<String, String>,
+    current: &str,
+    text: &str,
+) -> (String, bool) {
+    if projects.len() == 1 {
+        return (projects.values().next().unwrap().clone(), false);
+    }
+    let current = projects
+        .values()
+        .find(|project| project.as_str() == current)
+        .map_or("", String::as_str);
+    let wording = words(text);
+    let switch = [
+        " switch to ",
+        " switch project to ",
+        " use project ",
+        " change project to ",
+    ]
+    .iter()
+    .any(|phrase| wording.contains(phrase));
+    if !current.is_empty() && !switch {
+        return (current.to_owned(), false);
+    }
+    let mut named = projects
+        .iter()
+        .filter(|(name, _)| wording.contains(&words(name)));
+    if let Some((_, selected)) = named.next()
+        && named.next().is_none()
+    {
+        return (selected.clone(), switch);
+    }
+    (current.to_owned(), false)
 }
 
 fn list(value: &Value) -> io::Result<Vec<String>> {
@@ -141,4 +190,33 @@ pub(super) fn output<'tx>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_selection_only_switches_to_one_current_grant() {
+        let projects = BTreeMap::from([
+            ("one".to_owned(), "/repo/one".to_owned()),
+            ("two".to_owned(), "/repo/two".to_owned()),
+        ]);
+        assert_eq!(
+            choose(&projects, "/repo/one", "Two questions"),
+            ("/repo/one".into(), false)
+        );
+        assert_eq!(
+            choose(&projects, "/repo/one", "Switch to two"),
+            ("/repo/two".into(), true)
+        );
+        assert_eq!(
+            choose(&projects, "/repo/one", "Switch to one or two"),
+            ("/repo/one".into(), false)
+        );
+        assert_eq!(
+            choose(&projects, "/repo/removed", "Continue"),
+            (String::new(), false)
+        );
+    }
 }

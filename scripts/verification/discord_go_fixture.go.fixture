@@ -55,6 +55,16 @@ func main() {
 		check(store.Close())
 		return
 	}
+	if action == "project-add" {
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		if cfg.Projects == nil {
+			cfg.Projects = map[string]string{}
+		}
+		cfg.Projects[os.Args[3]] = os.Args[4]
+		check(discord.SaveConfig(dir, cfg))
+		return
+	}
 	if action == "project" {
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

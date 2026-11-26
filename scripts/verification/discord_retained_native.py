@@ -28,8 +28,8 @@ def discord_fixture(acknowledge):
         id: dict(id=id, type=0, channel_id="400", author=dict(id="200", username="synthetic owner"),
                  attachments=[], content=text)
         for id, text in [("501", "Original settled source"),
-                         ("701", "Retained real native loopback input."),
-                         ("702", "Second retained real native loopback input.")]
+                         ("701", "Use project former. Retained real native loopback input."),
+                         ("702", "Switch to secondary. Second retained real native loopback input.")]
     }
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -93,6 +93,8 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
         run(fixture, env, "create", place, base / "state", "personal", "true", base / "work")
         if acknowledge:
             run(fixture, env, "project", place, base / "work")
+            (base / "secondary").mkdir(mode=0o700)
+            run(fixture, env, "project-add", place, "secondary", base / "secondary")
         run(fixture, env, "bind", place, "original-room", "400")
         assert run(fixture, env, "ingress", place, "original-room", "501", "settle").strip() == "1"
         with daemon(go, env, base / "go.log"):

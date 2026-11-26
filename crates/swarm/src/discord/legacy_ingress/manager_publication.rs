@@ -371,6 +371,13 @@ pub(super) fn accept(
         return Err(invalid());
     }
     let turn = native_proof(place, cfg, &receipt, args, &call["meta"])?;
+    if personal_enrollment(place)?.0 != cfg.0 {
+        return Err(invalid());
+    }
+    let project = field(&receipt.admission, "project");
+    if !project.is_empty() && !grants::project(cfg, project) {
+        return Err(invalid());
+    }
     let mut output = stage_records(tx, receipt, &turn, logical, text, &candidate.origin)?;
     queue(cfg, lease, candidate, &output)?;
     if output["exported"] != true {

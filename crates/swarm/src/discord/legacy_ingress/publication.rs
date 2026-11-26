@@ -421,6 +421,11 @@ where
     let (voice_pin, _voice, origin) = original_voice(&directory, &scope, &out, cfg, &endpoint)?;
     verify_guard(&tx, cfg, &origin)?;
     let post = authorize(cfg)?;
+    if personal_enrollment(place)?.0 != cfg.0 {
+        return Err(io::Error::other(
+            "the original publication enrollment changed before delivery",
+        ));
+    }
     if !identity(&lease.pin, &lease.source)? || !identity(&voice_pin, &directory.join("voice.db"))?
     {
         return Err(invalid());
@@ -759,6 +764,58 @@ mod tests {
                     panic!("a changed attachment payload must not reach the outbound transport")
                 }
             )
+            .is_err()
+        );
+        assert_eq!(before, fs::read(&source).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn revocation_during_publication_validation_prevents_send() {
+        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
+            return;
+        };
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("dp-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let path = root.join("fixture");
+        let project = root.join("former-project");
+        runtime::private_dir(&project).unwrap();
+        let p = path.to_str().unwrap();
+        let approved = project.to_str().unwrap();
+        let run = |args: &[&str]| {
+            let output = Command::new(&fixture).args(args).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["create", p, root.to_str().unwrap(), "personal", "true"]);
+        run(&["bind", p, "original-room", "400"]);
+        run(&["project", p, approved]);
+        run(&[
+            "voice-ingress",
+            p,
+            "original-room",
+            "701",
+            "project-final",
+            approved,
+        ]);
+        run(&["publication-queue", p, "original-room", "701"]);
+        let place = Place::for_supervisor(&root).unwrap();
+        assert!(settle(&place, "701", false).unwrap());
+        let source = path.join("discord.db");
+        let before = fs::read(&source).unwrap();
+        assert!(
+            with(&place, "fixture-final", false, |cfg| {
+                let mut changed = cfg.0.clone();
+                changed.as_object_mut().unwrap().shift_remove("projects");
+                runtime::write_json(&path.join("config.json"), &changed)?;
+                Ok(|_: &Publication| panic!("a revoked project cannot post"))
+            })
             .is_err()
         );
         assert_eq!(before, fs::read(&source).unwrap());
