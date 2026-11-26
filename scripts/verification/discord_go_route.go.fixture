@@ -1,0 +1,14 @@
+// Install in internal/teammatemanager of the disposable pinned Go repository.
+package teammatemanager
+
+import (
+	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/skeleton"
+)
+
+func FixtureSupervisor(cfg discord.Config, discussion discord.TeammateDiscussion) (string, string, string, error) {
+	r := Runtime{previous: cfg.PreviousSupervisor, endpoint: skeleton.EndpointIDForStateDir(cfg.Supervisor.StateDir),
+		managerSettingsDir: cfg.Supervisor.StateDir}
+	r.cfg.DaemonSocket = cfg.DaemonSocket
+	return r.supervisorForDiscussion(discussion)
+}

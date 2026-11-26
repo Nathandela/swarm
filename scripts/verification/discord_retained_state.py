@@ -7,7 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from stopped_go_state import daemon, disk, fixture_env
+from contextlib import ExitStack
+from stopped_go_state import await_value, daemon, disk, fixture_env, listed, owner
 
 
 def run(binary, env, *args, code=0):
@@ -18,12 +19,42 @@ def run(binary, env, *args, code=0):
     return result.stdout
 
 
+def running(stack, env, label):
+    result = owner(env, {"op": "launch", "launch": {
+        "agent": "claude", "cwd": env["HOME"], "name": label, "cols": 80, "rows": 24,
+        "env": [f"PATH={env['PATH']}", f"HOME={env['HOME']}"],
+    }})
+    assert result["op"] == "launch", result
+    session = result["session"]["id"]
+
+    def stop():
+        assert owner(env, {"op": "kill", "session_id": session})["op"] == "ok"
+
+    stack.callback(stop)
+    await_value(lambda: any(row["id"] == session and row["status"]["Process"] == "running"
+                            for row in listed(env)))
+    return session
+
+
+def route(fixture, env, connector, discussion, session):
+    endpoint, socket, state = run(fixture, env, "route", connector, discussion).split()
+    assert endpoint == session.split("/")[0]
+    selected = env | {"SWARM_DAEMON_SOCK": socket, "SWARM_DAEMON_STATE": state}
+    assert any(row["id"] == session and row["status"]["Process"] == "running"
+               for row in listed(selected))
+    return selected
+
+
 def inspect(go, rust, fixture, base):
     home, original, destination, tools = (base / part for part in ("home", "old", "new", "bin"))
     for directory in home, original, destination, tools:
         directory.mkdir(mode=0o700)
     env = fixture_env(base, destination, tools)
     old_env = fixture_env(base, original, tools)
+    fake = tools / "claude"
+    fake.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "2.1.250 (Claude Code)"; exit; fi\n'
+                    'exec /bin/sleep 300\n')
+    fake.chmod(0o700)
     old_exclude = "fixture-token"
     for mode in ("personal", "teammate"):
         connector = base / ("dormant-" + mode)
@@ -59,9 +90,10 @@ def inspect(go, rust, fixture, base):
     assert not (unsafe / ".rust-go-discord-retained.json").exists()
 
     active = base / "transition"
-    run(fixture, env, "create", active, original, "personal", "true")
+    run(fixture, env, "create", active, original, "teammate", "true")
     run(fixture, env, "traffic", active, "sent")
     run(fixture, env, "traffic", active, "uncertain")
+    run(fixture, env, "bind", active, "existing", "401")
     protected = {name: (active / name).read_bytes() for name in ("discord.db", old_exclude)}
     config = active / "config.json"
     old_selector = original / "discord-active.json"
@@ -70,7 +102,12 @@ def inspect(go, rust, fixture, base):
     original_selection = old_selector.read_bytes()
     command = ["discord","migrate-supervisor","--state-dir",active]
     # The original Go and new Rust supervisors are real; the connector stays offline.
-    with daemon(go, old_env, base/"old.log"), daemon(rust, env, base/"new.log"):
+    with ExitStack() as stack:
+        stack.enter_context(daemon(go, old_env, base/"old.log"))
+        stack.enter_context(daemon(rust, env, base/"new.log"))
+        old_session = running(stack, old_env, "Original discussion session")
+        new_session = running(stack, env, "Destination discussion session")
+        route(fixture, env, active, "existing", old_session)
         assert run(rust, env, *command, "--dry-run") == run(go, env, *command, "--dry-run")
         assert disk(config) == original_config and not new_selector.exists()
         run(rust, env, *command, "--from-state-dir", original, code=1)
@@ -95,6 +132,9 @@ def inspect(go, rust, fixture, base):
         assert disk(config) == result and disk(new_selector) == str(active)
         assert run(go, env, *command, "--dry-run") == run(rust, env, *command, "--dry-run")
         assert protected == {name: (active / name).read_bytes() for name in protected}
+        run(fixture, env, "bind", active, "new", "402", env["SWARM_DAEMON_SOCK"])
+        route(fixture, env, active, "existing", old_session)
+        route(fixture, env, active, "new", new_session)
     assert run(fixture, env, "read", active).strip() == "true"
     assert run(fixture, env, "traffic-read", active, "sent").strip() == "sent"
     assert run(fixture, env, "traffic-read", active, "uncertain").strip() == "uncertain"

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/teammatemanager"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -54,10 +55,34 @@ func main() {
 		check(db.Close())
 		return
 	}
-	store, err := discord.OpenStore(dir)
+	open := discord.OpenStore
+	if action == "route" || action == "read" || action == "traffic-read" {
+		open = discord.FixtureOpenRead
+	}
+	store, err := open(dir)
 	check(err)
 	defer store.Close()
 	switch action {
+	case "bind":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		id, channel := os.Args[3], os.Args[4]
+		var socket string
+		if len(os.Args) == 6 {
+			socket = os.Args[5]
+		}
+		route := discord.Route{GuildID: "300", ChannelID: channel, MessageID: "500"}
+		check(store.FixtureBind(discord.TeammateDiscussion{ID: id, InstallationID: cfg.InstallationID,
+			Route: route, Starter: route, SupervisorSocket: socket}))
+	case "route":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		endpoint, socket, state, err := teammatemanager.FixtureSupervisor(cfg, row)
+		check(err)
+		fmt.Println(endpoint, socket, state)
+
 	case "traffic":
 		phase := os.Args[3]
 		now := time.Now().UTC()
