@@ -12,6 +12,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(super) fn linked_values(cfg: &Config) -> impl Iterator<Item = &Value> {
+    std::iter::once(&cfg.0["team_discussion"])
+        .filter(|value| !value.is_null())
+        .chain(cfg.0["team_discussions"].as_array().into_iter().flatten())
+}
+
 #[derive(Clone)]
 pub(super) struct Route {
     pub(super) guild: String,

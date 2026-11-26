@@ -141,6 +141,8 @@ struct LinkedDiscussion<'a> {
     inbox: Inbox,
     dispatcher: Option<super::dispatcher::Dispatcher>,
     unhealthy: bool,
+    history_ready: bool,
+    next_history_check: Instant,
 }
 
 impl<'a> LinkedDiscussion<'a> {
@@ -156,13 +158,16 @@ impl<'a> LinkedDiscussion<'a> {
         if inbox.cursor().is_none() {
             inbox.checkpoint("")?;
         }
+        let thread = super::team_thread::ThreadAudience { route, api };
         let dispatcher = super::dispatcher::Dispatcher::open(&cfg, &directory)?;
         Ok(Self {
             cfg,
-            thread: super::team_thread::ThreadAudience { route, api },
+            thread,
             inbox,
             dispatcher,
             unhealthy: false,
+            history_ready: false,
+            next_history_check: Instant::now(),
         })
     }
 
@@ -175,7 +180,20 @@ impl<'a> LinkedDiscussion<'a> {
         Ok(Some(scope))
     }
 
+    fn repair_history(&mut self) {
+        self.history_ready = admit_linked_starter(&self.cfg, &mut self.inbox, &self.thread)
+            .and_then(|_| super::team_history::repair(&self.cfg, &mut self.inbox, &self.thread))
+            .is_ok();
+        self.next_history_check = Instant::now() + Duration::from_secs(5);
+    }
+
     fn tick(&mut self, place: &Place, driver: &super::call_runtime::Driver) {
+        if !self.history_ready && Instant::now() >= self.next_history_check {
+            self.repair_history();
+        }
+        if !self.history_ready {
+            return;
+        }
         if let Some(dispatcher) = &self.dispatcher {
             let before = self.unhealthy;
             self.unhealthy = dispatcher
@@ -206,6 +224,7 @@ fn call_ready(inbox: &Inbox, additional: &[LinkedDiscussion<'_>], scope: Option<
     additional.iter().any(|slot| {
         scope["guild_id"] == slot.thread.route.guild
             && scope["channel_id"] == slot.thread.route.thread
+            && slot.history_ready
             && !slot.unhealthy
             && !slot.inbox.manager()["binding"].is_null()
     })
@@ -221,15 +240,18 @@ fn run_guild(
     if inbox.cursor().is_none() {
         inbox.checkpoint("")?;
     }
-    use super::dispatcher::Audience;
-    if cfg.0["team_discussion"].is_null()
-        && let Some(route) = super::thread_creation::recover(cfg, &inbox, &api)?
-    {
+    if inbox.thread_creation_linked(cfg) {
+        inbox.finish_thread_creation(cfg)?;
+    } else if let Some(route) = super::thread_creation::recover(cfg, &inbox, &api)? {
         let next = place.link_automatic(cfg, route)?;
-        drop(inbox);
-        let inbox = Inbox::open(&place.dir, &next)?;
-        return run_guild(place, &next, bridge, inbox, api);
+        inbox.finish_thread_creation(&next)?;
+        if next.0 != cfg.0 {
+            drop(inbox);
+            let inbox = Inbox::open(&place.dir, &next)?;
+            return run_guild(place, &next, bridge, inbox, api);
+        }
     }
+    let mut enrollment = cfg.clone();
     let _guild_authority = {
         let verifier = Discord::connect(cfg)?;
         super::worker_proof::Service::bind(
@@ -246,14 +268,8 @@ fn run_guild(
     let mut guild_events = std::collections::VecDeque::new();
     let thread = super::team_thread::Route::configured(cfg)?
         .map(|route| super::team_thread::ThreadAudience { route, api: &api });
-    if let Some(thread) = &thread
-        && thread.route.starter.is_some()
-        && inbox.manager().is_null()
-        && !inbox.has_team_source(&thread.route.thread)
-        && let Some(source) = thread.current(cfg, &thread.route.thread)?
-        && super::team_thread::explicit(cfg, &source)
-    {
-        thread.admit(&mut inbox, &source)?;
+    if let Some(thread) = &thread {
+        admit_linked_starter(cfg, &mut inbox, thread)?;
     }
     let dispatcher = if thread.is_some() {
         super::dispatcher::Dispatcher::open(cfg, &place.dir)?
@@ -329,16 +345,21 @@ fn run_guild(
                 Ordering::Release,
             );
         }
-        if thread.is_none()
-            && worker_send.is_none()
-            && let Some(route) = super::thread_creation::retry_due(cfg, &mut inbox, &api)?
+        if worker_send.is_none()
+            && let Some(route) = super::thread_creation::retry_due(&enrollment, &mut inbox, &api)?
         {
-            let next = place.link_automatic(cfg, route)?;
-            drop(driver);
-            drop(_guild_authority);
-            drop(inbox);
-            let inbox = Inbox::open(&place.dir, &next)?;
-            return run_guild(place, &next, bridge, inbox, api);
+            let next = place.link_automatic(&enrollment, route.clone())?;
+            inbox.finish_thread_creation(&next)?;
+            if thread.is_none() {
+                drop(driver);
+                drop(additional);
+                drop(_guild_authority);
+                drop(inbox);
+                let inbox = Inbox::open(&place.dir, &next)?;
+                return run_guild(place, &next, bridge, inbox, api);
+            }
+            add_linked(place, &api, &next, &route, &mut additional)?;
+            enrollment = next;
         }
         let event = match driver.inbound.recv_timeout(Duration::from_millis(200)) {
             Ok(Ok(Ingress::Discord(event))) => event,
@@ -401,16 +422,22 @@ fn run_guild(
                 continue;
             }
         };
-        if thread.is_none()
-            && worker_send.is_none()
-            && let Some(route) = super::thread_creation::ingest(cfg, &mut inbox, &api, &event)?
+        if worker_send.is_none()
+            && let Some(route) =
+                super::thread_creation::ingest(&enrollment, &mut inbox, &api, &event)?
         {
-            let next = place.link_automatic(cfg, route)?;
-            drop(driver);
-            drop(_guild_authority);
-            drop(inbox);
-            let inbox = Inbox::open(&place.dir, &next)?;
-            return run_guild(place, &next, bridge, inbox, api);
+            let next = place.link_automatic(&enrollment, route.clone())?;
+            inbox.finish_thread_creation(&next)?;
+            if thread.is_none() {
+                drop(driver);
+                drop(additional);
+                drop(_guild_authority);
+                drop(inbox);
+                let inbox = Inbox::open(&place.dir, &next)?;
+                return run_guild(place, &next, bridge, inbox, api);
+            }
+            add_linked(place, &api, &next, &route, &mut additional)?;
+            enrollment = next;
         }
         if let Some(flight) = &worker_send {
             use super::worker_proof::Invalidation;
@@ -456,6 +483,48 @@ fn run_guild(
     }
 }
 
+fn admit_linked_starter(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    thread: &super::team_thread::ThreadAudience<'_>,
+) -> io::Result<()> {
+    use super::dispatcher::Audience;
+    if thread.route.starter.is_some()
+        && inbox.manager().is_null()
+        && !inbox.has_team_source(&thread.route.thread)
+        && let Some(source) = thread.current(cfg, &thread.route.thread)?
+        && super::team_thread::explicit(cfg, &source)
+    {
+        thread.admit(inbox, &source)?;
+    }
+    Ok(())
+}
+
+fn add_linked<'a>(
+    place: &Place,
+    api: &'a Discord,
+    cfg: &Config,
+    route: &Value,
+    additional: &mut Vec<LinkedDiscussion<'a>>,
+) -> io::Result<()> {
+    if additional.iter().any(|slot| {
+        slot.thread.route.identity()
+            == json!({"guild_id":route["guild_id"],"thread_id":route["thread_id"]})
+    }) {
+        return Ok(());
+    }
+    let (route, cfg) = super::team_thread::Route::additional(cfg)?
+        .into_iter()
+        .find(|(linked, _)| {
+            route["guild_id"] == linked.guild && route["thread_id"] == linked.thread
+        })
+        .ok_or_else(|| invalid("verified new thread lacks its durable linked scope"))?;
+    let mut slot = LinkedDiscussion::open(place, route, cfg, api)?;
+    slot.repair_history();
+    additional.push(slot);
+    Ok(())
+}
+
 fn guild_gateway(
     place: &Place,
     cfg: &Config,
@@ -469,7 +538,7 @@ fn guild_gateway(
         super::team_history::repair(cfg, inbox, thread)?;
     }
     for slot in additional.iter_mut() {
-        super::team_history::repair(&slot.cfg, &mut slot.inbox, &slot.thread)?;
+        slot.repair_history();
     }
     let ready = call_ready(inbox, additional, scope.as_ref());
     let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
@@ -493,10 +562,14 @@ fn ingest_guild(
     if let Some(slot) = additional
         .iter_mut()
         .find(|slot| slot.thread.route.matches(&event["d"]))
-        && super::team_thread::ingest(&slot.cfg, &mut slot.inbox, &slot.thread, event)?
     {
-        checkpoint_linked(&mut slot.inbox, event)?;
-        return Ok(());
+        if !slot.history_ready {
+            return Ok(());
+        }
+        if super::team_thread::ingest(&slot.cfg, &mut slot.inbox, &slot.thread, event)? {
+            checkpoint_linked(&mut slot.inbox, event)?;
+            return Ok(());
+        }
     }
     let handled = match thread {
         Some(thread) => super::team_thread::ingest(cfg, inbox, thread, event)?,

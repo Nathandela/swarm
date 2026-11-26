@@ -598,7 +598,7 @@ impl Inbox {
     }
 
     pub(super) fn reserve_thread(&mut self, plan: Value) -> io::Result<()> {
-        if self.thread_creation().is_some() || !self.data["team_discussion"].is_null() {
+        if self.thread_creation().is_some() {
             return Err(invalid(
                 "connector already has its thread creation boundary",
             ));
@@ -606,6 +606,35 @@ impl Inbox {
         let mut next = self.data.clone();
         next["thread_creation"] = plan;
         next["thread_create_attempts"] = json!(1);
+        self.save(next)
+    }
+
+    pub(super) fn thread_creation_linked(&self, cfg: &Config) -> bool {
+        self.thread_creation().is_some_and(|plan| {
+            super::team_thread::linked_values(cfg).any(|route| {
+                route["guild_id"] == plan["guild_id"]
+                    && route["thread_id"] == plan["message_id"]
+                    && route["starter_channel_id"] == plan["parent_id"]
+                    && route["starter_revision"] == plan["revision"]
+            })
+        })
+    }
+
+    pub(super) fn finish_thread_creation(&mut self, cfg: &Config) -> io::Result<()> {
+        if !self.thread_creation_linked(cfg) {
+            return Err(invalid(
+                "thread create remains unresolved for its original opener",
+            ));
+        }
+        let mut next = self.data.clone();
+        for key in [
+            "thread_creation",
+            "thread_create_attempts",
+            "thread_create_retry_at",
+            "thread_create_retry_allowed",
+        ] {
+            next[key] = Value::Null;
+        }
         self.save(next)
     }
 

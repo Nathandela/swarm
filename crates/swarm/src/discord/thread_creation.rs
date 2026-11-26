@@ -32,6 +32,9 @@ pub(super) fn ingest(
             Ok(None)
         };
     }
+    if super::team_thread::linked_values(cfg).count() >= 17 {
+        return Ok(None);
+    }
     let message = &event["d"];
     if event["t"] != "MESSAGE_CREATE"
         || !team_thread::explicit(cfg, message)
@@ -98,6 +101,11 @@ fn authorize(
     id: &str,
     lookup: impl Fn(&str) -> io::Result<Option<Value>>,
 ) -> io::Result<Option<(Value, bool)>> {
+    if super::team_thread::linked_values(cfg)
+        .any(|route| route["guild_id"] == guild && route["thread_id"] == id)
+    {
+        return Ok(None);
+    }
     if !allowed(cfg, "guild_ids", guild)
         || cfg.0["channel_ids"]
             .as_array()
@@ -303,6 +311,44 @@ mod tests {
     use super::*;
     use crate::supervisor::runtime;
     use std::cell::Cell;
+
+    #[test]
+    fn proven_creation_installs_successive_threads_and_releases_only_the_exact_plan() {
+        use super::super::config::Place;
+        let dir = std::env::temp_dir().join(format!(
+            "swarm-thread-link-more-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&dir).unwrap();
+        let mut cfg = Config(
+            json!({"version":1,"enabled":true,"mode":"teammate","manager_cli":"codex",
+            "installation_id":"fixture","application_id":"3","owner_id":"4","name":"fixture","guild_ids":["1"],
+            "token_file":dir.join("token"),"daemon_socket":dir.join("daemon"),"work_dir":dir,
+            "team_discussion":{"guild_id":"1","thread_id":"5"}}),
+        );
+        runtime::write_json(&dir.join("config.json"), &cfg.0).unwrap();
+        runtime::write_json(&dir.join(".rust-offline-owner.json"), &json!("fixture")).unwrap();
+        let place = Place::fixture(dir.clone());
+        for id in ["9", "10"] {
+            let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+            let revision = "a".repeat(64);
+            let plan = json!({"guild_id":"1","parent_id":"2","message_id":id,"actor_id":"4","revision":revision});
+            let route = json!({"guild_id":"1","thread_id":id,"starter_channel_id":"2","starter_revision":revision});
+            inbox.reserve_thread(plan).unwrap();
+            assert!(inbox.finish_thread_creation(&cfg).is_err());
+            cfg = place.link_automatic(&cfg, route).unwrap();
+            drop(inbox);
+            // Equivalent to the process dying between publishing the owner config
+            // and retiring the in-progress creation in the ledger.
+            let mut recovered = Inbox::open(&dir, &cfg).unwrap();
+            assert!(recovered.thread_creation_linked(&cfg));
+            recovered.finish_thread_creation(&cfg).unwrap();
+            assert!(recovered.thread_creation().is_none());
+        }
+        assert_eq!(cfg.0["team_discussions"].as_array().unwrap().len(), 2);
+        assert_eq!(cfg.0["team_discussion"]["thread_id"], "5");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn revoked_throttled_opener_releases_the_slot_but_uncertain_write_cannot() {

@@ -537,13 +537,29 @@ impl Place {
         let _locks = self.lock()?;
         let current = self.load()?;
         self.ensure_owned(&current)?;
-        if current.0 != cfg.0 || !current.enabled() || !current.0["team_discussion"].is_null() {
+        if current.0 != cfg.0 || !current.enabled() {
             return Err(invalid(
                 "connector changed during automatic thread readback",
             ));
         }
+        if super::team_thread::linked_values(&current).any(|existing| existing == &route) {
+            return Ok(current);
+        }
         let mut updated = current;
-        updated.0["team_discussion"] = route;
+        if updated.0["team_discussion"].is_null() {
+            updated.0["team_discussion"] = route;
+        } else {
+            if updated.0["team_discussions"].is_null() {
+                updated.0["team_discussions"] = json!([]);
+            }
+            let entries = updated.0["team_discussions"]
+                .as_array_mut()
+                .ok_or_else(|| invalid("malformed linked discussions"))?;
+            if entries.len() >= 16 {
+                return Err(invalid("additional linked discussion limit reached"));
+            }
+            entries.push(route);
+        }
         updated.validate()?;
         runtime::write_json(&self.dir.join(CONFIG), &updated.0)?;
         Ok(updated)
