@@ -11,6 +11,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 
 from test_board import owner_request, p
@@ -89,6 +90,45 @@ def read_template_snapshot(path, after_header):
         raise AssertionError("fixture template snapshot never completed")
 
 
+def check_descriptor_scope(root, guard, env):
+    if sys.platform != "darwin":
+        return
+    # The test runner passes no outside writable descriptors to the sandbox.
+    with tempfile.TemporaryDirectory(prefix="tp-outside-", dir=root.parent) as outside_root:
+        outside = Path(outside_root) / "outside-sentinel"
+        outside.write_bytes(b"outside sandbox")
+        inside = root / "effects" / "descriptor-sentinel"
+        inside.write_bytes(b"inside sandbox")
+        code = '''
+import errno, os, sys
+inside, outside = sys.argv[1:]
+with open(inside, "r+b") as file:
+    fd = os.open(f"/dev/fd/{file.fileno()}", os.O_RDWR | os.O_CREAT)
+    assert os.fstat(fd).st_ino == os.fstat(file.fileno()).st_ino
+    assert os.write(fd, b"safe fixture") == 12
+    os.close(fd)
+for flags in (os.O_RDWR, os.O_WRONLY | os.O_CREAT | os.O_TRUNC):
+    with open(outside, "rb") as file:
+        try:
+            fd = os.open(f"/dev/fd/{file.fileno()}", flags)
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES, errno.EBADF), error
+        else:
+            os.close(fd)
+            raise AssertionError("outside descriptor acquired write access")
+try:
+    os.open(outside, os.O_RDWR)
+except OSError as error:
+    assert error.errno in (errno.EPERM, errno.EACCES), error
+else:
+    raise AssertionError("outside path was opened writable")
+'''
+        subprocess.run([*guard, sys.executable, "-c", code, inside, outside], env=env,
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=True)
+        assert inside.read_bytes().startswith(b"safe fixture")
+        assert outside.read_bytes() == b"outside sandbox"
+
+
 def run(root, rust, go):
     for name in ("bin", "home", "runtime", "tmp", "work", "effects", "state"):
         (root / name).mkdir(mode=0o700)
@@ -98,7 +138,8 @@ def run(root, rust, go):
     shutil.copy2(p.__file__, root / "bin/driver")
     rust, go = staged_rust, staged_go
     env = p.environment(root)
-    guard = p.guard(root)
+    guard = p.guard(root, descriptor_writes=True)
+    check_descriptor_scope(root, guard, env)
     work = root / "work"
     socket = env["SWARM_DAEMON_SOCK"]
     database = root / "state/schedules/state.db"

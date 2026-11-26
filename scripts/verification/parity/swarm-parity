@@ -188,16 +188,17 @@ def reap(root, driver, previous):
             "remaining": sorted(remaining)}
 
 
-def guard(root):
+def guard(root, *, descriptor_writes=False):
     if sys.platform == "darwin":
         profile = root / "fixture.sb"
         quote = json.dumps(str(root))
+        descriptors = '(allow file-write-data (regex #"^/dev/fd/[0-9]+$"))\n' if descriptor_writes else ''
         profile.write_text(f"""(version 1)
 (allow default)
 (deny file-write*)
 (allow file-write* (subpath {quote}) (literal "/dev/null") (literal "/dev/tty")
   (literal "/dev/ptmx") (regex #"^/dev/tty[sS][0-9]+$"))
-(deny network*)
+{descriptors}(deny network*)
 (allow network-bind (local unix-socket (subpath {quote})))
 (allow network-outbound (remote unix-socket (subpath {quote})))
 (allow network-inbound (local unix-socket (subpath {quote})))

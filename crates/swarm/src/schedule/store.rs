@@ -377,6 +377,7 @@ impl Store {
         require_time(deadline)?;
         let (result, commit) = f(&mut tx)?;
         if commit {
+            require_time(deadline)?;
             tx.commit()?;
         }
         Ok(result)
@@ -1164,6 +1165,10 @@ fn require_same_bolt(file: &File, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn open_pinned_bolt(file: &File) -> io::Result<Bolt> {
+    Bolt::open(pinned_bolt_path(file)).map_err(io::Error::other)
+}
+
 fn catalog_reader(path: &Path, deadline: Option<Instant>) -> Result<(Option<File>, impl DbApi)> {
     if let Some(deadline) = deadline {
         let pin = private_file(path, false)?.ok_or("schedule database disappeared")?;
@@ -1213,30 +1218,28 @@ fn catalog_writer(
         pin
     };
     catalog_flock(&pin, libc::LOCK_EX, Some(deadline))?;
+    if cfg!(target_os = "macos") {
+        // Darwin's /dev/fd duplicates the original open file description, including its flock.
+        let db = open_pinned_bolt(&pin)?;
+        require_time(Some(deadline))?;
+        require_same_bolt(&pin, path)?;
+        return Ok((Some(pin), db));
+    }
     BOLT_OPENER
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .map_err(|_| io::Error::other("a schedule database opener is still waiting for Bolt"))?;
     let permit = BoltOpener;
     let (send, receive) = std::sync::mpsc::sync_channel(0);
-    let physical_path = path.to_path_buf();
     std::thread::Builder::new().spawn(move || {
         let opened = (|| {
             require_time(Some(deadline))?;
-            let file = if cfg!(target_os = "macos") {
-                // Darwin's sandbox can disallow writable /dev/fd aliases. The caller holds state.lock,
-                // and checks this private catalog inode before opening Bolt and before starting a transaction.
-                require_same_bolt(&pin, &physical_path)?;
-                physical_path
-            } else {
-                pinned_bolt_path(&pin)
-            };
             // The Linux alias produces a new open file description, so Bolt must acquire its own lock.
             // SAFETY: this borrowed descriptor holds the preflight lock.
             if unsafe { libc::flock(pin.as_raw_fd(), libc::LOCK_UN) } != 0 {
                 return Err(io::Error::last_os_error());
             }
             require_time(Some(deadline))?;
-            let db = Bolt::open(file).map_err(io::Error::other)?;
+            let db = open_pinned_bolt(&pin)?;
             Ok((pin, db))
         })();
         drop(permit);
@@ -1263,6 +1266,7 @@ fn initialize(path: &Path, deadline: Option<Instant>) -> Result<()> {
     for bucket in [JOBS, REVISIONS, EVALUATED, RUNS, HISTORY, ACTIVE, TEMPLATES] {
         tx.create_bucket_if_not_exists(bucket)?;
     }
+    require_time(deadline)?;
     tx.commit()?;
     Ok(())
 }
@@ -1565,6 +1569,76 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         drop(other);
         Store::open_before(&temp.0, host, Instant::now() + Duration::from_secs(2)).unwrap();
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn upload_writer_opens_the_pinned_go_inode_across_replacement_and_restore() {
+        let temp = Temp::new();
+        let host = Path::new("/etc/localtime");
+        let store = Store::open(&temp.0, host).unwrap();
+        let path = store.dir.join("state.db");
+        let original = include_bytes!("../../tests/fixtures/schedule/go-catalog.db");
+        fs::write(&path, original).unwrap();
+        let pin = private_file_mode(&path, true, false).unwrap().unwrap();
+        catalog_flock(
+            &pin,
+            libc::LOCK_EX,
+            Some(Instant::now() + Duration::from_secs(1)),
+        )
+        .unwrap();
+        require_same_bolt(&pin, &path).unwrap();
+
+        let displaced = store.dir.join("displaced.db");
+        let replacement = store.dir.join("replacement.db");
+        fs::rename(&path, &displaced).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        let db = open_pinned_bolt(&pin).unwrap();
+        fs::rename(&path, &replacement).unwrap();
+        fs::rename(&displaced, &path).unwrap();
+        require_same_bolt(&pin, &path).unwrap();
+
+        // Path checks before and after an ordinary reopen would both pass here. The wrong inode
+        // would have been initialized, and the original Go template would be missing in that handle.
+        assert!(
+            fs::read(replacement).unwrap().is_empty(),
+            "a pathname reopen initialized the replacement"
+        );
+        assert_eq!(fs::read(path).unwrap(), original);
+        let tx = db.begin().unwrap();
+        let templates: Vec<Template> = records(&tx, TEMPLATES).unwrap();
+        assert_eq!(templates[0].prompt, "Copy me");
+    }
+
+    #[test]
+    fn upload_rollback_rechecks_deadline_between_staging_and_commit() {
+        let temp = Temp::new();
+        let store = Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        let path = store.dir.join("state.db");
+        let before = fs::read(&path).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut staged = false;
+        let error = store
+            .write_deciding(Some(deadline), |tx| {
+                tx.put_raw(TEMPLATES, "staged", b"{}")?;
+                staged = true;
+                std::thread::sleep(
+                    deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+                );
+                Ok(((), true))
+            })
+            .unwrap_err();
+        assert!(staged);
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
         assert_eq!(fs::read(path).unwrap(), before);
     }
 
