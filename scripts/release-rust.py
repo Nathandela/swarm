@@ -3,6 +3,7 @@
 import argparse
 import base64
 import gzip
+import fcntl
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -359,38 +361,247 @@ def install_members(prefix, files):
         path.chmod(member_mode(name))
 
 
-def verify(args):
-    checksums, entries = artifact_set(args.dist)
-    sig = base64.b64decode((args.dist / "checksums.txt.sig").read_bytes().strip(), validate=True)
+def verified_archive(dist, archive_name, public_key):
+    checksums, entries = artifact_set(dist)
+    sig = base64.b64decode((dist / "checksums.txt.sig").read_bytes().strip(), validate=True)
     require(len(sig) == 64, "invalid Ed25519 signature length")
     with tempfile.TemporaryDirectory(prefix="swarm-verify-") as tmp:
         data, signature = Path(tmp) / "checksums", Path(tmp) / "sig"
         data.write_bytes(checksums)
         signature.write_bytes(sig)
-        openssl("pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", args.public_key,
+        openssl("pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", public_key,
                 "-in", data, "-sigfile", signature, stdout=subprocess.DEVNULL)
-    match = ASSET.fullmatch(args.archive)
-    require(match and args.archive in entries, "archive is not signed for this preview")
-    with (args.dist / args.archive).open("rb") as handle:
+    match = ASSET.fullmatch(archive_name)
+    require(match and archive_name in entries, "archive is not signed for this preview")
+    with (dist / archive_name).open("rb") as handle:
         data = handle.read(MAX_ARCHIVE + 1)
-    require(len(data) <= MAX_ARCHIVE and digest(data) == entries[args.archive], "archive checksum differs")
+    require(len(data) <= MAX_ARCHIVE and digest(data) == entries[archive_name], "archive checksum differs")
+    admin = {}
     for name in ("swarm-rust-install.py", "swarm-rust-install.md"):
-        require(file_hash(args.dist / name) == entries[name], f"installer content differs for {name}")
+        admin[name] = (dist / name).read_bytes()
+        require(digest(admin[name]) == entries[name], f"installer content differs for {name}")
     files, compat = inspect_archive(data, match)
+    return files, compat, admin, entries[archive_name]
+
+
+def verify(args):
+    public = args.public_key.read_bytes()
+    with tempfile.TemporaryDirectory(prefix="swarm-key-") as tmp:
+        key = Path(tmp) / "key.pem"
+        key.write_bytes(public)
+        files, compat, admin, expected = verified_archive(args.dist, args.archive, key)
     if args.prefix:
-        require(host_platform() in GROUPS[match[2]], "archive architecture does not match this host")
+        require(host_platform() in GROUPS[ASSET.fullmatch(args.archive)[2]], "archive architecture does not match this host")
         require(args.prefix.parent.is_dir(), "create the install destination's parent first")
         args.prefix.mkdir(mode=0o700)
         try:
-            install_members(args.prefix, files)
-            exe = args.prefix / "swarm"
-            require(json.loads(output(exe, "release-info")) == compat, "installed CLI differs from its compatibility card")
-            if args.check_media:
-                run(exe, "release-check-media")
+            if args.managed:
+                managed_install(args.prefix, public, files | admin, compat, args.check_media)
+            else:
+                install_members(args.prefix, files)
+                check_executable(args.prefix, compat, args.check_media)
         except BaseException:
             shutil.rmtree(args.prefix)
             raise
-    print(f"verified {args.archive} {entries[args.archive]}")
+    print(f"verified {args.archive} {expected}")
+
+
+def check_executable(directory, compat, media):
+    exe = directory / "swarm"
+    require(json.loads(output(exe, "release-info")) == compat, "installed CLI differs from its compatibility card")
+    if media:
+        run(exe, "release-check-media")
+
+
+def fsync_path(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def private_write(path, content):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def replace_record(path, content):
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".swarm-record-") as tmp:
+        source = Path(tmp) / "record"
+        private_write(source, content)
+        os.replace(source, path)
+        fsync_path(path.parent)
+
+
+def release_id(compat):
+    version, source = compat["version"], compat["source"]
+    require(re.fullmatch(VERSION, version) and re.fullmatch(r"[0-9a-f]{40}", source), "invalid release identity")
+    require(compat.get("managed_format") == 1 and type(compat.get("state_abi")) is int
+            and compat["state_abi"] > 0, "archive does not support managed upgrades")
+    return f"{version}-{source}"
+
+
+def release_path(root, name):
+    require(isinstance(name, str) and re.fullmatch(rf"{VERSION}-[0-9a-f]{{40}}", name),
+            "invalid release slot")
+    return root / "releases" / name
+
+
+def populate(root, files, compat, media):
+    target = release_path(root, release_id(compat))
+    if target.exists():
+        current = verified_slot(target)
+        require(current == compat and all(file_hash(target / name) == digest(data)
+                                          for name, data in files.items()), "release slot bytes differ")
+        return target.name
+    with tempfile.TemporaryDirectory(dir=target.parent, prefix=".swarm-stage-") as tmp:
+        slot = Path(tmp)
+        install_members(slot, files)
+        private_write(slot / ".members.json", json_bytes({name: digest(data) for name, data in files.items()}))
+        check_executable(slot, compat, media)
+        for name in files:
+            fsync_path(slot / name)
+        for path, _, _ in os.walk(slot, topdown=False):
+            fsync_path(path)
+        os.rename(slot, target)
+        fsync_path(target.parent)
+    return target.name
+
+
+def verified_slot(slot):
+    require(slot.is_dir() and not slot.is_symlink(), "release slot is missing or unsafe")
+    manifest = json.loads((slot / ".members.json").read_bytes())
+    actual = set()
+    for path in slot.rglob("*"):
+        require(not path.is_symlink(), "release slot contains a symlink")
+        if path.is_file():
+            name = path.relative_to(slot).as_posix()
+            if name == ".members.json":
+                continue
+            require(name in manifest and file_hash(path) == manifest[name], f"modified release member: {name}")
+            actual.add(name)
+    require(actual == manifest.keys(), "release slot is incomplete")
+    compat = json.loads((slot / "compat.json").read_bytes())
+    require(release_id(compat) == slot.name, "wrong release slot")
+    check_executable(slot, compat, False)
+    return compat
+
+
+def route(root):
+    target = os.readlink(root / "current")
+    require(re.fullmatch(r"routes/route-[a-zA-Z0-9_]+", target), "invalid active route")
+    data = json.loads((root / target / "record.json").read_bytes())
+    active = release_path(root, data["active"])
+    require((root / "swarm").resolve(strict=True) == active / "swarm", "launcher does not match active route")
+    if data.get("previous"):
+        release_path(root, data["previous"])
+    return data
+
+
+def point(root, active, previous):
+    route_path = Path(tempfile.mkdtemp(dir=root / "routes", prefix="route-"))
+    private_write(route_path / "record.json", json_bytes({"active": active, "previous": previous}))
+    (route_path / "swarm").symlink_to(Path("../..") / "releases" / active / "swarm")
+    fsync_path(route_path)
+    fsync_path(route_path.parent)
+    with tempfile.TemporaryDirectory(dir=root, prefix=".swarm-switch-") as tmp:
+        link = Path(tmp) / "current"
+        link.symlink_to(route_path.relative_to(root))
+        os.replace(link, root / "current")
+        fsync_path(root)
+
+
+def managed_install(root, public, files, compat, media):
+    for name in ("releases", "routes", "effects"):
+        (root / name).mkdir(mode=0o700)
+    for name, data in (("admin.lock", b""), ("writers.lock", b""), ("public.pem", public)):
+        private_write(root / name, data)
+    active = populate(root, files, compat, media)
+    private_write(root / ".swarm-managed", b"1\n")
+    fsync_path(root)
+    (root / "swarm").symlink_to(Path("current") / "swarm")
+    point(root, active, None)
+
+
+def owner_lock(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        meta = os.fstat(fd)
+        require(stat.S_ISREG(meta.st_mode) and meta.st_uid == os.geteuid()
+                and meta.st_mode & 0o077 == 0 and meta.st_nlink == 1, "unsafe installation lock")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        require(os.path.samestat(meta, path.lstat()), "installation lock was replaced")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def version_key(value):
+    base, separator, suffix = value.partition("-")
+    parts = tuple((0, int(part)) if part.isdecimal() else (1, part) for part in suffix.split("."))
+    return tuple(map(int, base.split("."))), not separator, parts
+
+
+def compatible(previous, candidate):
+    fields = ("channel", "managed_format", "state_abi", "protocol", "shimwire", "media_protocol")
+    require(all(field in previous and previous[field] == candidate.get(field) for field in fields),
+            "release compatibility differs; use a separately qualified offline migration")
+
+
+def upgrade(args):
+    root = args.prefix.resolve(strict=True)
+    meta = root.lstat()
+    require(meta.st_uid == os.geteuid() and meta.st_mode & 0o077 == 0
+            and (root / ".swarm-managed").read_bytes() == b"1\n", "not a private self-managed installation")
+    with owner_lock(root / "admin.lock"):
+        record = route(root)
+        active = release_path(root, record["active"])
+        require(args.caller == active.name, "use the current managed launcher")
+        pending = root / "staged.json"
+        staged = json.loads(pending.read_bytes()) if pending.exists() else None
+        if staged and staged["from"] != active.name:
+            staged = None
+        if args.step == "status":
+            print(json.dumps({"owner": "self", **record, "staged": staged,
+                              "active_may_have_written": (root / "effects" / active.name).exists()}))
+            return
+        if args.step == "stage":
+            require(args.dist is not None, "stage needs --dist DIRECTORY")
+            _, entries = artifact_set(args.dist)
+            group = next(g for g, platforms in GROUPS.items() if host_platform() in platforms)
+            name = next(name for name in entries if (m := ASSET.fullmatch(name)) and m[2] == group)
+            files, card, admin, _ = verified_archive(args.dist, name, root / "public.pem")
+            old = verified_slot(active)
+            compatible(old, card)
+            require(version_key(card["version"]) > version_key(old["version"]), "stage requires a newer signed release")
+            selected = populate(root, files | admin, card, args.check_media)
+            replace_record(pending, json_bytes({"from": active.name, "to": selected}))
+            print(f"staged {selected}")
+            return
+        with owner_lock(root / "writers.lock"):
+            old = verified_slot(active)
+            if args.step == "activate":
+                require(staged and staged["from"] == active.name, "no stage for the active release")
+                candidate = release_path(root, staged["to"])
+                target = verified_slot(candidate)
+                compatible(old, target)
+                require(version_key(target["version"]) > version_key(old["version"]), "staged release is no longer newer")
+                # Each complete route owns both its identity and choice of rollback slot.
+                point(root, candidate.name, active.name)
+                print(f"activated {candidate.name}")
+            else:
+                require(record["previous"], "no previous release slot")
+                require(not (root / "effects" / active.name).exists(),
+                        "active release may have written; keep it available for read/export and reconcile state offline")
+                candidate = release_path(root, record["previous"])
+                compatible(old, verified_slot(candidate))
+                point(root, candidate.name, None)
+                print(f"rolled back to {candidate.name}")
 
 
 def main():
@@ -411,6 +622,13 @@ def main():
     p.add_argument("--public-key", type=Path, required=True)
     p.add_argument("--prefix", type=Path)
     p.add_argument("--check-media", action="store_true")
+    p.add_argument("--managed", action="store_true")
+    p = commands.add_parser("upgrade", help=argparse.SUPPRESS)
+    p.add_argument("prefix", type=Path)
+    p.add_argument("--caller", required=True)
+    p.add_argument("step", choices=("status", "stage", "activate", "rollback"), default="status", nargs="?")
+    p.add_argument("--dist", type=Path)
+    p.add_argument("--check-media", action="store_true")
     args = parser.parse_args()
     for key, value in vars(args).items():
         if isinstance(value, Path):
@@ -418,7 +636,8 @@ def main():
             setattr(args, key, value.absolute())
     try:
         require(not getattr(args, "check_media", False) or args.prefix is not None, "--check-media requires --prefix")
-        {"build": build, "sign": sign, "verify": verify}[args.command](args)
+        require(not getattr(args, "managed", False) or args.prefix is not None, "--managed requires --prefix")
+        {"build": build, "sign": sign, "verify": verify, "upgrade": upgrade}[args.command](args)
     except (ValueError, OSError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"swarm release: {exc}\n")
 

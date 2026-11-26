@@ -6,6 +6,8 @@ pub(crate) const MEDIA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/releas
 pub(crate) fn info() -> Value {
     json!({
         "format": 1,
+        "managed_format": 1,
+        "state_abi": 1,
         "channel": "rust-preview",
         "version": option_env!("SWARM_BUILD_VERSION").unwrap_or("dev"),
         "source": option_env!("SWARM_BUILD_COMMIT").unwrap_or("dev"),

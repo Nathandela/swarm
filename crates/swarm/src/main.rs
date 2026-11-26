@@ -16,12 +16,13 @@ mod shim;
 mod socket;
 mod supervisor;
 mod teammate;
+mod upgrade;
 mod workspace;
 
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|clean|doctor|discord|pilot|--pilot|setup-trust|teammate|dispatcher-guide|version]\n";
+const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|clean|doctor|upgrade|discord|pilot|--pilot|setup-trust|teammate|dispatcher-guide|version]\n";
 const GUIDE: &str = include_str!("../assets/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../assets/swarm-dispatcher/SKILL.md");
 
@@ -40,6 +41,35 @@ fn guide(args: &[String]) -> u8 {
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|s| s == "upgrade") {
+        return ExitCode::from(upgrade::run(&args[1..]));
+    }
+    let read_only = args.first().is_some_and(|arg| {
+        [
+            "--help",
+            "-h",
+            "help",
+            "version",
+            "--version",
+            "doctor",
+            "release-info",
+            "release-check-media",
+            "dispatcher-guide",
+        ]
+        .iter()
+        .any(|name| arg == *name)
+    });
+    let _installation = if read_only {
+        None
+    } else {
+        match upgrade::writer() {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("swarm: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
     if args.first().is_some_and(|s| s == "setup-trust") {
         return ExitCode::from(setup_trust::run(&args[1..]));
     }
