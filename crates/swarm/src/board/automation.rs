@@ -1,3 +1,5 @@
+use super::launch::{ACCENT, PLAIN, spans};
+use super::navigation::truncation;
 use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, usable};
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
@@ -426,12 +428,10 @@ impl Automation {
             return Action::None;
         }
         if let Some(change) = self.archive.take() {
-            if matches!(key, Key::Enter | Key::Text('y')) && geometry.0 >= 32 && geometry.1 >= 8 {
+            if key == Key::Text('y') && geometry.0 >= 32 && geometry.1 >= 8 {
                 return Action::ChangeAutomation(change);
             }
-            if key != Key::Text('n') {
-                self.archive = Some(change);
-            }
+            self.archive = Some(change);
             return Action::None;
         }
         match (&self.records, key) {
@@ -575,11 +575,22 @@ impl Automation {
             self.footer(output, cols, rows);
             return;
         }
-        if self.archive.is_some() {
-            form_header(output, cols, "Archive automation?");
-            if let Some(Records::Get(job)) = &self.records {
-                line(output, 2, cols, "", job.name());
-            }
+        if self.archive.is_some()
+            && let Some(Records::Get(job)) = &self.records
+        {
+            let name = job.name().replace('\n', " ");
+            let title = truncation(&format!("Archive {name}?"), cols);
+            line(output, 1, cols, ACCENT, &title);
+            let explanation = truncation(
+                "Future triggers stop. Run history stays available in Archived.",
+                cols.saturating_sub(2),
+            );
+            spans(
+                output,
+                2,
+                cols,
+                &[(ACCENT, "▌".into()), (PLAIN, format!(" {explanation}"))],
+            );
             self.footer(output, cols, rows);
             return;
         }
