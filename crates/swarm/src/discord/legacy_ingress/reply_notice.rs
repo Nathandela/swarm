@@ -32,6 +32,85 @@ fn canonical_voice_row(row: &Value, raw: &[u8]) -> io::Result<bool> {
     }) && prepare::go_bytes(row)? == raw)
 }
 
+// Go matches JSON member names case-insensitively. Validate the typed source
+// objects this check reads, while letting opaque journal payloads keep their keys.
+fn string_fields(row: &Value, required: &[&str], optional: &[&str]) -> bool {
+    row.as_object().is_some_and(|fields| {
+        required.iter().all(|name| fields.contains_key(*name))
+            && fields.iter().all(|(name, value)| {
+                required.contains(&name.as_str()) && value.is_string()
+                    || optional.contains(&name.as_str())
+                        && value.as_str().is_some_and(|s| !s.is_empty())
+            })
+    })
+}
+
+fn message_origin(origin: &Value) -> bool {
+    string_fields(
+        origin,
+        &["kind", "installation_id", "request_id", "actor_id"],
+        &[
+            "requester_id",
+            "actor_name",
+            "guild_id",
+            "channel_id",
+            "message_id",
+            "endorser_id",
+            "discussion_id",
+            "revision",
+        ],
+    )
+}
+
+fn exact_admission_request(receipt: &Receipt, origin: &Value) -> io::Result<()> {
+    let mut binding = receipt.binding.clone();
+    let fields = binding.as_object_mut().ok_or_else(invalid)?;
+    if fields.shift_remove("native_cli") != Some(json!(true))
+        || fields.shift_remove("generation") != Some(json!(0))
+    {
+        return Err(invalid());
+    }
+    let session = fields.shift_remove("session_id").ok_or_else(invalid)?;
+    fields.insert("session".into(), session);
+    if !string_fields(
+        &binding,
+        &[
+            "session",
+            "session_instance",
+            "conversation_id",
+            "provider",
+            "native_session_id",
+            "native_generation",
+            "observation_generation",
+            "login_epoch",
+        ],
+        &[],
+    ) {
+        return Err(invalid());
+    }
+    let request = &receipt.admission["request"];
+    let grant = &request["manager_admission"];
+    if request.as_object().is_none_or(|fields| {
+        fields.iter().any(|(name, value)| match name.as_str() {
+            "manager_admission" | "origin" => false,
+            "session" | "text" => !value.is_string(),
+            "worker_manager_conversation" | "session_instance" | "expected_turn" => {
+                !value.as_str().is_some_and(|s| !s.is_empty())
+            }
+            _ => true,
+        })
+    }) || !request["text"].is_string()
+        || request["origin"] != *origin
+        || grant
+            != &json!({
+                "expected_external_input":0,"binding":binding,"nonce":receipt.admission["native_input_id"]
+            })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 fn key(table: &str, conversation: &str, suffix: &str) -> io::Result<Vec<u8>> {
     Ok(format!(
         "{table}\0{}",
@@ -71,18 +150,6 @@ pub(in crate::discord) fn run(place: &Place, message: &str, dry_run: bool) -> io
         return Err(invalid());
     }
     publication::verify_guard(&connector, &cfg, &origin)?;
-    let mut expected_binding = receipts.binding.clone();
-    let fields = expected_binding.as_object_mut().ok_or_else(invalid)?;
-    fields.remove("native_cli");
-    fields.remove("generation");
-    let session = fields.remove("session_id").ok_or_else(invalid)?;
-    fields.insert("session".into(), session);
-    let request_proof = &receipts.admission["request"]["manager_admission"];
-    if request_proof["binding"] != expected_binding
-        || counter(request_proof, "expected_external_input", Value::as_u64)? != 0
-    {
-        return Err(invalid());
-    }
     let current = &receipts.conversation;
     if current["external_observed"] != true
         || counter(current, "external_input", Value::as_u64)? != 0
@@ -176,20 +243,20 @@ fn source_and_receipts<'a>(
         let origin = &row["origin"];
         if origin["message_id"] == message {
             if !canonical_voice_row(&row, raw)?
+                || !message_origin(origin)
                 || origin["kind"] != "owner_direct"
                 || origin["installation_id"] != cfg.text("installation_id")
                 || origin["channel_id"] != cfg.text("dm_channel_id")
                 || origin["actor_id"] != cfg.text("owner_id")
                 || origin["requester_id"] != cfg.text("owner_id")
-                || !origin["guild_id"].is_null()
-                || !origin["voice"].is_null()
+                || origin.get("guild_id").is_some()
+                || origin.get("endorser_id").is_some()
             {
                 return Err(invalid());
             }
-            return Ok((
-                origin.clone(),
-                inspect_voice(tx, ledger, origin, cfg, endpoint)?,
-            ));
+            let receipt = inspect_voice(tx, ledger, origin, cfg, endpoint)?;
+            exact_admission_request(&receipt, origin)?;
+            return Ok((origin.clone(), receipt));
         }
     }
     Err(invalid())
@@ -309,7 +376,24 @@ fn decide<'a>(
         if row["conversation_id"] != conversation || !canonical_voice_row(&row, raw)? {
             return Err(invalid());
         }
-        if k.starts_with(b"admissions\0") {
+        if matches!(table, b"publications" | b"requests")
+            && row.get("discussion_source").is_some_and(|source| {
+                !string_fields(
+                    source,
+                    &[],
+                    &["admission_id", "job_id", "attempt_id", "system_cause"],
+                ) || source.as_object().is_some_and(|fields| fields.is_empty())
+            })
+        {
+            return Err(invalid());
+        }
+        if table == b"admissions" {
+            if row
+                .get("origin")
+                .is_some_and(|origin| !message_origin(origin))
+            {
+                return Err(invalid());
+            }
             let seq = row["sequence"].as_u64().ok_or_else(invalid)?;
             let timer = counter(&row, "reply_check_after", Value::as_i64)?;
             if seq == 0
@@ -611,6 +695,36 @@ mod tests {
         tx.commit().unwrap();
     }
 
+    fn change_voice(
+        path: &Path,
+        cfg: &Config,
+        table: &str,
+        suffix: &str,
+        change: impl FnOnce(&mut Value) -> usize,
+    ) {
+        let (_pin, mut voice) = bounded_writer(writable_pin(path).unwrap()).unwrap();
+        let tx = voice.begin_rw().unwrap();
+        let (_, receipt) =
+            source_and_receipts(&tx, cfg, "fixture-room", "701", "ep-fixture").unwrap();
+        let conversation = field(&receipt.binding, "conversation_id");
+        let index = if suffix.is_empty() {
+            format!("{table}\0{conversation}").into_bytes()
+        } else {
+            key(table, conversation, suffix).unwrap()
+        };
+        let mut row: Value = {
+            let root = tx.bucket(b"controller").unwrap();
+            let records = root.bucket(b"records").unwrap();
+            serde_json::from_slice(records.get(&index).unwrap()).unwrap()
+        };
+        let raw_surplus = change(&mut row);
+        let mut header = receipt.header;
+        // Go counts the re-encoded typed state, while the record checksum covers the raw bytes.
+        header["logical_bytes"] =
+            json!(header["logical_bytes"].as_u64().unwrap() - raw_surplus as u64);
+        manager_publication::apply_voice(tx, header, &[(index, row)]).unwrap();
+    }
+
     #[test]
     #[ignore = "requires the exact v0.29.25 Go Discord fixture"]
     fn pinned_go_reply_noise_preserves_original_receipt_and_discussion_window_after_reopen() {
@@ -766,6 +880,59 @@ mod tests {
                 assert!(rust_step("701", base + 30, &[]).is_err());
                 assert_eq!(fs::read(&db_path).unwrap(), bytes);
             }
+            let reject_damaged_voice = |description: &str| {
+                let damaged = fs::read(&db_path).unwrap();
+                assert_eq!(
+                    rust_step("701", base + 30, &roster)
+                        .unwrap_err()
+                        .to_string(),
+                    invalid().to_string(),
+                    "{description}",
+                );
+                assert_eq!(fs::read(&db_path).unwrap(), damaged);
+            };
+            if scenario == "partial" {
+                change_voice(&db_path, &cfg, "publications", "fixture-progress", |row| {
+                    row["discussion_source"]["ADMISSION_ID"] = json!("unrelated");
+                    let mut go_decoded = row.clone();
+                    let source = go_decoded["discussion_source"].as_object_mut().unwrap();
+                    let alias = source.shift_remove("ADMISSION_ID").unwrap();
+                    source.insert("admission_id".into(), alias);
+                    prepare::go_bytes(row).unwrap().len()
+                        - prepare::go_bytes(&go_decoded).unwrap().len()
+                });
+                reject_damaged_voice("partial attribution alias");
+                let reopened = run(rust_path, "read", base + 30);
+                assert_eq!(
+                    reopened["publications"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .next()
+                        .unwrap()["discussion_source"]["admission_id"],
+                    "unrelated",
+                );
+                fs::write(&db_path, &bytes).unwrap();
+                for (table, suffix, section, name) in [
+                    ("admissions", "1", "/origin", "REQUEST_ID"),
+                    ("admissions", "1", "/request", "SESSION"),
+                    ("admissions", "1", "/request/manager_admission", "NONCE"),
+                    (
+                        "admissions",
+                        "1",
+                        "/request/manager_admission/binding",
+                        "CONVERSATION_ID",
+                    ),
+                    ("conversations", "", "/binding", "SESSION_ID"),
+                ] {
+                    change_voice(&db_path, &cfg, table, suffix, |row| {
+                        row.pointer_mut(section).unwrap()[name] = json!("unrelated");
+                        0
+                    });
+                    reject_damaged_voice(name);
+                    fs::write(&db_path, &bytes).unwrap();
+                }
+            }
             if scenario == "window" {
                 for (table, suffix, counter_name, bad) in [
                     ("conversations", "", "last_output", json!("wrong type")),
@@ -773,35 +940,11 @@ mod tests {
                     ("admissions", "1", "reply_receipt_checks", json!([])),
                     ("admissions", "2", "reply_check_after", json!("wrong type")),
                 ] {
-                    let (pin, mut voice) = bounded_writer(writable_pin(&db_path).unwrap()).unwrap();
-                    let tx = voice.begin_rw().unwrap();
-                    let (_, receipt) =
-                        source_and_receipts(&tx, &cfg, "fixture-room", "701", "ep-fixture")
-                            .unwrap();
-                    let conversation = field(&receipt.binding, "conversation_id");
-                    let index = if suffix.is_empty() {
-                        format!("{table}\0{conversation}").into_bytes()
-                    } else {
-                        key(table, conversation, suffix).unwrap()
-                    };
-                    let mut row: Value = {
-                        let root = tx.bucket(b"controller").unwrap();
-                        let records = root.bucket(b"records").unwrap();
-                        serde_json::from_slice(records.get(&index).unwrap()).unwrap()
-                    };
-                    row[counter_name] = bad;
-                    manager_publication::apply_voice(tx, receipt.header, &[(index, row)]).unwrap();
-                    drop(voice);
-                    drop(pin);
-                    let damaged = fs::read(&db_path).unwrap();
-                    assert_eq!(
-                        rust_step("701", base + 30, &roster)
-                            .unwrap_err()
-                            .to_string(),
-                        invalid().to_string(),
-                        "{counter_name}",
-                    );
-                    assert_eq!(fs::read(&db_path).unwrap(), damaged);
+                    change_voice(&db_path, &cfg, table, suffix, |row| {
+                        row[counter_name] = bad;
+                        0
+                    });
+                    reject_damaged_voice(counter_name);
                     fs::write(&db_path, &bytes).unwrap();
                 }
             }
