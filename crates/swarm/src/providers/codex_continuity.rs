@@ -739,7 +739,7 @@ fn scan_worker_turn(
 }
 
 pub(crate) fn initial_history(anchor: &Value, thread: &str) -> io::Result<Vec<Value>> {
-    let file = owned(Path::new(field(&anchor, "path")))?;
+    let file = owned(Path::new(field(anchor, "path")))?;
     let stat = file.metadata()?;
     if anchor["identity"] != json!([stat.dev(), stat.ino()]) || stat.len() > 4 << 20 {
         return Err(io::Error::other(
