@@ -112,14 +112,41 @@ impl<B: Backend> Engine<B> {
     pub(crate) fn run(&self, job: &str, invocation: &str, now: Timestamp) -> Result<String> {
         let _dispatch = self.store.dispatch_lock()?;
         let run = self.store.claim_manual(job, invocation, now)?;
+        self.dispatch_manual(&run, now)?;
+        Ok(run.id)
+    }
+
+    pub(crate) fn board_run(
+        &self,
+        job: &str,
+        query: super::catalog::Manual,
+        now: Timestamp,
+    ) -> Result<Option<super::catalog::RunState>> {
+        let run = match query {
+            super::catalog::Manual::Status => self.store.board_run(job)?,
+            super::catalog::Manual::Run { previous } => {
+                let _dispatch = self.store.dispatch_lock()?;
+                let run = self.store.claim_board_run(job, previous.as_deref(), now)?;
+                self.dispatch_manual(&run, now)?;
+                self.store.board_run(job)?
+            }
+        };
+        Ok(run.map(|run| super::catalog::RunState {
+            pending: run.dispatch_pending(),
+            id: run.id,
+            state: run.state,
+        }))
+    }
+
+    fn dispatch_manual(&self, run: &Occurrence, now: Timestamp) -> Result<()> {
         if run.state == "queued"
             && run.attempts.is_empty()
-            && let Err(error) = self.dispatch(&run, now)
+            && let Err(error) = self.dispatch(run, now)
             && !error.is::<Changed>()
         {
             return Err(error);
         }
-        Ok(run.id)
+        Ok(())
     }
 
     fn advance(&self, run: &Occurrence, now: Timestamp) -> Result<()> {

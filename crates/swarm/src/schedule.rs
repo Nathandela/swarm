@@ -32,7 +32,7 @@ fn id(now: Timestamp) -> Result<String> {
         .collect())
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 26 && id.as_bytes()[0] <= b'7' && id.bytes().all(|b| ALPHABET.contains(&b))
 }
 
@@ -72,7 +72,13 @@ pub(crate) struct Job {
     pub(crate) spec: Spec,
     pub(crate) state: String,
     created_at: Timestamp,
-    updated_at: Timestamp,
+    pub(crate) updated_at: Timestamp,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) lifecycle_generation: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Job {
@@ -188,14 +194,6 @@ pub(crate) fn automation_duration(input: &str) -> Result<i64> {
 
 pub(crate) fn automation_invocation() -> io::Result<String> {
     id(Timestamp::now()).map_err(|error| io::Error::other(error.to_string()))
-}
-
-pub(crate) fn run_automation(
-    client: &mut crate::ipc::Client,
-    job: &str,
-    operation: &str,
-) -> io::Result<String> {
-    rpc::run(client, job, operation).map_err(|error| io::Error::other(error.to_string()))
 }
 
 pub(crate) use cli::run;

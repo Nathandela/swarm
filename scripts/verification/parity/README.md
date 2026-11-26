@@ -57,6 +57,10 @@ it, records one manual run, opens that run's detail, pauses and archives it.
 The selected fixture provider has no scheduled route, so the run records a
 refusal without starting a worker. After shutdown, the board reports the
 disconnection while the CLI can still read the local catalog offline.
+The same witness discards a real pause reply, resumes the job from the CLI,
+and retries the stale pause. It also discards a manual-run reply, restarts the
+daemon and board, checks that `r` recovers the same occurrence, and verifies
+that only explicit `R` creates another occurrence.
 
 For exact comparisons, pass the same fresh `--form-root /tmp/pb-form-example`
 for the two sequential `--form-grid` commands. The harness creates and removes

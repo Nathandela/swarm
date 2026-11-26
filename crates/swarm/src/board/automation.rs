@@ -1,9 +1,8 @@
 use super::{Action, Editor, Key, capacity, form_header, line, usable};
-use crate::schedule::catalog::{Change, Read, Records, State};
+use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
     Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
 };
-use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(super) struct Automation {
@@ -14,8 +13,7 @@ pub(super) struct Automation {
     draft: Option<Draft>,
     archive: Option<Change>,
     run: Option<Occurrence>,
-    pending: BTreeMap<String, String>,
-    status: String,
+    manual: Option<RunState>,
 }
 
 impl Automation {
@@ -35,6 +33,7 @@ impl Automation {
                 if let Records::Get(job) = &records {
                     self.job.clone_from(&job.id);
                 }
+                self.manual = None;
                 self.records = Some(records);
                 self.run = None;
                 self.selected = 0;
@@ -55,22 +54,15 @@ impl Automation {
         }
     }
 
-    pub(super) fn triggered(
-        &mut self,
-        job: &str,
-        operation: &str,
-        response: std::io::Result<String>,
-    ) {
-        self.error.clear();
-        self.status.clear();
+    pub(super) fn triggered(&mut self, response: std::io::Result<Option<RunState>>) {
         match response {
             Ok(run) => {
-                self.pending.remove(job);
-                self.status = format!("Run recorded · {run}");
+                self.error.clear();
+                self.manual = run;
             }
             Err(error) => {
-                self.error = error.to_string();
-                self.status = format!("Retry operation · {operation}");
+                self.manual = None;
+                self.error = format!("Run status unconfirmed · {error}");
             }
         }
     }
@@ -148,6 +140,8 @@ impl Automation {
                     id: job.id.clone(),
                     revision: job.revision_id.clone(),
                     expected: job.state.clone(),
+                    generation: job.lifecycle_generation,
+                    updated_at: job.updated_at,
                     value,
                 };
                 if key == Key::Text('x') {
@@ -160,27 +154,23 @@ impl Automation {
                     Action::None
                 }
             }
-            (Some(Records::Get(job)), Key::Text('r')) if job.state != "archived" => {
+            (Some(Records::Get(job)), key @ Key::Text('r' | 'R')) if job.state != "archived" => {
                 if geometry.0 < 32 || geometry.1 < 8 {
                     self.error = "Resize to 32×8 to run an automation".into();
                     return Action::None;
                 }
-                let id = job.id.clone();
-                if let Some(operation) = self.pending.get(&id) {
-                    return Action::TriggerAutomation {
-                        job: id,
-                        operation: operation.clone(),
+                let previous = if key == Key::Text('R') {
+                    let Some(known) = self.manual.as_ref().filter(|run| !run.pending) else {
+                        self.error = "Resolve the current run before starting another".into();
+                        return Action::None;
                     };
-                }
-                match automation_invocation() {
-                    Ok(operation) => {
-                        self.pending.insert(id.clone(), operation.clone());
-                        Action::TriggerAutomation { job: id, operation }
-                    }
-                    Err(error) => {
-                        self.error = error.to_string();
-                        Action::None
-                    }
+                    Some(known.id.clone())
+                } else {
+                    None
+                };
+                Action::TriggerAutomation {
+                    job: job.id.clone(),
+                    intent: Manual::Run { previous },
                 }
             }
             (_, Key::Text('u')) => Action::Catalog(Read::List),
@@ -295,7 +285,17 @@ impl Automation {
                 if job.state == "archived" {
                     "h history · ← list · esc back"
                 } else {
-                    "e edit · p pause/resume · r run · h history · x archive · esc back"
+                    match &self.manual {
+                        Some(run) if run.pending => {
+                            "r reconcile · e edit · p pause/resume · h history · x archive"
+                        }
+                        Some(_) => {
+                            "R new run · r receipt · e edit · p pause/resume · h history · x archive"
+                        }
+                        None => {
+                            "e edit · p pause/resume · r run · h history · x archive · esc back"
+                        }
+                    }
                 },
             ),
             Some(Records::History(runs)) if runs.is_empty() => (
@@ -328,8 +328,21 @@ impl Automation {
         if !self.error.is_empty() {
             line(output, 2, cols, "\x1b[33m", &self.error);
         }
-        if !self.status.is_empty() && rows > 3 {
-            line(output, rows - 1, cols, "\x1b[2m", &self.status);
+        if let Some(run) = &self.manual
+            && rows > 3
+        {
+            let label = if run.pending {
+                "Run pending"
+            } else {
+                "Run recorded"
+            };
+            line(
+                output,
+                rows - 1,
+                cols,
+                "\x1b[2m",
+                &format!("{label} · {} · {}", run.id, run.state),
+            );
         }
         line(output, rows, cols, "\x1b[2m", hint);
     }

@@ -8,7 +8,8 @@ mod term;
 
 use crate::ipc::{self, Client, field};
 use crate::schedule::catalog::{
-    CAP as CATALOG_CAP, CONTROL as CATALOG_CONTROL, Change as CatalogChange, Read as CatalogRead,
+    CAP as CATALOG_CAP, CONTROL as CATALOG_CONTROL, Change as CatalogChange, MANUAL_CAP, Manual,
+    Read as CatalogRead, Records as CatalogRecords, RunState,
 };
 use automation::Automation;
 use keys::{Key, Keys, Mouse, MouseAction};
@@ -32,6 +33,7 @@ const ROSTER_CAPS: &[&str] = &[
     "resume-relocate",
     CATALOG_CAP,
     CATALOG_CONTROL,
+    MANUAL_CAP,
     "schedule",
     "schedule-run-id",
 ];
@@ -159,8 +161,12 @@ fn board(path: &Path) -> io::Result<()> {
                         },
                         |client| query.remote(client),
                     );
+                    let state = automation_status(&result, connection.as_mut());
                     if let Some(Modal::Automation(view)) = &mut board.modal {
                         view.receive(result);
+                        if let Some(state) = state {
+                            view.triggered(state);
+                        }
                     }
                 }
                 Action::ChangeAutomation(change) => {
@@ -172,21 +178,25 @@ fn board(path: &Path) -> io::Result<()> {
                         },
                         |client| change.remote(client),
                     );
+                    let state = automation_status(&result, connection.as_mut());
                     if let Some(Modal::Automation(view)) = &mut board.modal {
                         view.changed(result);
+                        if let Some(state) = state {
+                            view.triggered(state);
+                        }
                     }
                 }
-                Action::TriggerAutomation { job, operation } => {
+                Action::TriggerAutomation { job, intent } => {
                     let result = connection.as_mut().map_or_else(
                         || {
                             Err(io::Error::other(
                                 "daemon disconnected; reconnect before running",
                             ))
                         },
-                        |client| crate::schedule::run_automation(client, &job, &operation),
+                        |client| intent.remote(client, &job),
                     );
                     if let Some(Modal::Automation(view)) = &mut board.modal {
-                        view.triggered(&job, &operation, result);
+                        view.triggered(result);
                     }
                 }
                 Action::Request(message, target) => {
@@ -316,7 +326,7 @@ enum Action {
     SaveLayout(Layout),
     Catalog(CatalogRead),
     ChangeAutomation(CatalogChange),
-    TriggerAutomation { job: String, operation: String },
+    TriggerAutomation { job: String, intent: Manual },
     Request(Value, &'static str),
 }
 
@@ -1190,6 +1200,19 @@ impl Board {
 
 fn form_header(output: &mut String, cols: u16, title: &str) {
     line(output, 1, cols, "\x1b[38;2;142;180;230;1m", title);
+}
+
+fn automation_status(
+    records: &io::Result<CatalogRecords>,
+    connection: Option<&mut Client>,
+) -> Option<io::Result<Option<RunState>>> {
+    if let (Ok(CatalogRecords::Get(job)), Some(client)) = (records, connection)
+        && client.supports(MANUAL_CAP)
+    {
+        Some(Manual::Status.remote(client, &job.id))
+    } else {
+        None
+    }
 }
 
 fn scroll(offset: usize, down: bool) -> usize {

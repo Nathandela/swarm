@@ -739,7 +739,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer, state, message)
             }
 
-            "schedule_tick" | "schedule_run" | "schedule_workspace_check" | "schedule_route_check" | "schedule_native_status" => {
+            crate::schedule::catalog::MANUAL_OP | "schedule_tick" | "schedule_run" | "schedule_workspace_check" | "schedule_route_check" | "schedule_native_status" => {
                 let message = match scheduling::handle(state, &request, &caps) {
                     Ok(message) => message,
                     Err(e) => json!({"op":"error","error_code":"invalid_field","error":e.to_string()}),

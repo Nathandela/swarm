@@ -117,6 +117,8 @@ pub(crate) enum Change {
         id: String,
         revision: String,
         expected: String,
+        generation: u64,
+        updated_at: jiff::Timestamp,
         value: State,
     },
 }
@@ -166,8 +168,54 @@ pub(crate) fn change(root: &Path, request: &Value) -> Result<Value> {
             id,
             revision,
             expected,
+            generation,
+            updated_at,
             value,
-        } => store.set_state_bound(&id, value.token(), Some((&revision, &expected)), now)?,
+        } => store.set_state_bound(
+            &id,
+            value.token(),
+            Some((&revision, &expected, generation, updated_at)),
+            now,
+        )?,
     };
     Ok(json!({"op":CHANGE,"job":job}))
+}
+
+pub(crate) const MANUAL_CAP: &str = "schedule-board-manual-v1";
+pub(crate) const MANUAL_OP: &str = "schedule_board_manual";
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Manual {
+    Status,
+    Run { previous: Option<String> },
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RunState {
+    pub(crate) id: String,
+    pub(crate) state: String,
+    pub(crate) pending: bool,
+}
+
+impl Manual {
+    pub(crate) fn remote(self, client: &mut Client, job: &str) -> io::Result<Option<RunState>> {
+        if !client.supports(MANUAL_CAP) {
+            return Err(io::Error::other(
+                "selected supervisor does not support durable board runs",
+            ));
+        }
+        let reply = client.exchange(
+            json!({"op":MANUAL_OP,"schedule_id":job,"intent":self}),
+            MANUAL_OP,
+            std::time::Duration::from_secs(110),
+        )?;
+        if field(&reply, "endpoint_id") != client.endpoint() || field(&reply, "schedule_id") != job
+        {
+            return Err(io::Error::other(
+                "automation run reply did not match the request",
+            ));
+        }
+        Ok(serde_json::from_value(reply["run"].clone())?)
+    }
 }

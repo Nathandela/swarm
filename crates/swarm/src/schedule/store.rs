@@ -107,6 +107,15 @@ pub(super) fn zero_time() -> Timestamp {
 }
 
 impl Occurrence {
+    pub(super) fn dispatch_pending(&self) -> bool {
+        self.state == "queued"
+            || self.state == "attention"
+                && self
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.state == "unknown")
+    }
+
     pub(crate) fn live_session(&self) -> Option<&str> {
         if !matches!(self.state.as_str(), "working" | "needs-input") {
             return None;
@@ -373,6 +382,7 @@ impl Store {
             state: if draft { "paused" } else { "active" }.into(),
             created_at: now,
             updated_at: now,
+            lifecycle_generation: 0,
         };
         self.write(|tx| {
             if let Some(existing) = get::<Job>(tx, JOBS, &job.id)? {
@@ -426,14 +436,17 @@ impl Store {
         &self,
         id: &str,
         state: &str,
-        expected: Option<(&str, &str)>,
+        expected: Option<(&str, &str, u64, Timestamp)>,
         now: Timestamp,
     ) -> Result<Job> {
         self.write(|tx| {
             let mut job: Job = require(tx, JOBS, id)?;
-            if expected
-                .is_some_and(|(revision, state)| job.revision_id != revision || job.state != state)
-            {
+            if expected.is_some_and(|(revision, state, generation, updated)| {
+                job.revision_id != revision
+                    || job.state != state
+                    || job.lifecycle_generation != generation
+                    || job.updated_at != updated
+            }) {
                 return Err(CONFLICT.into());
             }
             if job.state == state {
@@ -446,6 +459,10 @@ impl Store {
                 let reason = format!("job was {state} before this trigger was claimed");
                 save_evaluation(tx, old, Some(&reason))?;
             }
+            job.lifecycle_generation = job
+                .lifecycle_generation
+                .checked_add(1)
+                .ok_or("automation lifecycle generation exhausted")?;
             job.state = state.into();
             job.updated_at = now;
             put(tx, JOBS, &job.id, &job)?;
@@ -588,26 +605,76 @@ impl Store {
         if !valid_id(invocation) {
             return Err("invalid schedule invocation ID".into());
         }
-        self.write(|tx| {
-            if let Some(existing) = get::<Occurrence>(tx, RUNS, invocation)? {
-                if !existing.manual || existing.job_id != job {
-                    return Err(CONFLICT.into());
+        self.write(|tx| self.claim_manual_tx(tx, job, invocation, now))
+    }
+
+    fn claim_manual_tx(
+        &self,
+        tx: &mut dyn WriteBucket,
+        job: &str,
+        invocation: &str,
+        now: Timestamp,
+    ) -> Result<Occurrence> {
+        if let Some(existing) = get::<Occurrence>(tx, RUNS, invocation)? {
+            if !existing.manual || existing.job_id != job {
+                return Err(CONFLICT.into());
+            }
+            return Ok(existing);
+        }
+        let job: Job = require(tx, JOBS, job)?;
+        if job.state == "archived" {
+            return Err(ARCHIVED.into());
+        }
+        let due = if job.spec.calendar.time_zone == "host" {
+            let zone = super::calendar::Zone::host(&self.host)?;
+            go_wall(now, &zone)
+        } else {
+            now.to_string()
+        };
+        let mut run = Occurrence::new(&job, due, now, now, Some(invocation))?;
+        check_overlap(tx, &mut run)?;
+        put_run(tx, &run)?;
+        Ok(run)
+    }
+
+    fn board_run_at(tx: &dyn ReadBucket, job: &str) -> Result<Option<Occurrence>> {
+        let operation: Option<String> = get(tx, EVALUATED, &format!("{job}/board-manual"))?;
+        operation
+            .map(|id| {
+                let run: Occurrence = require(tx, RUNS, &id)?;
+                if !run.manual || run.job_id != job {
+                    return Err("invalid board manual-run link".into());
                 }
-                return Ok(existing);
+                Ok(run)
+            })
+            .transpose()
+    }
+
+    pub(super) fn board_run(&self, job: &str) -> Result<Option<Occurrence>> {
+        self.view(|tx| Self::board_run_at(tx, job))
+    }
+
+    pub(super) fn claim_board_run(
+        &self,
+        job: &str,
+        previous: Option<&str>,
+        now: Timestamp,
+    ) -> Result<Occurrence> {
+        self.write(|tx| {
+            let current = Self::board_run_at(tx, job)?;
+            if let Some(previous) = previous {
+                if !current
+                    .as_ref()
+                    .is_some_and(|run| run.id == previous && !run.dispatch_pending())
+                {
+                    return Err("automation run changed or is still pending; reopen the job".into());
+                }
+            } else if let Some(current) = current {
+                return Ok(current);
             }
-            let job: Job = require(tx, JOBS, job)?;
-            if job.state == "archived" {
-                return Err(ARCHIVED.into());
-            }
-            let due = if job.spec.calendar.time_zone == "host" {
-                let zone = super::calendar::Zone::host(&self.host)?;
-                go_wall(now, &zone)
-            } else {
-                now.to_string()
-            };
-            let mut run = Occurrence::new(&job, due, now, now, Some(invocation))?;
-            check_overlap(tx, &mut run)?;
-            put_run(tx, &run)?;
+            let operation = id(now)?;
+            let run = self.claim_manual_tx(tx, job, &operation, now)?;
+            put(tx, EVALUATED, &format!("{job}/board-manual"), &operation)?;
             Ok(run)
         })
     }
@@ -981,6 +1048,57 @@ mod tests {
             allow_overlap: true,
             ..Spec::default()
         }
+    }
+
+    #[test]
+    fn board_intent_reopens_pending_without_allocating_a_second_occurrence() {
+        let dir = Temp::new();
+        let now = ts("2026-01-01T10:00:01Z");
+        let open = || Store::open(&dir.0, Path::new("/etc/localtime")).unwrap();
+        let store = open();
+        let job = store.create(spec(&dir.0), now, false).unwrap();
+        let first = store.claim_board_run(&job.id, None, now).unwrap();
+        assert!(first.dispatch_pending());
+        drop(store);
+        let reopened = open();
+        assert_eq!(reopened.board_run(&job.id).unwrap().unwrap().id, first.id);
+        assert_eq!(
+            reopened.claim_board_run(&job.id, None, now).unwrap().id,
+            first.id
+        );
+        assert!(
+            reopened
+                .claim_board_run(&job.id, Some(&first.id), now)
+                .is_err()
+        );
+        assert_eq!(reopened.history(&job.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn lifecycle_compare_and_swap_rejects_aba_at_the_same_clock_instant() {
+        let dir = Temp::new();
+        let store = Store::open(&dir.0, Path::new("/etc/localtime")).unwrap();
+        let now = ts("2026-01-01T10:00:01Z");
+        let job = store.create(spec(&dir.0), now, false).unwrap();
+        let expected = Some((
+            &*job.revision_id,
+            &*job.state,
+            job.lifecycle_generation,
+            job.updated_at,
+        ));
+        store
+            .set_state_bound(&job.id, "paused", expected, now)
+            .unwrap();
+        let resumed = store.set_state(&job.id, "active", now).unwrap();
+        assert_eq!(resumed.revision_id, job.revision_id);
+        assert_eq!(resumed.updated_at, job.updated_at);
+        assert_eq!(resumed.lifecycle_generation, job.lifecycle_generation + 2);
+        assert!(
+            store
+                .set_state_bound(&job.id, "paused", expected, now)
+                .is_err()
+        );
+        assert_eq!(store.job(&job.id).unwrap().state, "active");
     }
 
     #[test]
