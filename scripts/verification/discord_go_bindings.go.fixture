@@ -4,6 +4,7 @@ package discord
 import (
 	"path/filepath"
 
+	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -22,4 +23,27 @@ func (s *Store) FixtureBind(d TeammateDiscussion) error {
 func (s *Store) FixtureBinding(install, id string) (TeammateDiscussion, error) {
 	row, err := s.teammateBindingByID(install, id)
 	return row.TeammateDiscussion, err
+}
+
+func (s *Store) FixtureIngress(d TeammateDiscussion, owner, id, action string) (int, error) {
+	route := d.Route
+	route.MessageID = id
+	record := teammateCandidate{Route: route, Author: Actor{ID: owner}}
+	if err := s.teammateRecord(d.InstallationID, "synthetic-gateway", 1, []teammateCandidate{record}, false); err != nil {
+		return 0, err
+	}
+	pending, _, err := s.teammatePendingSnapshot(d.InstallationID)
+	if err != nil {
+		return 0, err
+	}
+	if action == "settle" && len(pending) == 1 {
+		msg := &discordgo.Message{ID: id, ChannelID: route.ChannelID, GuildID: route.GuildID,
+			Content: "offline replay witness", Author: &discordgo.User{ID: owner}}
+		admission := &TeammateAdmission{Discussion: d, OperationID: "da_" + digest([]string{d.InstallationID, id})[:32],
+			Revision: teammateRevision(msg), Author: record.Author, Route: route}
+		if err := s.teammateCandidateChange(d.InstallationID, pending[0], StateSent, "", admission); err != nil {
+			return 0, err
+		}
+	}
+	return len(pending), nil
 }

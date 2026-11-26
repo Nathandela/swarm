@@ -20,6 +20,7 @@ mod config;
 mod dispatcher;
 mod gateway;
 mod guild;
+mod legacy_discussions;
 mod legacy_state;
 mod local;
 mod mail_wake;

@@ -162,6 +162,8 @@ def inspect(go, rust, fixture, base):
     run(fixture, old_env, "create", controls, original, "personal", "true")
     run(fixture, old_env, "traffic", controls, "sent")
     run(fixture, old_env, "traffic", controls, "uncertain")
+    run(fixture, old_env, "bind", controls, "existing-dm", "400")
+    assert run(fixture, old_env, "ingress", controls, "existing-dm", "501", "settle").strip() == "1"
     config_bytes = (controls / "config.json").read_bytes()
     token_bytes = (controls / old_exclude).read_bytes()
     route_args = ["discord", "migrate-state", "--controls"]
@@ -195,6 +197,12 @@ def inspect(go, rust, fixture, base):
     assert (controls / old_exclude).read_bytes() == token_bytes
     assert run(fixture, old_env, "traffic-read", controls, "sent").strip() == "sent"
     assert run(fixture, old_env, "traffic-read", controls, "uncertain").strip() == "uncertain"
+    # Pinned Go re-sees this message after rollback but creates no new pending work.
+    assert run(fixture, old_env, "ingress", controls, "existing-dm", "501", "replay").strip() == "0"
+    assert run(fixture, old_env, "ingress", controls, "existing-dm", "502", "hold").strip() == "1"
+    pending_database = (controls / "discord.db").read_bytes()
+    assert not json.loads(run(rust, old_env, *route_args, "--dry-run", code=1))["eligible"]
+    assert (controls / "discord.db").read_bytes() == pending_database
     print("PASS Go-made Discord personal/team retained evidence, rollback, and verified original/default supervisor split")
 
 

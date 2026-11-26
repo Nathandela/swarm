@@ -233,6 +233,12 @@ fn scan<'tx>(
                             .push("publication has an unqualified delivery phase".into());
                     }
                 }
+                "teammate_discussions"
+                | "teammate_active_discussions"
+                | "teammate_discussion_ids"
+                | "teammate_ingress_guard"
+                | "teammate_meta"
+                    if controls => {}
                 _ => {
                     report.unresolved += 1;
                     if controls
@@ -339,6 +345,11 @@ fn inspect(
     let tx = db.begin().map_err(io::Error::other)?;
 
     let effects = scan(&tx, &mut report, end, controls)?;
+    if controls
+        && let Err(error) = super::legacy_discussions::verify(&tx, &cfg, cfg.text("daemon_socket"))
+    {
+        report.issues.push(error.to_string());
+    }
     let digest = if controls {
         effects
     } else {
@@ -547,6 +558,7 @@ pub(super) fn audience(
         Instant::now() + Duration::from_secs(10),
         true,
     )?;
+    super::legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"))?;
     if !report.issues.is_empty() || anchor["effects_sha256"] != digest || !unchanged(&pin, &path)? {
         return Err(io::Error::other("original connector effects changed"));
     }
