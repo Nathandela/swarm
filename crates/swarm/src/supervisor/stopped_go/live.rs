@@ -13,7 +13,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-mod codex;
+mod agy;
+pub(super) mod codex;
 
 pub(in crate::supervisor) const OPT_IN: &str = "SWARM_DAEMON_LIVE_GO_COMPAT";
 const SHIM_WIRE_VERSION: u64 = 2;
@@ -92,11 +93,40 @@ impl Process {
     }
 }
 
+fn managed_processes(
+    agent: &str,
+    path: &Path,
+    directory: &File,
+    launch: &Value,
+    meta: &Value,
+) -> io::Result<(Process, Option<Process>)> {
+    let native = read_at(directory, c"native-process.json")?;
+    if native["schema_version"] != 3
+        || native["provider"] != agent
+        || native["shim_pid"] != meta["shim_pid"]
+        || native["shim_start_time"] != meta["shim_start_time"]
+        || native["pid"] != native["pgid"]
+        || field(&native, "generation").is_empty()
+        || !native["incident_id"].is_null()
+        || agent == "claude"
+            && (!native["backend_pid"].is_null() || !native["backend_start_time"].is_null())
+    {
+        return Err(io::Error::other(
+            "Go shim and native process ownership disagree",
+        ));
+    }
+    let worker = Process::new(&native["pid"], &native["start_time"])?;
+    let backend = (agent == "codex")
+        .then(|| codex::owned_backend(path, directory, launch, &native))
+        .transpose()?;
+    Ok((worker, backend))
+}
+
 impl Owner {
     pub(super) fn open(path: PathBuf, directory: &File, meta: &Value) -> io::Result<Self> {
         super::qualified_role(meta)?;
         let agent = field(meta, "agent_type");
-        if !matches!(agent, "claude" | "codex")
+        if !matches!(agent, "claude" | "codex" | "agy")
             || meta["status"]["Process"] != "running"
             || meta["shim_wire_version"] != SHIM_WIRE_VERSION
             || !meta["exit_code"].is_null()
@@ -122,51 +152,22 @@ impl Owner {
                 "Go live launch must stay bound to its original private directory and hook spool",
             ));
         }
-        let expected_absent: &[&str] = if agent == "codex" {
-            &["exit.json", "native-writers-stopped.json"]
-        } else {
-            &[
-                "exit.json",
-                "native-writers-stopped.json",
-                "backend.json",
-                "codex.sock",
-            ]
-        };
-        for name in expected_absent {
-            match fs::symlink_metadata(path.join(name)) {
-                Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-                _ => {
-                    return Err(io::Error::other(
-                        "mixed or uncertain live Go writer custody",
-                    ));
-                }
-            }
+        super::absent_sidefiles(directory, &[c"exit.json", c"native-writers-stopped.json"])?;
+        if agent != "codex" {
+            super::absent_sidefiles(directory, &[c"backend.json", c"codex.sock"])?;
         }
-        let native = read_at(directory, c"native-process.json")?;
-        if native["schema_version"] != 3
-            || native["provider"] != agent
-            || native["shim_pid"] != meta["shim_pid"]
-            || native["shim_start_time"] != meta["shim_start_time"]
-            || native["pid"] != native["pgid"]
-            || field(&native, "generation").is_empty()
-            || agent == "claude"
-                && (!native["backend_pid"].is_null() || !native["backend_start_time"].is_null())
-            || !native["incident_id"].is_null()
-        {
-            return Err(io::Error::other(
-                "Go shim and native process ownership disagree",
-            ));
-        }
-        let backend = if agent == "codex" {
-            Some(codex::owned_backend(&path, directory, &launch, &native)?)
+        let shim = Process::new(&meta["shim_pid"], &meta["shim_start_time"])?;
+        let (worker, backend) = if agent == "agy" {
+            super::absent_sidefiles(directory, &[c"native-process.json"])?;
+            (agy::pty_worker(&shim)?, None)
         } else {
-            None
+            managed_processes(agent, &path, directory, &launch, meta)?
         };
         let owner = Self {
             dir: path,
             directory: directory.try_clone()?,
-            shim: Process::new(&meta["shim_pid"], &meta["shim_start_time"])?,
-            worker: Process::new(&native["pid"], &native["start_time"])?,
+            shim,
+            worker,
             backend,
             lease: Mutex::new(None),
         };

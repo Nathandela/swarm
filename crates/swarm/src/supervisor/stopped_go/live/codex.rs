@@ -118,9 +118,8 @@ fn socket_target(endpoint: &Path, uid: u32, version: &str) -> io::Result<(PathBu
     }
     // Codex 0.172.0 hashes the exact requested pathname and puts a mode-0600
     // listener into its per-UID private directory. Never connect via a mutable alias.
-    let root = PathBuf::from(format!("/tmp/codex-daemon-{uid}"));
-    let name = format!("{:x}", Sha256::digest(endpoint.as_os_str().as_bytes()));
-    let expected = root.join(name);
+    let expected = short_socket(endpoint, uid)?;
+    let root = expected.parent().expect("Codex socket parent");
     let directory = root.symlink_metadata()?;
     if fs::read_link(endpoint)? != expected
         || !directory.is_dir()
@@ -134,6 +133,61 @@ fn socket_target(endpoint: &Path, uid: u32, version: &str) -> io::Result<(PathBu
         return Err(invalid());
     }
     Ok((expected, socket))
+}
+
+fn short_socket(endpoint: &Path, uid: u32) -> io::Result<PathBuf> {
+    let root = Path::new("/tmp")
+        .canonicalize()?
+        .join(format!("codex-daemon-{uid}"));
+    let name = format!("{:x}", Sha256::digest(endpoint.as_os_str().as_bytes()));
+    Ok(root.join(name))
+}
+
+pub(in crate::supervisor::stopped_go) fn verify_stopped_socket(
+    directory: &File,
+    launch: &Value,
+    version: &str,
+) -> io::Result<()> {
+    use rustix::fs::{AtFlags, FileType, readlinkat, statat};
+    let alias = match statat(directory, "codex.sock", AtFlags::SYMLINK_NOFOLLOW) {
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+        Ok(alias) => alias,
+    };
+    let uid = directory.metadata()?.uid();
+    if version != "0.172.0"
+        || FileType::from_raw_mode(alias.st_mode) != FileType::Symlink
+        || alias.st_uid != uid
+    {
+        return Err(io::Error::other("Go Codex listener custody remains"));
+    }
+    let endpoint = Path::new(field(launch, "session_dir")).join("codex.sock");
+    let expected = short_socket(&endpoint, uid)?;
+    if readlinkat(directory, "codex.sock", Vec::new())?.to_bytes()
+        != expected.as_os_str().as_bytes()
+    {
+        return Err(io::Error::other(
+            "Go Codex stopped socket alias is unproved",
+        ));
+    }
+    match expected
+        .parent()
+        .expect("Codex socket parent")
+        .symlink_metadata()
+    {
+        Ok(parent) if parent.is_dir() && parent.uid() == uid && parent.mode() & 0o777 == 0o700 => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        _ => {
+            return Err(io::Error::other(
+                "Go Codex stopped socket directory is unproved",
+            ));
+        }
+    }
+    match expected.symlink_metadata() {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Err(io::Error::other("Go Codex short listener custody remains")),
+    }
 }
 
 fn send(wire: &mut WebSocket<UnixStream>, request: Value) -> io::Result<()> {

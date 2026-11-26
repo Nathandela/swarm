@@ -493,6 +493,9 @@ fn serve(dir: &Path) -> io::Result<()> {
                 }
             };
             let profile=codex_continuity::profile(&environment,cwd,&config["codex_options"]);
+            if rollback && profile.as_ref().ok()!=Some(&config["go_rollback"]["codex_profile"]) {
+                return Err(io::Error::other("Codex rollback native profile changed before exec"));
+            }
             if let Ok(profile)=&profile{
                 runtime::write_json(&dir.join("codex-profile.json"),&json!({"token":token,"profile":profile}))?;
             }

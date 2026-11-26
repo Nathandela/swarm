@@ -56,7 +56,9 @@ pub(super) struct Prepared {
 
 impl Prepared {
     pub(super) fn bind_go_rollback(&mut self, request: &Value) -> io::Result<()> {
-        if self.provider.agent != "claude"
+        if !matches!(self.provider.agent, "claude" | "agy" | "codex")
+            || !self.agy_launch["options"]["resume_conversation_id"].is_null()
+            || !self.agy_launch["resumed_from"].is_null()
             || self.isolated
             || self.lineage != json!({})
             || !self.manager.is_null()
@@ -64,13 +66,38 @@ impl Prepared {
             || self.scheduled.is_some()
             || !self.claude_resume.is_null()
             || !self.resume.is_null()
+            || !self.codex_resume.is_null()
         {
             return Err(io::Error::other(
-                "stopped rollback supports ordinary, non-worktree Claude launches",
+                "stopped rollback supports fresh ordinary, non-worktree Claude, agy or Codex launches",
             ));
         }
         self.go_rollback = json!({"schema":1, "options":request["launch"]["options"],
             "env":self.provider.env.iter().map(|(key,value)| format!("{key}={value}")).collect::<Vec<_>>()});
+        if self.provider.agent == "codex" {
+            if !self.provider.stable_release {
+                return Err(io::Error::other(
+                    "Codex rollback requires a stable qualified release",
+                ));
+            }
+            if self.provider.env.iter().any(|(key, value)| {
+                matches!(key.as_str(), "OPENAI_API_KEY" | "CODEX_HOME") && !value.is_empty()
+            }) {
+                return Err(io::Error::other(
+                    "Codex rollback requires the default native account origin",
+                ));
+            }
+            self.go_rollback["cli_identity"] = super::stopped_go::export::codex::legacy_identity(
+                &self.provider.executable,
+                &self.provider.version,
+                &self.provider.identity,
+            )?;
+            self.go_rollback["codex_profile"] = providers::codex_continuity::profile(
+                &self.provider.env,
+                &self.cwd,
+                &self.codex_options,
+            )?;
+        }
         Ok(())
     }
 

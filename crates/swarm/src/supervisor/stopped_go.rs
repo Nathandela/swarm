@@ -333,15 +333,15 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
     inactive(pid, birth)?;
     absent_sidefiles(
         file,
-        &[
-            c"shim.sock",
-            c"hooks.sock",
-            c"hook.sock",
-            c"codex.sock",
-            c"backend.json",
-        ],
+        &[c"shim.sock", c"hooks.sock", c"hook.sock", c"backend.json"],
     )?;
     let launch = launch_evidence(file, meta)?;
+    let managed_codex =
+        meta["agent_type"] == "codex" && !field(&launch, "backend_program").is_empty();
+    let codex_version = field(&meta["cli_identity"], "version");
+    if !managed_codex || codex_version != "0.172.0" {
+        absent_sidefiles(file, &[c"codex.sock"])?;
+    }
     if matches!(field(meta, "agent_type"), "agy" | "opencode") {
         // Classic PTY shims write exit.json after joining their PTY group.
         // Managed-native custody uses a different proof and is excluded here.
@@ -399,7 +399,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         ));
     }
     inactive(native_pid, native_birth)?;
-    if meta["agent_type"] == "codex" && !field(&launch, "backend_program").is_empty() {
+    if managed_codex {
         let backend = native["backend_pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
@@ -415,7 +415,8 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         if exit["backend_exit"].as_i64().is_none() {
             return Err(io::Error::other("missing Go Codex backend exit"));
         }
-        inactive(backend, epoch)
+        inactive(backend, epoch)?;
+        live::codex::verify_stopped_socket(file, &launch, codex_version)
     } else if !native["backend_pid"].is_null()
         || !native["backend_start_time"].is_null()
         || !exit["backend_exit"].is_null()
@@ -603,6 +604,15 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
     let remaining = &launch["argv"]
         .as_array()
         .expect("established launch arguments")[1..];
+    let remaining = match remaining {
+        [flag, settings, rest @ ..] if flag == "--settings" => {
+            if !classic_agy_statusline(settings) {
+                return false;
+            }
+            rest
+        }
+        _ => remaining,
+    };
     let mut args = remaining.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -616,6 +626,38 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
         }
     }
     true
+}
+
+fn classic_agy_statusline(settings: &Value) -> bool {
+    let Some(settings) = settings.as_str().filter(|text| text.len() <= 4096) else {
+        return false;
+    };
+    let Ok(fields) = RawFields::parse(settings) else {
+        return false;
+    };
+    let Some(line) = fields.0.get("statusLine").filter(|_| fields.0.len() == 1) else {
+        return false;
+    };
+    if !RawFields::parse(line).is_ok_and(|fields| fields.0.len() == 4) {
+        return false;
+    }
+    let Ok(line) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    let quoted = field(&line, "command")
+        .strip_prefix("'")
+        .and_then(|command| command.strip_suffix("' hook AgyStatusLine ''"));
+    let Some(quoted) = quoted else {
+        return false;
+    };
+    // Go's default hook accepts only one shell-quoted executable and the
+    // fixed empty chain argument. The bridge never evaluates the command.
+    quoted.starts_with('/')
+        && !quoted.replace("'\\''", "").contains('\'')
+        && !quoted.chars().any(char::is_control)
+        && line["type"] == "command"
+        && line["enabled"] == true
+        && line["stack_with_default"] == true
 }
 
 fn classic_opencode(meta: &Value, launch: &Value) -> bool {
