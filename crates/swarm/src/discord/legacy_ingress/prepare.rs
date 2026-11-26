@@ -451,6 +451,79 @@ pub(in crate::discord) fn read_executing_guild<'tx>(
     read_voice_with_admission(tx, id, cfg, endpoint, Some((origin, &["executing"])))
 }
 
+pub(in crate::discord) fn read_guild_publication<'tx>(
+    tx: &impl TxApi<'tx>,
+    id: &str,
+    cfg: &Config,
+    endpoint: &str,
+    origin: &Value,
+) -> io::Result<Voice> {
+    let voice = read_executing_guild(tx, id, cfg, endpoint, origin)?;
+    let header = voice.guild_publication_header()?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    let conversation = field(header, "current_conversation");
+    let admission = voice.queued.as_ref().ok_or_else(invalid)?;
+    let key = admission_key(
+        conversation,
+        admission["sequence"].as_u64().ok_or_else(invalid)?,
+    )?;
+    let cursor = |row: &Value| {
+        row.as_object().is_some_and(|map| map.len() == 2)
+            && row["binding"].is_string()
+            && row["sequence"].as_u64().is_some()
+    };
+    // Go's readState checks the size of the encoded full State, whose version
+    // and empty tables are independent of the v3 on-disk header.
+    let mut bytes = go_bytes(&json!({
+        "version":1, "generation":header["generation"], "current_conversation":conversation,
+        "workers":{}, "conversations":{}, "utterances":{}, "admissions":{}, "actions":{},
+        "closed_turns":{}, "cancelled_tasks":{}, "requests":{}, "permits":{}, "publications":{},
+        "journal":{}, "journal_snapshots":{}, "events":{}, "wakes":{},
+    }))?
+    .len();
+    let error = || io::Error::other("the original guild Voice records cannot reopen in Go");
+    let mut journal = false;
+    let mut snapshot = false;
+    for (record_key, raw) in records.iter_entries() {
+        let (table, suffix) = std::str::from_utf8(record_key)
+            .map_err(io::Error::other)?
+            .split_once('\0')
+            .ok_or_else(error)?;
+        match table {
+            "conversations" if record_key == voice.conversation_key => (),
+            "admissions" if record_key == key => (),
+            "journal" | "journal_snapshots" if suffix == conversation => {
+                let row: Value = serde_json::from_slice(raw)?;
+                if !canonical_guild_voice(&row, raw)? {
+                    return Err(error());
+                }
+                if table == "journal" && cursor(&row) {
+                    journal = true;
+                } else if table == "journal_snapshots"
+                    && row
+                        .as_object()
+                        .is_some_and(|map| map.len() == 3 && map.contains_key("metadata"))
+                    && cursor(&row["previous"])
+                    && cursor(&row["cursor"])
+                {
+                    snapshot = true;
+                } else {
+                    return Err(error());
+                }
+            }
+            _ => return Err(error()),
+        }
+        // Each qualified table has one entry. Count the encoded map key,
+        // colon, and canonical row within the braces already counted above.
+        bytes += go_bytes(&json!(suffix))?.len() + 1 + raw.len();
+    }
+    if !journal || !snapshot || header["logical_bytes"] != bytes {
+        return Err(error());
+    }
+    Ok(voice)
+}
+
 pub(in crate::discord) fn executing_guild_admission(
     voice: &mut Voice,
     cfg: &Config,

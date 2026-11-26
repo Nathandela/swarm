@@ -648,19 +648,21 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     checked = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
                     assert checked.returncode == 0 and (voice.read_bytes(), connector.read_bytes()) == original, checked.stdout + checked.stderr
                 print("PASS explicit stage dry-run and wrong message ID made no write", flush=True)
-                with sock.with_name("controller.lock").open("rb") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    invoke("guild-malform-timestamp", voice.parent, "701", "conversation-type")
-                damaged = voice.read_bytes()
-                try:
-                    go_read = subprocess.run([fixture, "guild-publication", voice.parent], env=env, capture_output=True, timeout=5)
-                    assert go_read.returncode != 0 and b"corrupt" in go_read.stderr, go_read.stderr
-                    for probe in ("malformed", "malformed-dry-run"):
-                        denied = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
-                        assert denied.returncode == 0 and (voice.read_bytes(), connector.read_bytes()) == (damaged, original[1]), denied.stdout + denied.stderr
-                finally:
-                    voice.write_bytes(original[0])
-                print("PASS Go and Rust reject a malformed typed Voice row without further writes", flush=True)
+                for damage in ("conversation-type", "logical-bytes", "journal-type", "snapshot-type"):
+                    with sock.with_name("controller.lock").open("rb") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        invoke("guild-malform-timestamp", voice.parent, "701", damage)
+                    damaged = voice.read_bytes()
+                    try:
+                        go_read = subprocess.run([fixture, "guild-publication", voice.parent], env=env, capture_output=True, timeout=5)
+                        assert go_read.returncode != 0 and b"corrupt" in go_read.stderr, (damage, go_read.stderr)
+                        for probe in ("malformed-dry-run", "malformed"):
+                            denied = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
+                            reason = b"unqualified original guild Voice header or conversation" if damage == "conversation-type" else b"cannot reopen in Go"
+                            assert denied.returncode == 0 and reason in denied.stderr and (voice.read_bytes(), connector.read_bytes()) == (damaged, original[1]), (damage, denied.stdout + denied.stderr)
+                    finally:
+                        voice.write_bytes(original[0])
+                    print(f"PASS Go and Rust reject checksum-correct Voice damage ({damage}) without further writes", flush=True)
         with subprocess.Popen(command, env=process_env, text=True, stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             lines, reader = lines_from(child.stdout)

@@ -62,7 +62,7 @@ pub(in crate::discord::legacy_team) fn serve(
         )?;
         Ok::<_, io::Error>((header, row))
     };
-    let original_voice = inspect(&mut voice::read_executing_guild(
+    let original_voice = inspect(&mut voice::read_guild_publication(
         &db.begin().map_err(io::Error::other)?,
         &id,
         cfg,
@@ -134,7 +134,7 @@ pub(in crate::discord::legacy_team) fn serve(
             let (_writer, mut db) = legacy_state::bounded_writer(writer)?;
             check_path()?;
             let mut tx = db.begin_rw().map_err(io::Error::other)?;
-            let mut voice = voice::read_executing_guild(&tx, &id, cfg, &endpoint, &input.origin)?;
+            let mut voice = voice::read_guild_publication(&tx, &id, cfg, &endpoint, &input.origin)?;
             if inspect(&mut voice)? != original_voice || recheck()? != scope {
                 return Err(unavailable());
             }
