@@ -1500,6 +1500,20 @@ fn maintenance_stop(state: &State, request: &Value) -> io::Result<()> {
             "maintenance claim no longer matches the approved target",
         ));
     }
+    if !claim["account_proof"].is_null() {
+        let proof = providers::codex_continuity::relogin_proof(
+            &state.dir,
+            &state.token,
+            &state.working_dir,
+            &runtime::launch_env(&claim["source_env"]),
+            thread,
+        )?;
+        if proof != claim["account_proof"] {
+            return Err(io::Error::other(
+                "native rollout or effective authority changed before stop",
+            ));
+        }
+    }
     let path = state.dir.join("maintenance-stop.json");
     match runtime::read_json(&path) {
         Ok(proof)

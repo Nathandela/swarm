@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Drive automatic CLI refresh and restart recovery through a private daemon."""
+from contextlib import contextmanager
 from pathlib import Path
 import json
 from datetime import datetime, timezone
@@ -78,6 +79,42 @@ def run(binary, codex_fixture=None, changed=False):
             wait_for(sock.exists,"daemon socket")
             return process
 
+        def wire(peer, body):
+            data = b"\x01" + json.dumps(body).encode()
+            peer.write(struct.pack(">I", len(data)) + data)
+            peer.flush()
+            return json.loads(read_frame(peer)[1:])
+
+        def read_frame(peer):
+            return peer.read(struct.unpack(">I", peer.read(4))[0])
+
+        @contextmanager
+        def attached(session):
+            with socket.socket(socket.AF_UNIX) as conn:
+                conn.settimeout(10)
+                conn.connect(str(sock))
+                with conn.makefile("rwb") as peer:
+                    hello = wire(peer, {"op":"hello","protocol_version":1,"capabilities":["attach"]})
+                    lease = wire(peer, {"op":"attach","endpoint_id":hello["endpoint_id"],"session_id":session})
+                    assert lease["op"] == "lease", lease
+                    remaining = lease["snapshot_len"]
+                    while remaining:
+                        frame = read_frame(peer)
+                        assert frame[0] == 4
+                        remaining -= len(frame) - 1
+                    yield
+
+        def direct_stop(directory, claim):
+            with socket.socket(socket.AF_UNIX) as conn:
+                conn.settimeout(5)
+                conn.connect(str(directory / "p"))
+                with conn.makefile("rwb") as peer:
+                    token = json.loads((directory / "session.json").read_text())["token"]
+                    assert wire(peer, {"type":"hello","wire_version":1,"token":token})["type"] == "hello"
+                    return wire(peer, {"type":"maintenance_stop","nonce":claim["nonce"],
+                                       "conversation_id":claim["conversation_id"],
+                                       "automatic_policy":claim["policy"]})
+
         def plain_launch(agent="agy"):
             def request(peer, body):
                 data = b"\x01" + json.dumps(body).encode()
@@ -135,6 +172,52 @@ def run(binary, codex_fixture=None, changed=False):
                     report = cli("relogin","--dry-run")
                     assert "would" in report, report
                     assert len(rows()) == 1
+                    source_dir = observed.parent
+                    journal = state / "rust-refresh.json"
+                    # Make the real daemon write an exact account claim while an owner lease prevents stop.
+                    with attached(source):
+                        assert "deferred" in cli("relogin")
+                        original_claim = journal.read_bytes()
+                        claim = json.loads(original_claim)["records"][source_dir.name]
+                        assert claim["state"] == "claimed" and claim["account_proof"]["rollout"]
+                    def refusal():
+                        result = direct_stop(source_dir, claim)
+                        return result if result["type"] != "busy" else None
+                    def untouched():
+                        assert journal.read_bytes() == original_claim
+                        assert not (source_dir / "maintenance-stop.json").exists()
+                        assert len(rows()) == 1 and rows()[0]["status"]["Process"] == "running"
+
+                    original = rollout.with_suffix(".original")
+                    rollout.rename(original)
+                    try:
+                        rollout.write_bytes(original.read_bytes())
+                        rollout.chmod(0o600)
+                        result = wait_for(refusal, "stop-boundary rollout refusal")
+                        assert "rollout or effective authority changed" in result["error"], result
+                        untouched()
+                    finally:
+                        rollout.unlink(missing_ok=True)
+                        original.rename(rollout)
+                    altered = work / "config.toml"
+                    altered.write_text('approval_policy = "never"\n')
+                    altered.chmod(0o600)
+                    try:
+                        result = wait_for(refusal, "stop-boundary authority refusal")
+                        assert "origin or authority changed" in result["error"], result
+                        untouched()
+                    finally:
+                        altered.unlink()
+                    original_work = work.with_name("original-work")
+                    work.rename(original_work)
+                    work.mkdir(mode=0o700)
+                    try:
+                        result = wait_for(refusal, "stop-boundary checkout refusal")
+                        assert "checkout or worker scope changed" in result["error"], result
+                        untouched()
+                    finally:
+                        work.rmdir()
+                        original_work.rename(work)
                     cli("relogin", "--auto", "on")
                     def recovered():
                         journal = state / "rust-refresh.json"

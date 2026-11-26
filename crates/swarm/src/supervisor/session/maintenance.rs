@@ -43,6 +43,7 @@ impl Session {
             || !matches!(self.agent.as_str(), "agy" | "claude" | "codex" | "opencode")
             || self.schedule.is_some()
             || !self.manager.is_null()
+            || !self.mailbox.is_null()
             || self.worker_native_installation.is_some()
             || !meta["checkout"].is_null()
             || !meta["lineage"]
@@ -106,6 +107,15 @@ impl Session {
                         "original Codex thread custody is ambiguous",
                     ));
                 }
+                if changed_auth {
+                    return providers::codex_continuity::relogin_proof(
+                        &self.dir,
+                        &self.token,
+                        cwd,
+                        &target.env,
+                        thread,
+                    );
+                }
                 let origin = runtime::read_json(&self.dir.join("codex-profile.json"))?;
                 let old = &origin["profile"];
                 let current =
@@ -122,20 +132,15 @@ impl Session {
                     ]
                     .iter()
                     .any(|key| old[*key] != current[*key])
-                    || (old["account"] != current["account"]) != changed_auth
+                    || old["account"] != current["account"]
                 {
                     return Err(io::Error::other("Codex native origin or authority changed"));
                 }
-                let rollout = providers::codex_continuity::rollout(
+                providers::codex_continuity::rollout(
                     Path::new(field(old, "native_home")),
                     cwd,
                     thread,
                 )?;
-                if changed_auth {
-                    return Ok(
-                        json!({"from":old["account"],"to":current["account"],"thread":thread,"rollout":rollout}),
-                    );
-                }
             }
             "claude" => {
                 let (_, _, original, _) = self.hands_off_claude_source()?;

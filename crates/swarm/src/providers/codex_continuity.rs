@@ -448,6 +448,53 @@ pub(crate) fn initial_history(home: &Path, cwd: &Path, thread: &str) -> io::Resu
     Ok(output)
 }
 
+pub(crate) fn relogin_proof(
+    session: &Path,
+    token: &str,
+    cwd: &Path,
+    environment: &[(String, String)],
+    thread: &str,
+) -> io::Result<Value> {
+    use crate::supervisor::runtime;
+    let reservation = runtime::read_json(&session.join("session.json"))?;
+    let folder = cwd.metadata()?;
+    let identity = json!([folder.dev(), folder.ino()]);
+    if reservation["token"] != token
+        || reservation["cwd"].as_str().map(Path::new) != Some(cwd)
+        || reservation["cwd_identity"] != identity
+        || cwd.canonicalize()? != cwd
+        || !reservation["checkout"].is_null()
+        || !reservation["manager"].is_null()
+        || !reservation["mailbox"].is_null()
+        || !reservation["schedule"].is_null()
+    {
+        return Err(io::Error::other(
+            "original Codex checkout or worker scope changed",
+        ));
+    }
+    match session.join("codex-thread-changed.json").symlink_metadata() {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        _ => {
+            return Err(io::Error::other(
+                "original Codex thread custody is ambiguous",
+            ));
+        }
+    }
+    let origin = runtime::read_json(&session.join("codex-profile.json"))?;
+    let old = &origin["profile"];
+    let current = profile(environment, cwd, &old["options"])?;
+    let mut unchanged = old.clone();
+    unchanged["account"] = current["account"].clone();
+    if origin["token"] != token || unchanged != current || old["account"] == current["account"] {
+        return Err(io::Error::other("Codex native origin or authority changed"));
+    }
+    let rollover = rollout(Path::new(field(old, "native_home")), cwd, thread)?;
+    Ok(json!({
+        "from":old["account"], "to":current["account"], "thread":thread, "rollout":rollover,
+        "profile":current, "cwd_identity":identity,
+    }))
+}
+
 pub(crate) fn newer_or_same(current: &str, saved: &str) -> bool {
     crate::providers::claude::release(current)
         .zip(crate::providers::claude::release(saved))
