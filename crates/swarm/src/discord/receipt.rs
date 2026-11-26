@@ -143,15 +143,23 @@ impl Inbox {
         Ok(Self { file, data })
     }
 
-    fn save(&mut self, next: Value) -> io::Result<()> {
-        if serde_json::to_vec(&next)?.len() >= MAX_STORE_BYTES {
-            return Err(io::Error::other("Discord inbox reached its storage limit"));
-        }
-        let _effect = super::worker_input::lock_ledger_writer(
+    fn lock_writer(&self) -> io::Result<std::fs::File> {
+        super::worker_input::lock_ledger_writer(
             self.file
                 .parent()
                 .ok_or_else(|| invalid("missing connector ledger directory"))?,
-        )?;
+        )
+    }
+
+    fn save(&mut self, next: Value) -> io::Result<()> {
+        let _writer = self.lock_writer()?;
+        self.write_locked(next)
+    }
+
+    fn write_locked(&mut self, next: Value) -> io::Result<()> {
+        if serde_json::to_vec(&next)?.len() >= MAX_STORE_BYTES {
+            return Err(io::Error::other("Discord inbox reached its storage limit"));
+        }
         if let Err(err) = runtime::write_json(&self.file, &next) {
             // A directory fsync failure can follow a successful rename. Stop this
             // writer before it can update a stale in-memory snapshot.
@@ -520,6 +528,33 @@ impl Inbox {
         next["messages"][id]["state"] = json!("withdrawn");
         next["manager"]["input"] = Value::Null;
         self.save(next)
+    }
+
+    pub(super) fn begin_draft_retry(&mut self, expected: &Value) -> io::Result<Value> {
+        use crate::providers::codex_receipt;
+
+        let input = &expected["input"];
+        if self.manager() != expected
+            || input["draft_retry"] != "prepared"
+            || !input["turn_id"].is_null()
+            || !input["composer"].is_object()
+            || !input["operation"].is_string()
+        {
+            return Err(invalid("dispatcher retry is no longer prepared"));
+        }
+        let _writer = self.lock_writer()?;
+        if runtime::read_json(&self.file)? != self.data {
+            return Err(invalid("dispatcher retry changed before commit"));
+        }
+        let mut manager = expected.clone();
+        if !codex_receipt::timely(field(input, "operation")) {
+            manager["input"]["operation"] = json!(codex_receipt::operation()?);
+        }
+        manager["input"]["draft_retry"] = json!("executing");
+        let mut next = self.data.clone();
+        next["manager"] = manager.clone();
+        self.write_locked(next)?;
+        Ok(manager)
     }
 
     pub(super) fn withdraw_draft_retry(&mut self, id: &str) -> io::Result<()> {

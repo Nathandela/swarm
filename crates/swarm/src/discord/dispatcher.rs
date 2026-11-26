@@ -271,7 +271,8 @@ impl Dispatcher {
                 let Some(current) = Self::mail_owner_current(cfg, inbox, api, id, revision)? else {
                     return Ok(());
                 };
-                let expired = !crate::providers::codex_receipt::timely(field(input, "operation"));
+                let expired = input["draft_retry"].is_null()
+                    && !crate::providers::codex_receipt::timely(field(input, "operation"));
                 if !current || expired {
                     let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
                         Ok(lock) => lock,
@@ -304,7 +305,6 @@ impl Dispatcher {
             if phase == "unknown"
                 && status["ready_for_input"] == true
                 && state["input"]["draft_retry"] == "prepared"
-                && crate::providers::codex_receipt::timely(field(&state["input"], "operation"))
             {
                 let input = &state["input"];
                 let id = field(input, "source_id");
@@ -334,8 +334,7 @@ impl Dispatcher {
                         }
                     }
                 }
-                state["input"]["draft_retry"] = json!("executing");
-                inbox.set_manager(state.clone())?;
+                state = inbox.begin_draft_retry(&state)?;
                 let input = &state["input"];
                 // The renewed operation crosses this boundary once. Only another exact
                 // durable pre-effect refusal can authorize another renewal.
@@ -1854,6 +1853,11 @@ mod tests {
         assert_eq!(renewed["draft_retry"], "prepared");
         assert_eq!(held["composer"], renewed["composer"]);
         assert_eq!(held["source_id"], renewed["source_id"]);
+        let mut stalled = inbox.manager().clone();
+        let expired = "semantic:1:00000000000000000000000000000001";
+        stalled["input"]["operation"] = json!(expired);
+        inbox.set_manager(stalled.clone()).unwrap();
+        let renewed = stalled["input"].clone();
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         api.source.set(LiveSource::Unavailable);
@@ -1878,11 +1882,18 @@ mod tests {
             return;
         }
         api.source.set(LiveSource::Exact);
+        let mut stale_inbox = Inbox::open(&dir, &cfg).unwrap();
         for _ in 0..3 {
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         }
         assert_eq!(state.lock().unwrap().sends, 2);
         assert_eq!(inbox.manager()["input"]["draft_retry"], "executing");
+        let chosen = field(&inbox.manager()["input"], "operation");
+        assert_ne!(chosen, expired);
+        assert!(crate::providers::codex_receipt::timely(chosen));
+        assert_eq!(inbox.manager()["input"]["composer"], renewed["composer"]);
+        assert!(stale_inbox.begin_draft_retry(&stalled).is_err());
+        assert!(inbox.begin_draft_retry(&inbox.manager().clone()).is_err());
         state.lock().unwrap().input_observed = true;
         assert!(api.posted.borrow().is_empty());
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
