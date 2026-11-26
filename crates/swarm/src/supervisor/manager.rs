@@ -8,6 +8,8 @@ use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 
+pub(crate) const NATIVE_CLI_CAP: &str = "manager-native-cli";
+
 pub(crate) fn retirement_id(request: &Value) -> io::Result<String> {
     let mut binding = serde_json::Map::new();
     let supplied = &request["binding"];

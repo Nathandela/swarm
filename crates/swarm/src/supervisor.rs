@@ -959,6 +959,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                             | "message-origin"
                             | "manager-retire"
                             | "manager-retire-resume-v1"
+                            | manager::NATIVE_CLI_CAP
                     )
                 || matches!(
                     *cap,

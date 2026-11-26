@@ -833,7 +833,11 @@ impl Config {
             "logins.manage.v1",
         ];
         if self.text("project_access") == "vm" {
-            caps.extend(["manager-retire-cancel", "dispatcher-worker-mail"]);
+            caps.extend([
+                "manager-retire-cancel",
+                "dispatcher-worker-mail",
+                crate::supervisor::manager::NATIVE_CLI_CAP,
+            ]);
         }
         caps
     }

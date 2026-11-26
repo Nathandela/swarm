@@ -92,6 +92,15 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
                 "manager-launch capability was not negotiated",
             ));
         }
+        if launch["manager"]["native_cli"] == true
+            && !caps.contains(&super::manager::NATIVE_CLI_CAP)
+        {
+            return Ok(refusal(
+                id,
+                "op_not_implemented",
+                "manager-native-cli capability was not negotiated",
+            ));
+        }
         let scope = match super::manager::launch_scope(state, &launch) {
             Ok(scope) => scope,
             Err(err) => return Ok(refusal(id, "manager_launch_prerequisite", &err.to_string())),

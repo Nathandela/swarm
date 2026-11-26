@@ -63,8 +63,12 @@ impl Manager {
     }
 
     fn dial(&self) -> io::Result<Client> {
-        let client = Client::dial(Path::new(self.cfg.text("daemon_socket")), CAPS)?;
-        self.cfg.check_supervisor(&client, CAPS)?;
+        let mut caps = CAPS.to_vec();
+        if self.cfg.text("project_access") == "vm" {
+            caps.push(crate::supervisor::manager::NATIVE_CLI_CAP);
+        }
+        let client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
         Ok(client)
     }
 
@@ -532,6 +536,18 @@ mod tests {
         };
         let launch = dispatcher.scope(&cfg)["launch"].clone();
         let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
+        if cfg.text("project_access") == "vm" {
+            let mut legacy = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS).unwrap();
+            let denied = legacy
+                .request_body(
+                    json!({"op":"owner_launch","operation_id":operation,
+                "launch":launch}),
+                    "launch",
+                )
+                .unwrap_err();
+            assert!(denied.to_string().contains("manager-native-cli"));
+            assert!(legacy.sessions().unwrap().is_empty());
+        }
         inbox
             .set_manager(json!({"generation":1,"launch_operation":operation,"launch":launch}))
             .unwrap();
