@@ -1,8 +1,23 @@
 # Connect a local Swarm to Discord
 
-## Personal voice room on the Rust migration branch
+## Enroll a personal dispatcher
 
-The enrolled personal Codex connector can opt in to one ordinary guild voice room. Establish the dispatcher by texting the owner DM first. Prepare the pinned helper with Node 24.17 or later in the Node 24 series, run `npm ci --omit=dev` in `services/discord-voice`, then run `./swarm-discord-voice --check`. The connector looks for Node in `/usr/local/bin`, `/opt/homebrew/bin`, then `/usr/bin`. Use npm 11 with `umask 077` to install the pinned lockfile. Keep the bundle and dependencies owned by the connector user or root and free of group or other write access. Restart the connector after installing a matching bundle.
+Select a private place directory, a workspace, the owner's Discord user ID and an owner-readable bot token file. The account running the connector must own the file. Run these commands with the same per-user supervisor and state directory.
+
+```sh
+swarm discord connect --mode personal --manager codex --project-access enrolled \
+    --owner-id "$owner" --token-file "$token_file" --workdir "$workspace" --state-dir "$place"
+swarm discord doctor --state-dir "$place"
+swarm discord run --state-dir "$place"
+```
+
+The example enrolls a personal Codex dispatcher with access to its registered workspaces. Select `--manager claude` for a qualified installed Claude Code. On a new placement, the historical default is `--project-access vm`; choosing `enrolled` restricts project operations to enrolled tools. The connect response reports the effective selection and the verified DM channel. Text the bot in that DM to start a discussion.
+
+Use `--install` on `connect` to register the per-user service and `swarm discord status --state-dir "$place"` to inspect it. A failure during service activation can leave the place configured. Doctor checks the bot, selected discussion, supervisor and native provider. For a teammate in a guild, use `--mode teammate --guild "$guild"` and run the channel-specific check with `swarm discord doctor --state-dir "$place" --channel "$channel"`. [Service behavior](../verification/rust-discord-service.md) · [Retained Go state](../verification/rust-discord-retained-state.md)
+
+## Personal voice room
+
+A signed preview archive includes the pinned Node runtime and Discord media dependencies. Run `swarm release-check-media` from the installed generation before enabling voice. When running from source, install the pinned dependencies under `services/discord-voice` using `umask 077` and `npm ci --omit=dev`, run `./swarm-discord-voice --check`, and set `calls.helper_path` to that executable. The source override uses an installed Node 24.17 or later in the Node 24 series. [Packaged media and installation checks](../verification/rust-installed-pty.md)
 
 Add a `calls` object to the private connector `config.json`, then restart the isolated foreground connector.
 
@@ -12,7 +27,6 @@ Add a `calls` object to the private connector `config.json`, then restart the is
   "guild_id": "GUILD_SNOWFLAKE",
   "room_id": "VOICE_ROOM_SNOWFLAKE",
   "discussion_id": "OWNER_DM_SNOWFLAKE",
-  "helper_path": "/absolute/path/to/swarm-discord-voice",
   "speech_state_dir": "/absolute/path/to/private-speech-state"
 }
 ```
