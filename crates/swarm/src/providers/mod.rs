@@ -26,6 +26,7 @@ pub(crate) struct LaunchPlan {
     pub executable: PathBuf,
     pub identity: Value,
     pub version: String,
+    pub stable_release: bool,
     pub agy_status_line: bool,
     pub native: Value,
     pub agy_acp: bool,
@@ -92,6 +93,13 @@ pub(crate) fn prepare(
     let agy_acp = agent == "agy"
         && agy::supports_acp(&version)
         && output.lines().any(|line| line.trim() == version);
+    let matching: Vec<_> = output
+        .split_whitespace()
+        .filter(|word| word.contains(&version))
+        .collect();
+    let stable_release = version.split('.').count() == 3
+        && !matching.is_empty()
+        && matching.iter().all(|word| *word == version);
     let after = identity(&executable)?;
     if before != after {
         return Err(io::Error::other(
@@ -149,6 +157,7 @@ pub(crate) fn prepare(
         executable,
         identity: after,
         version,
+        stable_release,
         agy_status_line,
         native,
         agy_acp,

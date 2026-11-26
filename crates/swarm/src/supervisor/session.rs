@@ -1,4 +1,5 @@
 mod hermes;
+pub(super) mod maintenance;
 mod manager_retire;
 mod manager_runtime;
 
@@ -1019,10 +1020,13 @@ impl Session {
         };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
+        let maintenance_env = maintenance::environment(&provider);
+        let auth_stamp = maintenance::auth_identity(provider.agent, &maintenance_env);
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
                 "schema": if provider.hermes.is_null() { 1 } else { 2 }, "go_rollback":go_rollback, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"mailbox":mailbox,"lineage":lineage,
+                "maintenance_env":maintenance_env,"auth_stamp":auth_stamp,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "schedule_claude_conversation":claude_conversation,
@@ -1036,7 +1040,7 @@ impl Session {
                     } else if provider.agent == "agy" && scheduled.is_some() {
                         "acp"
                     } else { "classic" },
-                    "executable": provider.executable, "identity": provider.identity, "hermes_profile":provider.hermes_profile,"hermes_installation":hermes_installation},
+                    "executable": provider.executable, "identity": provider.identity, "stable_release":provider.stable_release, "hermes_profile":provider.hermes_profile,"hermes_installation":hermes_installation},
                 "opencode_profile": (provider.agent == "opencode").then(|| opencode::profile(&provider.env)),
                 "opencode_resume": resume,
                 "claude_profile": claude_profile,

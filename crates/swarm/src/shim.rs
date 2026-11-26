@@ -1068,6 +1068,15 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 },
             )
         }
+        "maintenance_stop" => {
+            let result = maintenance_stop(state, &request);
+            let reply = match result {
+                Ok(()) => json!({"type":"ok"}),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => json!({"type":"busy"}),
+                Err(err) => json!({"type":"error","error":err.to_string()}),
+            };
+            runtime::write_control(&mut stream, &reply)
+        }
         "signal" if request["sig"] == "term" => {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
@@ -1311,6 +1320,71 @@ fn opencode_terminal_ready(state: &State) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn maintenance_stop(state: &State, request: &Value) -> io::Result<()> {
+    let nonce = field(request, "nonce");
+    let thread = field(request, "conversation_id");
+    let busy = || {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "worker is active or has unresolved input",
+        )
+    };
+    let root = state
+        .dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| io::Error::other("missing maintenance state root"))?;
+    let _policy = runtime::lock(&root.join(".native-maintenance-policy.lock"))?;
+    if let Some(name) = request["automatic_policy"].as_str()
+        && (!matches!(name, crate::refresh::AUTH | crate::refresh::POLICY)
+            || crate::refresh::disabled(root, name)?)
+    {
+        return Err(busy());
+    }
+    let _control = state.control.lock().unwrap();
+    if *_control != 0 || state.terminal_input.load(Ordering::Acquire) {
+        return Err(busy());
+    }
+    if !runtime::valid_id(nonce)
+        || !codex_receipt::canonical_thread(thread)
+        || state.schedule.is_some()
+        || !matches!(state.provider.as_str(), "codex" | "claude" | "agy")
+    {
+        return Err(io::Error::other("unsupported maintenance stop binding"));
+    }
+    let observation = runtime::read_json(&state.dir.join("observation.json"))?;
+    let status = &observation["status"];
+    if observation["token"] != state.token
+        || observation["conversation_id"] != thread
+        || status["Process"] != "running"
+        || status["Turn"] != "idle"
+        || status["Interaction"] != "none"
+        || status["Attention"] == true
+        || state.provider == "codex" && observation["manager_ingress_ready"] != true
+    {
+        return Err(busy());
+    }
+    let path = state.dir.join("maintenance-stop.json");
+    match runtime::read_json(&path) {
+        Ok(proof)
+            if proof["token"] == state.token
+                && proof["nonce"] == nonce
+                && proof["conversation_id"] == thread => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => runtime::write_json(
+            &path,
+            &json!({
+                "token":state.token,"nonce":nonce,"conversation_id":thread,
+            }),
+        )?,
+        _ => {
+            return Err(io::Error::other(
+                "conflicting durable maintenance stop proof",
+            ));
+        }
+    }
+    terminate(state)
 }
 
 fn queue_agy_prompt(state: &State, request: &Value) -> io::Result<()> {

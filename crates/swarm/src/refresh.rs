@@ -19,6 +19,11 @@ pub(crate) fn disabled(root: &Path, name: &str) -> io::Result<bool> {
 }
 
 fn set_disabled(root: &Path, name: &str, is_disabled: bool) -> io::Result<()> {
+    if !is_disabled && !root.exists() {
+        return Ok(());
+    }
+    runtime::private_dir(root)?;
+    let _policy = runtime::lock(&root.join(".native-maintenance-policy.lock"))?;
     if is_disabled {
         runtime::private_dir(root)?;
         runtime::write_json(&root.join(name), &json!({"disabled":true}))
@@ -131,7 +136,7 @@ pub(crate) fn run(verb: &str, args: &[String]) -> u8 {
     }
     let result = (|| {
         let root = ipc::state_path()?;
-        if auto != "" {
+        if !auto.is_empty() {
             set_disabled(&root, if status { POLICY } else { AUTH }, auto == "off")?;
             if !status {
                 println!("automatic auth watcher: {auto}");
