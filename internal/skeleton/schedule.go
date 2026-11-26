@@ -22,6 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/schedule"
@@ -189,9 +190,33 @@ func (b scheduleBackend) SendPrompt(sessionID, attemptID, prompt string, begin f
 		m.Status.Interaction != status.InteractionNone {
 		return nil
 	}
-	_, err := b.api.SemanticSendTransactional(b.api.endpointID, "schedule-prompt:"+attemptID,
-		protocol.ComposerSendReq{Session: sessionID, Text: prompt}, begin)
-	return err
+	return b.api.sendOwnerPrompt(local, "schedule-prompt:"+attemptID, prompt, begin)
+}
+
+// sendOwnerPrompt submits daemon-originated owner input under the same durable
+// custody a `swarm message` takes, which native Claude input requires.
+func (a *coreAPI) sendOwnerPrompt(local, operationID, text string, begin func() error) error {
+	req := protocol.ComposerSendReq{Session: protocol.NamespacedID(a.endpointID, local), Text: text}
+	phase, _, err := a.core.ClaimComposerOperation(operationID, protocol.OpSemanticSend, local, "", hex.EncodeToString(schema.ComposerSendContentHash(&req)))
+	if err != nil {
+		return err
+	}
+	if phase != string(idempotency.PhasePrepared) {
+		return fmt.Errorf("prompt operation is already %s; nothing was resent", phase)
+	}
+	begun := false
+	_, err = a.SemanticSendTransactional(a.endpointID, operationID, req, func() error {
+		if err := begin(); err != nil {
+			return err
+		}
+		err := a.core.BeginComposerOperation(operationID)
+		begun = err == nil
+		return err
+	})
+	if !begun || errors.Is(err, protocol.ErrComposerOutcomeUnknown) {
+		return err // prepared retries on the next tick; executing is never replayed
+	}
+	return errors.Join(err, a.core.CommitComposerOperation(operationID, []byte(fmt.Sprintf(`{"ok":%t}`, err == nil)), err == nil))
 }
 
 func (b scheduleBackend) WorkspaceAvailable(cwd string) bool {

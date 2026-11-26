@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -81,6 +82,10 @@ func dispatchTeammate(args []string, stdout, stderr io.Writer) int {
 	if len(files) > 0 && *kind != "complete" {
 		_, _ = fmt.Fprintln(stderr, "teammate: files require --kind complete")
 		return misuseExit
+	}
+	if os.Getenv(daemon.ScheduleEnvRun) != "" && os.Getenv(workermail.SocketEnv) == "" && os.Getenv(schema.WorkerBridgeEnv) == "" {
+		_, _ = fmt.Fprintln(stderr, `teammate: this is a scheduled run with no manager to message; finish it with "$SWARM_SCHEDULE_BIN" schedule complete --summary TEXT [--link URL]`)
+		return 1
 	}
 	if len(files) > 0 && os.Getenv(workermail.SocketEnv) == "" {
 		_, _ = fmt.Fprintln(stderr, "teammate: files require a mailbox-enabled Swarm worker")

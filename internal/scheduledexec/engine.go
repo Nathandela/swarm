@@ -162,10 +162,17 @@ func (e *Engine) observe(run schedule.Occurrence, now time.Time) error {
 		return e.stop(run, a, session, now)
 	case session.Stopped && session.StartupRejected && !a.PromptStarted:
 		return e.advanceRoute(run, a, startupRejectedDetail, now)
+	case session.Stopped && !a.PromptStarted && supportsPrivatePrompt(e.backend):
+		return e.update(run, a, schedule.OccurrenceIncomplete, schedule.AttemptStopped, "", "The opening prompt was never delivered, so the worker was stopped; the workspace was kept.", now)
 	case session.Stopped:
 		return e.update(run, a, schedule.OccurrenceIncomplete, schedule.AttemptStopped, "", "Worker exited without a completion receipt; the workspace was kept.", now)
 	case !session.Running:
 		return e.update(run, a, schedule.OccurrenceAttention, schedule.AttemptUnknown, "", "Worker disappeared without a verified stop or completion receipt.", now)
+	case !a.PromptStarted && supportsPrivatePrompt(e.backend) && now.Sub(a.StartedAt) >= promptDeadline:
+		// The worker cannot complete without its prompt; stopping it ends the
+		// attempt through the verified-exit path instead of blocking the job.
+		_ = e.backend.Stop(a.SessionID, a.ID)
+		return nil
 	case session.NeedsInput:
 		return e.update(run, a, schedule.OccurrenceNeedsInput, a.State, "", "Open the worker chat to continue.", now)
 	case !a.PromptDelivered && supportsPrivatePrompt(e.backend):
@@ -176,6 +183,9 @@ func (e *Engine) observe(run schedule.Occurrence, now time.Time) error {
 		return nil
 	}
 }
+
+// promptDeadline bounds how long a worker may wait for its opening prompt.
+const promptDeadline = 10 * time.Minute
 
 func supportsPrivatePrompt(backend Backend) bool {
 	_, supported := backend.(promptBackend)
