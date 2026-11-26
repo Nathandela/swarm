@@ -166,17 +166,28 @@ impl Route {
     pub(super) fn verify(
         &self,
         cfg: &Config,
-        mut get: impl FnMut(&str) -> io::Result<Option<Value>>,
+        get: impl FnMut(&str) -> io::Result<Option<Value>>,
         users: &[&str],
     ) -> io::Result<bool> {
+        Ok(self
+            .access(cfg, get, users)?
+            .is_some_and(|access| access.can_read_history))
+    }
+
+    fn access(
+        &self,
+        cfg: &Config,
+        mut get: impl FnMut(&str) -> io::Result<Option<Value>>,
+        users: &[&str],
+    ) -> io::Result<Option<ThreadAccess>> {
         let Some(thread) = get(&format!("/channels/{}", self.thread))? else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(parent) = thread["parent_id"]
             .as_str()
             .filter(|id| snowflake(id) && *id != self.thread)
         else {
-            return Ok(false);
+            return Ok(None);
         };
         if thread["id"] != self.thread
             || thread["guild_id"] != self.guild
@@ -191,26 +202,28 @@ impl Route {
                 !ids.is_empty() && !ids.iter().any(|id| id == &self.thread || id == parent)
             })
         {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(container) = get(&format!("/channels/{parent}"))? else {
-            return Ok(false);
+            return Ok(None);
         };
         if container["id"] != parent
             || container["guild_id"] != self.guild
             || !matches!(container["type"].as_u64(), Some(0 | 5 | 15 | 16))
         {
-            return Ok(false);
+            return Ok(None);
         }
         const ADMIN: u64 = 1 << 3;
-        const TEXT: u64 = (1 << 10) | (1 << 16) | (1 << 38);
+        const VIEW_AND_SEND: u64 = (1 << 10) | (1 << 38);
+        const HISTORY: u64 = 1 << 16;
+        let mut can_read_history = true;
         let bot = cfg.text("application_id");
         for user in std::iter::once(bot).chain(users.iter().copied()) {
             if !snowflake(user) {
-                return Ok(false);
+                return Ok(None);
             }
             let Some(member) = get(&format!("/guilds/{}/members/{user}", self.guild))? else {
-                return Ok(false);
+                return Ok(None);
             };
             if member["user"]["id"] != user
                 || member["user"]["system"] == true
@@ -219,24 +232,33 @@ impl Route {
                     && !member["user"]["bot"].is_null()
                     && member["user"]["bot"] != false)
             {
-                return Ok(false);
+                return Ok(None);
             }
             let bits = super::guild::member_permissions(&mut get, parent, user)?;
-            if bits & ADMIN == 0 && bits & TEXT != TEXT {
-                return Ok(false);
+            if bits & ADMIN == 0 && bits & VIEW_AND_SEND != VIEW_AND_SEND {
+                return Ok(None);
             }
+            can_read_history &= bits & (ADMIN | HISTORY) != 0;
             if thread["type"] == 12 {
                 let Some(row) = get(&format!("/channels/{}/thread-members/{user}", self.thread))?
                 else {
-                    return Ok(false);
+                    return Ok(None);
                 };
                 if row["id"] != self.thread || row["user_id"] != user {
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
-        Ok(true)
+        Ok(Some(ThreadAccess {
+            parent: parent.into(),
+            can_read_history,
+        }))
     }
+}
+
+pub(super) struct ThreadAccess {
+    pub(super) parent: String,
+    pub(super) can_read_history: bool,
 }
 
 pub(super) struct ThreadAudience<'a> {
@@ -245,8 +267,22 @@ pub(super) struct ThreadAudience<'a> {
 }
 
 impl ThreadAudience<'_> {
-    pub(super) fn history(&self, cfg: &Config, before: &str) -> io::Result<Vec<Value>> {
-        self.verify(cfg)?;
+    pub(super) fn access(&self, cfg: &Config) -> io::Result<ThreadAccess> {
+        self.route
+            .access(cfg, |path| super::guild::lookup(self.api, path), &[])?
+            .ok_or_else(|| invalid("linked team thread is no longer accessible"))
+    }
+
+    pub(super) fn history(
+        &self,
+        cfg: &Config,
+        parent: &str,
+        before: &str,
+    ) -> io::Result<Vec<Value>> {
+        let access = self.access(cfg)?;
+        if !access.can_read_history || access.parent != parent {
+            return Err(invalid("linked team history authority changed"));
+        }
         let suffix = if before.is_empty() {
             String::new()
         } else if snowflake(before) {

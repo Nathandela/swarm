@@ -10,6 +10,13 @@ const VERSION: u64 = 2;
 const VOICE_VERSION: u64 = 3;
 const MAX_RECORDS: usize = 2048;
 const MAX_STORE_BYTES: usize = 1 << 20;
+const MAX_GAP_NOTICES: usize = 32;
+pub(super) const TEAM_GAP_NOTICE: &str = "I may have missed requests while disconnected. Please restate anything you still want me to do.";
+
+pub(super) struct PendingGapNotice {
+    pub(super) nonce: String,
+    pub(super) parent: String,
+}
 
 pub(super) enum Observation {
     Gateway,
@@ -140,7 +147,9 @@ impl Inbox {
         } else if !data["team_discussion"].is_null() {
             return Err(invalid("linked team discussion is no longer configured"));
         }
-        Ok(Self { file, data })
+        let inbox = Self { file, data };
+        inbox.verify_team_gap_notices()?;
+        Ok(inbox)
     }
 
     fn lock_writer(&self) -> io::Result<std::fs::File> {
@@ -863,6 +872,198 @@ impl Inbox {
         self.data["team_gap_epoch"].as_u64().unwrap_or_default()
     }
 
+    pub(super) fn team_gap_pending(&self) -> bool {
+        self.team_gap_epoch()
+            > self.data["team_repaired_gap_epoch"]
+                .as_u64()
+                .unwrap_or_default()
+    }
+
+    fn team_gap_nonce(&self, epoch: u64, parent: &str) -> io::Result<String> {
+        let [installation, app, _, _, _] = self.identity();
+        Ok(hash(&json!([
+            "team_gap_notice",
+            installation,
+            app,
+            self.data["team_discussion"],
+            parent,
+            epoch
+        ]))?[..24]
+            .to_owned())
+    }
+
+    fn verify_team_gap_notices(&self) -> io::Result<()> {
+        let valid = |value: &Value| value.is_null() || value.as_u64().is_some();
+        let notices = &self.data["team_gap_notices"];
+        if !valid(&self.data["team_gap_epoch"])
+            || !valid(&self.data["team_repaired_gap_epoch"])
+            || self.data["team_repaired_gap_epoch"]
+                .as_u64()
+                .unwrap_or_default()
+                > self.team_gap_epoch()
+            || !notices.is_null() && !notices.is_object()
+        {
+            return Err(invalid("invalid linked discussion gap state"));
+        }
+        let Some(notices) = notices.as_object() else {
+            return Ok(());
+        };
+        if notices.len() > MAX_GAP_NOTICES || self.data["team_discussion"].is_null() {
+            return Err(invalid("invalid linked discussion gap custody"));
+        }
+        let mut epochs = std::collections::BTreeSet::new();
+        for (nonce, row) in notices {
+            let epoch = row["epoch"].as_u64().unwrap_or_default();
+            let parent = row["parent"].as_str().unwrap_or_default();
+            let valid_state = match row["state"].as_str() {
+                Some("prepared") => {
+                    valid(&row["retry_at"])
+                        && row["message_id"].is_null()
+                        && row["evidence"].is_null()
+                }
+                Some("sending") => {
+                    row["retry_at"].is_null()
+                        && row["message_id"].is_null()
+                        && row["evidence"].is_null()
+                }
+                Some("sent") => {
+                    row["retry_at"].is_null()
+                        && row["message_id"].as_str().is_some_and(snowflake)
+                        && matches!(
+                            row["evidence"].as_str(),
+                            Some("rest_acknowledged" | "gateway_seen" | "history_seen")
+                        )
+                }
+                _ => false,
+            };
+            if epoch == 0
+                || epoch > self.team_gap_epoch()
+                || !epochs.insert(epoch)
+                || !snowflake(parent)
+                || self.data["team_discussion"]["thread_id"] == parent
+                || *nonce != self.team_gap_nonce(epoch, parent)?
+                || !valid_state
+            {
+                return Err(invalid("invalid linked discussion gap receipt"));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn stage_team_gap(&mut self, parent: &str) -> io::Result<()> {
+        if !self.team_gap_pending() || self.team_cursor().is_none() {
+            return Ok(());
+        }
+        if !snowflake(parent)
+            || self.data["team_discussion"].is_null()
+            || self.data["team_discussion"]["thread_id"] == parent
+        {
+            return Err(invalid("invalid linked discussion gap audience"));
+        }
+        let epoch = self.team_gap_epoch();
+        let mut next = self.data.clone();
+        if next["team_gap_notices"].is_null() {
+            next["team_gap_notices"] = json!({});
+        }
+        let notices = next["team_gap_notices"].as_object_mut().unwrap();
+        if notices.values().any(|row| row["epoch"] == epoch) {
+            return Ok(());
+        }
+        if notices.len() >= MAX_GAP_NOTICES {
+            let settled = notices
+                .iter()
+                .filter(|(_, row)| row["state"] == "sent")
+                .min_by_key(|(_, row)| row["epoch"].as_u64())
+                .map(|(nonce, _)| nonce.clone())
+                .ok_or_else(|| {
+                    invalid("unconfirmed discussion gap notices reached their capacity")
+                })?;
+            notices.shift_remove(&settled);
+        }
+        notices.insert(
+            self.team_gap_nonce(epoch, parent)?,
+            json!({"epoch":epoch,"parent":parent,"state":"prepared"}),
+        );
+        self.save(next)
+    }
+
+    pub(super) fn pending_team_gap(&self, now: u64) -> Option<PendingGapNotice> {
+        let (nonce, row) = self.data["team_gap_notices"]
+            .as_object()?
+            .iter()
+            .filter(|(_, row)| {
+                row["state"] == "prepared" && row["retry_at"].as_u64().unwrap_or_default() <= now
+            })
+            .min_by_key(|(_, row)| row["epoch"].as_u64())?;
+        Some(PendingGapNotice {
+            nonce: nonce.clone(),
+            parent: row["parent"].as_str()?.to_owned(),
+        })
+    }
+
+    pub(super) fn team_gap_attempt(
+        &mut self,
+        nonce: &str,
+        retry_at: Option<u64>,
+    ) -> io::Result<()> {
+        let current = &self.data["team_gap_notices"][nonce]["state"];
+        let (expected, next_state) = if retry_at.is_some() {
+            ("sending", "prepared")
+        } else {
+            ("prepared", "sending")
+        };
+        if current != expected {
+            return Err(invalid("invalid linked discussion gap attempt"));
+        }
+        let mut next = self.data.clone();
+        next["team_gap_notices"][nonce]["state"] = json!(next_state);
+        next["team_gap_notices"][nonce]["retry_at"] = json!(retry_at);
+        self.save(next)
+    }
+
+    pub(super) fn team_gap_message_parent(&self, message: &Value) -> Option<&str> {
+        let [_, app, _, _, _] = self.identity();
+        let row = &self.data["team_gap_notices"][message["nonce"].as_str()?];
+        let team = &self.data["team_discussion"];
+        (row["state"] == "sending"
+            && message["id"].as_str().is_some_and(snowflake)
+            && boundary(&message["id"]) > boundary(&self.data["team_consent_floor"])
+            && message["channel_id"] == team["thread_id"]
+            && (message["guild_id"].is_null() || message["guild_id"] == team["guild_id"])
+            && message["author"]["id"] == app
+            && message["author"]["bot"] == true
+            && message["author"]["system"] != true
+            && message["webhook_id"].is_null()
+            && message["type"] == 0
+            && message["content"] == TEAM_GAP_NOTICE
+            && message["attachments"].as_array().is_some_and(Vec::is_empty))
+        .then(|| row["parent"].as_str())
+        .flatten()
+    }
+
+    pub(super) fn observe_team_gap(
+        &mut self,
+        message: &Value,
+        parent: &str,
+        via: Observation,
+    ) -> io::Result<()> {
+        let evidence = match via {
+            Observation::Rest => "rest_acknowledged",
+            Observation::Gateway => "gateway_seen",
+            Observation::History => "history_seen",
+        };
+        if self.team_gap_message_parent(message) == Some(parent) {
+            let nonce = message["nonce"].as_str().unwrap();
+            let mut next = self.data.clone();
+            let row = &mut next["team_gap_notices"][nonce];
+            row["state"] = json!("sent");
+            row["message_id"] = message["id"].clone();
+            row["evidence"] = json!(evidence);
+            self.save(next)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn mark_team_gap(&mut self) -> io::Result<()> {
         let epoch = self
             .team_gap_epoch()
@@ -878,17 +1079,30 @@ impl Inbox {
     }
 
     pub(super) fn checkpoint_team(&mut self, id: &str) -> io::Result<()> {
+        self.save_team_checkpoint(id, false)
+    }
+
+    pub(super) fn complete_team_repair(&mut self, id: &str) -> io::Result<()> {
+        self.save_team_checkpoint(id, self.team_gap_pending())
+    }
+
+    fn save_team_checkpoint(&mut self, id: &str, complete_gap: bool) -> io::Result<()> {
         if !id.is_empty() && !snowflake(id) || self.data["team_discussion"].is_null() {
             return Err(invalid("invalid linked team checkpoint"));
         }
-        if self.team_cursor().is_none()
-            || boundary(&json!(id)) > boundary(&self.data["team_history_cursor"])
-        {
+        let advanced = self.team_cursor().is_none()
+            || boundary(&json!(id)) > boundary(&self.data["team_history_cursor"]);
+        if advanced || complete_gap {
             let mut next = self.data.clone();
             if self.team_cursor().is_none() {
                 next["team_consent_floor"] = json!(id);
             }
-            next["team_history_cursor"] = json!(id);
+            if advanced {
+                next["team_history_cursor"] = json!(id);
+            }
+            if complete_gap {
+                next["team_repaired_gap_epoch"] = json!(self.team_gap_epoch());
+            }
             self.save(next)?;
         }
         Ok(())

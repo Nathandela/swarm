@@ -202,15 +202,17 @@ impl<'a> LinkedDiscussion<'a> {
     }
 
     fn repair_history(&mut self) {
-        self.history_ready = admit_linked_starter(&self.cfg, &mut self.inbox, &self.thread)
-            .and_then(|_| super::team_history::repair(&self.cfg, &mut self.inbox, &self.thread))
-            .is_ok();
-        self.next_history_check = Instant::now() + Duration::from_secs(5);
+        self.history_ready =
+            refresh_linked_history(&self.cfg, &mut self.inbox, &self.thread).unwrap_or(false);
     }
 
     fn tick(&mut self, place: &Place, driver: &super::call_runtime::Driver) {
-        if !self.history_ready && Instant::now() >= self.next_history_check {
-            self.repair_history();
+        if Instant::now() >= self.next_history_check {
+            self.next_history_check = Instant::now() + Duration::from_secs(5);
+            if !self.history_ready {
+                self.repair_history();
+            }
+            let _ = super::team_history::send_gap_notice(&self.cfg, &mut self.inbox, &self.thread);
         }
         if !self.history_ready {
             return;
@@ -235,12 +237,17 @@ impl<'a> LinkedDiscussion<'a> {
     }
 }
 
-fn call_ready(inbox: &Inbox, additional: &[LinkedDiscussion<'_>], scope: Option<&Value>) -> bool {
+fn call_ready(
+    inbox: &Inbox,
+    history_ready: bool,
+    additional: &[LinkedDiscussion<'_>],
+    scope: Option<&Value>,
+) -> bool {
     let Some(scope) = scope else {
         return false;
     };
     if scope["call_place"].is_null() {
-        return !inbox.manager()["binding"].is_null();
+        return history_ready && !inbox.manager()["binding"].is_null();
     }
     additional.iter().any(|slot| {
         scope["guild_id"] == slot.thread.route.guild
@@ -289,9 +296,6 @@ fn run_guild(
     let mut guild_events = std::collections::VecDeque::new();
     let thread = super::team_thread::Route::configured(cfg)?
         .map(|route| super::team_thread::ThreadAudience { route, api: &api });
-    if let Some(thread) = &thread {
-        admit_linked_starter(cfg, &mut inbox, thread)?;
-    }
     let dispatcher = if thread.is_some() {
         super::dispatcher::Dispatcher::open(cfg, &place.dir)?
     } else {
@@ -306,6 +310,14 @@ fn run_guild(
         .into_iter()
         .map(|(route, cfg)| LinkedDiscussion::open(place, route, cfg, &api))
         .collect::<io::Result<Vec<_>>>()?;
+    for discussion in
+        std::iter::once(&mut inbox).chain(additional.iter_mut().map(|slot| &mut slot.inbox))
+    {
+        // A new Gateway identify can have an offline interval even after a clean stop.
+        if discussion.team_cursor().is_some() && !discussion.team_gap_pending() {
+            discussion.mark_team_gap()?;
+        }
+    }
     let scope = if let Some(selected) = additional
         .iter()
         .find(|slot| slot.thread.route.accepts_voice(cfg))
@@ -314,7 +326,7 @@ fn run_guild(
     } else {
         dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg))
     };
-    let mut driver = guild_gateway(
+    let (mut driver, mut history_ready) = guild_gateway(
         place,
         cfg,
         &mut inbox,
@@ -322,6 +334,7 @@ fn run_guild(
         &mut additional,
         scope.clone(),
     )?;
+    let mut next_history_check = Instant::now();
     use super::call_runtime::Ingress;
     use std::sync::atomic::Ordering;
     loop {
@@ -338,6 +351,7 @@ fn run_guild(
                     &mut inbox,
                     &api,
                     thread.as_ref(),
+                    history_ready,
                     &mut additional,
                     &event,
                 )?;
@@ -360,14 +374,24 @@ fn run_guild(
             &mut worker_send,
         )?;
         if worker_send.is_none() {
-            if let (Some(dispatcher), Some(thread)) = (&dispatcher, &thread) {
-                dispatcher.tick_calls(cfg, &mut inbox, thread, Some((&place.dir, &driver)))?;
+            if let Some(thread) = &thread {
+                if Instant::now() >= next_history_check {
+                    next_history_check = Instant::now() + Duration::from_secs(5);
+                    if !history_ready {
+                        history_ready =
+                            refresh_linked_history(cfg, &mut inbox, thread).unwrap_or(false);
+                    }
+                    let _ = super::team_history::send_gap_notice(cfg, &mut inbox, thread);
+                }
+                if history_ready && let Some(dispatcher) = &dispatcher {
+                    dispatcher.tick_calls(cfg, &mut inbox, thread, Some((&place.dir, &driver)))?;
+                }
             }
             for slot in &mut additional {
                 slot.tick(place, &driver);
             }
             driver.discussion_ready.store(
-                call_ready(&inbox, &additional, scope.as_ref()),
+                call_ready(&inbox, history_ready, &additional, scope.as_ref()),
                 Ordering::Release,
             );
         }
@@ -391,7 +415,7 @@ fn run_guild(
             Ok(Ok(Ingress::Discord(event))) => event,
             Ok(Ok(Ingress::Transcript(origin, text))) => {
                 if let Some(scope) = &scope
-                    && call_ready(&inbox, &additional, Some(scope))
+                    && call_ready(&inbox, history_ready, &additional, Some(scope))
                     && super::call_runtime::verify_live(&place.dir, &origin).is_ok()
                 {
                     if scope["call_place"].is_null() {
@@ -419,7 +443,7 @@ fn run_guild(
                     slot.inbox.mark_team_gap()?;
                 }
                 guild_events.clear();
-                driver = loop {
+                (driver, history_ready) = loop {
                     if bridge.serve(cfg, &mut inbox, 0, false, "unavailable")? {
                         return Ok(());
                     }
@@ -445,6 +469,7 @@ fn run_guild(
                         }
                     }
                 };
+                next_history_check = Instant::now();
                 continue;
             }
         };
@@ -502,6 +527,7 @@ fn run_guild(
                 &mut inbox,
                 &api,
                 thread.as_ref(),
+                history_ready,
                 &mut additional,
                 &event,
             )?;
@@ -509,13 +535,15 @@ fn run_guild(
     }
 }
 
-fn admit_linked_starter(
+fn refresh_linked_history(
     cfg: &Config,
     inbox: &mut Inbox,
     thread: &super::team_thread::ThreadAudience<'_>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     use super::dispatcher::Audience;
-    if thread.route.starter.is_some()
+    let ready = super::team_history::repair(cfg, inbox, thread)?;
+    if ready
+        && thread.route.starter.is_some()
         && inbox.manager().is_null()
         && !inbox.has_team_source(&thread.route.thread)
         && let Some(source) = thread.current(cfg, &thread.route.thread)?
@@ -523,7 +551,7 @@ fn admit_linked_starter(
     {
         thread.admit(inbox, &source)?;
     }
-    Ok(())
+    Ok(ready)
 }
 
 fn add_linked<'a>(
@@ -558,15 +586,16 @@ fn guild_gateway(
     thread: Option<&super::team_thread::ThreadAudience<'_>>,
     additional: &mut [LinkedDiscussion<'_>],
     scope: Option<Value>,
-) -> io::Result<super::call_runtime::Driver> {
+) -> io::Result<(super::call_runtime::Driver, bool)> {
     let (socket, cursor) = gateway::open(cfg)?;
-    if let Some(thread) = thread {
-        super::team_history::repair(cfg, inbox, thread)?;
-    }
+    let history_ready = match thread {
+        Some(thread) => refresh_linked_history(cfg, inbox, thread)?,
+        None => true,
+    };
     for slot in additional.iter_mut() {
         slot.repair_history();
     }
-    let ready = call_ready(inbox, additional, scope.as_ref());
+    let ready = call_ready(inbox, history_ready, additional, scope.as_ref());
     let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
     let scope = if call_start.is_ok() { scope } else { None };
     let driver = super::call_runtime::Driver::start(socket, cursor, cfg, &place.dir, scope);
@@ -574,7 +603,7 @@ fn guild_gateway(
     driver
         .discussion_ready
         .store(ready, std::sync::atomic::Ordering::Release);
-    Ok(driver)
+    Ok((driver, history_ready))
 }
 
 fn ingest_guild(
@@ -582,6 +611,7 @@ fn ingest_guild(
     inbox: &mut Inbox,
     api: &Discord,
     thread: Option<&super::team_thread::ThreadAudience<'_>>,
+    history_ready: bool,
     additional: &mut [LinkedDiscussion<'_>],
     event: &Value,
 ) -> io::Result<()> {
@@ -589,11 +619,18 @@ fn ingest_guild(
         .iter_mut()
         .find(|slot| slot.thread.route.matches(&event["d"]))
     {
+        super::team_history::observe_gap_notice(&slot.cfg, &mut slot.inbox, &slot.thread, event)?;
         if !slot.history_ready {
             return Ok(());
         }
         if super::team_thread::ingest(&slot.cfg, &mut slot.inbox, &slot.thread, event)? {
             checkpoint_linked(&mut slot.inbox, event)?;
+            return Ok(());
+        }
+    }
+    if let Some(thread) = thread.filter(|thread| thread.route.matches(&event["d"])) {
+        super::team_history::observe_gap_notice(cfg, inbox, thread, event)?;
+        if !history_ready {
             return Ok(());
         }
     }
@@ -940,6 +977,359 @@ mod tests {
     fn owner_source(id: &str, content: &str) -> Value {
         json!({"id":id, "channel_id":"400", "content":content, "type":0,
                "attachments":[], "author":{"id":"300"}})
+    }
+
+    #[test]
+    fn guild_gap_notices_use_bounded_thread_custody_and_exact_wire_receipts() {
+        use super::super::{receipt::TEAM_GAP_NOTICE, team_history, team_thread};
+        use std::{
+            io::{BufRead, BufReader},
+            net::TcpListener,
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+        };
+
+        struct Wire {
+            rows: Vec<Value>,
+            posts: Vec<Value>,
+            primary_parent: &'static str,
+            primary_mute: bool,
+            linked_history: bool,
+            linked_history_reads: usize,
+        }
+        let wire = Arc::new(Mutex::new(Wire {
+            rows: Vec::new(),
+            posts: Vec::new(),
+            primary_parent: "10",
+            primary_mute: false,
+            linked_history: false,
+            linked_history_reads: 0,
+        }));
+        let bound = TcpListener::bind("127.0.0.1:0").unwrap();
+        bound.set_nonblocking(true).unwrap();
+        let port = bound.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let fixture = {
+            let wire = Arc::clone(&wire);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let mut socket = match bound.accept() {
+                        Ok((socket, _)) => socket,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => panic!("accept {error}"),
+                    };
+                    socket.set_nonblocking(false).unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut reader = BufReader::new(&mut socket);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let request = line
+                        .trim_end()
+                        .strip_suffix(" HTTP/1.1")
+                        .unwrap()
+                        .to_owned();
+                    let mut size = 0;
+                    let mut authenticated = false;
+                    loop {
+                        line.clear();
+                        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        let (key, value) = line.split_once(':').unwrap();
+                        if key.eq_ignore_ascii_case("content-length") {
+                            size = value.trim().parse().unwrap();
+                        }
+                        if key.eq_ignore_ascii_case("authorization") {
+                            authenticated = value.trim() == "Bot fixture-token";
+                        }
+                    }
+                    assert!(authenticated);
+                    let (method, path) = request.split_once(' ').unwrap();
+                    let path = path.strip_prefix("/api/v10/").unwrap();
+                    let mut data = wire.lock().unwrap();
+                    let value = match path.split('/').collect::<Vec<_>>().as_slice() {
+                        ["channels", id @ ("2" | "5")] => {
+                            let parent = if *id == "2" {
+                                data.primary_parent
+                            } else {
+                                "11"
+                            };
+                            json!({"id":id,"guild_id":"1","parent_id":parent,"type":11,
+                                "thread_metadata":{"archived":false,"locked":false}})
+                        }
+                        ["channels", id @ ("10" | "11" | "12")] => {
+                            json!({"id":id,"guild_id":"1","type":0})
+                        }
+                        ["guilds", "1", "members", id @ ("3" | "7")] => {
+                            json!({"user":{"id":id,"bot":*id=="3"}})
+                        }
+                        ["channels", parent, "permissions", "member", actor] => {
+                            let permissions = match (*parent, *actor) {
+                                ("11", "3") if !data.linked_history => (1u64 << 10) | (1 << 38),
+                                (_, "3") if data.primary_mute => (1 << 10) | (1 << 16),
+                                _ => 8,
+                            };
+                            json!({"permissions":permissions.to_string()})
+                        }
+                        ["channels", "2", "messages?limit=100"] => json!(data.rows),
+                        ["channels", "5", "messages?limit=100"] => {
+                            data.linked_history_reads += 1;
+                            assert!(data.linked_history);
+                            json!([])
+                        }
+                        ["channels", "2", "messages", id] => data
+                            .rows
+                            .iter()
+                            .find(|row| row["id"] == *id)
+                            .unwrap()
+                            .clone(),
+                        ["channels", id @ ("2" | "5"), "messages"] if method == "POST" => {
+                            let mut bytes = vec![0; size];
+                            reader.read_exact(&mut bytes).unwrap();
+                            let body: Value = serde_json::from_slice(&bytes).unwrap();
+                            assert_eq!(body["enforce_nonce"], true);
+                            assert_eq!(body["content"], TEAM_GAP_NOTICE);
+                            assert_eq!(body["allowed_mentions"]["parse"], json!([]));
+                            data.posts.push(json!({"thread":id,"nonce":body["nonce"]}));
+                            if *id == "2" {
+                                continue;
+                            } // The write could have succeeded.
+                            json!({"id":"41","channel_id":id,"type":0,"nonce":body["nonce"],
+                                "author":{"id":"3","bot":true},"content":body["content"],"attachments":[]})
+                        }
+                        _ => panic!("unexpected REST request {request}"),
+                    };
+                    drop(data);
+                    let body = value.to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket.write_all(response.as_bytes()).unwrap();
+                }
+            })
+        };
+
+        let dir = fixture_dir();
+        let linked_dir = dir.join("linked");
+        runtime::private_dir(&linked_dir).unwrap();
+        let token = dir.join("token");
+        runtime::write_atomic(&token, |file| file.write_all(b"fixture-token")).unwrap();
+        let cfg = Config(
+            json!({"mode":"teammate","installation_id":"fixture","application_id":"3",
+            "owner_id":"4","guild_ids":["1"],"token_file":token,"team_discussion":{"guild_id":"1","thread_id":"2"}}),
+        );
+        let mut linked_cfg = cfg.clone();
+        linked_cfg.0["team_discussion"]["thread_id"] = json!("5");
+        let api = Discord::loopback_fixture(&cfg, port).unwrap();
+        let primary = team_thread::ThreadAudience {
+            route: team_thread::Route::configured(&cfg).unwrap().unwrap(),
+            api: &api,
+        };
+        let linked = team_thread::ThreadAudience {
+            route: team_thread::Route::configured(&linked_cfg)
+                .unwrap()
+                .unwrap(),
+            api: &api,
+        };
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let mut linked_inbox = Inbox::open(&linked_dir, &linked_cfg).unwrap();
+        let row = |id: &str, author: &str, content: &str| {
+            json!({"id":id,"channel_id":"2","guild_id":"1",
+            "type":0,"author":{"id":author,"bot":author=="3"},"content":content,"attachments":[]})
+        };
+        inbox.checkpoint("").unwrap();
+        linked_inbox.checkpoint("").unwrap();
+        inbox.checkpoint_team("20").unwrap();
+        linked_inbox.checkpoint_team("20").unwrap();
+        let known = row("23", "7", "Known and compacted");
+        inbox.admit_team(&primary.route, &known).unwrap().unwrap();
+        inbox.withdraw("23").unwrap();
+        wire.lock().unwrap().rows = vec![
+            row("26", "3", "Earlier automated reply"),
+            row("25", "7", "<@3> voice join"),
+            known,
+            row("20", "7", "Before the gap"),
+        ];
+        inbox.mark_team_gap().unwrap();
+        assert!(team_history::repair(&cfg, &mut inbox, &primary).unwrap());
+        assert!(!inbox.team_gap_pending());
+        assert!(inbox.pending_team_gap(u64::MAX).is_none());
+        assert_eq!(inbox.team_cursor(), Some("26"));
+
+        let mut unknown = row("27", "7", "<@3> missed request");
+        unknown["mentions"] = json!([{"id":"3"}]);
+        wire.lock().unwrap().rows.insert(0, unknown);
+        inbox.mark_team_gap().unwrap();
+        assert!(team_history::repair(&cfg, &mut inbox, &primary).unwrap());
+        assert!(inbox.has_team_source("27"));
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let notice = inbox.pending_team_gap(u64::MAX).unwrap();
+        assert_eq!(inbox.team_cursor(), Some("27"));
+        assert!(!inbox.team_gap_pending());
+        wire.lock().unwrap().primary_mute = true;
+        assert!(team_history::send_gap_notice(&cfg, &mut inbox, &primary).is_err());
+        let mut data = wire.lock().unwrap();
+        data.primary_mute = false;
+        data.primary_parent = "12";
+        drop(data);
+        team_history::send_gap_notice(&cfg, &mut inbox, &primary).unwrap();
+        assert!(wire.lock().unwrap().posts.is_empty());
+        wire.lock().unwrap().primary_parent = "10";
+        team_history::send_gap_notice(&cfg, &mut inbox, &primary).unwrap();
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        team_history::send_gap_notice(&cfg, &mut inbox, &primary).unwrap();
+        assert_eq!(
+            wire.lock().unwrap().posts,
+            [json!({"thread":"2","nonce":notice.nonce})]
+        );
+
+        linked_inbox.mark_team_gap().unwrap();
+        assert!(!team_history::repair(&linked_cfg, &mut linked_inbox, &linked).unwrap());
+        assert!(linked_inbox.team_gap_pending());
+        assert_eq!(linked_inbox.team_cursor(), Some("20"));
+        let linked_notice = linked_inbox.pending_team_gap(u64::MAX).unwrap();
+        assert_ne!(linked_notice.nonce, notice.nonce);
+        team_history::send_gap_notice(&linked_cfg, &mut linked_inbox, &linked).unwrap();
+        assert!(linked_inbox.pending_team_gap(u64::MAX).is_none());
+        assert_eq!(wire.lock().unwrap().linked_history_reads, 0);
+        let mut additional = [LinkedDiscussion {
+            cfg: linked_cfg,
+            thread: linked,
+            inbox: linked_inbox,
+            dispatcher: None,
+            _enrolled: None,
+            unhealthy: false,
+            history_ready: false,
+            next_history_check: Instant::now(),
+        }];
+        let mut exact = json!({"t":"MESSAGE_CREATE","d":{"id":"40","guild_id":"1","channel_id":"2",
+            "author":{"id":"3","bot":true},"type":0,"content":TEAM_GAP_NOTICE,"nonce":notice.nonce,"attachments":[]}});
+        let mut wrong = exact.clone();
+        wrong["d"]["channel_id"] = json!("5");
+        ingest_guild(
+            &cfg,
+            &mut inbox,
+            &api,
+            Some(&primary),
+            true,
+            &mut additional,
+            &wrong,
+        )
+        .unwrap();
+        wrong = exact.clone();
+        wrong["d"]["content"] = json!("lookalike");
+        ingest_guild(
+            &cfg,
+            &mut inbox,
+            &api,
+            Some(&primary),
+            true,
+            &mut additional,
+            &wrong,
+        )
+        .unwrap();
+        let ledger = dir.join("rust-text-v1.json");
+        assert_eq!(
+            runtime::read_json(&ledger).unwrap()["team_gap_notices"][&notice.nonce]["state"],
+            "sending"
+        );
+        ingest_guild(
+            &cfg,
+            &mut inbox,
+            &api,
+            Some(&primary),
+            true,
+            &mut additional,
+            &exact,
+        )
+        .unwrap();
+        exact["d"]["id"] = json!("42");
+        ingest_guild(
+            &cfg,
+            &mut inbox,
+            &api,
+            Some(&primary),
+            true,
+            &mut additional,
+            &exact,
+        )
+        .unwrap();
+        let primary_ledger = runtime::read_json(&ledger).unwrap();
+        assert_eq!(
+            primary_ledger["team_gap_notices"][&notice.nonce]["message_id"],
+            "40"
+        );
+        assert_eq!(
+            primary_ledger["team_gap_notices"][&notice.nonce]["evidence"],
+            "gateway_seen"
+        );
+        let linked_ledger = runtime::read_json(&linked_dir.join("rust-text-v1.json")).unwrap();
+        assert_eq!(
+            linked_ledger["team_gap_notices"][&linked_notice.nonce]["message_id"],
+            "41"
+        );
+        assert_eq!(
+            linked_ledger["team_gap_notices"][&linked_notice.nonce]["evidence"],
+            "rest_acknowledged"
+        );
+        wire.lock().unwrap().linked_history = true;
+        additional[0].repair_history();
+        assert!(additional[0].history_ready);
+        assert!(!additional[0].inbox.team_gap_pending());
+        team_history::send_gap_notice(
+            &additional[0].cfg,
+            &mut additional[0].inbox,
+            &additional[0].thread,
+        )
+        .unwrap();
+        assert_eq!(
+            wire.lock().unwrap().posts,
+            [
+                json!({"thread":"2","nonce":notice.nonce}),
+                json!({"thread":"5","nonce":linked_notice.nonce})
+            ]
+        );
+
+        // If authenticated history returns the nonce, it can settle a lost ACK too.
+        let mut later = row("43", "7", "<@3> a separate missed request");
+        later["mentions"] = json!([{"id":"3"}]);
+        wire.lock().unwrap().rows.insert(0, later);
+        inbox.mark_team_gap().unwrap();
+        assert!(team_history::repair(&cfg, &mut inbox, &primary).unwrap());
+        let later_notice = inbox.pending_team_gap(u64::MAX).unwrap();
+        assert_ne!(later_notice.nonce, notice.nonce);
+        team_history::send_gap_notice(&cfg, &mut inbox, &primary).unwrap();
+        let mut readback = row("46", "3", TEAM_GAP_NOTICE);
+        readback["nonce"] = json!(later_notice.nonce);
+        wire.lock().unwrap().rows.insert(0, readback);
+        assert!(team_history::repair(&cfg, &mut inbox, &primary).unwrap());
+        let completed = runtime::read_json(&ledger).unwrap();
+        assert_eq!(
+            completed["team_gap_notices"][&later_notice.nonce]["message_id"],
+            "46"
+        );
+        assert_eq!(
+            completed["team_gap_notices"][&later_notice.nonce]["evidence"],
+            "history_seen"
+        );
+        team_history::send_gap_notice(&cfg, &mut inbox, &primary).unwrap();
+        assert_eq!(wire.lock().unwrap().posts.len(), 3);
+        stop.store(true, Ordering::Relaxed);
+        fixture.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
