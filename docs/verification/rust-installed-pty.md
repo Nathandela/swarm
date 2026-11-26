@@ -24,3 +24,16 @@ python3 scripts/verification/parity/installed_board.py \
 The genuine v0.29.22 Go binary read the public stable release metadata and reported itself current. Its GOBIN copy refused self-staging and identified Go as the owner. The native archive installer refused the occupied predecessor prefix and the Go executable retained its SHA-256. A new private managed prefix passed signed installation, reported Rust 0.1.0 and passed the packaged media check. The old explicit path still reported Go v0.29.22. The side-by-side canary left Go state in its original custody.
 
 The exact Rust image also refused self-staging through a disposable Caskroom symlink and through a private dpkg database, reporting the relevant package manager. These package-owner probes used isolated copies to represent the external owners. The installed PTY witness above exercises the managed launcher and its leases. No existing service or package installation changed.
+
+
+## Linux arm64 managed generation
+
+The same signed `5e42c2cf` package was installed and exercised inside an offline ARM64 Linux guest on Apple Silicon. The ordinary test user (UID 65534) launched the dashboard and both daemon generations by the stable managed path. The surviving shim kept the writer lock after SIGKILL. The replacement daemon reattached to the same worker. The lease was released after worker exit, terminal settings matched the original, and the reaper reported zero survivors. The bundled native media self-check passed. The guest powered down with status 0.
+
+| Item | SHA-256 |
+|---|---|
+| Signed Linux arm64 archive | `73bc972cf5691acbcc8a6f0a8a4186ec3eefaa4dd449643892aec5405a662cbe` |
+| Executed Rust generation | `676d8687c8318627bd6c4891cbdf3a6483b42cfbf264ac31f4ae7d126080599e` |
+| Full guest serial capture | `a23fd61f326b91adf2aa30ed8a312d196eff6081bfa9d9f2d40b843a3f2414db` |
+
+The CPU architecture was native to the host. The guest kernel was LinuxKit 6.10.14 with an ext4 filesystem and an isolated Debian Bookworm userland. The guest setup and kernel hash are recorded in the [archive rehearsal](rust-managed-upgrade.md). The stable-launcher test used witness revision `64b037f5`.
