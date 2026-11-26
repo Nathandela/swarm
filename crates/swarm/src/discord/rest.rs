@@ -25,6 +25,11 @@ pub(super) enum Post {
     Unconfirmed,
 }
 
+pub(super) enum ThreadPost {
+    Outcome(Post),
+    BadRequest,
+}
+
 impl Discord {
     pub(super) fn connect(cfg: &Config) -> io::Result<Self> {
         let token = load_token(Path::new(cfg.text("token_file")))?;
@@ -210,9 +215,14 @@ impl Discord {
         Ok(Some(message))
     }
 
-    pub(super) fn create_public_thread(&self, parent: &str, message: &str, name: &str) -> Post {
+    pub(super) fn create_public_thread(
+        &self,
+        parent: &str,
+        message: &str,
+        name: &str,
+    ) -> ThreadPost {
         if !snowflake(parent) || !snowflake(message) {
-            return Post::Unconfirmed;
+            return ThreadPost::Outcome(Post::Unconfirmed);
         }
         self.post_json(
             &self.endpoint(&format!("/channels/{parent}/messages/{message}/threads")),
@@ -220,7 +230,7 @@ impl Discord {
         )
     }
 
-    fn post_json(&self, url: &str, body: &Value) -> Post {
+    fn post_json(&self, url: &str, body: &Value) -> ThreadPost {
         let response = self
             .agent
             .post(url)
@@ -229,7 +239,14 @@ impl Discord {
             .build()
             .header("Authorization", &self.authorization)
             .send_json(body);
-        post_outcome(response)
+        if response
+            .as_ref()
+            .is_ok_and(|reply| reply.status().as_u16() == 400)
+        {
+            ThreadPost::BadRequest
+        } else {
+            ThreadPost::Outcome(post_outcome(response))
+        }
     }
 
     pub(super) fn post_publication(
@@ -496,11 +513,11 @@ server.listen(0,'127.0.0.1',()=>console.log(server.address().port));"#;
         let url = format!("https://127.0.0.1:{port}/channels/2/messages/9/threads");
         assert!(matches!(
             api.post_json(&url, &json!({"name":"fixture"})),
-            Post::RateLimited(200)
+            ThreadPost::Outcome(Post::RateLimited(200))
         ));
         assert!(matches!(
             api.post_json(&url, &json!({"name":"fixture"})),
-            Post::Unconfirmed
+            ThreadPost::Outcome(Post::Unconfirmed)
         ));
         let attachment = format!("https://127.0.0.1:{port}/attachments/2/22/data.csv");
         assert_eq!(

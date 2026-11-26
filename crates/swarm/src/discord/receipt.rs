@@ -745,7 +745,24 @@ impl Inbox {
         }
         let mut next = self.data.clone();
         next["thread_creation"] = plan;
+        next["thread_create_fallback"] = Value::Null;
         next["thread_create_attempts"] = json!(1);
+        self.save(next)
+    }
+
+    pub(super) fn thread_fallback(&self) -> Option<&str> {
+        self.data["thread_create_fallback"].as_str()
+    }
+
+    pub(super) fn choose_thread_fallback(&mut self, plan: &Value, name: &str) -> io::Result<()> {
+        if self.thread_creation() != Some(plan)
+            || self.thread_fallback().is_some()
+            || !self.data["thread_create_retry_at"].is_null()
+        {
+            return Err(invalid("thread creation has no unconsumed name fallback"));
+        }
+        let mut next = self.data.clone();
+        next["thread_create_fallback"] = json!(name);
         self.save(next)
     }
 
@@ -770,6 +787,7 @@ impl Inbox {
         for key in [
             "thread_creation",
             "thread_create_attempts",
+            "thread_create_fallback",
             "thread_create_retry_at",
             "thread_create_retry_allowed",
         ] {
@@ -813,6 +831,7 @@ impl Inbox {
         }
         let mut next = self.data.clone();
         next["thread_creation"] = Value::Null;
+        next["thread_create_fallback"] = Value::Null;
         next["thread_create_attempts"] = Value::Null;
         next["thread_create_retry_at"] = Value::Null;
         next["thread_create_retry_allowed"] = Value::Null;

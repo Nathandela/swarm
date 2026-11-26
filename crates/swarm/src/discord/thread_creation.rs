@@ -3,7 +3,7 @@ use super::{
     config::{Config, invalid, snowflake},
     guild,
     receipt::{Inbox, hash},
-    rest::{Discord, Post},
+    rest::{Discord, Post, ThreadPost},
     team_thread,
 };
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ pub(super) fn recover(cfg: &Config, inbox: &Inbox, api: &Discord) -> io::Result<
     let Some(plan) = inbox.thread_creation() else {
         return Ok(None);
     };
-    readback(cfg, plan, |path| guild::lookup(api, path))
+    readback(cfg, plan, |path| strict_lookup(api, path)).map(Readback::route)
 }
 
 pub(super) fn ingest(
@@ -50,14 +50,15 @@ pub(super) fn ingest(
         return Ok(None);
     };
     let lookup = |path: &str| guild::lookup(api, path);
-    let Some((plan, can_create)) = authorize(cfg, guild, parent, id, lookup)? else {
+    let Some(source) = authorize(cfg, guild, parent, id, lookup)? else {
         return Ok(None);
     };
-    let prior = readback(cfg, &plan, lookup)?;
-    if prior.is_none() && !can_create {
-        return Ok(None);
-    }
-    attempt(cfg, inbox, api, &plan, prior)
+    let prior = match readback(cfg, &source.plan, |path| strict_lookup(api, path))? {
+        Readback::Present(Some(route)) => Some(route),
+        Readback::Missing if source.can_create => None,
+        _ => return Ok(None),
+    };
+    attempt(cfg, inbox, api, &source, prior)
 }
 
 pub(super) fn retry_due(
@@ -71,8 +72,11 @@ pub(super) fn retry_due(
     }
     let plan = inbox.thread_creation().unwrap().clone();
     let lookup = |path: &str| guild::lookup(api, path);
-    if let Some(route) = readback(cfg, &plan, lookup)? {
-        return Ok(Some(route));
+    if let Readback::Present(route) = readback(cfg, &plan, |path| strict_lookup(api, path))? {
+        if route.is_none() {
+            inbox.thread_retry_at(Some(now.saturating_add(60_000)))?;
+        }
+        return Ok(route);
     }
     let (Some(guild), Some(parent), Some(message)) = (
         id(&plan["guild_id"]),
@@ -81,17 +85,23 @@ pub(super) fn retry_due(
     ) else {
         return Err(invalid("invalid persisted thread retry scope"));
     };
-    if !authorize(cfg, guild, parent, message, lookup)?
-        .is_some_and(|(current, can_create)| current == plan && can_create)
-    {
+    let source = authorize(cfg, guild, parent, message, lookup)?
+        .filter(|current| current.plan == plan && current.can_create);
+    let Some(source) = source else {
         inbox.retire_throttled_thread(&plan, now)?;
         return Ok(None);
-    }
+    };
     if !inbox.thread_retry_due(now) {
         inbox.thread_retry_at(Some(now.saturating_add(60_000)))?;
         return Ok(None);
     }
-    attempt(cfg, inbox, api, &plan, None)
+    attempt(cfg, inbox, api, &source, None)
+}
+
+struct Authorized {
+    plan: Value,
+    title: String,
+    can_create: bool,
 }
 
 fn authorize(
@@ -100,7 +110,7 @@ fn authorize(
     parent: &str,
     id: &str,
     lookup: impl Fn(&str) -> io::Result<Option<Value>>,
-) -> io::Result<Option<(Value, bool)>> {
+) -> io::Result<Option<Authorized>> {
     if super::team_thread::linked_values(cfg)
         .any(|route| route["guild_id"] == guild && route["thread_id"] == id)
     {
@@ -156,29 +166,87 @@ fn authorize(
     };
     let plan = json!({"guild_id":guild,"parent_id":parent,"message_id":id,"actor_id":actor,
         "revision":revision});
-    Ok(Some((plan, capacity & ((1 << 3) | (1 << 35)) != 0)))
+    Ok(Some(Authorized {
+        plan,
+        title: opener_title(
+            cfg.text("name"),
+            source["content"].as_str().unwrap_or_default(),
+        ),
+        can_create: capacity & ((1 << 3) | (1 << 35)) != 0,
+    }))
+}
+
+fn default_title(name: &str) -> String {
+    clip_title(&format!("{name} discussion")).to_owned()
+}
+
+fn opener_title(name: &str, mut source: &str) -> String {
+    let mut text = String::with_capacity(source.len());
+    while let Some((prefix, tail)) = source.split_once('<') {
+        text.push_str(prefix);
+        let mention = tail
+            .strip_prefix('@')
+            .map(|id| id.strip_prefix(['!', '&']).unwrap_or(id))
+            .or_else(|| tail.strip_prefix('#'));
+        if let Some(mention) = mention {
+            let digits = mention.bytes().take_while(u8::is_ascii_digit).count();
+            if digits != 0
+                && let Some(rest) = mention[digits..].strip_prefix('>')
+            {
+                text.push(' ');
+                source = rest;
+                continue;
+            }
+        }
+        text.push('<');
+        source = tail;
+    }
+    text.push_str(source);
+    let title = text
+        .split_whitespace()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        default_title(name)
+    } else {
+        clip_title(&title).to_owned()
+    }
+}
+
+fn clip_title(text: &str) -> &str {
+    let mut width = 0;
+    let end = text.char_indices().find_map(|(end, ch)| {
+        width += ch.len_utf16();
+        (width > 95).then_some(end)
+    });
+    &text[..end.unwrap_or(text.len())]
 }
 
 fn attempt(
     cfg: &Config,
     inbox: &mut Inbox,
     api: &Discord,
-    plan: &Value,
+    source: &Authorized,
     prior: Option<Value>,
 ) -> io::Result<Option<Value>> {
+    let plan = &source.plan;
+    let guild = id(&plan["guild_id"]).ok_or_else(|| invalid("invalid thread guild"))?;
     let parent = id(&plan["parent_id"]).ok_or_else(|| invalid("invalid thread parent"))?;
     let message = id(&plan["message_id"]).ok_or_else(|| invalid("invalid thread opener"))?;
-    let name = format!(
-        "{} discussion",
-        cfg.text("name").chars().take(40).collect::<String>()
-    );
     provision(
         inbox,
         plan,
         prior,
         crate::ipc::spawn::now_ms,
-        || api.create_public_thread(parent, message, &name),
-        || readback(cfg, plan, |path| guild::lookup(api, path)),
+        |fallback| api.create_public_thread(parent, message, fallback.unwrap_or(&source.title)),
+        || readback(cfg, plan, |path| strict_lookup(api, path)),
+        || {
+            let authorized =
+                authorize(cfg, guild, parent, message, |path| guild::lookup(api, path))?
+                    .is_some_and(|current| current.plan == *plan && current.can_create);
+            Ok(authorized.then(|| default_title(cfg.text("name"))))
+        },
     )
 }
 
@@ -187,8 +255,9 @@ fn provision(
     plan: &Value,
     prior: Option<Value>,
     clock: impl Fn() -> u64,
-    post: impl FnOnce() -> Post,
-    read: impl FnOnce() -> io::Result<Option<Value>>,
+    mut post: impl FnMut(Option<&str>) -> ThreadPost,
+    read: impl Fn() -> io::Result<Readback>,
+    fallback: impl FnOnce() -> io::Result<Option<String>>,
 ) -> io::Result<Option<Value>> {
     let now = clock();
     match inbox.thread_creation() {
@@ -196,16 +265,30 @@ fn provision(
         Some(saved) if saved == plan && inbox.thread_retry_due(now) => {
             inbox.start_thread_retry(now)?
         }
-        Some(_) => return read(),
+        Some(_) => return read().map(Readback::route),
     }
     if prior.is_some() {
         return Ok(prior);
     }
-    match post() {
-        Post::Acknowledged(observed) if !exact(&observed, plan) => {
+    let result = match post(inbox.thread_fallback()) {
+        ThreadPost::BadRequest if inbox.thread_fallback().is_none() => {
+            if let Readback::Present(route) = read()? {
+                return Ok(route);
+            }
+            let Some(name) = fallback()? else {
+                return Ok(None);
+            };
+            // A definitive throttle may retry this exact fallback name after restart.
+            inbox.choose_thread_fallback(plan, &name)?;
+            post(Some(&name))
+        }
+        other => other,
+    };
+    match result {
+        ThreadPost::Outcome(Post::Acknowledged(observed)) if !exact(&observed, plan) => {
             return Err(invalid("Discord create response named a different thread"));
         }
-        Post::RateLimited(delay) => {
+        ThreadPost::Outcome(Post::RateLimited(delay)) => {
             inbox.record_thread_throttle(
                 clock().saturating_add(delay.max(1)),
                 (1..=120_000).contains(&delay),
@@ -214,14 +297,36 @@ fn provision(
         }
         _ => {}
     }
-    read()
+    read().map(Readback::route)
+}
+
+enum Readback {
+    Missing,
+    Present(Option<Value>),
+}
+
+impl Readback {
+    fn route(self) -> Option<Value> {
+        match self {
+            Self::Missing => None,
+            Self::Present(route) => route,
+        }
+    }
+}
+
+fn strict_lookup(api: &Discord, path: &str) -> io::Result<Option<Value>> {
+    match api.request(path, None) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn readback(
     cfg: &Config,
     plan: &Value,
     mut lookup: impl FnMut(&str) -> io::Result<Option<Value>>,
-) -> io::Result<Option<Value>> {
+) -> io::Result<Readback> {
     let (Some(guild), Some(parent), Some(message), Some(actor)) = (
         id(&plan["guild_id"]),
         id(&plan["parent_id"]),
@@ -230,8 +335,14 @@ fn readback(
     ) else {
         return Err(invalid("invalid persisted thread creation binding"));
     };
-    let Some(channel) = lookup(&format!("/channels/{message}"))? else {
-        return Ok(None);
+    let coordinate = format!("/channels/{message}");
+    let channel = match lookup(&coordinate) {
+        Ok(Some(channel)) => channel,
+        Ok(None) => return Ok(Readback::Missing),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return Ok(Readback::Present(None));
+        }
+        Err(error) => return Err(error),
     };
     if !exact(&channel, plan) {
         return Err(invalid("Discord thread readback named another audience"));
@@ -241,13 +352,25 @@ fn readback(
         thread: message.into(),
         starter: None,
     };
-    if !route.verify(cfg, &mut lookup, &[actor])? {
-        return Ok(None);
-    }
-    Ok(Some(
+    let verified = match route.verify(
+        cfg,
+        |path| {
+            if path == coordinate {
+                Ok(Some(channel.clone()))
+            } else {
+                lookup(path)
+            }
+        },
+        &[actor],
+    ) {
+        Ok(verified) => verified,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => false,
+        Err(error) => return Err(error),
+    };
+    Ok(Readback::Present(verified.then(|| {
         json!({"guild_id":guild,"thread_id":message,"starter_channel_id":parent,
-        "starter_revision":plan["revision"]}),
-    ))
+               "starter_revision":plan["revision"]})
+    })))
 }
 
 fn exact(channel: &Value, plan: &Value) -> bool {
@@ -299,6 +422,318 @@ mod tests {
     use super::*;
     use crate::supervisor::runtime;
     use std::cell::Cell;
+
+    #[test]
+    fn opener_names_match_go_fields_mentions_and_utf16_limit() {
+        let long = "x".repeat(120);
+        for (source, title) in [
+            (
+                "<@99> check why staging fund page is slow",
+                "check why staging fund page is slow",
+            ),
+            (
+                "<@!99>   look at\n<@&5> the <#20> logs  ",
+                "look at the logs",
+            ),
+            (
+                "<@99> one two three four five six seven eight nine ten",
+                "one two three four five six seven eight",
+            ),
+            (
+                "a<@2>b\u{00a0}<@not-a-mention>\u{2028}c",
+                "a b <@not-a-mention> c",
+            ),
+            ("<@99>", "Claudio discussion"),
+            ("   ", "Claudio discussion"),
+            (&long, &long[..95]),
+        ] {
+            assert_eq!(opener_title("Claudio", source), title, "{source:?}");
+        }
+        let long = "x".repeat(94);
+        assert_eq!(opener_title("Claudio", &format!("{long}😀x")), long);
+        let emoji = "😀".repeat(47);
+        assert_eq!(
+            opener_title("Claudio", &format!("{emoji}x😀")),
+            format!("{emoji}x")
+        );
+        assert_eq!(opener_title(&format!("{emoji}😀"), ""), emoji);
+    }
+
+    #[test]
+    fn authenticated_create_fallback_obeys_current_rest_audience_and_source() {
+        use std::{
+            io::{BufRead, BufReader, Read, Write},
+            net::TcpListener,
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+            time::Duration,
+        };
+
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Scenario {
+            Named,
+            Fallback,
+            BlankDefault,
+            FallbackRejected,
+            Forbidden,
+            NoResponse,
+            AlreadyExists,
+            FoundAfter400,
+            LostAck,
+            WrongAudience,
+            DeniedReadback,
+            Edited,
+            Deleted,
+            Revoked,
+        }
+        use Scenario::*;
+
+        let title = "first two three four five six seven eight";
+        let default = "Claudio discussion";
+        for (scenario, names, linked) in [
+            (Named, vec![title], true),
+            (Fallback, vec![title, default], true),
+            (BlankDefault, vec![default, default], true),
+            (FallbackRejected, vec![title, default], false),
+            (Forbidden, vec![title], false),
+            (NoResponse, vec![title], false),
+            (AlreadyExists, vec![], true),
+            (FoundAfter400, vec![title], true),
+            (LostAck, vec![title], true),
+            (WrongAudience, vec![title], false),
+            (DeniedReadback, vec![title], false),
+            (Edited, vec![title], false),
+            (Deleted, vec![title], false),
+            (Revoked, vec![title], false),
+        ] {
+            let dir = std::env::temp_dir().join(format!(
+                "swarm-thread-names-{}",
+                runtime::random_id().unwrap()
+            ));
+            runtime::private_dir(&dir).unwrap();
+            let token = dir.join("token");
+            runtime::write_atomic(&token, |file| file.write_all(b"fixture-token")).unwrap();
+            let cfg = Config(json!({"mode":"teammate","installation_id":"fixture",
+                "application_id":"3","owner_id":"4","guild_ids":["1"],
+                "name":"Claudio","token_file":token}));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let api =
+                Discord::loopback_fixture(&cfg, listener.local_addr().unwrap().port()).unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let done = Arc::clone(&stop);
+            let fixture = thread::spawn(move || {
+                let mut posts = Vec::new();
+                let exact = json!({"id":"9","type":11,"guild_id":"1","parent_id":"2",
+                    "thread_metadata":{"archived":false,"locked":false}});
+                while !done.load(Ordering::Relaxed) {
+                    let mut socket = match listener.accept() {
+                        Ok((socket, _)) => socket,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => panic!("accept {error}"),
+                    };
+                    socket.set_nonblocking(false).unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut reader = BufReader::new(&mut socket);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let (request, _) = line.trim_end().rsplit_once(' ').unwrap();
+                    let request = request.to_owned();
+                    let mut size = 0;
+                    let mut authorized = false;
+                    loop {
+                        line.clear();
+                        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        let (name, value) = line.split_once(':').unwrap();
+                        if name.eq_ignore_ascii_case("authorization") {
+                            authorized = value.trim() == "Bot fixture-token";
+                        }
+                        if name.eq_ignore_ascii_case("content-length") {
+                            size = value.trim().parse().unwrap();
+                        }
+                    }
+                    assert!(authorized, "{request}");
+                    let first_attempted = !posts.is_empty();
+                    let (status, body) = match request.as_str() {
+                        "POST /api/v10/channels/2/messages/9/threads" => {
+                            let mut bytes = vec![0; size];
+                            reader.read_exact(&mut bytes).unwrap();
+                            let body: Value = serde_json::from_slice(&bytes).unwrap();
+                            posts.push(body["name"].as_str().unwrap().to_owned());
+                            match scenario {
+                                Named => (200, exact.clone()),
+                                Fallback | BlankDefault if first_attempted => (200, exact.clone()),
+                                Forbidden => (403, json!({})),
+                                NoResponse | LostAck => continue,
+                                _ => (400, json!({})),
+                            }
+                        }
+                        "GET /api/v10/channels/9" => match scenario {
+                            AlreadyExists => (200, exact.clone()),
+                            Named | FoundAfter400 | LostAck if first_attempted => {
+                                (200, exact.clone())
+                            }
+                            Fallback | BlankDefault if posts.len() == 2 => (200, exact.clone()),
+                            WrongAudience if first_attempted => {
+                                let mut wrong = exact.clone();
+                                wrong["parent_id"] = json!("99");
+                                (200, wrong)
+                            }
+                            DeniedReadback if first_attempted => (403, json!({})),
+                            _ => (404, json!({})),
+                        },
+                        "GET /api/v10/channels/2" => {
+                            (200, json!({"id":"2","guild_id":"1","type":0}))
+                        }
+                        "GET /api/v10/channels/2/messages/9" => {
+                            if scenario == Deleted && first_attempted {
+                                (404, json!({}))
+                            } else {
+                                let content = match scenario {
+                                    Edited if first_attempted => "<@!3> edited opener",
+                                    BlankDefault => "<@!3> <#20>",
+                                    _ => {
+                                        "<@!3> first  two <@&5> three four\n five <#6> six seven eight nine"
+                                    }
+                                };
+                                (
+                                    200,
+                                    json!({"id":"9","channel_id":"2","guild_id":"1","type":0,
+                                    "author":{"id":"7"},"content":content,"mentions":[{"id":"3"}]}),
+                                )
+                            }
+                        }
+                        "GET /api/v10/guilds/1/members/3" => {
+                            (200, json!({"user":{"id":"3","bot":true}}))
+                        }
+                        "GET /api/v10/guilds/1/members/7" => (200, json!({"user":{"id":"7"}})),
+                        "GET /api/v10/channels/2/permissions/member/3"
+                            if scenario == Revoked && first_attempted =>
+                        {
+                            let permissions = (1u64 << 10) | (1 << 16) | (1 << 38);
+                            (200, json!({"permissions":permissions.to_string()}))
+                        }
+                        "GET /api/v10/channels/2/permissions/member/3"
+                        | "GET /api/v10/channels/2/permissions/member/7" => {
+                            (200, json!({"permissions":"8"}))
+                        }
+                        _ => panic!("unexpected request {request}"),
+                    };
+                    write!(socket, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.to_string().len()).unwrap();
+                }
+                posts
+            });
+            let gateway = json!({"t":"MESSAGE_CREATE","d":{"id":"9","channel_id":"2",
+                "guild_id":"1","author":{"id":"7"},"content":"<@3> gateway hint",
+                "mentions":[{"id":"3"}]}});
+            let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+            let first = ingest(&cfg, &mut inbox, &api, &gateway);
+            drop(inbox);
+            let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+            let replay = ingest(&cfg, &mut inbox, &api, &gateway);
+            stop.store(true, Ordering::Relaxed);
+            assert_eq!(fixture.join().unwrap(), names, "{scenario:?}");
+            for result in [first, replay] {
+                if scenario == WrongAudience {
+                    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+                } else {
+                    let route = result.unwrap();
+                    assert_eq!(route.is_some(), linked, "{scenario:?}");
+                    if let Some(route) = route {
+                        assert_eq!(route["thread_id"], "9");
+                        assert_eq!(route["starter_channel_id"], "2");
+                        assert_eq!(
+                            route["starter_revision"],
+                            inbox.thread_creation().unwrap()["revision"]
+                        );
+                    }
+                }
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn fallback_throttles_keep_the_durable_name_and_existing_retry_budget() {
+        let dir = std::env::temp_dir().join(format!(
+            "swarm-thread-fallback-rate-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&dir).unwrap();
+        let cfg = Config(
+            json!({"mode":"teammate","installation_id":"test","application_id":"3","owner_id":"4"}),
+        );
+        let plan = json!({"guild_id":"1","parent_id":"2","message_id":"9","actor_id":"4","revision":"a".repeat(64)});
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let calls = Cell::new(0);
+        let name = "Claudio discussion";
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || 100,
+            |chosen| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    assert_eq!(chosen, None);
+                    ThreadPost::BadRequest
+                } else {
+                    assert_eq!(chosen, Some(name));
+                    let state = runtime::read_json(&dir.join("rust-text-v1.json")).unwrap();
+                    assert_eq!(state["thread_creation"], plan);
+                    assert_eq!(state["thread_create_fallback"], name);
+                    ThreadPost::Outcome(Post::RateLimited(200))
+                }
+            },
+            || Ok(Readback::Missing),
+            || Ok(Some(name.into())),
+        )
+        .unwrap();
+        assert_eq!(calls.get(), 2);
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        for now in [300, 500] {
+            assert!(inbox.thread_retry_due(now));
+            provision(
+                &mut inbox,
+                &plan,
+                None,
+                || now,
+                |chosen| {
+                    assert_eq!(chosen, Some(name));
+                    let state = runtime::read_json(&dir.join("rust-text-v1.json")).unwrap();
+                    assert!(state["thread_create_retry_at"].is_null());
+                    ThreadPost::Outcome(Post::RateLimited(200))
+                },
+                || panic!("definitive throttle"),
+                || panic!("fallback was already chosen"),
+            )
+            .unwrap();
+        }
+        assert!(!inbox.thread_retry_due(u64::MAX));
+        provision(
+            &mut inbox,
+            &plan,
+            None,
+            || u64::MAX,
+            |_| panic!("retry budget exhausted"),
+            || Ok(Readback::Missing),
+            || panic!("fallback was already chosen"),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn proven_creation_installs_successive_threads_and_releases_only_the_exact_plan() {
@@ -355,8 +790,9 @@ mod tests {
             &plan,
             None,
             || 100,
-            || Post::RateLimited(200),
+            |_| ThreadPost::Outcome(Post::RateLimited(200)),
             || panic!("definitive throttle"),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         assert!(inbox.retire_throttled_thread(&plan, 299).is_err());
@@ -372,8 +808,9 @@ mod tests {
             &another,
             None,
             || 301,
-            || Post::Unconfirmed,
-            || Ok(None),
+            |_| ThreadPost::Outcome(Post::Unconfirmed),
+            || Ok(Readback::Missing),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         assert!(inbox.retire_throttled_thread(&another, u64::MAX).is_err());
@@ -382,8 +819,9 @@ mod tests {
             &plan,
             None,
             || 302,
-            || panic!("uncertain create still controls slot"),
-            || Ok(None),
+            |_| panic!("uncertain create still controls slot"),
+            || Ok(Readback::Missing),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         std::fs::remove_dir_all(dir).unwrap();
@@ -407,11 +845,12 @@ mod tests {
             &plan,
             None,
             || clock.get(),
-            || {
+            |_| {
                 clock.set(125);
-                Post::RateLimited(200)
+                ThreadPost::Outcome(Post::RateLimited(200))
             },
             || panic!("known refusal"),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         drop(inbox);
@@ -425,8 +864,9 @@ mod tests {
             &other,
             None,
             || 325,
-            || panic!("other message retry"),
-            || Ok(None),
+            |_| panic!("other message retry"),
+            || Ok(Readback::Missing),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         provision(
@@ -434,13 +874,14 @@ mod tests {
             &plan,
             None,
             || 325,
-            || {
+            |_| {
                 let state = runtime::read_json(&dir.join("rust-text-v1.json")).unwrap();
                 assert!(state["thread_create_retry_at"].is_null());
                 assert_eq!(state["thread_create_attempts"], 2);
-                Post::Unconfirmed
+                ThreadPost::Outcome(Post::Unconfirmed)
             },
-            || Ok(None),
+            || Ok(Readback::Missing),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         assert!(!inbox.thread_retry_due(u64::MAX));
@@ -449,8 +890,9 @@ mod tests {
             &plan,
             None,
             || u64::MAX,
-            || panic!("uncertain writes may not repeat"),
-            || Ok(None),
+            |_| panic!("uncertain writes may not repeat"),
+            || Ok(Readback::Missing),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         std::fs::remove_dir_all(dir).unwrap();
@@ -472,21 +914,22 @@ mod tests {
             &plan,
             None,
             || 1,
-            || {
+            |_| {
                 assert_eq!(
                     runtime::read_json(&dir.join("rust-text-v1.json")).unwrap()["thread_creation"],
                     plan
                 );
                 create_calls.set(create_calls.get() + 1);
-                Post::Unconfirmed
+                ThreadPost::Outcome(Post::Unconfirmed)
             },
-            || Ok(None),
+            || Ok(Readback::Missing),
+            || panic!("unexpected fallback"),
         )
         .unwrap();
         assert!(result.is_none());
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        let route = provision(&mut inbox,&plan,None,||120_001,||panic!("uncertain writes may not repeat"),|| {
+        let route = provision(&mut inbox,&plan,None,||120_001,|_|panic!("uncertain writes may not repeat"),|| {
             readback(&cfg,&plan,|path| {
                 let value=match path {
                     "/channels/9"=>json!({"type":11,"id":"9","guild_id":"1","parent_id":"2","thread_metadata":{"archived":false,"locked":false}}),
@@ -498,7 +941,7 @@ mod tests {
                 };
                 Ok(Some(value))
             })
-        }).unwrap().unwrap();
+        }, || panic!("unexpected fallback")).unwrap().unwrap();
         assert_eq!(create_calls.get(), 1);
         assert_eq!(route["thread_id"], "9");
         assert_eq!(route["starter_channel_id"], "2");
