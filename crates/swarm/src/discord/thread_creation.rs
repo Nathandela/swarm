@@ -53,12 +53,19 @@ pub(super) fn ingest(
     let Some(source) = authorize(cfg, guild, parent, id, lookup)? else {
         return Ok(None);
     };
-    let prior = match readback(cfg, &source.plan, |path| strict_lookup(api, path))? {
-        Readback::Present(Some(route)) => Some(route),
-        Readback::Missing if source.can_create => None,
-        _ => return Ok(None),
-    };
-    attempt(cfg, inbox, api, &source, prior)
+    match readback(cfg, &source.plan, |path| strict_lookup(api, path))? {
+        Readback::Present(Some(route)) => {
+            inbox.reserve_thread(source.plan)?;
+            Ok(Some(route))
+        }
+        Readback::Missing if source.can_create => {
+            let Some(fresh) = reauthorize(cfg, api, &source.plan)? else {
+                return Ok(None);
+            };
+            attempt(cfg, inbox, api, &fresh)
+        }
+        _ => Ok(None),
+    }
 }
 
 pub(super) fn retry_due(
@@ -71,23 +78,14 @@ pub(super) fn retry_due(
         return Ok(None);
     }
     let plan = inbox.thread_creation().unwrap().clone();
-    let lookup = |path: &str| guild::lookup(api, path);
     if let Readback::Present(route) = readback(cfg, &plan, |path| strict_lookup(api, path))? {
         if route.is_none() {
             inbox.thread_retry_at(Some(now.saturating_add(60_000)))?;
         }
         return Ok(route);
     }
-    let (Some(guild), Some(parent), Some(message)) = (
-        id(&plan["guild_id"]),
-        id(&plan["parent_id"]),
-        id(&plan["message_id"]),
-    ) else {
-        return Err(invalid("invalid persisted thread retry scope"));
-    };
-    let source = authorize(cfg, guild, parent, message, lookup)?
-        .filter(|current| current.plan == plan && current.can_create);
-    let Some(source) = source else {
+    inbox.thread_uses_fallback(&default_title(cfg.text("name")))?;
+    let Some(source) = reauthorize(cfg, api, &plan)? else {
         inbox.retire_throttled_thread(&plan, now)?;
         return Ok(None);
     };
@@ -95,7 +93,7 @@ pub(super) fn retry_due(
         inbox.thread_retry_at(Some(now.saturating_add(60_000)))?;
         return Ok(None);
     }
-    attempt(cfg, inbox, api, &source, None)
+    attempt(cfg, inbox, api, &source)
 }
 
 struct Authorized {
@@ -223,64 +221,73 @@ fn clip_title(text: &str) -> &str {
     &text[..end.unwrap_or(text.len())]
 }
 
+fn reauthorize(cfg: &Config, api: &Discord, plan: &Value) -> io::Result<Option<Authorized>> {
+    let (Some(guild), Some(parent), Some(message)) = (
+        id(&plan["guild_id"]),
+        id(&plan["parent_id"]),
+        id(&plan["message_id"]),
+    ) else {
+        return Err(invalid("invalid persisted thread creation scope"));
+    };
+    Ok(
+        authorize(cfg, guild, parent, message, |path| guild::lookup(api, path))?
+            .filter(|current| current.plan == *plan && current.can_create),
+    )
+}
+
 fn attempt(
     cfg: &Config,
     inbox: &mut Inbox,
     api: &Discord,
     source: &Authorized,
-    prior: Option<Value>,
 ) -> io::Result<Option<Value>> {
     let plan = &source.plan;
-    let guild = id(&plan["guild_id"]).ok_or_else(|| invalid("invalid thread guild"))?;
     let parent = id(&plan["parent_id"]).ok_or_else(|| invalid("invalid thread parent"))?;
     let message = id(&plan["message_id"]).ok_or_else(|| invalid("invalid thread opener"))?;
     provision(
         inbox,
         plan,
-        prior,
+        &default_title(cfg.text("name")),
         crate::ipc::spawn::now_ms,
         |fallback| api.create_public_thread(parent, message, fallback.unwrap_or(&source.title)),
         || readback(cfg, plan, |path| strict_lookup(api, path)),
-        || {
-            let authorized =
-                authorize(cfg, guild, parent, message, |path| guild::lookup(api, path))?
-                    .is_some_and(|current| current.plan == *plan && current.can_create);
-            Ok(authorized.then(|| default_title(cfg.text("name"))))
-        },
+        || Ok(reauthorize(cfg, api, plan)?.is_some()),
     )
 }
 
 fn provision(
     inbox: &mut Inbox,
     plan: &Value,
-    prior: Option<Value>,
+    default_name: &str,
     clock: impl Fn() -> u64,
     mut post: impl FnMut(Option<&str>) -> ThreadPost,
     read: impl Fn() -> io::Result<Readback>,
-    fallback: impl FnOnce() -> io::Result<Option<String>>,
+    fallback_authorized: impl FnOnce() -> io::Result<bool>,
 ) -> io::Result<Option<Value>> {
     let now = clock();
-    match inbox.thread_creation() {
-        None => inbox.reserve_thread(plan.clone())?,
+    let use_fallback = match inbox.thread_creation() {
+        None => {
+            inbox.reserve_thread(plan.clone())?;
+            false
+        }
         Some(saved) if saved == plan && inbox.thread_retry_due(now) => {
-            inbox.start_thread_retry(now)?
+            let selected = inbox.thread_uses_fallback(default_name)?;
+            inbox.start_thread_retry(now)?;
+            selected
         }
         Some(_) => return read().map(Readback::route),
-    }
-    if prior.is_some() {
-        return Ok(prior);
-    }
-    let result = match post(inbox.thread_fallback()) {
-        ThreadPost::BadRequest if inbox.thread_fallback().is_none() => {
+    };
+    let result = match post(use_fallback.then_some(default_name)) {
+        ThreadPost::BadRequest if !use_fallback => {
             if let Readback::Present(route) = read()? {
                 return Ok(route);
             }
-            let Some(name) = fallback()? else {
+            if !fallback_authorized()? {
                 return Ok(None);
-            };
+            }
             // A definitive throttle may retry this exact fallback name after restart.
-            inbox.choose_thread_fallback(plan, &name)?;
-            post(Some(&name))
+            inbox.choose_thread_fallback(plan, default_name)?;
+            post(Some(default_name))
         }
         other => other,
     };
@@ -488,9 +495,20 @@ mod tests {
             Edited,
             Deleted,
             Revoked,
+            EditedDuring404,
+            DeletedDuring404,
+            MentionLostDuring404,
+            RevokedDuring404,
+            CorruptFallbackType,
+            CorruptFallbackTitle,
         }
         use Scenario::*;
 
+        const SOURCE: &str = "<@!3> first  two <@&5> three four\n five <#6> six seven eight nine";
+        let opener = |content: &str| {
+            json!({"id":"9","channel_id":"2","guild_id":"1","type":0,
+                "author":{"id":"7"},"content":content,"mentions":[{"id":"3"}]})
+        };
         let title = "first two three four five six seven eight";
         let default = "Claudio discussion";
         for (scenario, names, linked) in [
@@ -508,7 +526,17 @@ mod tests {
             (Edited, vec![title], false),
             (Deleted, vec![title], false),
             (Revoked, vec![title], false),
+            (EditedDuring404, vec![], false),
+            (DeletedDuring404, vec![], false),
+            (MentionLostDuring404, vec![], false),
+            (RevokedDuring404, vec![], false),
+            (CorruptFallbackType, vec![], false),
+            (CorruptFallbackTitle, vec![], false),
         ] {
+            let delay_404 = matches!(
+                scenario,
+                EditedDuring404 | DeletedDuring404 | MentionLostDuring404 | RevokedDuring404
+            );
             let dir = std::env::temp_dir().join(format!(
                 "swarm-thread-names-{}",
                 runtime::random_id().unwrap()
@@ -527,6 +555,7 @@ mod tests {
             let done = Arc::clone(&stop);
             let fixture = thread::spawn(move || {
                 let mut posts = Vec::new();
+                let mut delayed = false;
                 let exact = json!({"id":"9","type":11,"guild_id":"1","parent_id":"2",
                     "thread_metadata":{"archived":false,"locked":false}});
                 while !done.load(Ordering::Relaxed) {
@@ -591,27 +620,34 @@ mod tests {
                                 (200, wrong)
                             }
                             DeniedReadback if first_attempted => (403, json!({})),
+                            _ if delay_404 && !delayed => {
+                                // Change authority while the initial exact readback is outstanding.
+                                thread::sleep(Duration::from_millis(15));
+                                delayed = true;
+                                (404, json!({}))
+                            }
                             _ => (404, json!({})),
                         },
                         "GET /api/v10/channels/2" => {
                             (200, json!({"id":"2","guild_id":"1","type":0}))
                         }
                         "GET /api/v10/channels/2/messages/9" => {
-                            if scenario == Deleted && first_attempted {
+                            if scenario == Deleted && first_attempted
+                                || scenario == DeletedDuring404 && delayed
+                            {
                                 (404, json!({}))
                             } else {
                                 let content = match scenario {
                                     Edited if first_attempted => "<@!3> edited opener",
+                                    EditedDuring404 if delayed => "<@!3> edited opener",
                                     BlankDefault => "<@!3> <#20>",
-                                    _ => {
-                                        "<@!3> first  two <@&5> three four\n five <#6> six seven eight nine"
-                                    }
+                                    _ => SOURCE,
                                 };
-                                (
-                                    200,
-                                    json!({"id":"9","channel_id":"2","guild_id":"1","type":0,
-                                    "author":{"id":"7"},"content":content,"mentions":[{"id":"3"}]}),
-                                )
+                                let mut source = opener(content);
+                                if scenario == MentionLostDuring404 && delayed {
+                                    source["mentions"] = json!([]);
+                                }
+                                (200, source)
                             }
                         }
                         "GET /api/v10/guilds/1/members/3" => {
@@ -619,7 +655,8 @@ mod tests {
                         }
                         "GET /api/v10/guilds/1/members/7" => (200, json!({"user":{"id":"7"}})),
                         "GET /api/v10/channels/2/permissions/member/3"
-                            if scenario == Revoked && first_attempted =>
+                            if scenario == Revoked && first_attempted
+                                || scenario == RevokedDuring404 && delayed =>
                         {
                             let permissions = (1u64 << 10) | (1 << 16) | (1 << 38);
                             (200, json!({"permissions":permissions.to_string()}))
@@ -637,21 +674,73 @@ mod tests {
                     );
                     socket.write_all(response.as_bytes()).unwrap();
                 }
-                posts
+                (posts, delayed)
             });
             let gateway = json!({"t":"MESSAGE_CREATE","d":{"id":"9","channel_id":"2",
                 "guild_id":"1","author":{"id":"7"},"content":"<@3> gateway hint",
                 "mentions":[{"id":"3"}]}});
             let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-            let first = ingest(&cfg, &mut inbox, &api, &gateway);
-            drop(inbox);
-            let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-            let replay = ingest(&cfg, &mut inbox, &api, &gateway);
+            let corrupt = match scenario {
+                CorruptFallbackType => Some(json!({"name":default})),
+                CorruptFallbackTitle => Some(json!("Prior name discussion")),
+                _ => None,
+            };
+            let ledger = dir.join("rust-text-v1.json");
+            let (first, replay, unchanged_receipt) = if let Some(corrupt) = &corrupt {
+                inbox
+                    .reserve_thread(json!({"guild_id":"1","parent_id":"2","message_id":"9",
+                    "actor_id":"7","revision":revision(&opener(SOURCE)).unwrap()}))
+                    .unwrap();
+                inbox.record_thread_throttle(1, true).unwrap();
+                drop(inbox);
+                let mut state = runtime::read_json(&ledger).unwrap();
+                state["thread_create_fallback"] = corrupt.clone();
+                runtime::write_json(&ledger, &state).unwrap();
+                let before = std::fs::read(&ledger).unwrap();
+                let mut current = Inbox::open(&dir, &cfg).unwrap();
+                let first = retry_due(&cfg, &mut current, &api);
+                drop(current);
+                inbox = Inbox::open(&dir, &cfg).unwrap();
+                let replay = retry_due(&cfg, &mut inbox, &api);
+                (
+                    first,
+                    Some(replay),
+                    before == std::fs::read(&ledger).unwrap(),
+                )
+            } else {
+                let first = ingest(&cfg, &mut inbox, &api, &gateway);
+                let replay = if delay_404 {
+                    None
+                } else {
+                    drop(inbox);
+                    inbox = Inbox::open(&dir, &cfg).unwrap();
+                    Some(ingest(&cfg, &mut inbox, &api, &gateway))
+                };
+                (first, replay, true)
+            };
             stop.store(true, Ordering::Relaxed);
-            assert_eq!(fixture.join().unwrap(), names, "{scenario:?}");
-            for result in [first, replay] {
-                if scenario == WrongAudience {
-                    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert_eq!(
+                fixture.join().unwrap(),
+                (
+                    names.iter().map(|name| name.to_string()).collect(),
+                    delay_404
+                ),
+                "{scenario:?}"
+            );
+            assert!(unchanged_receipt, "{scenario:?}");
+            if delay_404 {
+                assert!(inbox.thread_creation().is_none(), "{scenario:?}");
+            }
+            for result in std::iter::once(first).chain(replay) {
+                if scenario == WrongAudience || corrupt.is_some() {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                    if corrupt.is_some() {
+                        assert_eq!(
+                            error.to_string(),
+                            "invalid persisted thread creation fallback"
+                        );
+                    }
                 } else {
                     let route = result.unwrap();
                     assert_eq!(route.is_some(), linked, "{scenario:?}");
@@ -686,7 +775,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || 100,
             |chosen| {
                 calls.set(calls.get() + 1);
@@ -702,7 +791,7 @@ mod tests {
                 }
             },
             || Ok(Readback::Missing),
-            || Ok(Some(name.into())),
+            || Ok(true),
         )
         .unwrap();
         assert_eq!(calls.get(), 2);
@@ -713,7 +802,7 @@ mod tests {
             provision(
                 &mut inbox,
                 &plan,
-                None,
+                "Claudio discussion",
                 || now,
                 |chosen| {
                     assert_eq!(chosen, Some(name));
@@ -730,7 +819,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || u64::MAX,
             |_| panic!("retry budget exhausted"),
             || Ok(Readback::Missing),
@@ -793,7 +882,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || 100,
             |_| ThreadPost::Outcome(Post::RateLimited(200)),
             || panic!("definitive throttle"),
@@ -811,7 +900,7 @@ mod tests {
         provision(
             &mut inbox,
             &another,
-            None,
+            "Claudio discussion",
             || 301,
             |_| ThreadPost::Outcome(Post::Unconfirmed),
             || Ok(Readback::Missing),
@@ -822,7 +911,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || 302,
             |_| panic!("uncertain create still controls slot"),
             || Ok(Readback::Missing),
@@ -848,7 +937,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || clock.get(),
             |_| {
                 clock.set(125);
@@ -859,6 +948,13 @@ mod tests {
         )
         .unwrap();
         drop(inbox);
+        let ledger = dir.join("rust-text-v1.json");
+        let mut legacy = runtime::read_json(&ledger).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("thread_create_fallback");
+        runtime::write_json(&ledger, &legacy).unwrap();
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         assert!(!inbox.thread_retry_due(324));
         assert!(inbox.thread_retry_due(325));
@@ -867,7 +963,7 @@ mod tests {
         provision(
             &mut inbox,
             &other,
-            None,
+            "Claudio discussion",
             || 325,
             |_| panic!("other message retry"),
             || Ok(Readback::Missing),
@@ -877,7 +973,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || 325,
             |_| {
                 let state = runtime::read_json(&dir.join("rust-text-v1.json")).unwrap();
@@ -893,7 +989,7 @@ mod tests {
         provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || u64::MAX,
             |_| panic!("uncertain writes may not repeat"),
             || Ok(Readback::Missing),
@@ -917,7 +1013,7 @@ mod tests {
         let result = provision(
             &mut inbox,
             &plan,
-            None,
+            "Claudio discussion",
             || 1,
             |_| {
                 assert_eq!(
@@ -934,7 +1030,7 @@ mod tests {
         assert!(result.is_none());
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        let route = provision(&mut inbox,&plan,None,||120_001,|_|panic!("uncertain writes may not repeat"),|| {
+        let route = provision(&mut inbox,&plan,"Claudio discussion",||120_001,|_|panic!("uncertain writes may not repeat"),|| {
             readback(&cfg,&plan,|path| {
                 let value=match path {
                     "/channels/9"=>json!({"type":11,"id":"9","guild_id":"1","parent_id":"2","thread_metadata":{"archived":false,"locked":false}}),

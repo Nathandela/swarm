@@ -750,13 +750,17 @@ impl Inbox {
         self.save(next)
     }
 
-    pub(super) fn thread_fallback(&self) -> Option<&str> {
-        self.data["thread_create_fallback"].as_str()
+    pub(super) fn thread_uses_fallback(&self, default_name: &str) -> io::Result<bool> {
+        match &self.data["thread_create_fallback"] {
+            Value::Null => Ok(false),
+            Value::String(name) if name == default_name => Ok(true),
+            _ => Err(invalid("invalid persisted thread creation fallback")),
+        }
     }
 
     pub(super) fn choose_thread_fallback(&mut self, plan: &Value, name: &str) -> io::Result<()> {
         if self.thread_creation() != Some(plan)
-            || self.thread_fallback().is_some()
+            || !self.data["thread_create_fallback"].is_null()
             || !self.data["thread_create_retry_at"].is_null()
         {
             return Err(invalid("thread creation has no unconsumed name fallback"));
