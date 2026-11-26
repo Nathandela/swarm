@@ -1,5 +1,5 @@
 use super::{
-    Calendar, Result, Spec,
+    Calendar, Job, Result, Spec,
     calendar::Rule,
     catalog::{Read, Records},
     file, id,
@@ -145,7 +145,7 @@ fn catalog(store: &Store, args: &[&str], now: Timestamp, out: &mut impl Write) -
         ["create", rest @ ..] => {
             let spec = read_spec(rest)?;
             super::rpc::host_calendar(&spec.calendar)?;
-            write_json(out, &store.create(spec, now, false)?)?;
+            write_job(out, &store.create(spec, now, false)?)?;
         }
         ["edit", job, "--spec-file", file, tail @ ..] => {
             let revision = match tail {
@@ -155,15 +155,15 @@ fn catalog(store: &Store, args: &[&str], now: Timestamp, out: &mut impl Write) -
             };
             let spec = read_spec(&["--spec-file", file])?;
             super::rpc::host_calendar(&spec.calendar)?;
-            write_json(out, &store.edit(job, revision, spec, now)?)?;
+            write_job(out, &store.edit(job, revision, spec, now)?)?;
         }
         ["edit", ..] => return Err("usage: swarm schedule edit JOB --spec-file FILE".into()),
-        ["pause", job] => write_json(out, &store.set_state(job, "paused", now)?)?,
+        ["pause", job] => write_job(out, &store.set_state(job, "paused", now)?)?,
         ["resume", job] => {
             super::rpc::host_calendar(&store.job(job)?.spec.calendar)?;
-            write_json(out, &store.set_state(job, "active", now)?)?;
+            write_job(out, &store.set_state(job, "active", now)?)?;
         }
-        ["archive", job] => write_json(out, &store.set_state(job, "archived", now)?)?,
+        ["archive", job] => write_job(out, &store.set_state(job, "archived", now)?)?,
         ["templates", "list"] => write_list(out, store.templates()?)?,
         ["templates", "show", id] => write_json(out, &store.template(id)?)?,
         ["templates", "delete", id] => store.delete_template(id)?,
@@ -222,11 +222,27 @@ fn read_catalog(records: Records, table: bool, now: Timestamp, out: &mut impl Wr
                 writeln!(out, "{}", row[4])?;
             }
         }
-        Records::List(jobs) => write_list(out, jobs)?,
-        Records::Get(job) => write_json(out, &job)?,
+        Records::List(jobs) => write_list(
+            out,
+            jobs.iter().map(public_job).collect::<Result<Vec<_>>>()?,
+        )?,
+        Records::Get(job) => write_job(out, &job)?,
         Records::History(runs) => write_list(out, runs)?,
     }
     Ok(())
+}
+
+fn public_job(job: &Job) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(job)?;
+    value
+        .as_object_mut()
+        .expect("serialized job object")
+        .shift_remove("lifecycle_generation");
+    Ok(value)
+}
+
+fn write_job(out: &mut impl Write, job: &Job) -> Result<()> {
+    write_json(out, &public_job(job)?)
 }
 
 fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
@@ -338,7 +354,7 @@ fn read_spec(args: &[&str]) -> Result<Spec> {
     })
 }
 
-fn duration(input: &str) -> Result<i64> {
+pub(super) fn duration(input: &str) -> Result<i64> {
     let invalid = || -> Box<dyn std::error::Error> { format!("invalid duration {input:?}").into() };
     let sign = if input.starts_with('-') { -1 } else { 1 };
     let mut text = input.strip_prefix(['-', '+']).unwrap_or(input);

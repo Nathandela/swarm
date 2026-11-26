@@ -657,7 +657,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | crate::bootstrap::RESTART
                 )
                 || (state.schedule_socket.is_some() && scheduling::CAPS.contains(cap)
-                    || *cap == crate::schedule::catalog::CAP)
+                    || *cap == crate::schedule::catalog::CAP
+                    || *cap == crate::schedule::catalog::CONTROL)
         })
         .collect();
     let mut welcome = json!({
@@ -790,8 +791,17 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     json!({"op":"error","error_code":"capability_refused","error":"schedule catalog requires the owner catalog capability"})
                 };
                 reply(&writer, state, message)
+            }            "schedule_catalog_change" => {
+                let message = if caps.contains(&crate::schedule::catalog::CONTROL) {
+                    crate::schedule::catalog::change(state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?, &request)
+                        .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
+                } else {
+                    json!({"op":"error","error_code":"capability_refused","error":"schedule change requires the owner control capability"})
+                };
+                reply(&writer, state, message)
             }
-            "schedule_tick" | "schedule_run" | "schedule_workspace_check" | "schedule_route_check" | "schedule_native_status" => {
+
+            crate::schedule::catalog::MANUAL_OP | "schedule_tick" | "schedule_run" | "schedule_workspace_check" | "schedule_route_check" | "schedule_native_status" => {
                 let message = match scheduling::handle(state, &request, &caps) {
                     Ok(message) => message,
                     Err(e) => json!({"op":"error","error_code":"invalid_field","error":e.to_string()}),

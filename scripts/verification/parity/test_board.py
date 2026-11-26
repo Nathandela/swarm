@@ -11,6 +11,8 @@ import os
 import re
 from pathlib import Path
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,39 @@ DRIVER = HERE / "swarm-parity"
 spec = importlib.util.spec_from_loader("parity", SourceFileLoader("parity", str(DRIVER)))
 p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
+
+
+def owner_request(path, capability, body, *, discard=False):
+    def read(conn, count):
+        chunks = bytearray()
+        while len(chunks) < count:
+            data = conn.recv(count - len(chunks))
+            assert data, "owner socket closed before a complete frame"
+            chunks.extend(data)
+        return chunks
+
+    def receive(conn):
+        length, = struct.unpack(">I", read(conn, 4))
+        assert 1 <= length <= 1 << 20
+        payload = read(conn, length)
+        assert payload[0] == 1
+        return json.loads(payload[1:])
+
+    def send(conn, value):
+        payload = json.dumps(value).encode()
+        conn.sendall(struct.pack(">IB", len(payload) + 1, 1) + payload)
+
+    with socket.socket(socket.AF_UNIX) as conn:
+        conn.settimeout(5)
+        conn.connect(path)
+        send(conn, {"op":"hello", "protocol_version":1, "capabilities":[capability]})
+        hello = receive(conn)
+        assert hello["op"] == "hello" and capability in hello["capabilities"]
+        send(conn, {**body, "endpoint_id":hello["endpoint_id"]})
+        if discard:
+            conn.shutdown(socket.SHUT_WR)
+            return None
+        return receive(conn)
 
 
 def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
@@ -64,6 +99,35 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
         assert listing.returncode == 0 and [row["id"] for row in json.loads(listing.stdout)] == [job]
         assert json.loads(cli("schedule", "show", job).stdout)["id"] == job
         assert json.loads(cli("schedule", "history", job).stdout) is None
+        owner_socket = env["SWARM_DAEMON_SOCK"]
+
+        def shown(id):
+            return json.loads(cli("schedule", "show", id).stdout)
+
+        def history_for(id):
+            return json.loads(cli("schedule", "history", id).stdout) or []
+
+        original = shown(job)
+        pause = {"op":"schedule_catalog_change", "change":{
+            "kind":"state", "id":job, "revision":original["revision_id"],
+            "expected":original["state"], "generation":original.get("lifecycle_generation", 0),
+            "updated_at":original["updated_at"], "value":"paused",
+        }}
+        owner_request(owner_socket, "schedule-catalog-control-v1", pause, discard=True)
+        p.wait_for(lambda: shown(job)["state"] == "paused", "lost pause ACK")
+        resumed = cli("schedule", "resume", job)
+        assert resumed.returncode == 0, resumed.stderr
+        refusal = owner_request(owner_socket, "schedule-catalog-control-v1", pause)
+        assert refusal["op"] == "error" and shown(job)["state"] == "active"
+
+        def quit_board(board):
+            board.send(b"\x1b[27u\x1b[27u")
+            def exited():
+                board.drain()
+                return board.child.poll() is not None
+            p.wait_for(exited, "automation board quit")
+            assert board.child.returncode == 0
+
         board = p.Board([str(root / "bin/board")], root, env)
         try:
             board.wait_bytes(b"swarm")
@@ -75,19 +139,89 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
             board.wait_bytes(b"Status")
             board.send(b"h")
             board.wait_bytes(b"No runs for this automation")
+
+            def step(keys, landmark):
+                start = len(board.capture)
+                board.send(keys)
+                board.wait_bytes(landmark, start)
+
+            step(b"\x1b[D", b"Status")
+            step(b"\x1b[D", b"n new")
+            step(b"n", b"New automation")
+            step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
+                 b"\x1b[B\x15claude\r", b"Status")
+            jobs = json.loads(cli("schedule", "list", "--json").stdout)
+            created, = [record for record in jobs if record["spec"]["name"] == "Created from board"]
+            assert created["state"] == "paused"
+            assert created["spec"]["prompt"] == "first line\nsecond line"
+            created_id = created["id"]
+            step(b"e", b"Edit automation")
+            step(b"\x15Revised from board\r", b"Revised from board")
+            edited = json.loads(cli("schedule", "show", created_id).stdout)
+            assert edited["spec"]["name"] == "Revised from board"
+            assert edited["revision_id"] != created["revision_id"]
+            step(b"p", b"Status")
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "active"
+            manual = {"op":"schedule_board_manual", "schedule_id":created_id,
+                      "intent":{"kind":"run", "previous":None}}
+            owner_request(owner_socket, "schedule-board-manual-v1", manual, discard=True)
+            def recorded_without_ack():
+                runs = history_for(created_id)
+                if not runs:
+                    return None
+                single, = runs
+                if single["state"] == "queued" or any(a["state"] == "unknown" for a in single.get("attempts", [])):
+                    return None
+                return single
+            first = p.wait_for(recorded_without_ack, "durable outcome without manual run ACK")
+            assert first["manual"] is True
+            quit_board(board)
+            board.close()
+            daemon.kill()
+            daemon.wait(timeout=5)
+            daemon = start()
+            board = p.Board([str(root / "bin/board")], root, env)
+            board.wait_bytes(b"swarm")
+            step(b"m", b"More")
+            step(b"a", b"Revised from board")
+            offset = len(board.capture)
+            step(b"\x1b[F\r", b"Status")
+            def restored_run():
+                board.drain()
+                frame = board.capture[offset:]
+                return b"Run pending" in frame or b"Run recorded" in frame
+            p.wait_for(restored_run, "durable run receipt after restart")
+            step(b"r", b"Run recorded")
+            assert [run["id"] for run in history_for(created_id)] == [first["id"]]
+            step(b"R", b"Run recorded")
+            ids = {run["id"] for run in history_for(created_id)}
+            assert first["id"] in ids and len(ids) == 2
+            stale = {**manual, "intent":{"kind":"run", "previous":first["id"]}}
+            assert owner_request(owner_socket, "schedule-board-manual-v1", stale)["op"] == "error"
+            assert {run["id"] for run in history_for(created_id)} == ids
+            assert not (root / "effects/worker").exists()
+            step(b"h", b"enter run")
+            step(b"\r", b"Automation run")
+            step(b"\x1b[D", b"enter run")
+            step(b"\x1b[D", b"Revised from board")
+            step(b"p", "Status · paused".encode())
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
+            step(b"x", b"Archive automation?")
+            step(b"n", b"Status")
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
+            step(b"x", b"Archive automation?")
+            step(b"y", b"Status")
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "archived"
+
             daemon.terminate()
             daemon.wait(timeout=5)
             offline = cli("schedule", "list", "--json")
-            assert offline.returncode == 0 and [row["id"] for row in json.loads(offline.stdout)] == [job]
+            assert offline.returncode == 0
+            assert {row["id"] for row in json.loads(offline.stdout)} == {job, created_id}
             board.wait_bytes(b"daemon connection lost")
             board.send(b"u")
             board.wait_bytes(b"daemon disconnected")
-            board.send(b"\x1b[27u\x1b[27u")
-            def quit_catalog():
-                board.drain()
-                return board.child.poll() is not None
-            p.wait_for(quit_catalog, "automation board quit")
-            assert board.child.returncode == 0
+            quit_board(board)
         finally:
             board.close()
         return

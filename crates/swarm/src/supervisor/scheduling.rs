@@ -19,6 +19,7 @@ pub(super) const CAPS: &[&str] = &[
     "schedule-route-check",
     "schedule-host-time",
     "schedule-native",
+    crate::schedule::catalog::MANUAL_CAP,
 ];
 
 pub(super) fn socket(owner: &Path) -> Result<(PathBuf, UnixListener)> {
@@ -75,6 +76,22 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> Result<Va
         "schedule_tick" if caps.contains(&"schedule") => {
             engine(state)?.tick(Timestamp::now())?;
             Ok(json!({"op":op}))
+        }
+        crate::schedule::catalog::MANUAL_OP
+            if caps.contains(&crate::schedule::catalog::MANUAL_CAP) =>
+        {
+            let job = field(request, "schedule_id");
+            if !crate::schedule::valid_id(job) {
+                return Err("invalid schedule job ID".into());
+            }
+            let intent: crate::schedule::catalog::Manual =
+                serde_json::from_value(request["intent"].clone())?;
+            if matches!(&intent, crate::schedule::catalog::Manual::Run { previous: Some(id) } if !crate::schedule::valid_id(id))
+            {
+                return Err("invalid previous board run ID".into());
+            }
+            let run = engine(state)?.board_run(job, intent, Timestamp::now())?;
+            Ok(json!({"op":op,"schedule_id":job,"run":run}))
         }
         "schedule_run" if caps.contains(&"schedule") && caps.contains(&"schedule-run-id") => {
             let invocation = field(request, "operation_id");

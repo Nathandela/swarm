@@ -32,47 +32,53 @@ fn id(now: Timestamp) -> Result<String> {
         .collect())
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 26 && id.as_bytes()[0] <= b'7' && id.bytes().all(|b| ALPHABET.contains(&b))
 }
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Calendar {
-    kind: String,
-    time_zone: String,
+pub(crate) struct Calendar {
+    pub(crate) kind: String,
+    pub(crate) time_zone: String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    time: String,
+    pub(crate) time: String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    date: String,
+    pub(crate) date: String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    weekday: String,
+    pub(crate) weekday: String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    cron: String,
+    pub(crate) cron: String,
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Spec {
-    name: String,
-    prompt: String,
-    directory: String,
-    authority: String,
-    workspace: String,
-    agents: Vec<String>,
-    calendar: Calendar,
-    grace: i64,
-    allow_overlap: bool,
+pub(crate) struct Spec {
+    pub(crate) name: String,
+    pub(crate) prompt: String,
+    pub(crate) directory: String,
+    pub(crate) authority: String,
+    pub(crate) workspace: String,
+    pub(crate) agents: Vec<String>,
+    pub(crate) calendar: Calendar,
+    pub(crate) grace: i64,
+    pub(crate) allow_overlap: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Job {
     pub(crate) id: String,
-    revision_id: String,
-    spec: Spec,
+    pub(crate) revision_id: String,
+    pub(crate) spec: Spec,
     pub(crate) state: String,
     created_at: Timestamp,
-    updated_at: Timestamp,
+    pub(crate) updated_at: Timestamp,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) lifecycle_generation: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Job {
@@ -182,9 +188,18 @@ fn file(path: &str) -> io::Result<String> {
     }
 }
 
+pub(crate) fn automation_duration(input: &str) -> Result<i64> {
+    cli::duration(input)
+}
+
+pub(crate) fn automation_invocation() -> io::Result<String> {
+    id(Timestamp::now()).map_err(|error| io::Error::other(error.to_string()))
+}
+
 pub(crate) use cli::run;
 pub(crate) use engine::{Backend, Engine, Launch, LaunchOutcome, WorkerState};
 pub(crate) use store::Completion;
+pub(crate) use store::Occurrence;
 
 #[cfg(test)]
 struct Temp(PathBuf);
