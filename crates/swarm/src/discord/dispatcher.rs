@@ -209,7 +209,15 @@ impl Dispatcher {
         let instance = field(&row["capabilities"], "session_instance");
         let status = match self.owner.runtime(session, instance, &self.launch) {
             Ok(status) => status,
-            Err(_) if state["binding"].is_null() => return Ok(()),
+            Err(error)
+                if state["binding"].is_null()
+                    || matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return Ok(());
+            }
             Err(err) => return Err(err),
         };
         if state["binding"].is_null() {
@@ -1458,6 +1466,7 @@ mod tests {
         sends: usize,
         wrong_turn: bool,
         wrong_binding: bool,
+        snapshot_busy: bool,
         completed: bool,
     }
 
@@ -1487,6 +1496,8 @@ mod tests {
                     json!({"op":"launch","operation_id":request["operation_id"],"session":self.row})
                 }
                 "list" => json!({"op":"list","sessions":[self.row]}),
+                "manager_runtime" if self.snapshot_busy => json!({"op":"error",
+                    "error_code":"temporarily_unavailable","error":"manager runtime snapshot is busy"}),
                 "manager_runtime" => {
                     let mut binding = self.binding.clone();
                     if self.wrong_binding {
@@ -1595,6 +1606,7 @@ mod tests {
             sends: 0,
             wrong_turn: false,
             wrong_binding: false,
+            snapshot_busy: false,
             completed: false,
         }));
         let server = {
@@ -1645,6 +1657,12 @@ mod tests {
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         assert_eq!(inbox.next_prepared().unwrap()["route"]["message_id"], "101");
         assert!(inbox.admit(&source(&cfg, "100")).unwrap().is_none());
+        assert!(inbox.manager()["binding"].is_object());
+        state.lock().unwrap().snapshot_busy = true;
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert_eq!(state.lock().unwrap().sends, 0);
+        assert_eq!(inbox.next_prepared().unwrap()["route"]["message_id"], "101");
+        state.lock().unwrap().snapshot_busy = false;
         dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         assert_eq!(state.lock().unwrap().sends, 1);
         assert!(api.posted.borrow().is_empty());

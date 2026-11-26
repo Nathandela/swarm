@@ -306,6 +306,11 @@ impl Client {
             match field(&reply, "op") {
                 "error" => {
                     let error = field(&reply, "error");
+                    if message["op"] == "manager_runtime"
+                        && reply["error_code"] == "temporarily_unavailable"
+                    {
+                        return Err(io::Error::new(io::ErrorKind::WouldBlock, error.to_owned()));
+                    }
                     let prefix = match field(&message, "op") {
                         "owner_launch" => Some("owner launch"),
                         "owner_launch_status" => Some("launch status"),

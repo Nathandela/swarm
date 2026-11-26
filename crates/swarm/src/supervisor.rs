@@ -1238,7 +1238,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "manager_runtime" | "manager_input_status" | "manager_resolve_call"
                 if caps.contains(&"manager-provenance") => state.session(&request).and_then(|session| {
-                    let body = session.manager_operation(&request)?;
+                    let body = match session.manager_operation(&request) {
+                        Err(error) if op == "manager_runtime" && matches!(error.kind(),io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                            json!({"op":"error","error_code":"temporarily_unavailable","error":"manager runtime snapshot is busy"}),
+                        result => result?,
+                    };
                     reply(&writer,state,body)
                 }),
             "manager_worker_read" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
