@@ -133,3 +133,23 @@ per-role RSS and descriptors around 100 attach cycles, binary/source
 identities, host load and cleanup. Record actual host activity with the
 evidence. Omit `--quiet-host` for a descriptive run during other work.
 `--smoke` uses fewer trials and never produces a gate pass.
+
+Use a separate run to measure the Rust board at the Go N-1 boundary.
+Build the owner and unit test executable from the same checkout.
+
+```sh
+cargo build --locked --release --bin swarm
+cargo test --locked --release --bin swarm --no-run
+python3 -B scripts/verification/m11_post_dial.py \
+  --candidate "$PWD/target/release/swarm" --candidate-source "$SOURCE_SHA" \
+  --test "$SWARM_UNIT_TEST_EXECUTABLE" --out "$FRESH_POST_DIAL_JSON"
+```
+
+Use the absolute path to the unit test executable printed by Cargo. The
+driver launches 50 fixture sessions with a guarded owner. The Rust test
+opens a fresh connection for each of 25 trials, then times subscription,
+initial board load, resize and rendering at 120×200. It checks every label
+in the first frame after stopping the clock. The receipt retains raw
+nanosecond samples, p50/p95/p99, tails and cleanup. The nearest-rank p95
+must be under 100 ms. The installed PTY performance run above remains a
+separate gate.

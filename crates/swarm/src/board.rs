@@ -65,20 +65,8 @@ pub(crate) fn run() -> u8 {
 }
 
 fn board(path: &Path) -> io::Result<()> {
-    let mut client = connect(path)?;
-    let mut board = Board {
-        hands_off: client.supports(handoff::CAP),
-        daemon_version: client.build_version().to_owned(),
-        skew_notice: version::notice(client.build_version()),
-        can_relocate: client.supports(resume::CAP),
-        context_owner: context_settings::Owner::from_connection(path, &client),
-        ..Board::default()
-    };
-    match Layout::load() {
-        Ok(settings) => board.layout = settings,
-        Err(error) => board.notice = format!("board layout: {error}"),
-    }
-    board.refresh(&mut client)?;
+    let mut client = Client::dial(path, ROSTER_CAPS)?;
+    let mut board = Board::load(path, &mut client)?;
     board.availability.refresh();
     let mut upgrade;
     let _terminal = term::Terminal::raw()?;
@@ -269,7 +257,11 @@ fn board(path: &Path) -> io::Result<()> {
                 }
             }
         } else if upgrade.is_none() && Instant::now() >= retry {
-            match connect(path).and_then(|mut client| board.refresh(&mut client).map(|()| client)) {
+            match Client::dial(path, ROSTER_CAPS).and_then(|mut client| {
+                subscribe(&mut client)?;
+                board.refresh(&mut client)?;
+                Ok(client)
+            }) {
                 Ok(client) => {
                     board.notice.clear();
                     board.daemon_version = client.build_version().to_owned();
@@ -517,10 +509,9 @@ fn board(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn connect(path: &Path) -> io::Result<Client> {
-    let mut client = Client::dial(path, ROSTER_CAPS)?;
+fn subscribe(client: &mut Client) -> io::Result<()> {
     client.request("subscribe", None, "ok")?;
-    Ok(client)
+    Ok(())
 }
 
 #[derive(Default)]
@@ -625,6 +616,24 @@ enum Action {
 }
 
 impl Board {
+    fn load(path: &Path, client: &mut Client) -> io::Result<Self> {
+        subscribe(client)?;
+        let mut board = Self {
+            hands_off: client.supports(handoff::CAP),
+            daemon_version: client.build_version().to_owned(),
+            skew_notice: version::notice(client.build_version()),
+            can_relocate: client.supports(resume::CAP),
+            context_owner: context_settings::Owner::from_connection(path, client),
+            ..Self::default()
+        };
+        match Layout::load() {
+            Ok(settings) => board.layout = settings,
+            Err(error) => board.notice = format!("board layout: {error}"),
+        }
+        board.refresh(client)?;
+        Ok(board)
+    }
+
     fn attach(
         &mut self,
         path: &Path,
@@ -1966,6 +1975,31 @@ fn caller_launch_environment(agent: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires the isolated 50-session fixture from m11_post_dial.py"]
+    fn real_owner_first_paint() {
+        let socket = env::var_os("SWARM_TEST_POST_DIAL_SOCKET")
+            .expect("set SWARM_TEST_POST_DIAL_SOCKET to the private fixture socket");
+        let path = Path::new(&socket);
+        let labels: Vec<_> = (0..50).map(|n| format!("m11-worker-{n:02}")).collect();
+        let dimensions = (120, 200);
+        for trial in 0..25 {
+            let mut client = Client::dial(path, ROSTER_CAPS).expect("fixture handshake");
+            // Match Go's New, WindowSizeMsg and View timing boundary.
+            let start = Instant::now();
+            let mut board = Board::load(path, &mut client).expect("fixture board");
+            board.columns = dimensions.0;
+            board.reveal_focus(dimensions.1);
+            let frame = board.view(dimensions);
+            let elapsed = start.elapsed();
+            println!("\npost_dial_ns={}", elapsed.as_nanos());
+            assert_eq!(board.rows.len(), labels.len(), "trial {trial}");
+            for label in &labels {
+                assert!(frame.contains(label), "trial {trial} omitted {label}");
+            }
+        }
+    }
 
     #[test]
     fn scheduled_enter_retains_captured_review_even_with_missing_directory() {
