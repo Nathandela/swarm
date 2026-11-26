@@ -61,10 +61,24 @@ def verify(binary, root):
             if daemon.poll() is not None or time.monotonic() >= deadline:
                 raise AssertionError("fresh owner socket did not start")
             time.sleep(0.02)
-        requested = ("subscribe", "remote-gateway", "pairing", "policy", "activity")
+        requested = (
+            "subscribe",
+            "remote-gateway",
+            "pairing",
+            "policy",
+            "activity",
+            "logins.manage.v1",
+        )
         hello = wire.owner_request(env, caps=requested)
         assert hello["capabilities"] == ["subscribe"], hello
-        for op in ("remote_approve", "pair", "push_register", "login_switch"):
+        for op in (
+            "remote_set_control",
+            "pair_start",
+            "push_prefs",
+            "login_manage",
+            "device_list",
+            "policy_query",
+        ):
             reply = wire.owner_request(env, dict(op=op), caps=requested)
             assert reply["op"] == "error", (op, reply)
         assert not any(
