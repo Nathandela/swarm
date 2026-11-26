@@ -100,6 +100,13 @@ verifies the successor points at it, and leaves the source running. An owner
 without the hands-off capability must refuse visibly and keep the roster at
 one session.
 
+Pass `--handoff-grid` with `--reference-board`, `--tmux` and `--grid-evidence`
+to compare the live handoff forms against the same owner and source. The
+receipt includes styled cells and terminal modes for target selection, model
+suggestions, both methods, modal keyboard handling and narrow transcript
+consent. It compares every cell and records hidden paint cursor coordinates
+separately.
+
 ## M11 real-path performance
 
 Run matching optimized native executables on the same idle host. Use the

@@ -5,6 +5,7 @@ import http.server
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -189,30 +190,35 @@ def verify(root, candidate, claude, codex, anthropic, source_agent):
             board.wait_bytes(b"CrossSource")
             board.send(b"h")
 
-            def detected():
+            def handoff_frame():
                 board.drain()
-                return next((agent for agent in ("claude", "codex")
-                             if f"● {agent}".encode() in board.capture), None)
+                latest = board.capture[board.capture.rfind(b"\x1b[H\x1b[2J"):]
+                return re.sub(rb"\x1b\[[0-9;]*m", b"", latest).decode(errors="replace")
+
+            def target_selected(agent):
+                return f"◂ {agent} ▸" in handoff_frame()
+
+            def detected():
+                return next((agent for agent in ("claude", "codex") if target_selected(agent)), None)
 
             selected = fixtures.wait_for(detected, "installed handoff targets", timeout=25)
             if selected != target_agent:
                 board.send(b"\x1b[C" if target_agent == "codex" else b"\x1b[D")
-                board.wait_bytes(f"● {target_agent}".encode())
-            latest = board.capture[board.capture.rfind(b"\x1b[H\x1b[2J"):]
-            if "◂ supervised ▸".encode() in latest:
+                fixtures.wait_for(lambda: target_selected(target_agent), "selected target " + target_agent)
+            if "◂ supervised ▸" in handoff_frame():
                 board.send(b"\t\t\t\x1b[C")
-            board.wait_bytes("◂ hands-off ▸".encode())
+            fixtures.wait_for(lambda: "◂ hands-off ▸" in handoff_frame(), "hands-off method")
             board.send(b"\r")
-            disclosure = f"Give the {target_agent} successor access to the {source_agent} source conversation?"
-            board.wait_bytes(disclosure.encode())
+            disclosure = (f"cross-CLI handoff: {target_agent} will be told to read a transcript written by "
+                          f"{source_agent} - y confirm, n cancel")
+            fixtures.wait_for(lambda: disclosure in handoff_frame(), "cross-CLI transcript disclosure")
             assert [row["id"] for row in rows()] == [sid] and not received
             board.send(b"n")
-            offset = len(board.capture)
-            board.wait_bytes("◂ hands-off ▸".encode(), offset)
+            fixtures.wait_for(lambda: (frame := handoff_frame()) and "◂ hands-off ▸" in frame
+                              and disclosure not in frame, "cancelled disclosure")
             assert [row["id"] for row in rows()] == [sid] and not received
-            offset = len(board.capture)
             board.send(b"\r")
-            board.wait_bytes(disclosure.encode(), offset)
+            fixtures.wait_for(lambda: disclosure in handoff_frame(), "renewed disclosure")
             board.send(b"y")
             child = fixtures.wait_for(lambda: next((row for row in rows()
                                       if row.get("spawned_from") == local), None),

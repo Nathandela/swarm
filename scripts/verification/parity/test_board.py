@@ -64,7 +64,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, managed=None):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, managed=None, handoff_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = managed / "swarm" if managed else root / "bin/swarm"
@@ -128,7 +128,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         try:
             board.wait_bytes(b"amber")
             board.send(b"h")
-            board.wait_bytes("● claude".encode())
+            board.wait_bytes("claude\x1b[0;38;5;60m ▸".encode())
             board.send(b"\r")
             log = root / "effects/input"
             p.wait_for(lambda: b"Prepare and supervise a handoff" in log.read_bytes(),
@@ -139,7 +139,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             begin = len(board.capture)
             board.send(b"h")
             board.wait_bytes(b"hands-off", begin)
-            board.wait_bytes("● claude".encode(), begin)
+            board.wait_bytes("claude\x1b[0;38;5;60m ▸".encode(), begin)
             hello = owner_request(env["SWARM_DAEMON_SOCK"], "hands-off-handoff", None)
             negotiated = "hands-off-handoff" in hello.get("capabilities", [])
             begin = len(board.capture)
@@ -1009,7 +1009,9 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         return
 
     if tmux is not None:
-        if relocation_grid:
+        if handoff_grid:
+            handoff_grid_witness(root, cli, roster, start, tmux, env)
+        elif relocation_grid:
             relocation_grid_witness(root, cli, roster, start, tmux)
         elif form_grid:
             launch_grid_witness(root, roster, start, tmux)
@@ -1422,6 +1424,152 @@ def launch_grid_witness(root, roster, start, tmux):
     daemon.terminate()
     daemon.wait(timeout=5)
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
+
+
+def handoff_grid_witness(root, cli, roster, start, tmux, env):
+    env["ANTHROPIC_API_KEY"] = "fixture-handoff-only"
+    (root / "home/.claude").mkdir(mode=0o700, exist_ok=True)
+    (root / "effects/board-events").touch()
+    daemon = start()
+    launch = cli("spawn", "--cli", "claude", "--name", "amber", "--dir", root / "work",
+                 "--prompt", "Fixture handoff form")
+    assert launch.returncode == 0, launch.stderr
+    identity = launch.stdout.decode().strip()
+    p.wait_for(lambda: (root / "effects/size").exists(), "handoff source worker")
+    assert cli("send", identity, "--text", "fixture permission").returncode == 0
+    p.wait_for(lambda: any(row["id"] == identity and row["group"] == "needs_input"
+                           for row in (roster() or ([],))[0]), "handoff source approval")
+    server = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
+    pane = "handoff:0.0"
+
+    def run(*args):
+        result = subprocess.run([*server, *args], env=env, cwd=root / "work",
+                                capture_output=True, timeout=4)
+        assert result.returncode == 0, (args, result.stderr)
+        return result.stdout
+
+    def key(*names):
+        run("send-keys", "-t", pane, *names)
+
+    run("new-session", "-d", "-s", "handoff-anchor", "-c", root / "work", "/bin/sleep", "30")
+
+    def collect(binary):
+        frames = []
+        cols, rows = 118, 26
+        run("new-session", "-d", "-s", "handoff", "-x", str(cols), "-y", str(rows),
+            "-c", root / "work", root / "bin" / binary)
+
+        def capture(label, *fragments, absent=()):
+            text = None
+
+            def observed():
+                nonlocal text
+                raw = run("capture-pane", "-pe", "-S", "0", "-E", str(rows - 1), "-t", pane)
+                cells = resolve_cells(raw, cols, rows)
+                text = ["".join(cell[0] for cell in line).rstrip() for line in cells]
+                haystack = "\n".join(text)
+                if all(fragment in haystack for fragment in fragments) and not any(
+                    fragment in haystack for fragment in absent
+                ):
+                    fmt = "|".join(f"#{{{mode}}}" for mode in TMUX_MODES)
+                    modes = run("display-message", "-p", "-t", pane, fmt).decode().strip().split("|")
+                    return {"label":label, "cols":cols, "rows":rows, "text":text, "cells":cells,
+                            "ansi_base64":base64.b64encode(raw).decode(),
+                            "terminal_modes":dict(zip(TMUX_MODES, modes, strict=True))}
+            try:
+                frame = p.wait_for(observed, f"{binary}: {cols}×{rows} {label}: {fragments!r}")
+            except RuntimeError:
+                p.write_json(root / "capture-timeout.json", {
+                    "arm":binary, "label":label, "last_rows":text, "prior_frames":frames,
+                }, replace=False)
+                raise
+            frames.append(frame)
+
+        capture("source", "amber", "approval")
+        key("h")
+        capture("opened", "▌ target      ◂ agy ▸", "not applicable - no supervisor exists",
+                "the source may still be running and editing this checkout", "arrows change target")
+        key("Left")
+        capture("previous-target", "▌ target      ◂ claude ▸")
+        key("Right")
+        capture("next-target", "▌ target      ◂ agy ▸")
+        key("Tab")
+        capture("model-default", "▌ model       █ (agent default)", "←→ suggestions")
+        key("Right")
+        capture("model-suggestion", "▌ model       Orchestrator (Carbon)█")
+        key("Down")
+        capture("supervision", "▌ supervision not applicable - no supervisor exists",
+                "arrows change supervision")
+        key("Right", "Down")
+        capture("method", "▌ method      ◂ hands-off ▸", "arrows change method")
+        key("Right")
+        capture("supervised-method", "supervision ◂ manual ▸", "▌ method      ◂ supervised ▸")
+        key("Enter")
+        capture("supervised-refusal", "resolve the permission request before handoff")
+        key("Right")
+        capture("hands-off-restored", "▌ method      ◂ hands-off ▸",
+                absent=("resolve the permission request",))
+        key("Enter")
+        capture("review", "▌ method      ◂ hands-off ▸", "Orchestrator (Carbon) ◂ ▸",
+                "cross-CLI handoff: agy will be told to read a transcript written by claude - y confirm, n cancel")
+        key("Left", "Tab", "Enter")
+        capture("review-modal", "▌ method      ◂ hands-off ▸", "Orchestrator (Carbon) ◂ ▸",
+                "cross-CLI handoff:")
+        cols, rows = 64, 14
+        run("resize-window", "-t", "handoff:0", "-x", str(cols), "-y", str(rows))
+        capture("narrow-review", "▌ method      ◂ hands-off ▸", "cross-CLI handoff:",
+                "written by claude - y confirm, n cancel")
+        cols, rows = 40, 8
+        run("resize-window", "-t", "handoff:0", "-x", str(cols), "-y", str(rows))
+        capture("compact-review", "Handoff: amber → agy", "Agent: claude", "↑↓/tab read")
+        key("y")
+        capture("compact-approval-blocked", "Handoff: amber → agy", "Agent: claude", "↑↓/tab read")
+        key("End")
+        capture("compact-read", "Handoff: amber → agy", "▌ Confirm · y", "n cancel")
+        cols, rows = 24, 4
+        run("resize-window", "-t", "handoff:0", "-x", str(cols), "-y", str(rows))
+        capture("tiny-review", "Resize to 32×8", "Esc back / n deny")
+        key("y")
+        capture("tiny-approval-blocked", "Resize to 32×8", "Esc back / n deny")
+        cols, rows = 118, 26
+        run("resize-window", "-t", "handoff:0", "-x", str(cols), "-y", str(rows))
+        capture("restored-review", "cross-CLI handoff:", "y confirm, n cancel")
+        key("n")
+        capture("negative-answer", "▌ method      ◂ hands-off ▸", "arrows change method",
+                absent=("cross-CLI handoff:",))
+        key("Enter")
+        capture("renewed-review", "cross-CLI handoff:", "y confirm, n cancel")
+        key("Escape")
+        capture("cancelled-review", "▌ method      ◂ hands-off ▸", "arrows change method",
+                absent=("cross-CLI handoff:",))
+        key("Escape")
+        capture("cancelled-form", "amber", "approval", absent=(" · handoff",))
+        assert [row["id"] for row in roster()[0]] == [identity]
+        run("kill-session", "-t", "handoff")
+        return frames[1:-1]
+
+    expected = collect("reference-board")
+    actual = collect("board")
+    differences, cursor_coordinates = [], []
+    cursor = ("cursor_x", "cursor_y")
+    for go, rust in zip(expected, actual, strict=True):
+        assert go["label"] == rust["label"]
+        mode_go, mode_rust = go["terminal_modes"], rust["terminal_modes"]
+        if mode_go["cursor_flag"] == mode_rust["cursor_flag"] == "0":
+            if any(mode_go[k] != mode_rust[k] for k in cursor):
+                cursor_coordinates.append({"frame":go["label"],
+                    "go":{k:mode_go[k] for k in cursor}, "rust":{k:mode_rust[k] for k in cursor}})
+            go = {**go, "terminal_modes":{k:v for k,v in mode_go.items() if k not in cursor}}
+            rust = {**rust, "terminal_modes":{k:v for k,v in mode_rust.items() if k not in cursor}}
+        if first := compare_projection(go, rust):
+            differences.append({"frame":go["label"], "difference":first})
+    run("kill-session", "-t", "handoff-anchor")
+    assert cli("kill", identity).returncode == 0
+    daemon.terminate()
+    daemon.wait(timeout=5)
+    p.write_json(root / "grid.json", {"handoff_reference":expected, "handoff_candidate":actual,
+        "fixture_id":identity, "fixture_cwd":str(root / "work"), "differences":differences,
+        "cursor_coordinates":cursor_coordinates, "first_divergence":differences[0] if differences else None})
 
 
 def relocation_grid_witness(root, cli, roster, start, tmux):
@@ -1994,7 +2142,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, scratch_path=Path("/tmp")):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, scratch_path=Path("/tmp"), handoff_grid=False):
     scratch = scratch_path.resolve(strict=True)
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -2014,7 +2162,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             dest = root / "bin" / name
             shutil.copyfile(source, dest)
             dest.chmod(0o700)
-        if relocate_board or scheduled_enter or relocation_grid:
+        if relocate_board or scheduled_enter or relocation_grid or handoff_grid:
             target = root / "bin/agy"
             shutil.copyfile(HERE / "agy", target)
             target.chmod(0o700)
@@ -2055,7 +2203,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             elif roster_motion:
                 command.append("--roster-motion")
             elif reference_board is not None:
-                command.append("--static-grid" if static_grid else "--relocation-grid" if relocation_grid else "--context-grid" if context_grid else "--manager-grid" if manager_grid
+                command.append("--handoff-grid" if handoff_grid else "--static-grid" if static_grid else "--relocation-grid" if relocation_grid else "--context-grid" if context_grid else "--manager-grid" if manager_grid
                                else "--edit-grid" if edit_grid else "--menu-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
@@ -2113,6 +2261,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                 "supervised and hands-off handoff" if handoff else
                 "working spinner and elapsed-clock motion" if roster_motion else
                 "paired deterministic roster cells" if static_grid else
+                "paired handoff form grids" if handoff_grid else
                 "paired native Antigravity relocation grids" if relocation_grid else
                 "paired compact Context Guard settings grids" if context_grid else
                 "paired compact manager prompt grids" if manager_grid else
@@ -2137,7 +2286,7 @@ if __name__ == "__main__":
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
                 sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
-                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid", sys.argv[-1] == "--static-grid", sys.argv[-1] == "--roster-motion", mode == "--layout-options")
+                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid", sys.argv[-1] == "--static-grid", sys.argv[-1] == "--roster-motion", mode == "--layout-options", handoff_grid=sys.argv[-1] == "--handoff-grid")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -2176,6 +2325,8 @@ if __name__ == "__main__":
         paired = parser.add_mutually_exclusive_group()
         paired.add_argument("--static-grid", action="store_true",
                             help="compare deterministic ordinary roster cells with --reference-board")
+        paired.add_argument("--handoff-grid", action="store_true",
+                            help="compare cross-CLI handoff form and consent with --reference-board")
         paired.add_argument("--relocation-grid", action="store_true",
                             help="compare Antigravity relocation with --reference-board")
         paired.add_argument("--context-grid", action="store_true",
@@ -2189,10 +2340,10 @@ if __name__ == "__main__":
             parser.error("--tmux and --grid-evidence are required together")
         if (args.form_grid or args.board_grid or args.reference_board or args.roster_motion) and not args.tmux:
             parser.error("grid checks require --tmux")
-        if (args.edit_grid or args.manager_grid or args.context_grid or args.relocation_grid or args.static_grid) and not args.reference_board:
+        if (args.edit_grid or args.manager_grid or args.context_grid or args.relocation_grid or args.static_grid or args.handoff_grid) and not args.reference_board:
             parser.error("paired grid checks require --reference-board")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options, args.scratch)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options, args.scratch, args.handoff_grid)

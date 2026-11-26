@@ -225,6 +225,10 @@ fn board(path: &Path) -> io::Result<()> {
             previous_editor = editor;
             previous_options = options;
             output.flush()?;
+            let has_notice = board.form_viewport(geometry).notice.is_some();
+            if let Some(Modal::Handoff(form)) = &mut board.modal {
+                form.note_paint(geometry, has_notice);
+            }
             painted = true;
         }
         needs_paint = false;
@@ -321,7 +325,14 @@ fn board(path: &Path) -> io::Result<()> {
             {
                 continue;
             }
-            let (action, resume) = match board.update(key, geometry, connection.is_some()) {
+            let action_geometry = if matches!(&board.modal, Some(Modal::Handoff(_)))
+                && matches!(key, Key::Enter | Key::Text('y'))
+            {
+                term::size()
+            } else {
+                geometry
+            };
+            let (action, resume) = match board.update(key, action_geometry, connection.is_some()) {
                 Action::Resume(resume) => {
                     (Action::Request(resume.message(), "launch"), Some(resume))
                 }
@@ -745,7 +756,8 @@ impl Board {
                 self.modal = Some(modal);
                 return Action::None;
             }
-            if matches!(key, Key::Escape)
+            if (key == Key::Escape
+                && !matches!(&modal, Modal::Handoff(form) if form.confirm_pending()))
                 || (matches!(modal, Modal::Launch(_))
                     && !Launch::readable(geometry)
                     && key == Key::Text('n'))
@@ -1642,7 +1654,9 @@ impl Board {
         let viewport = self.form_viewport((cols, rows));
         match &self.modal {
             Some(Modal::Launch(form)) => form.view(&mut screen, viewport),
-            Some(Modal::Handoff(form)) => form.view(&mut screen, viewport),
+            Some(Modal::Handoff(form)) => {
+                form.view(&mut screen, viewport, self.by_id(&form.source_id))
+            }
             Some(Modal::Automation(view)) => view.view(&mut screen, cols, rows),
             Some(Modal::Relocate(form)) => form.view(&mut screen, viewport),
             Some(Modal::Options(form)) => form.frame(viewport).paint(&mut screen, None),

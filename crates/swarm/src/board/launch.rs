@@ -10,10 +10,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const FAST_EDIT: &str = "⌘←/→ home/end · ⌘⌫/ctrl+u clear-left";
-const ERROR: &str = "\x1b[0;38;5;173m";
+pub(super) const FAST_EDIT: &str = "⌘←/→ home/end · ⌘⌫/ctrl+u clear-left";
+pub(super) const ERROR: &str = "\x1b[0;38;5;173m";
 
-const PROVIDERS: [&str; 5] = ["agy", "claude", "codex", "hermes", "opencode"];
+pub(super) const PROVIDERS: [&str; 5] = ["agy", "claude", "codex", "hermes", "opencode"];
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum Detection {
@@ -249,11 +249,11 @@ enum OptionInput {
     Toggle,
 }
 
-struct LaunchOption {
+pub(super) struct LaunchOption {
     key: &'static str,
     label: &'static str,
     input: OptionInput,
-    value: Editor,
+    pub(super) value: Editor,
 }
 
 impl LaunchOption {
@@ -266,7 +266,14 @@ impl LaunchOption {
         }
     }
 
-    fn apply(&mut self, key: Key) {
+    pub(super) fn suggestions(&self) -> usize {
+        match self.input {
+            OptionInput::Text(choices) | OptionInput::Choice(choices) => choices.len(),
+            OptionInput::Toggle => 0,
+        }
+    }
+
+    pub(super) fn apply(&mut self, key: Key) {
         match (&self.input, &key) {
             (OptionInput::Toggle, Key::Text(' ')) => {
                 self.value = Editor::new(if self.value.text == "true" {
@@ -307,6 +314,12 @@ impl LaunchOption {
             OptionInput::Text(_) => self.value.text.clone(),
         }
     }
+}
+
+pub(super) fn model_option(agent: &str) -> Option<LaunchOption> {
+    provider_options(agent)
+        .into_iter()
+        .find(|option| option.key == "model")
 }
 
 fn provider_options(agent: &str) -> Vec<LaunchOption> {
@@ -622,7 +635,8 @@ impl Launch {
         io::Error::other(message)
     }
 
-    pub(super) fn ready_agent(&self) -> Option<&'static str> {
+    #[cfg(test)]
+    fn ready_agent(&self) -> Option<&'static str> {
         (self.detection_complete && matches!(self.detected[self.agent], Detection::Ready))
             .then_some(PROVIDERS[self.agent])
     }
@@ -997,9 +1011,18 @@ pub(super) fn field(
     row: u16,
     cols: u16,
     label: &str,
-    value: &[(&str, String)],
+    value: &[(&'static str, String)],
     focused: bool,
 ) {
+    spans(output, row, cols, &field_spans(cols, label, value, focused));
+}
+
+pub(super) fn field_spans(
+    cols: u16,
+    label: &str,
+    value: &[(&'static str, String)],
+    focused: bool,
+) -> Vec<(&'static str, String)> {
     let marker = if focused {
         (ACCENT, "▌".into())
     } else {
@@ -1008,7 +1031,7 @@ pub(super) fn field(
     let (label, _) = label_layout(label, cols);
     let mut pieces = vec![marker, (PLAIN, " ".into()), (DIM, label)];
     pieces.extend_from_slice(value);
-    spans(output, row, cols, &pieces);
+    pieces
 }
 
 pub(super) fn label_layout(label: &str, cols: u16) -> (String, u16) {
