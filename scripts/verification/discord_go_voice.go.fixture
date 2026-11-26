@@ -68,6 +68,52 @@ func (d *DiscussionController) FixtureWithholdGuildAck(ctx context.Context, mark
 	return nil
 }
 
+type fixtureGuildBeforeSend struct {
+	context.Context
+	cancel  context.CancelFunc
+	store   *Store
+	message string
+}
+
+type fixtureRejectGuildSend struct{ *ProtocolControllerClient }
+
+func (fixtureRejectGuildSend) SemanticSend(string, protocol.ComposerSendReq) error {
+	return errors.New("pre-send fixture reached the native submission boundary")
+}
+
+func (c fixtureGuildBeforeSend) Err() error {
+	if c.Context.Err() != nil {
+		return c.Context.Err()
+	}
+	state, err := c.store.readView()
+	if err != nil {
+		c.cancel()
+		return c.Context.Err()
+	}
+	for _, row := range state.Admissions {
+		if row.Origin != nil && row.Origin.MessageID == c.message && row.Phase == "prepared" && !row.SourceCutover {
+			c.cancel()
+			break
+		}
+	}
+	return c.Context.Err()
+}
+
+func (d *DiscussionController) FixtureStopBeforeGuildSend(ctx context.Context, message string) (context.Context, context.CancelFunc, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.controller == nil {
+		return nil, nil, ErrStale
+	}
+	client, ok := d.controller.runtime.(*ProtocolControllerClient)
+	if !ok {
+		return nil, nil, ErrStale
+	}
+	d.controller.runtime = fixtureRejectGuildSend{client}
+	ctx, cancel := context.WithCancel(ctx)
+	return fixtureGuildBeforeSend{ctx, cancel, d.store, message}, cancel, nil
+}
+
 func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase, project string) error {
 	store, err := OpenStore(dir)
 	if err != nil {

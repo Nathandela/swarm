@@ -434,6 +434,66 @@ fn stage<'tx>(
     Ok(())
 }
 
+#[cfg(test)]
+pub(in crate::discord) fn guild_storage_witness(
+    place: &Place,
+    cfg: &Config,
+    saved: &Value,
+    origin: &Value,
+    copy: &Path,
+    exit_before_commit: bool,
+) -> io::Result<()> {
+    let (directory, id, endpoint) = voice_location(place, cfg, saved)?;
+    let (_pin, _db, oracle) = controller(&directory, &id, origin, cfg, &endpoint)?;
+    validate_prepared(&oracle, cfg)?;
+    activation::verify_idle_manager(place, cfg, &directory, &id, &oracle.binding)?;
+    let (_copy_pin, mut db) = bounded_writer(writable_pin(copy)?)?;
+    let mut tx = db.begin_rw().map_err(io::Error::other)?;
+    let mut initial = read_voice(&tx, &id, cfg, &endpoint)?;
+    if initial.conversation["binding"] != oracle.binding {
+        return Err(invalid());
+    }
+    let author = json!({"id":origin["actor_id"],"name":origin["actor_name"]});
+    let prompt = crate::manager_prompt::load(place.supervisor_root())?;
+    let (key, direct) = make_admission(
+        &mut initial,
+        origin,
+        &author,
+        field(&oracle.admission, "human_reply"),
+        &prompt,
+        &grants::enrolled(cfg)?,
+    )?;
+    assert_eq!(key, oracle.key);
+    assert_ne!(
+        direct["request"]["text"],
+        oracle.admission["request"]["text"]
+    );
+    assert!(direct["reply_check_after"].as_u64().is_some());
+    assert!(oracle.admission["reply_check_after"].is_null());
+    assert_eq!(
+        initial.conversation["last_admission"],
+        oracle.conversation["last_admission"]
+    );
+    stage(&mut tx, initial, &key, &oracle.admission)?;
+    if exit_before_commit {
+        std::process::exit(76);
+    }
+    tx.commit().map_err(io::Error::other)?;
+    let readback = inspect_voice(
+        &db.begin().map_err(io::Error::other)?,
+        &id,
+        origin,
+        cfg,
+        &endpoint,
+    )?;
+    validate_prepared(&readback, cfg)?;
+    assert_eq!(readback.admission, oracle.admission);
+    println!(
+        "Rust Voice storage preserved the Go tuple in a disposable copy. The personal renderer differed from Go's guild input."
+    );
+    Ok(())
+}
+
 pub(in crate::discord) fn run(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
     with(place, message, dry_run, capture_source)
 }

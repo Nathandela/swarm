@@ -461,6 +461,78 @@ pub(super) fn native_prepare_witness() {
         })
         .unwrap(),
         "prepare" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
+        "prepare-and-exit" => {
+            prepare_with(&place, &cfg, &api, "701", false).unwrap();
+            std::process::exit(75);
+        }
+        "voice-storage" | "voice-storage-and-exit" => {
+            use bbolt_rs::BucketApi;
+            let evidence: Value =
+                serde_json::from_str(&std::env::var("SWARM_TEST_DISCORD_VOICE_EVIDENCE").unwrap())
+                    .unwrap();
+            legacy_state::verify_controls_place(&place, &cfg).unwrap();
+            let _configuration = place.lock().unwrap();
+            let _bridge = LockDescription(runtime::lock(&place.dir.join("bridge.lock")).unwrap());
+            let source = place.dir.join("discord.db");
+            let (_pin, db) = open_bolt(&source, 64 << 20).unwrap();
+            let tx = db.begin().unwrap();
+            let (route, guard) = legacy_discussions::observer_scope(&tx).unwrap();
+            prepare::verify_ledger(&tx, &cfg, &route, &guard).unwrap();
+            let origin = &evidence["origin"];
+            let install = cfg.text("installation_id");
+            let key = format!("{install}\0{}", origin["message_id"].as_str().unwrap()).into_bytes();
+            let ingress = tx.bucket(b"teammate_ingress").unwrap();
+            let accepted: Value = serde_json::from_slice(ingress.get(&key).unwrap()).unwrap();
+            let a = &accepted["Admission"];
+            assert_eq!(accepted["State"], "accepted");
+            assert_eq!(a["OperationID"], origin["request_id"]);
+            assert_eq!(a["Revision"], origin["revision"]);
+            assert_eq!(a["Authority"], origin["kind"]);
+            assert_eq!(a["InvokerID"], origin["requester_id"]);
+            assert_eq!(a["Discussion"], evidence["binding"]);
+            assert_eq!(a["Author"]["id"], origin["actor_id"]);
+            assert_eq!(a["Route"]["guild_id"], route.guild_id);
+            assert_eq!(a["Route"]["channel_id"], route.channel_id);
+            let sequence = accepted["Sequence"].as_u64().unwrap();
+            let pending_key = [install.as_bytes(), b"\0", &sequence.to_be_bytes()].concat();
+            assert_eq!(
+                tx.bucket(b"teammate_pending").unwrap().get(&pending_key),
+                Some(key.as_slice())
+            );
+            api.verify_app(&cfg).unwrap();
+            let current = capture::read_source(
+                &api,
+                &cfg,
+                &route,
+                &guard,
+                &json!({"id":origin["message_id"],"author":{"id":origin["actor_id"]}}),
+                true,
+            )
+            .unwrap();
+            assert_eq!(Some(current.revision.as_str()), origin["revision"].as_str());
+            assert_eq!(current.author["name"], origin["actor_name"]);
+            let pending = capture::Pending {
+                ingress_key: key,
+                pending_key,
+                sequence,
+                candidate: current,
+            };
+            read_scope(&tx, &cfg, Some(&pending)).unwrap();
+            let binding = capture::binding(&tx, &cfg, &route, &guard, Some(&pending)).unwrap();
+            assert_eq!(
+                serde_json::to_value(prepare::ready_discussion(&binding).unwrap()).unwrap(),
+                evidence["binding"]
+            );
+            super::legacy_ingress::prepare::guild_storage_witness(
+                &place,
+                &cfg,
+                &evidence["binding"],
+                origin,
+                std::path::Path::new(evidence["copy"].as_str().unwrap()),
+                phase == "voice-storage-and-exit",
+            )
+            .unwrap();
+        }
         "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
         "refuse" => assert!(prepare_with(&place, &cfg, &api, "701", false).is_err()),
         "malformed-binding" | "malformed-binding-dry-run" => {

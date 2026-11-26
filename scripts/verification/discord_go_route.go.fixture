@@ -41,3 +41,12 @@ func (r *Runtime) FixtureWithholdGuildAck(ctx context.Context, bound discord.Tea
 	defer r.release(entry)
 	return entry.voice.FixtureWithholdGuildAck(ctx, marker)
 }
+
+func (r *Runtime) FixtureStopBeforeGuildSend(ctx context.Context, bound discord.TeammateDiscussion, message string) (context.Context, context.CancelFunc, error) {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer r.release(entry)
+	return entry.voice.FixtureStopBeforeGuildSend(ctx, message)
+}

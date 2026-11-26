@@ -355,7 +355,7 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 			return ErrConflict
 		}
 		return connector.process(ctx, c)
-	case "advance":
+	case "advance", "prepare-native":
 		if c.State != teammateStateAccepted || c.Admission == nil {
 			return ErrConflict
 		}
@@ -364,6 +364,16 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 			err = manager.Sync(ctx, d, connector.history(d), func(p TeammatePublication) error {
 				return fmt.Errorf("unexpected publication %s", p.ID)
 			})
+			if phase == "prepare-native" {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				if err != nil && !errors.Is(err, voice.ErrControllerJournalResync) {
+					return err
+				}
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
 			if err != nil && !errors.Is(err, voice.ErrControllerJournalResync) {
 				return err
 			}
