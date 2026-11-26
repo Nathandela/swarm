@@ -103,6 +103,9 @@ pub(super) fn hands_off(
     };
     let session = state.session(&json!({"session_id":scoped}))?;
     let (cwd, transcript, id, proof) = session.hands_off_source()?;
+    if proof["kind"] == "opencode" {
+        crate::providers::opencode_handoff::inherit_selection(launch, &proof)?;
+    }
     let rendered = render([
         &id,
         transcript
@@ -143,6 +146,9 @@ pub(crate) fn verify_handoff_artifact(dir: &Path, lineage: &Value) -> io::Result
                 .parent()
                 .ok_or_else(|| io::Error::other("missing owner session root"))?;
             providers::agy::verify_handoff(&sessions.join(id), proof)
+        }
+        Some(kind) if kind == "opencode" => {
+            providers::opencode_handoff::verify_handoff(dir, lineage)
         }
         Some(kind) if kind == "codex" => providers::codex_continuity::verify_handoff(dir, lineage),
         None => {

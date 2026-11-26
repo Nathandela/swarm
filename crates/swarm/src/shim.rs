@@ -1366,7 +1366,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 &json!({"type": if ready {"ok"} else {"error"}, "conversation_id":state.claude_schedule}),
             )
         }
-        "opencode_requests" | "opencode_operation" | "opencode_history" => {
+        "opencode_requests"
+        | "opencode_operation"
+        | "opencode_history"
+        | "opencode_handoff_page" => {
             let result = (|| {
                 stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                 let native = state
@@ -1384,6 +1387,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     "opencode_history" => native.history(
                         request["limit"].as_u64().unwrap_or(50),
                         field(&request, "before"),
+                    ),
+                    "opencode_handoff_page" => native.history_page(
+                        request["limit"].as_u64().unwrap_or(50),
+                        field(&request, "before"),
+                        true,
                     ),
                     _ => {
                         let params = (!request["body"].is_null()).then_some(&request["body"]);

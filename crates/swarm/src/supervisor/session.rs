@@ -4,6 +4,7 @@ mod hermes;
 pub(super) mod maintenance;
 mod manager_retire;
 mod manager_runtime;
+mod opencode_handoff;
 
 use super::runtime::{self, IO_TIMEOUT, SHIM_VERSION};
 use crate::ipc::field;

@@ -15,6 +15,9 @@ impl Session {
         if self.agent == "agy" {
             return self.hands_off_agy_source();
         }
+        if self.agent == "opencode" {
+            return self.hands_off_opencode_source();
+        }
         if !matches!(self.agent.as_str(), "claude" | "codex")
             || !self.owner_interactive
             || self.schedule.is_some()

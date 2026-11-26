@@ -436,17 +436,32 @@ fn encode_component(value: &str) -> String {
 
 impl Backend {
     pub(super) fn history(&self, limit: u64, before: &str) -> io::Result<Value> {
+        self.history_page(limit, before, false)
+    }
+
+    pub(super) fn history_page(
+        &self,
+        limit: u64,
+        before: &str,
+        with_native_identity: bool,
+    ) -> io::Result<Value> {
         let native = opencode::receipts::native(&self.dir, &self.token)?;
         let snapshot = self.snapshot(
             native["nativeCreatedAtMS"].as_u64().unwrap_or_default(),
             limit,
             before,
         )?;
-        Ok(json!({
+        let mut page = json!({
             "native_session_id":native["rootID"],"native_created_at_ms":native["nativeCreatedAtMS"],
             "session_instance":native["sessionInstance"],"history":snapshot["messages"],"next_cursor":snapshot["nextCursor"],
             "descendants":snapshot["descendants"],"hierarchy_scope":snapshot["hierarchyScope"],
-        }))
+        });
+        if with_native_identity {
+            page["info"] = snapshot["session"].clone();
+            page["backend_generation"] = native["backendGeneration"].clone();
+            page["native_version"] = json!(self.cli_version);
+        }
+        Ok(page)
     }
 }
 
