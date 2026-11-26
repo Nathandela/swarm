@@ -22,3 +22,16 @@ The witness covers 120×24, 80×24, 40×8, and 24×4. It compares the named sour
 | Rust owner, Go/Rust boards | `f828a5ad43883e16c49c7fc1e3651fc9dcf232beed90d6db6e4a2630a267dd24` | `7562bebdbe3d08e342ca3c5b46c82ed46fde5923bc5ccbfe406d8013cab3b573` |
 
 The tested menu target is a running Claude fixture in the permission state. The paired oracle follows selection and viewport state. Mutating action outcomes and provider-specific stopped rows are covered by separate cases. This slice does not close the general-board animation, edit and confirmation variants or the owner-backed Options rows.
+
+## Physical XTerm side-by-side capture
+
+![Pinned Go More menu on the left and Rust More menu on the right](rust-migration/board-more-xterm.png)
+
+The two actual boards ran against one synthetic permission-state worker and the same isolated Go owner on Linux x86_64. The capture used XTerm 372, DejaVu Sans Mono at 11 points, 80×24 cells per window and identical colors. The launcher created a dedicated 1552×470×24 Xvfb display with TCP disabled. The raw terminal relay preserved the bytes from each actual board PTY. The screen image contains only the synthetic scratch path and fixture identity.
+
+```sh
+python3 scripts/verification/parity/capture_more_xterm.py \
+  --reference "$pinned_go" --candidate "$frozen_rust" --out "$new_png"
+```
+
+The Go executable SHA-256 is `5808d838158261470fb68cc97c12d041c4436a77a48746cd00ae75ffbec7f05d`. The Rust executable comes from the qualified Context Guard Options tip `11d394c9` and has SHA-256 `09b0ca441ce4362a2c44431ec3be4e02d95d043fb8eef74f337dc75df7d7192e`. The actual captured PNG has SHA-256 `9c24ae0c7c4c23a8ad797bfaf053c3f8f625065bb8410295fe0c3c1e8dbbf042`. The runner compared the two equal-size full window regions and counted zero different pixels.

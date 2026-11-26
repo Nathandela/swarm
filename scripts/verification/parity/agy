@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Classic offline Antigravity fixture which exhibits a native resume identity."""
+import json
+import os
+from pathlib import Path
+import sys
+
+ARGS = sys.argv[1:]
+if ARGS == ["--version"]:
+    print("1.1.4")
+    raise SystemExit(0)
+if ARGS == ["--help"]:
+    raise SystemExit(0)
+
+effects = Path(sys.argv[0]).parent.parent / "effects"
+source = "11111111-2222-4333-8444-555555555555"
+neighbor = "22222222-3333-4444-8555-666666666666"
+cwd = Path.cwd()
+assert sys.stdin.isatty() and sys.stdout.isatty()
+with (effects / "agy-launches").open("a", encoding="utf-8") as log:
+    log.write(json.dumps({"argv": ARGS, "cwd": os.getcwd()}) + "\n")
+print("\x1b[2J\x1b[HAGY fixture ready", flush=True)
+for line in sys.stdin:
+    if line.strip() == "finish":
+        conversation = neighbor if cwd.name == "neighbor" else source
+        print(f"Resume with -c:\nagy --conversation={conversation}", flush=True)
+        raise SystemExit(0)
+    print(f"fixture received {line.strip()}", flush=True)

@@ -63,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -371,6 +371,179 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             return worker, birth
         finally:
             board.close()
+
+    if scheduled_enter:
+        daemon = start()
+        created = cli("spawn", "--cli", "agy", "--name", "scheduled-review", "--dir", cwd,
+                      "--prompt", "Offline scheduled review fixture")
+        assert created.returncode == 0, created.stderr
+        identity = created.stdout.decode().strip()
+        assert cli("send", identity, "--text", "finish").returncode == 0
+        p.wait_for(lambda: next((row for row in (roster() or ([],))[0]
+                   if row["id"] == identity and row["status"]["Process"] == "exited"), None),
+                   "stopped scheduled-review fixture")
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        # Seed only the synthetic completed marker while the fixture owner is
+        # stopped. Its actual shim and native conversation came from public spawn.
+        local = identity.rsplit("/", 1)[-1]
+        owned = root / "state" / local
+        matches = [path for path in (owned / "meta.json", owned / "session.json") if path.is_file()]
+        if not matches:
+            matches = [path for path in (root / "state").rglob("session.json")
+                       if path.parent.name == local]
+        meta, = matches
+        persisted = json.loads(meta.read_bytes())
+        agent = persisted.get("agent_type", persisted.get("provider", {}).get("name"))
+        assert persisted["id"] in (identity, local) and agent == "agy", (persisted["id"], agent)
+        persisted.update(tag="automation", scheduled_completed=True, schedule_projected=True)
+        meta.write_text(json.dumps(persisted))
+        daemon = start()
+        marked, = roster()[0]
+        assert marked["id"] == identity and marked["tag"] == "automation" and marked["scheduled_completed"]
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"scheduled-review")
+            board.wait_bytes("◆".encode())
+            board.send(b"\r")
+            board.wait_bytes(b"AGY fixture ready")
+            launched = [json.loads(line) for line in (root / "effects/agy-launches").read_text().splitlines()]
+            assert len(launched) == 2 and launched[1]["cwd"] == str(cwd), launched
+            args = launched[1]["argv"]
+            assert "--conversation" in args and args[args.index("--conversation") + 1] == "11111111-2222-4333-8444-555555555555", args
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "quit after scheduled review")
+            assert board.child.returncode == 0 and termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        for row in (roster() or ([],))[0]:
+            if row["status"]["Process"] == "running":
+                assert cli("kill", row["id"]).returncode == 0
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
+
+    if relocate_board:
+        daemon = start()
+        source = cwd / "source"
+        neighbor = cwd / "neighbor"
+        destination = cwd / "destination" / "qualified"
+        for folder in (source, neighbor, destination):
+            folder.mkdir(parents=True)
+        identities = {}
+        trails = {
+            "original-agy": "11111111-2222-4333-8444-555555555555",
+            "neighbor-agy": "22222222-3333-4444-8555-666666666666",
+        }
+
+        def sessions():
+            current = roster()
+            return current[0] if current else []
+
+        def launch(folder, label):
+            result = cli("spawn", "--cli", "agy", "--name", label, "--dir", folder,
+                         "--prompt", "Offline classic fixture")
+            assert result.returncode == 0, result.stderr
+            return result.stdout.decode().strip()
+
+        source_id = launch(source, "original-agy")
+        identities["neighbor-agy"] = launch(neighbor, "neighbor-agy")
+        identities["original-agy"] = source_id
+        for label, identity in identities.items():
+            assert cli("send", identity, "--text", "finish").returncode == 0
+            try:
+                p.wait_for(lambda: any(row["id"] == identity and row["status"]["Process"] == "exited"
+                                     for row in sessions()), f"stopped {label} with native identity")
+            except RuntimeError as error:
+                raise AssertionError((sessions(), cli("peek", identity).stdout)) from error
+            # Older Go list projections omit native conversation identity. The
+            # provider argv assertion below independently verifies the captured ID.
+            observed = next(row for row in sessions() if row["id"] == identity)
+            assert observed.get("conversation_id") in (None, "", trails[label]), observed
+        source.rename(cwd / "retired-checkout")
+        effects = root / "effects/agy-launches"
+
+        def argv():
+            return [json.loads(line) for line in effects.read_text().splitlines()]
+
+        def assert_launch(label, folder, index):
+            expected = trails[label]
+            entry = p.wait_for(lambda: argv()[index] if len(argv()) > index else None, f"native {label} resume launch")
+            args = entry["argv"]
+            assert entry["cwd"] == str(folder), entry
+            assert "--conversation" in args and args[args.index("--conversation") + 1] == expected, entry
+            return entry
+
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"original-agy")
+            board.send(b"r")
+            board.wait_bytes(b'original-agy" cannot be resumed')
+            board.send(b"\x15" + os.fsencode(cwd / "missing-destination") + b"\r")
+            board.wait_bytes(b"cannot access directory")
+            assert len(argv()) == 2
+            offset = len(board.capture)
+            board.send(b"\x1b[27u")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[B")
+            offset = len(board.capture)
+            board.send(b"r")
+            board.wait_bytes(b"AGY fixture ready", offset)
+            assert_launch("neighbor-agy", neighbor, 2)
+            assert len([entry for entry in argv() if entry["cwd"] == str(destination)]) == 0
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"More (m)", offset)
+            resumed = p.wait_for(lambda: next((row["id"] for row in sessions()
+                    if row["id"] not in identities.values() and row["status"]["Process"] == "running"), None),
+                    "neighbor successor")
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "quit after neighbor resume")
+            assert termios.tcgetattr(board.master) == board.original_mode
+            board.close()
+            assert cli("kill", resumed).returncode == 0
+            p.wait_for(lambda: any(row["id"] == resumed and row["status"]["Process"] == "exited"
+                                   for row in sessions()), "neighbor successor worker exit")
+            # Delete only the isolated neighbor successor so the undisplaced
+            # original is again the first addressable completed row.
+            peer = env["SWARM_DAEMON_SOCK"]
+            deleted = owner_request(peer, "subscribe", {"op":"delete", "session_id":resumed})
+            assert deleted["op"] == "ok", deleted
+            board = p.Board([str(root / "bin/board")], root, env)
+            board.wait_bytes(b"original-agy")
+            offset = len(board.capture)
+            board.send(b"r")
+            board.wait_bytes(b'original-agy" cannot be resumed', offset)
+            board.resize(24, 4)
+            board.wait_bytes("Resize to 32×8".encode(), offset)
+            offset = len(board.capture)
+            board.send(b"\x15" + os.fsencode(destination) + b"\r")
+            board.wait_bytes(b"qualified", offset)
+            assert len(argv()) == 3
+            offset = len(board.capture)
+            board.resize(80, 24)
+            board.wait_bytes(b"Select a new one to relocate it.", offset)
+            board.send(b"\x15" + os.fsencode(destination.parent / "qual") + b"\t\r")
+            board.wait_bytes(b"AGY fixture ready", offset)
+            assert_launch("original-agy", destination, 3)
+            assert len(argv()) == 4
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "quit after relocation")
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        for row in sessions():
+            if row["status"]["Process"] == "running":
+                assert cli("kill", row["id"]).returncode == 0
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
 
     if context_options:
         daemon = start()
@@ -743,7 +916,9 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         return
 
     if tmux is not None:
-        if form_grid:
+        if relocation_grid:
+            relocation_grid_witness(root, cli, roster, start, tmux)
+        elif form_grid:
             launch_grid_witness(root, roster, start, tmux)
         elif board_grid or menu_grid or edit_grid or manager_grid or context_grid:
             roster_grid_witness(root, cli, roster, start, tmux, menu_grid, edit_grid, manager_grid, context_grid)
@@ -1011,6 +1186,68 @@ def launch_grid_witness(root, roster, start, tmux):
     daemon.terminate()
     daemon.wait(timeout=5)
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
+
+
+def relocation_grid_witness(root, cli, roster, start, tmux):
+    daemon = start()
+    source = root / "work" / "source"
+    source.mkdir()
+    launch = cli("spawn", "--cli", "agy", "--name", "original-agy", "--dir", source,
+                 "--prompt", "Offline classic fixture")
+    assert launch.returncode == 0, launch.stderr
+    identity = launch.stdout.decode().strip()
+    assert cli("send", identity, "--text", "finish").returncode == 0
+    p.wait_for(lambda: next((row for row in (roster() or ([],))[0]
+               if row["id"] == identity and row["status"]["Process"] == "exited"), None),
+               "stopped Antigravity source")
+    source.rename(root / "work/retired-checkout")
+    command = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
+
+    def run(*args):
+        result = subprocess.run([*command, *args], env=p.environment(root), cwd=root / "work",
+                                capture_output=True, timeout=4)
+        assert result.returncode == 0, (args, result.stderr)
+        return result.stdout
+
+    def collect(binary):
+        frames = []
+        for cols, rows in ((80, 24), (40, 8), (24, 4)):
+            run("new-session", "-d", "-s", "resume", "-x", str(cols), "-y", str(rows),
+                "-c", root / "work", root / "bin" / binary)
+
+            def snapshot(relocating):
+                raw = run("capture-pane", "-pe", "-S", "0", "-E", str(rows - 1), "-t", "resume:0.0")
+                fmt = "|".join(f"#{{{name}}}" for name in TMUX_MODES)
+                modes = dict(zip(TMUX_MODES, run("display-message", "-p", "-t", "resume:0.0", fmt).decode().strip().split("|"), strict=True))
+                cells = resolve_cells(raw, cols, rows)
+                text = "\n".join("".join(cell[0] for cell in line) for line in cells).lower()
+                if relocating and ("▌ directory" not in text or modes["mouse_sgr_flag"] != "0"):
+                    return None
+                if not relocating and ("original-agy" not in text or modes["mouse_sgr_flag"] != "1"):
+                    return None
+                return {"ansi_base64":base64.b64encode(raw).decode(), "cells":cells,
+                        "terminal_modes":modes}
+
+            p.wait_for(lambda: snapshot(False), "original board row")
+            run("send-keys", "-t", "resume:0.0", "r")
+            frame = p.wait_for(lambda: snapshot(True), f"relocate {cols}×{rows}")
+            frames.append({"cols":cols, "rows":rows, "relocation":frame})
+            run("send-keys", "-t", "resume:0.0", "Escape")
+            p.wait_for(lambda: snapshot(False), "cancelled relocation")
+            run("kill-session", "-t", "resume")
+        return frames
+
+    expected, actual = collect("reference-board"), collect("board")
+    differences = []
+    for left, right in zip(expected, actual, strict=True):
+        difference = compare_projection(left["relocation"], right["relocation"])
+        if difference is not None:
+            differences.append({"cols":left["cols"], "rows":left["rows"], "difference":difference})
+    daemon.terminate()
+    daemon.wait(timeout=5)
+    p.write_json(root / "grid.json", {"relocation_reference":expected, "relocation_candidate":actual,
+        "source":identity, "source_directory":str(source), "differences":differences,
+        "first_divergence":differences[0] if differences else None})
 
 
 def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_grid=False, manager_grid=False, context_grid=False):
@@ -1325,7 +1562,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -1345,6 +1582,10 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             dest = root / "bin" / name
             shutil.copyfile(source, dest)
             dest.chmod(0o700)
+        if relocate_board or scheduled_enter or relocation_grid:
+            target = root / "bin/agy"
+            shutil.copyfile(HERE / "agy", target)
+            target.chmod(0o700)
         if terminal_reply is not None:
             shutil.copyfile(terminal_reply, root / "effects/terminal-mouse-reply")
         if reference_board is not None:
@@ -1367,6 +1608,10 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--manager-options")
         elif context_options:
             command.append("--context-options")
+        elif relocate_board:
+            command.append("--relocation-board")
+        elif scheduled_enter:
+            command.append("--scheduled-enter")
         elif tmux is not None:
             command.append(tmux)
             if form_grid:
@@ -1374,7 +1619,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             elif board_grid:
                 command.append("--board-grid")
             elif reference_board is not None:
-                command.append("--context-grid" if context_grid else "--manager-grid" if manager_grid
+                command.append("--relocation-grid" if relocation_grid else "--context-grid" if context_grid else "--manager-grid" if manager_grid
                                else "--edit-grid" if edit_grid else "--menu-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
@@ -1405,11 +1650,14 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("capability-gated Codex Context Guard Options and revision fencing" if context_options else
+    exercise = ("native scheduled review reopening through Enter" if scheduled_enter else
+                "captured Antigravity resume and relocation" if relocate_board else
+                "capability-gated Codex Context Guard Options and revision fencing" if context_options else
                 "owner manager prompt persistence and validation through Options" if manager_options else
                 "rename, tag, cancel, kill and delete through public board" if edit_rows else
                 "attached CLI button, native mouse and terminal restoration" if touch else
                 "supervised and hands-off handoff" if handoff else
+                "paired native Antigravity relocation grids" if relocation_grid else
                 "paired compact Context Guard settings grids" if context_grid else
                 "paired compact manager prompt grids" if manager_grid else
                 "paired edit and confirmation grids" if edit_grid else
@@ -1433,7 +1681,7 @@ if __name__ == "__main__":
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
                 sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
-                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid")
+                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -1442,6 +1690,10 @@ if __name__ == "__main__":
         modes.add_argument("--tmux", type=p.binary_path)
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--handoff-board", action="store_true", help="exercise supervised and capability-gated hands-off handoff")
+        modes.add_argument("--scheduled-enter", action="store_true",
+                           help="open a stopped synthetic scheduled review through the real native resume path")
+        modes.add_argument("--relocation-board", action="store_true",
+                           help="exercise captured Antigravity relocation, cancellation and wrong-row fences")
         modes.add_argument("--context-options", action="store_true",
                            help="check capability negotiation, owner Context Guard validation and stale revision refusal")
         modes.add_argument("--manager-options", action="store_true",
@@ -1461,6 +1713,8 @@ if __name__ == "__main__":
                            help="compare the More menu with this board using the same public owner and IDs")
         grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
         paired = parser.add_mutually_exclusive_group()
+        paired.add_argument("--relocation-grid", action="store_true",
+                            help="compare Antigravity relocation with --reference-board")
         paired.add_argument("--context-grid", action="store_true",
                             help="compare compact Context Guard settings with --reference-board")
         paired.add_argument("--manager-grid", action="store_true",
@@ -1472,10 +1726,10 @@ if __name__ == "__main__":
             parser.error("--tmux and --grid-evidence are required together")
         if (args.form_grid or args.board_grid or args.reference_board) and not args.tmux:
             parser.error("grid checks require --tmux")
-        if (args.edit_grid or args.manager_grid or args.context_grid) and not args.reference_board:
+        if (args.edit_grid or args.manager_grid or args.context_grid or args.relocation_grid) and not args.reference_board:
             parser.error("paired grid checks require --reference-board")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid)
