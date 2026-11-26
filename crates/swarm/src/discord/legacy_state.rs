@@ -111,6 +111,7 @@ pub(super) fn scan<'tx>(
     end: Instant,
     controls: bool,
     captured_keys: Option<(&[u8], &[u8])>,
+    check_gap_receipt: bool,
 ) -> io::Result<String> {
     let mut count = 0;
     let mut effect_digest = Sha256::new();
@@ -239,6 +240,8 @@ pub(super) fn scan<'tx>(
                     if controls => {}
                 "teammate_ingress" if captured_keys.is_some_and(|(ingress, _)| key == ingress) => {}
                 "teammate_pending" if captured_keys.is_some_and(|(_, pending)| key == pending) => {}
+                // The retained thread validates its exact compacted gap receipt after the bounded scan.
+                "teammate_receipts" if check_gap_receipt => {}
                 _ => {
                     report.unresolved += 1;
                     if controls
@@ -344,10 +347,10 @@ fn inspect(
     let (pin, db) = open_bolt(&path, 64 << 20)?;
     let tx = db.begin().map_err(io::Error::other)?;
 
-    let effects = scan(&tx, &mut report, end, controls, None)?;
+    let effects = scan(&tx, &mut report, end, controls, None, false)?;
     if controls
         && let Err(error) =
-            super::legacy_discussions::verify(&tx, &cfg, cfg.text("daemon_socket"), 0)
+            super::legacy_discussions::verify(&tx, &cfg, cfg.text("daemon_socket"), 0, false)
     {
         report.issues.push(error.to_string());
     }
@@ -551,8 +554,9 @@ pub(super) fn audience(
         Instant::now() + Duration::from_secs(10),
         true,
         None,
+        false,
     )?;
-    super::legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"), 0)?;
+    super::legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"), 0, false)?;
     if !report.issues.is_empty() || anchor["effects_sha256"] != digest || !unchanged(&pin, &path)? {
         return Err(io::Error::other("original connector effects changed"));
     }

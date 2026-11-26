@@ -1,6 +1,7 @@
 //! Gateway custody and capture of one original Go thread.
 mod admit;
 mod capture;
+mod gap;
 mod prepare;
 mod render;
 use super::{
@@ -376,19 +377,26 @@ fn read_scope<'tx>(
         Instant::now() + Duration::from_secs(10),
         true,
         pending.map(|row| (row.ingress_key.as_slice(), row.pending_key.as_slice())),
+        true,
     )?;
     if inventory.unresolved != 0 || !inventory.issues.is_empty() {
         return Err(invalid(
             "observer requires a settled original connector ledger",
         ));
     }
+    let (route, guard) = legacy_discussions::observer_scope(tx)?;
+    let settled_gap = gap::settled(tx, cfg, &route)?;
+    if settled_gap {
+        prepare::verify_ledger(tx, cfg, &route, &guard)?;
+    }
     legacy_discussions::verify(
         tx,
         cfg,
         cfg.text("daemon_socket"),
         u64::from(pending.is_some()),
+        settled_gap,
     )?;
-    legacy_discussions::observer_scope(tx)
+    Ok((route, guard))
 }
 
 fn verify_thread_authority(
@@ -564,6 +572,39 @@ pub(super) fn native_prepare_witness() {
         .unwrap();
     let api = Discord::loopback_fixture(&cfg, port).unwrap();
     match phase.as_str() {
+        "gap-refuse" => {
+            assert!(
+                observe(
+                    &place,
+                    &cfg,
+                    &api,
+                    Mode::Capture,
+                    RECHECK_INTERVAL,
+                    |_| -> io::Result<fn() -> io::Result<Option<Value>>> {
+                        panic!("unqualified gap opened Gateway")
+                    }
+                )
+                .is_err()
+            );
+        }
+        "gap-capture" => observe(&place, &cfg, &api, Mode::Capture, RECHECK_INTERVAL, |_| {
+            Ok(|| {
+                Ok(Some(json!({"t":"MESSAGE_CREATE","d":{
+                    "id":"703","guild_id":"300","channel_id":"401","author":{"id":"201"}
+                }})))
+            })
+        })
+        .unwrap(),
+        "gap-check" => {
+            let (_pin, db) = open_bolt(&place.dir.join("discord.db"), 64 << 20).unwrap();
+            let tx = db.begin().unwrap();
+            let pending = capture::pending(&tx, &cfg).unwrap().unwrap();
+            let (route, guard) = read_scope(&tx, &cfg, Some(&pending)).unwrap();
+            prepare::verify_ledger(&tx, &cfg, &route, &guard).unwrap();
+            let binding = capture::binding(&tx, &cfg, &route, &guard, Some(&pending)).unwrap();
+            assert_eq!(binding["GapMissed"], 1);
+            prepare::ready_discussion(&binding).unwrap();
+        }
         "capture" => observe(&place, &cfg, &api, Mode::Capture, RECHECK_INTERVAL, |_| {
             Ok(|| {
                 Ok(Some(json!({"t":"MESSAGE_CREATE","d":{

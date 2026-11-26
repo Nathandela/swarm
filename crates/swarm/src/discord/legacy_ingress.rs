@@ -956,7 +956,10 @@ pub(super) fn write_pending_ingress<'tx>(
     binding["LastIngressSequence"] = json!(sequence);
     tx.bucket_mut(b"teammate_discussions")
         .ok_or_else(invalid)?
-        .put(active_key, serde_json::to_vec(&binding)?)
+        .put(
+            active_key,
+            crate::ipc::escape_json(serde_json::to_string(&binding)?).as_bytes(),
+        )
         .map_err(io::Error::other)?;
     let pending_key = [install.as_bytes(), b"\0", &sequence.to_be_bytes()].concat();
     tx.bucket_mut(b"teammate_pending")

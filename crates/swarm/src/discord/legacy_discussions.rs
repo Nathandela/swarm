@@ -129,6 +129,7 @@ pub(super) fn verify<'tx>(
     cfg: &Config,
     old_socket: &str,
     expected_pending: u64,
+    settled_gap: bool,
 ) -> io::Result<()> {
     let invalid = || io::Error::other("unqualified original discussion or replay index");
     let discussions = tx.bucket(b"teammate_discussions").ok_or_else(invalid)?;
@@ -220,6 +221,9 @@ pub(super) fn verify<'tx>(
             return Err(invalid());
         }
         if key == b"active_ingress_count" && raw == expected_pending.to_be_bytes() {
+            continue;
+        }
+        if settled_gap && key == format!("{prefix}outbox_count").as_bytes() && raw == [0; 8] {
             continue;
         }
         if key == format!("{prefix}checkpoint").as_bytes() {

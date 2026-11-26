@@ -45,6 +45,7 @@ pub(super) fn binding<'tx>(
             != Some(u64::from(pending.is_some()).to_be_bytes().as_slice())
         || pending.is_some_and(|row| saved["LastIngressSequence"] != row.sequence)
         || checkpoint["Error"].as_str() != Some("")
+            && !(checkpoint["Error"] == gap::CHECKPOINT_DIAGNOSTIC && gap::settled(tx, cfg, route)?)
         || !checkpoint["WorkerMailIssue"].is_null()
             && checkpoint["WorkerMailIssue"].as_str() != Some("")
     {

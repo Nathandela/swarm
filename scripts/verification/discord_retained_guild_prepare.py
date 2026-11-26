@@ -61,8 +61,14 @@ def serve_discord(timestamps=False):
                     bits |= (1 << 38)
                 data = dict(permissions=str(bits))
             elif route.startswith("/channels/401/messages?"):
-                data = [messages["501"]] if wait_for_capture[0] else [messages["701"], messages["501"]]
-                wait_for_capture[0] = False
+                if rest.history is not None:
+                    data = rest.history(route)
+                    if isinstance(data, int):
+                        self.send_error(data)
+                        return
+                else:
+                    data = [messages["501"]] if wait_for_capture[0] else [messages["701"], messages["501"]]
+                    wait_for_capture[0] = False
             elif route.startswith("/channels/401/messages/") and route.rsplit("/", 1)[1] in messages:
                 data = messages[route.rsplit("/", 1)[1]]
             else:
@@ -82,6 +88,7 @@ def serve_discord(timestamps=False):
             self.send_error(400)
 
     rest = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    rest.history = None
     rest.change_starter = False
     rest.messages = messages
     Thread(target=rest.serve_forever, daemon=True).start()

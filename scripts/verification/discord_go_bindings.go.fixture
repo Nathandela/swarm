@@ -303,11 +303,65 @@ func (s *Store) FixtureDamageGuildBinding(installation, channel, field string) e
 			row[field] = json.RawMessage(`{}`)
 		case "Starter":
 			row[field] = json.RawMessage(`{"guild_id":{},"channel_id":"401","message_id":"500","parent_id":"399"}`)
+		case "gap-type":
+			row["GapMissed"] = json.RawMessage(`"1"`)
+		case "gap-alias":
+			row["gapmissed"] = row["GapMissed"]
+			delete(row, "GapMissed")
+		case "gap-repair-alias":
+			row["repairepoch"] = json.RawMessage(`0`)
+		case "gap-sequence-type":
+			row["LastIngressSequence"] = json.RawMessage(`{}`)
+		case "gap-future":
+			row["GapMissed"] = json.RawMessage(`2`)
 		default:
 			return ErrInvalid
 		}
 		return putJSON(tx, teammateDiscussionBucket, key, row)
 	})
+}
+
+func (s *Store) FixtureStartGuildGap(install string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return teammateCheckpointUpdate(tx, install, "synthetic-reset-gateway", 1, true, "")
+	})
+}
+
+// FixtureAcknowledgeGuildGap models acknowledgment of a preexisting post; it never calls a sender.
+func (s *Store) FixtureAcknowledgeGuildGap(d TeammateDiscussion) error {
+	outputs, err := s.teammateOutputs(d.InstallationID, d.ID)
+	if err != nil {
+		return err
+	}
+	if len(outputs) != 1 || !outputs[0].Internal || len(outputs[0].Chunks) != 1 ||
+		outputs[0].Publication.ID != "gap_"+digest([]any{d.ID, d.Gap})[:32] {
+		return ErrConflict
+	}
+	out := outputs[0]
+	if err = s.teammateChangeOutput(d.InstallationID, out, func(_ *bolt.Tx, _ []byte, saved *teammateOutput) error {
+		saved.Chunks[0].State = StateSending
+		return nil
+	}); err != nil {
+		return err
+	}
+	now := time.Now()
+	if err = s.teammateObserve(d.InstallationID, d.Route, "702", out.Chunks[0].ID, out.Chunks[0].Body, now); err != nil {
+		return err
+	}
+	return s.teammateCompactOutbox(d, now.Add(GuardTTL), nil)
+}
+
+func (s *Store) FixtureGuildGapReceipt(d TeammateDiscussion) ([]byte, error) {
+	var raw []byte
+	err := s.db.View(func(tx *bolt.Tx) error {
+		key := teammateOutputKey(d.InstallationID, d.ID, "gap_"+digest([]any{d.ID, d.Gap})[:32])
+		raw = bytes.Clone(tx.Bucket([]byte(teammateReceiptBucket)).Get(key))
+		if len(raw) == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	return raw, err
 }
 
 func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager TeammateManager, port, phase string) error {
@@ -332,6 +386,20 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 	service := NewService(cfg, s, nil, nil)
 	service.SetBotID(bot.ID)
 	connector := &teammateConnector{service: service, client: client, manager: manager}
+	if phase == "repair-gap" {
+		rows, err := s.teammateActiveBindings(cfg.InstallationID)
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			return ErrConflict
+		}
+		checkpoint, err := s.teammateCheckpoint(cfg.InstallationID)
+		if err != nil {
+			return err
+		}
+		return connector.repair(ctx, rows[0], checkpoint.GapEpoch)
+	}
 	pending, err := s.teammatePending(cfg.InstallationID)
 	if err != nil || len(pending) == 0 && phase == "advance" {
 		return err

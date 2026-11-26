@@ -91,6 +91,7 @@ pub(super) fn verify_ledger<'tx>(
                 "RepairEpoch",
                 "RepairTargetEpoch",
                 "NotifiedEpoch",
+                "GapMissed",
                 "ParentLow",
                 "Error",
             ][..],

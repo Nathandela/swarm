@@ -92,6 +92,10 @@ Append `--prepare-native-only` to stop before a native send. The Rust child exit
 
 The integrated `797dad1b` rerun passed all four entry points against signed Go v0.29.24 on Linux x86_64. It verified ordinary settlement, the pre-send copy and outside path refusal, acknowledged interruption without a second native turn, and exact queue rendering with source freshness and stop controls. Linux log SHA-256 is `ecab38f59c13945b94f9d6a27cde88df936bd335a31c462edaf2d2d36c07b252`. The nine pinned Go ledger tests also passed on both native hosts. macOS log SHA-256 is `b0334d2fef78e7d379452b4b6dafe935f8449182666e1fed807826a6c7a55e2a`.
 
+The retained public-thread capture also accepts a settled `GapMissed` from Go v0.29.25 (`44d796734fc60f6f9b9d6705dca44736f0c5741b`). The typed marker must name a completed epoch. The current Gateway repair must have finished, and Go must have compacted the exact acknowledged gap notice for that discussion. Rust retains the marker and the original receipt. Partial repair, any pending outbox row, and malformed or case-aliased ledger fields leave the database unchanged. Gapped native prompt rendering remains with Go.
+
+Build the Go fixture from the v0.29.25 source with the fixture files above. In a private Linux network namespace, set `SWARM_NATIVE_FIXTURE_HOST_NETNS` to the outer network namespace inode and run `python3 scripts/verification/discord_retained_gap_state.py /path/to/go-fixture /path/to/rust-test-binary`. The witness runs Go's checkpoint, history repair, acknowledgment, and compaction writers against a synthetic public thread. It models acknowledgment of a pre-existing notice and captures one new follow-up in Rust. Both readers reopen the capture with the Go-escaped socket path, the original receipt bytes, and zero Discord POSTs.
+
 Run the nine tests that use the pinned Go helper built above as an explicit group.
 
 ```sh
