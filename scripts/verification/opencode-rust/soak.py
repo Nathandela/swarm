@@ -10,6 +10,7 @@ import platform
 import shutil
 import signal
 import socket
+import sqlite3
 import time
 
 from launch import history_page
@@ -74,6 +75,7 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         'budgets': BUDGETS, 'inputs': 0, 'restarts': 0, 'cards': 0, 'maxima': {},
     }
     daemon = session = None
+    dispatch = None
     owned = {}
     effect_counts = Counter()
     turn_ids = set()
@@ -151,6 +153,7 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
                 text += ' RUST_SEMANTIC'
             operation = f'semantic:{time.time_ns() // 1000000}:{index:032x}'
             begin = time.monotonic()
+            dispatch = (index, marker, operation)
             initial = output('message', session, '--operation-id', operation, '--text', text)
             assert initial['state'] in ('native_accepted', 'completed'), initial
             observed = time.monotonic() - begin
@@ -195,6 +198,7 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             turn_ids.add(mid)
             assert sum(req['primary'] and req['marker'] == marker for req in requests) == 1, marker
             effect_counts.update(req['marker'] for req in requests if req['marker'] == marker and req['primary'])
+            dispatch = None
             result['inputs'] = index
             if mixed:
                 mixed.interaction(index)
@@ -244,6 +248,28 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         result['state'] = 'passed'
     except BaseException as exc:
         result.update(state='failed', error=repr(exc))
+        if dispatch is not None:
+            index, marker, operation = dispatch
+            failure = result['dispatch_witness'] = {
+                'index': index,
+                'operation': operation,
+                'elapsed_seconds': time.monotonic() - begin,
+                'primary_model_requests': sum(r['marker'] == marker and r['primary'] for r in requests),
+            }
+            try:
+                # A status lookup may reconcile the saved receipt. It never reissues input.
+                attempt = cli('message', session, '--status', '--operation-id', operation, check=False, timeout=5)
+                if attempt.returncode == 0:
+                    receipt = json.loads(attempt.stdout)
+                    failure['status'] = receipt['state']
+                    failure['outcome_source'] = receipt.get('outcome_source')
+                with sqlite3.connect((root / 'data/opencode/opencode.db').as_uri() + '?mode=ro',
+                                     uri=True, timeout=3) as db:
+                    failure['native_parts_with_marker'] = db.execute(
+                        'SELECT count(*) FROM part WHERE data LIKE ?', (f'%{marker}%',)
+                    ).fetchone()[0]
+            except Exception as witness_error:
+                failure['witness_error'] = type(witness_error).__name__
         raise
     finally:
         try:

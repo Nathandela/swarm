@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 if [ "$#" -lt 2 ]; then
   printf '%s\n' 'usage: run-linux.sh /dev/shm/oc.RANDOM fresh-run-name [loopback flags]' >&2
   exit 2
@@ -9,7 +10,7 @@ case "$probe_root" in /dev/shm/oc.*) ;; *) exit 2 ;; esac
 native=$(readlink -f "$HOME/.local/bin/opencode")
 run_name=$2
 case "$run_name" in ""|.*|*/*) exit 2 ;; esac
-mkdir -p -m 700 "$probe_root/bin"
+mkdir -p "$probe_root/bin"
 shift 2
 mkdir -m 700 "$probe_root/$run_name"
 test -x "$probe_root/swarm"

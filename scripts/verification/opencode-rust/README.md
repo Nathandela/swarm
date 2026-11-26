@@ -85,8 +85,9 @@ for publication.
 
 Use a new queue root. Stage the five native probe files above and `mixed.py`.
 Place the offline `scripts/verification/parity/claude` executable at
-`$test_root/bin/claude` and an architecture-matched build of
-`./cmd/swarm-fake-codex` at `$test_root/bin/codex`.
+`$test_root/bin/claude` and an architecture-matched build of the offline
+Codex fixture at `$test_root/bin/codex`. Build `./cmd/swarm-fake-codex` from
+development source `7202a48dd1eca0bb1c9f3ff422291ca7f871e74a`.
 
 Add `--mixed` to the queue command. This runs one 24-hour stage. It keeps
 the native OpenCode and a Claude fixture PTY alive on the same daemon,

@@ -170,9 +170,9 @@ def wait(check, timeout=25):
             return val
         time.sleep(0.15)
     raise AssertionError('condition timed out')
-def cli(*args, check=True):
+def cli(*args, check=True, timeout=60):
     owner()
-    result=subprocess.run([swarm,*args], env=env,capture_output=True,text=True,timeout=60)
+    result=subprocess.run([swarm,*args], env=env,capture_output=True,text=True,timeout=timeout)
     if check:
         assert result.returncode == 0, (args,result.stdout,result.stderr)
     return result

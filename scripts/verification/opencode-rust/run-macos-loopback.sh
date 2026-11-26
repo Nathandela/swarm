@@ -1,23 +1,29 @@
 #!/bin/bash
 set -euo pipefail
+umask 077
 if [ "$#" -lt 2 ] || [ ! -x "$2" ]; then
   printf '%s\n' 'usage: run-macos-loopback.sh /private/tmp/oc.RANDOM/fresh-stage /absolute/path/to/rust-swarm [loopback flags]' >&2
   exit 2
 fi
 root=$1
 test_dir=${root%/*}
-case "$test_dir" in /private/tmp/oc.*) ;; *) exit 2 ;; esac
-case "${root##*/}" in ""|.*) exit 2 ;; esac
+[[ "$test_dir" =~ ^/private/tmp/oc\.[A-Za-z0-9]+$ ]]
+[[ "${root##*/}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
 [ "$(cd -- "$test_dir" && pwd -P)" = "$test_dir" ]
 [ "$(stat -f '%u %Lp' "$test_dir")" = "$(id -u) 700" ]
 native=$(command -v opencode)
 case "$native" in /*) ;; *) exit 2 ;; esac
 mkdir -m 700 "$root"
-mkdir -m 700 -p "$test_dir/bin"
+mkdir -p "$test_dir/bin"
+[[ ! -L "$test_dir/bin" && ! -L "$test_dir/bin/opencode" && ! -d "$test_dir/bin/opencode" ]]
+launcher=$(mktemp "$test_dir/bin/.opencode.XXXXXX")
 # The shipping Go and Rust child allowlists omit TMPDIR. Keep Bun's scratch in this stage.
-printf '#!/bin/bash\nset -eu\nexport TMPDIR=${XDG_DATA_HOME%%/data}\nexec %q "$@"\n' "$native" >"$test_dir/bin/opencode"
-chmod 700 "$test_dir/bin/opencode"
-profile=$test_dir/guard.sb
+# shellcheck disable=SC2016 # Preserve the runtime variable expansions in the generated wrapper.
+printf '#!/bin/bash\nset -eu\nexport TMPDIR=${XDG_DATA_HOME%%/data}\nexec %q "$@"\n' "$native" >"$launcher"
+chmod 700 "$launcher"
+mv -f "$launcher" "$test_dir/bin/opencode"
+profile=$test_dir/${root##*/}.sb
+[[ ! -e "$profile" && ! -L "$profile" ]]
 cat >"$profile" <<PROFILE
 (version 1)
 (allow default)
