@@ -39,6 +39,8 @@ fn an_inactive_slot_cannot_become_an_unmanaged_writer_by_removing_its_marker() {
     for key in ["current", "writers.lock", "admin.lock"] {
         fs::remove_file(root.join(key)).unwrap();
     }
+    // Other version managers can also keep a top-level current symlink.
+    symlink("releases/stale", root.join("current")).unwrap();
     let standalone = run();
     assert!(
         standalone.status.success(),

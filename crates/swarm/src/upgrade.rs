@@ -34,7 +34,6 @@ pub(crate) fn identify() -> io::Result<Option<(PathBuf, PathBuf)>> {
                 "routes",
                 "inflight",
                 "effects",
-                "current",
             ] {
                 match fs::symlink_metadata(root.join(name)) {
                     Ok(_) => return Err(invalid("managed installation marker is missing")),
