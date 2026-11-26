@@ -62,28 +62,36 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
         return Err(invalid());
     }
     require_repaired(&tx, cfg, &binding)?;
-    original_boundary(&tx, cfg, &binding)?;
+    original_boundary(&tx, cfg, &binding).map_err(|error| {
+        io::Error::other(format!("original personal consent boundary: {error}"))
+    })?;
     prepare::no_pending_output(&tx, cfg)?;
     let meta = tx.bucket(b"teammate_meta").ok_or_else(invalid)?;
     if meta.get(b"active_ingress_count") != Some([0; 8].as_slice()) {
-        return Err(invalid());
+        return Err(io::Error::other(
+            "original personal ingress count is not settled",
+        ));
     }
     for bucket in ["teammate_ingress", "teammate_pending"] {
         let source = tx.bucket(bucket).ok_or_else(invalid)?;
         if source.iter_entries().next().is_some() || source.iter_buckets().next().is_some() {
-            return Err(invalid());
+            return Err(io::Error::other(
+                "original personal ingress index is not empty",
+            ));
         }
     }
     let (directory, ledger, endpoint) = voice_location(place, cfg, &binding)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
     let (_pin, voice) = open_bolt(&path, 64 << 20)?;
-    let state = prepare::read_voice(
-        &voice.begin().map_err(io::Error::other)?,
-        &ledger,
-        cfg,
-        &endpoint,
-    )?;
+    let voice_tx = voice.begin().map_err(io::Error::other)?;
+    let state = match prepare::read_voice(&voice_tx, &ledger, cfg, &endpoint) {
+        Err(_) if cfg.text("project_access") == "vm" => {
+            require_no_pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?;
+            return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint);
+        }
+        result => result?,
+    };
     let stored = &state.conversation["binding"];
     if cfg.text("project_access") == "vm" {
         require_no_pending_vm_mail(place, field(stored, "conversation_id"))?;

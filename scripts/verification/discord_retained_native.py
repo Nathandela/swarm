@@ -171,7 +171,7 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
         source.server_close()
 
 
-def admit_vm_worker_wake(go, fixture, codex, base):
+def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
     assert os.environ.get("SWARM_NATIVE_FIXTURE_OS_ISOLATED") == "1"
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
     for part in ("home", "home/.codex", "bin", "work", "state"):
@@ -229,7 +229,14 @@ def admit_vm_worker_wake(go, fixture, codex, base):
         run(fixture, env, "ingress", place, "original-room", "501", "settle")
         with daemon(go, env, base / "go.log"):
             try:
-                initial = json.loads(run(fixture, env, "activate", place, "original-room"))
+                activate = [fixture, "activate", place, "original-room"]
+                for retry in range(3):
+                    ready = subprocess.run(activate, env=env, capture_output=True, text=True, timeout=80)
+                    if ready.returncode == 0:
+                        break
+                    assert (retry < 2 and "discussion manager could not become ready" in ready.stderr), ready.stderr
+                    time.sleep(1)
+                initial = json.loads(ready.stdout)
                 assert initial["native_cli"] is True
                 ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -251,6 +258,11 @@ def admit_vm_worker_wake(go, fixture, codex, base):
                     ledger, = (place / "discussions").glob("*/voice.db")
                     stored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
                     assert base64.b64decode(stored) == original_bytes
+                    rust_env = env | {"SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT": str(base / "state")}
+                    run(rust_test, rust_env, "retained_original_go_admitted_file_wake_is_read_only",
+                        "--nocapture")
+                    restored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
+                    assert restored == stored
                 finally:
                     release.set()
                     if ctl.poll() is None:
@@ -270,7 +282,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if os.environ.get("SWARM_DISCORD_ADMITTED_WAKE") == "1":
         with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
-            admit_vm_worker_wake(go, fixture, codex, Path(directory))
+            admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory))
         print("PASS original Go admitted native worker wake fixture")
         sys.exit(0)
     for acknowledge in (True, False):
