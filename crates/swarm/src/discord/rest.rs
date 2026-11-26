@@ -1,5 +1,6 @@
 //! Discord v10 enrollment and read-side verification. Credentials stay in-process.
 use super::config::{Config, invalid, load_token, snowflake};
+use crate::supervisor::mail_files::Captured;
 use serde_json::{Value, json};
 use std::io;
 use std::path::Path;
@@ -178,20 +179,37 @@ impl Discord {
         Ok(Some(message))
     }
 
-    pub(super) fn post_reply(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
+    pub(super) fn post_publication(
+        &self,
+        cfg: &Config,
+        nonce: &str,
+        body: &str,
+        files: &[Captured],
+    ) -> Post {
         let channel = cfg.text("dm_channel_id");
         let url = format!("{API}/channels/{channel}/messages");
-        let mut response = match self
+        let request = self
             .agent
             .post(url)
             .config()
             .http_status_as_error(false)
             .build()
-            .header("Authorization", &self.authorization)
-            .send_json(json!({
-                "content": body, "nonce": nonce, "enforce_nonce": true,
-                "allowed_mentions": {"parse":[]}
-            })) {
+            .header("Authorization", &self.authorization);
+        let payload = json!({"content":body,"nonce":nonce,"enforce_nonce":true,"allowed_mentions":{"parse":[]}});
+        let response = if files.is_empty() {
+            request.send_json(payload)
+        } else {
+            let Ok((boundary, data)) = file_multipart(payload, nonce, files) else {
+                return Post::Unconfirmed;
+            };
+            request
+                .header(
+                    "Content-Type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .send(data.as_slice())
+        };
+        let mut response = match response {
             Ok(response) => response,
             Err(_) => return Post::Unconfirmed,
         };
@@ -237,6 +255,54 @@ impl Discord {
     }
 }
 
+fn file_multipart(
+    mut payload: Value,
+    nonce: &str,
+    files: &[Captured],
+) -> io::Result<(String, Vec<u8>)> {
+    use std::io::Write;
+    if nonce.len() != 24 || !nonce.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid("invalid publication attachment nonce"));
+    }
+    payload["attachments"] = json!(
+        files
+            .iter()
+            .enumerate()
+            .map(|(id, item)| json!({"id":id,"filename":item.file.name}))
+            .collect::<Vec<_>>()
+    );
+    let payload = serde_json::to_vec(&payload)?;
+    let boundary = (0..8)
+        .map(|counter| format!("swarm-{nonce}-{counter}"))
+        .find(|boundary| {
+            let bytes = boundary.as_bytes();
+            !payload.windows(bytes.len()).any(|window| window == bytes)
+                && files
+                    .iter()
+                    .all(|file| !file.data.windows(bytes.len()).any(|window| window == bytes))
+        })
+        .ok_or_else(|| invalid("worker file data conflicts with multipart framing"))?;
+    let mut body = Vec::new();
+    write!(
+        &mut body,
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n"
+    )?;
+    body.extend_from_slice(&payload);
+    body.extend_from_slice(b"\r\n");
+    for (id, item) in files.iter().enumerate() {
+        let filename = item.file.name.replace('"', "\\\"");
+        write!(
+            &mut body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"files[{id}]\"; filename=\"{filename}\"\r\nContent-Type: {}\r\n\r\n",
+            item.file.content_type
+        )?;
+        body.extend_from_slice(&item.data);
+        body.extend_from_slice(b"\r\n");
+    }
+    write!(&mut body, "--{boundary}--\r\n")?;
+    Ok((boundary, body))
+}
+
 fn personal_channel<'a>(dm: &'a Value, owner: &str) -> Option<&'a str> {
     let id = dm["id"].as_str().filter(|id| snowflake(id))?;
     let recipients = dm["recipients"].as_array()?;
@@ -257,6 +323,49 @@ fn personal_channel<'a>(dm: &'a Value, owner: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachments_form_uses_one_correlated_payload_and_exact_parts() {
+        use crate::supervisor::mail_files::Descriptor;
+        let nonce = "0123456789abcdef01234567";
+        let data = format!("row,swarm-{nonce}-0\n").into_bytes();
+        let files = [Captured {
+            file: Descriptor {
+                id: "file".into(),
+                name: "sample\"data.csv".into(),
+                content_type: "text/csv".into(),
+                sha256: String::new(),
+                size: data.len(),
+            },
+            data: data.clone(),
+        }];
+        let payload = json!({"nonce":nonce,"enforce_nonce":true,"allowed_mentions":{"parse":[]}});
+        let (boundary, body) = file_multipart(payload, nonce, &files).unwrap();
+        assert_eq!(boundary, format!("swarm-{nonce}-1"));
+        let body = String::from_utf8(body).unwrap();
+        let pieces: Vec<_> = body.split(&format!("--{boundary}")).collect();
+        assert_eq!(pieces.len(), 4);
+        let payload: Value =
+            serde_json::from_str(pieces[1].split_once("\r\n\r\n").unwrap().1.trim()).unwrap();
+        assert_eq!(payload["nonce"], nonce);
+        assert_eq!(payload["enforce_nonce"], true);
+        assert_eq!(payload["allowed_mentions"]["parse"], json!([]));
+        assert_eq!(
+            payload["attachments"],
+            json!([{"id":0,"filename":"sample\"data.csv"}])
+        );
+        assert!(pieces[2].contains("name=\"files[0]\"; filename=\"sample\\\"data.csv\""));
+        assert_eq!(
+            pieces[2]
+                .split_once("\r\n\r\n")
+                .unwrap()
+                .1
+                .strip_suffix("\r\n")
+                .unwrap()
+                .as_bytes(),
+            data
+        );
+    }
 
     #[test]
     fn owner_dm_rejects_group_cross_scope_and_bot_recipient() {

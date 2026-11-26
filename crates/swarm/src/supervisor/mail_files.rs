@@ -10,7 +10,7 @@ pub(super) const MAX_FILES: usize = 10;
 pub(super) const MAX_BYTES: usize = 8 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct Descriptor {
+pub(crate) struct Descriptor {
     pub id: String,
     pub name: String,
     pub content_type: String,
@@ -18,7 +18,7 @@ pub(super) struct Descriptor {
     pub size: usize,
 }
 
-pub(super) struct Captured {
+pub(crate) struct Captured {
     pub file: Descriptor,
     pub data: Vec<u8>,
 }
@@ -135,6 +135,21 @@ pub(super) fn capture(
         });
     }
     Ok(files)
+}
+
+pub(super) fn verify(file: &Descriptor, data: &[u8]) -> bool {
+    let name = &file.name;
+    !name.is_empty()
+        && name.len() <= 128
+        && name.trim() == name
+        && !name.contains(['/', '\\'])
+        && !name.chars().any(char::is_control)
+        && !data.is_empty()
+        && data.len() == file.size
+        && data.len() <= MAX_BYTES
+        && content_type(name, data) == Some(&file.content_type)
+        && file.sha256 == format!("{:x}", Sha256::digest(data))
+        && file.id == format!("{:x}", Sha256::digest(format!("{name}\0{}", file.sha256)))
 }
 
 fn content_type(name: &str, data: &[u8]) -> Option<&'static str> {

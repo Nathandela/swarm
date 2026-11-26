@@ -1,6 +1,6 @@
 mod handoff;
 pub(crate) mod mail;
-mod mail_files;
+pub(crate) mod mail_files;
 pub(crate) mod mail_store;
 pub(crate) mod manager;
 mod pilot_journal;

@@ -3,7 +3,11 @@ use super::config::{Config, invalid};
 use super::receipt::{Inbox, Observation, hash, publication_nonce, verify_publication};
 use super::rest::{Discord, Post};
 use super::{mail_wake, manager::Manager};
-use crate::{ipc::field, socket::DeadlineReader, supervisor::runtime};
+use crate::{
+    ipc::field,
+    socket::DeadlineReader,
+    supervisor::{mail_files::Captured, mail_store, runtime},
+};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -16,7 +20,7 @@ use subtle::ConstantTimeEq;
 pub(super) trait Audience {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>>;
     fn verify(&self, cfg: &Config) -> io::Result<()>;
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post;
+    fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post;
 }
 
 impl Audience for Discord {
@@ -28,8 +32,8 @@ impl Audience for Discord {
         self.verify_dm(cfg, None).map(|_| ())
     }
 
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
-        self.post_reply(cfg, nonce, body)
+    fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post {
+        self.post_publication(cfg, nonce, body, files)
     }
 }
 
@@ -222,6 +226,14 @@ impl Dispatcher {
                                 origin.clone(),
                                 field(&entry, "body").into(),
                             ));
+                    }
+                    let publication = inbox.publication(nonce);
+                    if !publication["proof"]["file_source"].is_null() {
+                        mail_store::release_publication(
+                            &self.owner.mail_root()?,
+                            &publication["proof"]["file_source"],
+                            nonce,
+                        )?;
                     }
                     state["input"] = Value::Null;
                     inbox.set_manager(state)?;
@@ -490,8 +502,29 @@ impl Dispatcher {
                 ));
             }
             let body = field(&entry, "body");
+            let file_source = &publication["file_source"];
+            let files = if file_source.is_null() {
+                Vec::new()
+            } else {
+                let selected = &input["selected_note"];
+                if selected["id"] != file_source["id"]
+                    || selected["binding"] != file_source["binding"]
+                    || !file_source["files"].as_array().is_some_and(|files| {
+                        files.iter().all(|file| {
+                            selected["files"]
+                                .as_array()
+                                .is_some_and(|known| known.contains(file))
+                        })
+                    })
+                {
+                    return Err(invalid(
+                        "queued publication no longer matches the selected worker note",
+                    ));
+                }
+                mail_store::pin_publication(&self.owner.mail_root()?, file_source, &nonce)?
+            };
             inbox.publication_state(&nonce, "sending", None)?;
-            match api.post(cfg, &nonce, body) {
+            match api.post(cfg, &nonce, body, &files) {
                 Post::Acknowledged(receipt)
                     if receipt["nonce"] == nonce
                         && inbox.observe(&receipt, Observation::Rest)? => {}
@@ -612,19 +645,41 @@ impl Dispatcher {
                 args["session_instance"] = wake["binding"]["Instance"].clone();
                 field(&wake["binding"], "ParentInputHash").to_owned()
             };
-            return super::super::supervisor::mail_store::manager_note(
+            let mut result = mail_store::manager_note(
                 &scope,
                 field(&state["binding"], "conversation_id"),
                 session,
                 &input_hash,
                 &args,
                 tool == "swarm_reply",
-            );
+            )?;
+            if let Some(binding) = result
+                .as_object_mut()
+                .and_then(|result| result.shift_remove("file_binding"))
+            {
+                if !state["input"]["final_nonce"].is_null() {
+                    return Err(invalid(
+                        "cannot change file selection after final publication",
+                    ));
+                }
+                state["input"]["selected_note"] = json!({
+                    "id":result["id"],"binding":binding,"files":result["files"]
+                });
+                inbox.set_manager(state)?;
+            }
+            return Ok(result);
         }
         let fields = args
             .as_object()
             .ok_or_else(|| invalid("invalid publication arguments"))?;
-        if fields.len() != 4 || args["sequence"] != 1 || args["final"] != true {
+        if fields.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "output_id" | "sequence" | "text" | "final" | "file_ids"
+            )
+        }) || args["sequence"] != 1
+            || args["final"] != true
+        {
             return Err(invalid(
                 "only one deliberate final text publication is supported",
             ));
@@ -634,7 +689,8 @@ impl Dispatcher {
         if output.is_empty()
             || output.len() > 128
             || output.chars().any(char::is_control)
-            || body.trim().is_empty()
+            || args["text"].as_str().is_none()
+            || body.trim().is_empty() && args["file_ids"].is_null()
             || body.encode_utf16().count() > 1900
         {
             return Err(invalid("invalid final publication ID or body"));
@@ -649,12 +705,37 @@ impl Dispatcher {
         if proof["native_turn_id"] != input["turn_id"] {
             return Err(invalid("manager publication belongs to another turn"));
         }
-        let publication = json!({
+        let mut publication = json!({
             "binding":state["binding"], "turn_id":input["turn_id"],
             "source_id":input["source_id"], "output_id":output,"body":body,
             "native_call_id":proof["native_call_id"], "call_receipt":proof,
             "host_meta":call["meta"], "arguments":args, "arguments_hash":hash(&args)?
         });
+        if !args["file_ids"].is_null() {
+            let ids = args["file_ids"]
+                .as_array()
+                .filter(|ids| !ids.is_empty() && ids.len() <= 10)
+                .ok_or_else(|| invalid("select 1 to 10 exact worker file IDs"))?;
+            let selected_note = &input["selected_note"];
+            let candidates = selected_note["files"].as_array().ok_or_else(|| {
+                invalid("read the exact worker completion before publishing its files")
+            })?;
+            let mut picked = Vec::new();
+            for requested in ids {
+                let file = candidates
+                    .iter()
+                    .find(|file| requested.is_string() && &file["id"] == requested)
+                    .ok_or_else(|| {
+                        invalid("publication file does not belong to the read worker note")
+                    })?;
+                if picked.contains(&file) {
+                    return Err(invalid("publication requested a duplicate worker file"));
+                }
+                picked.push(file);
+            }
+            publication["file_source"] =
+                json!({"id":selected_note["id"],"binding":selected_note["binding"],"files":picked});
+        }
         let nonce = publication_nonce(&publication)?;
         if input["final_nonce"]
             .as_str()
@@ -822,7 +903,7 @@ mod tests {
             Ok(())
         }
 
-        fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
+        fn post(&self, cfg: &Config, nonce: &str, body: &str, _files: &[Captured]) -> Post {
             self.posted
                 .borrow_mut()
                 .push((nonce.to_owned(), body.to_owned()));
@@ -949,7 +1030,7 @@ mod tests {
             outcome: RefCell::new(Post::Acknowledged(Value::Null)),
             posted: RefCell::new(Vec::new()),
         };
-        let Post::Acknowledged(receipt) = api.post(&cfg, &nonce, "deliberate reply") else {
+        let Post::Acknowledged(receipt) = api.post(&cfg, &nonce, "deliberate reply", &[]) else {
             panic!("expected acknowledgement")
         };
         assert!(inbox.observe(&receipt, Observation::Rest).unwrap());

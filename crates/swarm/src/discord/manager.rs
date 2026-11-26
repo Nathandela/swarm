@@ -361,6 +361,7 @@ mod tests {
     struct FixtureAudience {
         source: Value,
         posts: std::cell::RefCell<Vec<(String, String)>>,
+        file_ack: std::cell::RefCell<Value>,
     }
 
     impl super::super::dispatcher::Audience for FixtureAudience {
@@ -373,12 +374,31 @@ mod tests {
             Ok(())
         }
 
-        fn post(&self, cfg: &Config, nonce: &str, text: &str) -> super::super::rest::Post {
+        fn post(
+            &self,
+            cfg: &Config,
+            nonce: &str,
+            text: &str,
+            files: &[crate::supervisor::mail_files::Captured],
+        ) -> super::super::rest::Post {
             self.posts.borrow_mut().push((nonce.into(), text.into()));
-            super::super::rest::Post::Acknowledged(json!({
-                "id":"402","channel_id":cfg.text("dm_channel_id"),"author":{"id":"200","bot":true},
+            let mut receipt = json!({
+                "id":if files.is_empty() { "402" } else { "403" },
+                "channel_id":cfg.text("dm_channel_id"),"author":{"id":"200","bot":true},
                 "nonce":nonce,"content":text
-            }))
+            });
+            if !files.is_empty() {
+                assert_eq!(files.len(), 2);
+                assert_eq!(files[0].data, b"source,result\nfixture,ok\n");
+                assert_eq!(files[1].data, b"%PDF-1.7\n");
+                receipt["attachments"] =
+                    json!(files.iter().enumerate().map(|(i, file)| json!({
+                    "id":format!("42{i}"),"filename":file.file.name,"size":file.file.size
+                })).collect::<Vec<_>>());
+                self.file_ack.replace(receipt);
+                return super::super::rest::Post::Unconfirmed;
+            }
+            super::super::rest::Post::Acknowledged(receipt)
         }
     }
 
@@ -581,6 +601,11 @@ mod tests {
                 assert!(err.to_string().contains("exact connector cutover"));
             }
             let wake_fixture = std::env::var_os("SWARM_NATIVE_MAIL_WAKE_FIXTURE").is_some();
+            let publish_files_fixture =
+                std::env::var_os("SWARM_NATIVE_MAIL_PUBLISH_FILES_FIXTURE").is_some();
+            if publish_files_fixture {
+                std::fs::write(root.join(".fixture-mail-publish-files"), "").unwrap();
+            }
             if wake_fixture {
                 std::fs::write(root.join(".fixture-mail-wake-enabled"), "").unwrap();
             }
@@ -656,6 +681,7 @@ mod tests {
                 let fake = FixtureAudience {
                     source,
                     posts: std::cell::RefCell::new(Vec::new()),
+                    file_ack: Default::default(),
                 };
                 let local = id.split_once('/').unwrap().1;
                 if std::env::var_os("SWARM_NATIVE_MAIL_FIXTURE").is_some() {
@@ -814,12 +840,14 @@ mod tests {
                         decode(cli(&["reply", "--id", note], &worker_proof)),
                         readback
                     );
-                    let complete = decode(cli(
-                        &["message", "--kind", "complete", "--text", "Finished"],
-                        &worker_proof,
-                    ));
-                    let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
-                    assert_eq!(listed["notes"][0]["id"], complete["id"]);
+                    if !publish_files_fixture {
+                        let complete = decode(cli(
+                            &["message", "--kind", "complete", "--text", "Finished"],
+                            &worker_proof,
+                        ));
+                        let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
+                        assert_eq!(listed["notes"][0]["id"], complete["id"]);
+                    }
                     if std::env::var_os("SWARM_NATIVE_MAIL_FILES_FIXTURE").is_some() {
                         let csv = root.join("data.csv");
                         let pdf = root.join("report.pdf");
@@ -945,6 +973,7 @@ mod tests {
                         let withdrawn = FixtureAudience {
                             source: withdrawal,
                             posts: Default::default(),
+                            file_ack: Default::default(),
                         };
                         dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
                         assert_eq!(inbox.manager()["input"]["composer"], refused);
@@ -965,6 +994,7 @@ mod tests {
                             let other = FixtureAudience {
                                 source: replacement.clone(),
                                 posts: Default::default(),
+                                file_ack: Default::default(),
                             };
                             inbox.admit(&replacement).unwrap().unwrap();
                             dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
@@ -987,7 +1017,12 @@ mod tests {
                         };
                         assert_ne!(wake["turn_id"], turn["native_turn_id"]);
                         assert_eq!(wake["source_id"], "401");
-                        assert!(field(&wake["composer"], "text").contains("Finished"));
+                        let expected = if publish_files_fixture {
+                            "Worker attached files"
+                        } else {
+                            "Finished"
+                        };
+                        assert!(field(&wake["composer"], "text").contains(expected));
                         for _ in 0..3 {
                             dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
                             assert_eq!(inbox.manager()["input"], wake);
@@ -1026,8 +1061,64 @@ mod tests {
                                 .unwrap();
                         assert_eq!(selected["id"], wake["worker_wake"]["id"]);
                         assert_eq!(selected["state"], "ingested");
+                        if publish_files_fixture {
+                            let ids: Vec<_> = selected["files"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .map(|file| file["id"].clone())
+                                .collect();
+                            let mut meta = host.clone();
+                            meta["callId"] = json!("fixture-wake-attachments");
+                            meta["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
+                            let mut proxy = Command::new(binary)
+                                .arg("manager-mcp")
+                                .arg(&bridge_socket)
+                                .arg(&auth)
+                                .arg(field(&native["binding"], "conversation_id"))
+                                .arg(local)
+                                .stdin(Stdio::piped())
+                                .stdout(Stdio::piped())
+                                .spawn()
+                                .unwrap();
+                            writeln!(proxy.stdin.take().unwrap(), "{}", json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                                "params":{"name":"publish","arguments":{"output_id":"file-final","sequence":1,
+                                "text":"worker attachment fixture","final":true,"file_ids":ids},"_meta":meta}})).unwrap();
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            while fake.file_ack.borrow().is_null() {
+                                dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                                assert!(Instant::now() < deadline, "file publication timed out");
+                                std::thread::sleep(Duration::from_millis(15));
+                            }
+                            let response = proxy.wait_with_output().unwrap();
+                            let result: Value = serde_json::from_slice(&response.stdout).unwrap();
+                            assert!(result["result"]["isError"].is_null(), "{result}");
+                            let ack = fake.file_ack.borrow();
+                            let nonce = field(&ack, "nonce");
+                            assert_eq!(inbox.publication(nonce)["state"], "uncertain");
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            let mut incomplete = ack.clone();
+                            incomplete["attachments"].as_array_mut().unwrap().pop();
+                            assert!(
+                                !inbox
+                                    .observe(
+                                        &incomplete,
+                                        super::super::receipt::Observation::Gateway
+                                    )
+                                    .unwrap()
+                            );
+                            assert!(
+                                inbox
+                                    .observe(&ack, super::super::receipt::Observation::Gateway)
+                                    .unwrap()
+                            );
+                            assert_eq!(inbox.publication(nonce)["state"], "sent");
+                        }
                     }
-                    assert_eq!(fake.posts.borrow().len(), 1);
+                    assert_eq!(
+                        fake.posts.borrow().len(),
+                        if publish_files_fixture { 2 } else { 1 }
+                    );
                 }
             }
             let mut stale = host;
