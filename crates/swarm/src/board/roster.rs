@@ -166,12 +166,17 @@ fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'stat
         (PLAIN, " ".into())
     };
     let prefix_width = prefix.1.width() as u16 + 1;
-    let icon = match group {
-        "needs_input" => "●",
-        "working" => SPINNER[board.spinner],
-        "ready_for_review" if super::scheduled_review(row) => "◆",
-        "ready_for_review" => "✓",
-        _ => "─",
+    let icon = if field(row, "role") == "manager" {
+        "◈"
+    } else if super::scheduled_review(row) {
+        "◆"
+    } else {
+        match group {
+            "needs_input" => "●",
+            "working" => SPINNER[board.spinner],
+            "ready_for_review" => "✓",
+            _ => "─",
+        }
     };
     let mut label = name(row).to_owned();
     if field(row, "role") == "manager" {

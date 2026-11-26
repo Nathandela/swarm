@@ -8,6 +8,7 @@ mod menu;
 mod navigation;
 mod options;
 mod preferences;
+mod resume;
 mod roster;
 mod session_form;
 mod term;
@@ -38,7 +39,7 @@ const POLL: Duration = Duration::from_millis(40);
 const ROSTER_CAPS: &[&str] = &[
     "subscribe",
     "opencode-observation",
-    "resume-relocate",
+    resume::CAP,
     handoff::CAP,
     context_settings::CAP,
     CATALOG_CAP,
@@ -65,6 +66,7 @@ fn board(path: &Path) -> io::Result<()> {
     let mut client = connect(path)?;
     let mut board = Board {
         hands_off: client.supports(handoff::CAP),
+        can_relocate: client.supports(resume::CAP),
         context_owner: context_settings::Owner::from_connection(path, &client),
         ..Board::default()
     };
@@ -206,6 +208,7 @@ fn board(path: &Path) -> io::Result<()> {
                 Ok(client) => {
                     board.notice.clear();
                     board.hands_off = client.supports(handoff::CAP);
+                    board.can_relocate = client.supports(resume::CAP);
                     board.context_owner = context_settings::Owner::from_connection(path, &client);
                     if let Some(Modal::Options(form)) = &mut board.modal {
                         form.reconnected(board.context_owner.as_ref());
@@ -230,7 +233,14 @@ fn board(path: &Path) -> io::Result<()> {
             keys.read(&[], true)
         };
         for key in input_keys {
-            match board.update(key, geometry, connection.is_some()) {
+            let (action, resume) = match board.update(key, geometry, connection.is_some()) {
+                Action::Resume(resume) => {
+                    (Action::Request(resume.message(), "launch"), Some(resume))
+                }
+                other => (other, None),
+            };
+            match action {
+                Action::Resume(_) => unreachable!("resume normalized to owner request"),
                 Action::None => {}
                 Action::Quit => return Ok(()),
                 Action::Retry => {
@@ -323,12 +333,24 @@ fn board(path: &Path) -> io::Result<()> {
                             } else if let Some(label) = label
                                 && !id.is_empty()
                             {
-                                board.attach(path, id, &label, &mut output)?;
+                                let actual = field(&reply["session"], "name");
+                                board.attach(
+                                    path,
+                                    id,
+                                    if actual.is_empty() { &label } else { actual },
+                                    &mut output,
+                                )?;
                                 needs_paint = true;
                                 break;
                             }
                         }
-                        Err(error) => board.notice = error.to_string(),
+                        Err(error) => {
+                            if let Some(attempt) = resume {
+                                board.resume_failed(*attempt, &error.to_string());
+                            } else {
+                                board.notice = error.to_string();
+                            }
+                        }
                     }
                 }
             }
@@ -354,6 +376,7 @@ struct Board {
     columns: u16,
     spinner: usize,
     hands_off: bool,
+    can_relocate: bool,
     context_owner: Option<context_settings::Owner>,
     second: u64,
     selected: String,
@@ -395,10 +418,7 @@ enum Modal {
     Launch(Box<Launch>),
     Handoff(Box<Handoff>),
     Automation(Box<Automation>),
-    ResumeAgy {
-        id: String,
-        cwd: Editor,
-    },
+    Relocate(Box<resume::Relocation>),
     Options(Box<options::Form>),
     More {
         target: String,
@@ -429,6 +449,7 @@ enum Action {
     ChangeAutomation(CatalogChange),
     TriggerAutomation { job: String, intent: Manual },
     Request(Value, &'static str),
+    Resume(Box<resume::Request>),
 }
 
 impl Board {
@@ -603,7 +624,7 @@ impl Board {
             Key::Text('o') => {
                 self.modal = Some(Modal::Options(Box::new(options::Form::new(
                     self.layout,
-                    self.context_owner.clone(),
+                    self.context_owner.clone().filter(|_| online),
                 ))));
                 self.notice.clear();
             }
@@ -634,6 +655,9 @@ impl Board {
                             name: name(row).to_owned(),
                         };
                     }
+                    if scheduled_review(row) && !linked_dispatcher(row) {
+                        return self.begin_resume(id, geometry);
+                    }
                     self.notice = if linked_dispatcher(row) {
                         "Continue this dispatcher in its Discord thread".into()
                     } else if resumable(row) {
@@ -655,26 +679,7 @@ impl Board {
                     self.notice.clear();
                 }
             }
-            Key::Text('r') => {
-                if let Some(row) = self
-                    .by_id(id)
-                    .filter(|row| resumable(row) && !running(row) && !linked_dispatcher(row))
-                {
-                    let cwd = Path::new(field(row, "cwd"));
-                    let agent = field(row, "agent");
-                    if cwd.is_dir() || agent != "agy" {
-                        return resume(agent, id, cwd, geometry, false);
-                    }
-                    let cwd = cwd
-                        .ancestors()
-                        .find(|path| path.is_dir())
-                        .unwrap_or(Path::new("/"));
-                    self.modal = Some(Modal::ResumeAgy {
-                        id: id.to_owned(),
-                        cwd: Editor::new(&cwd.to_string_lossy()),
-                    });
-                }
-            }
+            Key::Text('r') => return self.begin_resume(id, geometry),
             Key::Text('e' | 't') => {
                 if let Some(row) = self.by_id(id).filter(|row| !linked_dispatcher(row)) {
                     let tag = matches!(key, Key::Text('t'));
@@ -698,6 +703,50 @@ impl Board {
             _ => {}
         }
         Action::None
+    }
+
+    fn begin_resume(&mut self, id: &str, geometry: (u16, u16)) -> Action {
+        let Some(row) = self
+            .by_id(id)
+            .filter(|row| !running(row) && !linked_dispatcher(row))
+        else {
+            return Action::None;
+        };
+        if !resumable(row) {
+            self.notice = "No supported native conversation is bound to this session".into();
+            return Action::None;
+        }
+        let source = resume::Source::from_row(row);
+        if source.scheduled || source.directory().is_dir() {
+            return Action::Resume(Box::new(resume::Request::original(source, geometry)));
+        }
+        if source.can_relocate(self.can_relocate) {
+            self.modal = Some(Modal::Relocate(Box::new(resume::Relocation::missing(
+                source,
+            ))));
+            self.notice.clear();
+        } else {
+            self.notice = format!(
+                "Resume unavailable: the working directory is gone and {} relocation is unsupported",
+                field(row, "agent")
+            );
+        }
+        Action::None
+    }
+
+    fn resume_failed(&mut self, request: resume::Request, error: &str) {
+        if request.source.scheduled {
+            self.notice = format!("Unable to reopen scheduled conversation: {error}");
+        } else if request.source.can_relocate(self.can_relocate)
+            && self
+                .by_id(&request.source.id)
+                .is_some_and(|row| request.source.matches(row))
+        {
+            self.modal = Some(Modal::Relocate(Box::new(request.rejected(error))));
+            self.notice.clear();
+        } else {
+            self.notice = format!("Resume failed: {error}");
+        }
     }
 
     fn apply_layout(&mut self, layout: Layout, rows: u16) {
@@ -739,20 +788,8 @@ impl Board {
                 let source = self.by_id(&form.source_id);
                 form.update(key, source, geometry, self.hands_off, online)
             }
-            Modal::ResumeAgy { id, cwd } => {
-                if matches!(key, Key::Enter) {
-                    if online && usable(geometry) && self.by_id(id).is_some_and(|row| !running(row))
-                    {
-                        let path = Path::new(cwd.text.trim());
-                        if path.is_absolute() && path.is_dir() {
-                            return resume("agy", id, path, geometry, true);
-                        }
-                        self.notice = "Choose an existing absolute workspace directory".into();
-                    }
-                } else {
-                    cwd.apply(key);
-                }
-                Action::None
+            Modal::Relocate(form) => {
+                form.update(key, geometry, self.by_id(&form.source.id), online)
             }
             Modal::Automation(view) => {
                 let action = view.update(key, geometry);
@@ -1350,23 +1387,7 @@ impl Board {
             Some(Modal::Launch(form)) => form.view(&mut screen, cols, rows),
             Some(Modal::Handoff(form)) => form.view(&mut screen, cols, rows),
             Some(Modal::Automation(view)) => view.view(&mut screen, cols, rows),
-            Some(Modal::ResumeAgy { cwd, .. }) => {
-                line(&mut screen, 1, cols, "\x1b[1m", "Relocate session");
-                line(
-                    &mut screen,
-                    2,
-                    cols,
-                    "",
-                    &format!("Directory  {}", cwd.text),
-                );
-                line(
-                    &mut screen,
-                    rows,
-                    cols,
-                    "\x1b[2m",
-                    "enter relocate · esc cancel",
-                );
-            }
+            Some(Modal::Relocate(form)) => form.view(&mut screen, (cols, rows)),
             Some(Modal::Options(form)) => form.frame((cols, rows)).paint(&mut screen, None),
             Some(Modal::More { .. }) => {
                 self.build_menu_frame((cols, rows))
@@ -1585,23 +1606,91 @@ fn caller_launch_environment(agent: &str) -> Vec<String> {
     crate::environment::reliable(agent, entries)
 }
 
-fn resume(agent: &str, id: &str, cwd: &Path, (cols, rows): (u16, u16), relocate: bool) -> Action {
-    let mut options = json!({"resume_from": id});
-    if relocate {
-        options["resume_relocate"] = json!("true");
-    }
-    Action::Request(
-        json!({"op":"launch","launch":{
-            "agent":agent, "cwd":cwd, "cols":cols, "rows":rows,
-            "env":caller_launch_environment(agent), "options":options,
-        }}),
-        "launch",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_enter_retains_captured_review_even_with_missing_directory() {
+        let mut board = Board {
+            rows: vec![json!({
+                "id":"scheduled", "agent":"agy", "name":"Review fixture", "cwd":"/unavailable/fixture",
+                "tag":"automation", "scheduled_completed":true, "group":"completed",
+                "status":{"Process":"exited"},
+            })],
+            can_relocate: true,
+            ..Board::default()
+        };
+        board.rebuild_sections();
+        let Action::Resume(request) = board.update(Key::Enter, (80, 24), true) else {
+            panic!("scheduled review did not request native resume");
+        };
+        let message = request.message();
+        assert_eq!(
+            message["launch"]["options"],
+            json!({"resume_from":"scheduled"})
+        );
+        assert_eq!(message["launch"]["name"], "Review fixture");
+        assert!(board.modal.is_none());
+    }
+
+    #[test]
+    fn removed_relocation_target_cannot_become_the_next_selected_row() {
+        let mut board = Board {
+            rows: vec![
+                json!({"id":"source","agent":"agy","name":"Source","cwd":"/unavailable/fixture",
+                       "group":"completed","status":{"Process":"exited"}}),
+                json!({"id":"neighbor","agent":"agy","name":"Neighbor","cwd":"/",
+                       "group":"completed","status":{"Process":"exited"}}),
+            ],
+            can_relocate: true,
+            ..Board::default()
+        };
+        board.rebuild_sections();
+        board.set_focus(Focus::Session("source".into()));
+        assert!(matches!(
+            board.update(Key::Text('r'), (80, 24), true),
+            Action::None
+        ));
+        board.rows.retain(|row| field(row, "id") != "source");
+        board.rebuild_sections();
+        assert!(matches!(
+            board.update(Key::Enter, (80, 24), true),
+            Action::None
+        ));
+        assert!(
+            board
+                .view((80, 24))
+                .contains("Resume source changed or disappeared")
+        );
+        board.update(Key::Escape, (80, 24), true);
+        let Action::Resume(request) = board.update(Key::Text('r'), (80, 24), true) else {
+            panic!("freshly selected neighbor did not request resume");
+        };
+        assert_eq!(
+            request.message()["launch"]["options"],
+            json!({"resume_from":"neighbor"})
+        );
+    }
+
+    #[test]
+    fn missing_directory_without_a_qualified_relocation_route_refuses() {
+        let mut board = Board {
+            rows: vec![json!({
+                "id":"claude", "agent":"claude", "name":"Source", "cwd":"/unavailable/fixture",
+                "group":"completed", "status":{"Process":"exited"},
+            })],
+            can_relocate: true,
+            ..Board::default()
+        };
+        board.rebuild_sections();
+        assert!(matches!(
+            board.update(Key::Text('r'), (80, 24), true),
+            Action::None
+        ));
+        assert!(board.modal.is_none());
+        assert!(board.notice.contains("claude relocation is unsupported"));
+    }
 
     #[test]
     fn terminal_content_is_safe_and_cell_bounded() {

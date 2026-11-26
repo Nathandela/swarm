@@ -18,13 +18,13 @@ enum Detection {
 }
 
 #[derive(Default)]
-struct Completion {
-    choices: Vec<String>,
-    ghost: String,
+pub(super) struct Completion {
+    pub(super) choices: Vec<String>,
+    pub(super) ghost: String,
 }
 
 impl Completion {
-    fn from_prefix(prefix: &str) -> Self {
+    pub(super) fn from_prefix(prefix: &str) -> Self {
         let choices = directories(prefix);
         let ghost = longest_common_path(&choices)
             .strip_prefix(prefix)
@@ -287,8 +287,6 @@ impl Launch {
         self.update_detection();
         let extras = self.options.len();
         let count = 6 + extras;
-        let directory_completion =
-            self.focus == 0 && matches!(key, Key::Left | Key::Right | Key::Tab);
         if !matches!(key, Key::Enter) {
             self.create_cwd = None;
         }
@@ -296,21 +294,12 @@ impl Launch {
             Key::Up => self.focus = (self.focus + count - 1) % count,
             Key::Down => self.focus = (self.focus + 1) % count,
             Key::Enter => return self.submit(cols, rows),
-            Key::Left | Key::Right | Key::Tab if directory_completion => {
-                self.complete(!matches!(key, Key::Left));
-            }
             Key::Left | Key::Right if self.focus == 3 => self.cycle_agent(key == Key::Left),
             Key::Text(' ') if self.focus == 5 + extras => {
                 self.worktree = !self.worktree;
             }
             key => match self.focus {
-                0 => {
-                    let current = self.cwd.text.clone();
-                    self.cwd.apply(key);
-                    if self.cwd.text != current {
-                        self.completion = Some(Completion::from_prefix(&self.cwd.text));
-                    }
-                }
+                0 => update_directory(&mut self.cwd, &mut self.completion, key),
                 1 => self.name.apply(key),
                 2 => self.tag.apply(key),
                 index if (4..4 + extras).contains(&index) => self.options[index - 4].apply(key),
@@ -319,30 +308,6 @@ impl Launch {
             },
         }
         Ok(Action::None)
-    }
-
-    fn complete(&mut self, forward: bool) {
-        let completion = self
-            .completion
-            .get_or_insert_with(|| Completion::from_prefix(&self.cwd.text));
-        if forward && !completion.ghost.is_empty() {
-            self.cwd = Editor::new(&format!("{}{}", self.cwd.text, completion.ghost));
-            self.completion = Some(Completion::from_prefix(&self.cwd.text));
-            return;
-        }
-        let len = completion.choices.len();
-        if len < 2 {
-            return;
-        }
-        let index = completion
-            .choices
-            .iter()
-            .position(|path| path == &self.cwd.text)
-            .map_or_else(
-                || if forward { 0 } else { len - 1 },
-                |index| (index + if forward { 1 } else { len - 1 }) % len,
-            );
-        self.cwd = Editor::new(&completion.choices[index]);
     }
 
     fn submit(&mut self, cols: u16, rows: u16) -> io::Result<Action> {
@@ -743,7 +708,41 @@ pub(super) fn status(output: &mut String, row: u16, cols: u16, hint: &str) {
     spans(output, row, cols, &pieces);
 }
 
-fn absolute_directory(raw: &str) -> io::Result<PathBuf> {
+pub(super) fn update_directory(editor: &mut Editor, completion: &mut Option<Completion>, key: Key) {
+    if matches!(key, Key::Left | Key::Right | Key::Tab) {
+        complete(editor, completion, key != Key::Left);
+    } else {
+        let current = editor.text.clone();
+        editor.apply(key);
+        if current != editor.text {
+            *completion = Some(Completion::from_prefix(&editor.text));
+        }
+    }
+}
+
+fn complete(editor: &mut Editor, state: &mut Option<Completion>, forward: bool) {
+    let completion = state.get_or_insert_with(|| Completion::from_prefix(&editor.text));
+    if forward && !completion.ghost.is_empty() {
+        *editor = Editor::new(&format!("{}{}", editor.text, completion.ghost));
+        *state = Some(Completion::from_prefix(&editor.text));
+        return;
+    }
+    let len = completion.choices.len();
+    if len < 2 {
+        return;
+    }
+    let index = completion
+        .choices
+        .iter()
+        .position(|path| path == &editor.text)
+        .map_or_else(
+            || if forward { 0 } else { len - 1 },
+            |index| (index + if forward { 1 } else { len - 1 }) % len,
+        );
+    *editor = Editor::new(&completion.choices[index]);
+}
+
+pub(super) fn absolute_directory(raw: &str) -> io::Result<PathBuf> {
     let home = || {
         env::var_os("HOME")
             .map(PathBuf::from)
