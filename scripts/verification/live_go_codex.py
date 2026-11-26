@@ -14,14 +14,18 @@ from live_go_shim import LIVE, attach, connect, grid_text, snapshot
 from parity_codex import model_fixture
 from stopped_go_state import await_value, daemon, disk, fixture_env, listed, owner, refused
 
+if sys.platform == "darwin":
+    import macos_codex_fixture as macos
+
 
 def rehearse(go, rust, root, version, cold=False):
     root = root.resolve()
+    if sys.platform == "darwin":
+        assert root.parent == Path("/tmp").resolve() and root.stat().st_mode & 0o777 == 0o700
     tools, home, state, work = (root / name for name in ("bin", "home", "state", "work"))
     assert (tools / "codex").is_file(), "stage the qualified native executable before running"
     for directory in (home, state, work, home / ".codex"):
         directory.mkdir(mode=0o700)
-    assert subprocess.check_output([tools / "codex", "--version"], env={"HOME":str(home)}).strip() == f"codex-cli {version}".encode()
     prompts = {
         "Go owner warmup": "The original Go turn succeeded.",
         "Rust owner continued the thread": "The Rust bridge turn succeeded.",
@@ -44,6 +48,16 @@ def rehearse(go, rust, root, version, cold=False):
     model, _ = model_fixture(root, False, answer_for_input=answer_for_input)
     go_env = fixture_env(root, state, tools) | {"TERM":"xterm-256color"}
     rust_env = fixture_env(root, state, tools, compat=True) | {LIVE:"1", "TERM":"xterm-256color"}
+    guard = None
+    vendor = tools / "codex"
+    if sys.platform == "darwin":
+        assert version == "0.172.0", "the Darwin fixture qualifies the signed alias runtime"
+        guard = macos.Guard(root, state, model.server_port, cold)
+        go, rust = guard.wrap(go, "go"), guard.wrap(rust, "rust")
+        vendor = guard.wrap(vendor, "version-probe")
+        go_env["SWARM_FIXTURE_SESSION_ID"] = macos.GO_ID
+        rust_env["SWARM_FIXTURE_SESSION_ID"] = macos.RUST_ID
+    assert subprocess.check_output([vendor, "--version"], env=go_env).strip() == f"codex-cli {version}".encode()
     active = None
     rust_held = None
 
@@ -65,13 +79,24 @@ def rehearse(go, rust, root, version, cold=False):
             until(lambda: prompts[prompt] in "\n".join(snapshot(env, active)["lines"]), f"native reply: {prompt}")
 
     def process_birth(pid):
+        if guard:
+            return macos.process_birth(pid)
         stat = (Path("/proc") / str(pid) / "stat").read_text()
         return int(stat.rsplit(")", 1)[1].split()[19])
+
+    def has_stopped(pid, birth):
+        try:
+            return process_birth(pid) != birth
+        except FileNotFoundError:
+            return True
 
     def socket_peer(endpoint):
         with socket.socket(socket.AF_UNIX) as probe:
             probe.connect(str(endpoint))
-            pid, uid, _ = struct.unpack("3i", probe.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if guard:
+                pid, uid = macos.socket_peer(probe)
+            else:
+                pid, uid, _ = struct.unpack("3i", probe.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
             assert uid == os.geteuid()
             return pid
 
@@ -147,6 +172,12 @@ def rehearse(go, rust, root, version, cold=False):
                 assert owner(go_env, {"op":"kill","session_id":active})["op"] == "ok"
                 until(lambda: disk(session / "meta.json")["status"]["Process"] == "exited", "drained Go source")
                 active = None
+        if cold and guard:
+            until(lambda: all(has_stopped(pid, birth) for pid, birth in identity[0]),
+                  "original Go native processes joined")
+            if guard.paths[0][0].is_socket():
+                refused(rust, rust_env, "Go Codex short listener custody remains")
+            guard.close()
         print("same session, native thread, shim, TUI and app-server across Go → Rust → Go")
         if cold:
             with daemon(rust, rust_env, root / "rust-create.log"):
@@ -172,10 +203,7 @@ def rehearse(go, rust, root, version, cold=False):
             with daemon(rust, rust_env, root / "rust-drain.log"):
                 assert owner(rust_env, {"op":"kill","session_id":active})["op"] == "ok"
                 until(lambda: (candidate_state / "go-stop-proof.json").is_file(), "Rust stop proof")
-                try:
-                    assert process_birth(backend_pid) != backend_birth, "original Rust app-server survived stop"
-                except FileNotFoundError:
-                    pass
+                assert has_stopped(backend_pid, backend_birth), "original Rust app-server survived stop"
             rust_held = None
             active = None
 
@@ -201,6 +229,8 @@ def rehearse(go, rust, root, version, cold=False):
             assert export_meta["conversation_id"] == native_thread
             assert export_meta["cli_identity"] == disk(candidate_state / "session.json")["go_rollback"]["cli_identity"]
             assert not (state / local / "shim-launch.json").exists()
+            if guard:
+                go_env["SWARM_FIXTURE_SESSION_ID"] = macos.RESUMED_GO_ID
             with daemon(go, go_env, root / "go-cold-resume.log"):
                 resumed = owner(go_env, {"op":"launch", "launch":launch | {
                     "name":"Go cold Codex resume", "options":{"resume_from":created["session"]["id"]}
@@ -232,10 +262,12 @@ def rehearse(go, rust, root, version, cold=False):
                 until(lambda: (session / "exit.json").is_file(), "stopped live fixture")
         model.shutdown()
         model.server_close()
+        if guard:
+            guard.close()
 
 
 if __name__ == "__main__":
-    assert sys.platform == "linux", "run in an isolated Linux process and network namespace"
+    assert sys.platform in ("linux", "darwin")
     os.umask(0o077)
     go, rust, root = (Path(value).resolve() for value in sys.argv[1:4])
     version = sys.argv[4] if len(sys.argv) >= 5 else "0.151.0"

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 mod agy;
-mod codex;
+pub(super) mod codex;
 
 pub(in crate::supervisor) const OPT_IN: &str = "SWARM_DAEMON_LIVE_GO_COMPAT";
 const SHIM_WIRE_VERSION: u64 = 2;

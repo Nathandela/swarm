@@ -333,15 +333,15 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
     inactive(pid, birth)?;
     absent_sidefiles(
         file,
-        &[
-            c"shim.sock",
-            c"hooks.sock",
-            c"hook.sock",
-            c"codex.sock",
-            c"backend.json",
-        ],
+        &[c"shim.sock", c"hooks.sock", c"hook.sock", c"backend.json"],
     )?;
     let launch = launch_evidence(file, meta)?;
+    let managed_codex =
+        meta["agent_type"] == "codex" && !field(&launch, "backend_program").is_empty();
+    let codex_version = field(&meta["cli_identity"], "version");
+    if !managed_codex || codex_version != "0.172.0" {
+        absent_sidefiles(file, &[c"codex.sock"])?;
+    }
     if matches!(field(meta, "agent_type"), "agy" | "opencode") {
         // Classic PTY shims write exit.json after joining their PTY group.
         // Managed-native custody uses a different proof and is excluded here.
@@ -399,7 +399,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         ));
     }
     inactive(native_pid, native_birth)?;
-    if meta["agent_type"] == "codex" && !field(&launch, "backend_program").is_empty() {
+    if managed_codex {
         let backend = native["backend_pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
@@ -415,7 +415,8 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         if exit["backend_exit"].as_i64().is_none() {
             return Err(io::Error::other("missing Go Codex backend exit"));
         }
-        inactive(backend, epoch)
+        inactive(backend, epoch)?;
+        live::codex::verify_stopped_socket(file, &launch, codex_version)
     } else if !native["backend_pid"].is_null()
         || !native["backend_start_time"].is_null()
         || !exit["backend_exit"].is_null()
