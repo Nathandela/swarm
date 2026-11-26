@@ -15,7 +15,7 @@ p = board.p
 
 
 def run(dist, archive, key, evidence):
-    root = Path(tempfile.mkdtemp(prefix="pi-", dir=Path("/tmp").resolve()))
+    root = Path(tempfile.mkdtemp(prefix="pi-", dir=Path(tempfile.gettempdir()).resolve()))
     child = driver = None
     previous = {}
     try:
