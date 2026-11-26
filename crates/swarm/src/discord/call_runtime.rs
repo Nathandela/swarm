@@ -983,6 +983,7 @@ while read -r line; do :; done
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (owner_ready, wait_ready) = mpsc::sync_channel::<()>(0);
         let (leave, paused) = mpsc::sync_channel::<()>(0);
         let fixture = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
@@ -1002,7 +1003,9 @@ while read -r line; do :; done
                 json!({"op":0,"t":"GUILD_CREATE","s":2,"d":{"id":"1","channels":[{"id":"2","type":2}],
                 "voice_states":[voice(2,"8",json!("2"))["d"],voice(2,"9",json!("2"))["d"]]}}),
             );
-            thread::sleep(Duration::from_millis(50));
+            if wait_ready.recv().is_err() {
+                return;
+            }
             let id =
                 |at: u64, sequence: u64| (((at - 1_420_070_400_000) << 22) | sequence).to_string();
             let at = crate::ipc::spawn::now_ms();
@@ -1024,7 +1027,9 @@ while read -r line; do :; done
                 json!({"op":0,"t":"VOICE_SERVER_UPDATE","s":6,"d":{
                         "guild_id":"1","endpoint":"voice.invalid","token":"synthetic"}}),
             );
-            paused.recv_timeout(Duration::from_secs(4)).unwrap();
+            if paused.recv().is_err() {
+                return;
+            }
             send(
                 &mut socket,
                 json!({"op":0,"t":"MESSAGE_DELETE","s":7,"d":{"guild_id":"1","channel_id":"6","id":id(at,4)}}),
@@ -1061,6 +1066,7 @@ while read -r line; do :; done
         driver.discussion_ready.store(true, Ordering::Release);
         let mut inbox = super::super::receipt::Inbox::open(&dir, &cfg).unwrap();
         inbox.checkpoint("").unwrap();
+        owner_ready.send(()).unwrap();
         for (speaker, words) in [("8", "first marker"), ("9", "second marker")] {
             let Ingress::Transcript(origin, text) = driver
                 .inbound
