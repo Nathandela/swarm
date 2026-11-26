@@ -4,10 +4,52 @@ use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, terminal
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
     Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
+    automation_timer_status,
 };
 use std::{fmt::Write as _, io, path::Path, sync::mpsc};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+#[derive(Default)]
+pub(super) struct TimerStatusProbe {
+    generation: u64,
+    pending: Option<(u64, mpsc::Receiver<String>)>,
+}
+
+impl TimerStatusProbe {
+    pub(super) fn refresh(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        if self.pending.is_none() {
+            self.start();
+        }
+        self.generation
+    }
+
+    fn start(&mut self) {
+        let (send, receive) = mpsc::channel();
+        self.pending = Some((self.generation, receive));
+        std::thread::spawn(move || {
+            let _ = send.send(automation_timer_status());
+        });
+    }
+
+    pub(super) fn poll(&mut self) -> Option<(u64, String)> {
+        let (generation, receive) = self.pending.as_ref()?;
+        let status = match receive.try_recv() {
+            Ok(status) => status,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => "status unavailable".into(),
+        };
+        let generation = *generation;
+        self.pending = None;
+        if generation != self.generation {
+            // Refreshes can supersede a slow manager read without starting more children.
+            self.start();
+            return None;
+        }
+        Some((generation, status))
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Automation {
@@ -15,6 +57,8 @@ pub(super) struct Automation {
     error: String,
     selected: usize,
     archived: bool,
+    timer_request: Option<u64>,
+    timer_status: String,
     job: String,
     draft: Option<Draft>,
     archive: Option<ArchivePrompt>,
@@ -69,6 +113,20 @@ impl Automation {
             }
             Err(error) => self.error = error.to_string(),
         }
+    }
+
+    pub(super) fn expect_timer_status(&mut self, generation: u64) {
+        self.timer_request = Some(generation);
+    }
+
+    pub(super) fn receive_timer_status(&mut self, generation: u64, status: String) -> bool {
+        if self.timer_request != Some(generation) || !matches!(self.records, Some(Records::List(_)))
+        {
+            return false;
+        }
+        self.timer_request = None;
+        self.timer_status = status;
+        true
     }
 
     pub(super) fn changed(&mut self, response: std::io::Result<Records>) {
@@ -187,7 +245,7 @@ impl Automation {
         let list_controls = [
             ("New", 'n'),
             (if self.archived { "Active" } else { "Archived" }, 'v'),
-            ("Refresh", 'u'),
+            ("Refresh", 'r'),
             ("Open", '⏎'),
             ("Back", '⎋'),
         ];
@@ -541,6 +599,7 @@ impl Automation {
                 }
             }
             (Some(Records::List(_)), Key::Text('v')) => self.list(!self.archived),
+            (Some(Records::List(_)), Key::Text('r')) => Action::Catalog(Read::List),
             (Some(Records::Get(job)), Key::Left | Key::Text('u')) => {
                 self.list(job.state == "archived")
             }
@@ -588,6 +647,27 @@ impl Automation {
                 .min(count.saturating_sub(1));
                 Action::None
             }
+        }
+    }
+
+    fn list_title(&self, cols: u16) -> String {
+        let title = if !self.archived {
+            "Automations"
+        } else if cols < 32 {
+            "Archived"
+        } else {
+            "Automations / Archived"
+        };
+        if self.timer_status.is_empty() {
+            title.into()
+        } else if cols < 42 {
+            let state = self
+                .timer_status
+                .split_once(", ")
+                .map_or("unknown", |(_, state)| state);
+            format!("{title} · {state}")
+        } else {
+            format!("{title} · Timer {}", self.timer_status)
         }
     }
 
@@ -651,12 +731,12 @@ impl Automation {
             self.footer(output, cols, rows);
             return;
         }
-        let title = match &self.records {
-            Some(Records::List(_)) if self.archived && cols < 32 => "Archived",
-            Some(Records::List(_)) if self.archived => "Automations / Archived",
-            _ => "Automations",
-        };
-        form_header(output, cols, title);
+        if matches!(&self.records, Some(Records::List(_))) {
+            let title = self.list_title(cols);
+            line(output, 1, cols, ACCENT, &truncation(&title, cols));
+        } else {
+            form_header(output, cols, "Automations");
+        }
         let items = match &self.records {
             Some(Records::List(_)) => {
                 let mut items: Vec<_> = self
@@ -977,6 +1057,34 @@ fn default_spec() -> Spec {
 #[cfg(test)]
 mod pointer_tests {
     use super::*;
+
+    #[test]
+    fn timer_status_is_bound_to_the_latest_list_refresh() {
+        let mut view = Automation {
+            records: Some(Records::List(vec![])),
+            ..Automation::default()
+        };
+        assert!(matches!(
+            view.update(Key::Text('r'), (80, 24)),
+            Action::Catalog(Read::List)
+        ));
+        view.expect_timer_status(1);
+        view.expect_timer_status(2);
+        assert!(!view.receive_timer_status(1, "not installed, inactive".into()));
+        assert_eq!(view.list_title(80), "Automations");
+        assert!(view.receive_timer_status(2, "installed, active".into()));
+        assert_eq!(view.list_title(80), "Automations · Timer installed, active");
+        assert_eq!(view.list_title(40), "Automations · active");
+        view.archived = true;
+        view.expect_timer_status(3);
+        assert!(view.receive_timer_status(3, "status unavailable".into()));
+        assert_eq!(
+            view.list_title(80),
+            "Automations / Archived · Timer status unavailable"
+        );
+        assert_eq!(view.list_title(40), "Automations / Archived · unknown");
+        assert_eq!(view.list_title(30), "Archived · unknown");
+    }
 
     #[test]
     fn list_paint_keeps_graphemes_whole_at_the_visible_boundary() {

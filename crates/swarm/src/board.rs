@@ -21,7 +21,7 @@ use crate::schedule::catalog::{
     CAP as CATALOG_CAP, CONTROL as CATALOG_CONTROL, Change as CatalogChange, MANUAL_CAP, Manual,
     Read as CatalogRead, Records as CatalogRecords, RunState,
 };
-use automation::Automation;
+use automation::{Automation, TimerStatusProbe};
 use handoff::Handoff;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::{Availability, Launch};
@@ -97,6 +97,7 @@ fn board(path: &Path) -> io::Result<()> {
     let mut previous_editor = None;
     let mut previous_options = None;
     let mut linked_poll = discussions::Poll::default();
+    let mut timer_status = TimerStatusProbe::default();
     let mut retry = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
@@ -158,6 +159,11 @@ fn board(path: &Path) -> io::Result<()> {
         {
             automation_changed(view, result, connection.as_mut());
             needs_paint = true;
+        }
+        if let Some((generation, status)) = timer_status.poll()
+            && let Some(Modal::Automation(view)) = &mut board.modal
+        {
+            needs_paint |= view.receive_timer_status(generation, status);
         }
         let spinner = (clock.elapsed().as_millis() / 90) as usize % 10;
         let second = clock.elapsed().as_secs();
@@ -411,6 +417,9 @@ fn board(path: &Path) -> io::Result<()> {
                     );
                     let state = automation_status(&result, connection.as_mut());
                     if let Some(Modal::Automation(view)) = &mut board.modal {
+                        if matches!(&result, Ok(CatalogRecords::List(_))) {
+                            view.expect_timer_status(timer_status.refresh());
+                        }
                         view.receive(result);
                         if let Some(state) = state {
                             view.triggered(state);

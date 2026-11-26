@@ -181,6 +181,28 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         return
 
     if automations:
+        timer_stem = "launchctl" if sys.platform == "darwin" else "systemctl"
+        manager = root / "bin" / timer_stem
+        if timer_stem == "launchctl":
+            check = 'test "$1" = print || exit 70'
+            active = """printf 'path = %s/Library/LaunchAgents/com.swarm.schedule.plist\n' "$HOME" """
+            inactive = """printf 'Could not find service "com.swarm.schedule" in domain\n' >&2; exit 113"""
+        else:
+            check = 'test "$1" = --user && test "$2" = show || exit 70'
+            active = """printf 'LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nFragmentPath=%s/config/systemd/user/swarm-schedule.timer\n' "$HOME" """
+            inactive = "printf 'LoadState=not-found\nActiveState=inactive\nFragmentPath=\n'"
+        manager.write_text(f"""#!/bin/sh
+{check}
+if test -f "$HOME/hold-status"; then
+    : > "$HOME/status-started"
+    while test -f "$HOME/hold-status"; do /bin/sleep .02; done
+    {active}
+else
+    {inactive}
+fi
+""")
+        manager.chmod(0o700)
+        held_status = root / "home/hold-status"
         daemon = start()
         listing = cli("schedule", "list", "--json")
         assert listing.returncode == 0 and json.loads(listing.stdout) is None, listing.stderr
@@ -233,11 +255,28 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             board.wait_bytes(b"swarm")
             board.send(b"m")
             board.wait_bytes(b"More")
-            board.send(b"a")
-            board.wait_bytes("active · Fixture automation · 2099-01-01 01:00 · UTC (fixed)".encode())
-            board.send(b"\x1b[<0;4;2M\x1b[<32;5;2M\x1b[<0;4;2m")
-            board.send(b"\x1b[<0;4;2M\x1b[<0;4;2m")
-            board.wait_bytes(b"Status")
+            held_status.touch()
+            try:
+                board.send(b"a")
+                cadence = "active · Fixture automation · 2099-01-01 01:00 · UTC (fixed)".encode()
+                board.wait_bytes(cadence)
+                p.wait_for((root / "home/status-started").exists, "held timer status")
+                board.send(b"\x1b[<0;4;2M\x1b[<32;5;2M\x1b[<0;4;2m")
+                board.send(b"\x1b[<0;4;2M\x1b[<0;4;2m")
+                board.wait_bytes(b"Status")
+                since = len(board.capture)
+                board.send(b"\x1b[27u")
+                board.wait_bytes(cadence, since)
+                since = len(board.capture)
+                board.send(b"r")
+                board.wait_bytes(cadence, since)
+            finally:
+                held_status.unlink(missing_ok=True)
+            board.wait_bytes("Automations · Timer not installed, inactive".encode(), since)
+            assert b"Timer not installed, active" not in board.capture
+            since = len(board.capture)
+            board.send(b"\r")
+            board.wait_bytes(b"Status", since)
             board.send(b"h")
             board.wait_bytes(b"No runs for this automation")
 

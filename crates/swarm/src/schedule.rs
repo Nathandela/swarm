@@ -194,6 +194,13 @@ fn file(path: &str) -> io::Result<String> {
     }
 }
 
+pub(crate) fn automation_timer_status() -> String {
+    timer::command("status")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "status unavailable".into())
+}
+
 pub(crate) fn automation_duration(input: &str) -> Result<i64> {
     cli::duration(input)
 }
