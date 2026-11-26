@@ -250,7 +250,7 @@ impl State {
                     "external Claude resume requires ordinary owner scope",
                 ));
             }
-            let prepared = Session::prepare_claude_external(launch)?;
+            let prepared = Session::prepare_claude_external(launch, true)?;
             return self.reserve_prepared(prepared, false, None, None);
         }
         if field(launch, "agent") == "codex" && options.get("resume_conversation_id").is_some() {
@@ -729,6 +729,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "subscribe"
                         | "owner-launch"
                         | "hands-off-handoff"
+                        | "claude-external-resume-v1"
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"
@@ -958,6 +959,22 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
+            "claude_external_preflight" if caps.contains(&"claude-external-resume-v1") => (|| {
+                let launch=&request["launch"];
+                if launch["agent"]!="claude" {
+                    return Err(io::Error::other("Claude preflight requires a Claude launch"));
+                }
+                let preview=Session::prepare_claude_external(launch,false)?;
+                let id=field(&preview.claude_resume,"conversation_id");
+                let _gate=state.launch_gate.lock().unwrap();
+                if state.sessions.read().unwrap().values().any(|row|row.owns_claude_conversation(id))
+                    || state.sessions.read().unwrap().values().filter(|row|row.is_live()).count()>=SESSION_LIMIT
+                    || scheduling::conflict(state,&preview.cwd,false).is_some()
+                {
+                    return Err(io::Error::other("Claude preflight found an active writer, capacity or workspace conflict"));
+                }
+                reply(&writer,state,json!({"op":"claude_external_preflight","conversation_id":id}))
+            })(),
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");

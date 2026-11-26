@@ -3,7 +3,7 @@
 # the synthetic loopback model available to the worker.
 set -eu
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-  echo 'usage: claude_native_linux.sh STAGED_FIXTURE CLAUDE_EXECUTABLE WITNESS.py [personal|accepted|revoked|external]' >&2
+  echo 'usage: claude_native_linux.sh STAGED_FIXTURE CLAUDE_EXECUTABLE WITNESS.py [personal|accepted|revoked|external|external-go]' >&2
   exit 2
 fi
 fixture_dir=$(realpath "$1")
@@ -14,6 +14,7 @@ case "$witness" in
     case "${4:-internal}" in
       internal) set -- --candidate /fixture/swarm --provider /native/claude ;;
       external) set -- --candidate /fixture/swarm --provider /native/claude --external ;;
+      external-go) set -- --candidate /fixture/swarm --provider /native/claude --external --go-owner /fixture/go-owner ;;
       *) exit 2 ;;
     esac ;;
   rust_claude_schedule.py)

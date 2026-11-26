@@ -392,7 +392,10 @@ impl Session {
         Ok(plan)
     }
 
-    pub(super) fn prepare_claude_external(launch: &Value) -> io::Result<Prepared> {
+    pub(super) fn prepare_claude_external(
+        launch: &Value,
+        require_stopped: bool,
+    ) -> io::Result<Prepared> {
         use providers::claude;
         let options = &launch["options"];
         let id = field(options, "resume_conversation_id");
@@ -427,6 +430,7 @@ impl Session {
             &prepared.provider.env,
             home,
             id,
+            require_stopped,
         )?;
         request["claude_retained_conversation"] = json!(id);
         prepared.provider.argv = claude::argv(&sanitize_name(field(launch, "name")), &request)?;

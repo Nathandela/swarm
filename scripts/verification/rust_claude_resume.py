@@ -23,7 +23,7 @@ from rust_claude_worker_input import Provider, save
 TASK = "Reply with a short synthetic test answer."
 
 
-def verify(swarm, installed, root, server, worktree=False, external=False):
+def verify(swarm, installed, root, server, worktree=False, external=False, go_owner=None):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     for directory in (home, work, state, tools, home / ".claude"):
         directory.mkdir(mode=0o700)
@@ -33,10 +33,15 @@ def verify(swarm, installed, root, server, worktree=False, external=False):
     staged = tools / "swarm"
     shutil.copyfile(swarm, staged)
     staged.chmod(0o700)
+    owner=staged
+    if go_owner:
+        owner=tools/"go-owner"
+        shutil.copyfile(go_owner,owner)
+        owner.chmod(0o700)
     owner_path = str(root / "d")
     env = dict(PATH=f"{tools}:/usr/bin:/bin", HOME=str(home), TMPDIR=str(root), TERM="xterm-256color",
                LANG="en_US.UTF-8", ANTHROPIC_API_KEY="synthetic-resume",
-               SWARM_DAEMON_STATE=str(state), SWARM_DAEMON_SOCK=owner_path)
+               SWARM_DAEMON_STATE=str(state), SWARM_DAEMON_SOCK=owner_path, SWARM_DAEMON_LOCK=str(root/"owner.lock"), SWARM_DAEMON_LOG=str(root/"owner.log"))
     guard = lambda argv: guarded(argv, root, [server.server_port])
     version = subprocess.check_output(guard([binary, "--version"]), env=env, text=True).split()[0]
     save(home / ".claude.json", dict(hasCompletedOnboarding=True, lastOnboardingVersion=version,
@@ -47,8 +52,8 @@ def verify(swarm, installed, root, server, worktree=False, external=False):
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1",
         CLAUDE_CODE_TMPDIR=str(root), CLAUDE_CODE_MAX_RETRIES="0")))
     check_guards(root,[server.server_port])
-    def cli(*args,expected=0):
-        run = subprocess.run(guard([staged,*args]), env=env, cwd=work,
+    def cli(*args,expected=0,overrides=None):
+        run = subprocess.run(guard([staged,*args]), env={**env,**(overrides or {})}, cwd=work,
                              capture_output=True, timeout=50 if args[0]=="reattach" else 15)
         assert run.returncode==expected,(args,run.stderr.decode(errors="replace"))
         return run.stdout
@@ -78,8 +83,12 @@ def verify(swarm, installed, root, server, worktree=False, external=False):
     daemon=None
     try:
         with (root / "daemon.log").open("wb") as log:
-            daemon=subprocess.Popen(guard([staged,"daemon"]),env=env,cwd=work,stderr=log,stdout=log)
-            eventually(lambda:Path(owner_path).exists(),"daemon")
+            daemon=subprocess.Popen(guard([owner,"daemon"]),env=env,cwd=work,stderr=log,stdout=log)
+            def listening():
+                if daemon.poll() is not None:
+                    raise RuntimeError((root/"daemon.log").read_text()[-2400:])
+                return Path(owner_path).exists()
+            eventually(listening,"daemon")
             if external:
                 def native_cli(*args):
                     result=subprocess.run(guard([binary,*args]),env=env,cwd=work,capture_output=True,timeout=35,umask=0o077)
@@ -99,10 +108,60 @@ def verify(swarm, installed, root, server, worktree=False, external=False):
                     cli("reattach","--cli","claude","--all",expected=1)
                     assert json.loads(cli("ls","--json"))==[]
                 live = original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
-                if live:
+                if live and not go_owner:
                     refused = wire(dict(agent="claude",name="unconfirmed",cwd=str(work),
                         options={"resume_conversation_id":native}),("external-resume",))
                     assert refused["op"]=="error" and "exact stopped source" in refused["error"]
+                if live:
+                    legacy_path=str(root/"old-owner")
+                    legacy=socket.socket(socket.AF_UNIX)
+                    legacy.bind(legacy_path)
+                    legacy.listen()
+                    def old_owner():
+                        with legacy:
+                            peer,_=legacy.accept()
+                            with peer:
+                                hello=read_control(peer)
+                                assert hello["op"]=="hello"
+                                control(peer,"hello",endpoint_id="legacy-owner",protocol_version=1,
+                                        capabilities=["external-resume"])
+                    fallback=threading.Thread(target=old_owner,daemon=True)
+                    fallback.start()
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        overrides={"SWARM_DAEMON_SOCK":legacy_path})
+                    fallback.join(timeout=4)
+                    assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+
+                    fake=root/"duplicate-bin"
+                    fake.mkdir(mode=0o700)
+                    marker=root/"native-stop-must-not-run"
+                    fixture=fake/"claude"
+                    data=json.dumps([original(),original()])
+                    fixture.write_text("#!/bin/sh\ncase \"$1\" in\n--version) echo '2.1.329 (Claude Code)' ;;\nagents) printf '%s' '"+data+"' ;;\n*) touch '"+str(marker)+"'; exit 3 ;;\nesac\n")
+                    fixture.chmod(0o700)
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                        overrides={"PATH":f"{fake}:/usr/bin:/bin"})
+                    assert not marker.exists()
+                    assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                    if not go_owner:
+                        entry=original()
+                        inventory=json.dumps([entry])
+                        changed=json.dumps([entry,{**entry,"sessionId":"01997f00-face-7000-8000-00000000cde0"}])
+                        count=fake/"calls"
+                        fixture.write_text(f"""#!/bin/sh
+case "$1" in
+--version) echo '2.1.329 (Claude Code)' ;;
+agents)
+  echo x >> '{count}'
+  if [ "$(wc -l < '{count}')" -ge 3 ]; then printf '%s' '{changed}'; else printf '%s' '{inventory}'; fi ;;
+*) touch '{marker}'; exit 3 ;;
+esac
+""")
+                        cli("reattach","--cli","claude","--all","--take-over",expected=1,
+                            overrides={"PATH":f"{fake}:/usr/bin:/bin"})
+                        assert len(count.read_text().splitlines())==3 and not marker.exists()
+                        assert original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                    print("old owner, duplicate UUID, and changed inventory protections preserved the live source")
                 before=transcript.read_bytes()
                 def turn_count(data):
                     rows = [json.loads(line) for line in data.splitlines()]
@@ -115,13 +174,15 @@ def verify(swarm, installed, root, server, worktree=False, external=False):
                 identity=row["id"]
                 assert identity.encode() in imported
                 directory=state/"rust-v1"/identity.split("/")[1]
-                assert json.loads((directory/"observation.json").read_text())["conversation_id"]==native
+                if not go_owner:
+                    assert json.loads((directory/"observation.json").read_text())["conversation_id"]==native
                 eventually(lambda:b"Synthetic native input processed" in cli("peek",identity),
                            "new owner viewer rendered the prior background answer")
                 current=transcript.read_bytes()
                 assert current.startswith(before) and turn_count(current)==initial_turns
                 assert original()["state"] in ("done","stopped","complete","completed","failed","cancelled","canceled")
-                cli("reattach","--cli","claude","--all","--take-over",expected=1)
+                if not go_owner:
+                    cli("reattach","--cli","claude","--all","--take-over",expected=1)
                 cli("kill",identity)
                 cli("watch",identity,"--until","completed","--timeout","5s")
                 print("Claude Agent View external acquisition preserved prior answer and did not replay the user turn; source was live before takeover:",live)
@@ -267,6 +328,7 @@ if __name__=="__main__":
     parser.add_argument("--provider",required=True,type=fixtures.binary_path)
     parser.add_argument("--worktree",action="store_true")
     parser.add_argument("--external",action="store_true")
+    parser.add_argument("--go-owner",type=fixtures.binary_path)
     args=parser.parse_args()
     root=Path(tempfile.mkdtemp(prefix="cr-",dir=Path("/tmp").resolve()))
     server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Provider)
@@ -277,7 +339,7 @@ if __name__=="__main__":
     thread.start()
     success=False
     try:
-        verify(args.candidate,args.provider,root,server,args.worktree,args.external)
+        verify(args.candidate,args.provider,root,server,args.worktree,args.external,args.go_owner)
         assert not server.sentinel.exists()
         success=True
     finally:

@@ -45,7 +45,11 @@ pub fn run(args: &[String]) -> i32 {
     let caps = match verb {
         "spawn" => spawn::CAPS,
         "message" => message::CAPS,
-        "reattach" => &["external-resume"],
+        "reattach" => &[
+            "external-resume",
+            "claude-external-resume-v1",
+            "context-guard-settings",
+        ],
         "requests" | "decide" => &["native-requests-v1"],
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
