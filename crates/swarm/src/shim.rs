@@ -1328,28 +1328,27 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         "semantic" if state.provider == "claude" => {
             let terminal = state.manager.then(|| state.control.lock().unwrap());
-            if terminal.is_some() && manager_terminal::unresolved(state) {
-                return runtime::write_control(
-                    &mut stream,
-                    &json!({"type":"error","error":manager_terminal::UNRESOLVED}),
-                );
-            }
-            if terminal.as_ref().is_some_and(|owner| {
-                **owner != 0
-                    || !providers::claude::manager_empty_composer(
-                        state.screen.lock().unwrap().parser.screen(),
-                    )
-            }) {
-                return runtime::write_control(
-                    &mut stream,
-                    &json!({"type":"error","error":"Claude manager terminal has a draft, attachment or native dialog"}),
-                );
-            }
-            let result = state
-                .claude_broker
-                .as_ref()
-                .ok_or_else(|| io::Error::other("Claude native input broker is unavailable"))
-                .and_then(|broker| broker.submit(&request));
+            let result = (|| {
+                if let Some(owner) = terminal.as_ref() {
+                    let held = manager_terminal::unresolved(state);
+                    if !held
+                        && (**owner != 0
+                            || !providers::claude::manager_empty_composer(
+                                state.screen.lock().unwrap().parser.screen(),
+                            ))
+                    {
+                        return Err(io::Error::other(
+                            "Claude manager terminal has a draft, attachment or native dialog",
+                        ));
+                    }
+                    manager_terminal::guard_dispatch(state, &request, held)?;
+                }
+                state
+                    .claude_broker
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Claude native input broker is unavailable"))?
+                    .submit(&request)
+            })();
             runtime::write_control(
                 &mut stream,
                 &result.map_or_else(
@@ -1487,15 +1486,17 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }
                 let _authority = state.control.lock().unwrap();
-                if manager_terminal::unresolved(state) {
-                    return Err(io::Error::other(manager_terminal::UNRESOLVED));
-                }
+                let held = manager_terminal::unresolved(state);
                 // shortcut: terminal edits make draft state uncertain until the native TUI exposes a verified empty composer.
-                if *_authority != 0
-                    || state.context_guard_busy.load(Ordering::Acquire)
-                    || state.terminal_input.load(Ordering::Acquire)
+                if !held
+                    && (*_authority != 0
+                        || state.context_guard_busy.load(Ordering::Acquire)
+                        || state.terminal_input.load(Ordering::Acquire))
                 {
                     return Err(io::Error::other("Codex terminal draft is not proven empty"));
+                }
+                if state.manager {
+                    manager_terminal::guard_dispatch(state, &request, held)?;
                 }
                 let sender = state
                     .semantic

@@ -234,6 +234,21 @@ impl Dispatcher {
         if !state["input"].is_null() {
             self.idle_since.set(None);
             let had_turn = !state["input"]["turn_id"].is_null();
+            let input = &state["input"];
+            if !had_turn
+                && input["draft_retry"] != "prepared"
+                && input["composer"]["manager_admission"]["binding"] == state["binding"]
+                && let Ok(receipt) = self.owner.semantic_receipt(
+                    field(input, "operation"),
+                    field(&input["composer"], "session"),
+                )
+                && exact_draft_refusal(input, &receipt)
+            {
+                state["input"]["operation"] = json!(operation("semantic")?);
+                state["input"]["draft_retry"] = json!("prepared");
+                inbox.set_manager(state)?;
+                return Ok(());
+            }
             let phase = self.reconcile_input(inbox, &mut state)?;
             if let Some((_, driver)) = calls
                 && !had_turn
@@ -276,12 +291,26 @@ impl Dispatcher {
                     }
                     return Ok(());
                 }
-                if status["ready_for_input"] == true {
+                if status["ready_for_input"] == true && input["draft_retry"].is_null() {
                     // The shim serializes native preparation with cancellation.
                     let _ = self
                         .owner
                         .send(field(input, "operation"), &input["composer"]);
                 }
+            }
+            if phase == "unknown"
+                && status["ready_for_input"] == true
+                && state["input"]["draft_retry"] == "prepared"
+                && crate::providers::codex_receipt::timely(field(&state["input"], "operation"))
+            {
+                state["input"]["draft_retry"] = json!("executing");
+                inbox.set_manager(state.clone())?;
+                let input = &state["input"];
+                // The renewed operation crosses this boundary once. Only another exact
+                // durable pre-effect refusal can authorize another renewal.
+                let _ = self
+                    .owner
+                    .send(field(input, "operation"), &input["composer"]);
             }
             self.deliver(cfg, inbox, api, &state, millis()?)?;
             if phase == "completed" {
@@ -1271,6 +1300,25 @@ impl Dispatcher {
     }
 }
 
+fn exact_draft_refusal(input: &Value, receipt: &Value) -> bool {
+    let composer = &input["composer"];
+    let instance = &composer["session_instance"];
+    input["turn_id"].is_null()
+        && input["operation"].is_string()
+        && composer["session"].is_string()
+        && instance.is_string()
+        && receipt["operation_id"] == input["operation"]
+        && receipt["session"] == composer["session"]
+        && receipt["session_instance"] == *instance
+        && receipt["state"] == "rejected"
+        && receipt["rejection_code"] == crate::shim::manager_terminal::CODE
+        && receipt["native_turn_id"].is_null()
+        && receipt["native_input_id"].is_null()
+        && (receipt["native_generation"].is_null()
+            || receipt["native_generation"]
+                == composer["manager_admission"]["binding"]["native_generation"])
+}
+
 fn settle_worker_send(action: &mut Value, result: Value) {
     if result["state"] == "pending" {
         action["state"] = json!("queued");
@@ -1433,6 +1481,33 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn only_an_exact_pre_effect_draft_refusal_renews_a_cutover() {
+        let mut input = json!({"operation":"original","composer":{
+            "session":"ep/dispatcher","session_instance":"instance",
+            "manager_admission":{"binding":{"native_generation":"current"}}}});
+        let receipt = json!({"operation_id":"original","session":"ep/dispatcher",
+            "session_instance":"instance","state":"rejected",
+            "rejection_code":crate::shim::manager_terminal::CODE});
+        assert!(exact_draft_refusal(&input, &receipt));
+        for (key, value) in [
+            ("operation_id", "earlier"),
+            ("session", "ep/other"),
+            ("session_instance", "previous"),
+            ("state", "outcome_unknown"),
+            ("rejection_code", "structured_unsupported"),
+            ("native_turn_id", "turn"),
+            ("native_input_id", "input"),
+            ("native_generation", "replaced"),
+        ] {
+            let mut changed = receipt.clone();
+            changed[key] = json!(value);
+            assert!(!exact_draft_refusal(&input, &changed), "{key}");
+        }
+        input["turn_id"] = json!("turn");
+        assert!(!exact_draft_refusal(&input, &receipt));
+    }
+
     struct MockDiscord {
         outcome: RefCell<Post>,
         posted: RefCell<Vec<(String, String)>>,
@@ -1473,6 +1548,8 @@ mod tests {
         launch: Value,
         composer: Value,
         sends: usize,
+        refusal: Value,
+        input_observed: bool,
         wrong_turn: bool,
         wrong_binding: bool,
         snapshot_busy: bool,
@@ -1536,7 +1613,23 @@ mod tests {
                         self.composer["text"],
                         crate::manager_prompt::render(&"P".repeat(800), "hello").unwrap()
                     );
-                    json!({"op":"ok","operation_id":request["operation_id"]})
+                    if self.sends == 1 {
+                        self.refusal = json!({"operation_id":request["operation_id"],"session":self.row["id"],
+                            "session_instance":self.composer["session_instance"],"state":"rejected",
+                            "rejection_code":crate::shim::manager_terminal::CODE});
+                        json!({"op":"error","error_code":crate::shim::manager_terminal::CODE,"error":"draft"})
+                    } else {
+                        assert_eq!(self.sends, 2, "an uncertain renewed operation was resent");
+                        json!({"op":"error","error_code":"outcome_unknown","error":"fixture lost the reply"})
+                    }
+                }
+                "semantic_status" => {
+                    json!({"op":"semantic_status","operation_id":request["operation_id"],
+                    "semantic_receipt":if request["operation_id"] == self.refusal["operation_id"] {
+                        self.refusal.clone()
+                    } else {
+                        json!({"state":"unknown_operation"})
+                    }})
                 }
                 "manager_input_status" => {
                     assert_eq!(
@@ -1545,8 +1638,9 @@ mod tests {
                     );
                     json!({"op":"manager_input_status","session_id":self.row["id"],
                     "manager_input_status":{
-                       "state":if self.completed {"completed"} else {"running"}, "external_input":0,
-                       "native_input_id":self.composer["manager_admission"]["nonce"],"native_turn_id":"authorized-turn"
+                       "state":if !self.input_observed {"unknown"} else if self.completed {"completed"} else {"running"}, "external_input":0,
+                       "native_input_id":self.composer["manager_admission"]["nonce"],
+                       "native_turn_id":if self.input_observed {"authorized-turn"} else {""}
                     }})
                 }
                 "manager_resolve_call" => {
@@ -1613,6 +1707,8 @@ mod tests {
             launch: Value::Null,
             composer: Value::Null,
             sends: 0,
+            refusal: Value::Null,
+            input_observed: false,
             wrong_turn: false,
             wrong_binding: false,
             snapshot_busy: false,
@@ -1672,8 +1768,23 @@ mod tests {
         assert_eq!(state.lock().unwrap().sends, 0);
         assert_eq!(inbox.next_prepared().unwrap()["route"]["message_id"], "101");
         state.lock().unwrap().snapshot_busy = false;
-        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
         assert_eq!(state.lock().unwrap().sends, 1);
+        let held = inbox.manager()["input"].clone();
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        let renewed = inbox.manager()["input"].clone();
+        assert_ne!(held["operation"], renewed["operation"]);
+        assert_eq!(renewed["draft_retry"], "prepared");
+        assert_eq!(held["composer"], renewed["composer"]);
+        assert_eq!(held["source_id"], renewed["source_id"]);
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        for _ in 0..3 {
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        }
+        assert_eq!(state.lock().unwrap().sends, 2);
+        assert_eq!(inbox.manager()["input"]["draft_retry"], "executing");
+        state.lock().unwrap().input_observed = true;
         assert!(api.posted.borrow().is_empty());
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
             "session_id":"local", "call":{"name":"publish","arguments":{
@@ -1779,7 +1890,7 @@ mod tests {
                 (nonce, "deliberate reply".into())
             ]
         );
-        assert_eq!(state.lock().unwrap().sends, 1);
+        assert_eq!(state.lock().unwrap().sends, 2);
         done.store(true, Ordering::Relaxed);
         let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
         server.join().unwrap();
