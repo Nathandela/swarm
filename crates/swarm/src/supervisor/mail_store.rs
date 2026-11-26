@@ -250,7 +250,11 @@ pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
     with_files(&tx, &key, note)
 }
 
-pub(super) fn pending(root: &Path, discussion: &str) -> io::Result<Vec<Value>> {
+fn pending(
+    root: &Path,
+    discussion: &str,
+    matches: impl Fn(&Value) -> bool,
+) -> io::Result<Vec<Value>> {
     let path = match open_path(root, false) {
         Ok(path) => path,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -270,7 +274,7 @@ pub(super) fn pending(root: &Path, discussion: &str) -> io::Result<Vec<Value>> {
     let mut result = Vec::new();
     while let Some((order_key, key)) = row {
         let key = key.ok_or_else(absent)?;
-        if !order_key.starts_with(prefix.as_bytes()) || result.len() >= 64 {
+        if !order_key.starts_with(prefix.as_bytes()) || result.len() >= 12 {
             break;
         }
         let raw = notes.get(key).ok_or_else(absent)?;
@@ -281,7 +285,9 @@ pub(super) fn pending(root: &Path, discussion: &str) -> io::Result<Vec<Value>> {
         {
             return Err(io_error("damaged worker pending index"));
         }
-        result.push(with_files(&tx, key, note)?);
+        if matches(&note) {
+            result.push(with_files(&tx, key, note)?);
+        }
         row = cursor.next();
     }
     Ok(result)
@@ -308,7 +314,7 @@ pub(crate) fn manager_note(
             && (!reply || note["Kind"] == "needs-input")
     };
     if !reply && args.as_object().is_some_and(|obj| obj.is_empty()) {
-        let rows: Vec<_> = pending(root, discussion)?.into_iter().filter(same).take(12)
+        let rows: Vec<_> = pending(root, discussion, same)?.into_iter()
             .map(|note| {
                 let mut row = json!({"id":note["ID"],"session":note["Session"],"session_instance":note["Instance"],
                     "kind":note["Kind"],"state":note["State"]});
@@ -450,6 +456,35 @@ pub(super) fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn older_scope_cannot_starve_current_manager_mail() -> io::Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "mail-scope-{}",
+            super::super::runtime::random_id()?
+        ));
+        super::super::runtime::private_dir(&root)?;
+        let mut binding = json!({"Discussion":"discussion","Parent":"manager","Session":"endpoint/worker",
+            "Instance":"worker","Attempt":"prior","Agent":"codex","Project":"/project","ParentInputHash":"old"});
+        for index in 0..65 {
+            submit(
+                &root,
+                &binding,
+                &format!("prior-{index}"),
+                "complete",
+                "Old",
+                true,
+                &[],
+            )?;
+        }
+        binding["Attempt"] = json!("current");
+        binding["ParentInputHash"] = json!("current");
+        submit(&root, &binding, "current", "complete", "Current", true, &[])?;
+        let mailbox = manager_note(&root, "discussion", "manager", "current", &json!({}), false)?;
+        assert_eq!(mailbox["notes"].as_array().unwrap().len(), 1);
+        assert_eq!(mailbox["notes"][0]["id"], "current");
+        std::fs::remove_dir_all(&root)
+    }
+
     #[test]
     #[ignore = "requires the locally built pinned Go mailbox oracle"]
     fn go_reads_the_exact_rust_pinned_worker_files() {
@@ -657,7 +692,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(pending(&root, "discussion").unwrap(), [created]);
+        assert_eq!(pending(&root, "discussion", |_| true).unwrap(), [created]);
         let filter = json!({"session":"endpoint/worker","session_instance":"worker-incarnation","id":"question"});
         assert!(
             manager_note(
@@ -673,7 +708,7 @@ mod tests {
         let seen = manager_note(&root, "discussion", "manager", "input", &filter, false).unwrap();
         assert_eq!(seen["text"], "Which path?");
         assert_eq!(seen["state"], "ingested");
-        assert!(pending(&root, "discussion").unwrap().is_empty());
+        assert!(pending(&root, "discussion", |_| true).unwrap().is_empty());
         assert_eq!(
             manager_note(&root, "discussion", "manager", "input", &filter, false).unwrap(),
             seen
