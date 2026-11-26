@@ -18,17 +18,21 @@ pub(super) struct Manager {
     cfg: Config,
     discussion: String,
     conversation: String,
+    route: Option<super::team_thread::Route>,
 }
 
 impl Manager {
     pub(super) fn new(cfg: &Config) -> io::Result<Self> {
-        if cfg.text("mode") != "personal" {
-            return Err(invalid("manager binding requires a personal installation"));
+        let route = super::team_thread::Route::configured(cfg)?;
+        if cfg.text("mode") != "personal" && route.is_none() {
+            return Err(invalid("manager binding requires a linked discussion"));
         }
         let coordinate = serde_json::to_vec(&json!([
             cfg.text("installation_id"),
-            "",
-            cfg.text("dm_channel_id")
+            route.as_ref().map_or("", |route| &route.guild),
+            route
+                .as_ref()
+                .map_or(cfg.text("dm_channel_id"), |route| &route.thread)
         ]))?;
         let digest = format!("{:x}", Sha256::digest(coordinate));
         let discussion = format!("dt_{}", &digest[..32]);
@@ -37,7 +41,17 @@ impl Manager {
             cfg: cfg.clone(),
             discussion,
             conversation,
+            route,
         })
+    }
+
+    pub(super) fn channel(&self) -> &str {
+        self.route
+            .as_ref()
+            .map_or(self.cfg.text("dm_channel_id"), |route| &route.thread)
+    }
+    pub(super) fn guild(&self) -> &str {
+        self.route.as_ref().map_or("", |route| &route.guild)
     }
 
     pub(super) fn mail_root(&self) -> io::Result<std::path::PathBuf> {
@@ -238,10 +252,13 @@ impl Manager {
             || !matches!(field(&runtime["turn"], "state"), "idle" | "completed")
             || binding["conversation_id"] != self.conversation
             || input["supervisor_socket"] != self.cfg.text("daemon_socket")
-            || input["authority"] != "owner_direct"
-            || !field(&input["route"], "guild_id").is_empty()
-            || actor != self.cfg.text("owner_id")
-            || channel != self.cfg.text("dm_channel_id")
+            || if self.guild().is_empty() {
+                input["authority"] != "owner_direct" || actor != self.cfg.text("owner_id")
+            } else {
+                input["authority"] != "team_participant" || !super::config::snowflake(actor)
+            }
+            || field(&input["route"], "guild_id") != self.guild()
+            || channel != self.channel()
         {
             return Err(invalid(
                 "manager or source is outside the current personal discussion grant",
@@ -262,12 +279,15 @@ impl Manager {
                 "nonce":nonce,
             },
             "origin": {
-                "kind":"owner_direct", "installation_id":self.cfg.text("installation_id"),
+                "kind":input["authority"], "installation_id":self.cfg.text("installation_id"),
                 "request_id":input["operation_id"], "actor_id":actor, "requester_id":actor,
                 "channel_id":channel, "message_id":input["route"]["message_id"],
                 "discussion_id":self.discussion, "revision":input["revision"],
             }
         });
+        if !self.guild().is_empty() {
+            composer["origin"]["guild_id"] = json!(self.guild());
+        }
         if input["voice_origin"].is_object() {
             composer["origin"] = input["voice_origin"].clone();
         }

@@ -20,6 +20,9 @@ use subtle::ConstantTimeEq;
 pub(super) trait Audience {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>>;
     fn verify(&self, cfg: &Config) -> io::Result<()>;
+    fn admit(&self, inbox: &mut Inbox, source: &Value) -> io::Result<Option<Value>> {
+        inbox.admit(source)
+    }
     fn post(&self, cfg: &Config, nonce: &str, body: &str, files: &[Captured]) -> Post;
 }
 
@@ -82,9 +85,13 @@ impl Dispatcher {
     }
 
     pub(super) fn scope(&self, cfg: &Config) -> Value {
-        json!({"launch":self.launch,"installation_id":cfg.text("installation_id"),
+        let mut scope = json!({"launch":self.launch,"installation_id":cfg.text("installation_id"),
             "application_id":cfg.text("application_id"),"owner_id":cfg.text("owner_id"),
-            "channel_id":cfg.text("dm_channel_id"),"supervisor_socket":cfg.text("daemon_socket")})
+            "channel_id":self.owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
+        if !self.owner.guild().is_empty() {
+            scope["guild_id"] = json!(self.owner.guild());
+        }
+        scope
     }
 
     #[cfg(test)]
@@ -279,7 +286,7 @@ impl Dispatcher {
             let Some(source) = api.current(cfg, &id)? else {
                 return inbox.withdraw(&id);
             };
-            let Some(current) = inbox.admit(&source)? else {
+            let Some(current) = api.admit(inbox, &source)? else {
                 return inbox.withdraw(&id);
             };
             (id, current)
@@ -430,7 +437,7 @@ impl Dispatcher {
         {
             return Ok(None);
         }
-        match inbox.admit(&source) {
+        match api.admit(inbox, &source) {
             Ok(receipt) => Ok(Some(receipt.is_some_and(|current| {
                 current["state"] == "accepted" && current["revision"] == *revision
             }))),
@@ -583,8 +590,8 @@ impl Dispatcher {
                     .ok_or_else(|| {
                         invalid("publication requires the original visible Discord source")
                     })?;
-                let current = inbox
-                    .admit(&source)?
+                let current = api
+                    .admit(inbox, &source)?
                     .filter(|receipt| receipt["state"] == "accepted")
                     .ok_or_else(|| {
                         invalid("publication source no longer proves native admission")
@@ -822,6 +829,10 @@ impl Dispatcher {
             "native_call_id":proof["native_call_id"], "call_receipt":proof,
             "host_meta":call["meta"], "arguments":args, "arguments_hash":hash(&args)?
         });
+        if !self.owner.guild().is_empty() {
+            publication["audience"] =
+                json!({"guild_id":self.owner.guild(),"thread_id":self.owner.channel()});
+        }
         if !args["file_ids"].is_null() {
             let ids = args["file_ids"]
                 .as_array()

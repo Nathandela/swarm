@@ -30,7 +30,7 @@ impl Inbox {
         let app = cfg.text("application_id");
         let channel = cfg.text("dm_channel_id");
         let identity = json!([installation, app, owner, channel, cfg.text("daemon_socket")]);
-        let data = match runtime::read_json(&file) {
+        let mut data = match runtime::read_json(&file) {
             Ok(data) => data,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let data =
@@ -63,6 +63,18 @@ impl Inbox {
                 "Discord outbox publication evidence failed integrity checks",
             ));
         }
+        let team = super::team_thread::Route::configured(cfg)?.map(|route| route.identity());
+        if let Some(team) = team {
+            if data["team_discussion"].is_null() && data["manager"].is_null() {
+                data["team_discussion"] = team.clone();
+                runtime::write_json(&file, &data)?;
+            }
+            if data["team_discussion"] != team {
+                return Err(invalid("linked team discussion changed"));
+            }
+        } else if !data["team_discussion"].is_null() {
+            return Err(invalid("linked team discussion is no longer configured"));
+        }
         Ok(Self { file, data })
     }
 
@@ -88,7 +100,7 @@ impl Inbox {
 
     pub(super) fn admit(&mut self, source: &Value) -> io::Result<Option<Value>> {
         let channel = self.identity()[3].to_owned();
-        self.admit_scoped(source, "", &channel, "", None)
+        self.admit_scoped(source, "", &channel, "", None, false)
     }
 
     pub(super) fn admit_guild(
@@ -112,7 +124,22 @@ impl Inbox {
         let Some(address) = super::guild::address(cfg, source) else {
             return Ok(None);
         };
-        self.admit_scoped(source, guild, channel, parent, Some(&address))
+        self.admit_scoped(source, guild, channel, parent, Some(&address), false)
+    }
+
+    pub(super) fn admit_team(
+        &mut self,
+        route: &super::team_thread::Route,
+        source: &Value,
+    ) -> io::Result<Option<Value>> {
+        if !route.matches(source) || self.data["team_discussion"] != route.identity() {
+            return Ok(None);
+        }
+        self.admit_scoped(source, &route.guild, &route.thread, "", None, true)
+    }
+
+    pub(super) fn has_team_source(&self, id: &str) -> bool {
+        self.data["messages"][id]["authority"] == "team_participant"
     }
 
     pub(super) fn has_guild_source(&self, guild: &str, channel: &str, id: &str) -> bool {
@@ -127,6 +154,7 @@ impl Inbox {
         channel: &str,
         parent: &str,
         address: Option<&str>,
+        team: bool,
     ) -> io::Result<Option<Value>> {
         let [installation, application, owner, _, supervisor] = self.identity();
         let Some(id) = source["id"].as_str().filter(|id| snowflake(id)) else {
@@ -141,8 +169,19 @@ impl Inbox {
         else {
             return Ok(None);
         };
+        let actor = if team {
+            let Some(actor) = source["author"]["id"]
+                .as_str()
+                .filter(|actor| snowflake(actor) && *actor != application)
+            else {
+                return Ok(None);
+            };
+            actor
+        } else {
+            owner
+        };
         if source["channel_id"] != channel
-            || source["author"]["id"] != owner
+            || source["author"]["id"] != actor
             || if guild.is_empty() {
                 !source["guild_id"].is_null()
             } else {
@@ -168,12 +207,12 @@ impl Inbox {
         if !edited.is_null() && !edited.as_str().is_some_and(|stamp| stamp.len() <= 64) {
             return Ok(None);
         }
-        let revision = hash(&json!([owner, body, channel, guild, id, edited, "", null]))?;
+        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", null]))?;
         let operation = format!("da_{}", &hash(&json!([installation, id]))?[..32]);
         let mut receipt = json!({
             "operation_id": operation, "revision": revision, "text": body,
             "route": {"guild_id": guild, "channel_id": channel, "message_id": id},
-            "author": {"id": owner}, "authority": "owner_direct",
+            "author": {"id": actor}, "authority": if team {"team_participant"} else {"owner_direct"},
             "supervisor_socket": supervisor, "state": "prepared", "edited_at": edited
         });
         if let Some(address) = address {
@@ -189,7 +228,7 @@ impl Inbox {
         if !parent.is_empty() {
             receipt["route"]["parent_id"] = json!(parent);
         }
-        if !guild.is_empty() {
+        if !guild.is_empty() && !team {
             receipt["guild_audience_digest"] =
                 json!(super::guild::audience_digest(application, &receipt)?);
         }
@@ -197,7 +236,7 @@ impl Inbox {
         if old["state"] == "withdrawn" || old == &receipt {
             return Ok((old == &receipt).then(|| old.clone()));
         }
-        if !guild.is_empty() && old["state"] == "prepared" {
+        if !guild.is_empty() && !team && old["state"] == "prepared" {
             let mut comparable = receipt.clone();
             comparable["audience_verified_at_ms"] = old["audience_verified_at_ms"].clone();
             comparable["guild_audience_digest"] = old["guild_audience_digest"].clone();
@@ -347,8 +386,14 @@ impl Inbox {
             || entry["state"] != "sending" && entry["state"] != "uncertain"
             || message["author"]["id"] != app
             || message["author"]["bot"] != true
-            || message["channel_id"] != channel
-            || !message["guild_id"].is_null()
+            || if entry["proof"]["audience"].is_null() {
+                message["channel_id"] != channel || !message["guild_id"].is_null()
+            } else {
+                let audience = &entry["proof"]["audience"];
+                audience != &self.data["team_discussion"]
+                    || message["channel_id"] != audience["thread_id"]
+                    || !message["guild_id"].is_null() && message["guild_id"] != audience["guild_id"]
+            }
             || !message["webhook_id"].is_null()
             || message["content"] != entry["body"]
             || !matches_attachments(&entry["proof"]["file_source"], &message["attachments"])
@@ -556,6 +601,9 @@ impl Inbox {
             .into_iter()
             .map(|id| (id, &self.data["messages"][id.to_string()]))
             .filter(|(_, row)| {
+                if row["authority"] == "team_participant" {
+                    return !worker;
+                }
                 super::worker::target_text(super::worker::source_text(row)).is_some() == worker
             })
             .min_by_key(|(id, _)| *id)

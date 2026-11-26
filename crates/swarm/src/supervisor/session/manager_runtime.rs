@@ -15,6 +15,7 @@ impl Session {
             "installation_id",
             "owner_id",
             "channel_id",
+            "guild_id",
             "supervisor_socket",
         ] {
             if current[key] != self.manager[key] {
@@ -150,13 +151,19 @@ impl Session {
         if admission["binding"] != native["binding"]
             || admission["nonce"] != expected_nonce
             || admission["expected_external_input"] != native["external_input"]
-            || origin["kind"] != "owner_direct"
             || origin["installation_id"] != self.manager["installation_id"]
             || origin["discussion_id"] != discussion
             || origin["channel_id"] != self.manager["channel_id"]
-            || origin["actor_id"] != self.manager["owner_id"]
-            || origin["requester_id"] != self.manager["owner_id"]
-            || !field(origin, "guild_id").is_empty()
+            || if field(&self.manager, "guild_id").is_empty() {
+                origin["kind"] != "owner_direct"
+                    || origin["actor_id"] != self.manager["owner_id"]
+                    || origin["requester_id"] != self.manager["owner_id"]
+                    || !field(origin, "guild_id").is_empty()
+            } else {
+                origin["kind"] != "team_participant"
+                    || origin["actor_id"] != origin["requester_id"]
+                    || origin["guild_id"] != self.manager["guild_id"]
+            }
             || field(origin, "message_id").is_empty() && origin["voice"].is_null()
             || field(origin, "revision").is_empty()
             || field(origin, "request_id").is_empty()
