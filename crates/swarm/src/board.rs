@@ -1200,8 +1200,8 @@ impl Editor {
             .next_back()
             .map_or(0, |(i, _)| i);
         match key {
-            Key::Home => self.cursor = 0,
-            Key::End => self.cursor = self.text.len(),
+            Key::Home | Key::EditHome => self.cursor = 0,
+            Key::End | Key::EditEnd => self.cursor = self.text.len(),
             Key::Left => self.cursor = previous,
             Key::Right => {
                 self.cursor += self.text[self.cursor..]
