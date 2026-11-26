@@ -209,29 +209,39 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     {
         prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
         let bound = prepare::ready_discussion(binding)?;
-        return history::serve(
-            place,
-            cfg,
-            binding,
-            &status,
-            || {
-                let tx = db.begin().map_err(io::Error::other)?;
-                if history::accepted(&tx, cfg)?.as_ref() != Some(pending)
-                    || capture::binding(&tx, cfg, &route, &guard, Some(pending))? != *binding
-                {
-                    return Err(invalid("original teammate source binding changed"));
-                }
-                history::verify_record(&tx, cfg, pending, &bound)?;
-                let key = history_pages::key(&tx)?;
-                let input = render::current_history(api, cfg, &route, &guard, pending, &bound)?;
-                verify_pins()?;
-                if status.stopping() {
-                    return Err(invalid("original teammate place stopped"));
-                }
-                Ok(history::Scope { input, key })
-            },
-            |cursor| history_pages::older(api, cfg, &route, cursor),
-        );
+        let recheck = || {
+            let tx = db.begin().map_err(io::Error::other)?;
+            if history::accepted(&tx, cfg)?.as_ref() != Some(pending)
+                || capture::binding(&tx, cfg, &route, &guard, Some(pending))? != *binding
+            {
+                return Err(invalid("original teammate source binding changed"));
+            }
+            history::verify_record(&tx, cfg, pending, &bound)?;
+            let key = history_pages::key(&tx)?;
+            let input = render::current_history(api, cfg, &route, &guard, pending, &bound)?;
+            verify_pins()?;
+            if status.stopping() {
+                return Err(invalid("original teammate place stopped"));
+            }
+            Ok(history::Scope { input, key })
+        };
+        #[cfg(test)]
+        if let Ok(phase) = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE")
+            && phase.starts_with("publish-")
+        {
+            return history::publication_fixture::serve(
+                place,
+                cfg,
+                binding,
+                &status,
+                &phase,
+                recheck,
+                verify_pins,
+            );
+        }
+        return history::serve(place, cfg, binding, &status, recheck, |cursor| {
+            history_pages::older(api, cfg, &route, cursor)
+        });
     }
     if let Mode::Prepare {
         message, dry_run, ..
@@ -622,6 +632,13 @@ pub(super) fn native_prepare_witness() {
         | "history-watch-pages"
         | "history-watch-pages-revoked"
         | "history-watch-pages-closed"
+        | "publish-stage"
+        | "publish-before-commit"
+        | "publish-after-commit"
+        | "publish-stop"
+        | "publish-edit"
+        | "publish-closed"
+        | "publish-recipient"
         | "history-refuse" => {
             let result = observe(
                 &place,
@@ -633,7 +650,7 @@ pub(super) fn native_prepare_witness() {
                     panic!("the running history witness cannot open Gateway")
                 },
             );
-            if phase == "history-refuse" {
+            if matches!(phase.as_str(), "history-refuse" | "publish-recipient") {
                 assert!(result.is_err())
             } else {
                 result.unwrap()

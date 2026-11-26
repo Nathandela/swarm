@@ -583,6 +583,46 @@ func FixtureGuildNativeAdmission(dir, message string) (Admission, error) {
 	return out, err
 }
 
+func FixtureGuildPublication(dir, message string) (map[string]any, error) {
+	db, err := bolt.Open(filepath.Join(dir, "voice.db"), 0, &bolt.Options{
+		ReadOnly: true, Timeout: time.Second, OpenFile: openInventoryLedger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var out map[string]any
+	err = db.View(func(tx *bolt.Tx) error {
+		st, err := readState(tx)
+		if err != nil {
+			return err
+		}
+		conversation := st.CurrentConversation
+		for _, a := range st.Admissions {
+			if a.ConversationID != conversation || a.Origin == nil || a.Origin.MessageID != message {
+				continue
+			}
+			for _, p := range st.Publications {
+				if p.ConversationID != conversation || p.Admission != a.Sequence {
+					continue
+				}
+				if out != nil {
+					return ErrConflict
+				}
+				permit, ok := st.Permits[key(conversation, p.NativeTurnID)]
+				if !ok {
+					return ErrCorrupt
+				}
+				out = map[string]any{"publication": p, "permit": permit, "admission": a,
+					"lastOutput": st.Conversations[conversation].LastOutput,
+					"lastSpeechEpoch": st.Conversations[conversation].LastSpeechEpoch}
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
 func FixtureDamageGuildNative(dir, message, change string) error {
 	canonical, err := filepath.EvalSymlinks(dir)
 	if err != nil {

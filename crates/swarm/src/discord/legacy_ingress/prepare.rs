@@ -56,6 +56,31 @@ impl Voice {
             .filter(|value| *value > 0)
             .ok_or_else(invalid)
     }
+
+    #[cfg(test)]
+    pub(super) fn executing_guild_receipt(self) -> io::Result<Receipt> {
+        let admission = self.queued.ok_or_else(invalid)?;
+        let binding = self.conversation["binding"].clone();
+        if admission["phase"] != "executing"
+            || admission["source_cutover"] != true
+            || !(self.conversation["last_speech_epoch"].is_null()
+                || self.conversation["last_speech_epoch"].as_u64().is_some())
+        {
+            return Err(invalid());
+        }
+        let raw = go_bytes(&admission)?;
+        Ok(Receipt {
+            header: self.header,
+            key: admission_key(
+                field(&binding, "conversation_id"),
+                admission["sequence"].as_u64().ok_or_else(invalid)?,
+            )?,
+            binding,
+            conversation: self.conversation,
+            admission,
+            raw,
+        })
+    }
 }
 
 fn settled_vm_history<'tx>(
@@ -374,7 +399,7 @@ pub(in crate::discord) fn read_executing_guild<'tx>(
 }
 
 pub(in crate::discord) fn executing_guild_admission(
-    mut voice: Voice,
+    voice: &mut Voice,
     cfg: &Config,
     origin: &Value,
     human: &str,
@@ -393,7 +418,9 @@ pub(in crate::discord) fn executing_guild_admission(
         .as_object_mut()
         .ok_or_else(invalid)?
         .remove("source_cutover");
-    if !guild_native_ready(&voice, cfg, origin, human, prompt, project, settings)? {
+    let valid = guild_native_ready(voice, cfg, origin, human, prompt, project, settings);
+    voice.queued = Some(original.clone());
+    if !valid? {
         return Err(invalid());
     }
     Ok(original)

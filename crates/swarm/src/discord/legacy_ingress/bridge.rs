@@ -151,7 +151,7 @@ pub(in crate::discord) struct ToolSocket<'a> {
 }
 
 impl ToolSocket<'_> {
-    fn verify_path(&self) -> io::Result<()> {
+    pub(in crate::discord) fn verify_path(&self) -> io::Result<()> {
         self.custody.verify_files()?;
         let metadata = fs::symlink_metadata(&self.custody.socket)?;
         if identity(&metadata) != self.identity || !owner_socket(&metadata) {

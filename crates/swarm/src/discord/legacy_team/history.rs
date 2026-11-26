@@ -10,6 +10,10 @@ use bbolt_rs::BucketApi;
 use serde::Deserialize;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "publication_fixture.rs"]
+pub(super) mod publication_fixture;
+
 const TOOL: &str = "swarm_discussion_history";
 const CAPS: [&str; 2] = ["manager-provenance", "message-origin"];
 
@@ -86,6 +90,15 @@ struct Arguments {
 }
 
 fn checked_request(raw: &[u8], request: &Value) -> io::Result<(Call, String)> {
+    let call = scoped_call(raw, request, TOOL)?;
+    let args = Arguments::deserialize(&call.arguments)?;
+    if !matches!(args.source.as_str(), "" | "thread") || !args.anchor.is_empty() {
+        return Err(unavailable());
+    }
+    Ok((call, args.cursor))
+}
+
+fn scoped_call(raw: &[u8], request: &Value, name: &str) -> io::Result<Call> {
     let wire: Value = serde_json::from_slice(raw)?;
     if !wire.is_object() || !wire["call"].is_object() || voice::go_bytes(&wire)? != raw {
         return Err(unavailable());
@@ -95,20 +108,16 @@ fn checked_request(raw: &[u8], request: &Value) -> io::Result<(Call, String)> {
         .split_once('/')
         .ok_or_else(unavailable)?;
     let binding = &request["manager_admission"]["binding"];
-    if !tool.call.arguments.is_object() || !tool.call.meta.is_object() {
-        return Err(unavailable());
-    }
-    let args = Arguments::deserialize(&tool.call.arguments)?;
     if tool.version != 1
         || tool.conversation_id != binding["conversation_id"]
         || tool.session_id != session
-        || tool.call.name != TOOL
-        || !matches!(args.source.as_str(), "" | "thread")
-        || !args.anchor.is_empty()
+        || tool.call.name != name
+        || !tool.call.arguments.is_object()
+        || !tool.call.meta.is_object()
     {
         return Err(unavailable());
     }
-    Ok((tool.call, args.cursor))
+    Ok(tool.call)
 }
 
 fn owner(place: &Place, cfg: &Config, request: &Value) -> io::Result<Client> {
@@ -197,9 +206,9 @@ pub(super) fn serve(
             ));
         }
         let tx = db.begin().map_err(io::Error::other)?;
-        let voice = voice::read_executing_guild(&tx, &id, cfg, &endpoint, &input.origin)?;
+        let mut voice = voice::read_executing_guild(&tx, &id, cfg, &endpoint, &input.origin)?;
         voice::executing_guild_admission(
-            voice,
+            &mut voice,
             cfg,
             &input.origin,
             &input.text,

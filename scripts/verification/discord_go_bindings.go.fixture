@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -393,6 +394,13 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 	service := NewService(cfg, s, nil, nil)
 	service.SetBotID(bot.ID)
 	connector := &teammateConnector{service: service, client: client, manager: manager}
+	if strings.HasPrefix(phase, "publication-") {
+		d, err := s.FixtureBinding(cfg.InstallationID, "original-room")
+		if err != nil {
+			return err
+		}
+		return connector.fixtureGuildPublication(ctx, d, phase, cursor)
+	}
 	if phase == "repair-gap" {
 		rows, err := s.teammateActiveBindings(cfg.InstallationID)
 		if err != nil {
@@ -479,6 +487,116 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 			time.Sleep(50 * time.Millisecond)
 		}
 		return ctx.Err()
+	default:
+		return ErrInvalid
+	}
+}
+
+func (t *teammateConnector) fixtureGuildPublication(ctx context.Context, d TeammateDiscussion, phase string, args []string) error {
+	store := t.service.Store
+	switch phase {
+	case "publication-settle":
+		settler, ok := t.manager.(interface {
+			FixtureNativeParentSettled(TeammateDiscussion, string) (bool, error)
+		})
+		if !ok {
+			return ErrInvalid
+		}
+		for ctx.Err() == nil {
+			err := t.manager.Sync(ctx, d, t.history(d), func(p TeammatePublication) error {
+				return fmt.Errorf("unexpected replayed publication %s", p.ID)
+			})
+			if err != nil && !errors.Is(err, voice.ErrControllerJournalResync) {
+				return err
+			}
+			pending, err := store.teammatePending(d.InstallationID)
+			if err != nil {
+				return err
+			}
+			if len(pending) > 1 || len(pending) == 1 && pending[0].Route.MessageID != "701" {
+				return ErrConflict
+			}
+			if len(pending) == 1 {
+				if err := t.reconcileAccepted(ctx, pending[0]); err != nil {
+					return err
+				}
+			}
+			settled, err := settler.FixtureNativeParentSettled(d, "701")
+			if err != nil || settled && len(pending) == 0 {
+				return err
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		return ctx.Err()
+	case "publication-serve", "publication-export":
+		var emitted []string
+		staged := errors.New("fixture observed a Go-staged publication")
+		for ctx.Err() == nil {
+			err := t.manager.Sync(ctx, d, t.history(d), func(p TeammatePublication) error {
+				if p.AdmissionID == "" || p.JobID != "" || p.AttemptID != "" || p.SystemCause != "" ||
+					p.QuestionID != "" || p.RecipientID != "" || len(p.Files) != 0 || len(emitted) != 0 {
+					return ErrConflict
+				}
+				if phase == "publication-serve" {
+					return staged
+				}
+				if err := t.queuePublication(ctx, d, p); err != nil {
+					return err
+				}
+				emitted = append(emitted, p.ID)
+				return nil
+			})
+			if errors.Is(err, staged) {
+				return nil
+			}
+			if err != nil && !errors.Is(err, voice.ErrControllerJournalResync) {
+				return err
+			}
+			if len(emitted) > 0 {
+				return store.teammateAckOutputs(d, emitted)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		return ctx.Err()
+	case "publication-send", "publication-send-lost":
+		err := t.sendPending(ctx, d)
+		if phase == "publication-send-lost" && err == nil {
+			return ErrConflict
+		}
+		if phase == "publication-send-lost" {
+			return json.NewEncoder(os.Stdout).Encode(err.Error())
+		}
+		return err
+	case "publication-gateway":
+		if len(args) != 1 || !json.Valid([]byte(args[0])) {
+			return ErrInvalid
+		}
+		return t.gateway(gatewayFrame{Type: "MESSAGE_CREATE", Data: json.RawMessage(args[0])}, "")
+	case "publication-outbox", "publication-receipt", "publication-compact":
+		if len(args) != 1 || !strings.HasPrefix(args[0], "publication:") {
+			return ErrInvalid
+		}
+		key := teammateOutputKey(d.InstallationID, d.ID, args[0])
+		if phase == "publication-compact" {
+			manager, ok := t.manager.(interface {
+				PublicationExported(TeammateDiscussion, string, bool) (bool, error)
+			})
+			if !ok {
+				return ErrInvalid
+			}
+			return store.teammateCompactOutbox(d, time.Now().Add(GuardTTL+time.Second), manager.PublicationExported)
+		}
+		return store.db.View(func(tx *bolt.Tx) error {
+			bucket := teammateOutboxBucket
+			if phase == "publication-receipt" {
+				bucket = teammateReceiptBucket
+			}
+			value := tx.Bucket([]byte(bucket)).Get(key)
+			if value == nil {
+				value = []byte("null")
+			}
+			return json.NewEncoder(os.Stdout).Encode(json.RawMessage(value))
+		})
 	default:
 		return ErrInvalid
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/discord"
@@ -191,6 +192,12 @@ func main() {
 		}
 		return
 	}
+	if action == "guild-publication" {
+		row, err := voice.FixtureGuildPublication(dir, "701")
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(row))
+		return
+	}
 	if action == "pending" || action == "pending-count" {
 		db, err := bolt.Open(filepath.Join(dir, "discord.db"), 0600, nil)
 		check(err)
@@ -272,7 +279,7 @@ func main() {
 			defer stop()
 		}
 		var cursor []string
-		if os.Args[4] == "history" {
+		if os.Args[4] == "history" || strings.HasPrefix(os.Args[4], "publication-") {
 			cursor = os.Args[5:]
 		}
 		check(store.FixtureGuildAdvance(ctx, cfg, manager, os.Args[3], os.Args[4], cursor...))

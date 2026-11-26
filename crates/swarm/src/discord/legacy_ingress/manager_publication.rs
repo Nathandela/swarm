@@ -195,11 +195,24 @@ pub(super) fn publication_id(
 }
 
 fn stage_records<'tx>(
-    tx: impl TxRwApi<'tx>,
-    mut original: Receipt,
+    mut tx: impl TxRwApi<'tx>,
+    original: Receipt,
     turn: &str,
     speech: &Speech<'_>,
 ) -> io::Result<Value> {
+    let (result, changed) = stage_speech(&mut tx, original, turn, speech)?;
+    if changed {
+        tx.commit().map_err(io::Error::other)?;
+    }
+    Ok(result)
+}
+
+fn stage_speech<'tx>(
+    tx: &mut impl TxRwApi<'tx>,
+    mut original: Receipt,
+    turn: &str,
+    speech: &Speech<'_>,
+) -> io::Result<(Value, bool)> {
     let logical = speech.logical;
     let text = speech.text;
     let files = speech.metadata()?;
@@ -229,7 +242,7 @@ fn stage_records<'tx>(
             && saved["discussion_files"] == manifest
             && saved["discussion_source"] == speech.source
         {
-            return Ok(saved);
+            return Ok((saved, false));
         }
         return Err(invalid());
     }
@@ -290,8 +303,35 @@ fn stage_records<'tx>(
         (permit_key, permit),
         (publication_key, result.clone()),
     ];
-    apply_voice(tx, original.header, &changes)?;
-    Ok(result)
+    stage_voice(tx, original.header, &changes)?;
+    Ok((result, true))
+}
+
+#[cfg(test)]
+pub(in crate::discord) fn stage_guild_speech<'tx>(
+    tx: &mut impl TxRwApi<'tx>,
+    voice: prepare::Voice,
+    turn: &str,
+    args: &Value,
+) -> io::Result<Value> {
+    let original = voice.executing_guild_receipt()?;
+    let source = json!({"admission_id":original.admission["origin"]["request_id"]});
+    let (publication, changed) = stage_speech(
+        tx,
+        original,
+        turn,
+        &Speech {
+            logical: field(args, "output_id"),
+            text: field(args, "text"),
+            source,
+            files: &[],
+            checkout: None,
+        },
+    )?;
+    if !changed {
+        return Err(invalid());
+    }
+    Ok(publication)
 }
 
 fn output_hash(text: &Value, files: &Value) -> io::Result<String> {

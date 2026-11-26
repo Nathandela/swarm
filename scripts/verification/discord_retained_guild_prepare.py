@@ -25,6 +25,7 @@ INSTALL = "fixture-teammate"
 OP = "da_" + hashlib.sha256(json.dumps([INSTALL, "701"], separators=(",", ":")).encode()).hexdigest()[:32]
 REV = hashlib.sha256(json.dumps(["201", TEXT, "401", "300", "701", None, "", None],
                                 separators=(",", ":")).encode()).hexdigest()
+PUBLICATION = dict(output_id="plain-guild-final", sequence=1, text="One retained reply, verified and complete.", final=True)
 
 
 def serve_discord(timestamps=False):
@@ -87,8 +88,22 @@ def serve_discord(timestamps=False):
             self.wfile.write(raw)
 
         def do_POST(self):
-            attempts.append(self.path)
-            self.send_error(400)
+            if not rest.publish:
+                attempts.append(self.path)
+                self.send_error(400)
+                return
+            assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
+            assert self.path == "/api/v10/channels/401/messages"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert body["content"] == PUBLICATION["text"] and body["enforce_nonce"] is True
+            assert body.get("message_reference") is None and body["allowed_mentions"]["parse"] == []
+            assert not attempts, "a second POST attempted to replay the original nonce"
+            attempts.append(body)
+            rest.echo = dict(id="989", type=0, guild_id="300", channel_id="401", nonce=body["nonce"],
+                             author=dict(id="100", bot=True), content=body["content"], attachments=[])
+            # The synthetic Discord effect has completed; its REST response is lost.
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
 
     rest = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     rest.history = None
@@ -96,6 +111,8 @@ def serve_discord(timestamps=False):
     rest.change_starter = False
     rest.before_response = None
     rest.messages = messages
+    rest.publish = False
+    rest.echo = None
     Thread(target=rest.serve_forever, daemon=True).start()
     return rest, permissions, wait_for_capture, attempts
 
@@ -198,10 +215,10 @@ def interrupt_history_call(env, binding, turn, call):
 
 
 def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False,
-            prepare_native=False, native_bridge=False, native_history=None):
+            prepare_native=False, native_bridge=False, native_history=None, native_publication=None):
     paged = (native_history or "").startswith("pages")
     closed = native_history in ("closed", "pages-closed")
-    prepare_in_rust = rust_test is not None and not paged
+    prepare_in_rust = rust_test is not None and not paged and not native_publication
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
@@ -232,7 +249,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
             first_output.extend(item for item in items if item.get("type") == "function_call_output")
             assert release_next_page.wait(timeout=20), "fixture never released the continuation call"
             return "Read the preceding page."
-        if native_history and len(calls) == (3 if paged else 2):
+        if (native_history or native_publication) and len(calls) == (3 if paged else 2):
             tool_output.extend(item for item in items if item.get("type") == "function_call_output"
                                and (not paged or item.get("call_id") == "fixture-call-2"))
             assert release_continuation.wait(timeout=25), "fixture never released the native continuation"
@@ -251,8 +268,16 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         namespace, name = names[0]
         args = {"cursor":tool_pages(first_output)[0]["Cursor"]} if paged and len(calls) == 2 else {}
         return namespace, name, args
+    def request_publication(body):
+        if len(calls) != 1:
+            return None
+        namespace, name = [(tool.get("name"), child.get("name"))
+                           for tool in body.get("tools", []) for child in tool.get("tools", [])
+                           if child.get("name") == "publish"][0]
+        args = PUBLICATION if native_publication != "recipient" else PUBLICATION | {"recipient_id":"202", "recipient_message_id":"701"}
+        return namespace, name, args
     source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None,
-                                 fixture_tool=request_history if native_history else None)
+                                 fixture_tool=request_history if native_history else request_publication if native_publication else None)
     rest, permissions, wait_for_capture, posts = serve_discord(queue_only)
     previous_reads = []
     if paged:
@@ -602,6 +627,147 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     print(lines.get_nowait(), end="", file=sys.stderr)
         print(f"PASS real restricted Codex history ({native_history}) with both Go stores unchanged", flush=True)
 
+    def running_publication(start, voice, turn):
+        connector = place / "discord.db"
+        original = voice.read_bytes(), connector.read_bytes()
+        original_ingress = pending()
+        sock = Path(start["bridge_socket"])
+        auth = Path(start["auth_file"])
+        result = lambda: json.loads(invoke("guild-publication", voice.parent))
+        advance = lambda phase, *args: invoke("guild-advance", place, go_port, f"publication-{phase}", *args)
+        phase = native_publication
+        assert phase is not None and calls and len(calls) == 1 and result() is None and posts == []
+        if phase == "go":
+            command = [fixture, "guild-advance", place, go_port, "publication-serve"]
+            process_env = env
+        else:
+            command = [rust_test, *rust_args]
+            process_env = rust_env(f"publish-{phase}")
+        with subprocess.Popen(command, env=process_env, text=True, stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            lines, reader = lines_from(child.stdout)
+            log = []
+            def collect(marker):
+                while not lines.empty():
+                    log.append(lines.get_nowait())
+                return any(marker in line for line in log)
+            try:
+                await_value(lambda: sock.exists() if phase == "go" else collect("Serving the isolated original guild publication call."))
+                if phase != "go":
+                    empty = dict(version=1, conversation_id=start["binding"]["conversation_id"],
+                                 session_id=start["binding"]["session"].split("/", 1)[1],
+                                 call=dict(name="publish", arguments=PUBLICATION, meta={}))
+                    assert manager_request(sock, auth.read_text(), json.dumps(empty, separators=(",", ":")).encode()) == {"error":"unconfirmed"}
+                release_model.set()
+                if phase == "recipient":
+                    await_value(lambda: tool_output)
+                    assert "manager action is unconfirmed" in json.dumps(tool_output), tool_output
+                    stop_connector(place)
+                elif phase not in ("go", "stage"):
+                    await_value(lambda: collect("holding supervisor-proven publication call"))
+                    live_call = json.loads((base / "state/rust-guild-publish-call").read_bytes())["call"]
+                    assert live_call["arguments"] == PUBLICATION
+                    if phase == "stop":
+                        stop_connector(place)
+                    elif phase == "edit":
+                        rest.messages["701"]["content"] = "Edited after genuine publish proof."
+                    elif phase == "closed":
+                        interrupt_history_call(env, start["binding"], turn, live_call)
+                    child.stdin.write("continue\n")
+                    child.stdin.flush()
+                expected = {"before-commit":87, "after-commit":88}.get(phase, 0)
+                assert child.wait(timeout=10) == expected, log
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=8)
+                reader.join(timeout=3)
+                if child.returncode not in (0, 87, 88):
+                    print("".join(log), end="", file=sys.stderr)
+                    while not lines.empty():
+                        print(lines.get_nowait(), end="", file=sys.stderr)
+        assert pending() == original_ingress and posts == []
+        if phase != "go":
+            assert original[1] == connector.read_bytes()
+        if phase not in ("go", "stage", "after-commit"):
+            assert original[0] == voice.read_bytes() and result() is None
+            if phase != "closed":
+                await_value(lambda: tool_output)
+                assert PUBLICATION["text"] not in json.dumps(tool_output), tool_output
+            print(f"PASS guild publish {phase} leaves both stores byte-identical and no POST", flush=True)
+            return None
+
+        saved = result()
+        publication, permit, row = [saved[k] for k in ("publication", "permit", "admission")]
+        conversation = row["conversation_id"]
+        stable = dict(Conversation=conversation, Admission=row["sequence"], Turn=turn["native_turn_id"], Logical=PUBLICATION["output_id"])
+        expected_id = f"publication:{row['sequence']}:" + hashlib.sha256(json.dumps(stable, separators=(",", ":")).encode()).hexdigest()
+        assert publication["id"] == expected_id and publication["text"] == PUBLICATION["text"] and publication["final"] is True
+        assert publication["text_hash"] == hashlib.sha256(PUBLICATION["text"].encode()).hexdigest()
+        assert publication["discussion_source"] == {"admission_id":OP} and "exported" not in publication
+        assert json.loads(publication["discussion_projects"]) == [str(base / "work")]
+        assert publication["native_turn_id"] == permit["native_turn_id"] == turn["native_turn_id"]
+        assert row["native_input_id"] == permit["native_input_id"] == turn["native_input_id"]
+        assert row["request"]["manager_admission"]["nonce"] == turn["native_input_id"] and row["phase"] == "running"
+        assert publication["speech_epoch"] == permit["epoch"] == saved["lastSpeechEpoch"] and permit["revoked"] is False
+        assert publication["output_sequence"] == saved["lastOutput"]
+        assert json.loads(advance("outbox", expected_id)) is None
+        await_value(lambda: tool_output)
+        if phase in ("go", "stage"):
+            assert expected_id in json.dumps(tool_output), tool_output
+        else:
+            assert expected_id not in json.dumps(tool_output), tool_output
+        assert len(calls) == 2 and posts == []
+        if phase != "go":
+            frozen = voice.read_bytes(), connector.read_bytes()
+            refused = subprocess.run(command, env=process_env, capture_output=True, timeout=10)
+            assert refused.returncode != 0 and (voice.read_bytes(), connector.read_bytes()) == frozen
+
+        advance("export")
+        exported = result()
+        assert exported["publication"] == publication | {"exported":True}
+        outbox = lambda: json.loads(advance("outbox", expected_id))
+        prepared = outbox()
+        nonce = hashlib.sha256(json.dumps([INSTALL, "original-room", expected_id, 0], separators=(",", ":")).encode()).hexdigest()[:24]
+        assert prepared["ExportAck"] and prepared["Route"] == {"guild_id":"300", "channel_id":"401", "parent_id":"399", "message_id":""}, prepared
+        assert prepared["Chunks"] == [{"id":nonce, "body":PUBLICATION["text"], "state":"prepared"}]
+        assert prepared["Publication"]["AdmissionID"] == OP and prepared["Publication"]["ID"] == expected_id
+        rest.publish = True
+        advance("send-lost")
+        uncertain = outbox()
+        assert len(posts) == 1 and posts[0]["nonce"] == nonce and rest.echo is not None
+        assert uncertain["Chunks"][0]["state"] == "uncertain" and uncertain["Chunks"][0]["id"] == nonce
+        for echo in (rest.echo | {"author":{"id":"101", "bot":True}}, rest.echo | {"channel_id":"402"},
+                     rest.echo | {"content":"not the original body"}, rest.echo | {"nonce":nonce[::-1]}):
+            advance("gateway", json.dumps(echo))
+            assert outbox() == uncertain
+        advance("gateway", json.dumps(rest.echo))
+        sent = outbox()
+        assert sent["Chunks"][0] == {"id":nonce,"body":"","state":"sent","message_id":"989","gateway_seen":True}, sent
+        advance("send")
+        assert outbox() == sent and len(posts) == 1
+        advance("compact", expected_id)
+        receipt = json.loads(advance("receipt", expected_id))
+        assert outbox() is None and receipt["DiscordMessageIDs"] == ["989"]
+        assert receipt["BodyHash"] == prepared["BodyHash"] and receipt["Route"] == prepared["Route"]
+        assert result() == exported and len(posts) == 1 and len(calls) == 2
+        release_continuation.set()
+        completed = await_value(lambda: native_input(turn["native_input_id"], "completed"))
+        assert completed["native_turn_id"] == turn["native_turn_id"]
+        advance("settle")
+        settled = result()
+        keys = ("sequence", "source_id", "operation_id", "native_input_id", "request", "native_turn_id")
+        assert pending() == [] and settled["publication"] == exported["publication"]
+        assert settled["admission"]["phase"] == "completed" and not settled["admission"]["settled_at"].startswith("0001")
+        assert all(settled["admission"][key] == row[key] for key in keys)
+        invoke("guild-record", place, "original-room", "701", "201", "fixture external")
+        invoke("guild-advance", place, go_port, "advance")
+        advance("send")
+        assert result() == settled and json.loads(advance("receipt", expected_id)) == receipt
+        assert pending() == [] and len(posts) == 1 and len(calls) == 2
+        print(f"PASS guild publish {phase}: current original turn, one Voice receipt and one authenticated Go reply", flush=True)
+        return {k: publication[k] for k in ("admission", "sequence", "speech_epoch", "output_sequence", "text_hash", "final", "speak", "discussion_source")}
+
     try:
         invoke("create", place, base / "state", "teammate", "true", base / "work")
         invoke("bind-thread", place, "original-room", "401", "399")
@@ -868,7 +1034,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     if not rust_test:
                         return comparable
                     assert request_bytes == invoke("guild-native-request", voice.parent, "701")
-                    if paged:
+                    if native_publication:
+                        print("PASS Go prepared the original guild native tuple", flush=True)
+                    elif paged:
                         print("PASS Go prepared the original full-page native tuple", flush=True)
                     else:
                         print("PASS Rust prepared one unsent Go tuple across commit interruption and repeat", flush=True)
@@ -939,6 +1107,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         running_paged_history(start, voice, before)
                     elif native_history:
                         running_history(start, voice, before)
+                    elif native_publication:
+                        return running_publication(start, voice, before)
                 invoke("guild-advance", place, go_port, "advance")
                 assert pending() == []
                 row = native(voice)
@@ -994,7 +1164,21 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
 
 if __name__ == "__main__":
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
-    if len(sys.argv) == 6 and sys.argv[5] == "--interrupt-after-native":
+    if len(sys.argv) == 6 and sys.argv[5] == "--native-publication-compare":
+        evidence = []
+        for phase in ("go", "stage"):
+            with tempfile.TemporaryDirectory(prefix="gp-") as root:
+                evidence.append(witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True,
+                                        interrupt=True, native_publication=phase))
+        assert evidence[0] == evidence[1], evidence
+        print("PASS Go and Rust staged the same scoped final publication fields", flush=True)
+    elif len(sys.argv) == 6 and sys.argv[5].startswith("--native-publication-"):
+        phase = sys.argv[5].removeprefix("--native-publication-")
+        assert phase in ("go", "stage", "before-commit", "after-commit", "stop", "edit", "closed", "recipient")
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True,
+                    native_publication=phase)
+    elif len(sys.argv) == 6 and sys.argv[5] == "--interrupt-after-native":
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             witness(Path(root).resolve(), *sys.argv[1:5], interrupt=True)
     elif len(sys.argv) == 6 and sys.argv[5] == "--prepare-native-only":
