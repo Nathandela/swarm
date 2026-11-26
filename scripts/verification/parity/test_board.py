@@ -63,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -371,6 +371,122 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             return worker, birth
         finally:
             board.close()
+
+    if touch:
+        daemon = start()
+        (root / "effects/touch-native").touch()
+        launched = cli("spawn", "--cli", "claude", "--name", "touch-amber",
+                       "--dir", cwd, "--prompt", "offline fixture")
+        assert launched.returncode == 0, launched.stderr
+        identity = launched.stdout.decode().strip()
+        logged = root / "effects/input"
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"touch-amber")
+            board.send(b"\r")
+            board.wait_bytes(b"ctrl+q returns to swarm")
+            assert b"[swarm (ctrl+q)]" not in board.capture
+
+            def marker(data, expected):
+                board.send(data + b"\r")
+                try:
+                    p.wait_for(lambda: logged.read_bytes() == expected, "exact attached worker bytes")
+                except RuntimeError as error:
+                    raise AssertionError((expected, logged.read_bytes(), board.capture[-900:])) from error
+
+            press = b"\x1b[<0;3;24M"
+            release = b"\x1b[<0;3;24m"
+            native_press = b"\x1b[<0;3;3M"
+            marker(press + release + b"disabled", press + release + b"disabled\r")
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"o")
+            board.wait_bytes(b"CLI button", offset)
+            board.send(b"\x1b[B\x1b[B\x1b[C")
+            board.wait_bytes(b"[x] on", offset)
+            offset = len(board.capture)
+            board.send(b"\r")
+            board.wait_bytes(b"More (m)", offset)
+            offset = len(board.capture)
+            board.send(b"\r")
+            board.wait_bytes(b"[swarm (ctrl+q)]", offset)
+
+            before = logged.read_bytes()
+            wanted = before + native_press + release + b"native\r"
+            marker(native_press + release + b"native", wanted)
+            drag = b"\x1b[<32;3;5M"
+            marker(press + drag + release + b"dragged", wanted + b"dragged\r")
+            wanted = logged.read_bytes()
+            offset = len(board.capture)
+            board.send(press[:5])
+            board.send(press[5:] + release[:6])
+            board.send(release[6:])
+            board.wait_bytes(b"More (m)", offset)
+            assert logged.read_bytes() == wanted
+            offset = len(board.capture)
+            board.send(b"\r")
+            board.wait_bytes(b"[swarm (ctrl+q)]", offset)
+            offset = len(board.capture)
+            marker(b"query mouse", wanted + b"query mouse\r")
+            board.wait_bytes(b"fixture queried", offset)
+            emitted = board.capture[offset:]
+            restore = emitted.find(b"\x1b[?1000h")
+            query = emitted.find(b"\x1b[?1000$p")
+            assert 0 <= restore < query, emitted
+            board.wait_bytes(b"ctrl+q returns to swarm", offset)
+            # The Go shim's VT answers DECRQM itself. A bare PTY transports the
+            # terminal query but has no outer emulator to return another reply.
+            board.send(press + release + b"native after query\r")
+            normal = wanted + b"query mouse\r"
+            native = press + release + b"native after query\r"
+            p.wait_for(lambda: logged.read_bytes() in (normal + native, normal + b"\x1b[?1000;1$y" + native),
+                       "native mouse delivery after ownership release")
+            offset = len(board.capture)
+            board.send(b"\x11")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "quit after touch detach")
+            assert board.child.returncode == 0
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        assert cli("kill", identity).returncode == 0
+        deleted = owner_request(env["SWARM_DAEMON_SOCK"], "subscribe",
+                                {"op": "delete", "session_id": identity})
+        assert deleted["op"] != "error", deleted
+        (root / "effects/touch-native").unlink()
+        launched = cli("spawn", "--cli", "claude", "--name", "touch-plain",
+                       "--dir", cwd, "--prompt", "offline fixture")
+        assert launched.returncode == 0, launched.stderr
+        identity = launched.stdout.decode().strip()
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"touch-plain")
+            board.send(b"\r")
+            board.wait_bytes(b"[swarm (ctrl+q)]")
+            before = logged.read_bytes()
+            marker(native_press + b"plain", before + b"plain\r")
+            offset = len(board.capture)
+            board.send(press)
+            board.resize(30, 2)
+            p.wait_for(lambda: (root / "effects/size").read_bytes() == b"30x2\n", "footer released on resize")
+            board.resize(80, 24)
+            board.wait_bytes(b"[swarm (ctrl+q)]", offset)
+            marker(release + b"resized", before + b"plain\rresized\r")
+            offset = len(board.capture)
+            board.send(press + release)
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "quit after plain touch detach")
+            assert board.child.returncode == 0
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        assert cli("kill", identity).returncode == 0
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
 
     if cycle:
         daemon = start()
@@ -861,7 +977,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False):
+        form_root=None, board_grid=False, handoff=False, touch=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -889,6 +1005,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--automations")
         elif cycle:
             command.append("--cycle")
+        elif touch:
+            command.append("--touch-back")
         elif tmux is not None:
             command.append(tmux)
             if form_grid:
@@ -922,7 +1040,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("supervised and hands-off handoff" if handoff else
+    exercise = ("attached CLI button, native mouse and terminal restoration" if touch else
+                "supervised and hands-off handoff" if handoff else
                 "comparative roster grids" if board_grid else
                 "comparative launch-form grids" if form_grid else
                 "local automation CLI and owner dashboard catalog/disconnect" if automations else
@@ -941,7 +1060,7 @@ if __name__ == "__main__":
         mode = sys.argv[3] if len(sys.argv) >= 4 else None
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
-                sys.argv[-1] == "--board-grid", mode == "--handoff-board")
+                sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -950,6 +1069,8 @@ if __name__ == "__main__":
         modes.add_argument("--tmux", type=p.binary_path)
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--handoff-board", action="store_true", help="exercise supervised and capability-gated hands-off handoff")
+        modes.add_argument("--touch-back", action="store_true",
+                           help="drive the Options toggle and attached native mouse and footer gestures")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
         parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
@@ -962,4 +1083,4 @@ if __name__ == "__main__":
         if (args.form_grid or args.board_grid) and not args.tmux:
             parser.error("--form-grid requires --tmux")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
-            args.form_grid, args.form_root, args.board_grid, args.handoff_board)
+            args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back)

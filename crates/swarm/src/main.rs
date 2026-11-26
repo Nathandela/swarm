@@ -16,6 +16,7 @@ mod shim;
 mod socket;
 mod supervisor;
 mod teammate;
+mod terminal_mouse;
 mod workspace;
 
 use std::io::{self, IsTerminal, Write};

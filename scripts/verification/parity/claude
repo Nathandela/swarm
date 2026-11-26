@@ -34,6 +34,8 @@ def geometry(*_):
 
 signal.signal(signal.SIGWINCH, geometry)
 geometry()
+if (effects / "touch-native").exists():
+    os.write(1, b"\x1b[?1000h\x1b[?1006h")
 os.write(1, b"\x1b[2J\x1b[Hfixture ready\r\n")
 with (effects / "input").open("ab", buffering=0) as log:
     pending = bytearray()
@@ -52,6 +54,10 @@ with (effects / "input").open("ab", buffering=0) as log:
                 post = subprocess.run([owner, "hook", event], input=json.dumps(payload).encode(),
                                       capture_output=True, timeout=3)
                 (effects / f"event-{event}").write_text(str(post.returncode))
+            elif (effects / "touch-native").exists() and pending == b"query mouse":
+                os.write(1, b"\x1b[?100")
+                time.sleep(0.03)
+                os.write(1, b"0$p\r\nfixture queried")
             elif (effects / "grid").exists() and pending == b"before":
                 os.write(1, b"\x1b[?1049h\x1b[?25l\x1b[?1h\x1b[?1002h\x1b[?1006h"
                             b"\x1b[?2004h\x1b[2J\x1b[1;1Hfixture grid"
