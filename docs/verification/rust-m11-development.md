@@ -151,3 +151,14 @@ The one-hour receipts above remain valid. Three longer development runs stopped 
 The native Mac run stopped waiting for the durable result of input 256. The provider had already completed that turn, including both permission and question steps. Its worker receipt still read `native_accepted`. In the Linux mixed run the 30-second durable wait expired on input 287. A read-only query against the stopped test database found exactly one matching native user row and one terminal assistant child with `finish=stop`. The model saw one request. The first explicit status query reconciled the missing completion from the native snapshot. These runs expose automatic receipt reconciliation when a completion event is lost.
 
 The Mac mixed run stopped with a different outcome. Its 299th scheduled occurrence was exhausted after 298 earlier completions. The original schedule database recorded only a rejected Codex attempt, with no worker session or prompt delivery. Its detail was `provider command timed out` during pre-reservation discovery. The evidence distinguishes this from a verified native quota or a failed model turn. A new timed run is needed after the independent receipt and discovery repairs.
+
+## Signed November 26 replacement runs
+
+The corrected source `41f9aedd2bd12f22314177725b01106e65c40a2c` completed the native one-hour workload on Darwin arm64 and Linux x86_64. OpenCode 1.19.3 used the local loopback model. The Darwin executable SHA-256 was `308f0e740e2c413ffb457e9e41f051617848168d92c3a99fe4a9a95a57c26129`. The Linux executable SHA-256 was `10b7fd14e41cac33120a2544ea98efb8d42a4384575d3ef426c0f1cbdd36981c`.
+
+| Host | Native receipts | Daemon restarts | Cleanup |
+| --- | ---: | ---: | --- |
+| Darwin arm64 | 328 | 16 | Passed |
+| Linux x86_64 | 327 | 16 | Passed |
+
+The Darwin run lasted 3,600.001 seconds, confirmed 132 decision cards and made 396 local model calls. The result SHA-256 was `263b3dcfc00dd8be2ded75b6158551f1ca1a3607b1eeb79fc6e4552cf8ffd1c0`. Its queue exited before registering a 24-hour stage. A manual restart with an inherited `PATH` found OpenCode 1.18.15. The version check rejected that process before workload execution. The Linux mixed run received a stop signal after 129 completed inputs and 99 scheduled completions, then reported successful cleanup. The independent older Linux native run at `cb630ec5` timed out waiting for input 310 and reported successful cleanup. These are separate outcomes. The 24- and 72-hour gates remain open.
