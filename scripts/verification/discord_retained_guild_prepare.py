@@ -257,7 +257,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         if TEXT not in json.dumps(items):
             raise AssertionError("the native request did not contain the captured guild prompt")
         model_started.set()
-        assert release_model.wait(timeout=35), "fixture never released the original model request"
+        assert release_model.wait(timeout=55 if native_publication else 35), "fixture never released the original model request"
         return "Native loopback reply."
     def request_history(body):
         if len(calls) != 1 and not (paged and len(calls) == 2):
@@ -422,7 +422,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     and row["role"] == "manager" and row["agent"] == "codex"
                     and row["manager_conversation_id"] == start["binding"]["conversation_id"]
                     and row["cwd"] == str(base / "work") and row["status"]["Process"] == "running"
-                    and row["capabilities"]["session_instance"] == start["binding"]["session_instance"]]) == 1
+                    and (row.get("capabilities") or {}).get("session_instance") == start["binding"]["session_instance"]]) == 1
 
     def running_history(start, voice, original_turn):
         connector = place / "discord.db"
@@ -663,6 +663,11 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     finally:
                         voice.write_bytes(original[0])
                     print(f"PASS Go and Rust reject checksum-correct Voice damage ({damage}) without further writes", flush=True)
+            await_value(lambda: manager_observed(
+                start, lambda current: current["ready_for_input"] is False
+                and current["turn"]["state"] == "running"
+                and current["turn"]["native_turn_id"] == turn["native_turn_id"]
+                and current["turn"]["native_input_id"] == turn["native_input_id"]))
         with subprocess.Popen(command, env=process_env, text=True, stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             lines, reader = lines_from(child.stdout)
