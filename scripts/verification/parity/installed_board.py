@@ -29,8 +29,16 @@ def run(dist, archive, key, evidence):
         installer = board.HERE.parents[1] / "release-rust.py"
         subprocess.run([sys.executable, installer, "verify", dist, archive, "--public-key", key,
                         "--prefix", root / "install", "--managed"], check=True, timeout=90)
+        guard = p.guard(root)
+        launcher = root / "install/swarm"
+        before = time.monotonic()
+        image = p.hash_file(launcher.resolve(strict=True))
+        media = subprocess.run([*guard, launcher, "release-check-media"], cwd=root / "work", env=p.environment(root),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, check=True, timeout=90)
+        assert not media.stdout
+        media_seconds = time.monotonic() - before
         p.table()
-        command = [*p.guard(root), sys.executable, root / "bin/installed_board.py", "_inside", root]
+        command = [*guard, sys.executable, root / "bin/installed_board.py", "_inside", root]
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root), start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
         until = time.monotonic() + 40
@@ -50,6 +58,9 @@ def run(dist, archive, key, evidence):
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
+    assert receipt["binary_sha256"] == image
+    receipt["media_self_check"] = "passed"
+    receipt["media_check_seconds"] = media_seconds
     receipt["cleanup"] = cleanup
     p.write_json(evidence, receipt, replace=False)
     print(f"installed managed PTY recovery passed; receipt {evidence}")

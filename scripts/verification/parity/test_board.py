@@ -1022,8 +1022,6 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
     if managed:
         card = json.loads(checked("release-info"))
         generation = binary.resolve(strict=True)
-        media_check = checked("release-check-media")
-        assert not media_check
         assert not writer_held()
         assert not list((managed / "effects").iterdir())
     (cwd / "qualified").mkdir()
@@ -1064,7 +1062,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         assert (managed / "effects" / generation.parent.name).is_file()
         return {"platform": sys.platform, "machine": os.uname().machine,
                 "launcher": str(binary), "generation": str(generation), "release": card,
-                "binary_sha256": p.hash_file(generation), "media_self_check": "passed",
+                "binary_sha256": p.hash_file(generation),
                 "daemon_before": daemon_before, "daemon_after": daemon_after,
                 "worker": before, "session": identity, "writer_held_after_daemon_death": True,
                 "writer_released_after_exit": True, "terminal_restored": True}

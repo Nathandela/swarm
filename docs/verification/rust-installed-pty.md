@@ -37,3 +37,8 @@ The same signed `5e42c2cf` package was installed and exercised inside an offline
 | Full guest serial capture | `a23fd61f326b91adf2aa30ed8a312d196eff6081bfa9d9f2d40b843a3f2414db` |
 
 The CPU architecture was native to the host. The guest kernel was LinuxKit 6.10.14 with an ext4 filesystem and an isolated Debian Bookworm userland. The guest setup and kernel hash are recorded in the [archive rehearsal](rust-managed-upgrade.md). The stable-launcher test used witness revision `64b037f5`.
+
+
+## macOS x86_64 under Rosetta
+
+The same signed universal archive passed the stable-launcher rehearsal from an x86_64 Python process under Rosetta on the Apple Silicon Mac. It rejoined the same worker, restored terminal settings and observed the writer lease across daemon death and release after worker exit. An independent macOS sample identified the actual media-checking Swarm process as `X86-64 (translated)`. The signed package's cold media check took 24.56 seconds in this translated rehearsal. The installed-package witness times media verification separately from terminal input and recovery. The receipt SHA-256 is `666bddaba33fc8d46271cf199f45edb4fc2663f361cf839b8847bd144059c215`. Native Intel hardware was not exercised in this run.
