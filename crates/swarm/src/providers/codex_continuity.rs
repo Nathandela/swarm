@@ -616,6 +616,7 @@ pub(crate) fn worker_turn(
     prompt: &str,
     target: Option<(&str, &str)>,
     budget: usize,
+    only_opening: bool,
 ) -> io::Result<Option<Value>> {
     let anchor = rollout(home, cwd, thread)?;
     let path = Path::new(field(&anchor, "path"));
@@ -626,8 +627,21 @@ pub(crate) fn worker_turn(
     }
     // Keep the scan tied to the initially opened file and the observed byte window.
     let cap = 64 << 20;
+    if only_opening && metadata.len() >= cap {
+        return Err(io::Error::other(
+            "Codex worker evidence exceeds the proof limit",
+        ));
+    }
     let mut reader = BufReader::new(file.take(metadata.len().min(cap)));
-    let evidence = scan_worker_turn(&mut reader, thread, cwd, prompt, target, budget)?;
+    let evidence = scan_worker_turn(
+        &mut reader,
+        thread,
+        cwd,
+        prompt,
+        target,
+        budget,
+        only_opening,
+    )?;
     if anchor != rollout(home, cwd, thread)? {
         return Err(io::Error::other("Codex worker rollout changed"));
     }
@@ -646,6 +660,7 @@ fn scan_worker_turn(
     prompt: &str,
     target: Option<(&str, &str)>,
     budget: usize,
+    only_opening: bool,
 ) -> io::Result<Option<Value>> {
     let invalid = || io::Error::other("invalid Codex worker rollout evidence");
     let mut bytes = String::new();
@@ -656,6 +671,9 @@ fn scan_worker_turn(
             return Err(invalid());
         }
         if !bytes.ends_with('\n') {
+            if only_opening && !bytes.is_empty() {
+                return Err(invalid());
+            }
             return Ok(None);
         }
         if !super::codex_context_guard::unique_keys(&bytes) {
@@ -672,6 +690,7 @@ fn scan_worker_turn(
     }
     let mut active = String::new();
     let mut matched = false;
+    let mut terminal = None;
     while let Some(row) = read()? {
         if row["type"] != "event_msg" {
             continue;
@@ -682,6 +701,12 @@ fn scan_worker_turn(
         let selected = !active.is_empty() && target.is_none_or(|(turn, _)| active == turn);
         if p.get("thread_id").is_some_and(|v| v != thread) {
             return Err(invalid());
+        }
+        if terminal.is_some() {
+            if kind == "task_started" {
+                return Ok(None);
+            }
+            continue;
         }
         match kind {
             "task_started" => {
@@ -751,13 +776,16 @@ fn scan_worker_turn(
                 while !text.is_char_boundary(end) {
                     end -= 1;
                 }
-                return Ok(Some(json!({"turn_id":id,"state":state,"text":&text[..end],
-                    "text_truncated":end != text.len()})));
+                terminal = Some(json!({"turn_id":id,"state":state,"text":&text[..end],
+                    "text_truncated":end != text.len()}));
+                if !only_opening {
+                    return Ok(terminal);
+                }
             }
             _ => {}
         }
     }
-    Ok(None)
+    Ok(terminal)
 }
 
 pub(crate) fn initial_history(anchor: &Value, thread: &str) -> io::Result<Vec<Value>> {
@@ -1051,7 +1079,11 @@ mod worker_turn_tests {
     const SECOND: &str = "019c0000-0000-7000-8000-000000000002";
     const THREAD: &str = "019c0000-0000-7000-8000-000000000003";
 
-    fn scan(events: &[Value], target: Option<(&str, &str)>) -> io::Result<Option<Value>> {
+    fn scan_worker(
+        events: &[Value],
+        target: Option<(&str, &str)>,
+        only_opening: bool,
+    ) -> io::Result<Option<Value>> {
         let home = Path::new("/worker");
         let mut lines = format!(
             "{}\n",
@@ -1070,7 +1102,12 @@ mod worker_turn_tests {
             &codex_receipt::hash("Approved prompt"),
             target,
             4096,
+            only_opening,
         )
+    }
+
+    fn scan(events: &[Value], target: Option<(&str, &str)>) -> io::Result<Option<Value>> {
+        scan_worker(events, target, false)
     }
 
     #[test]
@@ -1088,6 +1125,11 @@ mod worker_turn_tests {
         ];
         let both = [first.clone(), second].concat();
         assert_eq!(scan(&both, None)?.unwrap()["text"], "Approved result");
+        assert!(scan_worker(&both, None, true)?.is_none());
+        assert_eq!(
+            scan_worker(&first, None, true)?.unwrap()["text"],
+            "Approved result"
+        );
         assert!(scan(&both, Some((SECOND, "wrong")))?.is_none());
         assert_eq!(
             scan(&both, Some((SECOND, "verified")))?.unwrap()["turn_id"],

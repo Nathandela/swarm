@@ -1296,6 +1296,7 @@ mod tests {
                 field(&metadata["mailbox"], "prompt_hash"),
                 None,
                 256,
+                true,
             );
             if observed.as_ref().is_ok_and(|proof| {
                 proof

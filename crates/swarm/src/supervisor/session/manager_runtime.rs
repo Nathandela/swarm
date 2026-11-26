@@ -295,8 +295,8 @@ impl Session {
                 "enrolled worker reply lost its completed native parent",
             ));
         }
-        let result = child.enrolled_worker_result(manager, &json!({"session":query["worker"],
-            "session_instance":instance,"job_id":action["key"],"attempt_id":action["operation_id"]}))?;
+        let result = child.scoped_worker_result(manager, &json!({"session":query["worker"],
+            "session_instance":instance,"job_id":action["key"],"attempt_id":action["operation_id"]}), true)?;
         let terminal = &result["evidence"];
         let root = state
             .root
@@ -417,6 +417,15 @@ impl Session {
         state: &Value,
         args: &Value,
     ) -> io::Result<Value> {
+        self.scoped_worker_result(state, args, false)
+    }
+
+    fn scoped_worker_result(
+        &self,
+        state: &Value,
+        args: &Value,
+        only_opening: bool,
+    ) -> io::Result<Value> {
         let instance = codex_receipt::provider_instance(&self.agent, &self.token);
         let actions = &state["worker_actions"];
         let child = &self.mailbox;
@@ -511,6 +520,7 @@ impl Session {
                     &prompt,
                     native_target,
                     budget as usize,
+                    only_opening,
                 )
                 .map_err(|error| io::Error::other(format!("read Codex worker rollout: {error}")))?
             };
