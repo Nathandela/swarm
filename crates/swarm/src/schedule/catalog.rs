@@ -125,9 +125,12 @@ pub(crate) enum TemplateChange {
         id: Option<String>,
         name: String,
         prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_updated_at: Option<jiff::Timestamp>,
     },
     Delete {
         id: String,
+        expected_updated_at: Option<jiff::Timestamp>,
     },
 }
 
@@ -147,7 +150,9 @@ impl TemplateChange {
             ));
         }
         let template = match self {
-            Self::Save { id, name, prompt } => {
+            Self::Save {
+                id, name, prompt, ..
+            } => {
                 let template: Template = serde_json::from_value(reply["template"].clone())?;
                 if id.as_ref().is_some_and(|id| id != &template.id)
                     || template.name != name
@@ -159,7 +164,7 @@ impl TemplateChange {
                 }
                 Some(template)
             }
-            Self::Delete { id } => {
+            Self::Delete { id, .. } => {
                 if field(&reply, "template_id") != id {
                     return Err(io::Error::other(
                         "personal template delete reply did not match the request",
@@ -176,19 +181,37 @@ pub(crate) fn change_template(root: &Path, request: &Value) -> Result<Value> {
     let change: TemplateChange = serde_json::from_value(request["change"].clone())?;
     let store = Store::open(root, Path::new("/etc/localtime"))?;
     match change {
-        TemplateChange::Save { id, name, prompt } => {
+        TemplateChange::Save {
+            id,
+            name,
+            prompt,
+            expected_updated_at,
+        } => {
             if id.as_ref().is_some_and(|id| !super::valid_id(id)) {
                 return Err("invalid personal template ID".into());
             }
-            let template =
-                store.save_template(id.as_deref(), name, prompt, jiff::Timestamp::now())?;
+            if id.is_some() != expected_updated_at.is_some() {
+                return Err("editing a personal template requires its current updated_at".into());
+            }
+            let template = store.save_template_if_current(
+                id.as_deref(),
+                name,
+                prompt,
+                expected_updated_at,
+                jiff::Timestamp::now(),
+            )?;
             Ok(json!({"op":TEMPLATE_CHANGE,"template":template}))
         }
-        TemplateChange::Delete { id } => {
+        TemplateChange::Delete {
+            id,
+            expected_updated_at,
+        } => {
             if !super::valid_id(&id) {
                 return Err("invalid personal template ID".into());
             }
-            store.delete_template(&id)?;
+            let expected_updated_at = expected_updated_at
+                .ok_or("deleting a personal template requires its current updated_at")?;
+            store.delete_template_if_current(&id, Some(expected_updated_at))?;
             Ok(json!({"op":TEMPLATE_CHANGE,"template_id":id}))
         }
     }
@@ -243,7 +266,7 @@ mod tests {
     #[test]
     fn template_catalog_operations_preserve_go_written_template() {
         let temp = Temp::with_go_catalog();
-        Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        let store = Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
         let listed = serve_templates(&temp.0).unwrap();
         let templates: Vec<Template> = serde_json::from_value(listed["templates"].clone()).unwrap();
         assert_eq!(templates.len(), 1);
@@ -251,6 +274,45 @@ mod tests {
         assert_eq!(original.name, "Existing template");
         assert_eq!(original.prompt, "Copy me");
         assert_eq!(original.created_at, "2026-11-01T05:00:00Z".parse().unwrap());
+
+        let database = temp.0.join("schedules/state.db");
+        let unchanged = fs::read(&database).unwrap();
+        assert!(change_template(
+            &temp.0,
+            &json!({"change":{"kind":"save","id":original.id,"name":"No fence","prompt":"No fence"}}),
+        )
+        .is_err());
+        assert_eq!(fs::read(&database).unwrap(), unchanged);
+        assert!(
+            change_template(
+                &temp.0,
+                &json!({"change":{"kind":"delete","id":original.id}}),
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&database).unwrap(), unchanged);
+
+        store
+            .save_template(
+                Some(&original.id),
+                "Changed elsewhere".into(),
+                "New prompt".into(),
+                "2026-11-01T06:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let before_stale = fs::read(&database).unwrap();
+        assert!(change_template(
+            &temp.0,
+            &json!({"change":{"kind":"save","id":original.id,"name":"Stale","prompt":"Stale","expected_updated_at":original.updated_at}}),
+        )
+        .is_err());
+        assert_eq!(fs::read(&database).unwrap(), before_stale);
+        assert!(change_template(
+            &temp.0,
+            &json!({"change":{"kind":"delete","id":original.id,"expected_updated_at":original.updated_at}}),
+        )
+        .is_err());
+        assert_eq!(fs::read(&database).unwrap(), before_stale);
 
         let created = change_template(
             &temp.0,
@@ -260,7 +322,7 @@ mod tests {
         let created: Template = serde_json::from_value(created["template"].clone()).unwrap();
         let edited = change_template(
             &temp.0,
-            &json!({"change":{"kind":"save","id":created.id,"name":"Edited","prompt":"Updated"}}),
+            &json!({"change":{"kind":"save","id":created.id,"name":"Edited","prompt":"Updated","expected_updated_at":created.updated_at}}),
         )
         .unwrap();
         let edited: Template = serde_json::from_value(edited["template"].clone()).unwrap();
@@ -268,8 +330,11 @@ mod tests {
         assert_eq!(edited.created_at, created.created_at);
         assert_eq!(edited.name, "Edited");
 
-        let deleted =
-            change_template(&temp.0, &json!({"change":{"kind":"delete","id":edited.id}})).unwrap();
+        let deleted = change_template(
+            &temp.0,
+            &json!({"change":{"kind":"delete","id":edited.id,"expected_updated_at":edited.updated_at}}),
+        )
+        .unwrap();
         assert_eq!(deleted["template_id"], created.id);
         let templates = Store::open(&temp.0, Path::new("/etc/localtime"))
             .unwrap()
@@ -277,7 +342,7 @@ mod tests {
             .unwrap();
         assert_eq!(templates.len(), 1);
         assert_eq!(templates[0].id, original.id);
-        assert_eq!(templates[0].prompt, "Copy me");
+        assert_eq!(templates[0].prompt, "New prompt");
     }
 }
 

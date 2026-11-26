@@ -545,10 +545,27 @@ impl Store {
         prompt: String,
         now: Timestamp,
     ) -> Result<Template> {
+        self.save_template_if_current(existing, name, prompt, None, now)
+    }
+
+    pub fn save_template_if_current(
+        &self,
+        existing: Option<&str>,
+        name: String,
+        prompt: String,
+        expected_updated_at: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<Template> {
         validate_text(&name, &prompt)?;
         self.write(|tx| {
             let mut template: Template = match existing {
-                Some(id) => require(tx, TEMPLATES, id)?,
+                Some(id) => {
+                    let template: Template = require(tx, TEMPLATES, id)?;
+                    if expected_updated_at.is_some_and(|expected| expected != template.updated_at) {
+                        return Err("personal template changed; refresh before editing".into());
+                    }
+                    template
+                }
                 None => Template {
                     id: id(now)?,
                     name: String::new(),
@@ -566,8 +583,19 @@ impl Store {
     }
 
     pub fn delete_template(&self, id: &str) -> Result<()> {
+        self.delete_template_if_current(id, None)
+    }
+
+    pub fn delete_template_if_current(
+        &self,
+        id: &str,
+        expected_updated_at: Option<Timestamp>,
+    ) -> Result<()> {
         self.write(|tx| {
-            require::<Template>(tx, TEMPLATES, id)?;
+            let template: Template = require(tx, TEMPLATES, id)?;
+            if expected_updated_at.is_some_and(|expected| expected != template.updated_at) {
+                return Err("personal template changed; refresh before deleting".into());
+            }
             tx.delete_raw(TEMPLATES, id)
         })
     }
