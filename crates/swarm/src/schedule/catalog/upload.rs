@@ -330,7 +330,9 @@ fn receive_upload(
         return Err(io::ErrorKind::TimedOut.into());
     }
     let catalog = match target {
-        TemplateTarget::Create(Some(_)) => Store::open(root, host).map_err(explain)?,
+        TemplateTarget::Create(Some(_)) => {
+            Store::open_before(root, host, *deadline).map_err(explain)?
+        }
         TemplateTarget::Edit(..) => Store::existing(root, host)
             .map_err(explain)?
             .ok_or_else(|| io::Error::other("schedule record not found"))?,
@@ -340,7 +342,7 @@ fn receive_upload(
         return Err(io::ErrorKind::TimedOut.into());
     }
     let saved = catalog
-        .save_uploaded_template(target, name, prompt, now)
+        .save_uploaded_template(target, name, prompt, now, *deadline)
         .map_err(explain)?;
     let reply = Saved {
         id: saved.id,

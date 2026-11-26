@@ -93,6 +93,8 @@ The dashboard saves an individual retained template over a dedicated owner conne
 
 The saved Go JSON has the shared bbolt limit of `2^31 - 2` bytes per value. The upload grows allocations from the bytes actually received. A complete valid upload still needs memory for its decoded text, one encoded Bolt value and the database writer. The dashboard keeps its existing per-keystroke editing limits, and can save and copy an imported over-frame prompt. `scripts/verification/parity/template_retry.py RUST GO` exercises both dashboard actions against signed Go, a truncated transfer, a concurrent Go edit and recovery of an unacknowledged oversized create.
 
+The same upload deadline governs both the catalog and Bolt lock acquisition. An expired lock wait releases the upload permit and leaves the catalog unchanged. The fixture holds each lock separately, proves that a second connection can use the upload lane, releases the original lock and saves through a fresh request. A transaction that has begun writing can finish atomically, including when the caller loses its reply.
+
 The dashboard now reads one consistent catalog snapshot on a dedicated owner connection in chunks of up to 64 KiB decoded. It verifies the endpoint, chunk sequence and completion receipt before presenting the list. Both native hosts opened a 1,400,019-byte template written by signed Go and saved a separate small template while the original was present. A signed Go edit after the stream header preserved the original snapshot and the subsequent edit. The matching native fixture logs have SHA-256 `306a18471795e305cbfe3a54612fea9bb9ddd1b3a6ba36fd0dc2f1642c182aed`.
 
 ```sh

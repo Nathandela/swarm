@@ -17,6 +17,8 @@ use std::{
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 const JOBS: &str = "jobs";
@@ -47,7 +49,7 @@ pub(super) enum TemplateTarget<'a> {
 enum TemplateReply<'a> {
     Local,
     Inline(&'a str),
-    Upload,
+    Upload(Instant),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -259,15 +261,24 @@ struct Evaluation {
 
 impl Store {
     pub fn open(root: &Path, host: &Path) -> Result<Self> {
+        Self::open_inner(root, host, None)
+    }
+
+    pub(super) fn open_before(root: &Path, host: &Path, deadline: Instant) -> Result<Self> {
+        Self::open_inner(root, host, Some(deadline))
+    }
+
+    fn open_inner(root: &Path, host: &Path, deadline: Option<Instant>) -> Result<Self> {
+        require_time(deadline)?;
         let store = Self {
             dir: root.join("schedules"),
             host: host.into(),
         };
         crate::supervisor::runtime::private_dir(&store.dir)?;
-        let _lock = store.lock(libc::LOCK_EX)?;
+        let _lock = store.lock_file("state.lock", libc::LOCK_EX, deadline)?;
         let path = store.dir.join("state.db");
         if private_file(&path, false)?.is_some() {
-            let db = Bolt::open_ro(&path)?;
+            let (pin, db) = catalog_reader(&path, deadline)?;
             let tx = db.begin()?;
             if [JOBS, REVISIONS, EVALUATED, RUNS, HISTORY, ACTIVE, TEMPLATES]
                 .into_iter()
@@ -283,14 +294,17 @@ impl Store {
             }
             drop(tx);
             drop(db);
-            initialize(&path)?;
+            drop(pin);
+            initialize(&path, deadline)?;
         } else {
             // Publish a new catalog only after all buckets are durably committed.
             let temp = store
                 .dir
                 .join(format!(".catalog-{}", id(Timestamp::now())?));
-            let result =
-                initialize(&temp).and_then(|()| std::fs::rename(&temp, &path).map_err(Into::into));
+            let result = initialize(&temp, deadline).and_then(|()| {
+                require_time(deadline)?;
+                std::fs::rename(&temp, &path).map_err(Into::into)
+            });
             if result.is_err() {
                 let _ = std::fs::remove_file(temp);
             }
@@ -323,25 +337,18 @@ impl Store {
     }
 
     pub fn dispatch_lock(&self) -> Result<File> {
-        self.lock_file("dispatch.lock", libc::LOCK_EX)
+        self.lock_file("dispatch.lock", libc::LOCK_EX, None)
     }
 
     fn lock(&self, mode: libc::c_int) -> Result<File> {
-        self.lock_file("state.lock", mode)
+        self.lock_file("state.lock", mode, None)
     }
 
-    fn lock_file(&self, name: &str, mode: libc::c_int) -> Result<File> {
+    fn lock_file(&self, name: &str, mode: libc::c_int, deadline: Option<Instant>) -> Result<File> {
+        require_time(deadline)?;
         let lock = private_file(&self.dir.join(name), true)?.ok_or("missing schedule lock file")?;
-        loop {
-            // The open file owns the lock and releases it when the transaction is over.
-            if unsafe { libc::flock(lock.as_raw_fd(), mode) } == 0 {
-                return Ok(lock);
-            }
-            let err = io::Error::last_os_error();
-            if err.kind() != io::ErrorKind::Interrupted {
-                return Err(err.into());
-            }
-        }
+        catalog_flock(&lock, mode, deadline)?;
+        Ok(lock)
     }
 
     fn view<T>(&self, f: impl FnOnce(&dyn ReadBucket) -> Result<T>) -> Result<T> {
@@ -354,18 +361,20 @@ impl Store {
     }
 
     fn write<T>(&self, f: impl FnOnce(&mut dyn WriteBucket) -> Result<T>) -> Result<T> {
-        self.write_deciding(|tx| Ok((f(tx)?, true)))
+        self.write_deciding(None, |tx| Ok((f(tx)?, true)))
     }
 
     fn write_deciding<T>(
         &self,
+        deadline: Option<Instant>,
         f: impl FnOnce(&mut dyn WriteBucket) -> Result<(T, bool)>,
     ) -> Result<T> {
-        let _lock = self.lock(libc::LOCK_EX)?;
+        let _lock = self.lock_file("state.lock", libc::LOCK_EX, deadline)?;
         let path = self.dir.join("state.db");
         private_file(&path, false)?.ok_or("schedule database disappeared")?;
-        let mut db = Bolt::open(&path)?;
+        let (_pin, mut db) = catalog_writer(&path, deadline, false)?;
         let mut tx = db.begin_rw()?;
+        require_time(deadline)?;
         let (result, commit) = f(&mut tx)?;
         if commit {
             tx.commit()?;
@@ -624,8 +633,9 @@ impl Store {
         name: String,
         prompt: String,
         now: Timestamp,
+        deadline: Instant,
     ) -> Result<Template> {
-        self.save_template_inner(target, name, prompt, TemplateReply::Upload, now)
+        self.save_template_inner(target, name, prompt, TemplateReply::Upload(deadline), now)
     }
 
     fn save_template_inner(
@@ -637,10 +647,15 @@ impl Store {
         now: Timestamp,
     ) -> Result<Template> {
         validate_text(&name, &prompt)?;
-        self.write_deciding(|tx| {
+        let deadline = match reply {
+            TemplateReply::Upload(deadline) => Some(deadline),
+            _ => None,
+        };
+        self.write_deciding(deadline, |tx| {
             let receipt = match target {
                 TemplateTarget::Create(Some(id)) => {
                     let fingerprint = template_fingerprint(&name, &prompt)?;
+                    require_time(deadline)?;
                     tx.ensure_bucket(TEMPLATE_CREATES)?;
                     if let Some(saved) = tx.get_raw(TEMPLATE_CREATES, id)? {
                         if saved != fingerprint.as_bytes() {
@@ -649,7 +664,7 @@ impl Store {
                             );
                         }
                         let current = match reply {
-                            TemplateReply::Upload => uploaded_record::<Template>(tx, id)?,
+                            TemplateReply::Upload(_) => uploaded_record::<Template>(tx, id)?,
                             _ => get::<Template>(tx, TEMPLATES, id)?,
                         }
                         .ok_or("the previously saved personal template was deleted")?;
@@ -668,7 +683,7 @@ impl Store {
             let mut template: Template = match target {
                 TemplateTarget::Edit(id, expected_updated_at) => {
                     let template: Template = match reply {
-                        TemplateReply::Upload => {
+                        TemplateReply::Upload(_) => {
                             // The old prompt can itself be a large Bolt value. Only its identity and times survive an edit.
                             let saved: TemplateTimes = uploaded_record(tx, id)?.ok_or(NOT_FOUND)?;
                             if saved.id != id {
@@ -714,7 +729,7 @@ impl Store {
             if let TemplateReply::Inline(endpoint_id) = reply {
                 check_template_reply(&template, endpoint_id)?;
             }
-            if matches!(reply, TemplateReply::Upload) {
+            if matches!(reply, TemplateReply::Upload(_)) {
                 let size = template_size(
                     &template.id,
                     &template.name,
@@ -728,6 +743,7 @@ impl Store {
                     &mut bytes,
                     GoTemplateJson,
                 ))?;
+                require_time(deadline)?;
                 tx.put_raw(TEMPLATES, &template.id, &bytes)?;
             } else {
                 put(tx, TEMPLATES, &template.id, &template)?;
@@ -1100,9 +1116,150 @@ pub(super) fn digest(data: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(data))
 }
 
-fn initialize(path: &Path) -> Result<()> {
-    let mut db = Bolt::open(path)?;
+fn require_time(deadline: Option<Instant>) -> io::Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    Ok(())
+}
+
+fn catalog_flock(file: &File, mode: libc::c_int, deadline: Option<Instant>) -> io::Result<()> {
+    let flags = mode | if deadline.is_some() { libc::LOCK_NB } else { 0 };
+    loop {
+        require_time(deadline)?;
+        // SAFETY: the descriptor stays open for the advisory lock.
+        if unsafe { libc::flock(file.as_raw_fd(), flags) } == 0 {
+            return require_time(deadline);
+        }
+        let error = io::Error::last_os_error();
+        match (error.kind(), deadline) {
+            (io::ErrorKind::Interrupted, _) => {}
+            (io::ErrorKind::WouldBlock, Some(deadline)) => std::thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(10)),
+            ),
+            _ => return Err(error),
+        }
+    }
+}
+
+fn pinned_bolt_path(file: &File) -> PathBuf {
+    let aliases = if cfg!(target_os = "macos") {
+        "/dev/fd"
+    } else {
+        "/proc/self/fd"
+    };
+    Path::new(aliases).join(file.as_raw_fd().to_string())
+}
+
+fn require_same_bolt(file: &File, path: &Path) -> io::Result<()> {
+    let pinned = file.metadata()?;
+    let current = std::fs::symlink_metadata(path)?;
+    if (pinned.dev(), pinned.ino()) != (current.dev(), current.ino()) {
+        return Err(io::Error::other(
+            "schedule database changed during lock acquisition",
+        ));
+    }
+    Ok(())
+}
+
+fn catalog_reader(path: &Path, deadline: Option<Instant>) -> Result<(Option<File>, impl DbApi)> {
+    if let Some(deadline) = deadline {
+        let pin = private_file(path, false)?.ok_or("schedule database disappeared")?;
+        catalog_flock(&pin, libc::LOCK_SH, Some(deadline))?;
+        // Bolt takes another shared flock on this exact inode while the original stays pinned.
+        let db = Bolt::open_ro(pinned_bolt_path(&pin))?;
+        require_time(Some(deadline))?;
+        return Ok((Some(pin), db));
+    }
+    Ok((None, Bolt::open_ro(path.to_path_buf())?))
+}
+
+// The pinned Bolt library always uses blocking flock when opening a writer.
+// Schedule writers already share state.lock. Bound the remaining race with an independent raw Bolt opener.
+static BOLT_OPENER: AtomicBool = AtomicBool::new(false);
+
+struct BoltOpener;
+
+impl Drop for BoltOpener {
+    fn drop(&mut self) {
+        BOLT_OPENER.store(false, Ordering::Release);
+    }
+}
+
+fn catalog_writer(
+    path: &Path,
+    deadline: Option<Instant>,
+    initialize: bool,
+) -> Result<(Option<File>, Bolt)> {
+    let Some(deadline) = deadline else {
+        return Ok((None, Bolt::open(path)?));
+    };
+    require_time(Some(deadline))?;
+    let pin = if initialize && !path.try_exists()? {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)?
+    } else {
+        let pin = private_file_mode(path, true, false)?.ok_or("schedule database disappeared")?;
+        if pin.metadata()?.len() == 0 {
+            return Err("incomplete schedule database".into());
+        }
+        pin
+    };
+    catalog_flock(&pin, libc::LOCK_EX, Some(deadline))?;
+    BOLT_OPENER
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .map_err(|_| io::Error::other("a schedule database opener is still waiting for Bolt"))?;
+    let permit = BoltOpener;
+    let (send, receive) = std::sync::mpsc::sync_channel(0);
+    let physical_path = path.to_path_buf();
+    std::thread::Builder::new().spawn(move || {
+        let opened = (|| {
+            require_time(Some(deadline))?;
+            let file = if cfg!(target_os = "macos") {
+                // Darwin's sandbox can disallow writable /dev/fd aliases. The caller holds state.lock,
+                // and checks this private catalog inode before opening Bolt and before starting a transaction.
+                require_same_bolt(&pin, &physical_path)?;
+                physical_path
+            } else {
+                pinned_bolt_path(&pin)
+            };
+            // The Linux alias produces a new open file description, so Bolt must acquire its own lock.
+            // SAFETY: this borrowed descriptor holds the preflight lock.
+            if unsafe { libc::flock(pin.as_raw_fd(), libc::LOCK_UN) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            require_time(Some(deadline))?;
+            let db = Bolt::open(file).map_err(io::Error::other)?;
+            Ok((pin, db))
+        })();
+        drop(permit);
+        // The opener has neither an upload buffer nor a transaction to begin after a timeout.
+        let _ = send.send(opened);
+    })?;
+    let (pin, db) = receive
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => io::ErrorKind::TimedOut.into(),
+            std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                io::Error::other("schedule database opener stopped")
+            }
+        })??;
+    require_time(Some(deadline))?;
+    require_same_bolt(&pin, path)?;
+    Ok((Some(pin), db))
+}
+
+fn initialize(path: &Path, deadline: Option<Instant>) -> Result<()> {
+    let (_pin, mut db) = catalog_writer(path, deadline, true)?;
     let mut tx = db.begin_rw()?;
+    require_time(deadline)?;
     for bucket in [JOBS, REVISIONS, EVALUATED, RUNS, HISTORY, ACTIVE, TEMPLATES] {
         tx.create_bucket_if_not_exists(bucket)?;
     }
@@ -1249,9 +1406,13 @@ pub(super) fn template_size(
 }
 
 fn private_file(path: &Path, create: bool) -> Result<Option<File>> {
+    private_file_mode(path, create, create)
+}
+
+fn private_file_mode(path: &Path, write: bool, create: bool) -> Result<Option<File>> {
     let file = match OpenOptions::new()
         .read(true)
-        .write(create)
+        .write(write)
         .create(create)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -1384,6 +1545,27 @@ mod tests {
 
     fn ts(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn upload_open_expires_while_an_independent_bolt_writer_is_still_held() {
+        let temp = Temp::new();
+        let host = Path::new("/etc/localtime");
+        let store = Store::open(&temp.0, host).unwrap();
+        let path = store.dir.join("state.db");
+        let before = fs::read(&path).unwrap();
+        let other = Bolt::open(&path).unwrap();
+        let error = Store::open_before(&temp.0, host, Instant::now() + Duration::from_millis(50))
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        drop(other);
+        Store::open_before(&temp.0, host, Instant::now() + Duration::from_secs(2)).unwrap();
+        assert_eq!(fs::read(path).unwrap(), before);
     }
 
     fn spec(dir: &Path) -> Spec {

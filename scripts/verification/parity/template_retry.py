@@ -2,6 +2,7 @@
 """Exercise signed Go and Rust template replay, streaming, and dashboard saves in one private catalog."""
 import argparse
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -28,9 +29,10 @@ def read(stream):
     return json.loads(payload[1:])
 
 
-def upload_template(path, target, name, prompt, *, complete=True, before_complete=None, discard=False, busy=False):
+def upload_template(path, target, name, prompt, *, complete=True, before_complete=None,
+                    discard=False, busy=False, expired=False):
     with socket.socket(socket.AF_UNIX) as conn, conn.makefile("rb") as stream:
-        conn.settimeout(8)
+        conn.settimeout(23 if expired else 8)
         conn.connect(path)
         capability = "schedule-template-upload-v1"
         send(conn, {"op":"hello", "protocol_version":1, "capabilities":[capability]})
@@ -55,6 +57,9 @@ def upload_template(path, target, name, prompt, *, complete=True, before_complet
         if complete:
             send(conn, dict(op="schedule_template_chunk", endpoint_id=endpoint, sequence=sequence, complete=True))
         conn.shutdown(socket.SHUT_WR)
+        if expired:
+            assert stream.read(1) == b"", "expired upload returned a reply instead of closing"
+            return None
         if discard:
             assert conn.recv(1, socket.MSG_PEEK), "server never published the committed acknowledgement"
             return None
@@ -242,6 +247,23 @@ def run(root, rust, go):
             ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
         assert set(duplicate) == {"id", "created_at", "updated_at", "fingerprint"}
         assert duplicate["fingerprint"] == fingerprint and database.read_bytes() == committed
+
+        for lock_path, mode, suffix in ((database.with_name("state.lock"), fcntl.LOCK_EX, "Z"),
+                                        (database, fcntl.LOCK_SH, "V")):
+            expired_id = "01M8C694P5EA2PJDV268PQ74X" + suffix
+            retry = {"create_id":expired_id}
+            before = database.read_bytes()
+            with lock_path.open("rb") as blocking:
+                fcntl.flock(blocking, mode | fcntl.LOCK_NB)
+                upload_template(socket, retry, "Expired while locked", big_prompt, expired=True)
+                assert database.read_bytes() == before
+                probe = upload_template(socket, retry, "Released upload permit", big_prompt, complete=False)
+                assert probe["op"] == "error" and "another oversized" not in probe["error"], probe
+                assert database.read_bytes() == before
+            assert database.read_bytes() == before
+            recovered = upload_template(socket, retry, "Fresh after release", big_prompt)["saved"]
+            assert recovered["id"] == expired_id
+            assert json.loads(cli(go, "show", expired_id).stdout)["name"] == "Fresh after release"
     finally:
         if owner.poll() is None:
             owner.terminate()
@@ -253,6 +275,7 @@ def run(root, rust, go):
     print("A Go edit during a Rust stream preserved the original snapshot and the later edit.")
     print("The dashboard edited and copied an over-frame legacy Go template; signed Go reopened both.")
     print("Truncation and concurrent Go edits caused no Rust write; a lost oversized acknowledgement replayed exactly once.")
+    print("Expired schedule and Bolt lock waits released the upload permit without a late write; fresh saves succeeded.")
 
 
 if __name__ == "__main__":
