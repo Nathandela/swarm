@@ -1426,9 +1426,22 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         p.wait_for(observe, "native spinner changes and elapsed clock advances while idle")
         assert all(next_frame["elapsed_seconds"] >= frame["elapsed_seconds"]
                    for frame, next_frame in zip(frames, frames[1:]))
+        run("resize-window", "-t", "roster:0", "-x", "40", "-y", "8")
+        capture(40, 8, "teal")
+        assert cli("send", ids["teal"], "--text", "fixture permission").returncode == 0
+        caption = "teal needs input (approval)"
+        banner = capture(40, 8, caption)
+        assert caption in "".join(c[0] for c in banner["cells"][1])
+        def dismissed():
+            frame = snapshot(40, 8)
+            text = "\n".join("".join(c[0] for c in row) for row in frame["cells"])
+            return frame if caption not in text and "approval" in text else None
+        settled = p.wait_for(dismissed, "attention banner expires while approval remains in the roster")
+        assert any(row["id"] == ids["teal"] and row["group"] == "needs_input" for row in roster()[0])
         run("kill-session", "-t", "roster")
         close_fixture()
         p.write_json(root / "grid.json", {"motion":frames, "cols":cols, "rows":height,
+                                         "banner_shown":banner, "banner_expired":settled,
                                          "first_divergence":None})
         return
 

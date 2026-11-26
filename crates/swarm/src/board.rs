@@ -24,7 +24,7 @@ use automation::Automation;
 use handoff::Handoff;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
-use navigation::{Focus, Row, board_capacity, board_first, usable};
+use navigation::{Focus, Row, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -96,6 +96,16 @@ fn board(path: &Path) -> io::Result<()> {
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
+        if board
+            .banner
+            .as_ref()
+            .is_some_and(|(_, expires)| Instant::now() >= *expires)
+        {
+            board.banner = None;
+            board.press = None;
+            board.clamp_top(dimensions.1);
+            needs_paint = true;
+        }
         if let Some(client) = &connection
             && let Some(snapshot) = linked_poll.update(path, client.endpoint())
         {
@@ -440,6 +450,7 @@ struct Board {
     layout: Layout,
     press: Option<Press>,
     notice: String,
+    banner: Option<(String, Instant)>,
     modal: Option<Modal>,
 }
 
@@ -576,13 +587,22 @@ impl Board {
     }
 
     fn refresh(&mut self, client: &mut Client) -> io::Result<()> {
-        self.rows = discussions::project(client.sessions()?, client.endpoint(), false);
+        let mut rows = discussions::project(client.sessions()?, client.endpoint(), false);
         if let Some(linked) = &self.linked {
-            self.rows.extend(linked.rows.iter().cloned());
+            rows.extend(linked.rows.iter().cloned());
         }
+        self.note_attention(roster::attention_change(&self.rows, &rows));
+        self.rows = rows;
         self.roster_revision = self.roster_revision.wrapping_add(1);
         self.rebuild_sections();
         Ok(())
+    }
+
+    fn note_attention(&mut self, text: Option<String>) {
+        if let Some(text) = text {
+            self.banner = Some((text, Instant::now() + Duration::from_secs(4)));
+            self.press = None;
+        }
     }
 
     fn linked_binding(&self, id: &str) -> Option<&crate::discord::linked_board::Binding> {
@@ -597,6 +617,9 @@ impl Board {
             == next.as_ref().map(|s| (&s.binding, &s.rows))
         {
             return false;
+        }
+        if let Some(next) = &next {
+            self.note_attention(roster::attention_change(&self.rows, &next.rows));
         }
         if let Some(previous) = self.linked.take() {
             let endpoint = &previous.binding.endpoint;
@@ -658,7 +681,7 @@ impl Board {
             }
             return self.update_modal(modal, key, geometry, online);
         }
-        let step = board_capacity(rows) as isize;
+        let step = self.body_capacity(rows) as isize;
         let navigation = match key {
             Key::Escape | Key::CtrlC => return Action::Quit,
             Key::Up | Key::Text('k') => Some((-1, true)),
@@ -1109,16 +1132,7 @@ impl Board {
                 }
             }
             if row["supervision_pending"] == true {
-                let parent = field(row, "spawned_from");
-                let pending = self.rows.iter().any(|session| {
-                    let id = field(session, "id").rsplit('/').next().unwrap_or("");
-                    id == parent && running(session)
-                });
-                context.push(if pending {
-                    "Supervision: supervisor pending".into()
-                } else {
-                    "Supervision: supervisor gone".into()
-                });
+                context.push(format!("Supervision: {}", roster::supervision(self, row)));
             }
             entries.extend(
                 context
@@ -1302,7 +1316,7 @@ impl Board {
                     running: self.row().is_some_and(running),
                 });
         }
-        let first = board_first(rows);
+        let first = self.body_first(rows);
         if event.y < first {
             return None;
         }
@@ -1336,7 +1350,7 @@ impl Board {
                 let first = if self.modal.is_some() {
                     2
                 } else {
-                    board_first(geometry.1)
+                    self.body_first(geometry.1)
                 };
                 let end = if self.modal.is_some() {
                     2 + menu::capacity(geometry) as u16
@@ -1468,11 +1482,11 @@ impl Board {
         self.display_rows()
             .into_iter()
             .skip(self.top)
-            .take(board_capacity(rows))
+            .take(self.body_capacity(rows))
             .enumerate()
             .find_map(|(index, row)| match row {
                 Row::Session(row) if field(row, "id") == target => {
-                    Some((board_first(rows) + index as u16, row))
+                    Some((self.body_first(rows) + index as u16, row))
                 }
                 _ => None,
             })

@@ -180,9 +180,21 @@ impl Board {
         }
     }
 
+    pub(super) fn body_first(&self, rows: u16) -> u16 {
+        if rows >= 12 || self.banner.is_some() {
+            3
+        } else {
+            2
+        }
+    }
+
+    pub(super) fn body_capacity(&self, rows: u16) -> usize {
+        usize::from(rows.saturating_sub(self.body_first(rows)).max(1))
+    }
+
     pub(super) fn visible(&self, rows: u16) -> bool {
         self.focus_line()
-            .is_some_and(|line| line >= self.top && line < self.top + board_capacity(rows))
+            .is_some_and(|line| line >= self.top && line < self.top + self.body_capacity(rows))
     }
 
     fn focus_line(&self) -> Option<usize> {
@@ -198,13 +210,13 @@ impl Board {
             self.top = self
                 .top
                 .min(line)
-                .max((line + 1).saturating_sub(board_capacity(rows)));
+                .max((line + 1).saturating_sub(self.body_capacity(rows)));
         }
     }
 
     pub(super) fn clamp_top(&mut self, rows: u16) {
         let count = self.display_rows().len();
-        self.top = self.top.min(count.saturating_sub(board_capacity(rows)));
+        self.top = self.top.min(count.saturating_sub(self.body_capacity(rows)));
     }
 
     pub(super) fn move_selection(&mut self, offset: isize, wrap: bool, rows: u16) {
@@ -278,14 +290,6 @@ impl Board {
             self.reveal_focus(rows);
         }
     }
-}
-
-pub(super) fn board_first(rows: u16) -> u16 {
-    if rows >= 12 { 3 } else { 2 }
-}
-
-pub(super) fn board_capacity(rows: u16) -> usize {
-    usize::from(rows.saturating_sub(board_first(rows)).max(1))
 }
 
 pub(super) fn usable((cols, rows): (u16, u16)) -> bool {
