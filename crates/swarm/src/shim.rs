@@ -3,6 +3,7 @@ mod opencode_backend;
 mod pty;
 mod screen;
 mod supervision;
+mod terminal_reply;
 
 use crate::ipc::{field, wire};
 use crate::providers::{
@@ -89,6 +90,7 @@ struct Subscriber {
     generation: u64,
     output: SyncSender<Vec<u8>>,
     conn: UnixStream,
+    replies: Arc<Mutex<terminal_reply::Debt>>,
 }
 
 fn serve(dir: &Path) -> io::Result<()> {
@@ -619,10 +621,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         master,
         screen: Mutex::new(ScreenState {
             parser: vt100::Parser::new(rows.try_into().unwrap(), cols.try_into().unwrap(), 0),
-            mouse: crate::terminal_mouse::Tracker::new(crate::terminal_mouse::Modes {
-                known: true,
-                ..Default::default()
-            }),
+            mouse: crate::terminal_mouse::Tracker::new(crate::terminal_mouse::Modes::at_reset()),
             subscriber: None,
         }),
         control: Mutex::new(0),
@@ -681,9 +680,17 @@ fn serve(dir: &Path) -> io::Result<()> {
         let intent = config["opencode_initial"].clone();
         thread::spawn(move || opencode.run(&initial, &intent));
     }
+    let (replies, replies_in) = mpsc::sync_channel::<String>(256);
+    let reply_owner = state.clone();
+    thread::spawn(move || {
+        for reply in replies_in {
+            let _owner = reply_owner.control.lock().unwrap();
+            let _ = pty::input(&reply_owner.master, reply.as_bytes());
+        }
+    });
     let (drained, drain_done) = mpsc::sync_channel(1);
     let output = thread::spawn(move || {
-        drain(reader, pending);
+        drain(reader, pending, replies);
         let _ = drained.send(());
     });
     let shared = state.clone();
@@ -878,7 +885,7 @@ fn terminal_status_writer(state: &State, pending: &PendingStatus) {
     }
 }
 
-fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
+fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>, replies: SyncSender<String>) {
     let mut bytes = [0; 8192];
     let mut master = &state.master;
     let mut observed = None;
@@ -907,7 +914,17 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>) {
         screen.parser.process(&bytes[..n]);
         // The screen emulator collapses conflicting DEC mouse modes to a single
         // effective mode. The attach controller also needs the full native mask.
-        let _ = screen.mouse.feed(&bytes[..n], None, |_, _, _| Ok(()));
+        let subscriber = screen.subscriber.as_ref().map(|sub| sub.replies.clone());
+        let _ = screen.mouse.feed(&bytes[..n], None, |_, change, _| {
+            if let Some((mode, status)) = change.report
+                && replies.try_send(format!("\x1b[?{mode};{status}$y")).is_ok()
+                && let Some(subscriber) = &subscriber
+            {
+                // Register before exposing the triggering query to this attachment.
+                subscriber.lock().unwrap().register(mode, Instant::now());
+            }
+            Ok(())
+        });
         if let Some(sub) = &screen.subscriber
             && sub.output.try_send(bytes[..n].to_vec()).is_err()
         {
@@ -1734,6 +1751,8 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
     let worker = stream.try_clone()?;
     let eviction = stream.try_clone()?;
     let snap;
+    let replies = Arc::new(Mutex::new(terminal_reply::Debt::default()));
+    let mut filter = terminal_reply::Filter::default();
     {
         let mut owner = state.control.lock().unwrap();
         let mut screen = state.screen.lock().unwrap();
@@ -1742,6 +1761,7 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
             generation,
             output: tx,
             conn: eviction,
+            replies: replies.clone(),
         }) {
             let _ = previous.conn.shutdown(Shutdown::Both);
         }
@@ -1770,6 +1790,20 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
     });
     let result = (|| {
         loop {
+            if let Some(delay) = filter.delay(Instant::now())
+                && (delay.is_zero() || !pty::wait(&stream, libc::POLLIN, delay)?)
+            {
+                let owner = state.control.lock().unwrap();
+                if *owner != generation {
+                    break;
+                }
+                let bytes = filter.flush();
+                if !bytes.is_empty() {
+                    state.terminal_input.store(true, Ordering::Release);
+                    pty::input(&state.master, &bytes)?;
+                }
+                continue;
+            }
             let (tag, bytes) = wire::read_frame(&mut stream)?;
             let owner = state.control.lock().unwrap();
             if *owner != generation {
@@ -1782,10 +1816,11 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
                             "manager terminal input requires a custody transition",
                         ));
                     }
+                    let bytes = filter.feed(&mut replies.lock().unwrap(), &bytes, Instant::now());
                     if !bytes.is_empty() {
                         state.terminal_input.store(true, Ordering::Release);
+                        pty::input(&state.master, &bytes)?;
                     }
-                    pty::input(&state.master, &bytes)?;
                 }
                 wire::CONTROL => {
                     let request: Value = serde_json::from_slice(&bytes)?;
@@ -1815,6 +1850,11 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         if *owner == generation {
             *owner = 0;
+            let bytes = filter.flush();
+            if !bytes.is_empty() {
+                state.terminal_input.store(true, Ordering::Release);
+                let _ = pty::input(&state.master, &bytes);
+            }
         }
     }
     let _ = stream.shutdown(Shutdown::Both);

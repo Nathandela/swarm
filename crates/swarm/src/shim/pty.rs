@@ -71,9 +71,13 @@ pub(super) fn resize(master: &File, cols: u16, rows: u16) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn wait(master: &File, events: libc::c_short, timeout: Duration) -> io::Result<bool> {
+pub(super) fn wait(
+    io: &impl AsRawFd,
+    events: libc::c_short,
+    timeout: Duration,
+) -> io::Result<bool> {
     let mut fd = libc::pollfd {
-        fd: master.as_raw_fd(),
+        fd: io.as_raw_fd(),
         events,
         revents: 0,
     };
