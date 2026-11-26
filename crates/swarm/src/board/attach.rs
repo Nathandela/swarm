@@ -10,6 +10,7 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+pub(super) const CAPABILITIES: &[&str] = &["attach", "agy-permission-v1"];
 const LIVE_OUTPUT: u8 = 2;
 const INPUT: u8 = 3;
 const MAX_SNAPSHOT: u64 = 200 * 1024 * 1024;
@@ -31,7 +32,7 @@ pub(super) fn run(
     output: &mut impl Write,
 ) -> io::Result<Exit> {
     run_client(
-        Client::dial(path, &["attach"])?,
+        Client::dial(path, CAPABILITIES)?,
         id,
         name,
         touch_back,
@@ -48,6 +49,10 @@ pub(super) fn run_client(
     cycle: bool,
     output: &mut impl Write,
 ) -> io::Result<Exit> {
+    if !client.supports("attach") {
+        return Err(io::Error::other("Terminal attach capability was refused"));
+    }
+    let agy_permission = client.supports("agy-permission-v1");
     let lease = client.request("attach", Some(id), "lease")?;
     if field(&lease, "endpoint_id") != client.endpoint() || field(&lease, "session_id") != id {
         return Err(io::Error::other(
@@ -86,6 +91,20 @@ pub(super) fn run_client(
     output.flush()?;
     send_control("resize", Some(worker_size(geometry)), &mut stream)?;
 
+    let mut permission = None;
+    let permission_control = |stream: &mut std::os::unix::net::UnixStream,
+                              op: &str,
+                              request: &str,
+                              display: &str,
+                              choice: Option<u64>| {
+        runtime_control(
+            stream,
+            &json!({
+                "op":op,"endpoint_id":endpoint,"session_id":id,"generation":generation,
+                "request":request,"display":display,"choice":choice,
+            }),
+        )
+    };
     let mut filter = AttachKeys {
         no_cycle: !cycle,
         ..AttachKeys::default()
@@ -142,6 +161,34 @@ pub(super) fn run_client(
                 wire::CONTROL => {
                     let message: Value = serde_json::from_slice(&payload)?;
                     match field(&message, "op") {
+                        "agy_permission" if agy_permission => {
+                            if message["endpoint_id"] != endpoint
+                                || message["session_id"] != id
+                                || message["generation"] != generation
+                            {
+                                return Err(io::Error::other(
+                                    "invalid Antigravity permission display scope",
+                                ));
+                            }
+                            permission = None;
+                            filter = AttachKeys::default();
+                            if let Some(menu) = PermissionInput::offer(&message) {
+                                output.flush()?;
+                                if unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) } == 0
+                                {
+                                    permission_control(
+                                        &mut stream,
+                                        "agy_permission_displayed",
+                                        &menu.request,
+                                        &menu.display,
+                                        None,
+                                    )?;
+                                    permission = Some(menu);
+                                }
+                            }
+                            // The readiness bit may refer to input flushed above.
+                            continue;
+                        }
                         "detached" | "detach" | "lease_revoked" => break,
                         "error" => {
                             return Err(io::Error::other(field(&message, "error").to_owned()));
@@ -158,8 +205,28 @@ pub(super) fn run_client(
                 break;
             }
             last_input = Instant::now();
+            let was_paste = filter.paste;
             let (bytes, command) = filter.feed_touch(&input[..count], touch.as_mut());
-            if !bytes.is_empty() {
+            if let Some(menu) = &mut permission {
+                if was_paste
+                    || filter.paste
+                    || bytes
+                        .windows(PASTE_START.len())
+                        .any(|bytes| bytes == PASTE_START)
+                {
+                    menu.digits.clear();
+                    menu.invalid = false;
+                } else if let Some(choice) = menu.input(&bytes, output)? {
+                    permission_control(
+                        &mut stream,
+                        "agy_permission_reply",
+                        &menu.request,
+                        &menu.display,
+                        Some(choice),
+                    )?;
+                    permission = None;
+                }
+            } else if !bytes.is_empty() {
                 wire::write_frame(&mut stream, INPUT, &bytes)?;
             }
             if let Some(exit) = command {
@@ -172,12 +239,86 @@ pub(super) fn run_client(
         {
             let mut pending = Vec::new();
             filter.flush_pending(&mut pending, touch.as_mut());
-            if !pending.is_empty() {
+            if let Some(menu) = &mut permission {
+                if let Some(choice) = menu.input(&pending, output)? {
+                    permission_control(
+                        &mut stream,
+                        "agy_permission_reply",
+                        &menu.request,
+                        &menu.display,
+                        Some(choice),
+                    )?;
+                    permission = None;
+                }
+            } else if !pending.is_empty() {
                 wire::write_frame(&mut stream, INPUT, &pending)?;
             }
         }
     }
     Ok(Exit::Board)
+}
+
+fn runtime_control(stream: &mut std::os::unix::net::UnixStream, message: &Value) -> io::Result<()> {
+    wire::write_frame(stream, wire::CONTROL, &serde_json::to_vec(message)?)
+}
+
+struct PermissionInput {
+    request: String,
+    display: String,
+    choices: u64,
+    digits: String,
+    invalid: bool,
+}
+
+impl PermissionInput {
+    fn offer(message: &Value) -> Option<Self> {
+        let request = field(message, "request");
+        let choices = message["choices"]
+            .as_u64()
+            .filter(|choices| (1..=12).contains(choices))?;
+        let display = field(message, "display");
+        (crate::supervisor::runtime::valid_id(request)
+            && crate::supervisor::runtime::valid_id(display))
+        .then_some(Self {
+            request: request.into(),
+            display: display.into(),
+            choices,
+            digits: String::new(),
+            invalid: false,
+        })
+    }
+
+    fn input(&mut self, bytes: &[u8], output: &mut impl Write) -> io::Result<Option<u64>> {
+        for &byte in bytes {
+            match byte {
+                b'0'..=b'9' if !self.invalid && self.digits.len() < 2 => {
+                    self.digits.push(char::from(byte));
+                    output.write_all(&[byte])?;
+                }
+                8 | 127 if !self.invalid => {
+                    if self.digits.pop().is_some() {
+                        output.write_all(b"\x08 \x08")?;
+                    }
+                }
+                b'\r' | b'\n' => {
+                    let value = (!self.invalid)
+                        .then(|| self.digits.parse::<u64>().ok())
+                        .flatten()
+                        .filter(|&choice| choice <= self.choices);
+                    self.digits.clear();
+                    self.invalid = false;
+                    output.write_all(b"\r\n")?;
+                    output.flush()?;
+                    if value.is_some() {
+                        return Ok(value);
+                    }
+                }
+                _ => self.invalid = true,
+            }
+        }
+        output.flush()?;
+        Ok(None)
+    }
 }
 
 fn worker_size((cols, rows): (u16, u16)) -> (u16, u16) {

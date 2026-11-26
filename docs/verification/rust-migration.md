@@ -63,3 +63,5 @@ The unprivileged Linux x86_64 Go 1.26.9 normal and race package sets match exact
 | Complete TUI race rerun | 1 | 0 | `b374ab7cf2a4dbfd56dd1c52a65aa25f31cfb47e8d3051dcacda4e0bf64e1f87` |
 
 At integration revision `cb630ec5`, the ordinary Rust workspace suite passed 146 tests on native macOS arm64 and 146 on Linux x86_64. Five cases on each host required opt-in prerequisites. The joined suite includes stopped Go compatibility, the terminal query path, cleanup lock release, enrolled team calls and signed-install write custody. Whole-product parity and production qualification remain open.
+
+At `3db0f3fd`, all 168 default Rust tests passed on each native host, with six opt-in cases. Linux and macOS each completed a true one-hour OpenCode run with 17 daemon recoveries. The signed Linux archive was used for the successful replacement run after disk exhaustion. Longer native and mixed workloads are still in progress. [Measured soak results](rust-m11-development.md) · [XTerm comparison](rust-board-more-2026-11-26.md) · [Context Guard](rust-context-guard.md).
