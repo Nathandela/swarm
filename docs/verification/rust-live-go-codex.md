@@ -1,0 +1,9 @@
+# Live Go Codex owner round trip
+
+With both Go compatibility flags set, the Rust owner can adopt the pinned Go wire-v2 shim of an ordinary managed Codex terminal. It authenticates the original shim's private sockets and native TUI birth identity. It also checks the original backend record against the shim's native-writer record and verifies the original native app-server birth identity and private socket peer. A read-only app-server probe matches the persisted conversation exactly once in the loaded inventory and checks its checkout. Auxiliary native threads may share the inventory. The Rust bridge keeps terminal I/O on the original Go shim. The Go owner can subsequently start on the same state and reconnect.
+
+The Linux x86-64 fixture used pinned Go `f26648d69086e329132ac7849954d2f29a895387` and actual Codex 0.151.0. A single isolated network and process namespace hosted all three owners and a loopback Responses server. Each owner submitted a different terminal prompt and displayed its own reply. The fixture checked the actual kernel birth and PID of the original shim, TUI and app-server, the backend socket inode and authenticated peer, a single native rollout containing all three prompts, and refusal of a forged conversation ID before input. It restores the original Go metadata after the forged-ID probe.
+
+Run `python3 -Bu scripts/verification/live_go_codex.py PINNED_GO RUST SCRATCH` inside a Linux sandbox with private network, PID, and temporary-directory namespaces. Stage the actual Codex 0.151.0 binary read-only at `SCRATCH/bin/codex` and keep the scratch path short enough for Unix sockets. Only the fixture loopback model and generated profile are used.
+
+The witness covers attached terminal I/O and intact native state. Structured input and Context Guard remain with their original owner. Scheduled, account-managed and degraded launches, vendor socket aliases, macOS native Codex, and live classic agy require separate qualification.

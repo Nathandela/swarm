@@ -1,6 +1,6 @@
 # Stopped classic agy compatibility
 
-The stopped-Go compatibility mode accepts an ordinary schema-1 agy session written by Go wire v2. It preserves the original Go metadata and adds Rust roster and label changes through the same Go-readable record. The live Go bridge continues to require the existing classic Claude custody evidence.
+The stopped-Go compatibility mode accepts an ordinary schema-1 agy session written by Go wire v2. It preserves the original Go metadata and adds Rust roster and label changes through the same Go-readable record. Live agy custody has its own qualification gate.
 
 The pinned Go agy fixture supplies a matching private launch record, absolute agy executable identity and captured conversation identifier. Go's ordinary agy shim commits its exit report after joining the PTY group and closing its hook spool. Its side files differ from the Go Claude and Codex managed writer proofs. Qualification requires the matching exit metadata and extinct shim birth identity, with no managed writer record, backend/socket custody, or scheduled ACP launch. The witness verifies separate refusal for live agy, a native input binding, ACP arguments, a backend declaration, changed executable identity and a managed writer side file.
 

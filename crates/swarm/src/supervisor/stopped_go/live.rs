@@ -13,6 +13,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+mod codex;
+
 pub(in crate::supervisor) const OPT_IN: &str = "SWARM_DAEMON_LIVE_GO_COMPAT";
 const SHIM_WIRE_VERSION: u64 = 2;
 
@@ -21,6 +23,7 @@ pub(in crate::supervisor) struct Owner {
     directory: File,
     shim: Process,
     worker: Process,
+    backend: Option<Process>,
     lease: Mutex<Option<Controller>>,
 }
 
@@ -92,7 +95,8 @@ impl Process {
 impl Owner {
     pub(super) fn open(path: PathBuf, directory: &File, meta: &Value) -> io::Result<Self> {
         super::qualified_role(meta)?;
-        if meta["agent_type"] != "claude"
+        let agent = field(meta, "agent_type");
+        if !matches!(agent, "claude" | "codex")
             || meta["status"]["Process"] != "running"
             || meta["shim_wire_version"] != SHIM_WIRE_VERSION
             || !meta["exit_code"].is_null()
@@ -118,12 +122,17 @@ impl Owner {
                 "Go live launch must stay bound to its original private directory and hook spool",
             ));
         }
-        for name in [
-            "exit.json",
-            "native-writers-stopped.json",
-            "backend.json",
-            "codex.sock",
-        ] {
+        let expected_absent: &[&str] = if agent == "codex" {
+            &["exit.json", "native-writers-stopped.json"]
+        } else {
+            &[
+                "exit.json",
+                "native-writers-stopped.json",
+                "backend.json",
+                "codex.sock",
+            ]
+        };
+        for name in expected_absent {
             match fs::symlink_metadata(path.join(name)) {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => (),
                 _ => {
@@ -135,28 +144,37 @@ impl Owner {
         }
         let native = read_at(directory, c"native-process.json")?;
         if native["schema_version"] != 3
-            || native["provider"] != "claude"
+            || native["provider"] != agent
             || native["shim_pid"] != meta["shim_pid"]
             || native["shim_start_time"] != meta["shim_start_time"]
             || native["pid"] != native["pgid"]
             || field(&native, "generation").is_empty()
-            || !native["backend_pid"].is_null()
-            || !native["backend_start_time"].is_null()
+            || agent == "claude"
+                && (!native["backend_pid"].is_null() || !native["backend_start_time"].is_null())
             || !native["incident_id"].is_null()
         {
             return Err(io::Error::other(
                 "Go shim and native process ownership disagree",
             ));
         }
+        let backend = if agent == "codex" {
+            Some(codex::owned_backend(&path, directory, &launch, &native)?)
+        } else {
+            None
+        };
         let owner = Self {
             dir: path,
             directory: directory.try_clone()?,
             shim: Process::new(&meta["shim_pid"], &meta["shim_start_time"])?,
             worker: Process::new(&native["pid"], &native["start_time"])?,
+            backend,
             lease: Mutex::new(None),
         };
         owner.connect("hook.sock")?;
         owner.dial()?;
+        if let Some(backend) = &owner.backend {
+            codex::verify_thread(&owner.dir, backend, meta)?;
+        }
         Ok(owner)
     }
 
@@ -177,6 +195,9 @@ impl Owner {
             return Err(io::Error::other("unproven live Go socket custody"));
         }
         self.worker.matches()?;
+        if let Some(backend) = &self.backend {
+            backend.matches()?;
+        }
         let stream = UnixStream::connect(socket)?;
         stream.set_read_timeout(Some(runtime::IO_TIMEOUT))?;
         stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
