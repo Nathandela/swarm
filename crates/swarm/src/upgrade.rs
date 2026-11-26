@@ -1,4 +1,5 @@
 //! A managed installation holds a shared lease before any command can reach a writer.
+mod archive;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;

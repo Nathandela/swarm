@@ -8,6 +8,8 @@ publish = false
 base64 = "0.23"
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
+ring = "0.17"
+flate2 = "1"
 subtle = "2.6"
 libc = "0.2"
 vt100 = "0.18.1"
