@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 const STOP_WAIT: Duration = Duration::from_secs(2);
 
-pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
+pub(super) fn run(place: &Place, cfg: &Config, unattended: bool) -> io::Result<()> {
     let personal = cfg.text("mode") == "personal";
     if !personal && !super::guild::enabled(cfg) {
         return Err(io::Error::other(
@@ -29,6 +29,12 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
     let inbox = Inbox::open(&place.dir, cfg)?;
     let api = Discord::connect(cfg)?;
     api.verify_app(cfg)?;
+    if unattended
+        && cfg.managed()
+        && let Err(error) = super::linked_board::record(&place.dir)
+    {
+        eprintln!("discord: main board registration: {error}");
+    }
     if personal {
         run_personal(place, cfg, bridge, inbox, api)
     } else {

@@ -109,6 +109,17 @@ pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+pub(crate) fn user_config_dir() -> io::Result<PathBuf> {
+    let home = || env_path("HOME").ok_or_else(|| io::Error::other("HOME is undefined"));
+    if cfg!(target_os = "macos") {
+        Ok(home()?.join("Library/Application Support"))
+    } else if let Some(xdg) = env_path("XDG_CONFIG_HOME").filter(|path| path.is_absolute()) {
+        Ok(xdg)
+    } else {
+        Ok(home()?.join(".config"))
+    }
+}
+
 pub(crate) fn state_path() -> io::Result<PathBuf> {
     let state = if let Some(path) = env_path("SWARM_DAEMON_STATE") {
         path
