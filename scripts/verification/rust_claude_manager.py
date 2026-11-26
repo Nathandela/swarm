@@ -40,7 +40,9 @@ class Model(http.server.BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert request["model"] == "fixture"
         self.server.codex_requests.append(request)
-        text = "Codex scoped worker fixture."
+        instruction = "Start the exact enrolled worker follow-up."
+        text = ("Codex scoped follow-up completed." if instruction in json.dumps(request.get("input",[]))
+                else "Codex scoped worker fixture.")
         item = dict(type="message", id="msg_worker", role="assistant", status="completed",
                     content=[dict(type="output_text", text=text, annotations=[])])
         response = dict(id="resp_worker", object="response", model="fixture",
@@ -106,6 +108,14 @@ class Model(http.server.BaseHTTPRequestHandler):
             wrong = tool_result(request,"toolu_fixture_enrolled_wrong_instance")
             wrong_job = tool_result(request,"toolu_fixture_enrolled_wrong_job")
             exact_turn = tool_result(request,"toolu_fixture_enrolled_exact_turn")
+            send = tool_result(request,"toolu_fixture_enrolled_send")
+            send_replay = tool_result(request,"toolu_fixture_enrolled_send_replay")
+            send_conflict = tool_result(request,"toolu_fixture_send_conflict")
+            send_denied = tool_result(request,"toolu_fixture_send_revoked")
+            send_status = [mcp_object(item) for i in range(12)
+                           if (item := tool_result(request, f"toolu_fixture_send_status_{i}"))]
+            follow_up = [mcp_object(item) for i in range(5)
+                         if (item := tool_result(request, f"toolu_fixture_send_read_{i}"))]
             attempts = [tool_result(request,f"toolu_fixture_enrolled_read_{i}") for i in range(5)]
             reads = [mcp_object(item) for item in attempts if item]
             after = tool_result(request,"toolu_fixture_enrolled_next")
@@ -183,6 +193,48 @@ class Model(http.server.BaseHTTPRequestHandler):
                             dict(session=scoped["session"],session_instance=scoped["session_instance"],
                                  source="native",job_id=scoped["job_id"],attempt_id=scoped["attempt_id"],
                                  native_turn_id=scoped["evidence"]["turn_id"]))
+                    elif self.server.codex_send:
+                        assert mcp_object(exact_turn) == scoped
+                        args = dict(session=scoped["session"], session_instance=scoped["session_instance"],
+                                    action_id="stable-codex-follow-up",text="Start the exact enrolled worker follow-up.")
+                        if not send:
+                            structured = ("swarm_send","toolu_fixture_enrolled_send",args)
+                        elif self.server.codex_send_revoked:
+                            assert mcp_object(send)["state"] == "queued"
+                            revoked = self.server.release.parent / ".fixture-enrolled-deleted"
+                            deadline = time.monotonic() + 6
+                            while not revoked.is_file() and time.monotonic() < deadline:
+                                time.sleep(0.04)
+                            assert revoked.is_file(), "effect-time connector witness was never called"
+                            if not send_denied:
+                                structured = ("swarm_status","toolu_fixture_send_revoked",
+                                              dict(action_id=mcp_object(send)["action_id"]))
+                            else:
+                                assert "Manager request was not confirmed." in json.dumps(send_denied)
+                                (self.server.release.parent / ".fixture-enrolled-deleted-checked").touch()
+                        elif not send_replay:
+                            assert mcp_object(send)["state"] == "queued"
+                            structured = ("swarm_send","toolu_fixture_enrolled_send_replay",args)
+                        elif not send_conflict:
+                            structured = ("swarm_send","toolu_fixture_send_conflict",
+                                          args | dict(text="This divergent action must never reach the worker."))
+                        elif not send_status or send_status[-1]["state"] in ("queued","executing"):
+                            assert "Manager request was not confirmed." in json.dumps(send_conflict)
+                            assert mcp_object(send)["operation_id"] == mcp_object(send_replay)["operation_id"]
+                            assert len(send_status) < 12
+                            structured = ("swarm_status",f"toolu_fixture_send_status_{len(send_status)}",
+                                          dict(action_id=mcp_object(send)["action_id"]))
+                        elif not follow_up or follow_up[-1]["state"] == "pending":
+                            assert send_status[-1]["state"] == "native_accepted", send_status[-1]
+                            assert len(follow_up) < 5
+                            receipt = send_status[-1]["receipt"]
+                            structured = ("swarm_read",f"toolu_fixture_send_read_{len(follow_up)}",
+                                dict(session=scoped["session"],session_instance=scoped["session_instance"],
+                                     source="native",job_id=scoped["job_id"],attempt_id=scoped["attempt_id"],
+                                     native_turn_id=receipt["native_turn_id"]))
+                        else:
+                            assert follow_up[-1]["evidence"]["text"] == "Codex scoped follow-up completed."
+                            assert follow_up[-1]["evidence"]["turn_id"] != scoped["evidence"]["turn_id"]
                     else:
                         assert mcp_object(exact_turn) == scoped
                 else:
@@ -198,7 +250,7 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert not received and "Manager request was not confirmed." in content, \
                     "the changed forwarded receipt was not refused"
             self.server.forwarded_checked.write_text("classified")
-        publish = main and not (self.server.deleted and post_delete_read) and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
+        publish = main and not (self.server.deleted and post_delete_read or self.server.codex_send_revoked and send_denied) and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
         tool = publish or spawn or discover or read_note or read_attachment or structured
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
@@ -365,6 +417,12 @@ def verify(swarm, provider, test, root, server):
             save(native_home / "auth.json", dict(auth_mode="apikey", OPENAI_API_KEY="fixture-only"))
         access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
+        if server.codex_send:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_CODEX_SEND"] = "1"
+        if server.codex_send_revoked and not server.replaced_issuer:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED"] = "1"
+        if server.replaced_issuer:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_REPLACED_ISSUER"] = str(root)
         if server.deleted:
             env["SWARM_CLAUDE_MANAGER_FIXTURE_DELETED"] = "1"
     marker = root / "token"
@@ -401,7 +459,7 @@ def verify(swarm, provider, test, root, server):
             if server.project_fault or server.vm_revoked:
                 assert not server.seen_tools
                 assert provider_exec.is_file() == (server.project_fault == "after" or server.vm_revoked)
-            expected_posts = 0 if server.forwarded == "revoked" or server.deleted or server.project_fault or server.vm_revoked else (2 if server.park else 1)
+            expected_posts = 0 if server.forwarded == "revoked" or server.deleted or server.codex_send_revoked or server.project_fault or server.vm_revoked else (2 if server.park else 1)
             assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
             if server.codex:
                 assert server.codex_requests
@@ -415,6 +473,10 @@ def verify(swarm, provider, test, root, server):
                         if row["type"] == "event_msg" and item.get("type") == "UserMessage":
                             authored.extend(part.get("text") for part in item["content"])
                 assert authored.count(opening) == 1, "durable native opening was duplicated"
+                if server.codex_send:
+                    assert authored.count("Start the exact enrolled worker follow-up.") == (0 if server.codex_send_revoked else 1)
+                    assert "This divergent action must never reach the worker." not in authored
+            assert not (root / ".fixture-impostor-contacted").exists()
             assert not server.forwarded or server.forwarded_checked.is_file()
             assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=bool(server.seen_tools),
@@ -475,9 +537,12 @@ if __name__ == "__main__":
     modes.add_argument("--vm-revoked", action="store_true")
     modes.add_argument("--enrolled", action="store_true")
     modes.add_argument("--enrolled-codex", type=Path)
+    modes.add_argument("--enrolled-codex-send", type=Path)
+    modes.add_argument("--enrolled-codex-send-revoked", type=Path)
     modes.add_argument("--enrolled-deleted", action="store_true")
     modes.add_argument("--project-fault", choices=("before","after"))
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
+    modes.add_argument("--enrolled-codex-replaced-issuer", type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="cm-", dir="/tmp") as name, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
@@ -487,8 +552,11 @@ if __name__ == "__main__":
         server.vm = args.vm or args.vm_worktree or args.vm_revoked
         server.vm_revoked = args.vm_revoked
         server.worktree = args.vm_worktree
-        server.enrolled = bool(args.enrolled or args.enrolled_deleted or args.enrolled_codex)
-        server.codex = args.enrolled_codex
+        server.replaced_issuer = args.enrolled_codex_replaced_issuer is not None
+        server.codex = args.enrolled_codex or args.enrolled_codex_send or args.enrolled_codex_send_revoked or args.enrolled_codex_replaced_issuer
+        server.codex_send_revoked = args.enrolled_codex_send_revoked is not None or server.replaced_issuer
+        server.codex_send = bool(args.enrolled_codex_send or server.codex_send_revoked)
+        server.enrolled = bool(args.enrolled or args.enrolled_deleted or server.codex)
         server.codex_requests = []
         server.deleted = args.enrolled_deleted
         server.project_fault = args.project_fault

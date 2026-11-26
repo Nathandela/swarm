@@ -216,6 +216,93 @@ impl Session {
         crate::discord::enrolled_worker::launch(&self.manager, input, action)
     }
 
+    pub(in crate::supervisor) fn enrolled_worker_send_context(
+        &self,
+        request: &Value,
+    ) -> io::Result<Value> {
+        let action = &request["manager_worker_send"];
+        let session = field(request, "session_id");
+        let data = crate::discord::connector_intent(&self.manager)?;
+        let state = &data["manager"];
+        let arguments = &action["arguments"];
+        crate::discord::enrolled_worker::validate_send(arguments)?;
+        if request["body_version"] != 1
+            || self.manager["launch"]["manager"]["native_cli"] == true
+            || state["session"] != session
+            || action["kind"] != "send"
+            || action["call"]["name"] != "swarm_send"
+            || action["call"]["arguments"] != *arguments
+            || action["binding"] != state["binding"]
+            || action["state"] != "executing"
+            || !codex_receipt::timely(field(action, "operation_id"))
+            || state["worker_actions"][field(action, "key")] != *action
+        {
+            return Err(refuse(
+                "worker send lacks exact persisted native authorization",
+            ));
+        }
+        let evidence = self.native_manager_proof(session)?;
+        crate::discord::enrolled_worker::verify_send_evidence(&evidence, action)?;
+        Ok(self.manager.clone())
+    }
+
+    pub(in crate::supervisor) fn enrolled_worker_send(
+        &self,
+        state: &crate::supervisor::State,
+        grant: &Value,
+        action: &Value,
+        submit: bool,
+    ) -> io::Result<Value> {
+        let args = &action["arguments"];
+        let session = field(args, "session");
+        let operation = field(action, "operation_id");
+        let instance = codex_receipt::instance(&self.token);
+        if self.agent != "codex"
+            || self.mailbox["structured"] != true
+            || self.mailbox["discussion"] != action["binding"]["conversation_id"]
+            || self.mailbox["attempt"] != action["target"]["attempt"]
+            || self.mailbox["project"] != action["target"]["project"]
+            || args["session_instance"] != instance
+        {
+            return Err(refuse("worker send target or attempt changed"));
+        }
+        self.verify_effective()?;
+        if let Some(receipt) = self.semantic_status(operation, session, &state.root)? {
+            return Ok(receipt);
+        }
+        if !submit
+            || self.semantic_target().ok().as_deref() != Some(&instance)
+            || !self.confirm_idle_observation().unwrap_or(false)
+        {
+            return Ok(json!({"state":"pending"}));
+        }
+        let text = field(args, "text");
+        codex_receipt::bind_intent(
+            &state.root,
+            operation,
+            session,
+            &instance,
+            &crate::discord::enrolled_worker::send_intent(action)?,
+        )?;
+        let mut shim = self.dial()?;
+        shim.set_read_timeout(Some(std::time::Duration::from_secs(14)))?;
+        runtime::write_control(
+            &mut shim,
+            &json!({
+                "type":"semantic","operation_id":operation,"session":session,
+                "session_instance":instance,"text":text,"composer_send":{"session":session,"session_instance":instance,"text":text},
+                "enrolled_worker_send":{"scope":grant,"action":action}
+            }),
+        )?;
+        let reply = runtime::read_control(&mut shim)?;
+        if reply["type"] == "semantic_result" {
+            return self
+                .semantic_status(operation, session, &state.root)?
+                .ok_or_else(|| refuse("worker send receipt unavailable"));
+        }
+        Ok(json!({"state":"pending"}))
+    }
+
     pub(in crate::supervisor) fn enrolled_worker_result(
         &self,
         state: &Value,
@@ -277,6 +364,34 @@ impl Session {
                 return Err(refuse("Codex enrolled worker profile changed"));
             }
             let thread = self.semantic_thread()?;
+            let wanted = field(args, "native_turn_id");
+            let send = actions.as_object().and_then(|actions| {
+                actions.values().find(|send| {
+                    !wanted.is_empty()
+                        && send["kind"] == "send"
+                        && send["state"] == "native_accepted"
+                        && send["target"]["job"] == *job
+                        && send["target"]["attempt"] == child["attempt"]
+                        && send["arguments"]["session"] == args["session"]
+                        && send["arguments"]["session_instance"] == instance
+                        && send["receipt"]["operation_id"] == send["operation_id"]
+                        && send["receipt"]["session"] == args["session"]
+                        && send["receipt"]["session_instance"] == instance
+                        && send["receipt"]["native_session_id"] == thread
+                        && send["receipt"]["native_turn_id"] == wanted
+                        && send["receipt"]["state"] == "native_accepted"
+                        && send["receipt"]["origin"] == send["source_anchor"]["composer"]["origin"]
+                        && send["receipt"]["native_input_id"]
+                            == codex_receipt::hash(field(send, "operation_id"))
+                })
+            });
+            let (prompt, native_target) = match send {
+                Some(send) => (
+                    codex_receipt::hash(field(&send["arguments"], "text")),
+                    Some((wanted, field(&send["receipt"], "native_input_id"))),
+                ),
+                None => (field(child, "prompt_hash").to_owned(), None),
+            };
             let evidence = if thread.is_empty() {
                 None
             } else {
@@ -284,16 +399,18 @@ impl Session {
                     Path::new(field(stored, "native_home")),
                     cwd,
                     &thread,
-                    field(child, "prompt_hash"),
-                    None,
+                    &prompt,
+                    native_target,
                     budget as usize,
                 )
                 .map_err(|error| io::Error::other(format!("read Codex worker rollout: {error}")))?
             };
-            let wanted = field(args, "native_turn_id");
-            if !wanted.is_empty() && evidence.as_ref().is_none_or(|row| row["turn_id"] != wanted) {
+            if !wanted.is_empty()
+                && send.is_none()
+                && evidence.as_ref().is_none_or(|row| row["turn_id"] != wanted)
+            {
                 return Err(refuse(
-                    "native turn is outside the enrolled worker's opening intent",
+                    "native turn is outside the enrolled worker's admitted intent",
                 ));
             }
             if self.semantic_thread()? != thread {
@@ -303,7 +420,8 @@ impl Session {
                 json!({"source":"authorized_worker_turn", "session":args["session"],
                 "session_instance":instance, "job_id":job, "attempt_id":child["attempt"],
                 "state":evidence.as_ref().map_or("pending",|row| field(row,"state")),
-                "evidence":evidence,"source_anchor":anchor}),
+                "evidence":evidence,"source_anchor":anchor,
+                "send_source_anchor":send.map(|send| &send["source_anchor"])}),
             );
         }
         if !field(args, "native_turn_id").is_empty() {

@@ -82,6 +82,11 @@ pub(super) struct Dispatcher {
     socket_identity: (u64, u64),
     credential: String,
     mail_cursor: std::cell::Cell<u64>,
+    send_cursor: std::cell::Cell<usize>,
+    next_send: std::cell::Cell<Option<Instant>>,
+    pub(super) send_issuer: std::cell::RefCell<Value>,
+    #[cfg(test)]
+    pub(super) lose_enrolled_ack: std::cell::Cell<bool>,
     idle_since: std::cell::Cell<Option<Instant>>,
 }
 
@@ -107,11 +112,25 @@ impl Dispatcher {
             socket,
             credential,
             mail_cursor: std::cell::Cell::new(0),
+            send_cursor: std::cell::Cell::new(0),
+            next_send: std::cell::Cell::new(None),
+            send_issuer: Default::default(),
+            #[cfg(test)]
+            lose_enrolled_ack: std::cell::Cell::new(false),
             idle_since: std::cell::Cell::new(None),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
         Ok(Some(this))
+    }
+
+    pub(super) fn start_send_authority(
+        &self,
+        cfg: &Config,
+    ) -> io::Result<super::enrolled_worker::authority::Service> {
+        let service = super::enrolled_worker::authority::Service::discord(&self.scope(cfg), cfg)?;
+        self.send_issuer.replace(service.issuer().clone());
+        Ok(service)
     }
 
     pub(super) fn scope(&self, cfg: &Config) -> Value {
@@ -203,6 +222,7 @@ impl Dispatcher {
         {
             return Err(invalid("native manager requires owner reconciliation"));
         }
+        self.advance_worker_send(cfg, inbox, api, &mut state)?;
         if !state["input"].is_null() {
             self.idle_since.set(None);
             let had_turn = !state["input"]["turn_id"].is_null();
@@ -385,6 +405,14 @@ impl Dispatcher {
         if cfg.0["calls"].is_object()
             || status["ready_for_input"] != true
             || status["turn"]["state"] != "completed"
+            || inbox.manager()["worker_actions"]
+                .as_object()
+                .is_some_and(|actions| {
+                    actions.values().any(|action| {
+                        action["kind"] == "send"
+                            && matches!(field(action, "state"), "queued" | "executing")
+                    })
+                })
             || status["binding"]["provider"] == "claude" && status["retirement_ready"] != true
         {
             self.idle_since.set(None);
@@ -781,6 +809,95 @@ impl Dispatcher {
         Ok(())
     }
 
+    fn advance_worker_send(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        state: &mut Value,
+    ) -> io::Result<()> {
+        if self.next_send.get().is_some_and(|at| Instant::now() < at) {
+            return Ok(());
+        }
+        let Some(actions) = state["worker_actions"].as_object() else {
+            return Ok(());
+        };
+        let keys = actions
+            .iter()
+            .filter_map(|(key, action)| {
+                (action["kind"] == "send"
+                    && matches!(field(action, "state"), "queued" | "executing"))
+                .then_some(key.clone())
+            })
+            .collect::<Vec<_>>();
+        if keys.is_empty() {
+            return Ok(());
+        }
+        self.next_send
+            .set(Some(Instant::now() + Duration::from_millis(300)));
+        let current = self.send_cursor.get() % keys.len();
+        self.send_cursor.set(current + 1);
+        let key = &keys[current];
+        let mut action = actions[key].clone();
+        let session = field(state, "session").to_owned();
+        if !crate::providers::codex_receipt::timely(field(&action, "operation_id")) {
+            action["state"] = json!(if action["state"] == "executing" {
+                "outcome_unknown"
+            } else {
+                "rejected"
+            });
+        } else if action["state"] == "executing" {
+            if let Ok(result) = self.owner.enrolled_send(&session, &action, false) {
+                settle_worker_send(&mut action, result);
+            }
+        } else if action["binding"] != state["binding"] {
+            action["state"] = json!("rejected");
+        } else {
+            let launch = &actions[field(&action["target"], "job")];
+            let source =
+                enrolled_source(cfg, inbox, api, &action["source_anchor"]).and_then(|_| {
+                    if action["source_anchor"]["composer"]["origin"]
+                        != launch["source_anchor"]["composer"]["origin"]
+                    {
+                        enrolled_source(cfg, inbox, api, &launch["source_anchor"])
+                    } else {
+                        Ok(())
+                    }
+                });
+            match source {
+                Ok(()) if self.send_issuer.borrow().is_object() => {
+                    action["state"] = json!("executing");
+                    action["issuer"] = self.send_issuer.borrow().clone();
+                    #[cfg(test)]
+                    super::enrolled_worker::authority::replace_fixture_issuer(
+                        &self.socket,
+                        &mut action["issuer"],
+                    )?;
+                    state["worker_actions"][key] = action.clone();
+                    inbox.set_manager(state.clone())?;
+                    if let Ok(result) = self.owner.enrolled_send(&session, &action, true) {
+                        #[cfg(test)]
+                        if result["state"] == "native_accepted"
+                            && self.lose_enrolled_ack.replace(false)
+                        {
+                            return Ok(());
+                        }
+                        settle_worker_send(&mut action, result);
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
+                    action["state"] = json!("rejected");
+                }
+                _ => {}
+            }
+        }
+        if action != state["worker_actions"][key] {
+            state["worker_actions"][key] = action;
+            inbox.set_manager(state.clone())?;
+        }
+        Ok(())
+    }
+
     fn enrolled_worker_tool(
         &self,
         cfg: &Config,
@@ -820,7 +937,11 @@ impl Dispatcher {
             {
                 return Err(invalid("unknown enrolled worker action reference"));
             }
-            return self.owner.enrolled_worker(&session, action, false);
+            return if action["kind"] == "send" {
+                Ok(enrolled_send_status(action))
+            } else {
+                self.owner.enrolled_worker(&session, action, false)
+            };
         }
         if tool == "swarm_read" {
             let mut result = self.owner.enrolled_read(&session, call)?;
@@ -828,13 +949,22 @@ impl Dispatcher {
                 .as_object_mut()
                 .and_then(|result| result.remove("source_anchor"))
                 .ok_or_else(|| invalid("worker read lacks the original task source"))?;
+            if let Some(sent) = result
+                .as_object_mut()
+                .and_then(|result| result.remove("send_source_anchor"))
+                && sent.is_object()
+                && sent["composer"]["origin"] != anchor["composer"]["origin"]
+                && sent["composer"]["origin"] != input["composer"]["origin"]
+            {
+                enrolled_source(cfg, inbox, api, &sent)?;
+            }
             enrolled_source(cfg, inbox, api, &anchor)?;
             if anchor["composer"]["origin"] != input["composer"]["origin"] {
                 enrolled_source(cfg, inbox, api, input)?;
             }
             return Ok(result);
         }
-        if !input["worker_wake"].is_null() {
+        if tool == "swarm_create" && !input["worker_wake"].is_null() {
             return Err(invalid(
                 "worker creation requires a current human Discord admission",
             ));
@@ -847,7 +977,13 @@ impl Dispatcher {
                     "enrolled worker action already belongs to different arguments",
                 ));
             }
-            return self.owner.enrolled_worker(&session, prior, false);
+            return if prior["kind"] == "send" && tool == "swarm_send" {
+                Ok(enrolled_send_status(prior))
+            } else if prior["kind"].is_null() && tool == "swarm_create" {
+                self.owner.enrolled_worker(&session, prior, false)
+            } else {
+                Err(invalid("worker action ID belongs to another tool"))
+            };
         }
         if state["worker_actions"]
             .as_object()
@@ -857,6 +993,28 @@ impl Dispatcher {
         }
         let mut native_call = call.clone();
         native_call["arguments"] = args.clone();
+        if tool == "swarm_send" {
+            super::enrolled_worker::validate_send(&args)?;
+            let launch = self
+                .owner
+                .enrolled_send_target(&state["worker_actions"], &args)?;
+            enrolled_source(cfg, inbox, api, &launch["source_anchor"])?;
+            let action = json!({
+                "key":key,"kind":"send","state":"queued",
+                "operation_id":crate::providers::codex_receipt::operation()?,
+                "arguments":args,"call":native_call,
+                "source_anchor":{"source_id":input["source_id"],
+                    "composer":{"origin":input["composer"]["origin"]},
+                    "worker_wake":input["worker_wake"]},
+                "binding":input["composer"]["manager_admission"]["binding"],
+                "native_proof":proof,
+                "target":{"job":launch["key"],"attempt":launch["operation_id"],
+                    "project":launch["arguments"]["cwd"]}
+            });
+            state["worker_actions"][&key] = action.clone();
+            inbox.set_manager(state)?;
+            return Ok(enrolled_send_status(&action));
+        }
         let action = json!({"key":key,"operation_id":operation("launch")?,"arguments":args,
             "call":native_call,"source_anchor":{"source_id":input["source_id"],
                 "composer":{"origin":input["composer"]["origin"]}}});
@@ -893,6 +1051,7 @@ impl Dispatcher {
                     | "swarm_status"
                     | "swarm_list"
                     | "swarm_read"
+                    | "swarm_send"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -909,7 +1068,7 @@ impl Dispatcher {
         let tool = field(call, "name");
         if matches!(
             tool,
-            "swarm_create" | "swarm_status" | "swarm_list" | "swarm_read"
+            "swarm_create" | "swarm_status" | "swarm_list" | "swarm_read" | "swarm_send"
         ) {
             return self.enrolled_worker_tool(cfg, inbox, api, state, call);
         }
@@ -1102,6 +1261,20 @@ impl Dispatcher {
         inbox.prepare_publication(&nonce, publication, state)?;
         Ok(json!({"output_id":output,"state":inbox.publication(&nonce)["state"]}))
     }
+}
+
+fn settle_worker_send(action: &mut Value, result: Value) {
+    if result["state"] == "pending" {
+        action["state"] = json!("queued");
+    } else {
+        action["state"] = result["state"].clone();
+        action["receipt"] = result;
+    }
+}
+
+fn enrolled_send_status(action: &Value) -> Value {
+    json!({"action_id":action["key"],"state":action["state"],
+        "operation_id":action["operation_id"],"receipt":action["receipt"]})
 }
 
 impl Drop for Dispatcher {

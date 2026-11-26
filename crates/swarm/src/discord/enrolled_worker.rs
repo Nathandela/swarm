@@ -3,6 +3,8 @@ use crate::{ipc::field, providers::codex_receipt, supervisor::mail};
 use serde_json::{Value, json};
 use std::{io, path::Path};
 
+pub(crate) mod authority;
+
 pub(crate) const CAP: &str = "manager-enrolled-worker-v1";
 
 pub(crate) fn arguments_hash(arguments: &Value) -> io::Result<String> {
@@ -92,4 +94,82 @@ pub(crate) fn launch(scope: &Value, input: &Value, action: &Value) -> io::Result
         "attempt":operation,"project":cwd,"structured":true,
         "prompt_hash":codex_receipt::hash(field(&launch,"initial_prompt"))});
     Ok((launch, child))
+}
+
+/// The target matches a durable structured launch in this same discussion.
+pub(crate) fn send_target<'a>(actions: &'a Value, row: &Value, args: &Value) -> Option<&'a Value> {
+    if row["id"] != args["session"]
+        || row["role"] != "worker"
+        || row["worker_instance"] != args["session_instance"]
+        || row["agent"] != "codex"
+        || row["worker_attempt"].as_str().is_none()
+    {
+        return None;
+    }
+    actions.as_object()?.values().find(|action| {
+        action["call"]["name"] == "swarm_create"
+            && action["arguments"]["agent"] == "codex"
+            && action["arguments"]["cwd"] == row["cwd"]
+            && action["operation_id"] == row["worker_attempt"]
+    })
+}
+
+pub(crate) fn validate_send(args: &Value) -> io::Result<()> {
+    if args.as_object().is_none_or(|fields| fields.len() != 4)
+        || !["session", "session_instance", "action_id", "text"]
+            .iter()
+            .all(|key| args[*key].as_str().is_some_and(|value| !value.is_empty()))
+        || !crate::teammate::valid_text(field(args, "text"))
+    {
+        return Err(super::invalid("invalid enrolled worker send request"));
+    }
+    Ok(())
+}
+
+pub(crate) fn send_intent(action: &Value) -> io::Result<String> {
+    arguments_hash(&json!([
+        "discord-enrolled-worker-send-v1",
+        action["key"],
+        action["binding"],
+        action["target"],
+        action["arguments"],
+        action["native_proof"],
+        action["source_anchor"]
+    ]))
+}
+
+pub(crate) fn verify_send_evidence(evidence: &Value, action: &Value) -> io::Result<()> {
+    let binding = &action["binding"];
+    let origin = &action["source_anchor"]["composer"]["origin"];
+    let discussion = field(binding, "conversation_id")
+        .strip_prefix("discord-teammate-")
+        .filter(|discussion| !discussion.is_empty())
+        .ok_or_else(|| super::invalid("missing enrolled native discussion"))?;
+    let proof = crate::providers::codex_proof::resolve_recorded(
+        evidence,
+        &json!({
+            "binding":binding,"tool_name":"swarm_send","arguments_hash":arguments_hash(&action["arguments"])?,
+            "host_meta":action["call"]["meta"]
+        }),
+    )?;
+    let native_input = field(&proof, "native_input_id");
+    let external = &evidence["prepared"][native_input]["external_input"];
+    let expected = super::manager_nonce(
+        discussion,
+        &origin["request_id"],
+        &origin["revision"],
+        binding,
+        external,
+    )?;
+    if proof != action["native_proof"]
+        || !external.is_u64()
+        || expected != native_input
+        || origin["discussion_id"] != discussion
+        || origin["message_id"] != action["source_anchor"]["source_id"]
+    {
+        return Err(super::invalid(
+            "worker send no longer matches its native source admission",
+        ));
+    }
+    Ok(())
 }

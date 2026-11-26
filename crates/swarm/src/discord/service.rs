@@ -62,6 +62,11 @@ fn run_personal(
         inbox.checkpoint(baseline)?;
     }
     let dispatcher = super::dispatcher::Dispatcher::open(cfg, &place.dir)?;
+    let _enrolled = dispatcher
+        .as_ref()
+        .filter(|_| cfg.text("project_access") == "enrolled")
+        .map(|dispatcher| dispatcher.start_send_authority(cfg))
+        .transpose()?;
     let (gateway_socket, cursor) = gateway::open(cfg)?;
     repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
     // Serialize binding the call control socket with normal disconnect.
@@ -149,6 +154,7 @@ struct LinkedDiscussion<'a> {
     thread: super::team_thread::ThreadAudience<'a>,
     inbox: Inbox,
     dispatcher: Option<super::dispatcher::Dispatcher>,
+    _enrolled: Option<super::enrolled_worker::authority::Service>,
     unhealthy: bool,
     history_ready: bool,
     next_history_check: Instant,
@@ -169,11 +175,17 @@ impl<'a> LinkedDiscussion<'a> {
         }
         let thread = super::team_thread::ThreadAudience { route, api };
         let dispatcher = super::dispatcher::Dispatcher::open(&cfg, &directory)?;
+        let enrolled = dispatcher
+            .as_ref()
+            .filter(|_| cfg.text("project_access") == "enrolled")
+            .map(|dispatcher| dispatcher.start_send_authority(&cfg))
+            .transpose()?;
         Ok(Self {
             cfg,
             thread,
             inbox,
             dispatcher,
+            _enrolled: enrolled,
             unhealthy: false,
             history_ready: false,
             next_history_check: Instant::now(),
@@ -285,6 +297,11 @@ fn run_guild(
     } else {
         None
     };
+    let _enrolled = dispatcher
+        .as_ref()
+        .filter(|_| cfg.text("project_access") == "enrolled")
+        .map(|dispatcher| dispatcher.start_send_authority(cfg))
+        .transpose()?;
     let mut additional = super::team_thread::Route::additional(cfg)?
         .into_iter()
         .map(|(route, cfg)| LinkedDiscussion::open(place, route, cfg, &api))

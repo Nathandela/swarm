@@ -84,6 +84,16 @@ pub(super) fn launch_scope(state: &State, launch: &Value) -> io::Result<Value> {
             "manager bridge endpoint lacks exact private ownership",
         ));
     }
+    let peer = std::os::unix::net::UnixStream::connect(socket)?;
+    let bridge_pid = crate::supervisor::runtime::peer_pid(&peer)?;
+    let bridge_birth = crate::supervisor::runtime::birth(bridge_pid)?;
+    let current = fs::symlink_metadata(socket)?;
+    if (current.dev(), current.ino()) != (endpoint.dev(), endpoint.ino()) {
+        return Err(refusal("manager bridge endpoint changed during admission"));
+    }
+    scope["bridge_issuer"] = json!({
+        "socket":[endpoint.dev(),endpoint.ino()],"pid":bridge_pid,"birth":bridge_birth
+    });
     let credential = crate::manager_mcp::read_credential(auth)?;
     scope["credential_hash"] = json!(format!("{:x}", Sha256::digest(credential.as_bytes())));
     scope["endpoint_id"] = json!(state.endpoint);
@@ -121,7 +131,13 @@ pub(crate) fn mcp_args(scope: &Value, session: &str) -> io::Result<Vec<String>> 
         "swarm_read_attachment",
     ];
     if !native_cli {
-        transport.extend(["swarm_create", "swarm_status", "swarm_list", "swarm_read"]);
+        transport.extend([
+            "swarm_create",
+            "swarm_status",
+            "swarm_list",
+            "swarm_read",
+            "swarm_send",
+        ]);
     }
     if scope["launch"]["agent"] == "claude" {
         let mut server = json!({"mcpServers":{"swarm_voice":{"command":binary,"args":args}}});
