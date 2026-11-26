@@ -87,9 +87,11 @@ impl Prepared {
             version.get(1).copied().unwrap_or(0),
             version.get(2).copied().unwrap_or(0),
         );
-        if self.provider.agent != "codex" || release < (0, 167, 0) {
+        let claude = self.provider.agent == "claude"
+            && providers::claude_input::qualified(&self.provider.version);
+        if !claude && (self.provider.agent != "codex" || release < (0, 167, 0)) {
             return Err(io::Error::other(
-                "manager requires a qualified Codex native-turn runtime",
+                "manager requires a qualified native-turn runtime",
             ));
         }
         let home = self
@@ -99,9 +101,32 @@ impl Prepared {
             .find(|(name, _)| name == "HOME")
             .map(|(_, home)| PathBuf::from(home))
             .ok_or_else(|| io::Error::other("manager requires native account HOME"))?;
-        scope["account"] = json!(super::manager::account(&home)?);
+        scope["account"] = json!(if claude {
+            if self.provider.env.iter().any(|(key, value)| {
+                !value.is_empty()
+                    && matches!(
+                        key.as_str(),
+                        "ANTHROPIC_API_KEY"
+                            | "ANTHROPIC_AUTH_TOKEN"
+                            | "ANTHROPIC_BASE_URL"
+                            | "CLAUDE_CODE_OAUTH_TOKEN"
+                    )
+            }) {
+                return Err(io::Error::other(
+                    "Claude manager refuses explicit API credential substitution",
+                ));
+            }
+            providers::claude::manager_account(&home)?
+        } else {
+            super::manager::account(&home)?
+        });
         let predecessor = &scope["resume_request"]["binding"];
         if !predecessor.is_null() {
+            if claude {
+                return Err(io::Error::other(
+                    "Claude manager resume requires native transcript custody proof",
+                ));
+            }
             let native = field(predecessor, "native_session_id");
             if predecessor["login_epoch"] != scope["account"]
                 || !codex_receipt::canonical_thread(native)
@@ -1294,7 +1319,8 @@ impl Session {
     }
 
     pub(super) fn requires_worker_origin_cap(&self) -> bool {
-        matches!(self.agent.as_str(), "agy" | "claude") || self.hermes_native
+        self.manager.is_null() && matches!(self.agent.as_str(), "agy" | "claude")
+            || self.hermes_native
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
@@ -1487,7 +1513,7 @@ impl Session {
                 "invalid or stale provider semantic request",
             ));
         }
-        if self.agent == "codex" {
+        if self.agent == "codex" || self.agent == "claude" && !self.manager.is_null() {
             self.check_manager_input(session, operation, body)?;
         } else if !self.manager.is_null() || !body["manager_admission"].is_null() {
             return Err(io::Error::other(
@@ -1495,7 +1521,8 @@ impl Session {
             ));
         }
         let thread = self.semantic_thread()?;
-        let worker_origin = matches!(self.agent.as_str(), "agy" | "claude");
+        let worker_origin =
+            self.manager.is_null() && matches!(self.agent.as_str(), "agy" | "claude");
         let origin = if worker_origin {
             let origin = providers::agy_input::origin(&body["origin"])?;
             if self.worker_native_installation.as_deref() != origin["installation_id"].as_str() {
@@ -2330,7 +2357,7 @@ impl Session {
         }
         let status = self.manager_operation(
             &json!({"op":"manager_runtime","body_version":1,"session_id":full,
-            "manager_runtime_request":{"session_instance":codex_receipt::instance(&self.token)}}),
+            "manager_runtime_request":{"session_instance":codex_receipt::provider_instance(&self.agent, &self.token)}}),
         )?;
         let native = &status["manager_runtime"];
         let nonce = field(&native["turn"], "native_input_id");
@@ -2472,7 +2499,7 @@ impl Session {
             view["role"] = json!("manager");
             view["manager_conversation_id"] =
                 self.manager["launch"]["manager"]["conversation_id"].clone();
-            view["capabilities"] = json!({"session_instance":codex_receipt::instance(&self.token)});
+            view["capabilities"] = json!({"session_instance":codex_receipt::provider_instance(&self.agent,&self.token)});
         }
         view
     }

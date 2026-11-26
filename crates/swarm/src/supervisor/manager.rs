@@ -111,6 +111,14 @@ pub(crate) fn mcp_args(scope: &Value, session: &str) -> io::Result<Vec<String>> 
         session
     ]);
     let binary = std::env::current_exe()?;
+    if scope["launch"]["agent"] == "claude" {
+        let server = json!({"mcpServers":{"swarm_voice":{"command":binary,"args":args}}});
+        return Ok(vec![
+            "--strict-mcp-config".into(), "--mcp-config".into(), serde_json::to_string(&server)?,
+            "--tools".into(), String::new(), "--permission-mode".into(), "default".into(),
+            "--allowedTools=mcp__swarm_voice__publish,mcp__swarm_voice__swarm_read_note,mcp__swarm_voice__swarm_reply,mcp__swarm_voice__swarm_read_attachment".into(),
+        ]);
+    }
     let command = serde_json::to_string(&binary)?;
     Ok(vec![
         "-c".into(),

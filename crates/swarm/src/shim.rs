@@ -188,7 +188,11 @@ fn serve(dir: &Path) -> io::Result<()> {
         use sha2::{Digest, Sha256};
         if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes()))
             || scope["account"]
-                != crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
+                != if scope["launch"]["agent"] == "claude" {
+                    providers::claude::manager_account(Path::new(field(scope, "account_home")))?
+                } else {
+                    crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
+                }
         {
             return Err(io::Error::other(
                 "manager launch custody changed before exec",
@@ -311,7 +315,9 @@ fn serve(dir: &Path) -> io::Result<()> {
     } else {
         None
     };
-    let claude_broker = if schedule.is_none() && provider["claude_native_installation"].is_string()
+    let claude_broker = if schedule.is_none()
+        && (provider["claude_native_installation"].is_string()
+            || provider["name"] == "claude" && !scope.is_null())
     {
         let mut flags = Vec::new();
         let broker = providers::claude_input::Broker::prepare(
@@ -1067,6 +1073,12 @@ fn accept(listener: UnixListener, state: Arc<State>) {
     }
 }
 
+fn claude_manager_has_empty_composer(state: &State) -> bool {
+    let terminal = state.control.lock().unwrap();
+    *terminal == 0
+        && providers::claude::manager_empty_composer(state.screen.lock().unwrap().parser.screen())
+}
+
 fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     stream.set_read_timeout(Some(runtime::IO_TIMEOUT))?;
     stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
@@ -1186,6 +1198,22 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             };
             runtime::write_control(&mut stream, &reply)
         }
+        "claude_manager_proof" if state.manager && state.provider == "claude" => {
+            let result = state
+                .claude_broker
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Claude manager broker is unavailable"))
+                .and_then(|broker| broker.manager_snapshot());
+            let reply = result.map_or_else(
+                |error| json!({"type":"error","error":error.to_string()}),
+                |mut evidence| {
+                    evidence["owned_ingress_ready"] =
+                        json!(claude_manager_has_empty_composer(state));
+                    json!({"type":"ok","evidence":evidence})
+                },
+            );
+            runtime::write_control(&mut stream, &reply)
+        }
         "claude_ready" => {
             let ready = state
                 .claude_broker
@@ -1200,6 +1228,18 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             )
         }
         "semantic" if state.provider == "claude" => {
+            let terminal = state.manager.then(|| state.control.lock().unwrap());
+            if terminal.as_ref().is_some_and(|owner| {
+                **owner != 0
+                    || !providers::claude::manager_empty_composer(
+                        state.screen.lock().unwrap().parser.screen(),
+                    )
+            }) {
+                return runtime::write_control(
+                    &mut stream,
+                    &json!({"type":"error","error":"Claude manager terminal has a draft, attachment or native dialog"}),
+                );
+            }
             let result = state
                 .claude_broker
                 .as_ref()

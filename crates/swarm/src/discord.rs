@@ -129,11 +129,14 @@ fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
     if !cfg.enabled()
         || cfg.text("mode") != "personal" && team_thread::Route::configured(cfg)?.is_none()
         || cfg.text("project_access") == "vm"
-        || cfg.text("manager_cli") != "codex"
+        || !matches!(cfg.text("manager_cli"), "codex" | "claude")
     {
         return Err(invalid(
-            "qualified Rust manager requires an active enrolled Codex discussion",
+            "qualified Rust manager requires an active enrolled discussion",
         ));
+    }
+    if cfg.text("manager_cli") == "claude" {
+        crate::providers::claude_manager_runtime(Path::new(cfg.text("work_dir")))?;
     }
     let owner = manager::Manager::new(cfg)?;
     let bridge = std::fs::canonicalize(directory)?.join("manager-v1");

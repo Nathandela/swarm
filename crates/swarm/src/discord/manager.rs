@@ -115,6 +115,9 @@ impl Manager {
     }
 
     pub(super) fn can_retire(&self) -> bool {
+        if self.cfg.text("manager_cli") != "codex" {
+            return false;
+        }
         let caps = ["manager-retire", "manager-retire-resume-v1"];
         Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)
             .is_ok_and(|client| self.cfg.check_supervisor(&client, &caps).is_ok())
@@ -468,6 +471,99 @@ mod tests {
             }
             super::super::rest::Post::Acknowledged(receipt)
         }
+    }
+
+    #[test]
+    #[ignore = "requires the guarded installed-Claude loopback fixture"]
+    fn installed_claude_manager_producer() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_ROOT").unwrap(),
+        );
+        let place = root.join("s/discord");
+        let cfg = Config(runtime::read_json(&place.join("config.json")).unwrap());
+        let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &place)
+            .unwrap()
+            .expect("Claude owner supervisor capability");
+        let mut inbox = super::super::receipt::Inbox::open(&place, &cfg).unwrap();
+        let source = json!({"id":"401","channel_id":"400","author":{"id":"300","bot":false},
+            "type":0,"content":"Use the approved publish tool with the bounded answer.","attachments":[]});
+        inbox.checkpoint("400").unwrap();
+        let api = FixtureAudience {
+            source: source.clone(),
+            posts: Default::default(),
+            file_ack: Default::default(),
+        };
+        let launch = dispatcher.scope(&cfg)["launch"].clone();
+        let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
+        inbox
+            .set_manager(json!({"generation":1,"launch_operation":operation,"launch":launch}))
+            .unwrap();
+        let manager = Manager::new(&cfg).unwrap();
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let runtime = loop {
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            let session = field(inbox.manager(), "session");
+            let instance = field(&inbox.manager()["binding"], "session_instance");
+            if let Ok(status) = manager.runtime(session, instance, &launch)
+                && status["ready_for_input"] == true
+            {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < limit,
+                "Claude native composer did not become ready"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let session = field(&runtime["binding"], "session");
+        let instance = field(&runtime["binding"], "session_instance");
+        let mut terminal = Client::dial(Path::new(cfg.text("daemon_socket")), &["attach"]).unwrap();
+        let lease = terminal.request("attach", Some(session), "lease").unwrap();
+        let snapshot_len = lease["snapshot_len"].as_u64().unwrap() as usize;
+        terminal.take_snapshot(snapshot_len).unwrap();
+        assert_eq!(
+            manager.runtime(session, instance, &launch).unwrap()["ready_for_input"],
+            false
+        );
+        inbox.admit(&source).unwrap().unwrap();
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert!(inbox.manager()["input"].is_null());
+        drop(terminal);
+        let credentials = root.join("h/.claude.json");
+        let original = runtime::read_json(&credentials).unwrap();
+        let mut changed = original.clone();
+        changed["oauthAccount"]["organizationUuid"] = json!("different-org");
+        runtime::write_json(&credentials, &changed).unwrap();
+        assert!(manager.runtime(session, instance, &launch).is_err());
+        runtime::write_json(&credentials, &original).unwrap();
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(35);
+        loop {
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            if !api.posts.borrow().is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < limit,
+                "Claude publication unavailable: {}, native {:?}",
+                inbox.manager(),
+                Manager::new(&cfg).unwrap().runtime(
+                    field(inbox.manager(), "session"),
+                    field(&inbox.manager()["binding"], "session_instance"),
+                    &inbox.manager()["launch"]
+                )
+            );
+            std::thread::sleep(std::time::Duration::from_millis(65));
+        }
+        let posts = api.posts.borrow();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].1, "Bounded native Claude reply.");
+        let entry = inbox.publication(&posts[0].0);
+        assert_eq!(entry["rest_acknowledged"], true);
+        assert_eq!(entry["proof"]["binding"]["provider"], "claude");
+        assert_eq!(
+            entry["proof"]["native_call_id"],
+            "toolu_fixture_swarm_publish"
+        );
     }
 
     #[test]

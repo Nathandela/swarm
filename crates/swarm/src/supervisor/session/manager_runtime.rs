@@ -28,9 +28,32 @@ impl Session {
             crate::manager_mcp::read_credential(Path::new(field(bridge, "auth_file")))?;
         if self.manager["credential_hash"] != codex_receipt::hash(&credential)
             || self.manager["account"]
-                != manager::account(Path::new(field(&self.manager, "account_home")))?
+                != match self.agent.as_str() {
+                    "claude" => crate::providers::claude::manager_account(Path::new(field(
+                        &self.manager,
+                        "account_home",
+                    )))?,
+                    _ => manager::account(Path::new(field(&self.manager, "account_home")))?,
+                }
         {
             return Err(refuse("manager bridge or account custody was replaced"));
+        }
+        if self.agent == "claude" {
+            let reply = self.status_exchange(&json!({"type":"claude_manager_proof"}))?;
+            let evidence = &reply["evidence"];
+            let binding = &evidence["binding"];
+            if reply["type"] != "ok"
+                || evidence["blocked"] != false
+                || binding["session"] != session
+                || binding["provider"] != "claude"
+                || binding["session_instance"]
+                    != codex_receipt::provider_instance("claude", &self.token)
+                || binding["conversation_id"] != bridge["conversation_id"]
+                || binding["login_epoch"] != self.manager["account"]
+            {
+                return Err(refuse("Claude manager native custody changed"));
+            }
+            return Ok(evidence.clone());
         }
         self.dial()?;
         let owner = runtime::read_json(&self.dir.join("manager-binding.json"))?;

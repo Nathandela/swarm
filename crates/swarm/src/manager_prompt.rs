@@ -19,6 +19,15 @@ pub(crate) fn input_budget(prompt: &str) -> usize {
     }
 }
 
+pub(crate) fn provider_input_budget(provider: &str, prompt: &str) -> usize {
+    let budget = input_budget(prompt);
+    if provider == "claude" {
+        budget.saturating_sub(crate::providers::codex_proof::claude::ENVELOPE_OVERHEAD)
+    } else {
+        budget
+    }
+}
+
 fn validate(text: &str) -> io::Result<()> {
     if text.len() > LIMIT || text.chars().any(char::is_control) {
         Err(io::Error::other(

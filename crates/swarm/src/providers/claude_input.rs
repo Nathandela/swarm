@@ -60,12 +60,17 @@ impl Joined {
     }
 }
 
+enum Effect {
+    Worker { _locks: (File, File, File) },
+    Manager { _lock: File },
+}
+
 struct Pending {
     composer: Value,
     intent: String,
     result: Value,
     claimed: bool,
-    hold: Option<(File, File, File)>,
+    hold: Option<Effect>,
 }
 
 pub(crate) struct Broker {
@@ -127,7 +132,7 @@ impl Broker {
         let sender_name = if manager.is_null() {
             SENDER.to_owned()
         } else {
-            format!("swarm-manager-input-{}", runtime::random_id()?)
+            format!("swarm-manager-input-{generation}")
         };
         runtime::write_json(
             &descriptor,
@@ -207,13 +212,37 @@ impl Broker {
             .ok_or_else(refused)
     }
 
+    fn verify_manager_account(&self) -> io::Result<()> {
+        let home = Path::new(field(&self.manager, "account_home"));
+        if self.manager["account"] != claude::manager_account(home)? {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn manager_snapshot(&self) -> io::Result<Value> {
+        let joined = self.joined.lock().unwrap();
+        joined.ready().ok_or_else(refused)?;
+        let proof = joined.proof.as_ref().ok_or_else(refused)?;
+        codex_proof::Ledger::snapshot(&self.dir, proof.binding())
+    }
+
     pub(crate) fn submit(&self, request: &Value) -> io::Result<Value> {
         let operation = field(request, "operation_id");
         let session = field(request, "session");
         let text = field(request, "text");
         let instance = receipt::provider_instance("claude", &self.token);
-        let origin = agy_input::origin(&request["origin"])?;
-        let intent = agy_input::intent(text, &origin)?;
+        let manager = !self.manager.is_null();
+        let origin = if manager {
+            request["composer_send"]["origin"].clone()
+        } else {
+            agy_input::origin(&request["origin"])?
+        };
+        let intent = if manager {
+            receipt::hash(text)
+        } else {
+            agy_input::intent(text, &origin)?
+        };
         if !receipt::timely(operation)
             || text.is_empty()
             || text.len() > 4096
@@ -225,8 +254,18 @@ impl Broker {
         {
             return Err(refused());
         }
-        let composer =
-            json!({"session":session,"session_instance":instance,"text":text,"origin":origin});
+        let composer = if manager {
+            let composer = &request["composer_send"];
+            if composer["text"] != text
+                || composer["session"] != session
+                || composer["session_instance"] != instance
+            {
+                return Err(refused());
+            }
+            composer.clone()
+        } else {
+            json!({"session":session,"session_instance":instance,"text":text,"origin":origin})
+        };
         let mut joined = self.joined.lock().unwrap();
         let native = joined.ready().ok_or_else(refused)?.to_owned();
         if let Some(saved) = receipt::load_for(
@@ -248,14 +287,43 @@ impl Broker {
         }
         let root = self.dir.parent().ok_or_else(refused)?;
         receipt::verify_binding(root, operation, session, &instance, &intent)?;
-        crate::discord::verify_connector_worker_input(
-            &self.supervisor,
-            &self.owner_socket,
-            &self.installation,
-            "claude",
-            operation,
-            &composer,
-        )?;
+        if manager {
+            self.verify_manager_account()?;
+            let _effect = crate::discord::lock_manager_mail_effect(&self.manager)?;
+            let admission = &composer["manager_admission"];
+            let proof = joined.proof.as_mut().ok_or_else(refused)?;
+            let evidence = codex_proof::Ledger::snapshot(&self.dir, proof.binding())?;
+            if admission["binding"] != *proof.binding()
+                || evidence["thread_state"] != "idle"
+                || evidence["externally_steered"] == true
+                || evidence["external_input"] != admission["expected_external_input"]
+            {
+                return Err(refused());
+            }
+            let nonce = field(admission, "nonce");
+            codex_proof::claude::envelope(nonce, text)?;
+            crate::discord::verify_connector_input(
+                &self.manager,
+                operation,
+                &composer,
+                Some(&self.supervisor),
+            )?;
+            proof.prepare(
+                operation,
+                nonce,
+                text,
+                field_number(admission, "expected_external_input")?,
+            )?;
+        } else {
+            crate::discord::verify_connector_worker_input(
+                &self.supervisor,
+                &self.owner_socket,
+                &self.installation,
+                "claude",
+                operation,
+                &composer,
+            )?;
+        }
         receipt::fence_for(
             &self.dir,
             operation,
@@ -358,6 +426,31 @@ impl Broker {
             if joined.ready().is_none() {
                 return Err(refused());
             }
+            if path == "/manager-prompt" {
+                self.verify_manager_account()?;
+                let input = field(req, "text");
+                let (operation, entry) = joined
+                    .operations
+                    .iter()
+                    .find(|(_, entry)| {
+                        entry.claimed
+                            && entry.hold.is_some()
+                            && codex_proof::claude::envelope(
+                                field(&entry.composer["manager_admission"], "nonce"),
+                                field(&entry.composer, "text"),
+                            )
+                            .as_deref()
+                            .ok()
+                                == Some(input)
+                    })
+                    .ok_or_else(refused)?;
+                crate::discord::verify_connector_input(
+                    &self.manager,
+                    operation,
+                    &entry.composer,
+                    Some(&self.supervisor),
+                )?;
+            }
             let proof = joined.proof.as_mut().ok_or_else(refused)?;
             return proof.claude_guard(&self.sender_name, path, req);
         }
@@ -400,7 +493,9 @@ impl Broker {
             ) {
                 return Err(refused());
             }
-            entry.hold.take();
+            if self.manager.is_null() || disposition != "submitted" {
+                entry.hold.take();
+            }
             match disposition {
                 "submitted" => self.settle(entry, "submitted")?,
                 "started" => {
@@ -461,14 +556,28 @@ impl Broker {
                 .iter_mut()
                 .find(|(_, entry)| !entry.claimed)
         {
-            let guard = crate::discord::lock_connector_worker_input(
-                &self.supervisor,
-                &self.owner_socket,
-                &self.installation,
-                "claude",
-                operation,
-                &entry.composer,
-            );
+            let guard = if self.manager.is_null() {
+                crate::discord::lock_connector_worker_input(
+                    &self.supervisor,
+                    &self.owner_socket,
+                    &self.installation,
+                    "claude",
+                    operation,
+                    &entry.composer,
+                )
+                .map(|locks| Effect::Worker { _locks: locks })
+            } else {
+                (|| {
+                    let lock = crate::discord::lock_manager_mail_effect(&self.manager)?;
+                    crate::discord::verify_connector_input(
+                        &self.manager,
+                        operation,
+                        &entry.composer,
+                        Some(&self.supervisor),
+                    )?;
+                    Ok(Effect::Manager { _lock: lock })
+                })()
+            };
             let Ok(guard) = guard else {
                 let operation = operation.clone();
                 self.settle(entry, "rejected")?;
@@ -493,9 +602,16 @@ impl Broker {
                     entry.hold.take();
                 }
             });
-            return Ok(
-                json!({"operation_id":operation,"text":entry.composer["text"],"expires_ms":expires_ms}),
-            );
+            let raw = field(&entry.composer, "text");
+            let text = if self.manager.is_null() {
+                raw.to_owned()
+            } else {
+                codex_proof::claude::envelope(
+                    field(&entry.composer["manager_admission"], "nonce"),
+                    raw,
+                )?
+            };
+            return Ok(json!({"operation_id":operation,"text":text,"expires_ms":expires_ms}));
         }
         Ok(Value::Null)
     }
@@ -512,6 +628,10 @@ impl Broker {
         entry.result = result;
         Ok(())
     }
+}
+
+fn field_number(value: &Value, key: &str) -> io::Result<u64> {
+    value[key].as_u64().ok_or_else(refused)
 }
 
 fn write_artifact(path: &Path, body: &str) -> io::Result<()> {

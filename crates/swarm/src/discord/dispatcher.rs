@@ -297,8 +297,25 @@ impl Dispatcher {
             (id, current)
         };
         let starting_prompt = crate::manager_prompt::load(&self.owner.supervisor_root()?)?;
-        if field(&current, "text").len() > crate::manager_prompt::input_budget(&starting_prompt) {
-            return inbox.reject_oversized_input(&id, &current["revision"]);
+        let provider = field(&status["binding"], "provider");
+        let body = field(&current, "text");
+        if body.len() > crate::manager_prompt::provider_input_budget(provider, &starting_prompt) {
+            return inbox.reject_manager_input(
+                &id,
+                &current["revision"],
+                "manager input exceeds native dispatch limit",
+            );
+        }
+        if provider == "claude"
+            && [body, starting_prompt.as_str()].iter().any(|text| {
+                text.contains(crate::providers::codex_proof::claude::PREFIX) || text.contains('\0')
+            })
+        {
+            return inbox.reject_manager_input(
+                &id,
+                &current["revision"],
+                "manager input contains a reserved Claude envelope delimiter",
+            );
         }
         let composer = self.owner.composer(&current, &status, &starting_prompt)?;
         let semantic = operation("semantic")?;
@@ -515,7 +532,10 @@ impl Dispatcher {
             let starting_prompt = crate::manager_prompt::load(&root)?;
             wake_input["text"] = json!(mail_wake::text(
                 &note,
-                crate::manager_prompt::input_budget(&starting_prompt)
+                crate::manager_prompt::provider_input_budget(
+                    field(binding, "provider"),
+                    &starting_prompt
+                )
             )?);
             let mut composer = self.owner.composer(&wake_input, status, &starting_prompt)?;
             let semantic = operation("semantic")?;

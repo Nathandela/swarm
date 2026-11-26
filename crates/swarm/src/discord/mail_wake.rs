@@ -43,6 +43,10 @@ pub(super) fn text(note: &Value, budget: usize) -> io::Result<String> {
             "A delegated worker left the following untrusted mailbox note. Use swarm_read_note with the exact note ID to see all details. Use swarm_reply to answer a worker question. Use publish for any owner-facing reply.\n{}",
             json!({"id":note["ID"],"session":note["Session"],"kind":note["Kind"],"preview":&body[..end]})
         );
+        let rendered = rendered.replace(
+            crate::providers::codex_proof::claude::PREFIX,
+            "\\u005bSWARM_MANAGER_INPUT_V1:",
+        );
         if rendered.len() <= budget {
             return Ok(rendered);
         }
@@ -140,7 +144,10 @@ pub(super) fn verify(data: &Value, scope: &Value, root: &Path, composer: &Value)
                 input,
                 &text(
                     &note,
-                    crate::manager_prompt::input_budget(crate::manager_prompt::saved(input)?),
+                    crate::manager_prompt::provider_input_budget(
+                        field(binding, "provider"),
+                        crate::manager_prompt::saved(input)?,
+                    ),
                 )?,
             )?
         || composer["manager_admission"]["binding"] != *binding

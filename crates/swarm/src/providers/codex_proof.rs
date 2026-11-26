@@ -248,8 +248,12 @@ pub(crate) fn input_status(evidence: &Value, nonce: &str) -> Value {
         None if !evidence["prepared"][nonce].is_null() => ("", "prepared"),
         None => ("", "unknown"),
     };
-    json!({"native_input_id":nonce,"native_turn_id":turn,
-        "state":state,"external_input":evidence["external_input"]})
+    let mut result = json!({"native_input_id":nonce,"native_turn_id":turn,
+        "state":state,"external_input":evidence["external_input"]});
+    if evidence["externally_steered"] == true {
+        result["externally_steered"] = json!(true);
+    }
+    result
 }
 
 pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
@@ -261,6 +265,7 @@ pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
     let receipt = &evidence["turns"][turn];
     let nonce = field(receipt, "nonce");
     if evidence["blocked"] != false
+        || evidence["externally_steered"] == true
         || input["binding"] != *binding
         || field(input, "tool_name") != call["tool"].as_str().unwrap_or("publish")
         || call["closed"] != false

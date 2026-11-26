@@ -906,6 +906,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         );
     }
     let manager_available = state.stopped_go.is_none()
+        && hello["capabilities"].as_array().is_some_and(|caps| {
+            caps.iter()
+                .any(|cap| cap.as_str().is_some_and(|cap| cap.starts_with("manager-")))
+        })
         && crate::discord::native_manager_available(state.socket.to_string_lossy().as_ref());
     let worker_origin_available = state.stopped_go.is_none()
         && state.root.parent().is_some_and(|root| {

@@ -171,6 +171,32 @@ pub(crate) fn prepare(
     })
 }
 
+pub(crate) fn claude_manager_runtime(cwd: &Path) -> io::Result<()> {
+    static QUALIFIED: std::sync::Mutex<Option<(PathBuf, Value)>> = std::sync::Mutex::new(None);
+    let env = crate::supervisor::runtime::launch_env(&Value::Null);
+    let path = env
+        .iter()
+        .find(|(key, _)| key == "PATH")
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("");
+    let binary = resolve("claude", cwd, path)?;
+    let binary_id = identity(&binary)?;
+    let mut cached = QUALIFIED.lock().unwrap();
+    if cached.as_ref() == Some(&(binary.clone(), binary_id.clone())) {
+        return Ok(());
+    }
+    let banner = version_banner("claude", &binary, cwd, &env)?;
+    if !claude_input::qualified(admitted_version("claude", &banner)?)
+        || binary_id != identity(&binary)?
+    {
+        return Err(io::Error::other(
+            "Claude manager requires a qualified installed runtime",
+        ));
+    }
+    *cached = Some((binary, binary_id));
+    Ok(())
+}
+
 fn version_banner(
     agent: &str,
     executable: &Path,

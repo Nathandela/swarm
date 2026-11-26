@@ -4,14 +4,15 @@ use crate::ipc::field;
 use serde_json::{Value, json};
 use std::io;
 
-const PREFIX: &str = "[SWARM_MANAGER_INPUT_V1:";
+pub(crate) const PREFIX: &str = "[SWARM_MANAGER_INPUT_V1:";
+pub(crate) const ENVELOPE_OVERHEAD: usize = PREFIX.len() + 66;
 
 pub(crate) fn envelope(nonce: &str, text: &str) -> io::Result<String> {
     if !is_hash(nonce)
         || text.is_empty()
         || text.contains(['\0'])
         || text.contains(PREFIX)
-        || text.len() > 4096 - PREFIX.len() - 66
+        || text.len() > 4096 - ENVELOPE_OVERHEAD
     {
         return Err(refusal("invalid Claude manager admission envelope"));
     }
@@ -110,6 +111,7 @@ impl Ledger {
                     Err(refusal("Claude external input sequence changed"))
                 } else {
                     next["external_input"] = req["external_input"].clone();
+                    next["externally_steered"] = json!(true);
                     Ok(())
                 }
             }

@@ -310,6 +310,32 @@ pub(crate) fn empty_composer(screen: &vt100::Screen) -> bool {
     composer(screen, "", "")
 }
 
+pub(crate) fn manager_empty_composer(screen: &vt100::Screen) -> bool {
+    if screen.alternate_screen() {
+        return empty_composer(screen);
+    }
+    let (row, col) = screen.cursor_position();
+    let (_, cols) = screen.size();
+    if row < 1 || col != 2 || !screen.bracketed_paste() {
+        return false;
+    }
+    let mut lines = screen.rows(0, cols.get()).skip(usize::from(row - 1));
+    let above = lines.next();
+    let composer = lines.next();
+    let below = lines.next();
+    let footer = lines.next();
+    above.is_some_and(|line| {
+        line.ends_with('─') && line.chars().take_while(|ch| *ch == '─').count() >= 8
+    }) && composer.is_some_and(|line| {
+        line.strip_prefix('❯')
+            .is_some_and(|tail| tail.trim().is_empty())
+    }) && below.is_some_and(|line| {
+        line.chars().count() == usize::from(cols.get()) && line.chars().all(|ch| ch == '─')
+    }) && footer
+        .is_some_and(|line| line.contains("manual mode on") && line.contains("? for shortcuts"))
+        && lines.all(|line| line.trim().is_empty())
+}
+
 pub(crate) fn rendered_paste(screen: &vt100::Screen, text: &str) -> bool {
     let newlines = text.bytes().filter(|&byte| byte == b'\n').count();
     composer(
@@ -486,6 +512,42 @@ pub(crate) fn profile(
         "origin":origin,"settings":text_hash(&settings.to_string()),
         "options":options.as_object().cloned().unwrap_or_default(),
     }))
+}
+
+/// Claude managers grant effects under one native OAuth profile only.
+pub(crate) fn manager_account(home: &std::path::Path) -> io::Result<String> {
+    let current = profile(
+        &[("HOME".into(), home.to_string_lossy().into_owned())],
+        &Value::Null,
+        &Value::Null,
+    )?;
+    let settings = read_private_optional(&home.join(".claude/settings.json"))?;
+    let override_name = |key: &str| {
+        matches!(
+            key,
+            "ANTHROPIC_API_KEY"
+                | "ANTHROPIC_AUTH_TOKEN"
+                | "ANTHROPIC_BASE_URL"
+                | "CLAUDE_CONFIG_DIR"
+                | "CLAUDE_SECURESTORAGE_CONFIG_DIR"
+                | "CLAUDE_CODE_OAUTH_TOKEN"
+        ) || key.starts_with("CLAUDE_CODE_USE_")
+            || key.starts_with("CLAUDE_CODE_GATEWAY_")
+    };
+    if current["origin"]["kind"] != "oauth"
+        || std::env::vars_os()
+            .any(|(key, value)| !value.is_empty() && key.to_str().is_some_and(override_name))
+        || settings["env"].as_object().is_some_and(|env| {
+            env.iter().any(|(key, value)| {
+                override_name(key) && value.as_str().is_some_and(|value| !value.is_empty())
+            })
+        })
+    {
+        return Err(io::Error::other(
+            "Claude manager requires qualified native OAuth account custody",
+        ));
+    }
+    Ok(text_hash(&current.to_string()))
 }
 
 fn read_private_optional(path: &std::path::Path) -> io::Result<Value> {
