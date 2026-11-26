@@ -109,17 +109,21 @@ impl Backend {
     fn matches(&self, value: &Value, created: u64) -> bool {
         created > 0
             && created <= 9_007_199_254_740_991
-            && [
-                "version",
-                "workerID",
-                "sessionInstance",
-                "backendGeneration",
-                "rootID",
-                "directory",
-            ]
-            .iter()
-            .all(|key| value[*key] == self.binding[*key])
+            && self.matches_reservation(value)
             && value["nativeCreatedAtMS"] == created
+    }
+
+    fn matches_reservation(&self, value: &Value) -> bool {
+        [
+            "version",
+            "workerID",
+            "sessionInstance",
+            "backendGeneration",
+            "rootID",
+            "directory",
+        ]
+        .iter()
+        .all(|key| value[*key] == self.binding[*key])
     }
 
     fn envelope(&self) -> Value {
@@ -129,28 +133,47 @@ impl Backend {
 
     fn bound(&self) -> io::Result<Value> {
         let began = Instant::now();
+        let mut last_readiness = "no correlated bridge response";
         while began.elapsed() < Duration::from_secs(22) {
-            if let Ok(ready) = self.http("/ready", None)
-                && ready["bound"] == true
-                && ready["ready"] == true
-            {
-                let created = ready["nativeCreatedAtMS"].as_u64().unwrap_or_default();
-                if self.matches(&ready, created)
-                    && (self.binding["mode"] != "resume"
-                        || self.binding["nativeCreatedAtMS"] == created)
-                    && ready["nativeVersion"] == self.cli_version
-                {
-                    return Ok(ready);
+            if let Ok(ready) = self.http("/ready", None) {
+                if ready["bound"] == true && ready["ready"] == true {
+                    let created = ready["nativeCreatedAtMS"].as_u64().unwrap_or_default();
+                    if self.matches(&ready, created)
+                        && (self.binding["mode"] != "resume"
+                            || self.binding["nativeCreatedAtMS"] == created)
+                        && ready["nativeVersion"] == self.cli_version
+                    {
+                        return Ok(ready);
+                    }
+                    return Err(io::Error::other(
+                        "OpenCode native runtime did not prove the reserved binding",
+                    ));
                 }
-                return Err(io::Error::other(
-                    "OpenCode native runtime did not prove the reserved binding",
-                ));
+                if !self.matches_reservation(&ready) {
+                    thread::sleep(Duration::from_millis(80));
+                    continue;
+                }
+                last_readiness = match ready["degraded"][0].as_str() {
+                    Some("binding_pending") => "native session binding pending",
+                    Some("native_not_ready") => "native runtime not ready",
+                    Some("native_deadline") => "native bootstrap request timed out",
+                    Some("native_read_failed") => "native bootstrap request failed",
+                    Some("native_binding_mismatch") => {
+                        "native bootstrap returned a different session"
+                    }
+                    Some("initial_plugin_conflict") => {
+                        "active external plugin conflicts with initial input"
+                    }
+                    Some("route_mismatch") => "terminal is on a different native route",
+                    Some("modal_open") => "native terminal dialog is open",
+                    _ => "native binding unavailable",
+                };
             }
             thread::sleep(Duration::from_millis(80));
         }
-        Err(io::Error::other(
-            "OpenCode TUI did not acknowledge the reserved native session",
-        ))
+        Err(io::Error::other(format!(
+            "OpenCode TUI did not acknowledge the reserved native session ({last_readiness})",
+        )))
     }
 
     pub(super) fn launch(&self, initial: &Value, intent: &Value) -> io::Result<u64> {

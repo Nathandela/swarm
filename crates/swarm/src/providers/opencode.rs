@@ -401,7 +401,9 @@ mod tests {
         runtime::private_dir(&dir).unwrap();
         let bridge = dir.join("embedded.mjs");
         fs::write(&bridge, bridge_source().unwrap()).unwrap();
-        let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/opencode/tui.test.mjs");
+        let suite = dir.join("tui.test.mjs");
+        fs::write(&suite, include_str!("../../assets/opencode/tui.test.mjs")).unwrap();
+        fs::write(dir.join("tui.mjs"), BRIDGE).unwrap();
         let result = std::process::Command::new("node")
             .args(["--test", "--test-name-pattern=^admission boundary:"])
             .arg(suite)
