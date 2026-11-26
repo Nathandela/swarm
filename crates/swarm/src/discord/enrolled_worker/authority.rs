@@ -26,6 +26,7 @@ use std::{
 };
 
 const SOCKET: &str = "e";
+const LEASE: &str = "e.lock";
 const TIMEOUT: Duration = Duration::from_secs(7);
 
 fn custody(scope: &Value) -> io::Result<&Path> {
@@ -38,6 +39,8 @@ fn custody(scope: &Value) -> io::Result<&Path> {
 pub(in crate::discord) struct Service {
     path: PathBuf,
     identity: [u64; 2],
+    issuer: Value,
+    _lease: File,
     running: Arc<AtomicBool>,
 }
 
@@ -62,17 +65,30 @@ impl Service {
         })
     }
 
+    pub(in crate::discord) fn issuer(&self) -> &Value {
+        &self.issuer
+    }
+
     pub(in crate::discord) fn bind(
         scope: &Value,
         cfg: Config,
         mut current: impl FnMut(&Config, &mut Inbox, &Value) -> io::Result<()> + Send + 'static,
     ) -> io::Result<Self> {
         let place = custody(scope)?.to_owned();
-        let path = place.join("manager-v1").join(SOCKET);
+        let directory = place.join("manager-v1");
+        let lease = runtime::lock(&directory.join(LEASE))?;
+        let lease_metadata = lease.metadata()?;
+        let path = directory.join(SOCKET);
         runtime::reclaim_socket(&path)?;
         let listener = runtime::bind(&path)?;
         listener.set_nonblocking(true)?;
         let metadata = fs::symlink_metadata(&path)?;
+        let pid = std::process::id();
+        let issuer = json!({
+            "pid":pid,"birth":runtime::birth(pid)?,
+            "socket":[metadata.dev(),metadata.ino()],
+            "lease":[lease_metadata.dev(),lease_metadata.ino()]
+        });
         let running = Arc::new(AtomicBool::new(true));
         let active = running.clone();
         let expected = scope.clone();
@@ -122,6 +138,8 @@ impl Service {
         Ok(Self {
             path,
             identity: [metadata.dev(), metadata.ino()],
+            issuer,
+            _lease: lease,
             running,
         })
     }
@@ -301,18 +319,16 @@ pub(crate) fn guard(
     validate_connector(scope, action)?;
     let native = codex_proof::Ledger::snapshot(&parent_dir, binding)?;
     super::verify_send_evidence(&native, action)?;
-    let socket = path.join("manager-v1").join(SOCKET);
-    let stat = fs::symlink_metadata(&socket)?;
-    // SAFETY: geteuid takes no arguments.
-    if !stat.file_type().is_socket()
-        || stat.mode() & 0o777 != 0o600
-        || stat.nlink() != 1
-        || stat.uid() != unsafe { libc::geteuid() }
-    {
-        return Err(invalid("untrusted enrolled send authority socket"));
-    }
+    let issuer = &action["issuer"];
+    let directory = path.join("manager-v1");
+    let socket = directory.join(SOCKET);
     let challenge = runtime::random_id()?;
+    verify_issuer(&directory, issuer)?;
     let mut stream = UnixStream::connect(socket)?;
+    if issuer["pid"] != runtime::peer_pid(&stream)? {
+        return Err(invalid("enrolled send issuer peer changed"));
+    }
+    verify_issuer(&directory, issuer)?;
     stream.set_write_timeout(Some(Duration::from_secs(1)))?;
     runtime::write_control(&mut stream, &json!({"action":action,"challenge":challenge}))?;
     let reply = runtime::read_control(&mut DeadlineReader(&stream, Instant::now() + TIMEOUT))?;
@@ -321,7 +337,67 @@ pub(crate) fn guard(
             "Discord no longer authorizes the queued worker send",
         ));
     }
+    verify_issuer(&directory, issuer)?;
     verify_place()?;
     validate_connector(scope, action)?;
     Ok(lock)
+}
+
+fn verify_issuer(directory: &Path, issuer: &Value) -> io::Result<()> {
+    let refused = || invalid("enrolled send authority issuer changed");
+    let pid = issuer["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(refused)?;
+    let socket = fs::symlink_metadata(directory.join(SOCKET))?;
+    let lease_path = directory.join(LEASE);
+    let lease = fs::symlink_metadata(&lease_path)?;
+    // SAFETY: geteuid takes no arguments.
+    let uid = unsafe { libc::geteuid() };
+    if !socket.file_type().is_socket()
+        || !lease.is_file()
+        || [&socket, &lease]
+            .iter()
+            .any(|meta| meta.mode() & 0o777 != 0o600 || meta.nlink() != 1 || meta.uid() != uid)
+        || issuer["socket"] != json!([socket.dev(), socket.ino()])
+        || issuer["lease"] != json!([lease.dev(), lease.ino()])
+        || issuer["birth"] != runtime::birth(pid)?
+        || !matches!(runtime::lock(&lease_path), Err(err) if err.kind() == io::ErrorKind::WouldBlock)
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(in crate::discord) fn replace_fixture_issuer(bridge: &Path) -> io::Result<()> {
+    let Some(root) =
+        std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_REPLACED_ISSUER").map(PathBuf::from)
+    else {
+        return Ok(());
+    };
+    let withdrawn = root.join(".fixture-enrolled-deleted");
+    if withdrawn.exists() {
+        return Ok(());
+    }
+    let socket = bridge.parent().unwrap().join(SOCKET);
+    fs::remove_file(&socket)?;
+    let replacement = runtime::bind(&socket)?;
+    fs::write(withdrawn, b"source withdrawn after preflight")?;
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = replacement.accept()
+            && let Ok(req) =
+                runtime::read_control(&mut DeadlineReader(&stream, Instant::now() + TIMEOUT))
+        {
+            let _ = fs::write(
+                root.join(".fixture-impostor-contacted"),
+                b"unexpected authority request",
+            );
+            let _ = runtime::write_control(
+                &mut stream,
+                &json!({"challenge":req["challenge"],"approved":true}),
+            );
+        }
+    });
+    Ok(())
 }

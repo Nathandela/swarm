@@ -56,9 +56,7 @@ fn run_personal(
     let _enrolled = dispatcher
         .as_ref()
         .filter(|_| cfg.text("project_access") == "enrolled")
-        .map(|dispatcher| {
-            super::enrolled_worker::authority::Service::discord(&dispatcher.scope(cfg), cfg)
-        })
+        .map(|dispatcher| dispatcher.start_send_authority(cfg))
         .transpose()?;
     let (gateway_socket, cursor) = gateway::open(cfg)?;
     repair(&mut inbox, |before| api.owner_history(cfg, before, 100))?;
@@ -171,9 +169,7 @@ impl<'a> LinkedDiscussion<'a> {
         let enrolled = dispatcher
             .as_ref()
             .filter(|_| cfg.text("project_access") == "enrolled")
-            .map(|dispatcher| {
-                super::enrolled_worker::authority::Service::discord(&dispatcher.scope(&cfg), &cfg)
-            })
+            .map(|dispatcher| dispatcher.start_send_authority(&cfg))
             .transpose()?;
         Ok(Self {
             cfg,
@@ -295,9 +291,7 @@ fn run_guild(
     let _enrolled = dispatcher
         .as_ref()
         .filter(|_| cfg.text("project_access") == "enrolled")
-        .map(|dispatcher| {
-            super::enrolled_worker::authority::Service::discord(&dispatcher.scope(cfg), cfg)
-        })
+        .map(|dispatcher| dispatcher.start_send_authority(cfg))
         .transpose()?;
     let mut additional = super::team_thread::Route::additional(cfg)?
         .into_iter()

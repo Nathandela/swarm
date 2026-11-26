@@ -419,8 +419,10 @@ def verify(swarm, provider, test, root, server):
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
         if server.codex_send:
             env["SWARM_CLAUDE_MANAGER_FIXTURE_CODEX_SEND"] = "1"
-        if server.codex_send_revoked:
+        if server.codex_send_revoked and not server.replaced_issuer:
             env["SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED"] = "1"
+        if server.replaced_issuer:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_REPLACED_ISSUER"] = str(root)
         if server.deleted:
             env["SWARM_CLAUDE_MANAGER_FIXTURE_DELETED"] = "1"
     marker = root / "token"
@@ -474,6 +476,7 @@ def verify(swarm, provider, test, root, server):
                 if server.codex_send:
                     assert authored.count("Start the exact enrolled worker follow-up.") == (0 if server.codex_send_revoked else 1)
                     assert "This divergent action must never reach the worker." not in authored
+            assert not (root / ".fixture-impostor-contacted").exists()
             assert not server.forwarded or server.forwarded_checked.is_file()
             assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=bool(server.seen_tools),
@@ -539,6 +542,7 @@ if __name__ == "__main__":
     modes.add_argument("--enrolled-deleted", action="store_true")
     modes.add_argument("--project-fault", choices=("before","after"))
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
+    modes.add_argument("--enrolled-codex-replaced-issuer", type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="cm-", dir="/tmp") as name, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
@@ -548,8 +552,9 @@ if __name__ == "__main__":
         server.vm = args.vm or args.vm_worktree or args.vm_revoked
         server.vm_revoked = args.vm_revoked
         server.worktree = args.vm_worktree
-        server.codex = args.enrolled_codex or args.enrolled_codex_send or args.enrolled_codex_send_revoked
-        server.codex_send_revoked = args.enrolled_codex_send_revoked is not None
+        server.replaced_issuer = args.enrolled_codex_replaced_issuer is not None
+        server.codex = args.enrolled_codex or args.enrolled_codex_send or args.enrolled_codex_send_revoked or args.enrolled_codex_replaced_issuer
+        server.codex_send_revoked = args.enrolled_codex_send_revoked is not None or server.replaced_issuer
         server.codex_send = bool(args.enrolled_codex_send or server.codex_send_revoked)
         server.enrolled = bool(args.enrolled or args.enrolled_deleted or server.codex)
         server.codex_requests = []

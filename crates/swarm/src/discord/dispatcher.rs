@@ -84,6 +84,7 @@ pub(super) struct Dispatcher {
     mail_cursor: std::cell::Cell<u64>,
     send_cursor: std::cell::Cell<usize>,
     next_send: std::cell::Cell<Option<Instant>>,
+    pub(super) send_issuer: std::cell::RefCell<Value>,
     #[cfg(test)]
     pub(super) lose_enrolled_ack: std::cell::Cell<bool>,
     idle_since: std::cell::Cell<Option<Instant>>,
@@ -113,6 +114,7 @@ impl Dispatcher {
             mail_cursor: std::cell::Cell::new(0),
             send_cursor: std::cell::Cell::new(0),
             next_send: std::cell::Cell::new(None),
+            send_issuer: Default::default(),
             #[cfg(test)]
             lose_enrolled_ack: std::cell::Cell::new(false),
             idle_since: std::cell::Cell::new(None),
@@ -120,6 +122,15 @@ impl Dispatcher {
         };
         this.listener.set_nonblocking(true)?;
         Ok(Some(this))
+    }
+
+    pub(super) fn start_send_authority(
+        &self,
+        cfg: &Config,
+    ) -> io::Result<super::enrolled_worker::authority::Service> {
+        let service = super::enrolled_worker::authority::Service::discord(&self.scope(cfg), cfg)?;
+        self.send_issuer.replace(service.issuer().clone());
+        Ok(service)
     }
 
     pub(super) fn scope(&self, cfg: &Config) -> Value {
@@ -854,10 +865,13 @@ impl Dispatcher {
                     }
                 });
             match source {
-                Ok(()) => {
+                Ok(()) if self.send_issuer.borrow().is_object() => {
                     action["state"] = json!("executing");
+                    action["issuer"] = self.send_issuer.borrow().clone();
                     state["worker_actions"][key] = action.clone();
                     inbox.set_manager(state.clone())?;
+                    #[cfg(test)]
+                    super::enrolled_worker::authority::replace_fixture_issuer(&self.socket)?;
                     if let Ok(result) = self.owner.enrolled_send(&session, &action, true) {
                         #[cfg(test)]
                         if result["state"] == "native_accepted"
@@ -871,7 +885,7 @@ impl Dispatcher {
                 Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
                     action["state"] = json!("rejected");
                 }
-                Err(_) => {}
+                _ => {}
             }
         }
         if action != state["worker_actions"][key] {

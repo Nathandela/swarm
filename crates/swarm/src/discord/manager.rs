@@ -772,7 +772,8 @@ mod tests {
             forwarded_revocation: (forwarded == "revoked")
                 .then(|| root.join(".fixture-hide-forward")),
             source_deletion: (std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_DELETED").is_some()
-                || std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED").is_some())
+                || std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED").is_some()
+                || std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_REPLACED_ISSUER").is_some())
             .then(|| root.join(".fixture-enrolled-deleted")),
         };
         let _send_guard = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_CODEX_SEND").map(|_| {
@@ -783,7 +784,7 @@ mod tests {
             let source = source.clone();
             let after_preflight = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED")
                 .map(|_| root.join(".fixture-enrolled-deleted"));
-            super::super::enrolled_worker::authority::Service::bind(
+            let service = super::super::enrolled_worker::authority::Service::bind(
                 &scope,
                 cfg.clone(),
                 move |cfg, inbox, anchor| {
@@ -800,7 +801,9 @@ mod tests {
                     super::super::dispatcher::enrolled_source(cfg, inbox, &api, anchor)
                 },
             )
-            .unwrap()
+            .unwrap();
+            dispatcher.send_issuer.replace(service.issuer().clone());
+            service
         });
         let launch = dispatcher.scope(&cfg)["launch"].clone();
         let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
