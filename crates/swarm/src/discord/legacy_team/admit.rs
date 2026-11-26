@@ -46,16 +46,56 @@ pub(super) fn verify_record<'tx>(
     Ok(())
 }
 
-pub(super) fn queue<'a>(
+#[derive(Clone, Copy)]
+pub(super) struct Advancement {
+    pub(super) native: bool,
+    pub(super) dry_run: bool,
+}
+
+pub(super) fn advance<'a>(
     place: &Place,
     cfg: &Config,
     binding: &Value,
     input: &render::Input,
-    dry_run: bool,
+    action: Advancement,
     recheck: impl FnOnce() -> io::Result<render::Input>,
     guard_commit: impl FnOnce() -> io::Result<std::sync::MutexGuard<'a, ()>>,
 ) -> io::Result<()> {
-    let mut manager = prepare::Manager::claim(place, cfg, binding, Some(&input.origin))?;
+    let accepted = Some((&input.origin, action.native));
+    let mut manager = prepare::Manager::claim(place, cfg, binding, accepted)?;
+    let settings = if action.native {
+        crate::manager_prompt::load(place.supervisor_root())?
+    } else {
+        String::new()
+    };
+    let verify_settings = || {
+        if action.native && crate::manager_prompt::load(place.supervisor_root())? != settings {
+            return Err(unavailable());
+        }
+        Ok(())
+    };
+    let complete = |state: &mut voice::Voice| {
+        if action.native {
+            voice::guild_native_ready(
+                state,
+                cfg,
+                &input.origin,
+                &input.text,
+                &input.prompt,
+                &input.project,
+                &settings,
+            )
+        } else {
+            Ok(voice::queued_guild_admission(
+                state,
+                &input.origin,
+                &input.text,
+                &input.prompt,
+                &input.project,
+            )?
+            .is_none())
+        }
+    };
     let existing = {
         let (_pin, db) = open_bolt(&manager.directory.join("voice.db"), 64 << 20)?;
         let mut state = voice::read_voice_with_queue(
@@ -63,47 +103,37 @@ pub(super) fn queue<'a>(
             &manager.id,
             cfg,
             &manager.endpoint,
-            Some(&input.origin),
+            accepted,
         )?;
         if state.conversation["binding"] != manager.binding
             || state.generation()? != manager.generation
         {
             return Err(unavailable());
         }
-        voice::queued_guild_admission(
-            &mut state,
-            &input.origin,
-            &input.text,
-            &input.prompt,
-            &input.project,
-        )?
-        .is_none()
+        complete(&mut state)?
     };
-    if existing || dry_run {
+    if existing || action.dry_run {
         manager.verify(place, cfg)?;
         if recheck()? != *input {
             return Err(unavailable());
         }
         manager.verify_pins()?;
+        verify_settings()?;
         println!(
             "{}",
-            if existing {
-                "The original Go Voice store already has this queued input."
-            } else {
-                "The original Go Voice store can queue this teammate input."
-            }
+            match (action.native, existing) {
+                (false, true) => "The original Go Voice store already has this queued input.",
+                (false, false) => "The original Go Voice store can queue this teammate input.",
+                (true, true) => "The original Go Voice store already has this prepared input.",
+                (true, false) => "The original Go Voice store can prepare this teammate input.",
+            },
         );
         return Ok(());
     }
     let (_pin, mut db) = manager.open_writer()?;
     let mut tx = db.begin_rw().map_err(io::Error::other)?;
-    let mut state = voice::read_voice_with_queue(
-        &tx,
-        &manager.id,
-        cfg,
-        &manager.endpoint,
-        Some(&input.origin),
-    )?;
+    let mut state =
+        voice::read_voice_with_queue(&tx, &manager.id, cfg, &manager.endpoint, accepted)?;
     if state.conversation["binding"] != manager.binding || state.generation()? != manager.generation
     {
         return Err(unavailable());
@@ -113,19 +143,39 @@ pub(super) fn queue<'a>(
         return Err(unavailable());
     }
     manager.verify_pins()?;
-    let (key, admission) = voice::queued_guild_admission(
-        &mut state,
-        &input.origin,
-        &input.text,
-        &input.prompt,
-        &input.project,
-    )?
-    .ok_or_else(unavailable)?;
-    voice::stage(&mut tx, state, &key, &admission)?;
+    verify_settings()?;
+    if action.native {
+        if complete(&mut state)? {
+            return Err(unavailable());
+        }
+        voice::stage_guild_native(
+            &mut tx,
+            state,
+            cfg,
+            &input.origin,
+            &input.prompt,
+            &input.project,
+            &settings,
+        )?;
+    } else {
+        let (key, admission) = voice::queued_guild_admission(
+            &mut state,
+            &input.origin,
+            &input.text,
+            &input.prompt,
+            &input.project,
+        )?
+        .ok_or_else(unavailable)?;
+        voice::stage(&mut tx, state, &key, &admission)?;
+    }
     {
         let _commit = guard_commit()?;
         tx.commit().map_err(io::Error::other)?;
     }
-    println!("Queued the original teammate input in Go Voice.");
+    if action.native {
+        println!("Prepared the original teammate native request for Go to submit.");
+    } else {
+        println!("Queued the original teammate input in Go Voice.");
+    }
     Ok(())
 }

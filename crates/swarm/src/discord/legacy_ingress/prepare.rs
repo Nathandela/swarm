@@ -169,7 +169,7 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
     id: &str,
     cfg: &Config,
     endpoint: &str,
-    origin: Option<&Value>,
+    origin: Option<(&Value, bool)>,
 ) -> io::Result<Voice> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let raw = root.get(b"state").ok_or_else(invalid)?;
@@ -219,7 +219,7 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
             return Err(invalid());
         }
         if key.starts_with(b"admissions\0")
-            && let Some(origin) = origin
+            && let Some((origin, allow_prepared)) = origin
             && value["origin"]["request_id"] == origin["request_id"]
         {
             let sequence = value["sequence"]
@@ -231,7 +231,7 @@ pub(in crate::discord) fn read_voice_with_queue<'tx>(
                 || value["origin"] != *origin
                 || value["conversation_id"] != conversation
                 || key != admission_key(&conversation, sequence)?.as_slice()
-                || !value["phase"].is_null()
+                || !(value["phase"].is_null() || allow_prepared && value["phase"] == "prepared")
                 || value["settled_at"] != "0001-01-01T00:00:00Z"
             {
                 return Err(invalid());
@@ -354,6 +354,27 @@ fn admission_key(conversation: &str, sequence: u64) -> io::Result<Vec<u8>> {
     Ok(format!("admissions\0{id}").into_bytes())
 }
 
+fn guild_admission(
+    voice: &Voice,
+    origin: &Value,
+    text: &str,
+    prompt: &str,
+    project: &str,
+    sequence: u64,
+) -> Value {
+    let conversation = field(&voice.conversation["binding"], "conversation_id");
+    let mut expected = json!({"reply_tracked":true,"human_reply":text,"origin":origin,"project":project,
+        "input_text":prompt,"conversation_id":conversation,"sequence":sequence,
+        "source_id":format!("discussion:{}",field(origin,"request_id")),"settled_at":"0001-01-01T00:00:00Z"});
+    if let Some(after) = voice.conversation["last_output"]
+        .as_u64()
+        .filter(|v| *v > 0)
+    {
+        expected["question_boundary"] = json!(after);
+    }
+    expected
+}
+
 pub(in crate::discord) fn queued_guild_admission(
     voice: &mut Voice,
     origin: &Value,
@@ -371,15 +392,7 @@ pub(in crate::discord) fn queued_guild_admission(
     };
     let conversation = field(&voice.conversation["binding"], "conversation_id");
     let key = admission_key(conversation, sequence)?;
-    let mut expected = json!({"reply_tracked":true,"human_reply":text,"origin":origin,"project":project,
-        "input_text":prompt,"conversation_id":conversation,"sequence":sequence,
-        "source_id":format!("discussion:{}",field(origin,"request_id")),"settled_at":"0001-01-01T00:00:00Z"});
-    if let Some(after) = voice.conversation["last_output"]
-        .as_u64()
-        .filter(|v| *v > 0)
-    {
-        expected["question_boundary"] = json!(after);
-    }
+    let expected = guild_admission(voice, origin, text, prompt, project, sequence);
     if let Some(saved) = &voice.queued {
         if *saved != expected {
             return Err(invalid());
@@ -388,6 +401,145 @@ pub(in crate::discord) fn queued_guild_admission(
     }
     voice.conversation["last_admission"] = json!(sequence);
     Ok(Some((key, expected)))
+}
+
+fn dispatch_text(settings: &str, prompt: &str, project: &str) -> io::Result<String> {
+    let context = if project.is_empty() {
+        "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action.".to_owned()
+    } else {
+        let selected = String::from_utf8(go_bytes(&json!(project))?).map_err(io::Error::other)?;
+        format!("Approved project for new work {selected}")
+    };
+    crate::manager_prompt::render(settings, &format!("{context}\n{prompt}"))
+}
+
+fn semantic_ids() -> io::Result<(u64, String, String)> {
+    let mut nonce = [0; 32];
+    let mut operation = [0; 16];
+    let mut random = fs::File::open("/dev/urandom")?;
+    random.read_exact(&mut nonce)?;
+    random.read_exact(&mut operation)?;
+    let hex = |slice: &[u8]| slice.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let now = crate::ipc::spawn::now_ms();
+    Ok((
+        now,
+        format!("semantic:{now}:{}", hex(&operation)),
+        hex(&nonce),
+    ))
+}
+
+fn guild_request(voice: &Voice, text: &str, origin: &Value, nonce: &str) -> Value {
+    let b = &voice.conversation["binding"];
+    let mut wire_origin = json!({});
+    for key in [
+        "kind",
+        "installation_id",
+        "request_id",
+        "actor_id",
+        "requester_id",
+        "actor_name",
+        "guild_id",
+        "channel_id",
+        "message_id",
+        "discussion_id",
+        "revision",
+    ] {
+        wire_origin[key] = origin[key].clone();
+    }
+    let binding = json!({"session":b["session_id"],"session_instance":b["session_instance"],
+        "conversation_id":b["conversation_id"],"provider":b["provider"],"native_session_id":b["native_session_id"],
+        "native_generation":b["native_generation"],"observation_generation":b["observation_generation"],"login_epoch":b["login_epoch"]});
+    json!({"manager_admission":{"expected_external_input":0,"binding":binding,"nonce":nonce},
+        "session":b["session_id"],"session_instance":b["session_instance"],"text":text,"origin":wire_origin})
+}
+
+pub(in crate::discord) fn guild_native_ready(
+    voice: &Voice,
+    cfg: &Config,
+    origin: &Value,
+    human: &str,
+    prompt: &str,
+    project: &str,
+    settings: &str,
+) -> io::Result<bool> {
+    let queued = voice.queued.as_ref().ok_or_else(invalid)?;
+    let last = voice.conversation["last_admission"]
+        .as_u64()
+        .filter(|seq| *seq > 0)
+        .ok_or_else(invalid)?;
+    let retired = voice.conversation["retired_through"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    let last_output = &voice.conversation["last_output"];
+    if last <= retired
+        || !(last_output.is_null() || last_output.as_u64().is_some())
+        || cfg.text("manager_cli") != "codex"
+        || !grants::project(cfg, project)
+    {
+        return Err(invalid());
+    }
+    let text = dispatch_text(settings, prompt, project)?;
+    let expected = guild_admission(voice, origin, human, prompt, project, last);
+    if *queued == expected {
+        return Ok(false);
+    }
+    let mut base = queued.clone();
+    let fields = base.as_object_mut().ok_or_else(invalid)?;
+    for key in ["phase", "request", "operation_id", "native_input_id"] {
+        fields.remove(key);
+    }
+    let nonce = field(queued, "native_input_id");
+    if base != expected
+        || queued["phase"] != "prepared"
+        || nonce.len() != 64
+        || !nonce
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || go_bytes(&queued["request"])? != go_bytes(&guild_request(voice, &text, origin, nonce))?
+    {
+        return Err(invalid());
+    }
+    validate_prepared_state(
+        queued,
+        &voice.conversation,
+        &voice.conversation["binding"],
+        cfg,
+    )?;
+    Ok(true)
+}
+
+pub(in crate::discord) fn stage_guild_native<'tx>(
+    tx: &mut impl TxRwApi<'tx>,
+    mut voice: Voice,
+    cfg: &Config,
+    origin: &Value,
+    prompt: &str,
+    project: &str,
+    settings: &str,
+) -> io::Result<()> {
+    let mut queued = voice.queued.take().ok_or_else(invalid)?;
+    if !queued["phase"].is_null() {
+        return Err(invalid());
+    }
+    let sequence = queued["sequence"].as_u64().ok_or_else(invalid)?;
+    let key = admission_key(field(&queued, "conversation_id"), sequence)?;
+    let (_, operation, nonce) = semantic_ids()?;
+    queued["request"] = guild_request(
+        &voice,
+        &dispatch_text(settings, prompt, project)?,
+        origin,
+        &nonce,
+    );
+    queued["operation_id"] = json!(operation);
+    queued["native_input_id"] = json!(nonce);
+    queued["phase"] = json!("prepared");
+    validate_prepared_state(
+        &queued,
+        &voice.conversation,
+        &voice.conversation["binding"],
+        cfg,
+    )?;
+    manager_publication::stage_voice(tx, voice.header, &[(key, queued)])
 }
 
 fn canonical_guild_voice(value: &Value, raw: &[u8]) -> io::Result<bool> {
@@ -424,13 +576,7 @@ fn make_admission(
             );
         }
     }
-    let context = if project.is_empty() {
-        "Workspace unresolved. Ask the discussion to choose an enrolled project before your first project-dependent action.".to_owned()
-    } else {
-        let selected = String::from_utf8(go_bytes(&json!(project))?).map_err(io::Error::other)?;
-        format!("Approved project for new work {selected}")
-    };
-    let native_text = crate::manager_prompt::render(settings, &format!("{context}\n{prompt}"))?;
+    let native_text = dispatch_text(settings, &prompt, &project)?;
     let n = voice.conversation["last_admission"]
         .as_u64()
         .and_then(|n| n.checked_add(1))
@@ -442,15 +588,7 @@ fn make_admission(
     fields.insert("session".into(), session.clone());
     fields.remove("generation");
     fields.remove("native_cli");
-    let mut nonce = [0; 32];
-    let mut operation = [0; 16];
-    let mut random = fs::File::open("/dev/urandom")?;
-    random.read_exact(&mut nonce)?;
-    random.read_exact(&mut operation)?;
-    let hex = |slice: &[u8]| slice.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    let nonce = hex(&nonce);
-    let now = crate::ipc::spawn::now_ms();
-    let operation = format!("semantic:{now}:{}", hex(&operation));
+    let (now, operation, nonce) = semantic_ids()?;
     let conversation = field(&binding, "conversation_id");
     let key = admission_key(conversation, n)?;
     let mut admission = json!({

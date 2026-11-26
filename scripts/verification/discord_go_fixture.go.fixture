@@ -164,10 +164,15 @@ func main() {
 		fmt.Println(phase, cutover)
 		return
 	}
-	if action == "guild-native" {
+	if action == "guild-native" || action == "guild-native-request" {
 		row, err := voice.FixtureGuildNativeAdmission(dir, os.Args[3])
 		check(err)
-		check(json.NewEncoder(os.Stdout).Encode(row))
+		if action == "guild-native-request" {
+			_, err = os.Stdout.Write(row.Request)
+			check(err)
+		} else {
+			check(json.NewEncoder(os.Stdout).Encode(row))
+		}
 		return
 	}
 	if action == "pending" || action == "pending-count" {

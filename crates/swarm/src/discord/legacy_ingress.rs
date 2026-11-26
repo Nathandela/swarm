@@ -624,11 +624,23 @@ fn original_revision(message: &Value, origin: &Value) -> io::Result<String> {
 }
 
 fn validate_prepared(receipt: &Receipt, cfg: &Config) -> io::Result<()> {
-    let admission = &receipt.admission;
-    let active = &receipt.conversation;
+    validate_prepared_state(
+        &receipt.admission,
+        &receipt.conversation,
+        &receipt.binding,
+        cfg,
+    )
+}
+
+fn validate_prepared_state(
+    admission: &Value,
+    active: &Value,
+    binding: &Value,
+    cfg: &Config,
+) -> io::Result<()> {
     let request = &admission["request"];
     let runtime_binding = &request["manager_admission"]["binding"];
-    let mut expected = receipt.binding.clone();
+    let mut expected = binding.clone();
     let fields = expected.as_object_mut().ok_or_else(invalid)?;
     fields.remove("native_cli");
     fields.remove("generation");

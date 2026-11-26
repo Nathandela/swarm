@@ -21,6 +21,15 @@ fn key(table: &str, conversation: &str, suffix: &str) -> io::Result<Vec<u8>> {
 
 pub(super) fn apply_voice<'tx>(
     mut tx: impl TxRwApi<'tx>,
+    header: Value,
+    changes: &[(Vec<u8>, Value)],
+) -> io::Result<()> {
+    stage_voice(&mut tx, header, changes)?;
+    tx.commit().map_err(io::Error::other)
+}
+
+pub(super) fn stage_voice<'tx>(
+    tx: &mut impl TxRwApi<'tx>,
     mut header: Value,
     changes: &[(Vec<u8>, Value)],
 ) -> io::Result<()> {
@@ -78,7 +87,7 @@ pub(super) fn apply_voice<'tx>(
         root.put(b"digest", format!("{:x}", Sha256::digest(raw)))
             .map_err(io::Error::other)?;
     }
-    tx.commit().map_err(io::Error::other)
+    Ok(())
 }
 
 fn native_proof(

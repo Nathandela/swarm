@@ -161,7 +161,7 @@ impl Manager {
         place: &Place,
         cfg: &Config,
         discussion: &Value,
-        queued: Option<&Value>,
+        queued: Option<(&Value, bool)>,
     ) -> io::Result<Self> {
         let (directory, id, endpoint) = legacy_ingress::voice_location(place, cfg, discussion)?;
         let root = fs::canonicalize("/tmp")?

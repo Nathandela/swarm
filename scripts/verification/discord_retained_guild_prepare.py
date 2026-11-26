@@ -101,10 +101,15 @@ def stop_connector(place):
         assert json.loads(raw.split(b"\r\n\r\n", 1)[1]) == {"stopped": True}
 
 
-def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_native=False, queue_only=False):
+def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False, prepare_native=False):
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
+    if prepare_native:
+        settings = base / "state/manager-settings"
+        settings.mkdir(mode=0o700)
+        (settings / "starting-prompt").write_text("Retained manager settings <&>")
+        (settings / "starting-prompt").chmod(0o600)
     env = fixture_env(base, base / "state", base / "bin")
     env["TERM"] = "xterm-256color"
     if interrupt:
@@ -141,8 +146,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
 
     def rust(phase, evidence=None):
         test_env = rust_env(phase, evidence)
-        exit_code = {"prepare-and-exit":75, "voice-storage-and-exit":76,
-                     "admit-before":77, "admit-after":78}.get(phase)
+        exit_code = {"prepare-and-exit":75, "voice-storage-and-exit":76, "admit-before":77,
+                     "admit-after":78, "native-prepare-before":79, "native-prepare-after":80}.get(phase)
         if exit_code is not None:
             child = subprocess.run([rust_test, *rust_args], env=test_env, capture_output=True, timeout=25)
             assert child.returncode == exit_code, child.stderr
@@ -190,7 +195,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
             voice, = (place / "discussions").glob("*/voice.db")
             credential = voice.with_name("bridge.auth").read_bytes()
             before_voice = voice.read_bytes()
-            if prepare_native:
+            if prepare_only:
                 voice_copy = base / "voice-copy" / "voice.db"
                 voice_copy.parent.mkdir(mode=0o700)
                 shutil.copy2(voice, voice_copy)
@@ -261,7 +266,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     assert connector.read_bytes() == before
                     rust("dry-run")
                     assert connector.read_bytes() == before and voice.read_bytes() == before_voice
-                    rust("prepare-and-exit" if prepare_native else "prepare")
+                    rust("prepare-and-exit" if prepare_only else "prepare")
                 sending, = pending()
                 a = sending["Admission"]
                 assert sending["State"] == "sending" and a["OperationID"] == OP and a["Revision"] == REV
@@ -281,6 +286,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     connector = place / "discord.db"
                     source_bytes = connector.read_bytes()
                     before_queue = voice.read_bytes()
+                    if prepare_native:
+                        rust("native-prepare-refuse")
+                        assert voice.read_bytes() == before_queue and connector.read_bytes() == source_bytes
                     rust("admit-dry-run")
                     permissions[0] = False
                     rust("admit-refuse")
@@ -324,14 +332,43 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     assert voice.read_bytes() == after_voice and native(voice) == queued
                     assert connector.read_bytes() == source_bytes and pending() == [sending]
                     assert calls == [] and posts == []
+                    if prepare_native:
+                        rust("dry-run")
+                        permissions[0] = False
+                        rust("native-prepare-refuse")
+                        permissions[0] = True
+                        with Path(start["bridge_socket"]).with_name("controller.lock").open("rb") as lock:
+                            fcntl.flock(lock, fcntl.LOCK_EX)
+                            rust("native-prepare-refuse")
+                        assert voice.read_bytes() == after_voice and connector.read_bytes() == source_bytes
+                        rust("native-prepare-before")
+                        assert voice.read_bytes() == after_voice and native(voice) == queued
+                        rust("native-prepare-after")
+                        prepared = native(voice)
+                        request_bytes = invoke("guild-native-request", voice.parent, "701")
+                        persisted = voice.read_bytes()
+                        prompt = settings / "starting-prompt"
+                        original_setting = prompt.read_bytes()
+                        try:
+                            prompt.write_text("changed after the original native request was prepared")
+                            rust("native-prepare-refuse")
+                            assert voice.read_bytes() == persisted and native(voice) == prepared
+                        finally:
+                            prompt.write_bytes(original_setting)
+                        rust("prepare")
+                        assert voice.read_bytes() == persisted and native(voice) == prepared
+                        assert connector.read_bytes() == source_bytes and pending() == [sending]
+                        assert calls == [] and posts == []
                 invoke("guild-advance", place, go_port, "accept")
                 accepted, = pending()
                 assert accepted["State"] == "accepted" and accepted["Admission"] == a
                 row = native(voice)
                 assert row["source_id"] == f"discussion:{OP}" and row["origin"]["revision"] == REV, row
                 assert row["origin"]["guild_id"] == "300" and row["origin"]["kind"] == "external"
-                assert not row.get("phase") and not row.get("native_input_id") and calls == [] and posts == []
-                if prepare_native:
+                if not (prepare_native and rust_test):
+                    assert not row.get("phase") and not row.get("native_input_id")
+                assert calls == [] and posts == []
+                if prepare_only:
                     invoke("guild-advance", place, go_port, "prepare-native")
                     prepared = native(voice)
                     assert pending() == [accepted]
@@ -376,7 +413,28 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     assert calls == [] and posts == []
                     print("PASS Rust's existing storage stages the exact Go tuple in a copy that Go reopens; personal rendering differs", flush=True)
                     return prepared
-                if queue_only:
+                if prepare_native:
+                    if not rust_test:
+                        invoke("guild-advance", place, go_port, "prepare-native")
+                        prepared = native(voice)
+                        request_bytes = invoke("guild-native-request", voice.parent, "701")
+                    assert prepared == native(voice) and pending() == [accepted]
+                    assert prepared["phase"] == "prepared" and not prepared.get("source_cutover")
+                    assert not prepared.get("reply_check_after") and prepared["request"]["manager_admission"]["binding"] == start["binding"]
+                    nonce = prepared["native_input_id"]
+                    operation = prepared["operation_id"]
+                    assert native_input(nonce) is None and calls == [] and posts == []
+                    status = owner(env, {"op":"semantic_status", "session_id":session, "operation_id":operation}, caps=("semantic-send",))
+                    assert status["op"] == "error", status
+                    comparable = request_bytes.replace(str(base / "work"), "/fixture/work").replace(nonce, "fixture-nonce")
+                    for key, value in start["binding"].items():
+                        if key != "provider":
+                            comparable = comparable.replace(json.dumps(value), json.dumps(f"fixture-{key}"))
+                    if not rust_test:
+                        return comparable
+                    assert request_bytes == invoke("guild-native-request", voice.parent, "701")
+                    print("PASS Rust prepared one unsent Go tuple across commit interruption and repeat", flush=True)
+                if queue_only and not prepare_native:
                     assert not row.get("reply_check_after") and not row.get("operation_id") and not row.get("request")
                     assert row["input_text"].count("Earlier Discord messages for context (JSON)") == 1
                     assert row.pop("conversation_id") == binding["conversation_id"]
@@ -425,6 +483,19 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     assert interrupted["phase"] == "executing" and interrupted["source_cutover"]
                     assert (interrupted["operation_id"], interrupted["native_input_id"]) == (operation, nonce)
                     assert runtime()["binding"] == start["binding"]
+                    if prepare_native:
+                        assert interrupted["operation_id"] == prepared["operation_id"] and interrupted["native_input_id"] == prepared["native_input_id"]
+                        assert request_bytes == invoke("guild-native-request", voice.parent, "701")
+                        executing = voice.read_bytes()
+                        connector = place / "discord.db"
+                        actual = connector.read_bytes()
+                        try:
+                            connector.write_bytes(source_bytes)
+                            rust("native-prepare-refuse")
+                            assert voice.read_bytes() == executing and connector.read_bytes() == source_bytes
+                        finally:
+                            connector.write_bytes(actual)
+                        print("PASS stale sending connector cannot renew the executing Go native tuple", flush=True)
                 invoke("guild-advance", place, go_port, "advance")
                 assert pending() == []
                 row = native(voice)
@@ -452,6 +523,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     completed = await_value(lambda: native_input(row["native_input_id"], "completed"))
                     assert completed["native_turn_id"] == before["native_turn_id"] and len(calls) == 1 and posts == []
                     print("PASS Go recovered the exact executing operation after SIGKILL at the withheld native acknowledgment", flush=True)
+                if prepare_native:
+                    assert request_bytes == invoke("guild-native-request", voice.parent, "701")
+                    return comparable
                 print("PASS same Go sending operation produced one authenticated native nonce and no Discord posts", flush=True)
                 sending["Admission"]["Discussion"].pop("supervisor_socket")
                 return sending
@@ -477,7 +551,7 @@ if __name__ == "__main__":
             witness(Path(root).resolve(), *sys.argv[1:5], interrupt=True)
     elif len(sys.argv) == 6 and sys.argv[5] == "--prepare-native-only":
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
-            witness(Path(root).resolve(), *sys.argv[1:5], prepare_native=True)
+            witness(Path(root).resolve(), *sys.argv[1:5], prepare_only=True)
     elif len(sys.argv) == 6 and sys.argv[5] == "--queue-only":
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             first = witness(Path(root).resolve(), *sys.argv[1:4], queue_only=True)
@@ -485,6 +559,13 @@ if __name__ == "__main__":
             second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True)
         assert first == second, (first, second)
         print("PASS Rust and Go matched the authenticated starter/history prompt byte-for-byte and omitted reply wait", flush=True)
+    elif len(sys.argv) == 6 and sys.argv[5] == "--native-prepare-rollback":
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            first = witness(Path(root).resolve(), *sys.argv[1:4], queue_only=True, prepare_native=True)
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True)
+        assert first == second, (first, second)
+        print("PASS exact native request rendering and one Go-owned rollback send", flush=True)
     else:
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             first = witness(Path(root).resolve(), *sys.argv[1:4])

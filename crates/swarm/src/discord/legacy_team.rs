@@ -30,6 +30,7 @@ enum Mode<'a> {
     Prepare {
         message: &'a str,
         dry_run: bool,
+        before_commit: fn(),
     },
     Admit {
         message: &'a str,
@@ -82,7 +83,17 @@ fn prepare_with(
     message: &str,
     dry_run: bool,
 ) -> io::Result<()> {
-    continue_without_gateway(place, cfg, api, message, Mode::Prepare { message, dry_run })
+    continue_without_gateway(
+        place,
+        cfg,
+        api,
+        message,
+        Mode::Prepare {
+            message,
+            dry_run,
+            before_commit: || {},
+        },
+    )
 }
 
 fn continue_without_gateway(
@@ -149,13 +160,20 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     }
     let source = place.dir.join("discord.db");
     let (pin, db) = open_bolt(&source, 64 << 20)?;
-    let (route, guard, pending, binding) = {
+    let (route, guard, pending, binding, native_preparation) = {
         let tx = db.begin().map_err(io::Error::other)?;
         let needs_capture_scope = !matches!(mode, Mode::Observe);
-        let pending = match mode {
-            Mode::Observe => None,
-            Mode::Admit { message, .. } => Some(admit::pending(&tx, cfg, message)?),
-            _ => capture::pending(&tx, cfg)?,
+        let (pending, native_preparation) = match mode {
+            Mode::Observe => (None, false),
+            Mode::Admit { message, .. } => (Some(admit::pending(&tx, cfg, message)?), false),
+            Mode::Prepare { message, .. } => match capture::pending(&tx, cfg) {
+                Ok(pending) => (pending, false),
+                Err(error) => (
+                    Some(admit::pending(&tx, cfg, message).map_err(|_| error)?),
+                    true,
+                ),
+            },
+            Mode::Capture => (capture::pending(&tx, cfg)?, false),
         };
         let (route, guard) = read_scope(&tx, cfg, pending.as_ref())?;
         if changing {
@@ -164,7 +182,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         let binding = needs_capture_scope
             .then(|| capture::binding(&tx, cfg, &route, &guard, pending.as_ref()))
             .transpose()?;
-        (route, guard, pending, binding)
+        (route, guard, pending, binding, native_preparation)
     };
     let connector_state = match mode {
         Mode::Observe => "retained_teammate_read_only",
@@ -182,7 +200,11 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         Ok(())
     };
     api.verify_app(cfg)?;
-    if let Mode::Prepare { message, dry_run } = mode {
+    if let Mode::Prepare {
+        message, dry_run, ..
+    } = mode
+        && !native_preparation
+    {
         let pending = pending
             .as_ref()
             .filter(|row| row.candidate.route["message_id"] == message)
@@ -222,12 +244,20 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         println!("Prepared the original teammate message for Go to resume.");
         return Ok(());
     }
-    if let Mode::Admit {
-        message,
-        dry_run,
-        before_commit,
-    } = mode
-    {
+    let advance = match mode {
+        Mode::Admit {
+            message,
+            dry_run,
+            before_commit,
+        }
+        | Mode::Prepare {
+            message,
+            dry_run,
+            before_commit,
+        } => Some((message, dry_run, before_commit)),
+        _ => None,
+    };
+    if let Some((message, dry_run, before_commit)) = advance {
         let pending = pending
             .as_ref()
             .ok_or_else(|| invalid("original sending record is unavailable"))?;
@@ -254,10 +284,21 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
             Ok(current)
         };
         let input = recheck()?;
-        return admit::queue(place, cfg, binding, &input, dry_run, recheck, || {
-            before_commit();
-            status.commit_guard()
-        });
+        return admit::advance(
+            place,
+            cfg,
+            binding,
+            &input,
+            admit::Advancement {
+                native: native_preparation,
+                dry_run,
+            },
+            recheck,
+            || {
+                before_commit();
+                status.commit_guard()
+            },
+        );
     }
     if let Some(pending) = pending {
         capture::verify_pending(api, cfg, &route, &guard, &pending, false)?;
@@ -611,6 +652,31 @@ pub(super) fn native_prepare_witness() {
             }
         }
         "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
+        "native-prepare-before" | "native-prepare-after" | "native-prepare-refuse" => {
+            let result = continue_without_gateway(
+                &place,
+                &cfg,
+                &api,
+                "701",
+                Mode::Prepare {
+                    message: "701",
+                    dry_run: false,
+                    before_commit: if phase == "native-prepare-before" {
+                        || std::process::exit(79)
+                    } else {
+                        || {}
+                    },
+                },
+            );
+            if phase == "native-prepare-refuse" {
+                assert!(result.is_err());
+            } else {
+                result.unwrap();
+                if phase == "native-prepare-after" {
+                    std::process::exit(80);
+                }
+            }
+        }
         "admit"
         | "admit-before"
         | "admit-after"
