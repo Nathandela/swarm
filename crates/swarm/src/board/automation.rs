@@ -1248,6 +1248,7 @@ impl Automation {
         };
         let capacity = self.body_capacity((cols, rows));
         let detail = matches!(&self.records, Some(Records::Get(_)));
+        let list = matches!(&self.records, Some(Records::List(_)));
         let start = if detail {
             self.detail_start(items.len(), capacity)
         } else {
@@ -1256,7 +1257,11 @@ impl Automation {
         for (index, text) in items.iter().enumerate().skip(start).take(capacity) {
             let selected = index == self.selected.min(items.len().saturating_sub(1));
             let row = (index - start) as u16 + 2;
-            if detail || matches!(&self.records, Some(Records::List(_))) {
+            if list && index > start {
+                // Go advances from the terminal's actual wrapped row in the job list.
+                output.push_str("\r\n");
+                write_list_label(output, cols, text, selected);
+            } else if detail || list {
                 write_list_row(output, row, cols, text, selected);
             } else {
                 let marker = if selected { "▌" } else { " " };
@@ -1300,6 +1305,11 @@ fn timer_prompt_rows(cols: u16) -> impl Iterator<Item = &'static str> {
 }
 
 fn write_list_row(output: &mut String, row: u16, cols: u16, text: &str, selected: bool) {
+    let _ = write!(output, "\x1b[{row};1H");
+    write_list_label(output, cols, text, selected);
+}
+
+fn write_list_label(output: &mut String, cols: u16, text: &str, selected: bool) {
     let (style, marker) = if selected {
         (ACCENT, "▌")
     } else {
@@ -1307,7 +1317,7 @@ fn write_list_row(output: &mut String, row: u16, cols: u16, text: &str, selected
     };
     let label = list_label(text, usize::from(cols.saturating_sub(2)));
     // The bounded label goes straight to the terminal to preserve whole graphemes.
-    let _ = write!(output, "\x1b[{row};1H{style}{marker}{PLAIN} {label}");
+    let _ = write!(output, "{style}{marker}{PLAIN} {label}");
 }
 
 fn list_label(text: &str, columns: usize) -> String {
