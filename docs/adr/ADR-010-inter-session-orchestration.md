@@ -913,8 +913,9 @@ D2 recommended a worktree for. These clauses are lettered K.
 
 - `swarm handoff`: after resolving the source's checkout (agents-tracker-xl6k), the daemon launches
   the child with worktree isolation when that checkout is inside a git work tree. The worktree is
-  created as for any `--worktree` launch (`<checkout>/.swarm/worktrees/<slug>`, branch
-  `swarm/<slug>-<id>`) from the checkout's HEAD. A checkout outside git has nothing to isolate and
+  created as for any `--worktree` launch (`<primary>/.swarm/worktrees/<slug>`, branch
+  `swarm/<slug>-<id>`) from the source checkout's HEAD. Bare-backed and separate-metadata
+  repositories use the Git common directory when Git lists it as the primary. A checkout outside git has nothing to isolate and
   the child continues there, as before. `swarm handoff` has no opt-out.
 - `swarm spawn --handoff` and `--delegate`: the CLI sends `Worktree` by default when the target
   directory is a git work tree. An explicit `--worktree=false` restores the previous shape.
@@ -941,8 +942,10 @@ lose, and the source's own directory is the only place the work exists.
 
 - Deleting a handoff child now removes its worktree, as for every worktree session; the
   shared-workspace guard in discussion delete still refuses while another session works there.
-- A handoff from a source that is itself a worktree nests the child's worktree inside the source's
-  checkout. Deleting the source is refused while the child uses it (the same guard).
+- A handoff from a linked source puts the child's worktree alongside the repository's other managed
+  checkouts. Existing nested checkouts retain their recorded paths. Teardown refuses a parent that
+  contains another checkout and removes only the verified registration. This replaces Epic 12's
+  repository-wide prune on session deletion.
 - The handoff document copy stays in `<os.TempDir()>/swarm-handoff-*` (F3). A reboot still erases
   it, which this amendment does not address; the child's worktree and branch survive.
 - Evidence: `docs/verification/adr010/amendment10-red.md`.

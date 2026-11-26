@@ -32,7 +32,7 @@ func TestLaunchRollback_CompensatesPreLaunchWorktree(t *testing.T) {
 	}
 	cfg.PreDelete = func(m persist.Meta) error {
 		if m.AgentCwd != "" {
-			return worktree.RemoveAt(m.Cwd, m.AgentCwd)
+			return worktree.RemoveAt(m.Cwd, m.AgentCwd, m.ID)
 		}
 		return worktree.Remove(m.Cwd, m.ID)
 	}

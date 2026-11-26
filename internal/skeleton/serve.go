@@ -1510,18 +1510,33 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return "", nil
 	}
+	check := spec.CheckWorktreeDestination
 	if isAgentHandoffLaunch(spec) {
-		if err := refuseTemporaryHandoffWorktree(spec); err != nil {
-			return "", err
+		check = func(path string) error {
+			if err := refuseTemporaryHandoffPaths(spec.Cwd, path); err != nil {
+				return err
+			}
+			if spec.CheckWorktreeDestination != nil {
+				return spec.CheckWorktreeDestination(path)
+			}
+			return nil
 		}
 	}
 	if spec.RepairWorkerReservation {
 		existing, err := worktree.ReservedCheckout(spec.Cwd, id, spec.Name)
-		if err != nil || existing != "" {
-			return existing, err
+		if err != nil {
+			return "", err
+		}
+		if existing != "" {
+			if check != nil {
+				if err := check(existing); err != nil {
+					return "", err
+				}
+			}
+			return existing, nil
 		}
 	}
-	return worktree.Create(spec.Cwd, id, spec.Name)
+	return worktree.CreateChecked(spec.Cwd, id, spec.Name, check)
 }
 
 // preDeleteWorktree tears down a worktree-isolated session's worktree on delete.
@@ -1539,7 +1554,7 @@ func preDeleteWorktree(m persist.Meta) error {
 		if _, err := os.Lstat(m.AgentCwd); os.IsNotExist(err) {
 			return nil
 		}
-		return worktree.RemoveAt(m.Cwd, m.AgentCwd)
+		return worktree.RemoveAt(m.Cwd, m.AgentCwd, m.ID)
 	}
 	if _, err := os.Lstat(filepath.Join(m.Cwd, ".swarm", "worktrees", m.ID)); os.IsNotExist(err) {
 		return nil

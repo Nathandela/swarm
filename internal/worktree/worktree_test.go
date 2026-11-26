@@ -45,6 +45,10 @@ func newGitRepo(t *testing.T) string {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, dir, "init", "-q")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "test")
@@ -209,7 +213,7 @@ func TestRemoveTearsDownWorktree(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := RemoveAt(repo, dir); err != nil {
+	if err := RemoveAt(repo, dir, "sess1"); err != nil {
 		t.Fatalf("RemoveAt: %v", err)
 	}
 
@@ -243,7 +247,7 @@ func TestRemoveAtRejectsPathsOutsideWorktreeRoot(t *testing.T) {
 		filepath.Join(repo, ".swarm", "worktrees", "nested", "sess1"),
 		filepath.Join(repo, ".swarm", "worktrees", "..", "escape"),
 	} {
-		if err := RemoveAt(repo, dir); err == nil {
+		if err := RemoveAt(repo, dir, "sess1"); err == nil {
 			t.Errorf("RemoveAt(%q): want path-boundary error", dir)
 		}
 	}

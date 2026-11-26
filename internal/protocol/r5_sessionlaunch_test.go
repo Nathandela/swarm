@@ -48,6 +48,7 @@ package protocol
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -313,7 +314,15 @@ func TestR5SessionLaunch_StaleRevisionRefusesStalePreset(t *testing.T) {
 // free-text contribution (the initial prompt).
 func TestR5SessionLaunch_ComposesFromThePresetAloneAndBindsTheContentHash(t *testing.T) {
 	p := r5PresetView(t, "preset-api")
+	p.Worktree = true
 	b := newR5Backend(p)
+	allowedDestination := filepath.Join(p.Root, ".swarm", "worktrees", "worker")
+	b.allow = func(path string) error {
+		if path != p.Root && path != allowedDestination {
+			return errNotUnderRoot
+		}
+		return nil
+	}
 	sock := serveRemoteAPI(t, b)
 	rc := rawDial(t, sock)
 	rep := rc.hello(Version, []string{CapRemoteGateway})
@@ -350,6 +359,11 @@ func TestR5SessionLaunch_ComposesFromThePresetAloneAndBindsTheContentHash(t *tes
 	spec := specs[0]
 	if spec.Cwd != p.Root {
 		t.Errorf("spec.Cwd = %q, want the preset root %q (already canonical here)", spec.Cwd, p.Root)
+	}
+	check := spec.CheckWorktreeDestination
+	if spec.Options[OptionWorktree] != "true" || check == nil ||
+		check(allowedDestination) != nil || check(filepath.Dir(p.Root)) == nil {
+		t.Fatal("preset launch did not carry isolation and the destination policy")
 	}
 	if spec.AgentType != "claude" {
 		t.Errorf("spec.AgentType = %q, want the preset's provider claude", spec.AgentType)
@@ -537,7 +551,7 @@ func TestR5OperationStatus_AnswersAuthoritativeOrOutcomeUnknownNeverInvents(t *t
 		rc.writeControl(Control{
 			Op: OpOperationStatus, EndpointID: rep.EndpointID,
 			OperationID: "devA:01JQ-" + subject, DeviceID: "devA", DeviceSig: "sig", ExpiresAt: &exp,
-			BodyVersion: schema.CurrentProfileVersion,
+			BodyVersion:        schema.CurrentProfileVersion,
 			SubjectOperationID: subject,
 		})
 		return rc.readControl()
