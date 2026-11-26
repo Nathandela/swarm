@@ -244,7 +244,7 @@ impl State {
         }
         let resume = matches!(
             field(launch, "agent"),
-            "agy" | "opencode" | "hermes" | "claude" | "claude-code"
+            "agy" | "opencode" | "hermes" | "claude" | "claude-code" | "codex"
         ) && !field(options, "resume_from").is_empty();
         let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
         if field(launch, "agent") == "hermes" && options.get("resume_from").is_some() && !resume {
@@ -281,6 +281,13 @@ impl State {
                     return Err(io::Error::other("unsupported Claude resume role"));
                 }
                 let prepared = session.prepare_claude_resume(launch, &qualified)?;
+                return self.reserve_prepared(prepared, false, None, None);
+            }
+            if field(launch, "agent") == "codex" {
+                if managed.is_some() {
+                    return Err(io::Error::other("unsupported Codex resume role"));
+                }
+                let prepared = session.prepare_codex_resume(launch, &qualified)?;
                 return self.reserve_prepared(prepared, false, None, None);
             }
             if field(launch, "agent") == "opencode" {
@@ -394,6 +401,18 @@ impl State {
         {
             return Err(io::Error::other(
                 "Claude conversation already has a live or unconfirmed writer",
+            ));
+        }
+        if let Some(id) = prepared.codex_resume["thread"].as_str()
+            && self
+                .sessions
+                .read()
+                .unwrap()
+                .values()
+                .any(|row| row.owns_codex_thread(id))
+        {
+            return Err(io::Error::other(
+                "Codex thread already has a live or unconfirmed writer",
             ));
         }
         if !prepared.resume.is_null()

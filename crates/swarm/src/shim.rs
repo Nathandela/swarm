@@ -341,7 +341,30 @@ fn serve(dir: &Path) -> io::Result<()> {
             }
         }
         if provider["name"] == "codex" && provider["mode"] == "managed" {
-            let (owner, connection) = codex_backend::start(
+            use providers::codex_continuity;
+            let cwd=Path::new(working_dir);
+            let restored=&config["codex_resume"];
+            let profile=codex_continuity::profile(&environment,cwd,&config["codex_options"]);
+            if let Ok(profile)=&profile{
+                runtime::write_json(&dir.join("codex-profile.json"),&json!({"token":token,"profile":profile}))?;
+            }
+            if restored.is_object() {
+                let profile=profile?;
+                if profile!=restored["profile"] ||
+                    codex_continuity::rollout(Path::new(field(&profile,"home")),cwd,field(restored,"thread"))?!=restored["rollout"]
+                    || !argv.as_slice().starts_with(&["resume".into(),field(restored,"thread").into()])
+                {
+                    return Err(io::Error::other("Codex resume profile, rollout or argument custody changed"));
+                }
+                let sandbox=field(&profile["options"],"sandbox");
+                if !sandbox.is_empty(){
+                    if !matches!(sandbox,"read-only"|"workspace-write"|"danger-full-access"){
+                        return Err(io::Error::other("Codex resume sandbox policy is unqualified"));
+                    }
+                    app_args.extend(["-c".into(),format!("sandbox_mode={sandbox}")]);
+                }
+            }
+            let (owner, mut connection) = codex_backend::start(
                 executable,
                 Path::new(working_dir),
                 dir,
@@ -349,6 +372,12 @@ fn serve(dir: &Path) -> io::Result<()> {
                 &app_args,
             )?;
             backend = Some(owner);
+            if restored.is_object(){
+                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=restored["profile"]{
+                    return Err(io::Error::other("Codex resume authority changed during app-server startup"));
+                }
+                connection.bind_resume(field(restored,"thread"),cwd)?;
+            }
             command
                 .args(["--remote", &connection.endpoint])
                 .env_remove("OPENAI_API_KEY");

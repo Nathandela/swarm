@@ -14,7 +14,7 @@ import tempfile
 import time
 
 sys.dont_write_bytecode = True
-from parity_runtime import attach, control, fixtures, read_control
+from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
 def model_fixture(root):
@@ -41,7 +41,7 @@ def model_fixture(root):
             index = len(replies) + 1
             replies.append(index)
             ident = f"fixture-response-{index}"
-            text = "Native loopback reply."
+            text = "Native loopback reply." if index == 1 else "Auxiliary fixture reply."
             item = {"type":"message","id":f"fixture-item-{index}","role":"assistant","status":"completed",
                     "content":[{"type":"output_text","text":text,"annotations":[]}]}
             response = {"id":ident,"object":"response","created_at":int(time.time()),"model":"fixture","status":"in_progress","output":[]}
@@ -73,13 +73,15 @@ def model_fixture(root):
         'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
         'cli_auth_credentials_store="file"\n[model_providers.fixture]\nname="fixture"\nwire_api="responses"\n'
         f'base_url="http://127.0.0.1:{server.server_port}/v1"\nrequires_openai_auth=false\nsupports_websockets=false\n'
-        f'[projects."{root}/work"]\ntrust_level="trusted"\n')
+        f'[projects."{root}/work"]\ntrust_level="trusted"\n'
+        '[tui]\nscreen_reader_detection_done=true\n[tui.model_availability_nux]\n"gpt-6.1-sol"=100\n')
+    (home/"config.toml").chmod(0o600)
     (home/"auth.json").write_text(json.dumps({"auth_mode":"apikey","OPENAI_API_KEY":"offline-fixture-only"}))
     (home/"auth.json").chmod(0o600)
     return server,replies
 
 
-def drive(root, native, guard, loopback):
+def drive(root, native, guard, loopback, resume_check=False):
     model, replies = model_fixture(root) if loopback else (None, [])
     daemon = None
     previous = {}
@@ -106,20 +108,21 @@ def drive(root, native, guard, loopback):
             fixtures.wait_for(ready, "daemon socket")
             return process
 
-        def launch():
+        def launch(from_id=None, expected="launch"):
             route = Path(env["SWARM_DAEMON_SOCK"])
             with socket.socket(socket.AF_UNIX) as conn:
                 conn.settimeout(16)
                 conn.connect(str(route))
                 control(conn, "hello", endpoint_id="", protocol_version=1)
                 endpoint = read_control(conn)["endpoint_id"]
+                options = {"resume_from":from_id} if from_id else {"sandbox":"read-only"}
                 control(conn, "launch", endpoint_id=endpoint, launch={
                     "agent": "codex", "name": "codex fixture", "cwd": str(root / "work"),
-                    "cols": 100, "rows": 30, "options": {"sandbox": "read-only"},
+                    "cols": 100, "rows": 30, "options": options,
                 })
                 launched = read_control(conn)
-                assert launched["op"] == "launch", launched
-                return launched["session"]["id"]
+                assert launched["op"] == expected, launched
+                return launched["session"]["id"] if expected=="launch" else launched
 
         if not native:
             (root / "work/.fixture-seeded-rollout").touch()
@@ -148,7 +151,11 @@ def drive(root, native, guard, loopback):
                     fixtures.wait_for(lambda: b"ATTACHED" in invoke("peek", identity), "managed Codex TUI attach")
                     assert b"VIEWER openai=false anthropic=false claude_hook=false" in invoke("peek", identity)
                 control(connection, "detach", **fields)
-                assert read_control(connection)["op"] == "detach"
+                while True:
+                    tag, payload = read_frame(connection)
+                    if tag == 1:
+                        assert json.loads(payload)["op"] == "detach"
+                        break
             observation = state / "observation.json"
 
             def observed():
@@ -238,6 +245,32 @@ def drive(root, native, guard, loopback):
             invoke("kill", identity)
             assert json.loads(invoke("watch", identity, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
             print("managed Codex worker and exact native thread survived owner restart")
+            if resume_check:
+                fixtures.wait_for(lambda: fixtures.generation(owner["pid"]) is None,"old managed shim reaped")
+                config=root/"home/.codex/config.toml"
+                saved=config.read_bytes()
+                config.write_bytes(saved.replace(b"127.0.0.1:",b"127.0.0.2:"))
+                try:
+                    assert launch(identity,"error").get("error_code")=="invalid_field"
+                finally:
+                    config.write_bytes(saved)
+                rollouts = list((root/"home/.codex/sessions").rglob(f"*-{thread}.jsonl"))
+                assert len(rollouts) == 1
+                def native_turns():
+                    events = map(json.loads, rollouts[0].read_text().splitlines())
+                    return sum(row["type"]=="event_msg" and row["payload"]["type"]=="task_started" for row in events)
+                assert native_turns() == 1
+                resumed=launch(identity)
+                resumed_state=root/"state/rust-v1"/resumed.split("/")[1]
+                assert json.loads((resumed_state/"observation.json").read_text())["conversation_id"]==thread
+                assert any(row["id"]==resumed and row["resumed_from"]==identity for row in json.loads(invoke("ls","--json")))
+                fixtures.wait_for(lambda: b"Native loopback reply." in invoke("peek",resumed),"resumed native viewer displays prior reply",timeout=15)
+                assert native_turns() == 1, "resuming must not replay the original user turn"
+                assert launch(identity,"error").get("error_code")=="invalid_field"
+                invoke("kill",resumed)
+                invoke("watch",resumed,"--until","completed","--timeout","4s")
+                print("real Codex resumed the exact prior rollout, rejected changed authority without replaying the original user turn")
+
             if not native:
                 (root / "work/.fixture-drop-turn-reply").touch()
                 identity = launch()
@@ -284,7 +317,7 @@ def drive(root, native, guard, loopback):
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -306,13 +339,15 @@ def verify(candidate, provider, native, scratch, loopback):
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback)
+            drive(root, native, guard, loopback, resume_check)
         else:
             command = [*guard, sys.executable, root / "bin/parity_codex.py", "--isolated-root", root]
             if native:
                 command.append("--native")
             if loopback:
                 command.append("--loopback-model")
+            if resume_check:
+                command.append("--resume-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -333,12 +368,15 @@ if __name__ == "__main__":
     parser.add_argument("--loopback-model",action="store_true",help="use the installed native CLI with a fixed local Responses fixture in a private Linux network namespace")
     parser.add_argument("--scratch", type=Path, default=Path("/tmp").resolve())
     parser.add_argument("--isolated-root", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--resume-check",action="store_true")
     args = parser.parse_args()
+    if args.resume_check and not args.loopback_model:
+        parser.error("--resume-check requires --loopback-model")
     if args.loopback_model and (not args.native or not sys.platform.startswith("linux")):
         parser.error("--loopback-model requires Linux and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check)
     else:
         parser.error("--candidate and --provider are required")

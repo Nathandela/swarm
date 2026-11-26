@@ -1,0 +1,9 @@
+# Rust Codex resume verification
+
+The owner accepts `launch.options.resume_from` for a stopped ordinary managed Codex viewer. It verifies the original account and physical native profile, checkout, configuration, exact rollout header and native thread. The shim rechecks the source before starting the private app-server and verifies a native `thread/resume` response for the exact idle thread before starting the viewer. The resumed row records `resumed_from`. A second live or unconfirmed writer for that thread blocks another resume.
+
+Run the disposable Linux fixture with `scripts/verification/parity_codex.py --candidate <swarm> --provider <codex> --native --loopback-model --resume-check`. The fixture uses its own HOME inside a private namespace and a loopback Responses server. It sends one real Codex turn, restarts the owner, stops the source, checks that changed config blocks resume, and verifies that the viewer presents the old reply without starting a second user turn. It then checks that another viewer cannot resume the same thread while the replacement owns it.
+
+The qualified origin is the ordinary physical `HOME/.codex` profile. Config comparison is fail-closed on any change, including preference rewrites. The fixture seeds the vendor's screen-reader and model onboarding preferences to keep the profile stable during the test. Explicit profile and alternate origins, approval and question replies, structured interrupt, and owner-visible history are separate qualification work.
+
+On 2026-11-26 the fixture passed with installed Codex 0.172.0 on Linux x86-64. The retained original rollout still recorded exactly one `task_started` event after resume. The real provider also emitted an ephemeral title-generator thread. The observer ignores only events explicitly identified as ephemeral title generation.

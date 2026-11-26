@@ -56,6 +56,47 @@ pub(super) struct Channel {
     connection: WebSocket<UnixStream>,
     pid: u32,
     birth: u64,
+    restored: Option<Observation>,
+}
+
+impl Channel {
+    pub(super) fn bind_resume(&mut self, thread: &str, cwd: &Path) -> io::Result<()> {
+        send(
+            &mut self.connection,
+            json!({"id":2,"method":"thread/resume","params":{"threadId":thread,"excludeTurns":true}}),
+        )?;
+        let mut observation = Observation {
+            thread: thread.to_owned(),
+            idle: true,
+            joined: true,
+            ..Observation::default()
+        };
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            let Some(frame) = read(&mut self.connection)? else {
+                continue;
+            };
+            if frame["id"] != 2 || !frame["method"].is_null() {
+                observation.apply(&frame, cwd);
+                continue;
+            }
+            let restored = &frame["result"]["thread"];
+            let live = field(restored, "cwd");
+            if restored["id"] != thread
+                || live.is_empty()
+                || Path::new(live).canonicalize()?.as_path() != cwd
+                || restored["status"]["type"] != "idle"
+                || !observation.schedule_ready()
+            {
+                return Err(io::Error::other(
+                    "Codex native resume did not prove the exact idle source thread",
+                ));
+            }
+            self.restored = Some(observation);
+            return Ok(());
+        }
+        Err(io::Error::other("Codex native resume proof timed out"))
+    }
 }
 
 pub(super) fn start(
@@ -169,6 +210,7 @@ fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel
         connection,
         pid,
         birth,
+        restored: None,
     })
 }
 
@@ -236,6 +278,14 @@ impl Observation {
         if method == "thread/started" {
             let thread = &payload["thread"];
             let id = field(thread, "id");
+            // The installed viewer starts a proven ephemeral title generator
+            // after a reply. It never owns the native rollout or the PTY.
+            if thread["ephemeral"] == true
+                && thread["threadSource"] == "thread_title"
+                && thread["source"] == "vscode"
+            {
+                return false;
+            }
             if !self.thread.is_empty() && codex_receipt::canonical_thread(id) && self.thread != id {
                 self.ambiguous = true;
                 self.idle = false;
@@ -352,6 +402,12 @@ struct SemanticTarget<'a> {
 }
 
 fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
+    if observation.ambiguous {
+        let _ = runtime::write_json(
+            &target.dir.join("codex-thread-changed.json"),
+            &json!({"token":target.token}),
+        );
+    }
     let requests: Vec<_> = observation.requests.iter().map(|(id, kind)| {
         let public_id = serde_json::from_str::<String>(id).unwrap_or_else(|_| id.clone());
         let (category, summary) = match *kind {
@@ -601,7 +657,8 @@ pub(super) fn observe(
     actions: Receiver<SemanticAction>,
     manager: Value,
 ) {
-    let mut observation = Observation::default();
+    let resumed = channel.restored.is_some();
+    let mut observation = channel.restored.take().unwrap_or_default();
     let target = SemanticTarget {
         cwd: &cwd,
         dir: &dir,
@@ -609,6 +666,9 @@ pub(super) fn observe(
         schedule: schedule.as_ref(),
         manager: &manager,
     };
+    if resumed {
+        persist_observation(&observation, &target);
+    }
     let mut serial = 10;
     let mut join = None;
     let mut history = None;
