@@ -10,6 +10,9 @@ fixture_dir=$(realpath "$1")
 claude_exe=$(realpath "$2")
 witness=$3
 case "$witness" in
+  rust_claude_resume.py)
+    test "$#" -eq 3
+    set -- --candidate /fixture/swarm --provider /native/claude ;;
   rust_claude_schedule.py)
     test "$#" -eq 3
     set -- ;;
@@ -22,6 +25,9 @@ case "$witness" in
     esac ;;
   *) exit 2 ;;
 esac
+if [ "$witness" != rust_claude_resume.py ]; then
+  set -- /fixture/swarm /native/claude "$@"
+fi
 test -f "$fixture_dir/$witness"
 test -x "$fixture_dir/swarm"
 test -x "$claude_exe"
@@ -37,4 +43,4 @@ exec bwrap --unshare-user --uid 0 --gid 0 --unshare-net --unshare-pid --unshare-
   --setenv SWARM_NATIVE_FIXTURE_OS_ISOLATED 1 --setenv SWARM_NATIVE_FIXTURE_WRITABLE_ROOT /tmp \
   --setenv SWARM_NATIVE_FIXTURE_HOST_NETNS "$netns" --setenv PYTHONDONTWRITEBYTECODE 1 \
   /bin/sh -ec 'ip link set lo up; exec setpriv --bounding-set=-all -- "$@"' sh \
-  /usr/bin/python3 -B "/fixture/$witness" /fixture/swarm /native/claude "$@"
+  /usr/bin/python3 -B "/fixture/$witness" "$@"

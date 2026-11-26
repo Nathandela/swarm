@@ -39,6 +39,8 @@ pub(super) struct Prepared {
     rows: u16,
     provider: LaunchPlan,
     pub(super) resume: Value,
+    pub(super) claude_resume: Value,
+    claude_profile: Value,
     agy_launch: Value,
     go_rollback: Value,
     scheduled: Option<(worker::Binding, Value)>,
@@ -54,6 +56,7 @@ impl Prepared {
             || !self.manager.is_null()
             || !self.mailbox.is_null()
             || self.scheduled.is_some()
+            || !self.claude_resume.is_null()
             || !self.resume.is_null()
         {
             return Err(io::Error::other(
@@ -193,6 +196,7 @@ impl Session {
             resumed_from: data["agy_launch"]["resumed_from"]
                 .as_str()
                 .or_else(|| data["opencode_resume"]["resumed_from"].as_str())
+                .or_else(|| data["claude_resume"]["resumed_from"].as_str())
                 .map(str::to_owned),
             worker_native_installation: data["provider"][if data["provider"]["name"] == "claude" {
                 "claude_native_installation"
@@ -325,6 +329,12 @@ impl Session {
             &launch,
             runtime::launch_env(&req["env"]),
         )?;
+        let claude_profile = if provider.agent == "claude" {
+            providers::claude::profile(&provider.env, &req["env"], &req["options"])
+                .unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
         let (cols, rows) = runtime::dims(req);
         let isolated = req["worktree"] == true;
         if isolated && !crate::workspace::is_repo(&cwd) {
@@ -353,6 +363,8 @@ impl Session {
             provider,
             go_rollback: Value::Null,
             resume: Value::Null,
+            claude_resume: Value::Null,
+            claude_profile,
             scheduled: None,
             manager: Value::Null,
             mailbox: Value::Null,
@@ -412,6 +424,177 @@ impl Session {
             json!({"proof":launch.token,"socket":socket,"binary":binary}),
         ));
         Ok(plan)
+    }
+
+    pub(super) fn prepare_claude_resume(
+        &self,
+        launch: &Value,
+        source: &str,
+    ) -> io::Result<Prepared> {
+        if self.agent != "claude"
+            || !self.owner_interactive
+            || self.schedule.is_some()
+            || !self.exit()?["error"].is_null()
+            || !owner_gone(&self.dir, &self.token)?
+        {
+            return Err(io::Error::other(
+                "Claude resume requires a confirmed stopped ordinary worker",
+            ));
+        }
+        if launch["options"]
+            .as_object()
+            .is_none_or(|opts| opts.len() != 1)
+            || launch.as_object().is_none_or(|fields| {
+                fields.iter().any(|(key, value)| {
+                    !matches!(
+                        key.as_str(),
+                        "agent" | "cwd" | "env" | "name" | "cols" | "rows" | "options"
+                    ) && !value.is_null()
+                })
+            })
+        {
+            return Err(io::Error::other("unsupported Claude resume parameters"));
+        }
+        let cwd = self.verify_effective()?.to_owned();
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        let id = self.claude_conversation()?;
+        let info = &meta["claude_profile"];
+        if !info.is_object() {
+            return Err(io::Error::other("original Claude profile is unproven"));
+        }
+        let mut environment = runtime::launch_env(&launch["env"]);
+        let current = providers::claude::profile(&environment, &launch["env"], &info["options"])?;
+        let same = ["home", "home_id", "origin", "settings"]
+            .iter()
+            .all(|key| current[*key] == info[*key]);
+        if !same {
+            return Err(io::Error::other("Claude native profile or account changed"));
+        }
+        let saved_path = info["path"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| io::Error::other("saved Claude launch path is unproven"))?;
+        environment.retain(|(key, _)| key != "PATH" && key != "HOME");
+        environment.extend([
+            ("PATH".into(), saved_path.into()),
+            ("HOME".into(), field(info, "home").into()),
+        ]);
+        let env: Vec<_> = environment
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        let label = sanitize_name(field(launch, "name"));
+        let label = if label.is_empty() {
+            self.labels.lock().unwrap().name.clone()
+        } else {
+            label
+        };
+        let mut request = launch.clone();
+        request["cwd"] = json!(cwd);
+        request["options"] = info["options"].clone();
+        request["env"] = json!(env);
+        request["name"] = json!(label);
+        let mut prepared = Self::prepare(&json!({"launch":request}))?;
+        request["claude_retained_conversation"] = json!(id);
+        prepared.provider.argv = providers::claude::argv(&label, &request)?;
+        if providers::claude::release(&prepared.provider.version)
+            .zip(providers::claude::release(field(
+                &meta["provider"],
+                "version",
+            )))
+            .is_none_or(|(current, original)| current < original)
+        {
+            return Err(io::Error::other(
+                "installed Claude CLI is older than the source runtime",
+            ));
+        }
+        let home = Path::new(field(info, "home"));
+        let authority = self.claude_project_authority(home, &cwd)?;
+        let (_, transcript) = providers::claude::transcript(home, &cwd, &id)?;
+        prepared.tag = self.labels.lock().unwrap().tag.clone();
+        prepared.claude_resume = json!({"conversation_id":id,"resumed_from":source,"transcript":transcript,"project_authority":authority});
+        Ok(prepared)
+    }
+
+    pub(super) fn claude_conversation(&self) -> io::Result<String> {
+        claude_conversation(&self.dir, &self.token)
+    }
+
+    pub(super) fn hands_off_claude_source(&self) -> io::Result<(PathBuf, PathBuf, String, Value)> {
+        if self.agent != "claude" || !self.owner_interactive || self.schedule.is_some() {
+            return Err(io::Error::other(
+                "hands-off source requires a retained ordinary Claude worker",
+            ));
+        }
+        if self.is_live() {
+            self.dial()?;
+        } else if !self.exit()?["error"].is_null() || !owner_gone(&self.dir, &self.token)? {
+            return Err(io::Error::other("hands-off source ownership is unproven"));
+        }
+        let cwd = self.verify_effective()?.to_owned();
+        let meta = runtime::read_json(&self.dir.join("session.json"))?;
+        let profile = &meta["claude_profile"];
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| io::Error::other("daemon home is missing"))?
+            .canonicalize()?;
+        if profile["home"].as_str().map(Path::new) != Some(home.as_path()) {
+            return Err(io::Error::other(
+                "Claude transcript is outside the daemon's trusted native profile",
+            ));
+        }
+        let current = providers::claude::profile(
+            &runtime::launch_env(&Value::Null),
+            &Value::Null,
+            &profile["options"],
+        )?;
+        if ["home", "home_id", "origin", "settings"]
+            .iter()
+            .any(|key| current[*key] != profile[*key])
+        {
+            return Err(io::Error::other("Claude source profile or account changed"));
+        }
+        let id = self.claude_conversation()?;
+        let authority = self.claude_project_authority(&home, &cwd)?;
+        let (transcript, identity) = providers::claude::transcript(&home, &cwd, &id)?;
+        use std::os::unix::fs::MetadataExt;
+        let dir = cwd.metadata()?;
+        let proof = json!({"conversation":id,"transcript":transcript,"identity":identity,
+            "cwd":cwd,"cwd_identity":[dir.dev(),dir.ino()],"home":home,"project_authority":authority});
+        Ok((cwd, transcript, id, proof))
+    }
+
+    fn claude_project_authority(&self, home: &Path, cwd: &Path) -> io::Result<Value> {
+        let proof = runtime::read_json(&self.dir.join("claude-authority.json"))?;
+        if proof["token"] != self.token
+            || Path::new(field(&proof, "home")) != home
+            || Path::new(field(&proof, "cwd")) != cwd
+        {
+            return Err(io::Error::other(
+                "Claude project authority provenance is unproved",
+            ));
+        }
+        providers::claude::verify_project_authority(home, cwd, &proof["authority"])?;
+        Ok(proof["authority"].clone())
+    }
+
+    pub(super) fn owns_claude_conversation(&self, id: &str) -> bool {
+        if self.agent != "claude"
+            || self.exit().is_ok() && owner_gone(&self.dir, &self.token).is_ok_and(|gone| gone)
+        {
+            return false;
+        }
+        if self
+            .claude_conversation()
+            .is_ok_and(|captured| captured == id)
+        {
+            return true;
+        }
+        runtime::read_json(&self.dir.join("session.json"))
+            .ok()
+            .is_some_and(|meta| {
+                meta["token"] == self.token && meta["claude_resume"]["conversation_id"] == id
+            })
     }
 
     pub(super) fn prepare_opencode_resume(
@@ -533,6 +716,8 @@ impl Session {
             mailbox,
             resume,
             go_rollback,
+            claude_profile,
+            claude_resume,
         } = prepared;
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
@@ -606,6 +791,8 @@ impl Session {
                     "executable": provider.executable, "identity": provider.identity, "hermes_profile":provider.hermes_profile,"hermes_installation":hermes_installation},
                 "opencode_profile": (provider.agent == "opencode").then(|| opencode::profile(&provider.env)),
                 "opencode_resume": resume,
+                "claude_profile": claude_profile,
+                "claude_resume": claude_resume,
                 "opencode_initial": initial,
 
             }),
@@ -673,8 +860,13 @@ impl Session {
     }
 
     pub(super) fn await_ready(&self) -> io::Result<()> {
+        let resumed =
+            runtime::read_json(&self.dir.join("session.json"))?["claude_resume"]["conversation_id"]
+                .as_str()
+                .map(str::to_owned);
         let deadline = Instant::now()
             + Duration::from_secs(match self.agent.as_str() {
+                "claude" if resumed.is_some() => 8,
                 "opencode" => 45,
                 "codex" => 85,
                 "hermes" if self.hermes_native => 75,
@@ -696,7 +888,10 @@ impl Session {
                             field(&launch, "reason")
                         )));
                     }
-                } else {
+                } else if resumed
+                    .as_ref()
+                    .is_none_or(|id| self.claude_conversation().is_ok_and(|actual| &actual == id))
+                {
                     self.transition(Phase::Running);
                     return Ok(());
                 }
@@ -2002,6 +2197,26 @@ fn unrestricted_owner(data: &Value) -> bool {
 
 fn now() -> String {
     runtime::timestamp_now()
+}
+
+fn claude_conversation(dir: &Path, token: &str) -> io::Result<String> {
+    match fs::symlink_metadata(dir.join("claude-thread-changed.json")) {
+        Ok(_) => {
+            return Err(io::Error::other(
+                "Claude conversation changed inside its terminal; source is ambiguous",
+            ));
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    let proof = runtime::read_json(&dir.join("observation.json"))?;
+    let id = field(&proof, "conversation_id");
+    if proof["token"] != token || !providers::claude::canonical_id(id) {
+        return Err(io::Error::other(
+            "no authenticated Claude conversation identity",
+        ));
+    }
+    Ok(id.into())
 }
 
 pub(super) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {

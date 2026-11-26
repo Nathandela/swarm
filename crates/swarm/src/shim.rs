@@ -323,6 +323,48 @@ fn serve(dir: &Path) -> io::Result<()> {
             ));
         }
         command.current_dir(working_dir);
+        if provider["name"]=="claude" && config["claude_resume"].is_object() {
+            let saved=&config["claude_profile"];
+            let live=providers::claude::profile(&environment,&Value::Null,&saved["options"])?;
+            let id=field(&config["claude_resume"],"conversation_id");
+            let home=Path::new(field(saved,"home"));
+            let cwd=Path::new(working_dir);
+            providers::claude::verify_project_authority(home,cwd,&config["claude_resume"]["project_authority"])?;
+            let (_,transcript)=providers::claude::transcript(home,cwd,id)?;
+            if &live!=saved || transcript!=config["claude_resume"]["transcript"]
+                || argv.iter().filter(|arg|arg.as_str()=="--resume").count()!=1
+                || !argv.ends_with(&["--resume".to_owned(),id.to_owned()])
+            {
+                return Err(io::Error::other("Claude resume custody changed before exec"));
+            }
+        }
+        if let Some(proof)=config["lineage"]["hands_off"].as_object(){
+            use std::os::unix::fs::MetadataExt;
+            let get=|key|proof.get(key).and_then(Value::as_str).unwrap_or_default();
+            let cwd=Path::new(get("cwd"));
+            let home=Path::new(get("home"));
+            let authority=proof.get("project_authority").unwrap_or(&Value::Null);
+            providers::claude::verify_project_authority(home,cwd,authority)?;
+            let (transcript,identity)=providers::claude::transcript(home,cwd,get("conversation"))?;
+            let status=cwd.metadata()?;
+            if proof.get("identity")!=Some(&identity)
+                || transcript!=Path::new(get("transcript"))
+                || proof.get("cwd_identity")!=Some(&json!([status.dev(),status.ino()]))
+            {
+                return Err(io::Error::other("hands-off source custody changed before launch"));
+            }
+        }
+        if provider["name"]=="claude" {
+            let cwd=Path::new(working_dir);
+            let profile=&config["claude_profile"];
+            let home=Path::new(field(profile,"home"));
+            if let Ok(authority)=providers::claude::project_authority(home,cwd) {
+                runtime::write_json(&dir.join("claude-authority.json"),
+                    &json!({"token":token,"home":home,"cwd":cwd,"authority":authority}))?;
+            } else if config["claude_resume"].is_object() || config["lineage"]["hands_off"].is_object() {
+                return Err(io::Error::other("Claude project authority cannot be proved before exec"));
+            }
+        }
         if provider["name"] == "codex" && provider["mode"] == "managed" {
             let (owner, connection) = codex_backend::start(
                 executable,
@@ -508,6 +550,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         observations: Mutex::new(ProviderObservation {
             conversation: config["agy_launch"]["options"]["resume_conversation_id"]
                 .as_str()
+                .or_else(|| config["claude_resume"]["conversation_id"].as_str())
                 .map(str::to_owned),
             ..ProviderObservation::default()
         }),
@@ -1476,6 +1519,10 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
     if let Some(id) = conversation {
         if let Some(first) = &observed.conversation {
             if first != id {
+                runtime::write_json(
+                    &state.dir.join("claude-thread-changed.json"),
+                    &json!({"token":state.token}),
+                )?;
                 return Err(io::Error::other("provider hook conversation changed"));
             }
         } else if !cwd.is_empty() {

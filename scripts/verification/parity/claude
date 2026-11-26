@@ -46,7 +46,10 @@ with (effects / "input").open("ab", buffering=0) as log:
                 event = {b"fixture permission":"PermissionRequest", b"fixture review":"Stop",
                          b"fixture busy":"UserPromptSubmit"}[bytes(pending)]
                 owner = Path(sys.argv[0]).parent / "swarm"
-                post = subprocess.run([owner, "hook", event], input=b'{"last_assistant_message":"fixture review"}',
+                payload = {"last_assistant_message": "fixture review"}
+                if (effects / "handoff-fixture").exists():
+                    payload.update(session_id="8bf8d92a-d8f0-4025-9e38-8c70c64c6dd1", cwd=os.getcwd())
+                post = subprocess.run([owner, "hook", event], input=json.dumps(payload).encode(),
                                       capture_output=True, timeout=3)
                 (effects / f"event-{event}").write_text(str(post.returncode))
             elif (effects / "grid").exists() and pending == b"before":

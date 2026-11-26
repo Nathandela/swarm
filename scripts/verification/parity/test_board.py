@@ -85,6 +85,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
 
     if handoff:
         os.umask(0o077)
+        env["ANTHROPIC_API_KEY"] = "fixture-handoff-only"
+        (root / "home/.claude").mkdir(mode=0o700, exist_ok=True)
         daemon = start()
         (root / "effects/board-events").touch()
         (root / "effects/handoff-fixture").touch()
@@ -131,6 +133,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             board.send(b"\r")
             if negotiated:
                 def successor():
+                    board.drain()
                     rows = roster()
                     return rows and len(rows[0]) == 2 and next(
                         (row for row in rows[0] if row["id"] != source), None)
