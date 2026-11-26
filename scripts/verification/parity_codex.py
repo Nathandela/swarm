@@ -20,6 +20,7 @@ from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 def model_fixture(root):
     replies = []
+    interrupt_open = threading.Event()
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -38,6 +39,13 @@ def model_fixture(root):
             body = json.loads(self.rfile.read(size))
             if body.get("model") != "fixture":
                 self.send_error(400, "fixture model required")
+                return
+            if b"Hold this synthetic turn for interrupt." in json.dumps(body.get("input", [])).encode():
+                interrupt_open.wait(timeout=20)
+                try:
+                    self.send_error(503, "fixture paused the turn")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             index = len(replies) + 1
             replies.append(index)
@@ -79,11 +87,11 @@ def model_fixture(root):
     (home/"config.toml").chmod(0o600)
     (home/"auth.json").write_text(json.dumps({"auth_mode":"apikey","OPENAI_API_KEY":"offline-fixture-only"}))
     (home/"auth.json").chmod(0o600)
-    return server,replies
+    return server,replies,interrupt_open
 
 
-def drive(root, native, guard, loopback, resume_check=False):
-    model, replies = model_fixture(root) if loopback else (None, [])
+def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False):
+    model, replies, interrupt_open = model_fixture(root) if loopback else (None, [], None)
     daemon = None
     previous = {}
     try:
@@ -243,6 +251,24 @@ def drive(root, native, guard, loopback, resume_check=False):
                 invoke("kill", conflict)
                 invoke("watch", conflict, "--until", "completed", "--timeout", "4s")
                 print("one native turn accepted across exact retries and supervisor replacement; cross-session reuse refused")
+            if interrupt_check:
+                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
+                                  "joined native observation before interrupt")
+                invoke("send", identity, "--text", "Hold this synthetic turn for interrupt.")
+                turn = fixtures.wait_for(
+                    lambda: json.loads(invoke("interrupt", identity, "--active")),
+                    "native active turn", timeout=15)
+                invoke("interrupt", identity, "--expected-turn", "forged-turn", expected=1)
+                assert json.loads(invoke("interrupt", identity, "--active")) == turn
+                invoke("interrupt", identity, "--expected-turn", turn)
+                assert json.loads(invoke("interrupt", identity, "--active")) is None
+                daemon.kill()
+                daemon.wait(timeout=5)
+                daemon = start(log)
+                assert json.loads((state / "owner.json").read_text()) == owner
+                invoke("interrupt", identity, "--expected-turn", turn)
+                interrupt_open.set()
+                print("owner interrupted the exact native turn, refused a forged turn and replayed the receipt")
             invoke("kill", identity)
             assert json.loads(invoke("watch", identity, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
             print("managed Codex worker and exact native thread survived owner restart")
@@ -342,6 +368,7 @@ def drive(root, native, guard, loopback, resume_check=False):
             daemon.terminate()
             daemon.wait(timeout=4)
         if model:
+            interrupt_open.set()
             model.shutdown()
             model.server_close()
         cleanup = fixtures.reap(root, None, previous)
@@ -349,7 +376,7 @@ def drive(root, native, guard, loopback, resume_check=False):
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback, resume_check=False):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -371,7 +398,7 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False):
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback, resume_check)
+            drive(root, native, guard, loopback, resume_check, interrupt_check)
         else:
             if resume_check:
                 system = root/"system-policy"
@@ -385,6 +412,8 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False):
                 command.append("--loopback-model")
             if resume_check:
                 command.append("--resume-check")
+            if interrupt_check:
+                command.append("--interrupt-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -406,14 +435,17 @@ if __name__ == "__main__":
     parser.add_argument("--scratch", type=Path, default=Path("/tmp").resolve())
     parser.add_argument("--isolated-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--resume-check",action="store_true")
+    parser.add_argument("--interrupt-check",action="store_true")
     args = parser.parse_args()
     if args.resume_check and not args.loopback_model:
         parser.error("--resume-check requires --loopback-model")
+    if args.interrupt_check and (not args.loopback_model or args.resume_check):
+        parser.error("--interrupt-check requires a separate --loopback-model run")
     if args.loopback_model and (not args.native or not sys.platform.startswith("linux")):
         parser.error("--loopback-model requires Linux and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check)
     else:
         parser.error("--candidate and --provider are required")

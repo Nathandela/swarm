@@ -310,3 +310,29 @@ pub(super) fn decide(client: &mut Client, args: &[String]) -> CliResult {
     }
     json_out(receipt).map_err(report)
 }
+
+pub(super) fn interrupt(client: &mut Client, args: &[String]) -> CliResult {
+    match args {
+        [session, flag] if flag == "--active" && !session.starts_with('-') => {
+            let reply = client
+                .request_body(
+                    json!({"op":"active_turn","session_id":session}),
+                    "active_turn",
+                )
+                .map_err(report)?;
+            json_out(&reply["active_turn"]).map_err(report)
+        }
+        [session, flag, turn]
+            if flag == "--expected-turn" && !session.starts_with('-') && !turn.is_empty() =>
+        {
+            client.exchange(json!({"op":"turn_interrupt","session_id":session,"body_version":1,"turn_interrupt":{
+                "session":session,"expected_turn":turn,
+            }}),"ok",Duration::from_secs(10)).map_err(report)?;
+            Ok(())
+        }
+        _ => Err((
+            2,
+            "swarm interrupt <session> --active | --expected-turn <turn>".into(),
+        )),
+    }
+}

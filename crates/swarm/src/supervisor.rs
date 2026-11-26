@@ -717,6 +717,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "semantic-target"
                         | "opencode-history-v1"
                         | "native-requests-v1"
+                        | "codex-turn-interrupt-v1"
                         | crate::bootstrap::UNATTENDED
                         | crate::bootstrap::RESTART
                 )
@@ -938,6 +939,23 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
+            "active_turn" if caps.contains(&"codex-turn-interrupt-v1") => state.session(&request).and_then(|session| {
+                let active = session.codex_active_turn()?;
+                reply(&writer,state,json!({"op":"active_turn","session_id":request["session_id"],"active_turn":active}))
+            }),
+            "turn_interrupt" if caps.contains(&"codex-turn-interrupt-v1") => state.session(&request).and_then(|session| {
+                let body = &request["turn_interrupt"];
+                if request["body_version"] != 1 || body["session"] != request["session_id"] {
+                    return Err(io::Error::other("invalid turn interrupt envelope"));
+                }
+                match session.codex_interrupt(field(body,"expected_turn")) {
+                    Ok(()) => reply(&writer,state,json!({"op":"ok","session_id":request["session_id"]})),
+                    Err(err) if err.to_string() == "stale_turn" => reply(&writer,state,json!({
+                        "op":"error","error_code":"stale_turn","error":"expected turn is no longer active"
+                    })),
+                    Err(err) => Err(err),
+                }
+            }),
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");

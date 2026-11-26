@@ -315,7 +315,7 @@ impl Observation {
         match method {
             "turn/started" => {
                 let id = field(&payload["turn"], "id");
-                if id.is_empty() {
+                if id.is_empty() || (!parent.is_empty() && parent != id) {
                     return false;
                 }
                 self.turn = Some(id.to_owned());
@@ -383,6 +383,15 @@ impl Observation {
     }
 }
 
+pub(super) enum Action {
+    Send(SemanticAction),
+    Interrupt {
+        expected: String,
+        expires: Instant,
+        answer: SyncSender<io::Result<Value>>,
+    },
+}
+
 pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
@@ -421,7 +430,7 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
         &target.dir.join("observation.json"),
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
-            "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
+            "backend_available":!observation.ambiguous, "active_turn":observation.turn, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
             "requests":requests,"schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
             "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
                 && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
@@ -648,13 +657,75 @@ impl ScheduledTurn {
     }
 }
 
+fn interrupt(
+    channel: &mut Channel,
+    observation: &mut Observation,
+    target: &SemanticTarget<'_>,
+    rpc: u64,
+    expected: &str,
+    expires: Instant,
+) -> io::Result<Value> {
+    if observation.thread.is_empty() || observation.ambiguous || !observation.joined {
+        return Err(io::Error::other("Codex active turn is unavailable"));
+    }
+    let key = codex_receipt::hash(&format!(
+        "{}:{}:{}",
+        target.token, observation.thread, expected
+    ));
+    let path = target.dir.join(format!("codex-interrupt-{key}.json"));
+    let receipt = |status| json!({"token":target.token,"thread":observation.thread,"turn":expected,"state":status});
+    match runtime::read_json(&path) {
+        Ok(prior) => {
+            if prior == receipt("confirmed") {
+                return Ok(json!({"state":"confirmed","turn":expected}));
+            }
+            return Err(io::Error::other("Codex interrupt outcome is unknown"));
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    if observation.turn.as_deref() != Some(expected) || Instant::now() >= expires {
+        return Err(io::Error::other("stale_turn"));
+    }
+    runtime::write_json(&path, &receipt("uncertain"))?;
+    send(
+        &mut channel.connection,
+        json!({"id":rpc,"method":"turn/interrupt","params":{
+            "threadId":observation.thread,"turnId":expected,
+        }}),
+    )?;
+    let thread = observation.thread.clone();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        let Some(frame) = read(&mut channel.connection)? else {
+            continue;
+        };
+        if frame["id"] == rpc && frame["method"].is_null() && !frame["error"].is_null() {
+            return Err(io::Error::other("Codex interrupt outcome is unknown"));
+        }
+        let matching = frame["method"] == "turn/completed"
+            && frame["params"]["threadId"] == thread
+            && frame["params"]["turn"]["id"] == expected
+            && frame["params"]["turn"]["status"] == "interrupted";
+        observe_frame(observation, &frame, target);
+        if matching {
+            runtime::write_json(
+                &path,
+                &json!({"token":target.token,"thread":thread,"turn":expected,"state":"confirmed"}),
+            )?;
+            return Ok(json!({"state":"confirmed","turn":expected}));
+        }
+    }
+    Err(io::Error::other("Codex interrupt outcome is unknown"))
+}
+
 pub(super) fn observe(
     mut channel: Channel,
     cwd: PathBuf,
     dir: PathBuf,
     token: String,
     schedule: Option<worker::Binding>,
-    actions: Receiver<SemanticAction>,
+    actions: Receiver<Action>,
     manager: Value,
 ) {
     let resumed = channel.restored.is_some();
@@ -711,14 +782,33 @@ pub(super) fn observe(
         }
         if quiet && let Ok(action) = actions.try_recv() {
             serial += 1;
-            let result = submit(
-                &mut channel.connection,
-                &mut observation,
-                serial,
-                &action,
-                &target,
-            );
-            let _ = action.answer.send(result);
+            match action {
+                Action::Send(action) => {
+                    let result = submit(
+                        &mut channel.connection,
+                        &mut observation,
+                        serial,
+                        &action,
+                        &target,
+                    );
+                    let _ = action.answer.send(result);
+                }
+                Action::Interrupt {
+                    expected,
+                    expires,
+                    answer,
+                } => {
+                    let result = interrupt(
+                        &mut channel,
+                        &mut observation,
+                        &target,
+                        serial,
+                        &expected,
+                        expires,
+                    );
+                    let _ = answer.send(result);
+                }
+            }
         }
         let reading = Instant::now();
         match read(&mut channel.connection) {

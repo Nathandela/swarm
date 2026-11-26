@@ -46,7 +46,7 @@ struct State {
     token: String,
     hook_token: String,
     provider: String,
-    semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    semantic: Option<SyncSender<codex_backend::Action>>,
     agy_broker: Option<agy_input::Broker>,
     claude_broker: Option<Arc<providers::claude_input::Broker>>,
     schedule: Option<worker::Binding>,
@@ -1019,6 +1019,41 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             };
             runtime::write_control(&mut stream, &response)
         }
+        "codex_interrupt" => {
+            let result = (|| {
+                let turn = field(&request, "expected_turn");
+                if state.manager
+                    || state.schedule.is_some()
+                    || !request["session_instance"]
+                        .eq(&json!(codex_receipt::instance(&state.token)))
+                    || turn.is_empty()
+                    || turn.len() > 128
+                    || turn.chars().any(char::is_control)
+                {
+                    return Err(io::Error::other("invalid Codex interrupt authority"));
+                }
+                let sender = state
+                    .semantic
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
+                let (answer, response) = mpsc::sync_channel(1);
+                sender
+                    .try_send(codex_backend::Action::Interrupt {
+                        expected: turn.into(),
+                        expires: Instant::now() + Duration::from_secs(2),
+                        answer,
+                    })
+                    .map_err(|_| io::Error::other("Codex native control lane is unavailable"))?;
+                response
+                    .recv_timeout(Duration::from_secs(7))
+                    .map_err(|_| io::Error::other("Codex interrupt outcome is unknown"))?
+            })();
+            let response = match result {
+                Ok(body) => json!({"type":"codex_interrupt","body":body}),
+                Err(err) => json!({"type":"error","error":err.to_string()}),
+            };
+            runtime::write_control(&mut stream, &response)
+        }
         "semantic" => {
             let operation = field(&request, "operation_id");
             let text = field(&request, "text");
@@ -1051,7 +1086,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
                 let (answer, response) = mpsc::sync_channel(1);
                 sender
-                    .try_send(codex_backend::SemanticAction {
+                    .try_send(codex_backend::Action::Send(codex_backend::SemanticAction {
                         operation: operation.into(),
                         session: session.into(),
                         text: text.into(),
@@ -1059,7 +1094,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         composer: request["composer_send"].clone(),
                         answer,
                         not_after: Instant::now() + Duration::from_secs(2),
-                    })
+                    }))
                     .map_err(|_| io::Error::other("Codex native input lane is unavailable"))?;
                 response
                     .recv_timeout(Duration::from_secs(6))

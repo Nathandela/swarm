@@ -44,6 +44,7 @@ pub fn run(args: &[String]) -> i32 {
     let caps = match verb {
         "spawn" => spawn::CAPS,
         "message" => message::CAPS,
+        "interrupt" => &["codex-turn-interrupt-v1"],
         "requests" | "decide" => &["native-requests-v1"],
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
@@ -74,6 +75,7 @@ pub fn run(args: &[String]) -> i32 {
         "spawn" => spawn::run(&mut client, &args[1..]),
         "message" => message::run(&mut client, &args[1..]),
         "requests" => message::requests(&mut client, &args[1..]),
+        "interrupt" => message::interrupt(&mut client, &args[1..]),
         "decide" => message::decide(&mut client, &args[1..]),
         "send" => actions::send(&mut client, &args[1..]),
         "kill" => actions::kill(&mut client, &args[1..]),

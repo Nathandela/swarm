@@ -1162,6 +1162,51 @@ impl Session {
         Ok(codex_receipt::instance(&self.token))
     }
 
+    fn codex_control_authority(&self) -> io::Result<()> {
+        if self.agent != "codex" || !self.owner_interactive || self.schedule.is_some() {
+            return Err(io::Error::other(
+                "ordinary owner Codex control is unavailable",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn codex_active_turn(&self) -> io::Result<Value> {
+        self.codex_control_authority()?;
+        self.dial()?;
+        let observation = runtime::read_json(&self.dir.join("observation.json"))?;
+        if observation["token"] != self.token
+            || observation["backend_available"] != true
+            || observation["requests_available"] != true
+        {
+            return Err(io::Error::other("Codex active turn is unavailable"));
+        }
+        Ok(observation["active_turn"].clone())
+    }
+
+    pub(super) fn codex_interrupt(&self, turn: &str) -> io::Result<()> {
+        self.codex_control_authority()?;
+        if turn.is_empty() || turn.len() > 128 || turn.chars().any(char::is_control) {
+            return Err(io::Error::other("an interrupt must name an observed turn"));
+        }
+        let mut stream = self.dial()?;
+        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
+        runtime::write_control(
+            &mut stream,
+            &json!({
+                "type":"codex_interrupt","session_instance":codex_receipt::instance(&self.token),"expected_turn":turn,
+            }),
+        )?;
+        let response = runtime::read_control(&mut stream)?;
+        if response["type"] == "codex_interrupt"
+            && response["body"]["state"] == "confirmed"
+            && response["body"]["turn"] == turn
+        {
+            return Ok(());
+        }
+        Err(io::Error::other(field(&response, "error").to_owned()))
+    }
+
     pub(super) fn native_requests(&self, session: &str, body: &Value) -> io::Result<Value> {
         if self.agent == "hermes" {
             return Err(io::Error::other(
