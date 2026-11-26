@@ -58,6 +58,9 @@ def exercise(go, rust, base):
     with daemon(go,ge,base/"copy-go.log"):
         expected,=listed(ge)
     for change in (
+        {"require_launch_identity":"false"},
+        {"scheduled_codex_backend":0},
+        {"backend_required":[]},
         {"agy_input":{}},
         {"argv":[str(agy),"acp"]},
         {"backend_program":str(agy)},

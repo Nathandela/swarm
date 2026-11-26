@@ -429,7 +429,14 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || Path::new(field(&launch, "socket_path")) != launch_dir.join("shim.sock")
         || (meta["agent_type"] == "claude" && launch["native_provider"] != "claude")
         || (meta["agent_type"] == "agy" && !classic_agy(meta, &launch))
-        || launch["claude_input"] == true
+        || [
+            "claude_input",
+            "require_launch_identity",
+            "scheduled_codex_backend",
+            "backend_required",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null() && launch[*key] != false)
         || ["login_runtime", "opencode", "hermes_input", "agy_input"]
             .iter()
             .any(|key| !launch[*key].is_null())
@@ -454,8 +461,6 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
     let executable = Path::new(field(identity, "path"));
     let fingerprint = field(identity, "fingerprint");
     if !launch["native_provider"].is_null()
-        || launch["require_launch_identity"] == true
-        || launch["scheduled_codex_backend"] == true
         || meta["shim_wire_version"] != 2
         || !identity.is_object()
         || *identity != meta["cli_identity"]
