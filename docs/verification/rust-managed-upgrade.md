@@ -25,3 +25,14 @@ The frozen collector resolved four Swarm targets and four DAVE addon targets fro
 ## Boundary
 
 The supported updater scope is one explicit private managed installation and a locally obtained signed Rust feed. Cold activation holds the managed lease and any applicable configured daemon locks. Unknown crash leftovers defer to offline custody reconciliation. The updater does not start or restart services. The pinned Go stable channel, package-manager in-place transitions, externally managed writers at other roots, automatic release-feed selection, and live compatibility across generations need their own qualification. For the confirmed classic Go state export route, see [the stopped-state rehearsal](rust-stopped-go-state.md). No tag, release or production installation was changed.
+
+
+## Integrated package on November 26
+
+The archives built from `cb630ec5b1131e4b4ae6d706a1132120e03a7dbd` carried the signed manifest, both updater documents, the four architecture slices, pinned media and dependency notices. The rehearsal used a disposable Ed25519 key. On macOS arm64 and Linux x86_64 the installed launcher passed an actual PTY launch, daemon crash and reattach. Both installed media checks passed. The universal macOS output also passed all-slice ad hoc code-signature verification and its x86_64 media check under Rosetta. The arm64 Linux archive passed signature and member verification.
+
+| Archive | SHA-256 |
+|---|---|
+| Universal macOS | `78f4a2b81b6c79acad52b584255591e18a52d5f1ee3a057df6350ba9ee748654` |
+| Linux x86_64 | `51b4f398246bfa7b778ef345ec95111bc57edd9eb699088e7191981b938dd266` |
+| Linux arm64 | `5ef709452623aeb1f941f28ab12a90f78eba7faa32ed637039cb4e83c6d8cf34` |

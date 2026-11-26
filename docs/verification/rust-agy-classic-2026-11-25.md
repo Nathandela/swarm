@@ -14,7 +14,7 @@ The actual CLI binary had SHA-256 `b7a13e53c9f49921692676ef8edc2e60ceb67064c00bc
 
 The status-line gate requires both a compatible version and a bounded help probe advertising the flag. This is an intentional divergence from the pinned Go version-only gate on the installed build above. The wrapper is observational and conveys no permission to submit work or approve a tool. Rust's classic transport refuses semantic submission without a qualified native input registration. The fixture also supplies unrelated provider API keys and checks that agy receives neither. It inspects the inherited environment of the preserved status-line command, and exercises malformed conversation fields through both the public hook and a direct framed callback. Rust preserved the joined title and permission state after those callbacks.
 
-Go's optional native agentapi broker (versions 1.4.0, 1.4.5 and 1.4.7), authenticated native turns, and scheduled ACP (1.5.12 or newer) remain separate qualification items. The fixture confirms no positive broker or ACP behavior.
+The classic fixture covers PTY behavior. The native broker and scheduled ACP results below use their own versioned probes.
 
 ```sh
 cargo build
@@ -56,3 +56,21 @@ Native delivery requires a durable worker cutover in the active, owned personal 
 The private connector fixture refused missing cutover, manager cutover, forged audience, mismatched text and incarnation, out-of-bound source, exclusion, expiry and changed installation. It withdrew one message during the provider metadata probe and verified the shim recorded a rejection with zero provider message effects. The exact worker cutover delivered once and the receipt survived daemon restart. The fixture writes the private ledger directly. The separate ordinary-worker connector producer owns live ingress.
 
 The worker effect takes the same supervisor and connector directory locks as configuration changes, followed by the ledger lock. The guard spans the provider call and its receipt. In the fixture, a real `discord disconnect` returned busy during a held native write and succeeded after release. A previously negotiated client then tried a late cutover and the daemon refused it after that acknowledgment. The first effect in an empty DM enrollment succeeded with its empty consent baseline. Worker delivery negotiates `worker-discord-origin-v1` independently from manager origin support.
+
+### Installed ACP provider
+
+On November 26, the official agy 1.5.17 binaries completed a real scheduled ACP turn against Rust revision `33392148be92524d4ce26217a08a7429f400d5eb` on macOS arm64 and Linux x86_64. Each native provider contributed the original opening marker to a loopback model request. The operator saw the provider request permission for `mcp_swarm_schedule_complete` and selected Allow. The scoped MCP bridge returned a receipt. Swarm verified the matching closing summary and marked the original run ready. Each host recorded three synthetic model calls.
+
+The native binaries came from the platform manifests named by Google's installer. The fixture verified each vendor SHA-512 before extracting it to scratch. It used privately generated Gemini settings and isolated network access. [Official distribution](https://antigravity.google/docs/getting-started?tab=cli) · [macOS manifest](https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json) · [Linux manifest](https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json).
+
+| Native host | agy executable SHA-256 | Rust executable SHA-256 |
+|---|---|---|
+| macOS arm64 | `e6cabc85878e5beaaac911993751abe314f6c1d89ebfd30a4fc578b7703638eb` | `0c11e6bf517675ba0c17f8fa8ab2710322eab7e4a853ba935e57d8fdbf347361` |
+| Linux x86_64 | `f3f384bd2c15a74a036ebc3b0a2f48695cc6e56523ba0f9524fb6e4c4adb3baa` | `7acaeb0bb737b8908893a591355eec3683fb964ff6f0cdf3670cae0f9a2b5cc0` |
+
+```sh
+python3 scripts/verification/rust_agy_schedule.py /path/to/swarm /path/to/agy-1.5.17
+sh scripts/verification/provider_native_linux.sh "$STAGED_FIXTURE" /path/to/agy-1.5.17 rust_agy_schedule.py
+```
+
+On Linux, stage `swarm`, `rust_agy_schedule.py` and `native_fixture_sandbox.py` together. The shared launcher exposes the vendor executable read-only and enables only the new namespace's loopback interface.
