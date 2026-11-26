@@ -1,4 +1,4 @@
-usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|version]
+usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|ls|watch|kill|send|message|requests|decide|peek|doctor|checkout|clean|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -31,6 +31,7 @@ usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guid
                    --native-session-id id --request-hash hash --reply once|always|reject|answer
                    [--answers JSON], or read its receipt with --status --operation-id id
   swarm peek       print a session's current screen <session> [--lines N]
+  swarm checkout inventory [--json] [PATH ...]
   swarm clean      preview safe storage cleanup [--apply] [--json]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)

@@ -21,7 +21,7 @@ fn absent() -> io::Error {
     io_error("worker mailbox: unknown note")
 }
 
-pub(super) fn key(binding: &Value, id: &str) -> io::Result<Vec<u8>> {
+pub(crate) fn key(binding: &Value, id: &str) -> io::Result<Vec<u8>> {
     let mut parts = Vec::with_capacity(6);
     for name in ["Discussion", "Session", "Instance", "Attempt"] {
         let value = binding[name]

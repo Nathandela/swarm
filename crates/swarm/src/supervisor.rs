@@ -8,7 +8,7 @@ mod reliable;
 mod removal;
 pub(crate) mod runtime;
 mod scheduling;
-mod session;
+pub(crate) mod session;
 mod stopped_go;
 mod supervision;
 
