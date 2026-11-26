@@ -2,6 +2,8 @@
 
 ## November 26 combined implementation
 
+At `dc269ed8`, 206 default tests passed on each native host. Nine additional cases require external fixtures or run as private subprocesses. Both hosts passed the service replacement regression with an injected service-manager failure. The fixture verifies that failure was reached and the original service recovered. The signed `5e42c2cf` package separately kept its managed writer lease and worker across daemon termination on all three exercised OS/architecture pairs. [Installed launcher receipts](rust-installed-pty.md) · [Service installation](rust-discord-service.md)
+
 Commit `76e03953` passed 194 default tests on macOS arm64 and 194 on Linux x86_64. Eight environment-dependent cases per host require separate execution. Formatting, warnings-denied Clippy and five packaging tests passed. Both mixed Go/Rust dashboard owner directions exercised attach, kill and delete through the public board. Scheduled ACP reached its scoped completion with the official agy 1.5.17 on both hosts. [Linked dashboards](rust-board-linked-discussions.md) · [Native updater](rust-native-upgrade.md)
 
 The signed development archive from `cb630ec5` also passed managed installation, Node/DAVE verification and real PTY recovery after daemon termination inside an offline ARM64 Linux guest. Work on retained Discord state, live publication and calls, full provider continuity, durations, and release qualification is ongoing. [Architecture-specific package runs](rust-managed-upgrade.md) · [Retained Discord state](rust-discord-retained-state.md) · [Long-running workloads](rust-m11-development.md)

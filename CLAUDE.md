@@ -50,29 +50,12 @@ bd close <id>         # Complete work
 <!-- END BEADS INTEGRATION -->
 
 
-## Build & Test
+## Development agreements
 
-Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency, ADR-005; to 1.25 by Phase B's
-mandatory `golang.org/x/mobile` tool directive, ADR-008; to 1.26 by the `golang.org/x/net` CVE fix,
-ADR-008 Amendment 1).
+Use the build commands and repository map in [AGENTS.md](AGENTS.md). The Rust application lives in `crates/swarm`. The roadmap identifies the original Go revisions used for differential tests and the per-milestone exit criteria. [Migration roadmap](docs/specifications/rust-migration/README.md)
 
-```bash
-go build ./...
-go test ./...        # -race on packages that spawn goroutines
-go vet ./...
-golangci-lint run
-```
-
-All four must be green before any epic closes (implementation-goals.md GG-4).
-
-## Architecture Overview
-
-Terminal multi-CLI agent tracker: a Bubble Tea TUI client talks over a UDS to a supervisor daemon, which orchestrates per-session shim processes that own the PTYs — sessions survive terminal close and daemon crash/upgrade. Start at [AGENTS.md](AGENTS.md) and [docs/INDEX.md](docs/INDEX.md); the authoritative documents are the system spec, build plan, implementation goals, invariants, and ADRs linked there.
-
-## Conventions & Patterns
-
-- **TDD is mandatory**: write failing tests before implementation; the failing-first run must be evidenced (implementation-goals.md GG-5). Never modify a test to make it pass — if a test seems wrong, stop and discuss.
-- **Verification exit criteria**: an epic is done only when every exit criterion in docs/specifications/implementation-goals.md is demonstrably true and its evidence file exists under docs/verification/.
-- **Decision changes require an ADR** (docs/adr/README.md has the convention); never silently drift from the spec.
-- **No emojis** in code, comments, or docs.
-- **Commit and push often** — small checkpoints that can be walked back.
+- Capture a failing case before fixing a behavioral difference. Retain the observed failure and the passing regression in the relevant verification record.
+- Evaluate differences against the pinned Go oracle and the user's accepted behavior changes.
+- Record changes to architectural decisions according to the [ADR convention](docs/adr/README.md).
+- Keep code, comments and documentation free of emojis.
+- Commit and push small verified changes to the migration branch.

@@ -9,11 +9,11 @@ Use the [migration roadmap](docs/specifications/rust-migration/README.md) for sc
 | Need | Read |
 |---|---|
 | Everything, one hop away | [docs/INDEX.md](docs/INDEX.md) |
-| Requirements (EARS ids), architecture, scenarios | [docs/specifications/system-spec.md](docs/specifications/system-spec.md) |
-| 15 ordered epics, contracts, gap resolutions | [docs/specifications/build-plan.md](docs/specifications/build-plan.md) |
-| Per-epic exit criteria, global goals, orchestration protocol | [docs/specifications/implementation-goals.md](docs/specifications/implementation-goals.md) |
-| Safety/liveness invariants (S1-S12, L1-L3) | [docs/invariants/system-invariants.md](docs/invariants/system-invariants.md) |
-| Foundational architecture decisions | [docs/adr/README.md](docs/adr/README.md) |
+| Current implementation milestones and ownership | [Rust migration roadmap](docs/specifications/rust-migration/README.md) |
+| Rust architecture and module boundaries | [Rust design](docs/specifications/rust-migration/rust-design.md) |
+| Behavioral oracle, comparisons and release gates | [Qualification contract](docs/specifications/rust-migration/qualification.md) |
+| Observed native results and outstanding release gates | [Verification ledger](docs/verification/rust-migration.md) |
+| Original requirements, invariants and decisions | [System specification](docs/specifications/system-spec.md) · [Invariants](docs/invariants/system-invariants.md) · [Decision index](docs/adr/README.md) |
 | Vendored codebase-governance principles | [docs/governance/](docs/governance/) |
 
 ## Build and test this branch
@@ -31,21 +31,7 @@ Use [the local qualification harness](scripts/verification/parity/README.md) for
 
 Run Go gates in a separate reference checkout. The executable builder checks out each source pin independently. Corrections specific to the Go test harness are recorded at `6ea90b40`. [Reference builder](scripts/verification/build_rust_references.py)
 
-The reference requires Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency — see ADR-005; to 1.25 by
-Phase B's mandatory `golang.org/x/mobile` tool directive — see ADR-008, which supersedes ADR-005's
-floor without superseding ADR-005; to 1.26 by the `golang.org/x/net` CVE fix — ADR-008 Amendment 1).
-
-```bash
-go build ./...
-go vet ./...
-go test ./...
-golangci-lint run
-```
-
-At an epic close, GG-4 also requires `-race` on every package that spawns goroutines.
-
-Share the existing Go and Gradle caches across worktrees; do not create per-worktree cache copies.
-Use the test supervisor's per-run `TMPDIR` for scratch, keeping short socket roots inside it.
+Use Go 1.26 or newer for the pinned reference. Share the existing Go cache across checkouts. The original build, vet, lint, normal and race gates are recorded with the pinned test populations. The fleet accepts a short per-run `TMPDIR` for sockets and test state. [Reference checks](docs/specifications/rust-migration/reference-checks.md)
 
 ## CI policy
 
@@ -104,4 +90,4 @@ bd close <id>         # Complete work
 
 ## Verification
 
-An epic closes only when every exit criterion listed for it in implementation-goals.md is demonstrably true (passing test, produced artifact, or recorded verification) and the GG-4 quality gates (build, vet, lint, test, `-race`) are green. Evidence is recorded per epic under `docs/verification/`.
+Close a Rust milestone when its roadmap exit criteria, local Cargo gates and required native witnesses pass on the identified source revision. Link the evidence under `docs/verification/` in Beads and record any outstanding external gates there. Use the original implementation goals when verifying the Go reference itself.
