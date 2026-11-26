@@ -452,8 +452,9 @@ impl Manager<'_> {
         let set_enabled = |on| self.ctl(&[if on { "enable" } else { "disable" }, TIMER]);
         if let Some(board) = board {
             // The directory lock and manager reads can outlive the confirmed owner.
-            (board.validate)()?;
             super::rpc::qualified_board_timer(board.path, board.endpoint)?;
+            // Recheck the draft on its original connection after the last native-status reply.
+            (board.validate)()?;
         }
         let mut undo: Vec<Box<dyn FnOnce() -> Result<()>>> = Vec::new();
         let result: Result<()> = (|| {
