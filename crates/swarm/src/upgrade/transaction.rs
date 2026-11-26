@@ -876,3 +876,92 @@ fn transaction(root: &Path, exe: &Path, opts: &Options<'_>) -> io::Result<u8> {
     )?;
     report(root, opts, installed, "activated", &staged.to, latest)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_identity_does_not_guess_channel_or_arch() {
+        let mut sums = ADMIN
+            .iter()
+            .map(|name| (name.to_string(), "a".repeat(64)))
+            .collect::<BTreeMap<_, _>>();
+        for group in GROUPS {
+            sums.insert(format!("swarm-rust_0.2.0_{group}.tar.gz"), "b".repeat(64));
+        }
+        assert_eq!(assets(&sums).unwrap().0, "0.2.0");
+        sums.remove("swarm-rust_0.2.0_linux_arm64.tar.gz");
+        sums.insert("swarm_0.2.0_linux_arm64.tar.gz".into(), "c".repeat(64));
+        assert!(assets(&sums).is_err());
+        assert!(version("0.2.0-rc.2").unwrap() < version("0.2.0-rc.10").unwrap());
+        assert!(version("0.2.0-rc.10").unwrap() < version("0.2.0").unwrap());
+    }
+
+    #[test]
+    fn reverse_after_effects_requires_the_exact_prior_source() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-native-reverse-{}",
+            runtime::random_id().unwrap()
+        ));
+        dir(&root).unwrap();
+        dir(&root.join("effects")).unwrap();
+        let previous = json!({"source":"a".repeat(40)});
+        let read_compatible = json!({"rollback_sources":[previous["source"]]});
+        let unproven = json!({"rollback_sources":["b".repeat(40)]});
+        assert!(reverse_allowed(&root, "active", &unproven, &previous).is_ok());
+        durable(&root.join("effects/active"), b"", 0o600).unwrap();
+        durable(&root.join("recent-work"), b"new work", 0o600).unwrap();
+        assert!(reverse_allowed(&root, "active", &unproven, &previous).is_err());
+        assert!(reverse_allowed(&root, "active", &read_compatible, &previous).is_ok());
+        assert_eq!(fs::read(root.join("recent-work")).unwrap(), b"new work");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn route_switch_records_previous_generation_and_excludes_another_holder() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-native-upgrade-{}",
+            runtime::random_id().unwrap()
+        ));
+        dir(&root).unwrap();
+        for name in ["releases", "routes", "inflight"] {
+            dir(&root.join(name)).unwrap();
+        }
+        let old = format!("0.1.0-{}", "a".repeat(40));
+        let new = format!("0.2.0-{}", "b".repeat(40));
+        for name in [&old, &new] {
+            let slot = root.join("releases").join(name);
+            dir(&slot).unwrap();
+            durable(&slot.join("swarm"), b"test", 0o755).unwrap();
+        }
+        durable(&root.join("writers.lock"), b"", 0o600).unwrap();
+        symlink("current/swarm", root.join("swarm")).unwrap();
+        point(
+            &root,
+            Route {
+                active: old.clone(),
+                previous: None,
+                held: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(route(&root).unwrap().active, old);
+        let held = secure_lock(&root.join("writers.lock")).unwrap();
+        assert!(secure_lock(&root.join("writers.lock")).is_err());
+        drop(held);
+        point(
+            &root,
+            Route {
+                active: new.clone(),
+                previous: Some(old.clone()),
+                held: None,
+            },
+        )
+        .unwrap();
+        let record = route(&root).unwrap();
+        assert_eq!(record.active, new);
+        assert_eq!(record.previous, Some(old));
+        fs::remove_dir_all(root).unwrap();
+    }
+}

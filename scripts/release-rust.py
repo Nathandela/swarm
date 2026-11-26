@@ -2,10 +2,7 @@
 """Local-only Swarm preview release workflow. Build with Python 3.11+, verify with 3.10+."""
 import argparse
 import base64
-from contextlib import ExitStack
-from datetime import datetime, timezone
 import gzip
-import fcntl
 import hashlib
 import io
 import json
@@ -13,7 +10,6 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-import stat
 import subprocess
 import tarfile
 import tempfile
@@ -501,14 +497,6 @@ def private_write(path, content):
         os.fsync(handle.fileno())
 
 
-def replace_record(path, content):
-    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".swarm-record-") as tmp:
-        source = Path(tmp) / "record"
-        private_write(source, content)
-        os.replace(source, path)
-        fsync_path(path.parent)
-
-
 def release_id(compat):
     version, source = compat["version"], compat["source"]
     require(re.fullmatch(VERSION, version) and re.fullmatch(r"[0-9a-f]{40}", source), "invalid release identity")
@@ -525,11 +513,6 @@ def release_path(root, name):
 
 def populate(root, files, compat, media):
     target = release_path(root, release_id(compat))
-    if target.exists():
-        current = verified_slot(target)
-        require(current == compat and all(file_hash(target / name) == digest(data)
-                                          for name, data in files.items()), "release slot bytes differ")
-        return target.name
     with tempfile.TemporaryDirectory(dir=target.parent, prefix=".swarm-stage-") as tmp:
         slot = Path(tmp)
         install_members(slot, files)
@@ -542,36 +525,6 @@ def populate(root, files, compat, media):
         os.rename(slot, target)
         fsync_path(target.parent)
     return target.name
-
-
-def verified_slot(slot):
-    require(slot.is_dir() and not slot.is_symlink(), "release slot is missing or unsafe")
-    manifest = json.loads((slot / ".members.json").read_bytes())
-    actual = set()
-    for path in slot.rglob("*"):
-        require(not path.is_symlink(), "release slot contains a symlink")
-        if path.is_file():
-            name = path.relative_to(slot).as_posix()
-            if name == ".members.json":
-                continue
-            require(name in manifest and file_hash(path) == manifest[name], f"modified release member: {name}")
-            actual.add(name)
-    require(actual == manifest.keys(), "release slot is incomplete")
-    compat = json.loads((slot / "compat.json").read_bytes())
-    require(release_id(compat) == slot.name, "wrong release slot")
-    check_executable(slot, compat, False)
-    return compat
-
-
-def route(root):
-    target = os.readlink(root / "current")
-    require(re.fullmatch(r"routes/route-[a-zA-Z0-9_]+", target), "invalid active route")
-    data = json.loads((root / target / "record.json").read_bytes())
-    active = release_path(root, data["active"])
-    require((root / "swarm").resolve(strict=True) == active / "swarm", "launcher does not match active route")
-    if data.get("previous"):
-        release_path(root, data["previous"])
-    return data
 
 
 def point(root, active, previous, held=None):
@@ -599,154 +552,6 @@ def managed_install(root, public, files, compat, media):
     point(root, active, None)
 
 
-def owner_lock(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        meta = os.fstat(fd)
-        require(stat.S_ISREG(meta.st_mode) and meta.st_uid == os.geteuid()
-                and meta.st_mode & 0o077 == 0 and meta.st_nlink == 1, "unsafe installation lock")
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        require(os.path.samestat(meta, path.lstat()), "installation lock was replaced")
-        return os.fdopen(fd, "rb")
-    except BaseException:
-        os.close(fd)
-        raise
-
-
-def version_key(value):
-    base, separator, suffix = value.partition("-")
-    parts = tuple((0, int(part)) if part.isdecimal() else (1, part) for part in suffix.split("."))
-    return tuple(map(int, base.split("."))), not separator, parts
-
-
-def compatible(previous, candidate):
-    fields = ("channel", "managed_format", "state_abi", "protocol", "shimwire", "media_protocol")
-    require(all(field in previous and previous[field] == candidate.get(field) for field in fields),
-            "release compatibility differs; use a separately qualified offline migration")
-
-
-def require_reverse_proof(root, active, current, target):
-    if not (root / "effects" / active.name).exists():
-        return
-    qualified = current.get("rollback_sources", [])
-    require(isinstance(qualified, list) and all(isinstance(source, str) and
-                re.fullmatch(r"[0-9a-f]{40}", source) for source in qualified)
-            and target["source"] in qualified,
-            "active release may have written; keep it available for read/export and reconcile state offline")
-
-
-def report(args, root, installed, outcome, detail, latest="", staged=None, code=0):
-    state = {"checked_at": datetime.now(timezone.utc).isoformat(),
-             "installed": installed, "owner": "self", "outcome": outcome, "detail": detail}
-    if latest:
-        state["latest"] = latest
-    if staged:
-        state["staged_version"] = staged
-    replace_record(root / "upgrade.json", json_bytes(state))
-    print(json.dumps(state) if getattr(args, "json", False) else f"{outcome}: {detail}")
-    return code
-
-
-def local_asset(dist):
-    if dist is None:
-        return None
-    _, entries = artifact_set(dist)
-    group = next(g for g, platforms in GROUPS.items() if host_platform() in platforms)
-    return next(name for name in entries if (m := ASSET.fullmatch(name)) and m[2] == group)
-
-
-def upgrade(args):
-    root = args.prefix.resolve(strict=True)
-    meta = root.lstat()
-    require(meta.st_uid == os.geteuid() and meta.st_mode & 0o077 == 0
-            and (root / ".swarm-managed").read_bytes() == b"1\n", "not a private self-managed installation")
-    with owner_lock(root / "admin.lock"):
-        record = route(root)
-        active = release_path(root, record["active"])
-        require(args.caller == active.name, "use the current managed launcher")
-        prev_card = json.loads((active / "compat.json").read_bytes())
-        installed = prev_card["version"]
-        pending = root / "staged.json"
-        staged = json.loads(pending.read_bytes()) if pending.exists() else None
-        if staged and staged["from"] != active.name:
-            staged = None
-        if args.step == "status":
-            print(json.dumps({"owner": "self", **record, "staged": staged,
-                              "unfinished_writers": sorted(p.name for p in (root / "inflight").iterdir()),
-                              "active_may_have_written": (root / "effects" / active.name).exists()}))
-            return 0
-        if args.step in {"check", "stage", "unattended"}:
-            name = local_asset(args.dist)
-            latest = ASSET.fullmatch(name)[1] if name else ""
-            comparison = (version_key(latest) > version_key(installed)) - (version_key(latest) < version_key(installed)) if latest else 0
-            allow = bool(getattr(args, "allow_downgrade", False)) and args.step != "unattended"
-            action, outcome, detail = "stage", "", f"{installed} -> {latest}"
-            if not latest:
-                action, outcome, detail = "refuse", "offline", "no signed Rust distribution selected"
-            elif latest == record.get("held"):
-                action, outcome, detail = "refuse", "held", "this version was rolled back"
-            elif comparison == 0:
-                action, outcome, detail = "current", "current", f"{installed} is current"
-            elif comparison < 0 and not allow:
-                action, outcome, detail = "refuse", "refused-downgrade", "use --allow-downgrade for a qualified older release"
-            if args.step == "check":
-                if getattr(args, "json", False):
-                    print(json.dumps({"Action": action, "Reason": detail, "Latest": latest,
-                                      "Owner": "self", "RefuseOutcome": outcome if action == "refuse" else ""}))
-                else:
-                    print(f"installed {installed}, latest {latest or '(unresolved)'}: would {action} ({detail})")
-                return 0
-            if action != "stage":
-                return report(args, root, installed, outcome, detail, latest)
-            files, card, admin, _ = verified_archive(args.dist, name, root / "public.pem")
-            old = verified_slot(active)
-            compatible(old, card)
-            selected = populate(root, files | admin, card, args.check_media)
-            staged = {"from": active.name, "to": selected, "downgrade": comparison < 0}
-            replace_record(pending, json_bytes(staged))
-            if args.step == "stage":
-                return report(args, root, installed, "staged", selected, latest, latest)
-        with ExitStack() as custody:
-            custody.enter_context(owner_lock(root / "writers.lock"))
-            for path in dict.fromkeys(getattr(args, "writer_lock", [])):
-                try:
-                    path.lstat()
-                except FileNotFoundError:
-                    continue
-                custody.enter_context(owner_lock(path))
-            require(not any((root / "inflight").iterdir()),
-                    "unfinished managed writers require offline ownership and effect reconciliation")
-            old = verified_slot(active)
-            if args.step in {"activate", "unattended"}:
-                require(staged and staged["from"] == active.name, "no stage for the active release")
-                candidate = release_path(root, staged["to"])
-                target = verified_slot(candidate)
-                compatible(old, target)
-                if version_key(target["version"]) < version_key(old["version"]):
-                    require(staged.get("downgrade"), "staged downgrade was not selected explicitly")
-                    require_reverse_proof(root, active, old, target)
-                require(target["version"] != old["version"], "staged release is already active")
-                point(root, candidate.name, active.name, record.get("held"))
-                return report(args, root, installed, "activated", candidate.name, target["version"])
-            require(record["previous"], "no previous release slot")
-            candidate = release_path(root, record["previous"])
-            previous = verified_slot(candidate)
-            compatible(old, previous)
-            require_reverse_proof(root, active, old, previous)
-            point(root, candidate.name, None, installed)
-            return report(args, root, installed, "rolled-back", candidate.name, previous["version"])
-
-
-def run_upgrade(args):
-    try:
-        return upgrade(args)
-    except BlockingIOError:
-        outcome = "deferred-wirebump" if args.step in {"activate", "rollback", "unattended"} else "busy"
-        detail = "a managed writer or upgrader holds the installation lease"
-        print(json.dumps({"outcome": outcome, "detail": detail}) if args.json else f"{outcome}: {detail}")
-        return 2 if outcome == "deferred-wirebump" else 0
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -767,15 +572,6 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--check-media", action="store_true")
     p.add_argument("--managed", action="store_true")
-    p = commands.add_parser("upgrade", help=argparse.SUPPRESS)
-    p.add_argument("prefix", type=Path)
-    p.add_argument("--caller", required=True)
-    p.add_argument("step", choices=("check", "status", "stage", "activate", "rollback", "unattended"))
-    p.add_argument("--json", action="store_true")
-    p.add_argument("--allow-downgrade", action="store_true")
-    p.add_argument("--writer-lock", type=Path, action="append", default=[])
-    p.add_argument("--dist", type=Path)
-    p.add_argument("--check-media", action="store_true")
     args = parser.parse_args()
     for key, value in vars(args).items():
         if isinstance(value, Path):
@@ -784,7 +580,7 @@ def main():
     try:
         require(not getattr(args, "check_media", False) or args.prefix is not None, "--check-media requires --prefix")
         require(not getattr(args, "managed", False) or args.prefix is not None, "--managed requires --prefix")
-        return {"build": build, "sign": sign, "verify": verify, "upgrade": run_upgrade}[args.command](args)
+        return {"build": build, "sign": sign, "verify": verify}[args.command](args)
     except (ValueError, OSError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"swarm release: {exc}\n")
 

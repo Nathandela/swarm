@@ -78,104 +78,20 @@ class ArchiveTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid compatibility card"):
             self.inspect()
 
-class UpgradeTest(unittest.TestCase):
-    def setUp(self):
-        import types
-        scratch = tempfile.TemporaryDirectory()
-        self.addCleanup(scratch.cleanup)
-        self.root = Path(scratch.name).resolve() / "sw"
-        self.root.mkdir(mode=0o700)
-        self.args = types.SimpleNamespace(prefix=self.root, caller=None, step="status",
-                                          dist=None, check_media=False)
-        self.old = self.card("0.1.0", "a")
-        self.new = self.card("0.2.0", "b")
-        release.managed_install(self.root, b"fixture", self.members(self.old), self.old, False)
-        self.args.caller = release.release_id(self.old)
-        self.new_slot = release.populate(self.root, self.members(self.new), self.new, False)
-        release.replace_record(self.root / "staged.json",
-                               release.json_bytes({"from": self.args.caller, "to": self.new_slot}))
-
-    def card(self, version, source):
-        return {"version": version, "source": source * 40, "managed_format": 1,
-                "state_abi": 1, "channel": "rust-preview", "protocol": 1, "shimwire": 1,
-                "media_protocol": 1}
-
-    def members(self, card):
-        encoded = release.json_bytes(card)
-        return {"compat.json": encoded, "swarm": b"#!/bin/sh\ncat <<'EOF'\n" + encoded + b"EOF\n"}
-
-    def test_cold_activate_and_rollback(self):
-        self.args.step = "activate"
-        with release.owner_lock(self.root / "writers.lock"):
-            with self.assertRaises(BlockingIOError):
-                release.upgrade(self.args)
-        release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], self.new_slot)
-        self.args.step = "rollback"
-        with self.assertRaisesRegex(ValueError, "current managed launcher"):
-            release.upgrade(self.args)
-        self.args.caller = self.new_slot
-        release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], release.release_id(self.old))
-
-    def test_possible_effect_blocks_rollback_and_preserves_state(self):
-        self.args.step = "activate"
-        release.upgrade(self.args)
-        self.args.caller = self.new_slot
-        self.args.step = "rollback"
-        (self.root / "effects" / self.new_slot).write_bytes(b"")
-        (self.root / "user-work").write_text("written after cutover")
-        with self.assertRaisesRegex(ValueError, "may have written"):
-            release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], self.new_slot)
-        self.assertEqual((self.root / "user-work").read_text(), "written after cutover")
-
-    def test_crashed_writer_blocks_switch(self):
-        self.args.step = "activate"
-        (self.root / "inflight/123-456").write_bytes(b"fixture")
-        with self.assertRaisesRegex(ValueError, "unfinished managed writers"):
-            release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], self.args.caller)
-
-    def test_rollback_with_exact_proof_keeps_new_work(self):
-        card = self.card("0.3.0", "c")
-        card["rollback_sources"] = [self.old["source"]]
-        slot = release.populate(self.root, self.members(card), card, False)
-        release.replace_record(self.root / "staged.json",
-                               release.json_bytes({"from": self.args.caller, "to": slot}))
-        self.args.step = "activate"
-        release.upgrade(self.args)
-        self.args.caller = slot
-        self.args.step = "rollback"
-        (self.root / "effects" / slot).write_bytes(b"")
-        (self.root / "user-work").write_text("written after cutover")
-        release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], release.release_id(self.old))
-        self.assertEqual((self.root / "user-work").read_text(), "written after cutover")
-
-    def test_interrupted_pointer_rename_preserves_old_route(self):
-        from unittest.mock import patch
-        self.args.step = "activate"
-        rename = release.os.replace
-
-        def interrupt(source, target):
-            if target == self.root / "current":
-                raise OSError("injected crash before rename")
-            return rename(source, target)
-
-        with patch.object(release.os, "replace", interrupt):
-            with self.assertRaisesRegex(OSError, "injected crash"):
-                release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], self.args.caller)
-        release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], self.new_slot)
-
-    def test_tamper_never_switches_pointer(self):
-        self.args.step = "activate"
-        (release.release_path(self.root, self.new_slot) / "compat.json").write_text("{}")
-        with self.assertRaisesRegex(ValueError, "modified release member"):
-            release.upgrade(self.args)
-        self.assertEqual(release.route(self.root)["active"], self.args.caller)
+class ManagedBootstrapTest(unittest.TestCase):
+    def test_signed_native_card_creates_native_route_marker(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch).resolve() / "install"
+            root.mkdir(mode=0o700)
+            card = {"version": "0.1.0", "source": "a" * 40, "managed_format": 1,
+                    "upgrade_runtime": 2, "state_abi": 1, "channel": "rust-native-preview"}
+            encoded = release.json_bytes(card)
+            app = b"#!/bin/sh\ncat <<'EOF'\n" + encoded + b"EOF\n"
+            release.managed_install(root, b"disposable",
+                                    {"swarm": app, "compat.json": encoded}, card, False)
+            self.assertEqual((root / ".swarm-managed").read_bytes(), b"2\n")
+            actual = root / "releases" / release.release_id(card) / "swarm"
+            self.assertEqual((root / "swarm").resolve(), actual)
 
 
 if __name__ == "__main__":
