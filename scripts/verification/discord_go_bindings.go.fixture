@@ -371,7 +371,7 @@ func (s *Store) FixtureGuildGapReceipt(d TeammateDiscussion) ([]byte, error) {
 	return raw, err
 }
 
-func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager TeammateManager, port, phase string) error {
+func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager TeammateManager, port, phase string, cursor ...string) error {
 	n, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || n == 0 || cfg.Mode != "teammate" {
 		return ErrInvalid
@@ -417,14 +417,18 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 	c := pending[0]
 	switch phase {
 	case "history":
-		if c.State != teammateStateAccepted || c.Admission == nil {
+		if c.State != teammateStateAccepted || c.Admission == nil || len(cursor) > 1 {
 			return ErrConflict
 		}
 		connector.cursorKey, err = s.teammateCursorKey()
 		if err != nil {
 			return err
 		}
-		page, err := connector.history(c.Admission.Discussion, c.Route.MessageID)(ctx, TeammateHistoryQuery{})
+		query := TeammateHistoryQuery{}
+		if len(cursor) == 1 {
+			query.Cursor = cursor[0]
+		}
+		page, err := connector.history(c.Admission.Discussion, c.Route.MessageID)(ctx, query)
 		if err != nil {
 			return err
 		}

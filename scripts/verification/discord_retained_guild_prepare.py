@@ -57,7 +57,7 @@ def serve_discord(timestamps=False):
             elif route == "/channels/399":
                 data = dict(id="399", guild_id="300", type=0)
             elif route == "/channels/399/permissions/member/100":
-                bits = (1 << 10) | (1 << 16)
+                bits = (1 << 10) | ((1 << 16) if rest.read_history else 0)
                 if permissions[0]:
                     bits |= (1 << 38)
                 data = dict(permissions=str(bits))
@@ -92,6 +92,7 @@ def serve_discord(timestamps=False):
 
     rest = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     rest.history = None
+    rest.read_history = True
     rest.change_starter = False
     rest.before_response = None
     rest.messages = messages
@@ -198,6 +199,9 @@ def interrupt_history_call(env, binding, turn, call):
 
 def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False,
             prepare_native=False, native_bridge=False, native_history=None):
+    paged = (native_history or "").startswith("pages")
+    closed = native_history in ("closed", "pages-closed")
+    prepare_in_rust = rust_test is not None and not paged
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
@@ -220,10 +224,17 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
     model_started = Event()
     release_model = Event()
     release_continuation = Event()
+    release_next_page = Event()
+    first_output = []
     tool_output = []
     def hold_model(items):
-        if native_history and len(calls) == 2:
-            tool_output.extend(item for item in items if item.get("type") == "function_call_output")
+        if paged and len(calls) == 2:
+            first_output.extend(item for item in items if item.get("type") == "function_call_output")
+            assert release_next_page.wait(timeout=20), "fixture never released the continuation call"
+            return "Read the preceding page."
+        if native_history and len(calls) == (3 if paged else 2):
+            tool_output.extend(item for item in items if item.get("type") == "function_call_output"
+                               and (not paged or item.get("call_id") == "fixture-call-2"))
             assert release_continuation.wait(timeout=25), "fixture never released the native continuation"
             return "Read the retained history."
         if TEXT not in json.dumps(items):
@@ -232,16 +243,29 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         assert release_model.wait(timeout=35), "fixture never released the original model request"
         return "Native loopback reply."
     def request_history(body):
-        if len(calls) != 1:
+        if len(calls) != 1 and not (paged and len(calls) == 2):
             return None
         names = [(tool.get("name"), child.get("name"))
                  for tool in body.get("tools", []) for child in tool.get("tools", [])
                  if child.get("name") == "swarm_discussion_history"]
         namespace, name = names[0]
-        return namespace, name, {}
+        args = {"cursor":tool_pages(first_output)[0]["Cursor"]} if paged and len(calls) == 2 else {}
+        return namespace, name, args
     source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None,
                                  fixture_tool=request_history if native_history else None)
     rest, permissions, wait_for_capture, posts = serve_discord(queue_only)
+    previous_reads = []
+    if paged:
+        def old_message(id):
+            return dict(rest.messages["501"], id=str(id), content=f"Retained prior message {id} <&>.")
+        first = [rest.messages[str(id)] for id in (701, 501, 500)] + [old_message(id) for id in range(499, 482, -1)]
+        previous = [old_message(id) for id in range(482, 476, -1)]
+        def history_route(path):
+            if "before=" in path:
+                previous_reads.append(path)
+                return previous if "before=483" in path else 403
+            return first
+        rest.history = history_route
     go_port = str(rest.server_port)
     place = base / "connector"
     invoke = lambda *args: run(fixture, env, *args)
@@ -418,7 +442,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     if phrase in line:
                         return
             try:
-                marker("Serving one history page")
+                marker("Serving original public-thread history")
                 if native_history == "allow":
                     binding = start["binding"]
                     request = json.dumps(dict(version=1, conversation_id=binding["conversation_id"],
@@ -488,6 +512,96 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 while not lines.empty():
                     print(lines.get_nowait(), end="", file=sys.stderr)
         print(f"PASS real restricted Codex history ({native_history}) with both Go stores unchanged", flush=True)
+
+    def running_paged_history(start, voice, original_turn):
+        before = json.loads(invoke("guild-advance", place, go_port, "history"))
+        after = json.loads(invoke("guild-advance", place, go_port, "history", before["Cursor"]))
+        assert len(before["Messages"]) == 20 and before["LowWater"] == "483"
+        assert after["Cursor"] == "" and [row["id"] for row in after["Messages"]] == list(map(str, range(477, 483)))
+        await_value(lambda: manager_observed(start, lambda current: not current["ready_for_input"] and
+            current["turn"]["state"] == "running" and current["turn"]["native_turn_id"] == original_turn["native_turn_id"]
+            and current["turn"]["native_input_id"] == original_turn["native_input_id"]))
+        connector = place / "discord.db"
+        original_bytes = (voice.read_bytes(), connector.read_bytes())
+        sock, auth = Path(start["bridge_socket"]), Path(start["auth_file"])
+        phase = f"history-watch-{native_history}"
+        read_pending, release_read = Event(), Event()
+        permission_reads = []
+        def delay_final_scope(path):
+            if path == "/channels/399/permissions/member/100":
+                permission_reads.append(path)
+                if len(permission_reads) == 4:
+                    read_pending.set()
+                    assert release_read.wait(timeout=10), "fixture did not release the final page permission GET"
+        with subprocess.Popen([rust_test, *rust_args], env=rust_env(phase), text=True,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            lines, reader = lines_from(child.stdout)
+            log = []
+            def marker(phrase):
+                while True:
+                    line = lines.get(timeout=10)
+                    log.append(line)
+                    if phrase in line:
+                        return
+            try:
+                marker("Serving original public-thread history")
+                release_model.set()
+                await_value(lambda: first_output)
+                assert tool_pages(first_output) == [before], first_output
+                first_call = (base / "state/rust-guild-history-call").read_bytes()
+                request = json.loads(first_call)
+                refused = {"error":"unconfirmed"}
+                assert manager_request(sock, auth.read_text(), first_call) == refused
+                baseline = len(previous_reads)
+                for args in ({"cursor":before["Cursor"] + "x"}, {"cursor":before["Cursor"],"source":"parent"},
+                             {"cursor":before["Cursor"],"anchor":"501"}):
+                    request["call"]["arguments"] = args
+                    wire = json.dumps(request, separators=(",", ":")).encode()
+                    assert manager_request(sock, auth.read_text(), wire) == refused
+                assert len(previous_reads) == baseline
+                release_next_page.set()
+                if native_history != "pages":
+                    marker("holding supervisor-proven history call")
+                    if closed:
+                        rest.before_response = delay_final_scope
+                    else:
+                        rest.read_history = False
+                    child.stdin.write("continue\n")
+                    child.stdin.flush()
+                next_call = base / "state/rust-guild-history-next-call"
+                if closed:
+                    assert read_pending.wait(timeout=5), "the final scope read was not held"
+                    interrupt_history_call(env, start["binding"], original_turn, json.loads(next_call.read_bytes())["call"])
+                    release_read.set()
+                    marker("Withheld the history response from the closed native call")
+                    assert len(calls) == 2 and not tool_output and len(previous_reads) == baseline + 1
+                else:
+                    await_value(lambda: tool_output)
+                    if native_history == "pages":
+                        assert tool_pages(tool_output) == [after], tool_output
+                        assert manager_request(sock, auth.read_text(), next_call.read_bytes()) == refused
+                        assert len(previous_reads) == baseline + 1
+                    else:
+                        assert "manager action is unconfirmed" in json.dumps(tool_output), tool_output
+                        assert not tool_pages(tool_output) and len(previous_reads) == baseline
+                assert (voice.read_bytes(), connector.read_bytes()) == original_bytes and posts == []
+                stop_connector(place)
+                assert child.wait(timeout=10) == 0
+            finally:
+                rest.read_history = True
+                rest.before_response = None
+                release_read.set()
+                release_next_page.set()
+                if child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=8)
+                reader.join(timeout=3)
+                if child.returncode != 0:
+                    print("".join(log), end="", file=sys.stderr)
+                while not lines.empty():
+                    print(lines.get_nowait(), end="", file=sys.stderr)
+        print(f"PASS real restricted Codex history ({native_history}) with both Go stores unchanged", flush=True)
+
     try:
         invoke("create", place, base / "state", "teammate", "true", base / "work")
         invoke("bind-thread", place, "original-room", "401", "399")
@@ -517,14 +631,14 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     if state is None or report["state"] == state:
                         return report
             try:
-                if rust_test is None:
+                if not prepare_in_rust:
                     invoke("guild-record", place, "original-room", "701", "201", "fixture external")
                 else:
                     wait_for_capture[0] = True
                     rust("capture")
                 original, = pending()
                 assert original["State"] == "prepared" and original["Admission"] is None
-                if rust_test is None:
+                if not prepare_in_rust:
                     invoke("guild-advance", place, go_port, "stage")
                 else:
                     connector = place / "discord.db"
@@ -578,14 +692,14 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 assert a["Text"] == "" and a["Route"] == original["Route"]
                 assert before_voice == voice.read_bytes() and calls == [] and posts == []
                 assert native(voice)["sequence"] == 0
-                print(f"{'Rust' if rust_test else 'Go'} committed rendering-free sending with no Voice mutation or native call", flush=True)
+                print(f"{'Rust' if prepare_in_rust else 'Go'} committed rendering-free sending with no Voice mutation or native call", flush=True)
                 permissions[0] = False
                 decline = subprocess.run([fixture, "guild-advance", place, go_port, "accept"],
                                          env=env, capture_output=True, timeout=35)
                 assert decline.returncode != 0 and b"not authorized" in decline.stderr, decline.stderr
                 assert pending() == [sending] and calls == [] and posts == []
                 permissions[0] = True
-                if queue_only and rust_test:
+                if queue_only and prepare_in_rust:
                     connector = place / "discord.db"
                     source_bytes = connector.read_bytes()
                     before_queue = voice.read_bytes()
@@ -735,7 +849,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     print("PASS Rust's existing storage stages the exact Go tuple in a copy that Go reopens; personal rendering differs", flush=True)
                     return prepared
                 if prepare_native:
-                    if not rust_test:
+                    if not prepare_in_rust:
                         invoke("guild-advance", place, go_port, "prepare-native")
                         prepared = native(voice)
                         request_bytes = invoke("guild-native-request", voice.parent, "701")
@@ -754,7 +868,10 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     if not rust_test:
                         return comparable
                     assert request_bytes == invoke("guild-native-request", voice.parent, "701")
-                    print("PASS Rust prepared one unsent Go tuple across commit interruption and repeat", flush=True)
+                    if paged:
+                        print("PASS Go prepared the original full-page native tuple", flush=True)
+                    else:
+                        print("PASS Rust prepared one unsent Go tuple across commit interruption and repeat", flush=True)
                 if queue_only and not prepare_native:
                     assert not row.get("reply_check_after") and not row.get("operation_id") and not row.get("request")
                     assert row["input_text"].count("Earlier Discord messages for context (JSON)") == 1
@@ -807,6 +924,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     if prepare_native:
                         assert interrupted["operation_id"] == prepared["operation_id"] and interrupted["native_input_id"] == prepared["native_input_id"]
                         assert request_bytes == invoke("guild-native-request", voice.parent, "701")
+                    if prepare_native and prepare_in_rust:
                         executing = voice.read_bytes()
                         connector = place / "discord.db"
                         actual = connector.read_bytes()
@@ -817,7 +935,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         finally:
                             connector.write_bytes(actual)
                         print("PASS stale sending connector cannot renew the executing Go native tuple", flush=True)
-                    if native_history:
+                    if paged:
+                        running_paged_history(start, voice, before)
+                    elif native_history:
                         running_history(start, voice, before)
                 invoke("guild-advance", place, go_port, "advance")
                 assert pending() == []
@@ -826,13 +946,13 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 assert row["origin"]["revision"] == REV and row["origin"]["request_id"] == OP
                 assert len(row["native_input_id"]) == 64 and row["request"]["manager_admission"]["nonce"] == row["native_input_id"]
                 assert row["request"]["session"] == session and row["request"]["session_instance"] == instance
-                expected_requests = 2 if native_history and native_history != "closed" else 1
+                expected_requests = (2 if closed else 3) if paged else 2 if native_history and not closed else 1
                 await_value(lambda: len(calls) == expected_requests)
                 native_proof = await_value(lambda: native_input(row["native_input_id"]))
                 if interrupt:
                     keys = ("sequence", "source_id", "operation_id", "native_input_id", "request")
                     assert [row[k] for k in keys] == [interrupted[k] for k in keys]
-                    assert row["phase"] == ("completed" if native_history == "closed" else "running")
+                    assert row["phase"] == ("completed" if closed else "running")
                     assert row["native_turn_id"] == before["native_turn_id"]
                     assert native_proof["native_turn_id"] == before["native_turn_id"]
                 semantic = owner(env, {"op":"semantic_status", "session_id":session,
@@ -864,6 +984,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         owner(env, {"op": "kill", "session_id": original["id"]})
     finally:
         release_model.set()
+        release_next_page.set()
         release_continuation.set()
         rest.shutdown()
         rest.server_close()
@@ -886,6 +1007,10 @@ if __name__ == "__main__":
             second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True)
         assert first == second, (first, second)
         print("PASS Rust and Go matched the authenticated starter/history prompt byte-for-byte and omitted reply wait", flush=True)
+    elif len(sys.argv) == 6 and sys.argv[5] in ("--native-history-pages", "--native-history-pages-revoked", "--native-history-pages-closed"):
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True, prepare_native=True, interrupt=True,
+                    native_history=sys.argv[5].removeprefix("--native-history-"))
     elif len(sys.argv) == 6 and (sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody")
                                  or sys.argv[5].startswith("--native-history")):
         history = {"--native-history":"allow", "--native-history-edit":"edit", "--native-history-stop":"stop",

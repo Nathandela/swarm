@@ -3,6 +3,7 @@ mod admit;
 mod capture;
 mod gap;
 mod history;
+mod history_pages;
 mod prepare;
 mod render;
 use super::{
@@ -208,21 +209,29 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     {
         prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
         let bound = prepare::ready_discussion(binding)?;
-        return history::serve(place, cfg, binding, &status, || {
-            let tx = db.begin().map_err(io::Error::other)?;
-            if history::accepted(&tx, cfg)?.as_ref() != Some(pending)
-                || capture::binding(&tx, cfg, &route, &guard, Some(pending))? != *binding
-            {
-                return Err(invalid("original teammate source binding changed"));
-            }
-            history::verify_record(&tx, cfg, pending, &bound)?;
-            let input = render::current(api, cfg, &route, &guard, pending, &bound)?;
-            verify_pins()?;
-            if status.stopping() {
-                return Err(invalid("original teammate place stopped"));
-            }
-            Ok(input)
-        });
+        return history::serve(
+            place,
+            cfg,
+            binding,
+            &status,
+            || {
+                let tx = db.begin().map_err(io::Error::other)?;
+                if history::accepted(&tx, cfg)?.as_ref() != Some(pending)
+                    || capture::binding(&tx, cfg, &route, &guard, Some(pending))? != *binding
+                {
+                    return Err(invalid("original teammate source binding changed"));
+                }
+                history::verify_record(&tx, cfg, pending, &bound)?;
+                let key = history_pages::key(&tx)?;
+                let input = render::current_history(api, cfg, &route, &guard, pending, &bound)?;
+                verify_pins()?;
+                if status.stopping() {
+                    return Err(invalid("original teammate place stopped"));
+                }
+                Ok(history::Scope { input, key })
+            },
+            |cursor| history_pages::older(api, cfg, &route, cursor),
+        );
     }
     if let Mode::Prepare {
         message, dry_run, ..
@@ -610,6 +619,9 @@ pub(super) fn native_prepare_witness() {
         | "history-watch-stop"
         | "history-watch-credential"
         | "history-watch-closed"
+        | "history-watch-pages"
+        | "history-watch-pages-revoked"
+        | "history-watch-pages-closed"
         | "history-refuse" => {
             let result = observe(
                 &place,
@@ -848,7 +860,12 @@ pub(super) fn native_prepare_witness() {
 }
 
 #[cfg(test)]
-fn history_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<bool> {
+fn history_proof_fixture(
+    place: &Place,
+    cfg: &Config,
+    raw: &[u8],
+    initial: bool,
+) -> io::Result<bool> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
     let Ok(phase) = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE") else {
         return Ok(false);
@@ -857,16 +874,24 @@ fn history_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<
         return Ok(false);
     }
     isolated_guild_fixture(place, cfg)?;
+    let name = if initial {
+        "rust-guild-history-call"
+    } else {
+        "rust-guild-history-next-call"
+    };
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(place.supervisor_root().join("rust-guild-history-call"))?
+        .open(place.supervisor_root().join(name))?
         .write_all(raw)?;
-    if phase != "history-watch" {
+    if phase != "history-watch"
+        && phase != "history-watch-pages"
+        && !(initial && phase.starts_with("history-watch-pages-"))
+    {
         wait_at_test_boundary("holding supervisor-proven history call")?;
     }
-    Ok(phase == "history-watch-closed")
+    Ok(phase == "history-watch-closed" || !initial && phase == "history-watch-pages-closed")
 }
 
 #[cfg(test)]

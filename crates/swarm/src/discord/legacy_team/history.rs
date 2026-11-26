@@ -1,4 +1,4 @@
-//! One public history page for an already-running original restricted Codex turn.
+//! Plain public-thread history for an already-running original restricted Codex turn.
 use super::*;
 use crate::{
     discord::legacy_ingress::{
@@ -85,7 +85,7 @@ struct Arguments {
     anchor: String,
 }
 
-fn checked_request(raw: &[u8], request: &Value) -> io::Result<Call> {
+fn checked_request(raw: &[u8], request: &Value) -> io::Result<(Call, String)> {
     let wire: Value = serde_json::from_slice(raw)?;
     if !wire.is_object() || !wire["call"].is_object() || voice::go_bytes(&wire)? != raw {
         return Err(unavailable());
@@ -104,12 +104,11 @@ fn checked_request(raw: &[u8], request: &Value) -> io::Result<Call> {
         || tool.session_id != session
         || tool.call.name != TOOL
         || !matches!(args.source.as_str(), "" | "thread")
-        || !args.cursor.is_empty()
         || !args.anchor.is_empty()
     {
         return Err(unavailable());
     }
-    Ok(tool.call)
+    Ok((tool.call, args.cursor))
 }
 
 fn owner(place: &Place, cfg: &Config, request: &Value) -> io::Result<Client> {
@@ -163,14 +162,26 @@ fn verify_live_runtime(native: &Value, request: &Value, custody: &Custody) -> io
     Ok(())
 }
 
+#[derive(PartialEq)]
+pub(super) struct Scope {
+    pub(super) input: render::Input,
+    pub(super) key: Option<history_pages::Key>,
+}
+
 pub(super) fn serve(
     place: &Place,
     cfg: &Config,
     binding: &Value,
     status: &StatusSocket,
-    recheck: impl Fn() -> io::Result<render::Input>,
+    recheck: impl Fn() -> io::Result<Scope>,
+    older: impl Fn(&history_pages::Cursor) -> io::Result<Value>,
 ) -> io::Result<()> {
-    let input = recheck()?;
+    let scope = recheck()?;
+    let input = &scope.input;
+    let discussion = field(&input.origin, "discussion_id");
+    let upper = field(&input.history_page, "HighWater");
+    let mut initial = input.history_page.clone();
+    let initial_next = history_pages::advance(&mut initial, scope.key.as_ref(), discussion)?;
     let settings = crate::manager_prompt::load(place.supervisor_root())?;
     let (directory, id, endpoint) = legacy_ingress::voice_location(place, cfg, binding)?;
     let custody = Custody::claim(&directory, &id, true)?;
@@ -206,7 +217,7 @@ pub(super) fn serve(
         "manager_runtime",
     )?;
     verify_live_runtime(&runtime["manager_runtime"], request, &custody)?;
-    if recheck()? != input || read()? != row {
+    if recheck()? != scope || read()? != row {
         return Err(invalid(
             "the original guild history source changed before custody",
         ));
@@ -215,8 +226,8 @@ pub(super) fn serve(
         let _stop = status.commit_guard()?;
         custody.listen()?
     };
-    println!("Serving one history page for the original running teammate turn.");
-    let mut served = false;
+    println!("Serving original public-thread history for the running teammate turn.");
+    let mut expected_cursor = Some(String::new());
     let until = Instant::now() + Duration::from_secs(45);
     while !status.stopping() && Instant::now() < until {
         #[cfg(test)]
@@ -224,10 +235,10 @@ pub(super) fn serve(
         #[cfg(test)]
         let mut source_verified = false;
         let _reply = bridge.accept_guarded(|raw| {
-            if served {
+            let (call, cursor) = checked_request(raw, request)?;
+            if expected_cursor.as_ref() != Some(&cursor) {
                 return Err(unavailable());
             }
-            let call = checked_request(raw, request)?;
             let mut owner = owner(place, cfg, request)?;
             let prove = |owner: &mut Client| {
                 let (native, turn) =
@@ -238,9 +249,17 @@ pub(super) fn serve(
             let turn = prove(&mut owner)?;
             #[cfg(test)]
             {
-                closing_fixture = super::history_proof_fixture(place, cfg, raw)?;
+                closing_fixture = super::history_proof_fixture(place, cfg, raw, cursor.is_empty())?;
             }
-            if recheck()? != input || read()? != row {
+            let (page, next) = if cursor.is_empty() {
+                (initial.clone(), initial_next.clone())
+            } else {
+                let cursor = history_pages::decode(scope.key.as_ref(), &cursor, discussion, upper)?;
+                let mut page = older(&cursor)?;
+                let next = history_pages::advance(&mut page, scope.key.as_ref(), discussion)?;
+                (page, next)
+            };
+            if recheck()? != scope || read()? != row {
                 return Err(unavailable());
             }
             #[cfg(test)]
@@ -251,8 +270,8 @@ pub(super) fn serve(
                 return Err(unavailable());
             }
             let stop = status.commit_guard()?;
-            served = true;
-            Ok((input.history_page.clone(), stop))
+            expected_cursor = next;
+            Ok((page, stop))
         })?;
         #[cfg(test)]
         if closing_fixture {

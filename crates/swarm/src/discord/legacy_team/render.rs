@@ -4,6 +4,7 @@ use crate::{
     discord::legacy_ingress::prepare::{DISCUSSION_INSTRUCTIONS, go_bytes, human_instruction},
     ipc::field,
 };
+use std::collections::BTreeSet;
 use std::os::unix::fs::MetadataExt;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -37,7 +38,7 @@ fn checkout_identity(project: &str) -> io::Result<(u64, u64)> {
     Ok((checkout.dev(), checkout.ino()))
 }
 
-fn evidence(route: &Route, message: &Value) -> io::Result<(OffsetDateTime, Value)> {
+pub(super) fn evidence(route: &Route, message: &Value) -> io::Result<(OffsetDateTime, Value)> {
     let id = field(message, "id");
     let actor = &message["author"];
     let author = field(actor, "id");
@@ -86,9 +87,31 @@ pub(super) fn current(
     pending: &capture::Pending,
     bound: &prepare::Discussion,
 ) -> io::Result<Input> {
+    current_inner(api, cfg, route, guard, pending, bound, false)
+}
+
+pub(super) fn current_history(
+    api: &Discord,
+    cfg: &Config,
+    route: &Route,
+    guard: &Guard,
+    pending: &capture::Pending,
+    bound: &prepare::Discussion,
+) -> io::Result<Input> {
+    current_inner(api, cfg, route, guard, pending, bound, true)
+}
+
+fn current_inner(
+    api: &Discord,
+    cfg: &Config,
+    route: &Route,
+    guard: &Guard,
+    pending: &capture::Pending,
+    bound: &prepare::Discussion,
+    paged_read: bool,
+) -> io::Result<Input> {
     let starter = &bound.starter;
     let project = cfg.text("work_dir");
-    // shortcut: one full two-message page and an older in-thread starter, extend with pinned Go history fixtures.
     if bound.gap != 0
         || !bound.parent_anchor.is_empty()
         || starter.guild_id != route.guild_id
@@ -118,9 +141,13 @@ pub(super) fn current(
         &format!("/channels/{}/messages?limit=20", route.channel_id),
         None,
     )?;
-    let [latest, prior] = page.as_array().map(Vec::as_slice).ok_or_else(unavailable)? else {
+    let raw = page.as_array().map(Vec::as_slice).ok_or_else(unavailable)?;
+    let [latest, prior, rest @ ..] = raw else {
         return Err(unavailable());
     };
+    if !paged_read && !rest.is_empty() {
+        return Err(unavailable());
+    }
     let message = field(&pending.candidate.route, "message_id");
     let actor = field(&pending.candidate.author, "id");
     let source = api.request(
@@ -144,23 +171,42 @@ pub(super) fn current(
     {
         return Err(unavailable());
     }
-    let (_, invoking) = evidence(route, &source)?;
     verify_revision(route, guard, prior)?;
     let root = evidence(route, &opening)?;
-    let previous = evidence(route, prior)?;
-    let history_page = json!({"Messages":[previous.1, invoking], "Cursor":"", "HighWater":message,
-        "LowWater":guard.route.message_id, "Notice":"", "Starter":root.1, "ReplyChain":null});
-    let mut rows = [root, previous];
+    let rows = history_pages::rows(route, raw, None)?;
     if rows
         .iter()
+        .chain(std::iter::once(&root))
         .any(|(_, row)| row["author"]["id"] == cfg.text("application_id"))
-        || go_bytes(&rows[0].1)?.len() + go_bytes(&rows[1].1)?.len() > 900
     {
         return Err(unavailable());
     }
-    rows.sort_by_key(|(time, _)| *time);
-    let history =
-        String::from_utf8(go_bytes(&json!([rows[0].1, rows[1].1]))?).map_err(io::Error::other)?;
+    let history_page = history_pages::page(&rows, Some(&root.1), message)?;
+    let mut context = Vec::new();
+    let mut seen = BTreeSet::from([message]);
+    let mut remaining = 900;
+    for (time, entry) in std::iter::once(&root).chain(rows.iter().rev()) {
+        let bytes = go_bytes(entry)?.len();
+        if bytes <= remaining && seen.insert(field(entry, "id")) {
+            context.push((time, entry));
+            remaining -= bytes;
+        }
+    }
+    if !paged_read && context.len() != 2 {
+        return Err(unavailable());
+    }
+    context.sort_by_key(|(time, _)| *time);
+    let context = if context.is_empty() {
+        Value::Null
+    } else {
+        json!(
+            context
+                .into_iter()
+                .map(|(_, entry)| entry)
+                .collect::<Vec<_>>()
+        )
+    };
+    let history = String::from_utf8(go_bytes(&context)?).map_err(io::Error::other)?;
     let body = human_instruction(&pending.candidate.author, &source["id"], text)?;
     verify_thread_authority(api, cfg, route, true)?;
     if checkout_identity(project)? != project_identity {
