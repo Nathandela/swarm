@@ -205,7 +205,7 @@ impl Backend {
                 "native_accepted" | "outcome_unknown"
             )
         {
-            let _ = self.reconcile_prompt(created, operation, record, None);
+            let _ = self.reconcile_prompt(created, operation, record);
         }
         if !matches!(
             field(&record["receipt"], "state"),
@@ -268,21 +268,15 @@ impl Backend {
         created: u64,
         operation: &str,
         record: &mut Value,
-        terminal_id: Option<&str>,
     ) -> io::Result<()> {
-        if let Some(next) = self.observe_prompt(created, record, terminal_id)? {
+        if let Some(next) = self.observe_prompt(created, record)? {
             receipts::save(&self.dir, operation, &next)?;
             *record = next;
         }
         Ok(())
     }
 
-    fn observe_prompt(
-        &self,
-        created: u64,
-        record: &Value,
-        terminal_id: Option<&str>,
-    ) -> io::Result<Option<Value>> {
+    fn observe_prompt(&self, created: u64, record: &Value) -> io::Result<Option<Value>> {
         let root = field(record, "target");
         let input = field(record, "message_id");
         let row = self.http(&format!("/message?messageID={input}"), None)?;
@@ -341,26 +335,19 @@ impl Backend {
             "id":input,"session":root,"created_ms":at,"agent":info["agent"],
             "model":receipt["model"],"text_hash":record["text_hash"],
         });
-        let outcome = if let Some(id) = terminal_id {
-            self.http(&format!("/message?messageID={id}"), None)
-                .ok()
-                .filter(|row| row["info"]["id"] == id)
-                .and_then(|row| {
-                    terminal_outcome(&json!({"messages":[row]}), root, input, at)
-                        .map(|(_, _, state, id)| (state, id.to_owned()))
-                })
-        } else {
-            find_terminal(root, input, at, |before| self.snapshot(created, 50, before))
-        };
+        let outcome = find_terminal(root, input, at, |before| {
+            let snapshot = self.snapshot(created, 50, before)?;
+            let status = super::status(&snapshot, root);
+            if status["Turn"] != "idle" || status["Interaction"] != "none" {
+                return Err(io::Error::other("OpenCode native work is still active"));
+            }
+            Ok(snapshot)
+        });
         let mut next = record.clone();
         if let Some((state, native_message)) = outcome {
             receipt["state"] = json!(state);
             receipt["native_turn_id"] = json!(native_message);
-            receipt["outcome_source"] = json!(if terminal_id.is_some() {
-                "reconciled_message"
-            } else {
-                "reconciled_snapshot"
-            });
+            receipt["outcome_source"] = json!("reconciled_snapshot");
             next["terminal_proof"] = json!({"state":state,"assistant":native_message,"parent":row["info"]["id"],"session":row["info"]["sessionID"]});
         }
         if record["receipt"] == receipt {
@@ -370,32 +357,11 @@ impl Backend {
         next["native_input"] = native_input;
         Ok(Some(next))
     }
-    pub(super) fn checkpoint_terminal(&self, created: u64, event: &Value) -> io::Result<()> {
-        let info = &event["properties"]["info"];
-        let id = field(info, "id");
-        if event["type"] != "message.updated"
-            || info["role"] != "assistant"
-            || info["sessionID"] != self.binding["rootID"]
-            || !opencode::valid_id(id, "msg_")
-            || !(info["time"]["completed"].is_u64() || info["error"].is_object())
-        {
-            return Ok(());
-        }
-        self.checkpoint_prompt(created, Some((field(info, "parentID"), id)))
-    }
-
-    pub(super) fn checkpoint_prompt(
-        &self,
-        created: u64,
-        event: Option<(&str, &str)>,
-    ) -> io::Result<()> {
+    pub(super) fn checkpoint_prompt(&self, created: u64) -> io::Result<()> {
         let Some((operation, before)) = receipts::pending_prompt(&self.dir, &self.token)? else {
             return Ok(());
         };
-        if event.is_some_and(|(parent, _)| before["message_id"] != parent) {
-            return Ok(());
-        }
-        let Some(next) = self.observe_prompt(created, &before, event.map(|(_, id)| id))? else {
+        let Some(next) = self.observe_prompt(created, &before)? else {
             return Ok(());
         };
         // SDK reads can wait on the worker. Acquire the mutation lane only for
@@ -412,66 +378,63 @@ impl Backend {
     }
 }
 
-fn terminal_outcome<'a>(
-    snapshot: &'a Value,
-    root: &str,
-    input: &str,
-    at: u64,
-) -> Option<(bool, u64, &'static str, &'a str)> {
-    let mut results = snapshot["messages"]
-        .as_array()?
-        .iter()
-        .filter_map(|row| {
-            let message = &row["info"];
-            let id = field(message, "id");
-            if message["role"] != "assistant"
-                || message["sessionID"] != root
-                || message["parentID"] != input
-                || message["summary"] == true
-                || !opencode::valid_id(id, "msg_")
-            {
+enum Assistant<'a> {
+    Continuation(u64),
+    Terminal {
+        started: u64,
+        state: &'static str,
+        id: &'a str,
+    },
+}
+
+fn classify_assistant<'a>(row: &'a Value, root: &str) -> Option<Assistant<'a>> {
+    let message = &row["info"];
+    let id = field(message, "id");
+    let started = message["time"]["created"].as_u64()?;
+    let finish = field(message, "finish");
+    let terminal = |state| Some(Assistant::Terminal { started, state, id });
+    if message["error"].is_object() {
+        if matches!(finish, "stop" | "length") {
+            return None;
+        }
+        return terminal(match field(&message["error"], "name") {
+            "MessageAbortedError" => "cancelled",
+            "ContentFilterError" => "declined",
+            _ => "failed",
+        });
+    }
+    let completed = message["time"]["completed"]
+        .as_u64()
+        .filter(|time| *time >= started)?;
+    if finish == "content-filter" {
+        return terminal("declined");
+    }
+    let mut part_ids = std::collections::BTreeSet::new();
+    let mut local_tool = false;
+    for part in row["parts"].as_array()? {
+        if part["sessionID"] != root
+            || part["messageID"] != id
+            || field(part, "id").is_empty()
+            || !part_ids.insert(field(part, "id"))
+        {
+            return None;
+        }
+        if part["type"] == "tool"
+            && part["metadata"]["providerExecuted"] != true
+            && !(part["state"]["status"] == "error"
+                && part["state"]["metadata"]["interrupted"] == true)
+        {
+            if !matches!(field(&part["state"], "status"), "completed" | "error") {
                 return None;
             }
-            let created = message["time"]["created"].as_u64()?;
-            if created < at {
-                return None;
-            }
-            let completed = message["time"]["completed"]
-                .as_u64()
-                .filter(|time| *time >= created);
-            if message["error"].is_object() {
-                let state = match field(&message["error"], "name") {
-                    "MessageAbortedError" => "cancelled",
-                    "ContentFilterError" => "declined",
-                    _ => "failed",
-                };
-                return Some((true, completed.unwrap_or(created), state, id));
-            }
-            let finished = completed?;
-            if message["finish"] == "content-filter" {
-                return Some((true, finished, "declined", id));
-            }
-            let parts = row["parts"].as_array()?;
-            let mut part_ids = std::collections::BTreeSet::new();
-            if !matches!(field(message, "finish"), "stop" | "length")
-                || parts.iter().any(|part| {
-                    part["sessionID"] != root
-                        || part["messageID"] != id
-                        || field(part, "id").is_empty()
-                        || !part_ids.insert(field(part, "id"))
-                        || part["type"] == "tool"
-                            && part["metadata"]["providerExecuted"] != true
-                            && !(part["state"]["status"] == "error"
-                                && part["state"]["metadata"]["interrupted"] == true)
-                })
-            {
-                return None;
-            }
-            Some((false, finished, "completed", id))
-        })
-        .collect::<Vec<_>>();
-    results.sort_unstable();
-    results.last().copied()
+            local_tool = true;
+        }
+    }
+    match (local_tool, finish) {
+        (true, "stop" | "length" | "tool-calls") => Some(Assistant::Continuation(completed)),
+        (false, "stop" | "length") => terminal("completed"),
+        _ => None,
+    }
 }
 
 fn find_terminal(
@@ -483,29 +446,68 @@ fn find_terminal(
     let started = std::time::Instant::now();
     let mut before = String::new();
     let mut cursors = std::collections::BTreeSet::new();
-    let mut best = None;
-    // shortcut: recover bounded history after a missed SSE checkpoint; wider history needs event indexing.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut newer_floor = u64::MAX;
+    let mut terminal = None;
+    let mut latest_continuation = 0;
+    let mut verified_input = false;
     for _ in 0..8 {
-        let Ok(snapshot) = read(&before) else { break };
-        if let Some((failed, time, state, id)) = terminal_outcome(&snapshot, root, input, at) {
-            let result = (failed, time, state, id.to_owned());
-            if best.as_ref().is_none_or(|other| &result > other) {
-                best = Some(result);
+        let snapshot = read(&before).ok()?;
+        if started.elapsed() >= std::time::Duration::from_secs(6) {
+            return None;
+        }
+        let rows = snapshot["messages"].as_array()?;
+        let cursor = snapshot["nextCursor"].as_str()?;
+        if rows.is_empty() && !cursor.is_empty() {
+            return None;
+        }
+        let mut floor = newer_floor;
+        for row in rows {
+            let message = &row["info"];
+            let id = field(message, "id");
+            let created = message["time"]["created"].as_u64()?;
+            if !opencode::valid_id(id, "msg_")
+                || message["sessionID"] != root
+                || !seen.insert(id.to_owned())
+                || created > newer_floor
+            {
+                return None;
+            }
+            floor = floor.min(created);
+            if id == input {
+                if message["role"] != "user" || created != at {
+                    return None;
+                }
+                verified_input = true;
+            }
+            if message["parentID"] == input && message["summary"] != true {
+                if message["role"] != "assistant" || created < at {
+                    return None;
+                }
+                match classify_assistant(row, root)? {
+                    Assistant::Continuation(until) => {
+                        latest_continuation = latest_continuation.max(until)
+                    }
+                    Assistant::Terminal { started, state, id } => {
+                        if terminal.replace((started, state, id.to_owned())).is_some() {
+                            return None;
+                        }
+                    }
+                }
             }
         }
-        let cursor = field(&snapshot, "nextCursor");
-        if cursor.is_empty()
-            || !cursors.insert(cursor.to_owned())
-            || snapshot["messages"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["info"]["id"] == input))
-            || started.elapsed() >= std::time::Duration::from_secs(6)
-        {
-            break;
+        if verified_input && (floor < at || cursor.is_empty()) {
+            return terminal
+                .filter(|(started, _, _)| *started >= latest_continuation)
+                .map(|(_, state, id)| (state, id));
+        }
+        if cursor.is_empty() || !cursors.insert(cursor.to_owned()) {
+            return None;
         }
         cursor.clone_into(&mut before);
+        newer_floor = floor;
     }
-    best.map(|(_, _, state, id)| (state, id))
+    None
 }
 
 fn unexpired(record: &Value, now: u64) -> Option<u64> {
@@ -691,29 +693,38 @@ mod tests {
             "id":reply,"sessionID":root,"parentID":input,"role":"assistant",
             "time":{"created":2,"completed":3},"finish":"stop"
         },"parts":[{"id":"prt_safe","sessionID":root,"messageID":reply,"type":"tool"}]}]});
-        assert!(terminal_outcome(&snapshot, root, input, 1).is_none());
+        assert!(classify_assistant(&snapshot["messages"][0], root).is_none());
         snapshot["messages"][0]["parts"][0]["metadata"]["providerExecuted"] = json!(true);
         assert_eq!(
-            terminal_outcome(&snapshot, root, input, 1),
-            Some((false, 3, "completed", reply))
+            match classify_assistant(&snapshot["messages"][0], root) {
+                Some(Assistant::Terminal { state, id, .. }) => Some((state, id)),
+                _ => None,
+            },
+            Some(("completed", reply))
         );
         snapshot["messages"][0]["parts"][0]["metadata"] = Value::Null;
         snapshot["messages"][0]["parts"][0]["state"] =
             json!({"status":"error","metadata":{"interrupted":true}});
         assert_eq!(
-            terminal_outcome(&snapshot, root, input, 1),
-            Some((false, 3, "completed", reply))
+            match classify_assistant(&snapshot["messages"][0], root) {
+                Some(Assistant::Terminal { state, id, .. }) => Some((state, id)),
+                _ => None,
+            },
+            Some(("completed", reply))
         );
         snapshot["messages"][0]["parts"][0]["state"]["metadata"]["interrupted"] = json!(false);
-        assert!(terminal_outcome(&snapshot, root, input, 1).is_none());
+        assert!(
+            classify_assistant(&snapshot["messages"][0], root)
+                .is_some_and(|result| matches!(result, Assistant::Continuation(3)))
+        );
         snapshot["messages"][0]["parts"][0]["type"] = json!("text");
         assert_eq!(
-            terminal_outcome(&snapshot, root, input, 1),
-            Some((false, 3, "completed", reply))
+            match classify_assistant(&snapshot["messages"][0], root) {
+                Some(Assistant::Terminal { state, id, .. }) => Some((state, id)),
+                _ => None,
+            },
+            Some(("completed", reply))
         );
-        assert!(terminal_outcome(&snapshot, root, "msg_012345678902", 1).is_none());
-        snapshot["messages"][0]["info"]["summary"] = json!(true);
-        assert!(terminal_outcome(&snapshot, root, input, 1).is_none());
     }
     #[test]
     fn request_card_still_authorizes_after_two_minutes_and_expires_at_five() {
@@ -744,10 +755,51 @@ mod tests {
                 json!({"messages":[{"info":{
                     "id":reply,"sessionID":root,"parentID":input,"role":"assistant",
                     "time":{"created":2,"completed":3},"finish":"stop"
-                },"parts":[]}],"nextCursor":""})
+                },"parts":[]},{"info":{"id":input,"sessionID":root,"role":"user",
+                    "time":{"created":1}},"parts":[]}],"nextCursor":""})
             })
         });
         assert_eq!(cursors, ["", "older"]);
         assert_eq!(outcome, Some(("completed", reply.to_owned())));
+    }
+    #[test]
+    fn terminal_history_requires_verified_input_and_one_final_child() {
+        let root = "ses_012345678900";
+        let input = "msg_012345678900";
+        let reply = "msg_012345678901";
+        let assistant = json!({"info":{"id":reply,"sessionID":root,"parentID":input,
+            "role":"assistant","time":{"created":4,"completed":5},"finish":"stop"},"parts":[]});
+        let user = json!({"info":{"id":input,"sessionID":root,"role":"user","time":{"created":1}},"parts":[]});
+        let error = json!({"info":{"id":"msg_012345678902","sessionID":root,"parentID":input,
+            "role":"assistant","time":{"created":2,"completed":3},"error":{"name":"MessageAbortedError"}},"parts":[]});
+        let continuation = json!({"info":{"id":"msg_012345678903","sessionID":root,"parentID":input,
+        "role":"assistant","time":{"created":2,"completed":3},"finish":"stop"},"parts":[{
+          "id":"prt_valid","sessionID":root,"messageID":"msg_012345678903","type":"tool","state":{"status":"completed"}
+        }]});
+        let check = |rows: Vec<Value>| {
+            find_terminal(root, input, 1, |_| {
+                Ok(json!({"messages":rows,"nextCursor":""}))
+            })
+        };
+        assert_eq!(check(vec![assistant.clone()]), None);
+        assert_eq!(check(vec![assistant.clone(), error, user.clone()]), None);
+        assert_eq!(
+            check(vec![assistant.clone(), continuation, user]),
+            Some(("completed", reply.to_owned()))
+        );
+        assert_eq!(
+            find_terminal(root, input, 1, |cursor| if cursor.is_empty() {
+                Ok(json!({"messages":[assistant],"nextCursor":"deeper"}))
+            } else {
+                Err(io::Error::other("history lost"))
+            }),
+            None
+        );
+        assert_eq!(
+            find_terminal(root, input, 1, |_| Ok(
+                json!({"messages":[assistant],"nextCursor":"repeated"})
+            )),
+            None
+        );
     }
 }
