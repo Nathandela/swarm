@@ -381,6 +381,7 @@ pub(super) fn with_vm_wake(
         cfg: &cfg,
         binding: &binding,
         room,
+        authority: VmAuthority::Explicit,
     }
     .run(&mut lease, deliver, opened, || Ok(false))
     .map(|_| true)
@@ -391,6 +392,7 @@ struct VmRelay<'a, R> {
     cfg: &'a Config,
     binding: &'a Value,
     room: &'a R,
+    authority: VmAuthority,
 }
 
 impl<R: Room> VmRelay<'_, R> {
@@ -418,11 +420,17 @@ impl<R: Room> VmRelay<'_, R> {
                         lease,
                         self.binding,
                         &request,
+                        self.authority,
                         |message| self.room.message(self.cfg, message),
                     )?;
                     if deliver {
                         result = publication::deliver_admitted_vm(
-                            self.place, self.cfg, lease, &output, self.room,
+                            self.place,
+                            self.cfg,
+                            lease,
+                            &output,
+                            self.room,
+                            self.authority,
                         );
                     }
                     accepted = Some(output.clone());
@@ -518,6 +526,7 @@ where
             cfg: &cfg,
             binding: &binding,
             room,
+            authority: VmAuthority::Activated,
         }
         .run(
             &mut lease,

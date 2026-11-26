@@ -241,6 +241,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     capture = []
     tool_outputs = []
     file_calls = []
+    moved_project = base / "work-original"
     file_sha = hashlib.sha256(original_bytes).hexdigest()
     file_id = hashlib.sha256(f"completion.csv\0{file_sha}".encode()).hexdigest()
 
@@ -268,10 +269,20 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             assert len(names) == 1, names
             capture.append(observed)
             waiting.set()
-            if not release.wait(timeout=60) or len(file_calls) >= 3:
+            attempts = [[file_id, file_id], ["0" * 64], [file_id]]
+            if mode == "ordinary-replace":
+                attempts.insert(0,[file_id])
+            if not release.wait(timeout=60) or len(file_calls) >= len(attempts):
                 return None
+            if mode == "ordinary-replace" and len(file_calls) == 1:
+                assert moved_project.is_dir() and posts == []
+                assert (place / "discord.db").read_bytes() == before_crash[0]
+                assert not intent.exists()
+                assert any("unconfirmed" in str(item) for item in tool_outputs)
+                project.rmdir()
+                moved_project.rename(project)
             namespace, name = names[0]
-            selected_files = [[file_id, file_id], ["0" * 64], [file_id]][len(file_calls)]
+            selected_files = attempts[len(file_calls)]
             file_calls.append(selected_files)
             return namespace, name, dict(output_id="retained-worker-file", sequence=1,
                                          text="Verified retained worker file.", final=True,
@@ -348,6 +359,11 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                     try:
                         await_value(lambda: (base / "state/rust-wake-ready").exists() or stager.poll() is not None)
                         assert stager.poll() is None, stager.communicate()
+                        if mode == "ordinary-replace":
+                            original_checkout = project.stat().st_ino
+                            project.rename(moved_project)
+                            project.mkdir(mode=0o700)
+                            assert project.stat().st_ino != original_checkout
                         release.set()
                         output, errors = stager.communicate(timeout=32)
                         if fault:
@@ -376,9 +392,9 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             return
                         assert stager.returncode == 0, (output, errors, tool_outputs)
                         assert not intent.exists()
-                        assert len(file_calls) == 3
+                        assert len(file_calls) == (4 if mode == "ordinary-replace" else 3)
                         states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
-                        phase = {"revoked": "prepared", "ordinary-sent": "sent", "ordinary-mixed": "sent"}.get(mode, mode)
+                        phase = {"revoked": "prepared", "ordinary-sent": "sent", "ordinary-mixed": "sent", "ordinary-replace": "sent"}.get(mode, mode)
                         count = 2 if mode == "ordinary-mixed" else 1
                         assert len(states) == count and all(item.startswith(f"{phase} true ") for item in states), states
                         nonces = [item.split()[-1] for item in states]
@@ -412,6 +428,9 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             else:
                                 assert posts == [nonce]
                     finally:
+                        if moved_project.exists():
+                            project.rmdir()
+                            moved_project.rename(project)
                         if stager.poll() is None:
                             stager.terminate()
                             stager.communicate(timeout=10)
@@ -437,7 +456,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             print(f"PASS original Go admitted native worker wake fixture ({mode})")

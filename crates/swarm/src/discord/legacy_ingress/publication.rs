@@ -442,7 +442,9 @@ pub(super) fn deliver_admitted_vm(
     lease: &mut ConnectorLease,
     output: &Value,
     room: &impl service::Room,
+    authority: VmAuthority,
 ) -> io::Result<bool> {
+    authority.verify(place, cfg)?;
     let tx = lease.db.begin().map_err(io::Error::other)?;
     let Some(out) = publication(&tx, cfg, field(output, "id"), false)? else {
         return Ok(true);
@@ -456,10 +458,10 @@ pub(super) fn deliver_admitted_vm(
     let current = room.message(cfg, field(&first.origin, "message_id"))?;
     if !current["message_snapshots"].is_null()
         || original_revision(&current, &first.origin)? != first.origin["revision"]
-        || personal_config(place, true)?.0 != cfg.0
     {
         return Err(invalid());
     }
+    authority.verify(place, cfg)?;
     let latest = wake::inspect(place, cfg, &tx, &voice_tx, &out.binding, &id, &endpoint)?;
     let conversation = field(&latest.receipt.binding, "conversation_id");
     let reference = serde_json::to_string(&[conversation, field(output, "id")])?;
@@ -491,6 +493,7 @@ pub(super) fn deliver_admitted_vm(
     {
         return Err(invalid());
     }
+    authority.verify(place, cfg)?;
     drop(tx);
     send_prepared(lease, cfg, out, |out| {
         room.post(cfg, &out.nonce, &out.body, &out.files)

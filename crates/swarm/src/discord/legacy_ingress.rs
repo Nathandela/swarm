@@ -373,6 +373,26 @@ fn current_turn_enrollment(place: &Place, cfg: &Config) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum VmAuthority {
+    Activated,
+    Explicit,
+}
+
+impl VmAuthority {
+    fn verify(self, place: &Place, cfg: &Config) -> io::Result<()> {
+        match self {
+            Self::Activated => current_turn_enrollment(place, cfg),
+            Self::Explicit => {
+                if personal_config(place, true)?.0 != cfg.0 {
+                    return Err(invalid());
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 fn personal_enrollment(place: &Place) -> io::Result<Config> {
     personal_config(place, false)
 }
@@ -1335,7 +1355,10 @@ mod tests {
         let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
         let marker = root.join("rust-wake-ready");
         let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
-        if matches!(deliver.as_str(), "ordinary-sent" | "ordinary-mixed") {
+        if matches!(
+            deliver.as_str(),
+            "ordinary-sent" | "ordinary-mixed" | "ordinary-replace"
+        ) {
             let mixed = deliver == "ordinary-mixed";
             let command = |args: &[&str]| {
                 use super::super::{Request, execute};

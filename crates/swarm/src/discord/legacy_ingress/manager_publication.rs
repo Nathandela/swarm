@@ -476,8 +476,10 @@ pub(super) fn accept_wake(
     lease: &mut ConnectorLease,
     binding: &Value,
     request: &Value,
+    authority: VmAuthority,
     current: impl FnOnce(&str) -> io::Result<Value>,
 ) -> io::Result<Value> {
+    authority.verify(place, cfg)?;
     let call = &request["call"];
     let args = &call["arguments"];
     let logical = field(args, "output_id");
@@ -521,12 +523,12 @@ pub(super) fn accept_wake(
                 .next()
                 .unwrap_or("")
         || original_revision(&parent, origin)? != origin["revision"]
-        || personal_config(place, true)?.0 != cfg.0
         || !identity(&pin, &path)?
         || !lease.source_unchanged()?
     {
         return Err(invalid());
     }
+    authority.verify(place, cfg)?;
     let turn = native_proof(place, cfg, &proof.receipt, args, &call["meta"])?;
     let sequence = proof.receipt.admission["sequence"]
         .as_u64()
@@ -552,10 +554,10 @@ pub(super) fn accept_wake(
     if !physical.is_dir()
         || fs::canonicalize(checkout)? != checkout
         || (physical.dev(), physical.ino()) != proof.checkout_identity
-        || personal_config(place, true)?.0 != cfg.0
     {
         return Err(invalid());
     }
+    authority.verify(place, cfg)?;
     let mailbox = wake_intent::prepare(
         place,
         cfg,
@@ -578,6 +580,7 @@ pub(super) fn accept_wake(
         mailbox,
     )?;
     wake_fault("after-pin");
+    authority.verify(place, cfg)?;
     let speech = Speech {
         logical,
         text,
