@@ -1,14 +1,49 @@
 #!/usr/bin/env python3
 """Use one private catalog across an unacknowledged Rust create and Go deletion."""
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import struct
 import subprocess
 import tempfile
 
 from test_board import owner_request, p
+
+
+def read_template_snapshot(path, after_header):
+    def send(conn, value):
+        body = json.dumps(value).encode()
+        conn.sendall(struct.pack(">IB", len(body) + 1, 1) + body)
+
+    def read(stream):
+        size, = struct.unpack(">I", stream.read(4))
+        assert 1 < size <= 1 << 20
+        payload = stream.read(size)
+        assert len(payload) == size and payload[0] == 1
+        return json.loads(payload[1:])
+
+    with socket.socket(socket.AF_UNIX) as conn, conn.makefile("rb") as stream:
+        conn.settimeout(8)
+        conn.connect(path)
+        send(conn, {"op": "hello", "protocol_version": 1,
+                    "capabilities": ["schedule-catalog-v1"]})
+        owner = read(stream)["endpoint_id"]
+        send(conn, {"op": "schedule_templates", "endpoint_id": owner, "stream": True})
+        assert read(stream) == {"op": "schedule_templates", "endpoint_id": owner, "stream": True}
+        after_header()
+        content = bytearray()
+        for sequence in range(128):
+            packet = read(stream)
+            assert packet["op"] == "schedule_template_chunk"
+            assert packet["endpoint_id"] == owner and packet["sequence"] == sequence
+            if packet.get("complete") is True:
+                return json.loads(content)
+            content.extend(base64.b64decode(packet["data"], validate=True))
+        raise AssertionError("fixture template snapshot never completed")
 
 
 def run(root, rust, go):
@@ -81,6 +116,17 @@ def run(root, rust, go):
         assert len(big_prompt.encode()) > 1 << 20
         prompt.write_text(big_prompt)
         large = json.loads(cli(go, "create", "Large retained Go template", prompt).stdout)
+
+        def replace_after_snapshot():
+            prompt.write_text("Go updated this template during the stream")
+            cli(go, "edit", large["id"], "Renamed during read", prompt)
+
+        snapshot = read_template_snapshot(socket, replace_after_snapshot)
+        original_streamed, = [item for item in snapshot if item["id"] == large["id"]]
+        assert original_streamed == large
+        assert json.loads(cli(go, "show", large["id"]).stdout)["name"] == "Renamed during read"
+        prompt.write_text(big_prompt)
+        cli(go, "edit", large["id"], large["name"], prompt)
         unchanged = database.read_bytes()
         board = p.Board([*guard, str(rust)], root, env)
         try:
@@ -122,6 +168,7 @@ def run(root, rust, go):
         assert not result["remaining"], result
     print("Go reopened and deleted the Rust template. Exact retry after restart made no write.")
     print("The board read an over-frame Go template and saved another without changing it.")
+    print("A Go edit during a Rust stream preserved the original snapshot and the later edit.")
 
 
 if __name__ == "__main__":
