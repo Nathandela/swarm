@@ -18,6 +18,18 @@ Go v0.29.24 also passed both provider directions on the same two native hosts. P
 
 Scratch profiles used synthetic credentials. Both fixtures reaped all their processes. No existing session, hosted provider endpoint or Discord destination participated. The earlier Codex continuity test separately covered a real Codex source and a Claude receiving stub during owner restart and subsequent Codex resume. [Codex source witness](rust-codex-resume.md#hands-off-from-a-live-codex-session)
 
+## Paired handoff form and consent
+
+The `62a1a28c` board lane compared the signed Go v0.29.24 board and Rust against the same Go owner on each native host. All 49,028 styled cells in 24 frames matched across wide, compact and tiny geometry. Visible terminal modes matched. The raw receipts retain 15 differences in hidden cursor coordinates per host. They cover initial focus, target cycling, model suggestions, supervision and method changes, the running-checkout warning, the provider-naming disclosure, scrolling to read it, cancel, and the compact reading reset on target change.
+
+Rust credits approval only after the current readable decision is painted. A buffered `y` before that paint, a resize, an unreconciled older reading position after a source rename, or a changed target cannot approve the prior decision. The native Rust fixture repeated both provider directions on each host with the same production checks and zero survivors. The Mac binary used its fixture-only deterministic Codex ID for Seatbelt.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| macOS paired grid | `55cd27697d7c5619bf7164d375dec4359c5f50cb8976254dd578cf1cfdd9b8f0` |
+| Linux paired grid | `9e37fa5ee51beaa452a9fcd5a1881f79bdc2310dddd39fad82a144da00e419ff` |
+| Both native provider directions on both hosts | `5d785e1ded9b58b7104e8b9612ad96f2f3c4a866081c4cd55325f2b33bcbaf1e` |
+
 On macOS, point the launcher at the resolved binaries. Its temporary source archive fixes only the Codex row ID so the sandbox can allow the exact redirected Unix socket. The patched fixture executable builds into the archive's private target directory.
 
 ```sh

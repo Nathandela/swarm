@@ -43,6 +43,8 @@ The macOS Rust log SHA-256 is `ca11ded5d4e31f9cf3a31c247a62945ea04e1de037341c833
 
 The broader board fixture initially restarted the owner after it could see a row that still had work to commit. Both the prior and current binary could reopen that row as `queued` with a rejected attempt. The fixture now waits for the exact `exhausted` receipt and verifies that the same ID appears after restart. Three fresh runs passed on macOS arm64 and three on Linux x86_64, with no survivors. The raw failed reproduction SHA-256 is `85f8e3598d128f782798fcffdd1b5802c54804c3d59c28f1052e9e4e66514ee7`. The corrected log SHA-256 is `60c80c873583c2f853cb1d7ea34db6c88782feb6dfba623297dd5cf69efbf99f` on macOS and `150c7abc26a040683a56e39f795df4bbde066339473e90286e67f423aeba859b` on Linux.
 
+Explicit Reconcile now handles that interruption point. If the occurrence is still queued and every prior attempt recorded a definitive refusal, it advances only to the next unused route or records exhaustion. The original occurrence and rejected attempt are preserved. Unknown or dispatching attempts stay pending. The store-reopen test checks fallback with a distinct operation, exhaustion, both uncertain controls and read-only status. Replacing the predicate with the old empty-attempt rule reproduced the stuck queued state.
+
 ```sh
 python3 -Bu scripts/verification/parity/automation_enable.py GO_V0_29_24 --reference-go
 python3 -Bu scripts/verification/parity/automation_enable.py target/debug/swarm
