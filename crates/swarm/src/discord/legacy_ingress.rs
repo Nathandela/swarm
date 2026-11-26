@@ -1,5 +1,8 @@
 //! Settle a Go personal ingress candidate from the original voice controller's cutover receipt.
+pub(super) mod manager_publication;
 pub(super) mod prepare;
+pub(super) mod publication;
+pub(super) mod service;
 
 use super::{
     config::{Config, Place, open_owner_file, snowflake},
@@ -316,14 +319,28 @@ fn identity(file: &fs::File, path: &Path) -> io::Result<bool> {
 }
 
 fn scope(place: &Place, message: &str) -> io::Result<Config> {
+    if !snowflake(message) {
+        return Err(invalid());
+    }
+    retained_config(place)
+}
+
+fn retained_config(place: &Place) -> io::Result<Config> {
+    let cfg = personal_enrollment(place)?;
+    match fs::symlink_metadata(place.dir.join("bridge.sock")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(cfg),
+        Err(error) => Err(error),
+        Ok(_) => Err(invalid()),
+    }
+}
+
+fn personal_enrollment(place: &Place) -> io::Result<Config> {
     let cfg = place.load()?;
     verify_controls_place(place, &cfg)?;
     if cfg.text("mode") != "personal"
         || cfg.text("project_access") == "vm"
         || !cfg.0["calls"].is_null()
         || !cfg.0["previous_supervisor"].is_null()
-        || !snowflake(message)
-        || place.dir.join("bridge.sock").symlink_metadata().is_ok()
     {
         return Err(invalid());
     }
@@ -339,15 +356,24 @@ struct ConnectorLease {
 }
 
 impl ConnectorLease {
-    fn open(
+    fn open(place: &Place, cfg: &Config, expected: &fs::Metadata) -> io::Result<Self> {
+        Self::acquire(place, cfg, expected, false)
+    }
+
+    fn acquire(
         place: &Place,
         cfg: &Config,
-        message: &str,
         expected: &fs::Metadata,
+        foreground: bool,
     ) -> io::Result<Self> {
         let configuration = place.lock()?;
         let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
-        if scope(place, message)?.0 != cfg.0 {
+        let current = if foreground {
+            personal_enrollment(place)?
+        } else {
+            retained_config(place)?
+        };
+        if current.0 != cfg.0 {
             return Err(invalid());
         }
         let source = place.dir.join("discord.db");
@@ -377,7 +403,7 @@ impl ConnectorLease {
 fn voice_location(
     place: &Place,
     cfg: &Config,
-    c: &Candidate,
+    binding: &Value,
 ) -> io::Result<(PathBuf, String, String)> {
     let root = fs::canonicalize(place.supervisor_root())?;
     let endpoint = supervisor::endpoint(&root);
@@ -392,7 +418,7 @@ fn voice_location(
         cfg.text("installation_id"),
         "",
         cfg.text("dm_channel_id"),
-        field(&c.binding, "ID"),
+        field(binding, "ID"),
     ]
     .join("\0");
     let id = format!("{:x}", Sha256::digest(coordinate.as_bytes()));
@@ -408,7 +434,7 @@ pub(super) fn settle(place: &Place, message: &str, dry_run: bool) -> io::Result<
     let source = place.dir.join("discord.db");
     let source_identity = fs::symlink_metadata(&source)?;
     let stage = |c: Candidate| {
-        let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+        let (directory, id, endpoint) = voice_location(place, &cfg, &c.binding)?;
         let (pin, voice, receipt) = controller(
             &directory,
             &id,
@@ -437,7 +463,7 @@ pub(super) fn settle(place: &Place, message: &str, dry_run: bool) -> io::Result<
             return Ok(true);
         }
     }
-    let mut lease = ConnectorLease::open(place, &cfg, message, &source_identity)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &source_identity)?;
     settle_under_lease(place, &cfg, message, &mut lease)
 }
 
@@ -452,7 +478,7 @@ fn settle_under_lease(
         println!("Original personal ingress is already settled.");
         return Ok(true);
     };
-    let (directory, id, endpoint) = voice_location(place, cfg, &row)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &row.binding)?;
     let (voice, _voice_db, receipt) = controller(
         &directory,
         &id,
@@ -643,7 +669,7 @@ fn dispatch_with(
     if dry_run {
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
         let c = pending_dispatch(&db, &cfg, message)?;
-        let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+        let (directory, id, endpoint) = voice_location(place, &cfg, &c.binding)?;
         let (_pin, _voice, receipt) = controller(
             &directory,
             &id,
@@ -655,7 +681,7 @@ fn dispatch_with(
         println!("Verified a prepared original personal DM with no native cutover recorded.");
         return Ok(true);
     }
-    let mut lease = ConnectorLease::open(place, &cfg, message, &expected)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &expected)?;
     dispatch_under_lease(place, &cfg, message, &mut lease, fetch)
 }
 
@@ -674,7 +700,7 @@ fn dispatch_under_lease(
     fetch: impl FnOnce(&Config) -> io::Result<Value>,
 ) -> io::Result<bool> {
     let c = pending_dispatch(&lease.db, cfg, message)?;
-    let (directory, id, endpoint) = voice_location(place, cfg, &c)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &c.binding)?;
     let (voice_pin, voice_db, receipt) = controller(
         &directory,
         &id,
@@ -817,7 +843,7 @@ fn capture_with(
         println!("Original Go ingress can accept a new owner DM after source verification.");
         return Ok(true);
     }
-    let mut lease = ConnectorLease::open(place, &cfg, message, &identity)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &identity)?;
     capture_under_lease(&cfg, message, &mut lease, fetch)
 }
 
@@ -1121,7 +1147,7 @@ mod tests {
                 let c = candidate(&db.begin().unwrap(), &cfg, "701")
                     .unwrap()
                     .unwrap();
-                let (dir, id, endpoint) = voice_location(&place, &cfg, &c).unwrap();
+                let (dir, id, endpoint) = voice_location(&place, &cfg, &c.binding).unwrap();
                 let (_pin, _db, receipt) =
                     controller(&dir, &id, &c.origin, "codex", &endpoint).unwrap();
                 (dir, id, endpoint, receipt)
@@ -1250,36 +1276,180 @@ mod tests {
         let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT") else {
             return;
         };
+        use super::super::rest::Post;
+        struct Room {
+            current: Value,
+            actual_rest: super::super::rest::Discord,
+            posts: std::cell::Cell<u32>,
+            status: PathBuf,
+            acknowledge: bool,
+            close_first: std::sync::mpsc::SyncSender<()>,
+        }
+        impl service::Room for Room {
+            fn verify(&self, cfg: &Config) -> io::Result<()> {
+                service::Room::verify(&self.actual_rest, cfg)
+            }
+            fn history(&self, cfg: &Config) -> io::Result<Vec<Value>> {
+                service::Room::history(&self.actual_rest, cfg)
+            }
+            fn message(&self, cfg: &Config, id: &str) -> io::Result<Value> {
+                service::Room::message(&self.actual_rest, cfg, id)
+            }
+            fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
+                let status = super::super::local::call(&self.status, "status", "", None).unwrap();
+                assert_eq!(status["connected"], true);
+                assert_eq!(status["installation_id"], "fixture-personal");
+                assert_eq!(body, "Verified native final reply.");
+                let count = self.posts.get() + 1;
+                self.posts.set(count);
+                let result = self.actual_rest.post_publication(cfg, nonce, body, &[]);
+                if matches!(result, Post::Acknowledged(_)) && count == 1 {
+                    self.close_first.send(()).unwrap();
+                }
+                result
+            }
+        }
         let place = Place::for_supervisor(Path::new(&root)).unwrap();
         let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
             "content":"Retained real native loopback input.", "type":0, "attachments":[]});
-        let cfg = scope(&place, "701").unwrap();
+        let mut second = current.clone();
+        second["id"] = json!("702");
+        second["content"] = json!("Second retained real native loopback input.");
+        let (close_first, first_closed) = std::sync::mpsc::sync_channel::<()>(1);
+        let room = Room {
+            current: current.clone(),
+            actual_rest: super::super::rest::Discord::loopback_fixture(
+                &place.load().unwrap(),
+                std::env::var("SWARM_TEST_DISCORD_REST_PORT")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            )
+            .unwrap(),
+            posts: std::cell::Cell::new(0),
+            status: place.dir.clone(),
+            acknowledge: std::env::var_os("SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK").is_none(),
+            close_first,
+        };
+        // An interrupted foreground process leaves this private pathname behind.
+        let dormant = runtime::bind(&place.dir.join("bridge.sock")).unwrap();
+        drop(dormant);
         let source = place.dir.join("discord.db");
-        let expected = fs::symlink_metadata(&source).unwrap();
-        let mut lease = ConnectorLease::open(&place, &cfg, "701", &expected).unwrap();
-        assert!(open_bolt(&source, 64 << 20).is_err());
-        if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
-            let other = Command::new(fixture)
-                .arg("activate")
-                .arg(&place.dir)
-                .arg("original-room")
-                .output()
+        use super::super::gateway;
+        let worker = |frames: Vec<Value>, done: std::sync::mpsc::Receiver<()>| {
+            let (local, remote) = std::os::unix::net::UnixStream::pair().unwrap();
+            local
+                .set_read_timeout(Some(std::time::Duration::from_millis(50)))
                 .unwrap();
-            assert!(!other.status.success());
-            assert!(String::from_utf8_lossy(&other.stderr).contains("timeout"));
+            let peer = std::thread::spawn(move || {
+                let mut socket = tungstenite::accept(remote).unwrap();
+                gateway::send(
+                    &mut socket,
+                    json!({"op":10,"d":{"heartbeat_interval":45000}}),
+                )
+                .unwrap();
+                let frame = socket.read().unwrap().into_text().unwrap();
+                let identify: Value = serde_json::from_str(&frame).unwrap();
+                assert_eq!(identify["op"], 2);
+                assert_eq!(identify["d"]["intents"], 1 << 12);
+                gateway::send(
+                    &mut socket,
+                    json!({"op":0,"s":1,"t":"READY","d":{
+                    "application":{"id":"100"},"user":{"id":"100","bot":true}}}),
+                )
+                .unwrap();
+                for frame in frames {
+                    gateway::send(&mut socket, frame).unwrap();
+                }
+                done.recv_timeout(std::time::Duration::from_secs(40))
+                    .unwrap();
+                let _ = socket.close(None);
+            });
+            (local, peer)
+        };
+        let (finish, done) = std::sync::mpsc::sync_channel::<()>(1);
+        let frames = vec![
+            json!({"op":0,"s":2,"t":"MESSAGE_CREATE","d":{"id":"699","channel_id":"400","author":{"id":"201"}}}),
+            json!({"op":0,"s":3,"t":"MESSAGE_CREATE","d":current}),
+        ];
+        let mut sockets = std::collections::VecDeque::new();
+        let mut peers = Vec::new();
+        if room.acknowledge {
+            let (local, first) = worker(frames, first_closed);
+            sockets.push_back(local);
+            peers.push(first);
+            let (local, second) = worker(
+                vec![json!({"op":0,"s":2,"t":"MESSAGE_CREATE","d":second})],
+                done,
+            );
+            sockets.push_back(local);
+            peers.push(second);
+        } else {
+            let (local, peer) = worker(frames, done);
+            sockets.push_back(local);
+            peers.push(peer);
         }
-        assert!(capture_under_lease(&cfg, "701", &mut lease, |_, _| Ok(current.clone())).unwrap());
-        assert!(
-            prepare::under_lease(&place, &cfg, "701", &mut lease, |_, _| Ok(current.clone()))
-                .unwrap()
-        );
-        assert!(dispatch_under_lease(&place, &cfg, "701", &mut lease, |_| Ok(current)).unwrap());
+        let result = service::with(&place, &room, Some(2), |cfg| {
+            assert!(open_bolt(&source, 64 << 20).is_err());
+            let status = super::super::local::call(&place.dir, "status", "", None).unwrap();
+            assert_eq!(status["connected"], false);
+            if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
+                let other = Command::new(fixture)
+                    .arg("activate")
+                    .arg(&place.dir)
+                    .arg("original-room")
+                    .output()
+                    .unwrap();
+                assert!(!other.status.success());
+                assert!(String::from_utf8_lossy(&other.stderr).contains("timeout"));
+            }
+            let (mut socket, _) = tungstenite::client(
+                "ws://localhost",
+                sockets
+                    .pop_front()
+                    .expect("only the expected Gateway peers should open"),
+            )
+            .unwrap();
+            let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
+            Ok(move || cursor.event(&mut socket))
+        });
+        finish.send(()).unwrap();
+        for peer in peers {
+            peer.join().unwrap();
+        }
+        assert!(sockets.is_empty());
+        assert!(!place.dir.join("bridge.sock").exists());
+        if room.acknowledge {
+            assert!(result.unwrap());
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("outcome remains unresolved")
+            );
+        }
+        assert_eq!(room.posts.get(), if room.acknowledge { 2 } else { 1 });
+        let cfg = place.load().unwrap();
         let request = {
-            let c = pending_dispatch(&lease.db, &cfg, "701").unwrap();
-            let (directory, id, endpoint) = voice_location(&place, &cfg, &c).unwrap();
+            let (_pin, db) = open_bolt(&source, 64 << 20).unwrap();
+            let tx = db.begin().unwrap();
+            let saved = value(&tx, "teammate_discussions", b"fixture-personal\x00400")
+                .unwrap()
+                .unwrap();
+            let mut origin = json!({"kind":"owner_direct","installation_id":"fixture-personal",
+                "request_id":operation("fixture-personal","701").unwrap(),"actor_id":"200","requester_id":"200",
+                "actor_name":"synthetic owner","channel_id":"400","message_id":"701","discussion_id":"original-room"});
+            origin["revision"] = json!(original_revision(&room.current, &origin).unwrap());
+            let (directory, id, endpoint) = voice_location(&place, &cfg, &saved).unwrap();
             let (_pin, _db, receipt) =
-                controller(&directory, &id, &c.origin, "codex", &endpoint).unwrap();
-            assert_eq!(receipt.admission["phase"], "executing");
+                controller(&directory, &id, &origin, "codex", &endpoint).unwrap();
+            let phase = if room.acknowledge {
+                "completed"
+            } else {
+                "running"
+            };
+            assert_eq!(receipt.admission["phase"], phase);
             assert_eq!(receipt.admission["source_cutover"], true);
             receipt.admission["request"].clone()
         };
@@ -1317,7 +1487,6 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert!(settle_under_lease(&place, &cfg, "701", &mut lease).unwrap());
     }
 
     #[test]

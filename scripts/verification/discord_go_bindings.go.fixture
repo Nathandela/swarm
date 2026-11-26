@@ -2,7 +2,9 @@
 package discord
 
 import (
+	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
@@ -78,4 +80,38 @@ func (s *Store) FixturePersonalGap(installation string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return teammateCheckpointUpdate(tx, installation, "synthetic-reconnected-gateway", 2, true, "")
 	})
+}
+
+func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string) error {
+	return s.teammateQueueOutput(d, TeammatePublication{ID: "fixture-final", Body: "Original final personal reply.",
+		AdmissionID: "da_" + digest([]string{d.InstallationID, source})[:32], Sequence: 1}, time.Now().UTC())
+}
+
+func (s *Store) FixtureFinalState(d TeammateDiscussion) (string, string, error) {
+	var output teammateOutput
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), teammateOutputKey(d.InstallationID, d.ID, "fixture-final"), &output)
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return output.Chunks[0].State, output.Chunks[0].ID, nil
+}
+
+func (s *Store) FixtureOutputPhases(d TeammateDiscussion) ([]string, error) {
+	var phases []string
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(teammateOutboxBucket))
+		return teammateEach(bucket, d.InstallationID+"\x00"+d.ID, func(key, _ []byte) error {
+			var row teammateOutput
+			if err := teammateGet(bucket, key, &row); err != nil {
+				return err
+			}
+			for _, chunk := range row.Chunks {
+				phases = append(phases, fmt.Sprintf("%s %t %s", chunk.State, row.ExportAck, chunk.ID))
+			}
+			return nil
+		})
+	})
+	return phases, err
 }

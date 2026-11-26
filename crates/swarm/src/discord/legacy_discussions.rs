@@ -52,7 +52,6 @@ struct Checkpoint {
 
 fn scoped(cfg: &Config, route: &Route) -> bool {
     snowflake(&route.channel_id)
-        && snowflake(&route.message_id)
         && if cfg.text("mode") == "personal" {
             route.guild_id.is_empty()
                 && route.parent_id.is_empty()
@@ -114,6 +113,7 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
             || row.id.contains('\0')
             || key != format!("{prefix}{}", route.channel_id).as_bytes()
             || ids.get(format!("{prefix}{}", row.id).as_bytes()) != Some(key)
+            || (!route.message_id.is_empty() && !snowflake(&route.message_id))
             || !scoped(cfg, &route)
             || (!row.supervisor_socket.is_empty() && row.supervisor_socket != old_socket)
             || routes.insert(row.id, route).is_some()
@@ -148,6 +148,7 @@ pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) 
         let row: Guard = serde_json::from_slice(raw).map_err(|_| invalid())?;
         let operation = operation(install, &row.route.message_id)?;
         if key != format!("{prefix}{}", row.route.message_id).as_bytes()
+            || !snowflake(&row.route.message_id)
             || !scoped(cfg, &row.route)
             || !snowflake(&row.actor_id)
             || cfg.text("mode") == "personal" && row.actor_id != cfg.text("owner_id")
