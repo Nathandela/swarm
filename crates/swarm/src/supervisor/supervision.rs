@@ -129,7 +129,8 @@ fn delivery(
     let Some(e) = &record.pending else {
         return Ok(false);
     };
-    if !source.owner_interactive
+    if source.is_discord_manager()
+        || !source.owner_interactive
         || !child.owner_interactive
         || child.lineage["source_instance"] != source.incarnation()
     {

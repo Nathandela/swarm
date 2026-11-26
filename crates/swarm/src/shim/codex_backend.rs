@@ -485,6 +485,7 @@ struct SemanticTarget<'a> {
     schedule: Option<&'a worker::Binding>,
     token: &'a str,
     manager: &'a Value,
+    state: Option<&'a super::State>,
     cwd: &'a Path,
 }
 
@@ -524,7 +525,9 @@ fn persist_observation(observation: &mut Observation, target: &SemanticTarget<'_
     if let Some(guard) = &observation.guard {
         view["context_guard"] = guard.view();
     }
-    let _ = runtime::write_json(&target.dir.join("observation.json"), &view);
+    if let Some(state) = target.state {
+        let _ = super::manager_terminal::observe(state, &view);
+    }
 }
 
 fn capture_history(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
@@ -908,6 +911,7 @@ pub(super) fn observe(
         token,
         schedule: state.schedule.as_ref(),
         manager: &manager,
+        state: Some(&state),
     };
     if resumed {
         persist_observation(&mut observation, &target);
@@ -1113,6 +1117,7 @@ mod tests {
             token: "fixture",
             schedule: None,
             manager: &Value::Null,
+            state: None,
         };
         let turn = ScheduledTurn {
             attempt: "attempt".into(),

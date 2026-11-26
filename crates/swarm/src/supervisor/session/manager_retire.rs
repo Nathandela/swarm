@@ -123,6 +123,9 @@ impl Session {
             return Err(io::Error::other("manager or turn is no longer quiescent"));
         }
         let response = self.status_exchange(&json!({"type":"manager_park","retire":request}))?;
+        if field(&response, "error") == crate::shim::manager_terminal::UNRESOLVED {
+            return Err(io::Error::other(crate::shim::manager_terminal::UNRESOLVED));
+        }
         if response["type"] != "ok" {
             return Err(io::Error::other(
                 "manager shim did not prove quiescent retirement",

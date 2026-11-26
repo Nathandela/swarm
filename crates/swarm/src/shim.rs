@@ -1,5 +1,6 @@
 mod agy_permission;
 mod codex_backend;
+pub(crate) mod manager_terminal;
 pub(crate) mod opencode_backend;
 mod pty;
 mod screen;
@@ -107,6 +108,7 @@ struct State {
     schedule: Option<worker::Binding>,
     claude_schedule: Option<String>,
     manager: bool,
+    manager_terminal: Mutex<manager_terminal::Input>,
     terminal_input: AtomicBool,
     context_guard_busy: AtomicBool,
     context_guard_activity: AtomicU64,
@@ -710,6 +712,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         schedule: schedule.clone(),
         claude_schedule,
         manager: !scope.is_null(),
+        manager_terminal: Mutex::default(),
         terminal_input: AtomicBool::new(false),
         context_guard_busy: AtomicBool::new(false),
         context_guard_activity: AtomicU64::new(0),
@@ -1170,9 +1173,19 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             opencode_terminal_ready(state)?;
             attach(stream, state, request["agy_permission"] == true)
         }
+        "manager_direct_input" if state.manager => {
+            let _owner = state.control.lock().unwrap();
+            runtime::write_control(
+                &mut stream,
+                &json!({"type":"ok","unresolved":manager_terminal::unresolved(state)}),
+            )
+        }
         "manager_park" if state.manager => {
             let result = (|| {
                 let owner = state.control.lock().unwrap();
+                if manager_terminal::unresolved(state) {
+                    return Err(io::Error::other(manager_terminal::UNRESOLVED));
+                }
                 if *owner != 0 {
                     return Err(io::Error::other("manager is attached"));
                 }
@@ -1315,6 +1328,12 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         "semantic" if state.provider == "claude" => {
             let terminal = state.manager.then(|| state.control.lock().unwrap());
+            if terminal.is_some() && manager_terminal::unresolved(state) {
+                return runtime::write_control(
+                    &mut stream,
+                    &json!({"type":"error","error":manager_terminal::UNRESOLVED}),
+                );
+            }
             if terminal.as_ref().is_some_and(|owner| {
                 **owner != 0
                     || !providers::claude::manager_empty_composer(
@@ -1468,6 +1487,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     return Err(io::Error::other("invalid or stale Codex semantic request"));
                 }
                 let _authority = state.control.lock().unwrap();
+                if manager_terminal::unresolved(state) {
+                    return Err(io::Error::other(manager_terminal::UNRESOLVED));
+                }
                 // shortcut: terminal edits make draft state uncertain until the native TUI exposes a verified empty composer.
                 if *_authority != 0
                     || state.context_guard_busy.load(Ordering::Acquire)
@@ -1519,11 +1541,6 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             runtime::write_control(&mut stream, &response)
         }
         "input" => {
-            if state.manager {
-                return Err(io::Error::other(
-                    "terminal input requires an explicit manager custody transition",
-                ));
-            }
             opencode_terminal_ready(state)?;
             let text = field(&request, "data");
             if text.is_empty() || text.len() > 4096 {
@@ -1534,6 +1551,25 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 return runtime::write_control(
                     &mut stream,
                     &json!({"type":"error","error":"Codex Context Guard has a native action active"}),
+                );
+            }
+            if state.manager {
+                let result = if request["paste"] == true
+                    || request["submit"] == true
+                    || !matches!(text, "\r" | "\x1b" | "\x03" | "\t" | "\x1b[A" | "\x1b[B")
+                {
+                    Err(io::Error::other(
+                        "dispatcher convenience input requires a named key",
+                    ))
+                } else {
+                    manager_terminal::write(state, text.as_bytes())
+                };
+                return runtime::write_control(
+                    &mut stream,
+                    &result.map_or_else(
+                        |error| json!({"type":"error","error":error.to_string()}),
+                        |()| json!({"type":"ok"}),
+                    ),
                 );
             }
             if state.provider == "agy" && state.schedule.is_some() {
@@ -2038,8 +2074,8 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
     }
     observe_claude_schedule(state, &mut observed, event, payload)?;
     observed.state.apply(event, payload);
-    runtime::write_json(
-        &state.dir.join("observation.json"),
+    manager_terminal::observe(
+        state,
         &json!({
             "token": state.token,
             "conversation_id": observed.conversation,
@@ -2220,8 +2256,7 @@ fn attach(mut stream: UnixStream, state: &State, agy_permission: bool) -> io::Re
                 }
                 let bytes = filter.flush();
                 if !bytes.is_empty() {
-                    state.terminal_input.store(true, Ordering::Release);
-                    pty::input(&state.master, &bytes)?;
+                    manager_terminal::write(state, &bytes)?;
                 }
                 continue;
             }
@@ -2233,15 +2268,9 @@ fn attach(mut stream: UnixStream, state: &State, agy_permission: bool) -> io::Re
             match tag {
                 DATA_IN if agy => {}
                 DATA_IN => {
-                    if state.manager {
-                        return Err(io::Error::other(
-                            "manager terminal input requires a custody transition",
-                        ));
-                    }
                     let bytes = filter.feed(&mut replies.lock().unwrap(), &bytes, Instant::now());
                     if !bytes.is_empty() {
-                        state.terminal_input.store(true, Ordering::Release);
-                        pty::input(&state.master, &bytes)?;
+                        manager_terminal::write(state, &bytes)?;
                     }
                 }
                 wire::CONTROL => {
@@ -2286,8 +2315,7 @@ fn attach(mut stream: UnixStream, state: &State, agy_permission: bool) -> io::Re
             *owner = 0;
             let bytes = filter.flush();
             if !bytes.is_empty() {
-                state.terminal_input.store(true, Ordering::Release);
-                let _ = pty::input(&state.master, &bytes);
+                let _ = manager_terminal::write(state, &bytes);
             }
         }
     }

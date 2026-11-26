@@ -17,6 +17,7 @@ mod stopped_go;
 mod supervision;
 
 use crate::ipc::{self, VERSION, field, wire};
+use crate::shim::manager_terminal;
 use crate::socket::DeadlineReader;
 use runtime::{DATA_IN, DATA_OUT, IO_TIMEOUT, SNAPSHOT};
 use serde_json::{Value, json};
@@ -34,6 +35,8 @@ use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const DISPATCHER_INPUT_ROUTE: &str = "use Discord or a bound worker note (swarm teammate message) to contact this dispatcher, or attach for manual input";
 
 const SESSION_LIMIT: usize = 64;
 
@@ -1264,6 +1267,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "manager_runtime" | "manager_input_status" | "manager_resolve_call"
                 if caps.contains(&"manager-provenance") => state.session(&request).and_then(|session| {
+                    if op == "manager_runtime" && session.dispatcher_runtime_has_draft(&request) {
+                        return reply(&writer,state,json!({"op":"error","error_code":manager_terminal::CODE,"error":manager_terminal::UNRESOLVED}));
+                    }
                     let body = match session.manager_operation(&request) {
                         Err(error) if op == "manager_runtime" && matches!(error.kind(),io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                             json!({"op":"error","error_code":"temporarily_unavailable","error":"manager runtime snapshot is busy"}),
@@ -1300,7 +1306,14 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     reply(&writer,state,body)
                 }),
             "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>
-                state.session(&request).and_then(|session| reply(&writer,state,session.manager_retire(&request)?)),
+                state.session(&request).and_then(|session| {
+                    let body = match session.manager_retire(&request) {
+                        Err(error) if error.to_string() == manager_terminal::UNRESOLVED =>
+                            json!({"op":"error","error_code":manager_terminal::CODE,"error":"unsent terminal draft prevents dispatcher replacement"}),
+                        result => result?,
+                    };
+                    reply(&writer,state,body)
+                }),
             "worker_mail" if caps.contains(&crate::teammate::MAIL_CAP) => mail::request(state,&request).and_then(|body| reply(&writer,state,body)),
             "claude_batch_takeover" if caps.contains(&"claude-batch-takeover-v1") => {
                 claude_takeover::acquire(state,&request).and_then(|results|{
@@ -1399,8 +1412,28 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     && !(caps.contains(&"manager-provenance") && caps.contains(&"message-origin")) {
                     return reply(&writer,state,json!({"op":"error","error_code":"op_not_implemented","error":"requires manager provenance and message origin"}));
                 }
+                let body = &request["composer_send"];
+                if session.is_discord_manager() && body["manager_admission"].is_null() {
+                    let id = field(&request,"session_id");
+                    let instance = field(body,"session_instance");
+                    let text = field(body,"text");
+                    if request["body_version"] == 1 && body["session"] == id
+                        && !instance.is_empty() && !text.is_empty() && text.len() <= 4096 {
+                        let digest = Sha256::digest(operation);
+                        let _operation = state.operation_locks
+                            [usize::from(digest[0]) % state.operation_locks.len()]
+                            .lock().unwrap();
+                        crate::providers::codex_receipt::reject_unadmitted(
+                            &state.root, operation, id, instance, body,
+                        )?;
+                        return reply(&writer,state,json!({"op":"error","error_code":"structured_unsupported","error":format!("composer_send: {DISPATCHER_INPUT_ROUTE}")}));
+                    }
+                }
                 let receipt = match session.semantic_send(&request,field(&request,"session_id"),state) {
                     Ok(receipt) => receipt,
+                    Err(err) if err.to_string() == manager_terminal::UNRESOLVED => {
+                        return reply(&writer,state,json!({"op":"error","error_code":manager_terminal::CODE,"error":format!("composer_send: {}", manager_terminal::UNRESOLVED)}));
+                    }
                     Err(err) if session.requires_worker_origin_cap() && err.kind() == io::ErrorKind::Interrupted => {
                         return reply(&writer,state,json!({"op":"error","operation_id":operation,"error_code":"outcome_unknown","error":"Current connector authorization is unconfirmed; inspect --status"}));
                     }
@@ -1465,10 +1498,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 }
                 let key = field(data, "key");
                 let text = field(data, "text");
-                let submit = data["submit"] == true;
+                let submit = key.is_empty() && data["submit"] == true;
                 let (bytes, paste) = if key.is_empty() && !text.is_empty() && text.len() <= 4096 {
                     (text, true)
-                } else if !key.is_empty() && text.is_empty() && !submit {
+                } else if !key.is_empty() && text.is_empty() {
                     let bytes = match key {
                         "enter" => "\r",
                         "esc" => "\x1b",
@@ -1482,6 +1515,12 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 } else {
                     return Err(io::Error::other("need exactly one of text or key"));
                 };
+                if !session.is_live() {
+                    return Err(io::Error::other(format!("session {:?} is not running", session.id)));
+                }
+                if paste && session.is_discord_manager() {
+                    return Err(io::Error::other(DISPATCHER_INPUT_ROUTE));
+                }
                 let mut command = json!({"type":"input","data":bytes,"submit":submit,"paste":paste});
                 if submit && session.is_scheduled_agy() && caps.contains(&"agy-permission-cli-v1") {
                     command["permission_contexts"] = json!(["tty","pipe"].iter().filter_map(|route| runtime::terminal_peer(&stream,route,false).ok()).collect::<Vec<_>>());

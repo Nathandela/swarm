@@ -12,7 +12,12 @@ pub(super) fn notify(state: &State, req: &Value) -> io::Result<Value> {
         .filter(|n| *n > 0)
         .ok_or_else(|| io::Error::other("invalid supervision event sequence"))?;
     let text = field(req, "data");
-    if !runtime::valid_id(id) || text.is_empty() || text.len() > 4096 || state.semantic.is_some() {
+    if !runtime::valid_id(id)
+        || text.is_empty()
+        || text.len() > 4096
+        || state.semantic.is_some()
+        || state.manager
+    {
         return Err(io::Error::other("unsupported supervision input"));
     }
     let owner = state.control.lock().unwrap();
