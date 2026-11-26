@@ -616,9 +616,17 @@ impl Session {
         providers::codex::refuse_unqualified_origin(&launch["env"])?;
         let mut env = runtime::launch_env(&launch["env"]);
         let current = codex_continuity::profile(&env, &cwd, &old["options"])?;
-        if ["home", "native_home_id", "config", "account", "project"]
-            .into_iter()
-            .any(|key| current[key] != old[key])
+        if [
+            "home",
+            "native_home_id",
+            "config",
+            "account",
+            "project",
+            "system_policy",
+            "cwd_config",
+        ]
+        .into_iter()
+        .any(|key| current[key] != old[key])
         {
             return Err(io::Error::other("Codex native origin or authority changed"));
         }

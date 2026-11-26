@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -254,6 +255,15 @@ def drive(root, native, guard, loopback, resume_check=False):
                     assert launch(identity,"error").get("error_code")=="invalid_field"
                 finally:
                     config.write_bytes(saved)
+                if sys.platform == "linux":
+                    for name in ("config.toml", "requirements.toml", "managed_config.toml"):
+                        policy = Path("/etc/codex") / name
+                        policy.write_text('model="unqualified-fixture-policy"\n')
+                        try:
+                            rejected = launch(identity, "error")
+                            assert rejected["error_code"] == "invalid_field" and "system configuration" in rejected["error"]
+                        finally:
+                            policy.unlink()
                 rollouts = list((root/"home/.codex/sessions").rglob(f"*-{thread}.jsonl"))
                 assert len(rollouts) == 1
                 def native_turns():
@@ -267,6 +277,28 @@ def drive(root, native, guard, loopback, resume_check=False):
                 fixtures.wait_for(lambda: b"Native loopback reply." in invoke("peek",resumed),"resumed native viewer displays prior reply",timeout=15)
                 assert native_turns() == 1, "resuming must not replay the original user turn"
                 assert launch(identity,"error").get("error_code")=="invalid_field"
+                if sys.platform == "linux":
+                    # Replay the already-approved fixture plan through the real shim after policy changed.
+                    denied = resumed_state.parent/"4f0000000000000000000000"
+                    denied.mkdir(mode=0o700)
+                    plan = json.loads((resumed_state/"session.json").read_text())
+                    plan.update(id=denied.name, token="9f0000000000000000000000")
+                    config = denied/"session.json"
+                    config.write_text(json.dumps(plan))
+                    config.chmod(0o600)
+                    policy = Path("/etc/codex/requirements.toml")
+                    policy.write_text('allowed_approval_policies=["never"]\n')
+                    argv = json.dumps({"argv":["resume",thread]}).encode()
+                    try:
+                        result = subprocess.run([*command,"shim","--rust-session",denied],
+                            input=struct.pack(">IB",len(argv)+1,1)+argv,
+                            env=env,cwd=root/"work",capture_output=True,timeout=8)
+                        assert result.returncode != 0 and not (denied/"owner.json").exists(), result
+                        refused = json.loads((denied/"exit.json").read_text())
+                        assert "system configuration" in refused["error"], refused
+                    finally:
+                        policy.unlink()
+                        shutil.rmtree(denied)
                 invoke("kill",resumed)
                 invoke("watch",resumed,"--until","completed","--timeout","4s")
                 print("real Codex resumed the exact prior rollout, rejected changed authority without replaying the original user turn")
@@ -341,6 +373,11 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False):
         if sys.platform == "darwin":
             drive(root, native, guard, loopback, resume_check)
         else:
+            if resume_check:
+                system = root/"system-policy"
+                system.mkdir(mode=0o700)
+                split = guard.index("--")
+                guard[split:split] = ["--bind", str(system), "/etc/codex"]
             command = [*guard, sys.executable, root / "bin/parity_codex.py", "--isolated-root", root]
             if native:
                 command.append("--native")

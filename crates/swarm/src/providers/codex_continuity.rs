@@ -51,7 +51,85 @@ fn config(path: &Path) -> io::Result<Value> {
     }
 }
 
+fn no_system_files(directory: &Path) -> io::Result<()> {
+    match directory.symlink_metadata() {
+        Ok(stat) if stat.is_dir() => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+        Ok(_) => {
+            return Err(io::Error::other(
+                "Codex system configuration directory is not physical",
+            ));
+        }
+    }
+    for name in ["config.toml", "requirements.toml", "managed_config.toml"] {
+        match directory.join(name).symlink_metadata() {
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "Codex continuity cannot verify managed system configuration",
+                ));
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn no_forced_preferences() -> io::Result<()> {
+    use std::ffi::{c_char, c_void};
+    type Cf = *const c_void;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithCString(allocator: Cf, value: *const c_char, encoding: u32) -> Cf;
+        fn CFPreferencesAppSynchronize(app: Cf) -> u8;
+        fn CFPreferencesAppValueIsForced(key: Cf, app: Cf) -> u8;
+        fn CFRelease(value: Cf);
+    }
+    // SAFETY: The C literals are NUL-terminated; valid CF objects are checked and released.
+    unsafe {
+        let make = |value: &std::ffi::CStr| {
+            CFStringCreateWithCString(std::ptr::null(), value.as_ptr(), 0x08000100)
+        };
+        let app = make(c"com.openai.codex");
+        if app.is_null() {
+            return Err(io::Error::other(
+                "Codex managed preferences probe unavailable",
+            ));
+        }
+        let result = (|| {
+            if CFPreferencesAppSynchronize(app) == 0 {
+                return Err(io::Error::other(
+                    "Codex managed preferences probe unavailable",
+                ));
+            }
+            for name in [c"config_toml_base64", c"requirements_toml_base64"] {
+                let key = make(name);
+                if key.is_null() {
+                    return Err(io::Error::other(
+                        "Codex managed preferences probe unavailable",
+                    ));
+                }
+                let forced = CFPreferencesAppValueIsForced(key, app);
+                CFRelease(key);
+                if forced != 0 {
+                    return Err(io::Error::other(
+                        "Codex continuity cannot verify forced macOS configuration",
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        CFRelease(app);
+        result
+    }
+}
+
 pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> io::Result<Value> {
+    no_system_files(Path::new("/etc/codex"))?;
+    #[cfg(target_os = "macos")]
+    no_forced_preferences()?;
     let value = |key: &str| {
         env.iter()
             .rev()
@@ -108,6 +186,7 @@ pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> 
     Ok(
         json!({"home":root,"native_home_id":[info.dev(),info.ino()],"path":value("PATH"),
         "config":config(&home.join("config.toml"))?,"project":project,"account":account,
+        "system_policy":"absent-v1", "cwd_config":config(&cwd.join("config.toml"))?,
         "options":options.as_object().cloned().unwrap_or_default()}),
     )
 }
