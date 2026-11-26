@@ -177,7 +177,11 @@ impl Helper {
     pub(super) fn command(&self) -> io::Result<Command> {
         match self {
             #[cfg(test)]
-            Self::Fixture(path) => Ok(Command::new(path)),
+            Self::Fixture(path) => {
+                let mut command = Command::new("/bin/sh");
+                command.arg(path);
+                Ok(command)
+            }
             Self::Pinned(pinned) => pinned.command(),
         }
     }

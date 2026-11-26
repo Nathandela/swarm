@@ -434,6 +434,8 @@ exit 1
                 "A".repeat(1280),
             )).unwrap();
             fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+            // A concurrent fixture child can hold the script open until its exec.
+            let _write_fd = fs::OpenOptions::new().write(true).open(&helper).unwrap();
             let mut media = Media::start(
                 &Helper::Fixture(helper.clone()),
                 "1",
