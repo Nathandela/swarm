@@ -371,6 +371,10 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             assert termios.tcgetattr(board.master) == board.original_mode
             assert p.generation(worker) == birth
             return worker, birth
+        except Exception:
+            if managed:
+                print(f"installed board exit={board.child.poll()}, terminal tail={board.capture[-1000:]!r}", file=sys.stderr)
+            raise
         finally:
             board.close()
 

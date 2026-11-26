@@ -25,6 +25,7 @@ def run(dist, archive, key, evidence):
             target = root / "bin" / name
             shutil.copyfile(board.HERE / name, target)
             target.chmod(0o700)
+        (root / "bin/driver").symlink_to("swarm-parity")
         installer = board.HERE.parents[1] / "release-rust.py"
         subprocess.run([sys.executable, installer, "verify", dist, archive, "--public-key", key,
                         "--prefix", root / "install", "--managed"], check=True, timeout=90)
