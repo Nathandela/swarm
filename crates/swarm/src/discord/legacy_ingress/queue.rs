@@ -56,7 +56,7 @@ pub(super) fn inspect(
         supervisor::mail_store::original_queued_file(place.supervisor_root(), &conversation)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let voice_path = directory.join("voice.db");
-    let (voice_pin, db) = open_bolt(&voice_path, 64 << 20)?;
+    let (voice_pin, db) = voice_ledger::open(&voice_path)?;
     let voice = db.begin().map_err(io::Error::other)?;
     let root = voice.bucket(b"controller").ok_or_else(invalid)?;
     let parsed = voice_ledger::reopen(&voice)?;
@@ -286,10 +286,7 @@ fn prepared_file<'tx>(
     conversation: &str,
 ) -> io::Result<Option<(Value, String, Value)>> {
     let mut found = None;
-    for (index, (key, raw)) in records.iter_entries().enumerate() {
-        if index >= 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
+    for (key, raw) in records.iter_entries() {
         if !key.starts_with(b"wakes\0") {
             continue;
         }
@@ -399,7 +396,7 @@ pub(super) fn prepare(
     {
         return Err(invalid());
     }
-    let (pin, mut db) = bounded_writer(writable_pin(&proof.path)?)?;
+    let (pin, mut db) = bounded_writer(voice_ledger::pin_write(&proof.path)?)?;
     let current = pin.metadata()?;
     if (current.dev(), current.ino()) != proof.voice_identity
         || !identity(&pin, &proof.path)?
@@ -573,7 +570,7 @@ pub(super) fn dispatch(
         &prepared.note,
         prepared.mailbox_identity,
     )?;
-    let (pin, mut db) = bounded_writer(writable_pin(&prepared.path)?)?;
+    let (pin, mut db) = bounded_writer(voice_ledger::pin_write(&prepared.path)?)?;
     let identity_of = pin.metadata()?;
     if (identity_of.dev(), identity_of.ino()) != prepared.voice_identity
         || !identity(&pin, &prepared.path)?

@@ -9,7 +9,7 @@ mod queue;
 pub(super) mod reply_notice;
 pub(super) mod service;
 pub(super) mod source_attachment;
-mod voice_ledger;
+pub(super) mod voice_ledger;
 mod wake;
 mod wake_intent;
 
@@ -200,7 +200,7 @@ fn controller(
     }
     open_owner_file(&path.join("voice.initialized"))?;
     let voice_db = path.join("voice.db");
-    let (pin, db) = open_bolt(&voice_db, 64 << 20)?;
+    let (pin, db) = voice_ledger::open(&voice_db)?;
     let receipt = inspect_voice(
         &db.begin().map_err(io::Error::other)?,
         id,
@@ -218,8 +218,19 @@ fn inspect_voice<'tx>(
     cfg: &Config,
     endpoint: &str,
 ) -> io::Result<Receipt> {
-    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let header = voice_ledger::reopen(tx)?;
+    inspect_validated_voice(tx, id, origin, cfg, endpoint, header)
+}
+
+fn inspect_validated_voice<'tx>(
+    tx: &impl TxApi<'tx>,
+    id: &str,
+    origin: &Value,
+    cfg: &Config,
+    endpoint: &str,
+    header: Value,
+) -> io::Result<Receipt> {
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let conversation = format!("discord-teammate-{id}");
     if !matches!(header["version"].as_u64(), Some(3 | 4))
         || header["current_conversation"] != conversation
@@ -733,7 +744,7 @@ fn dispatch_under_lease(
     drop(voice_db);
     drop(voice_pin);
     let voice_path = directory.join("voice.db");
-    let (write_pin, mut writer) = bounded_writer(writable_pin(&voice_path)?)?;
+    let (write_pin, mut writer) = bounded_writer(voice_ledger::pin_write(&voice_path)?)?;
     let written_identity = write_pin.metadata()?;
     if (written_identity.dev(), written_identity.ino())
         != (voice_identity.dev(), voice_identity.ino())

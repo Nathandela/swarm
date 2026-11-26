@@ -97,7 +97,9 @@ pub(super) fn advance<'a>(
         }
     };
     let existing = {
-        let (_pin, db) = open_bolt(&manager.directory.join("voice.db"), 64 << 20)?;
+        let (_pin, db) = crate::discord::legacy_ingress::voice_ledger::open(
+            &manager.directory.join("voice.db"),
+        )?;
         let mut state = voice::read_voice_with_queue(
             &db.begin().map_err(io::Error::other)?,
             &manager.id,

@@ -456,6 +456,10 @@ pub(super) fn verify_controls_place(place: &Place, cfg: &Config) -> io::Result<(
 }
 
 pub(super) fn writable_pin(path: &Path) -> io::Result<fs::File> {
+    writable_pin_with_limit(path, 64 << 20)
+}
+
+pub(super) fn writable_pin_with_limit(path: &Path, max_bytes: u64) -> io::Result<fs::File> {
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -466,7 +470,7 @@ pub(super) fn writable_pin(path: &Path) -> io::Result<fs::File> {
         || info.nlink() != 1
         || info.mode() & 0o077 != 0
         || info.uid() != unsafe { libc::geteuid() }
-        || !(4096..=64 << 20).contains(&info.len())
+        || !(4096..=max_bytes).contains(&info.len())
     {
         return Err(io::Error::other(
             "expected a bounded private original database",

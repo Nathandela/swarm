@@ -166,7 +166,7 @@ fn original_voice(
     endpoint: &str,
 ) -> io::Result<(fs::File, impl DbApi + use<>, Value)> {
     open_owner_file(&path.join("voice.initialized"))?;
-    let (pin, db) = open_bolt(&path.join("voice.db"), 64 << 20)?;
+    let (pin, db) = voice_ledger::open(&path.join("voice.db"))?;
     let tx = db.begin().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let header = voice_ledger::reopen(&tx)?;
@@ -416,7 +416,7 @@ pub(super) fn deliver_admitted_vm(
     };
     let (path, id, endpoint) = voice_location(place, cfg, &out.binding)?;
     let source = path.join("voice.db");
-    let (voice_pin, voice) = open_bolt(&source, 64 << 20)?;
+    let (voice_pin, voice) = voice_ledger::open(&source)?;
     let voice_tx = voice.begin().map_err(io::Error::other)?;
     let first = wake::inspect(place, cfg, &tx, &voice_tx, &out.binding, &id, &endpoint)?;
     room.verify(cfg)?;

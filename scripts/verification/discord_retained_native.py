@@ -7,6 +7,7 @@ import hashlib
 import http.server
 import json
 import shlex
+import shutil
 import socket
 import threading
 import time
@@ -251,6 +252,8 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     waiting = threading.Event()
     release = threading.Event()
     worker_release = threading.Event()
+    mature_roster_stop = threading.Event()
+    mature_roster = None
     selected = set()
     lock = threading.Lock()
     capture = []
@@ -436,9 +439,62 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         assert row["spawned_from"] == note["Parent"]
                         assert list(map(base64.b64decode,witness["Files"])) == [original_bytes]
                         queued_env = env | {"SWARM_TEST_DISCORD_QUEUED_FILE_ROOT":str(base / "state")}
+                        mature = os.environ.get("SWARM_DISCORD_MATURE_VOICE")
+                        if mature in ("1", "read-max"):
+                            capacity = mature == "read-max"
+                            fresh_roster = threading.Event()
+                            # Go's one-second roster hint expires during a large
+                            # ledger scan unless its normal observer refreshes it.
+                            def refresh_mature_roster():
+                                while not mature_roster_stop.is_set():
+                                    rows = owner(env, {"op":"list"}, caps=("manager-provenance",))["sessions"]
+                                    if any(item["id"] == initial["session_id"]
+                                           and item.get("manager_conversation_id") == initial["conversation_id"]
+                                           and (item.get("capabilities") or {}).get("session_instance") == initial["session_instance"]
+                                           for item in rows):
+                                        fresh_roster.set()
+                                    mature_roster_stop.wait(0.1)
+                            mature_roster = threading.Thread(target=refresh_mature_roster, daemon=True)
+                            mature_roster.start()
+                            assert fresh_roster.wait(5), "original Go roster never proved the exact manager instance"
+                            copy = base / "voice-size-copy"
+                            copy.mkdir(mode=0o700)
+                            copied = copy / "voice.db"
+                            shutil.copy2(ledger, copied)
+                            shutil.copy2(ledger.with_name("voice.initialized"), copy / "voice.initialized")
+                            history = json.loads(run(fixture, env, "retained-voice-size", copy,
+                                                     "mature-capacity" if capacity else "mature"))
+                            assert history["rows"] == (10_000 if capacity else 4200)
+                            assert history["large_row_bytes"] > 1 << 20
+                            if capacity:
+                                assert history["logical_bytes"] == 64 << 20 and history["physical_bytes"] > 64 << 20
+                            run(fixture, env, "retained-voice-size", copy, "reopen")
+                            run(fixture, env, "retained-voice-size", copy, "read")
+                            history["physical_after_go_reopen"] = copied.stat().st_size
+                            ledger.write_bytes(copied.read_bytes())
+                            original_ledgers = original_ledgers[0], ledger.read_bytes()
+                            copied.unlink()
+                            (copy / "voice.initialized").unlink()
+                            copy.rmdir()
+                            print("Go wrote and read mature retained VM history", history, flush=True)
+                            if baseline := os.environ.get("SWARM_DISCORD_OLD_VOICE_TEST"):
+                                old = subprocess.run(
+                                    [baseline, "native_go_queued_file_owner_inspection_is_read_only", "--nocapture"],
+                                    env=queued_env, capture_output=True, timeout=25)
+                                reason = (b"expected a bounded private regular file" if capacity
+                                          else b"cannot reopen in Go")
+                                assert old.returncode != 0 and reason in old.stderr, old.stderr
+                                assert (place / "discord.db").read_bytes() == original_ledgers[0]
+                                assert ledger.read_bytes() == original_ledgers[1]
+                                assert not posts and not worker_wake_requests and not file_calls
+                                print("PASS older Rust refused the same copied Voice bytes without an effect", flush=True)
                         run(rust_test,queued_env,"native_go_queued_file_owner_inspection_is_read_only","--nocapture")
                         assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
                         assert posts == []
+                        if mature == "read-max":
+                            assert not worker_wake_requests and not file_calls
+                            print("PASS Go/Rust read the same maximum-sized retained Voice without mutation or effect", flush=True)
+                            return
                         if mode == "ordinary-restart-lost":
                             copy = base / "voice-size-copy"
                             copy.mkdir(mode=0o700)
@@ -737,6 +793,10 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             stager.terminate()
                             stager.communicate(timeout=10)
                 finally:
+                    mature_roster_stop.set()
+                    if mature_roster is not None:
+                        mature_roster.join(5)
+                        assert not mature_roster.is_alive()
                     release.set()
                     worker_release.set()
                     allow_pending.set()

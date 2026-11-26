@@ -129,7 +129,7 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
     }
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
-    let (_pin, voice) = open_bolt(&path, 64 << 20)?;
+    let (_pin, voice) = voice_ledger::open(&path)?;
     let voice_tx = voice.begin().map_err(io::Error::other)?;
     let state = match prepare::read_voice(&voice_tx, &ledger, cfg, &endpoint) {
         Err(_) if retained_vm(cfg) => {

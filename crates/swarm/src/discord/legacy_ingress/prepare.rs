@@ -794,10 +794,16 @@ pub(in crate::discord) fn stage<'tx>(
         .checked_sub(voice.raw_conversation.len() as u64)
         .and_then(|v| v.checked_add((conversation.len() + quoted.len() + 1 + raw.len()) as u64))
         .and_then(|v| v.checked_add(u64::from(voice.admissions > 0)))
-        .filter(|v| *v <= 64 << 20)
+        .filter(|v| *v <= voice_ledger::MAX_BYTES)
         .ok_or_else(invalid)?;
     voice.header["logical_bytes"] = json!(bytes);
-    voice.header["records"] = json!(voice.header["records"].as_u64().ok_or_else(invalid)? + 1);
+    voice.header["records"] = json!(
+        voice.header["records"]
+            .as_u64()
+            .and_then(|records| records.checked_add(1))
+            .filter(|records| *records <= voice_ledger::MAX_RECORDS)
+            .ok_or_else(invalid)?
+    );
     voice.header["record_hash"] = json!(sum);
     let header = go_bytes(&voice.header)?;
     {
@@ -863,7 +869,7 @@ pub(in crate::discord) fn guild_storage_witness(
     {
         return Err(unqualified());
     }
-    let file = writable_pin(&copy)?;
+    let file = voice_ledger::pin_write(&copy)?;
     let opened = file.metadata()?;
     if (opened.dev(), opened.ino()) != (candidate.dev(), candidate.ino())
         || fs::canonicalize(&copy_dir)? != copy_dir
@@ -1068,7 +1074,7 @@ pub(super) fn under_lease(
     let (directory, id, endpoint) = voice_location(place, cfg, &c.binding)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let voice_path = directory.join("voice.db");
-    let (voice_pin, mut voice_db) = bounded_writer(writable_pin(&voice_path)?)?;
+    let (voice_pin, mut voice_db) = bounded_writer(voice_ledger::pin_write(&voice_path)?)?;
     let mut voice_tx = voice_db.begin_rw().map_err(io::Error::other)?;
     if let Ok(prior) = inspect_voice(&voice_tx, &id, &origin, cfg, &endpoint) {
         validate_prepared(&prior, cfg)?;

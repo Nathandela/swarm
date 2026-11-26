@@ -925,6 +925,9 @@ func FixtureRetainedVoiceSize(dir, action string) error {
 			!(action == "reopen" && strings.HasPrefix(filepath.Base(root), "gp-"))) {
 		return ErrInvalid
 	}
+	if action == "mature-capacity" || action == "mature" {
+		return fixtureRetainedVoiceHistory(dir, action == "mature-capacity")
+	}
 	if action == "reopen" {
 		store, err := OpenStore(dir)
 		if err != nil {
@@ -978,4 +981,145 @@ func FixtureRetainedVoiceSize(dir, action string) error {
 	default:
 		return ErrInvalid
 	}
+}
+
+// These lexical checkout paths are retained history, so no active filesystem
+// enrollment is created. The Go scope field has no aggregate size limit.
+func fixtureProjectHistory(encodedBytes int) string {
+	var paths []string
+	remaining := encodedBytes + 1 // nonempty lists have a comma between entries
+	for remaining > 0 {
+		entry := min(remaining, 2048)
+		if remaining-entry < 32 {
+			entry = remaining
+		}
+		prefix := fmt.Sprintf("/fixture/settled/%04d/", len(paths))
+		var path strings.Builder
+		path.WriteString(prefix)
+		for path.Len()+204 < entry-5 {
+			path.WriteString(strings.Repeat("p", 203) + "/")
+		}
+		path.WriteString(strings.Repeat("p", entry-5-path.Len()))
+		paths = append(paths, path.String())
+		remaining -= entry
+	}
+	raw, _ := json.Marshal(paths)
+	return string(raw)
+}
+
+func fixtureRetainedVoiceHistory(dir string, capacity bool) error {
+	store, err := OpenStore(dir)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	err = store.db.Update(func(tx *bolt.Tx) error {
+		st, err := readState(tx)
+		if err != nil {
+			return err
+		}
+		conversation := st.CurrentConversation
+		current := st.Conversations[conversation]
+		if !current.Binding.NativeCLI || current.LastAdmission != current.RetiredThrough {
+			return ErrConflict
+		}
+		target := 4_200
+		if capacity {
+			target = MaxRecords
+		}
+		var keys []string
+		for countRecords(st) < target {
+			current.LastAdmission++
+			key := admissionKey(conversation, current.LastAdmission)
+			st.Admissions[key] = Admission{ConversationID: conversation, Sequence: current.LastAdmission,
+				SourceID: "settled-fixture-" + strconv.FormatUint(current.LastAdmission, 10),
+				Phase: "completed", SettledAt: time.Unix(1, 0).UTC()}
+			keys = append(keys, key)
+		}
+		if len(keys) == 0 {
+			return ErrConflict
+		}
+		current.RetiredThrough = current.LastAdmission
+		st.Conversations[conversation] = current
+		full := fixtureProjectHistory(1_200_000)
+		first := st.Admissions[keys[0]]
+		first.WorkerProjects = full
+		st.Admissions[keys[0]] = first
+		raw, err := json.Marshal(st)
+		if err != nil {
+			return err
+		}
+		if capacity {
+			empty := first
+			empty.WorkerProjects = ""
+			before, _ := json.Marshal(empty)
+			fullRow, _ := json.Marshal(first)
+			empty.WorkerProjects = "[]"
+			emptyScope, _ := json.Marshal(empty)
+			overhead := len(emptyScope) - len(before)
+			remaining := MaxStoreBytes - len(raw)
+			for _, key := range keys[1:] {
+				if remaining < overhead+32 {
+					admission := st.Admissions[key]
+					admission.SourceID += strings.Repeat("p", remaining)
+					st.Admissions[key] = admission
+					break
+				}
+				admission := st.Admissions[key]
+				if remaining >= len(fullRow)-len(before) {
+					admission.WorkerProjects = full
+					remaining -= len(fullRow) - len(before)
+				} else {
+					admission.WorkerProjects = fixtureProjectHistory(remaining - overhead)
+					remaining = 0
+				}
+				st.Admissions[key] = admission
+				if remaining == 0 {
+					break
+				}
+			}
+			raw, err = json.Marshal(st)
+			if err != nil || len(raw) != MaxStoreBytes {
+				return fmt.Errorf("expected exact Go logical capacity, got %d: %v", len(raw), err)
+			}
+		}
+		header, err := readHeader(tx)
+		if err != nil {
+			return err
+		}
+		header.Version = mediaStoreSchemaVersion
+		if err := writeHeader(tx, header); err != nil {
+			return err
+		}
+		return writeStateRecord(tx, raw)
+	})
+	if err != nil {
+		return err
+	}
+	return store.db.View(func(tx *bolt.Tx) error {
+		header, err := readHeader(tx)
+		if err != nil {
+			return err
+		}
+		state, err := readState(tx)
+		if err != nil {
+			return err
+		}
+		f, err := os.Stat(filepath.Join(dir, "voice.db"))
+		if err != nil {
+			return err
+		}
+		maxRow := 0
+		for _, admission := range state.Admissions {
+			if admission.WorkerProjects != "" {
+				raw, err := json.Marshal(admission)
+				if err != nil {
+					return err
+				}
+				maxRow = max(maxRow, len(raw))
+			}
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"rows": header.Records,
+			"logical_bytes": header.LogicalBytes, "physical_bytes": f.Size(), "large_row_bytes": maxRow})
+	})
 }

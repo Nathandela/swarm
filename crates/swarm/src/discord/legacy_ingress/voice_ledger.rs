@@ -3,11 +3,25 @@ use super::{BucketApi, Digest, Sha256, TxApi, Value, io, json, prepare::go_bytes
 
 use crate::json_fields::object_fields;
 
-const MAX_RECORDS: usize = 4096;
-const MAX_BYTES: usize = 64 << 20;
+pub(super) const MAX_RECORDS: u64 = 10_000;
+pub(super) const MAX_BYTES: u64 = 64 << 20;
 // Go decodes the full State on writable reopen. Its root and table map
 // surround each stored row and count towards encoding/json's 10,000 levels.
 const MAX_ROW_DEPTH: usize = 9_998;
+
+// bbolt also stores pages, free lists and prior copy-on-write allocations.
+// Keep a separate physical limit for Voice without widening connector stores.
+const MAX_FILE_BYTES: u64 = 256 << 20;
+
+pub(in crate::discord) fn open(
+    path: &super::Path,
+) -> io::Result<(super::fs::File, impl super::DbApi + use<>)> {
+    super::open_bolt(path, MAX_FILE_BYTES)
+}
+
+pub(in crate::discord) fn pin_write(path: &super::Path) -> io::Result<super::fs::File> {
+    super::super::legacy_state::writable_pin_with_limit(path, MAX_FILE_BYTES)
+}
 
 fn invalid() -> io::Error {
     io::Error::other("the original Voice records cannot reopen in Go")
@@ -32,11 +46,11 @@ pub(super) fn reopen<'tx>(tx: &impl TxApi<'tx>) -> io::Result<Value> {
         .ok_or_else(invalid)?;
     let expected_size = header["logical_bytes"]
         .as_u64()
-        .filter(|value| *value <= MAX_BYTES as u64)
+        .filter(|value| *value <= MAX_BYTES)
         .ok_or_else(invalid)?;
     let expected_count = header["records"]
         .as_u64()
-        .filter(|value| *value <= MAX_RECORDS as u64)
+        .filter(|value| *value <= MAX_RECORDS)
         .ok_or_else(invalid)?;
     let expected_hash: [u8; 32] = serde_json::from_value(header["record_hash"].clone())?;
     if !matches!(header["version"].as_u64(), Some(3 | 4))
@@ -76,15 +90,12 @@ pub(super) fn reopen<'tx>(tx: &impl TxApi<'tx>) -> io::Result<Value> {
             .map(|(_, kind)| *kind)
             .ok_or_else(invalid)?;
         count += 1;
-        if count > expected_count || raw.len() > 1 << 20 {
+        size += go_bytes(&json!(index))?.len() + 1 + usize::from(table == previous) + raw.len();
+        if count > expected_count || size as u64 > expected_size {
             return Err(invalid());
         }
         let row = std::str::from_utf8(raw).map_err(io::Error::other)?;
         if !go_row_depth(row) || !kind.check(row, false) {
-            return Err(invalid());
-        }
-        size += go_bytes(&json!(index))?.len() + 1 + usize::from(table == previous) + raw.len();
-        if size as u64 > expected_size {
             return Err(invalid());
         }
         previous = table;

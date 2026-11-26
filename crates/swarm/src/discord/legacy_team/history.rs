@@ -195,7 +195,7 @@ pub(super) fn serve(
     let custody = Custody::claim(&directory, &id, true)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
-    let (pin, db) = open_bolt(&path, 64 << 20)?;
+    let (pin, db) = legacy_ingress::voice_ledger::open(&path)?;
     let read = || {
         if !legacy_state::unchanged(&pin, &path)?
             || crate::manager_prompt::load(place.supervisor_root())? != settings

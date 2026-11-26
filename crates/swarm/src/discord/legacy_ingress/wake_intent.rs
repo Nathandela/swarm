@@ -151,7 +151,7 @@ pub(super) fn reconcile(
         .ok_or_else(invalid)?
         .get(outbox_key.as_bytes())
         .is_some();
-    let (voice_pin, voice) = open_bolt(&voice_path, 64 << 20)?;
+    let (voice_pin, voice) = voice_ledger::open(&voice_path)?;
     let tx = voice.begin().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let header = voice_ledger::reopen(&tx)?;

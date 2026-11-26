@@ -41,9 +41,6 @@ pub(super) fn stage_voice<'tx>(
         let mut records = root.bucket_mut(b"records").ok_or_else(invalid)?;
         for (record_key, value) in changes {
             let record = go_json(value)?;
-            if record.len() > 1 << 20 {
-                return Err(invalid());
-            }
             let prior = records.get(record_key).map(<[u8]>::to_vec);
             if let Some(prior) = prior {
                 for (a, b) in checksum.iter_mut().zip(record_hash(record_key, &prior)) {
@@ -69,12 +66,12 @@ pub(super) fn stage_voice<'tx>(
             }
             logical = logical
                 .checked_add(record.len() as u64)
-                .filter(|n| *n <= 64 << 20)
+                .filter(|n| *n <= voice_ledger::MAX_BYTES)
                 .ok_or_else(invalid)?;
             records.put(record_key, record).map_err(io::Error::other)?;
         }
     }
-    if rows > 4096 {
+    if rows > voice_ledger::MAX_RECORDS {
         return Err(invalid());
     }
     header["logical_bytes"] = json!(logical);
@@ -501,7 +498,7 @@ pub(super) fn accept(
     let (directory, id, endpoint) = voice_location(place, cfg, &candidate.binding)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
-    let (pin, mut voice) = bounded_writer(writable_pin(&path)?)?;
+    let (pin, mut voice) = bounded_writer(voice_ledger::pin_write(&path)?)?;
     let tx = voice.begin_rw().map_err(io::Error::other)?;
     let receipt = inspect_voice(&tx, &id, &candidate.origin, cfg, &endpoint)?;
     if request["conversation_id"] != receipt.binding["conversation_id"]
@@ -583,7 +580,7 @@ pub(super) fn accept_wake(
     let (directory, id, endpoint) = voice_location(place, cfg, binding)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
-    let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
+    let (pin, mut db) = bounded_writer(voice_ledger::pin_write(&path)?)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let proof = {
         let conn = lease.db.begin().map_err(io::Error::other)?;
@@ -706,7 +703,7 @@ pub(super) fn complete(
 ) -> io::Result<()> {
     let (directory, id, endpoint) = voice_location(place, cfg, &candidate.binding)?;
     let path = directory.join("voice.db");
-    let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
+    let (pin, mut db) = bounded_writer(voice_ledger::pin_write(&path)?)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let mut original = inspect_voice(&tx, &id, &candidate.origin, cfg, &endpoint)?;
     let request = &original.admission["request"];
@@ -854,7 +851,7 @@ pub(super) fn complete_vm_wake(
         return Err(invalid());
     }
     let path = directory.join("voice.db");
-    let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
+    let (pin, mut db) = bounded_writer(voice_ledger::pin_write(&path)?)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let header = voice_ledger::reopen(&tx)?;

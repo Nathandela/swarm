@@ -167,7 +167,7 @@ impl Manager {
         let (directory, id, endpoint) = legacy_ingress::voice_location(place, cfg, discussion)?;
         let controller = Custody::claim(&directory, &id, true)?;
         open_owner_file(&directory.join("voice.initialized"))?;
-        let (voice, db) = open_bolt(&directory.join("voice.db"), 64 << 20)?;
+        let (voice, db) = legacy_ingress::voice_ledger::open(&directory.join("voice.db"))?;
         let state = legacy_ingress::prepare::read_voice_with_queue(
             &db.begin().map_err(io::Error::other)?,
             &id,
@@ -193,7 +193,7 @@ impl Manager {
     pub(super) fn open_writer(&mut self) -> io::Result<(File, Bolt)> {
         let held = self.voice.take().ok_or_else(unavailable)?.metadata()?;
         let path = self.directory.join("voice.db");
-        let file = legacy_state::writable_pin(&path)?;
+        let file = legacy_ingress::voice_ledger::pin_write(&path)?;
         let current = file.metadata()?;
         if (held.dev(), held.ino()) != (current.dev(), current.ino()) {
             return Err(unavailable());

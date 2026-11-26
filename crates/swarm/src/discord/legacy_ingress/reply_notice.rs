@@ -143,7 +143,7 @@ pub(in crate::discord) fn run(place: &Place, message: &str, dry_run: bool) -> io
     }
     let checkout_pin = fs::File::open(checkout)?;
     let source = directory.join("voice.db");
-    let (pin, mut voice) = bounded_writer(writable_pin(&source)?)?;
+    let (pin, mut voice) = bounded_writer(voice_ledger::pin_write(&source)?)?;
     let tx = voice.begin_rw().map_err(io::Error::other)?;
     let (origin, receipts) = source_and_receipts(&tx, &cfg, &ledger, message, &endpoint)?;
     if origin["discussion_id"] != route["ID"] {
@@ -227,15 +227,10 @@ fn source_and_receipts<'a>(
     message: &str,
     endpoint: &str,
 ) -> io::Result<(Value, Receipt)> {
+    let header = voice_ledger::reopen(tx)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    if records.iter_buckets().next().is_some() {
-        return Err(invalid());
-    }
-    for (count, (k, raw)) in records.iter_entries().enumerate() {
-        if count >= 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
+    for (k, raw) in records.iter_entries() {
         if !k.starts_with(b"admissions\0") {
             continue;
         }
@@ -254,7 +249,7 @@ fn source_and_receipts<'a>(
             {
                 return Err(invalid());
             }
-            let receipt = inspect_voice(tx, ledger, origin, cfg, endpoint)?;
+            let receipt = inspect_validated_voice(tx, ledger, origin, cfg, endpoint, header)?;
             exact_admission_request(&receipt, origin)?;
             return Ok((origin.clone(), receipt));
         }
@@ -934,7 +929,7 @@ mod tests {
                         row.pointer_mut(section).unwrap()[name] = json!("unrelated");
                         0
                     });
-                    reject_damaged_voice(name, name == "SESSION_ID");
+                    reject_damaged_voice(name, matches!(name, "REQUEST_ID" | "SESSION_ID"));
                     fs::write(&db_path, &bytes).unwrap();
                 }
             }

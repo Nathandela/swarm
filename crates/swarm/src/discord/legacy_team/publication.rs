@@ -48,7 +48,7 @@ pub(in crate::discord::legacy_team) fn serve(
     let custody = Custody::claim(&directory, &id, true)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
-    let (read_lock, db) = open_bolt(&path, 64 << 20)?;
+    let (read_lock, db) = legacy_ingress::voice_ledger::open(&path)?;
     let inspect = |voice: &mut voice::Voice| {
         let header = voice.guild_publication_header()?.clone();
         let row = voice::executing_guild_admission(
@@ -126,7 +126,7 @@ pub(in crate::discord::legacy_team) fn serve(
             received = true;
             #[cfg(test)]
             super::super::publication_proof_fixture(place, cfg, raw)?;
-            let writer = legacy_state::writable_pin(&path)?;
+            let writer = legacy_ingress::voice_ledger::pin_write(&path)?;
             let (old, new) = (pin.metadata()?, writer.metadata()?);
             if (old.dev(), old.ino()) != (new.dev(), new.ino()) {
                 return Err(unavailable());
