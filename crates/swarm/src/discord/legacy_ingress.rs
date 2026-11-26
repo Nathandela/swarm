@@ -9,7 +9,7 @@ pub(super) mod source_attachment;
 mod wake;
 
 use super::{
-    config::{Config, Place, open_owner_file, snowflake},
+    config::{Config, LockDescription, Place, PlaceLock, open_owner_file, snowflake},
     legacy_discussions::operation,
     legacy_state::{bounded_writer, verify_controls_place, writable_pin},
 };
@@ -366,11 +366,11 @@ fn personal_config(place: &Place, vm: bool) -> io::Result<Config> {
 }
 
 struct ConnectorLease {
-    _configuration: (fs::File, fs::File),
-    _bridge: fs::File,
+    db: Bolt,
     source: PathBuf,
     pin: fs::File,
-    db: Bolt,
+    _bridge: LockDescription,
+    _configuration: PlaceLock,
 }
 
 impl ConnectorLease {
@@ -385,7 +385,7 @@ impl ConnectorLease {
         foreground: bool,
     ) -> io::Result<Self> {
         let configuration = place.lock()?;
-        let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
+        let bridge = LockDescription(runtime::lock(&place.dir.join("bridge.lock"))?);
         let current = if foreground {
             personal_config(place, cfg.text("project_access") == "vm")?
         } else {
@@ -1076,7 +1076,8 @@ mod tests {
             ("semantic_send", json!({"op":"ok","operation_id":operation})),
         ];
         for (op, mut response) in expected {
-            let (tag, bytes) = wire::read_frame(&mut stream).unwrap();
+            let (tag, bytes) = wire::read_frame(&mut stream)
+                .unwrap_or_else(|error| panic!("original owner fixture expected {op}: {error}"));
             assert_eq!(tag, wire::CONTROL);
             let actual: Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(actual["op"], op);
@@ -1190,7 +1191,9 @@ mod tests {
             });
             let result = dispatch_with(&place, "701", false, |_| Ok(current));
             assert_eq!(result.is_ok(), acknowledge, "{result:?}");
-            owner.join().unwrap();
+            owner.join().unwrap_or_else(|_| {
+                panic!("original owner fixture failed; dispatch returned {result:?}")
+            });
             drop(owner_lock);
             assert!(
                 dispatch_with(&place, "701", false, |_| panic!(

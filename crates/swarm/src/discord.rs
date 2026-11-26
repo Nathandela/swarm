@@ -1,7 +1,8 @@
 mod worker_input;
 pub(crate) use worker_input::{
-    lock_connector_worker_input, verify_connector_worker_input, worker_input_available,
-    worker_input_guild_available, worker_input_installation, worker_installation_enrolled,
+    ConnectorWorkerInputGuard, lock_connector_worker_input, verify_connector_worker_input,
+    worker_input_available, worker_input_guild_available, worker_input_installation,
+    worker_installation_enrolled,
 };
 mod call_live;
 

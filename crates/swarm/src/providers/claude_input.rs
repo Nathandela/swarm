@@ -63,7 +63,7 @@ struct Pending {
     intent: String,
     result: Value,
     claimed: bool,
-    hold: Option<(File, File, File)>,
+    hold: Option<crate::discord::ConnectorWorkerInputGuard>,
 }
 
 pub(crate) struct Broker {

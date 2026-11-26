@@ -96,6 +96,23 @@ const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
 const ENROLLMENTS: &str = "discord-enrollments-v1.json";
 
+#[derive(Debug)]
+pub(super) struct LockDescription(pub(super) File);
+
+impl Drop for LockDescription {
+    fn drop(&mut self) {
+        // Release the open-file description even if a child inherited it before exec.
+        // SAFETY: flock borrows this live descriptor.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PlaceLock {
+    _connector: Option<LockDescription>,
+    _supervisor: LockDescription,
+}
+
 impl Place {
     pub(super) fn supervisor_root(&self) -> &Path {
         &self.supervisor
@@ -283,7 +300,7 @@ impl Place {
         Ok(cfg)
     }
 
-    pub(super) fn lock(&self) -> io::Result<(File, File)> {
+    pub(super) fn lock(&self) -> io::Result<PlaceLock> {
         runtime::private_dir(&self.supervisor)?;
         runtime::private_dir(&self.dir)?;
         let lock = |path: &Path| {
@@ -311,10 +328,15 @@ impl Place {
             Ok(())
         };
         acquire(&supervisor)?;
+        let mut locks = PlaceLock {
+            _connector: None,
+            _supervisor: LockDescription(supervisor),
+        };
         if (first.dev(), first.ino()) != (second.dev(), second.ino()) {
             acquire(&connector)?;
+            locks._connector = Some(LockDescription(connector));
         }
-        Ok((supervisor, connector))
+        Ok(locks)
     }
 
     pub(super) fn ensure_owned(&self, cfg: &Config) -> io::Result<()> {
@@ -873,6 +895,45 @@ impl Config {
 #[cfg(test)]
 mod registry_tests {
     use super::*;
+
+    #[test]
+    fn releasing_configuration_custody_unlocks_inherited_descriptions() {
+        let root =
+            std::env::temp_dir().join(format!("swarm-lock-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let connector = root.join("connector");
+        runtime::private_dir(&connector).unwrap();
+        let place = Place {
+            dir: connector,
+            supervisor: root.clone(),
+            explicit: true,
+        };
+
+        // A fork duplicates the same open-file description, just as dup/try_clone does.
+        let inherited = {
+            let file = File::open(&root).unwrap();
+            assert_eq!(
+                unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            file.try_clone().unwrap()
+        };
+        let denied = place.lock().err().unwrap();
+        assert_eq!(
+            denied.to_string(),
+            "another configuration change is in progress"
+        );
+        drop(inherited);
+
+        let locks = place.lock().unwrap();
+        let supervisor_inherited = locks._supervisor.0.try_clone().unwrap();
+        let connector_inherited = locks._connector.as_ref().unwrap().0.try_clone().unwrap();
+        assert!(place.lock().is_err());
+        drop(locks);
+        drop(place.lock().unwrap());
+        drop((supervisor_inherited, connector_inherited));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn two_enrollments_survive_selection_changes_and_refuse_aliases() {
