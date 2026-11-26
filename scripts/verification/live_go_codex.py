@@ -205,15 +205,17 @@ def rehearse(go, rust, root, version, cold=False):
             hermes = tools / "hermes"
             hermes.write_text('#!/bin/sh\n[ "$*" = "chat --cli" ] || exit 2\nexec /bin/sleep 120\n')
             hermes.chmod(0o700)
-            with daemon(go, go_env, root / "go-hermes.log"):
-                created_hermes = owner(go_env, {"op":"launch", "launch":launch | {
+            hermes_env = go_env | {"SWARM_FIXTURE_SESSION_ID": "h" * 16} if guard else go_env
+            with daemon(go, hermes_env, root / "go-hermes.log"):
+                created_hermes = owner(hermes_env, {"op":"launch", "launch":launch | {
                     "agent":"hermes", "name":"Retained Go Hermes terminal fixture",
                 }}, timeout=30)
                 assert created_hermes["op"] == "launch", created_hermes
                 hermes_id = created_hermes["session"]["id"]
+                assert hermes_id != go_held and hermes_id != created["session"]["id"]
                 hermes_state = state / hermes_id.split("/")[-1]
                 hermes_meta = hermes_state / "meta.json"
-                assert owner(go_env, {"op":"kill","session_id":hermes_id})["op"] == "ok"
+                assert owner(hermes_env, {"op":"kill","session_id":hermes_id})["op"] == "ok"
                 until(lambda: disk(hermes_meta)["status"]["Process"] == "exited", "stopped Go Hermes fixture")
                 assert (hermes_state / "exit.json").is_file()
                 assert not disk(hermes_meta).get("cli_identity") and not disk(hermes_meta).get("hermes_native")
