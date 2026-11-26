@@ -103,6 +103,9 @@ pub(super) fn hands_off(
     };
     let session = state.session(&json!({"session_id":scoped}))?;
     let (cwd, transcript, id, proof) = session.hands_off_source()?;
+    if proof["kind"] == "opencode" {
+        crate::providers::opencode_handoff::inherit_selection(launch, &proof)?;
+    }
     let rendered = render([
         &id,
         transcript

@@ -460,6 +460,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         if let Some(proof)=config["lineage"]["hands_off"].as_object(){
             match proof.get("kind").and_then(Value::as_str) {
                 Some("codex") => providers::codex_continuity::verify_handoff(dir, &config["lineage"])?,
+                Some("opencode") => providers::opencode_handoff::verify_handoff(dir,&config["lineage"])?,
                 None | Some("claude") => {
             use std::os::unix::fs::MetadataExt;
             let get=|key|proof.get(key).and_then(Value::as_str).unwrap_or_default();
@@ -1387,7 +1388,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 &json!({"type": if ready {"ok"} else {"error"}, "conversation_id":state.claude_schedule}),
             )
         }
-        "opencode_requests" | "opencode_operation" | "opencode_history" => {
+        "opencode_requests"
+        | "opencode_operation"
+        | "opencode_history"
+        | "opencode_handoff_page" => {
             let result = (|| {
                 stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                 let native = state
@@ -1405,6 +1409,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     "opencode_history" => native.history(
                         request["limit"].as_u64().unwrap_or(50),
                         field(&request, "before"),
+                    ),
+                    "opencode_handoff_page" => native.history_page(
+                        request["limit"].as_u64().unwrap_or(50),
+                        field(&request, "before"),
+                        true,
                     ),
                     _ => {
                         let params = (!request["body"].is_null()).then_some(&request["body"]);

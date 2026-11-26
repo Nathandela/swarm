@@ -9,6 +9,7 @@ pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;
 pub(crate) mod hermes;
 pub(crate) mod opencode;
+pub(crate) mod opencode_handoff;
 
 use serde_json::{Value, json};
 use std::fs;
@@ -412,6 +413,34 @@ pub(crate) fn stop_claude_agent_view(
     Ok(())
 }
 
+pub(crate) fn opencode_export(
+    executable: &Path,
+    cwd: &Path,
+    mut env: Vec<(String, String)>,
+    id: &str,
+    version: &str,
+) -> io::Result<Value> {
+    env.extend([
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("OPENCODE_DISABLE_AUTOUPDATE".into(), "true".into()),
+        ("OPENCODE_DISABLE_DEFAULT_PLUGINS".into(), "true".into()),
+        ("OPENCODE_DISABLE_PROJECT_CONFIG".into(), "true".into()),
+        ("OPENCODE_DISABLE_MODELS_FETCH".into(), "true".into()),
+    ]);
+    if opencode::version(&version_banner("opencode", executable, cwd, &env)?)? != version {
+        return Err(io::Error::other("OpenCode source exporter changed version"));
+    }
+    let output = command_output(
+        executable,
+        cwd,
+        &env,
+        &["export", id],
+        Duration::from_secs(20),
+        opencode_handoff::MAX_BYTES,
+    )?;
+    Ok(serde_json::from_str(&output)?)
+}
+
 fn command_output(
     executable: &Path,
     cwd: &Path,
@@ -427,7 +456,13 @@ fn command_output(
     } else {
         Stdio::null()
     };
-    let mut child = Command::new(executable)
+    let export = args.first() == Some(&"export");
+    let mut command = Command::new(executable);
+    if export {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .args(args)
         .current_dir(cwd)
         .env_clear()
@@ -443,6 +478,11 @@ fn command_output(
         .stdout(Stdio::from(OwnedFd::from(writer)))
         .stderr(stderr)
         .spawn()?;
+    let mut reaped = false;
+    let kill_export_group = |pid: u32| {
+        // SAFETY: the creator put this unreaped child in a dedicated process group.
+        unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+    };
     let result = (|| {
         // Nonblocking reads bound the probe even if a descendant inherits the output.
         let mut buffer = [0; 1024];
@@ -462,7 +502,20 @@ fn command_output(
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => false,
                 Err(err) => return Err(err),
             };
-            if idle && let Some(status) = child.try_wait()? {
+            let status = if idle && export {
+                if crate::supervisor::runtime::child_exited(&child)? {
+                    kill_export_group(child.id());
+                    Some(child.wait()?)
+                } else {
+                    None
+                }
+            } else if idle {
+                child.try_wait()?
+            } else {
+                None
+            };
+            if let Some(status) = status {
+                reaped = true;
                 if !status.success() {
                     return Err(io::Error::other("provider command failed"));
                 }
@@ -478,6 +531,9 @@ fn command_output(
         }
     })();
     if result.is_err() {
+        if export && !reaped {
+            kill_export_group(child.id());
+        }
         let _ = child.kill();
         let _ = child.wait();
     }

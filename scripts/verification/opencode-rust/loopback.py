@@ -24,6 +24,7 @@ parser.add_argument('--restart-every', type=int, default=20)
 parser.add_argument('--source')
 parser.add_argument('--native', type=Path)
 parser.add_argument('--mixed', action='store_true')
+parser.add_argument('--hands-off', action='store_true')
 parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
                     help='pause the verified native TUI across one preflight deadline')
 parser.add_argument('--check-arguments', action='store_true')
@@ -83,7 +84,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         length = int(self.headers['Content-Length'])
         assert 0 < length <= 16 * 1024 * 1024, 'model input ceiling exceeded'
         incoming = json.loads(self.rfile.read(length))
-        assert incoming['model'] == 'fixture'
+        assert incoming['model'] in (('fixture','handoff-source') if args.hands_off else ('fixture',))
         messages = incoming['messages']
         latest = max((i for i,m in enumerate(messages) if m.get('role')=='user'),default=-1)
         after = messages[latest+1:]
@@ -153,6 +154,13 @@ print('loopback guard verified',flush=True)
     'options':{'baseURL':f'http://127.0.0.1:{port}/v1','apiKey':'local-fixture'},
     'models':{'fixture':{'name':'Local Fixture','tool_call':True,'limit':{'context':64000,'output':8192}}}}}
 }))
+if args.hands_off:
+    config=root/'config/opencode/opencode.json'
+    current=json.loads(config.read_text())
+    current['provider']['fixture']['models']['handoff-source']={
+        'name':'Fixture alternative','tool_call':True,'limit':{'context':64000,'output':8192},
+    }
+    config.write_text(json.dumps(current))
 (root/'xdg-state/opencode/model.json').write_text(json.dumps({'recent':[{'providerID':'fixture','modelID':'fixture'}], 'favorite':[], 'variant':{}}))
 from launch import owner_request, history_page, resume_request
 
@@ -200,8 +208,15 @@ if args.duration is not None:
 
 daemon=start()
 try:
-    assert cli('spawn','--cli','opencode','--dir',str(root/'project'),'--model','fixture/fixture',
-               '--prompt','RUST_INITIAL. Reply fixture only.').returncode==0
+    if args.hands_off:
+        source=owner_request(env,dict(op='launch',launch=dict(agent='opencode',cwd=str(root/'project'),
+            name='source',env=[f"{k}={v}" for k,v in env.items()],
+            options={'model':'fixture/handoff-source','agent':'plan'},
+            initial_prompt='RUST_HANDOFF_SOURCE. Reply with the private fixture only.')))
+        assert source['op']=='launch',source
+    else:
+        assert cli('spawn','--cli','opencode','--dir',str(root/'project'),'--model','fixture/fixture',
+                   '--prompt','RUST_INITIAL. Reply fixture only.').returncode==0
     print('initial prompt admitted',flush=True)
     row=output('ls','--json')[0]['id']
     def history(identifier=row, limit=15, before=''):
@@ -211,6 +226,78 @@ try:
     wait(ready)
     before=history()
     assert any(m['info']['role']=='user' for m in before['history']), before
+    if args.hands_off:
+        def completed_source():
+            page=history()
+            return page if any(message["info"]["role"]=="assistant" and any(
+                part.get("text")=="Deterministic OpenCode fixture response." for part in message["parts"])
+                for message in page["history"]) else None
+        before=wait(completed_source)
+        def handoff(options=None):
+            return owner_request(env,dict(op='launch',launch=dict(agent='opencode',cwd=str(root/'forged-cwd'),
+                initial_prompt='FORGED CLIENT PROMPT',env=[f"{k}={v}" for k,v in env.items()],
+                options={'handoff_from':row,**(options or {})})),('hands-off-handoff',))
+        def read_prompt(identifier):
+            page=history(identifier)
+            return next((part['text'] for message in page['history'] if message['info']['role']=='user'
+                for part in message.get('parts',[]) if part['type']=='text' and 'transcript file:' in part['text']),None)
+        def verify_success(kind,expected_model,expected_agent,options=None):
+            opened=handoff(options)
+            assert opened['op']=='launch',opened
+            successor=opened['session']
+            assert successor['cwd']==str(root/'project') and successor['spawned_from']==row.split("/")[-1]
+            assert successor['spawn_intent']=='handoff' and 'supervision' not in successor
+            source_meta=json.loads((root/'state/rust-v1'/row.split('/')[-1]/'session.json').read_text())
+            successor_meta=json.loads((root/'state/rust-v1'/successor['id'].split('/')[-1]/'session.json').read_text())
+            lineage=successor_meta['lineage']['hands_off']
+            assert 'token' not in lineage and source_meta['token'] not in json.dumps(lineage)
+            assert re.fullmatch('[a-f0-9]{64}',lineage['instance'])
+            prompt=wait(lambda:read_prompt(successor['id']))
+            assert 'FORGED CLIENT PROMPT' not in prompt and f"conversation uid: {before['native_session_id']}" in prompt
+            assert 'source agent: opencode' in prompt
+            path=Path(re.search(r'^transcript file: (.+)$',prompt,re.M)[1])
+            assert path.parent==root/'state/handoff-exports' and re.fullmatch('native-history-[a-f0-9]{64}.json',path.name)
+            assert path.stat().st_mode & 0o777==0o600
+            artifact=json.loads(path.read_text())
+            assert artifact['swarm_provenance']['source']==kind and not artifact['swarm_provenance']['truncated']
+            assert artifact['info']['id']==before['native_session_id'] and artifact['info']['agent']=='plan'
+            assert artifact['info']['model']['id']=='handoff-source'
+            assert [entry['info']['id'] for entry in artifact['messages']]==[
+                entry['info']['id'] for entry in sorted(before['history'],
+                    key=lambda entry:(entry['info']['time']['created'],entry['info']['id']))]
+            own=history(successor['id'])
+            assert own['native_session_id']!=before['native_session_id']
+            first=next(item['info'] for item in own['history'] if item['info']['role']=='user')
+            assert first['model']['modelID']==expected_model and first['agent']==expected_agent,first
+            cli('kill',successor['id'])
+            return path
+        assert handoff({'resume_from':row})['op']=='error'
+        live=verify_success('live_sdk','handoff-source','plan')
+        assert any(entry['id']==row and entry['status']['Process']=='running' for entry in output('ls','--json'))
+        live.chmod(0o644)
+        try:
+            assert handoff()['op']=='error'
+        finally:
+            live.chmod(0o600)
+        owner_data=json.loads((root/'state/rust-v1'/row.split('/')[-1]/'owner.json').read_text())
+        cli('kill',row)
+        def gone():
+            try: os.kill(owner_data['pid'],0)
+            except ProcessLookupError: return True
+            return False
+        wait(gone)
+        wait(lambda:any(entry['id']==row and entry['status']['Process']=='exited' for entry in output('ls','--json')))
+        database=root/'data/opencode/opencode.db'
+        mode=database.stat().st_mode & 0o777
+        database.chmod(0o660)
+        try:
+            refused=handoff()
+            assert refused['op']=='error' and 'database is unproved' in refused['error'],refused
+        finally:
+            database.chmod(mode)
+        verify_success('native_cli_export','fixture','build',{'model':'fixture/fixture','agent':'build'})
+        print('native running and stopped handoff, owner-only artifact, inherited and explicit successor selection verified',flush=True)
+        sys.exit(0)
     assert resume_request(env, row, root/'project')['op'] == 'error'
     if args.digest_pause:
         from digest_pause import verify_fault

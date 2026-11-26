@@ -1,0 +1,11 @@
+# OpenCode hands-off handoff
+
+A managed ordinary OpenCode source can hand off through the retained owner launch. A live source is read through its authenticated shim and paginated native SDK. A confirmed stopped source is read by the bound OpenCode executable's native export, with the original physical database and configuration profile. Whole messages and their parts must belong to the exact native root. The private, content-addressed `handoff-exports/native-history-<digest>.json` file records native identity, source, scope and capture limits. The owner and new shim check its inode, bytes, source lineage and physical checkout before use.
+
+The existing pointers-only template names that artifact and the source conversation. The daemon derives the successor's directory and lineage. When the successor also uses OpenCode, missing model and agent options come from the export's committed native session metadata. Explicit successor selections retain precedence. Artifacts remain private if later launch admission fails.
+
+The installed OpenCode 1.19.3 loopback fixture exercises the live SDK and stopped export paths, using a fresh profile and a synthetic model. It verifies native message identities, source-derived artifact name and private mode, forged prompt and directory replacement, retained live source, rejection of mixed resume and handoff, unsafe artifact refusal, inherited model and agent, and explicit successor selection. The focused artifact test rejects foreign native parts and tampered content and recovers an interrupted hard-link publication.
+
+Use `--hands-off` with `scripts/verification/opencode-rust/run-linux.sh` or `run-macos-loopback.sh` and their existing scratch and binary arguments. The source capture and selection rules follow the pinned Go `internal/skeleton/opencode_history.go`, `internal/skeleton/opencode_selection.go`, and `composeHandsOffLaunch` in `internal/skeleton/api.go`.
+
+Both Linux x86-64 and macOS arm64 passed against installed OpenCode 1.19.3. The historical path also refused an unsafe database mode before export. The verified successor used a distinct native conversation and stored only a source instance hash in its lineage. Formatting, macOS Clippy, the focused artifact unit test and the Linux build passed.

@@ -526,8 +526,14 @@ impl State {
             if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
                 s.incarnation() == instance
                     && if prepared.lineage["hands_off"].is_object() {
-                        s.hands_off_source()
-                            .is_ok_and(|(_, _, _, proof)| proof == prepared.lineage["hands_off"])
+                        if prepared.lineage["hands_off"]["kind"] == "opencode" {
+                            s.verify_opencode_handoff(&prepared.lineage["hands_off"])
+                                .is_ok()
+                        } else {
+                            s.hands_off_source().is_ok_and(|(_, _, _, proof)| {
+                                proof == prepared.lineage["hands_off"]
+                            })
+                        }
                     } else {
                         s.is_live() && s.verify_effective().is_ok()
                     }
