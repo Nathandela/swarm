@@ -41,7 +41,10 @@ def artifacts():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host", help="authorized SSH hostname or alias")
-    host = parser.parse_args().host
+    parser.add_argument("--stage-parent", choices=["/tmp", "/dev/shm"], default="/tmp",
+                        help="remote filesystem for the cross-built test executables")
+    args = parser.parse_args()
+    host = args.host
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]*", host):
         parser.error("invalid SSH host")
     ssh = ["ssh", "-o", "BatchMode=yes", host]
@@ -49,22 +52,30 @@ def main():
     if platform != "Linux x86_64":
         raise RuntimeError(f"Expected Linux x86_64, got {platform!r}")
     binaries, tests = artifacts()
-    root = subprocess.check_output([*ssh, "umask 077 && mktemp -d /tmp/sw-test.XXXXXXXX"],
-                                   text=True).strip()
-    if not re.fullmatch(r"/tmp/sw-test\.[A-Za-z0-9]{8}", root):
-        raise RuntimeError("unexpected remote scratch path")
-    print(f"Running {len(tests)} test executables on {host} in {root}", flush=True)
+    def new_directory(parent):
+        root = subprocess.check_output(
+            [*ssh, f"umask 077 && mktemp -d {parent}/sw-test.XXXXXXXX"], text=True
+        ).strip()
+        if not re.fullmatch(re.escape(parent) + r"/sw-test\.[A-Za-z0-9]{8}", root):
+            raise RuntimeError("unexpected remote scratch path")
+        return root
+
+    root = new_directory(args.stage_parent)
+    # Workspace identity tests need a filesystem that reports directory birth time.
+    scratch = root if args.stage_parent == "/tmp" else new_directory("/tmp")
+    print(f"Running {len(tests)} test executables on {host} in {root}, scratch {scratch}", flush=True)
     subprocess.run(["scp", "-q", "-o", "BatchMode=yes", *binaries, f"{host}:{root}/"], check=True)
     failed = []
     for name in tests:
-        result = subprocess.run([*ssh, f"cd {root} && TMPDIR={root} SWARM_TEST_BIN={root}/swarm ./{name}"])
+        result = subprocess.run([*ssh, f"cd {root} && TMPDIR={scratch} SWARM_TEST_BIN={root}/swarm ./{name}"])
         if result.returncode:
             failed.append(name)
     if failed:
-        raise SystemExit(f"Failed {failed}; retained scratch at {host}:{root}")
+        raise SystemExit(f"Failed {failed}; retained binaries at {host}:{root} and scratch at {scratch}")
     # Refuse to discard unexpected files or a surviving test's scratch directory.
     names = " ".join("./" + p.name for p in binaries)
-    subprocess.run([*ssh, f"cd {root} && rm -- {names} && cd / && rmdir {root}"], check=True)
+    directories = root if scratch == root else f"{root} {scratch}"
+    subprocess.run([*ssh, f"cd {root} && rm -- {names} && cd / && rmdir {directories}"], check=True)
 
 
 if __name__ == "__main__":
