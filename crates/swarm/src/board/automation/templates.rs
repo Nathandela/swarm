@@ -233,7 +233,7 @@ impl Automation {
         let Some(draft) = &self.draft else {
             return Action::None;
         };
-        let edit = Edit::new(None, &draft.values[0].text, &draft.values[2].text);
+        let edit = Edit::new(None, &draft.name.text, &draft.prompt.text);
         let action = self.open_templates(true);
         self.templates.as_mut().unwrap().page = Page::Edit(edit);
         action
@@ -332,11 +332,7 @@ impl Automation {
             && let Some(template) = picker.items.get(picker.selected)
             && let Some(draft) = &mut self.draft
         {
-            if draft.values[0].text.is_empty() {
-                draft.values[0] = Editor::new(&template.name);
-            }
-            draft.values[2] = Editor::new(&template.prompt);
-            draft.focus = 2;
+            draft.use_template(&template.name, &template.prompt);
             self.templates = None;
             self.error.clear();
         } else if !picker.from_draft && key == Key::Text('n') {
@@ -421,14 +417,8 @@ mod tests {
         for name in ["", "Keep my name"] {
             let mut view = Automation::in_directory("/selected/workspace");
             let draft = view.draft.as_mut().unwrap();
-            draft.values[0] = Editor::new(name);
-            draft.values[3] = Editor::new("codex,claude");
-            let prior: Vec<_> = draft
-                .values
-                .iter()
-                .skip(3)
-                .map(|field| field.text.clone())
-                .collect();
+            draft.name = Editor::new(name);
+            let before = draft.spec();
             assert!(matches!(
                 view.update(Key::CtrlT, geometry),
                 Action::ReadTemplates
@@ -438,21 +428,17 @@ mod tests {
             assert!(view.templates.is_none());
             let draft = view.draft.as_ref().unwrap();
             assert_eq!(
-                draft.values[0].text,
+                draft.name.text,
                 if name.is_empty() { "Example" } else { name }
             );
-            assert_eq!(draft.values[1].text, "/selected/workspace");
-            assert_eq!(draft.values[2].text, template.prompt);
-            assert_eq!(draft.focus, 2);
-            assert_eq!(
-                draft
-                    .values
-                    .iter()
-                    .skip(3)
-                    .map(|field| field.text.as_str())
-                    .collect::<Vec<_>>(),
-                prior
-            );
+            assert_eq!(draft.prompt.text, template.prompt);
+            assert_eq!(draft.focus, 1);
+            let after = draft.spec();
+            assert_eq!(after.directory, before.directory);
+            assert_eq!(after.agents, before.agents);
+            assert_eq!(after.authority, before.authority);
+            assert_eq!(after.workspace, before.workspace);
+            assert!(after.calendar == before.calendar);
         }
     }
 }

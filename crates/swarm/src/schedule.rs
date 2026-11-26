@@ -143,17 +143,7 @@ impl Spec {
             return Err("select at least one agent".into());
         }
         for (i, agent) in self.agents.iter().enumerate() {
-            match agent.as_str() {
-                "codex" => {}
-                "claude" | "agy" if self.authority == "agent-default" => {}
-                "claude" | "agy" => {
-                    return Err(format!("{agent} supports agent-default authority only").into());
-                }
-                "hermes" | "opencode" => {
-                    return Err(format!("{agent} has no scheduled execution route").into());
-                }
-                _ => return Err(format!("unknown agent {agent:?}").into()),
-            }
+            check_route_authority(agent, &self.authority)?;
             if self.agents[..i].contains(agent) {
                 return Err(format!("agent {agent:?} is listed twice").into());
             }
@@ -162,24 +152,56 @@ impl Spec {
             return Err("catch-up grace must be nonnegative".into());
         }
         calendar::Rule::compile(&self.calendar, host)?;
-        if self.directory.trim().is_empty() {
-            return Err("select a directory".into());
-        }
-        let path = match self.directory.as_str() {
-            "~" => home()?,
-            s if s.starts_with("~/") => home()?.join(s[2..].trim_start_matches('/')),
-            s => PathBuf::from(s),
-        };
-        let directory = fs::canonicalize(path).map_err(|e| format!("resolve directory: {e}"))?;
-        if !directory.is_dir() {
-            return Err(format!("{directory:?} is not a directory").into());
-        }
-        self.directory = directory
-            .into_os_string()
-            .into_string()
-            .map_err(|_| "directory path must contain valid UTF-8 text")?;
+        self.directory = resolve_directory(&self.directory)?;
         Ok(())
     }
+}
+
+pub(crate) fn check_route_authority(agent: &str, authority: &str) -> Result<()> {
+    match agent {
+        "codex" => Ok(()),
+        "claude" | "agy" if authority == "agent-default" => Ok(()),
+        "claude" | "agy" => {
+            Err(format!("{agent} requires configured agent permissions for scheduled runs").into())
+        }
+        "hermes" | "opencode" => Err(format!("{agent} has no scheduled execution route").into()),
+        _ => Err(format!("unknown agent {agent:?}").into()),
+    }
+}
+
+pub(crate) fn resolve_directory(directory: &str) -> Result<String> {
+    let path = match directory {
+        s if s.trim().is_empty() => return Err("select a directory".into()),
+        "~" => home()?,
+        s if s.starts_with("~/") => home()?.join(s[2..].trim_start_matches('/')),
+        s => PathBuf::from(s),
+    };
+    let directory = fs::canonicalize(path).map_err(|e| format!("resolve directory: {e}"))?;
+    if !directory.is_dir() {
+        return Err(format!("{directory:?} is not a directory").into());
+    }
+    Ok(directory
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "directory path must contain valid UTF-8 text")?)
+}
+
+pub(crate) fn editor_firing(calendar: &Calendar) -> Result<(String, String)> {
+    let rule = calendar::Rule::compile(calendar, Path::new("/etc/localtime"))?;
+    let Some(next) = rule.find(Timestamp::now(), false) else {
+        return Ok(("No future trigger".into(), String::new()));
+    };
+    let host = if calendar.time_zone == "host" {
+        rule.zone.tz.iana_name().unwrap_or("Local").to_owned()
+    } else {
+        String::new()
+    };
+    Ok((
+        next.to_zoned(rule.zone.tz)
+            .strftime("%a, %d %b %Y %H:%M %Z")
+            .to_string(),
+        host,
+    ))
 }
 
 fn home() -> Result<PathBuf> {
@@ -205,10 +227,6 @@ pub(crate) fn automation_install_timer(
 ) -> io::Result<()> {
     timer::board_install(path, endpoint, expected)
         .map_err(|error| io::Error::other(error.to_string()))
-}
-
-pub(crate) fn automation_duration(input: &str) -> Result<i64> {
-    cli::duration(input)
 }
 
 pub(crate) fn automation_invocation() -> io::Result<String> {

@@ -135,7 +135,7 @@ printf '2.1.329 (Claude Code)\n'
                 step(b"m", b"More")
                 step(b"a", b"Enable probe")
                 step(b"\r", b"History")
-                editor = b"Job name" if reference else b"Edit automation"
+                editor = b"Automations / Edit"
                 step(b"p", editor)
                 assert show() == paused, "opening the editor changed the paused job"
                 step(b"\x1b[27u", b"History")
@@ -187,7 +187,7 @@ printf '2.1.329 (Claude Code)\n'
                 step(b"p", editor)
                 step(b"\x15Saved and enabled", b"Saved and enabled")
                 start = len(board.capture)
-                step(b"\x13", b"Status")
+                step(b"\x13", b"Automations / Saved and enabled")
                 active = show()
                 assert active["state"] == "active" and active["spec"]["name"] == "Saved and enabled"
                 assert active["revision_id"] != latest["revision_id"]
@@ -209,7 +209,7 @@ printf '2.1.329 (Claude Code)\n'
                     return saved
 
                 before_install = prepare_install()
-                step(b"y", b"Status")
+                step(b"y", b"Automations / Saved and enabled")
                 installed = show()
                 assert installed["state"] == "active"
                 assert installed["revision_id"] != before_install["revision_id"]

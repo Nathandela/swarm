@@ -1,10 +1,9 @@
-use super::launch::{ACCENT, PLAIN, spans};
+use super::launch::{ACCENT, Detected, ERROR, PLAIN, spans};
 use super::navigation::truncation;
 use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, terminal_char, usable};
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
-    Calendar, Job, Occurrence, Spec, Template, automation_duration, automation_install_timer,
-    automation_invocation, automation_timer_status,
+    Calendar, Job, Occurrence, Spec, Template, automation_install_timer, automation_timer_status,
 };
 use std::{
     fmt::Write as _,
@@ -20,7 +19,10 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+mod draft;
 mod templates;
+
+use draft::{Draft, Field, Preview};
 
 #[derive(Default)]
 pub(super) struct TimerStatusProbe {
@@ -99,7 +101,11 @@ pub(super) struct Automation {
     timer_prompt: Option<TimerPrompt>,
     timer_installing: Option<(String, mpsc::Receiver<io::Result<()>>)>,
     job: String,
+    catalog_owner: Option<String>,
+    draft_owner: Option<String>,
     draft: Option<Draft>,
+    detected: Option<Detected>,
+    preview_worker: Option<(Spec, mpsc::Receiver<Preview>)>,
     templates: Option<templates::Picker>,
     archive: Option<ArchivePrompt>,
     enable_confirmation: bool,
@@ -125,6 +131,8 @@ struct ArchivePrompt {
 enum PointerTarget {
     Button(char),
     Row(usize),
+    DraftChoice(usize, Field, char),
+    DraftActivate(usize, Field),
 }
 
 struct Button {
@@ -137,11 +145,75 @@ struct Button {
 impl Automation {
     pub(super) fn in_directory(directory: &str) -> Self {
         let mut draft = Draft::new(None);
-        draft.values[1] = Editor::new(directory);
+        draft.directory = Editor::new(directory);
         Self {
             draft: Some(draft),
             ..Self::default()
         }
+    }
+
+    pub(super) fn apply_detection(&mut self, detected: &Detected) {
+        self.detected = Some(detected.clone());
+    }
+
+    pub(super) fn catalog_owner(&mut self, endpoint: &str) {
+        self.catalog_owner = Some(endpoint.to_owned());
+        if self.draft.is_some() && self.draft_owner.is_none() {
+            self.draft_owner.clone_from(&self.catalog_owner);
+        }
+    }
+
+    pub(super) fn accepts_change_owner(&self, endpoint: &str) -> bool {
+        self.draft.is_none() || self.draft_owner.as_deref() == Some(endpoint)
+    }
+
+    pub(super) fn has_draft(&self) -> bool {
+        self.draft.is_some()
+    }
+
+    fn open_draft(&mut self, draft: Draft) {
+        self.draft_owner.clone_from(&self.catalog_owner);
+        self.draft = Some(draft);
+    }
+
+    pub(super) fn poll_draft_preview(&mut self, geometry: (u16, u16)) -> bool {
+        let budget = self.body_capacity(geometry);
+        if let Some((spec, receiver)) = &self.preview_worker {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    if let Some(draft) = &mut self.draft
+                        && draft.spec() == *spec
+                    {
+                        draft.apply_preview(
+                            spec.clone(),
+                            result,
+                            geometry.0,
+                            &self.timer_status,
+                            self.detected.as_ref(),
+                            budget,
+                        );
+                        self.preview_worker = None;
+                        return true;
+                    }
+                    self.preview_worker = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => return false,
+                Err(mpsc::TryRecvError::Disconnected) => self.preview_worker = None,
+            }
+        }
+        if let Some(draft) = &self.draft
+            && draft.preview.is_none()
+            && std::time::Instant::now() >= draft.preview_after
+        {
+            let spec = draft.spec();
+            let work = spec.clone();
+            let (send, receive) = mpsc::channel();
+            self.preview_worker = Some((spec, receive));
+            thread::spawn(move || {
+                let _ = send.send(Preview::read(&work));
+            });
+        }
+        false
     }
 
     pub(super) fn receive(&mut self, response: std::io::Result<Records>) {
@@ -335,6 +407,13 @@ impl Automation {
             self.error.clear();
             return Some(Action::None);
         }
+        if let Some(draft) = &mut self.draft
+            && draft.convert_zone
+        {
+            draft.convert_zone = false;
+            self.error.clear();
+            return Some(Action::None);
+        }
         if self.draft.take().is_some() || self.archive.take().is_some() || self.run.take().is_some()
         {
             self.error.clear();
@@ -371,6 +450,7 @@ impl Automation {
             ("Open", '⏎'),
             ("Back", '⎋'),
         ];
+        let draft_controls;
         let controls: &[(&str, char)] = if self.enabling.is_some()
             || self.timer_installing.is_some()
         {
@@ -387,25 +467,24 @@ impl Automation {
             }
         } else if self.enable_confirmation {
             &[("Save and enable", 'y'), ("Cancel", '⎋')]
-        } else if self
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.enable.is_some())
-        {
-            &[
-                ("Save paused", '↡'),
-                ("Save and enable", '↟'),
-                ("Use template", templates::USE),
-                ("Save template", templates::SAVE),
-                ("Cancel", '⎋'),
-            ]
-        } else if self.draft.is_some() {
-            &[
-                ("Save", '⏎'),
-                ("Use template", templates::USE),
-                ("Save template", templates::SAVE),
-                ("Cancel", '⎋'),
-            ]
+        } else if let Some(draft) = &self.draft {
+            if draft.convert_zone {
+                &[("Use host wall time", 'y'), ("Back", '⎋')]
+            } else {
+                let (enable, save) = draft.labels();
+                draft_controls = [
+                    (enable, '↟'),
+                    (save, '↡'),
+                    ("Use template", templates::USE),
+                    ("Save template", templates::SAVE),
+                    ("Previous choice", '←'),
+                    ("Next choice", '→'),
+                    ("Move fallback up", '-'),
+                    ("Move fallback down", '+'),
+                    ("Back", '⎋'),
+                ];
+                &draft_controls
+            }
         } else if self.archive.is_some() {
             &[("Archive job", 'y'), ("Cancel", '⎋')]
         } else {
@@ -531,12 +610,10 @@ impl Automation {
             return picker.rows_at(budget);
         }
         if let Some(draft) = &self.draft {
-            let budget = budget.saturating_sub(1).max(1);
-            return (
-                (draft.focus + 1).saturating_sub(budget),
-                budget,
-                FIELDS.len(),
-            );
+            let count = draft
+                .rows(geometry.0, &self.timer_status, self.detected.as_ref())
+                .len();
+            return (draft.start(count, budget), budget, count);
         }
         let count = match &self.records {
             Some(Records::List(_)) => self.visible_jobs().count(),
@@ -565,12 +642,53 @@ impl Automation {
         }) {
             return Some(PointerTarget::Button(button.key));
         }
-        if self.run.is_some() || self.archive.is_some() || event.y == 2 && !self.error.is_empty() {
+        if self.run.is_some()
+            || self.archive.is_some()
+            || event.y == 2 && !self.error.is_empty() && self.draft.is_none()
+        {
             return None;
         }
         let (start, budget, count) = self.rows_at(geometry);
         let offset = usize::from(event.y - 2);
-        (offset < budget && start + offset < count).then_some(PointerTarget::Row(start + offset))
+        let index = start + offset;
+        if offset >= budget || index >= count {
+            return None;
+        }
+        if self.templates.is_none()
+            && let Some(draft) = &self.draft
+        {
+            let items = draft.rows(geometry.0, &self.timer_status, self.detected.as_ref());
+            if let Some(row) = items.get(index)
+                && let Some(field) = row.field
+            {
+                match field {
+                    Field::SaveEnable
+                    | Field::SaveDraft
+                    | Field::ConvertZone
+                    | Field::Advanced
+                    | Field::Fallback(_) => {
+                        return Some(PointerTarget::DraftActivate(index, field));
+                    }
+                    Field::Cadence
+                    | Field::Day
+                    | Field::Primary
+                    | Field::Authority
+                    | Field::Workspace
+                    | Field::Overlap
+                    | Field::Missed => {
+                        for arrow in ['‹', '›'] {
+                            if let Some(caret) = row.text.find(arrow)
+                                && usize::from(event.x) == 3 + row.text[..caret].width()
+                            {
+                                return Some(PointerTarget::DraftChoice(index, field, arrow));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(PointerTarget::Row(index))
     }
 
     pub(super) fn mouse(&mut self, event: Mouse, geometry: (u16, u16)) -> Option<Key> {
@@ -590,14 +708,32 @@ impl Automation {
             MouseAction::Press => {
                 self.press = None;
                 if let Some(target) = target {
+                    let budget = self.body_capacity(geometry);
                     let activate = match target {
                         PointerTarget::Button(_) => true,
+                        PointerTarget::DraftChoice(index, _, _)
+                        | PointerTarget::DraftActivate(index, _) => {
+                            if let Some(draft) = &mut self.draft {
+                                let rows = draft.rows(
+                                    geometry.0,
+                                    &self.timer_status,
+                                    self.detected.as_ref(),
+                                );
+                                draft.select(index, rows.len(), budget);
+                            }
+                            true
+                        }
                         PointerTarget::Row(index) => {
                             if let Some(picker) = &mut self.templates {
                                 picker.select(index)
                             } else if let Some(draft) = &mut self.draft {
-                                draft.focus = index;
-                                index + 1 == FIELDS.len()
+                                let rows = draft.rows(
+                                    geometry.0,
+                                    &self.timer_status,
+                                    self.detected.as_ref(),
+                                );
+                                draft.select(index, rows.len(), budget);
+                                false
                             } else {
                                 let activate = self.selected == index
                                     && matches!(
@@ -622,9 +758,13 @@ impl Automation {
                     && Some(prior) == target
                 {
                     return Some(match prior {
+                        PointerTarget::DraftChoice(_, _, '‹') => Key::Left,
+                        PointerTarget::DraftChoice(_, _, _) => Key::Right,
+                        PointerTarget::DraftActivate(_, _) => Key::Enter,
                         PointerTarget::Row(_) | PointerTarget::Button('⏎') => Key::Enter,
                         PointerTarget::Button('⎋') => Key::Escape,
                         PointerTarget::Button('←') => Key::Left,
+                        PointerTarget::Button('→') => Key::Right,
                         PointerTarget::Button('↟') => Key::CtrlS,
                         PointerTarget::Button('↡') => Key::CtrlD,
                         PointerTarget::Button(templates::USE) => Key::CtrlT,
@@ -691,6 +831,23 @@ impl Automation {
         if self.enable_confirmation && !matches!(key, Key::Text('y')) {
             return Action::None;
         }
+        let budget = self.body_capacity(geometry);
+        if let Some(draft) = &mut self.draft
+            && draft.convert_zone
+        {
+            if key == Key::Text('y') {
+                draft.confirm_zone(geometry.0, &self.timer_status, self.detected.as_ref());
+            } else {
+                draft.update(
+                    key,
+                    geometry.0,
+                    budget,
+                    &self.timer_status,
+                    self.detected.as_ref(),
+                );
+            }
+            return Action::None;
+        }
         if key == Key::CtrlT && self.draft.is_some() {
             return self.open_templates(true);
         }
@@ -698,17 +855,26 @@ impl Automation {
             return self.save_draft_template();
         }
         if let Some(draft) = &mut self.draft {
+            if key == Key::CtrlR {
+                draft.preview = None;
+                draft.preview_after = std::time::Instant::now();
+                self.error.clear();
+                return Action::None;
+            }
             let install_timer = self.enable_confirmation;
-            if key == Key::Enter && (draft.enable.is_none() || draft.focus + 1 == FIELDS.len())
-                || matches!(key, Key::CtrlS | Key::CtrlD) && draft.enable.is_some()
-                || install_timer
-            {
+            let field = draft
+                .rows(geometry.0, &self.timer_status, self.detected.as_ref())
+                .get(draft.focus)
+                .and_then(|row| row.field);
+            let invoke = matches!(key, Key::Enter | Key::Text(' '));
+            let enable =
+                key == Key::CtrlS || install_timer || invoke && field == Some(Field::SaveEnable);
+            let save = key == Key::CtrlD || invoke && field == Some(Field::SaveDraft);
+            if enable || save {
                 if geometry.0 < 32 || geometry.1 < 8 {
                     self.error = "Resize to 32×8 to save".into();
                 } else {
-                    match draft
-                        .change((key == Key::CtrlS || install_timer).then_some(install_timer))
-                    {
+                    match draft.change(enable.then_some(install_timer)) {
                         Ok(change) => {
                             self.enable_confirmation = false;
                             return Action::ChangeAutomation(change);
@@ -718,7 +884,13 @@ impl Automation {
                 }
             } else {
                 self.error.clear();
-                draft.update(key);
+                draft.update(
+                    key,
+                    geometry.0,
+                    budget,
+                    &self.timer_status,
+                    self.detected.as_ref(),
+                );
             }
             return Action::None;
         }
@@ -746,17 +918,15 @@ impl Automation {
                 Action::None
             }
             (Some(Records::List(_)), Key::Text('n')) => {
-                self.draft = Some(Draft::new(None));
+                self.open_draft(Draft::new(None));
                 Action::None
             }
             (Some(Records::Get(job)), Key::Text('e')) if job.state != "archived" => {
-                self.draft = Some(Draft::new(Some(job)));
+                self.open_draft(Draft::new(Some(job)));
                 Action::None
             }
             (Some(Records::Get(job)), Key::Text('p')) if job.state == "paused" => {
-                let mut draft = Draft::new(Some(job));
-                draft.enable = Some((job.lifecycle_generation, job.updated_at));
-                self.draft = Some(draft);
+                self.open_draft(Draft::new(Some(job)));
                 Action::None
             }
             (Some(Records::Get(job)), key @ Key::Text('p' | 'x')) if job.state != "archived" => {
@@ -999,9 +1169,22 @@ impl Automation {
         }
         if let Some(draft) = &self.draft {
             let budget = self.body_capacity((cols, rows));
-            draft.view(output, cols, budget);
-            if !self.error.is_empty() {
-                line(output, budget as u16 + 1, cols, "\x1b[33m", &self.error);
+            let items = draft.rows(cols, &self.timer_status, self.detected.as_ref());
+            let (title, style) = if self.error.is_empty() {
+                (draft.title(), ACCENT)
+            } else {
+                (self.error.as_str(), ERROR)
+            };
+            line(output, 1, cols, style, &list_label(title, cols.into()));
+            let start = draft.start(items.len(), budget);
+            for (offset, item) in items.iter().skip(start).take(budget).enumerate() {
+                write_list_row(
+                    output,
+                    offset as u16 + 2,
+                    cols,
+                    &item.text,
+                    start + offset == draft.focus,
+                );
             }
             self.footer(output, cols, rows);
             return;
@@ -1167,200 +1350,6 @@ fn list_cadence(calendar: &Calendar) -> String {
         format!("{cadence} · Host wall time")
     } else {
         format!("{cadence} · {} (fixed)", calendar.time_zone)
-    }
-}
-
-const FIELDS: [&str; 15] = [
-    "Name",
-    "Directory",
-    "Prompt",
-    "Agents",
-    "Authority",
-    "Workspace",
-    "Calendar",
-    "Timezone",
-    "Time",
-    "Date",
-    "Weekday",
-    "Cron expression",
-    "Catch-up duration",
-    "Allow overlap",
-    "Save",
-];
-
-struct Draft {
-    target: Option<(String, String)>,
-    enable: Option<(u64, jiff::Timestamp)>,
-    operation: Option<String>,
-    values: Vec<Editor>,
-    focus: usize,
-}
-
-impl Draft {
-    fn new(job: Option<&Job>) -> Self {
-        let initial = job.map_or_else(default_spec, |job| job.spec.clone());
-        let cal = initial.calendar;
-        let values = [
-            initial.name,
-            initial.directory,
-            initial.prompt,
-            initial.agents.join(","),
-            initial.authority,
-            initial.workspace,
-            cal.kind,
-            cal.time_zone,
-            cal.time,
-            cal.date,
-            cal.weekday,
-            cal.cron,
-            format!("{}ns", initial.grace),
-            initial.allow_overlap.to_string(),
-        ];
-        Self {
-            target: job.map(|job| (job.id.clone(), job.revision_id.clone())),
-            enable: None,
-            operation: None,
-            values: values.iter().map(|value| Editor::new(value)).collect(),
-            focus: 0,
-        }
-    }
-
-    fn update(&mut self, key: Key) {
-        match key {
-            Key::Up => self.focus = (self.focus + FIELDS.len() - 1) % FIELDS.len(),
-            Key::Down | Key::Tab => self.focus = (self.focus + 1) % FIELDS.len(),
-            Key::Paste(text) if self.focus == 2 => {
-                self.values[2].insert_text(
-                    text.chars()
-                        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\r' | '\t')),
-                );
-            }
-            key => {
-                if let Some(editor) = self.values.get_mut(self.focus) {
-                    editor.apply(key);
-                }
-            }
-        }
-    }
-
-    fn change(&mut self, enable: Option<bool>) -> Result<Change, String> {
-        let get = |index: usize| self.values[index].text.trim().to_owned();
-        let kind = get(6);
-        let (time, date, weekday, cron) = match kind.as_str() {
-            "cron" => (String::new(), String::new(), String::new(), get(11)),
-            "once" => (get(8), get(9), String::new(), String::new()),
-            "weekly" => (get(8), String::new(), get(10), String::new()),
-            "daily" | "weekdays" => (get(8), String::new(), String::new(), String::new()),
-            _ => return Err("Calendar requires once, daily, weekdays, weekly, or cron".into()),
-        };
-        let spec = Box::new(Spec {
-            name: get(0),
-            directory: get(1),
-            prompt: self.values[2].text.clone(),
-            agents: self.values[3]
-                .text
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            authority: get(4),
-            workspace: get(5),
-            calendar: Calendar {
-                kind,
-                time_zone: get(7),
-                time,
-                date,
-                weekday,
-                cron,
-            },
-            grace: automation_duration(&get(12)).map_err(|error| error.to_string())?,
-            allow_overlap: get(13)
-                .parse()
-                .map_err(|_| "Allow overlap requires true or false")?,
-        });
-        Ok(match (&self.target, self.enable.zip(enable)) {
-            (Some((id, revision)), Some(((generation, updated_at), install_timer))) => {
-                Change::Enable {
-                    id: id.clone(),
-                    revision: revision.clone(),
-                    generation,
-                    updated_at,
-                    spec,
-                    install_timer,
-                }
-            }
-            (Some((id, revision)), _) => Change::Edit {
-                id: id.clone(),
-                revision: revision.clone(),
-                spec,
-                paused: self.enable,
-            },
-            (None, _) => {
-                if self.operation.is_none() {
-                    self.operation =
-                        Some(automation_invocation().map_err(|error| error.to_string())?);
-                }
-                Change::Create {
-                    operation: self.operation.clone().unwrap(),
-                    spec,
-                }
-            }
-        })
-    }
-
-    fn view(&self, output: &mut String, cols: u16, budget: usize) {
-        form_header(
-            output,
-            cols,
-            if self.target.is_some() {
-                "Edit automation"
-            } else {
-                "New automation"
-            },
-        );
-        let window = budget.saturating_sub(1).max(1);
-        let start = (self.focus + 1).saturating_sub(window);
-        for (index, label) in FIELDS.iter().enumerate().skip(start).take(window) {
-            let marker = if index == self.focus { "▌" } else { " " };
-            let value = self
-                .values
-                .get(index)
-                .map(|editor| editor.text.as_str())
-                .unwrap_or_else(|| {
-                    if self.target.is_some() {
-                        "Save revision"
-                    } else {
-                        "Save paused draft"
-                    }
-                });
-            line(
-                output,
-                (index - start) as u16 + 2,
-                cols,
-                "",
-                &format!("{marker} {label}  {value}"),
-            );
-        }
-    }
-}
-
-fn default_spec() -> Spec {
-    Spec {
-        directory: std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into(),
-        authority: "agent-default".into(),
-        workspace: "directory".into(),
-        agents: vec!["codex".into()],
-        calendar: Calendar {
-            kind: "daily".into(),
-            time_zone: "UTC".into(),
-            time: "09:00".into(),
-            ..Calendar::default()
-        },
-        ..Spec::default()
     }
 }
 

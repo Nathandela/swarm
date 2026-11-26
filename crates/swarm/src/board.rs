@@ -135,6 +135,10 @@ fn board(path: &Path) -> io::Result<()> {
                     form.apply_detection(snapshot);
                     needs_paint = true;
                 }
+                Some(Modal::Automation(view)) => {
+                    view.apply_detection(snapshot);
+                    needs_paint = true;
+                }
                 _ => {}
             }
         }
@@ -181,6 +185,9 @@ fn board(path: &Path) -> io::Result<()> {
                 view.timer_install_error("automation owner changed; refresh to check timer status");
             }
             needs_paint = true;
+        }
+        if let Some(Modal::Automation(view)) = &mut board.modal {
+            needs_paint |= view.poll_draft_preview(dimensions);
         }
         if let Some((generation, status)) = timer_status.poll()
             && let Some(Modal::Automation(view)) = &mut board.modal
@@ -357,8 +364,12 @@ fn board(path: &Path) -> io::Result<()> {
             let needs_current_size = match (&board.modal, &key) {
                 (Some(Modal::Handoff(_)), Key::Enter | Key::Text('y')) => true,
                 (Some(Modal::Automation(view)), Key::Text('y') | Key::Mouse(_)) => {
-                    view.confirmation_pending()
+                    view.confirmation_pending() || view.has_draft()
                 }
+                (
+                    Some(Modal::Automation(view)),
+                    Key::Enter | Key::CtrlD | Key::CtrlS | Key::Text(' '),
+                ) => view.has_draft(),
                 _ => false,
             };
             let action_geometry = if needs_current_size {
@@ -473,6 +484,16 @@ fn board(path: &Path) -> io::Result<()> {
                 }
                 Action::ChangeAutomation(change) => {
                     if let Some(Modal::Automation(view)) = &mut board.modal {
+                        if connection
+                            .as_ref()
+                            .is_some_and(|client| !view.accepts_change_owner(client.endpoint()))
+                        {
+                            view.changed(Err(io::Error::other(
+                                "automation owner changed; reopen the draft before saving",
+                            )));
+                            needs_paint = true;
+                            continue;
+                        }
                         if matches!(change, CatalogChange::Enable { .. })
                             && let Some(client) = &connection
                         {
@@ -941,7 +962,11 @@ impl Board {
                 self.notice.clear();
             }
             Key::Text('a') => {
-                self.modal = Some(Modal::Automation(Box::default()));
+                let mut view = Automation::default();
+                if let Some(detected) = self.availability.cached.as_ref() {
+                    view.apply_detection(detected);
+                }
+                self.modal = Some(Modal::Automation(Box::new(view)));
                 self.notice.clear();
                 return Action::Catalog(CatalogRead::List);
             }
@@ -949,9 +974,11 @@ impl Board {
                 if let Some(row) = self.by_id(id).filter(|_| self.linked_binding(id).is_none()) {
                     let directory = field(row, "cwd");
                     if !directory.is_empty() {
-                        self.modal = Some(Modal::Automation(Box::new(Automation::in_directory(
-                            directory,
-                        ))));
+                        let mut view = Automation::in_directory(directory);
+                        if let Some(detected) = self.availability.cached.as_ref() {
+                            view.apply_detection(detected);
+                        }
+                        self.modal = Some(Modal::Automation(Box::new(view)));
                         self.notice.clear();
                         return Action::Catalog(CatalogRead::List);
                     }
@@ -1890,6 +1917,11 @@ fn automation_read(
         |client| query.remote(client),
     );
     let state = automation_status(&result, connection.as_deref_mut());
+    if result.is_ok()
+        && let Some(client) = connection.as_ref()
+    {
+        view.catalog_owner(client.endpoint());
+    }
     if matches!(&result, Ok(CatalogRecords::List(_))) {
         let owner = connection
             .filter(|client| client.supports("schedule-native"))

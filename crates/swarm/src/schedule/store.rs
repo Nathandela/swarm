@@ -419,35 +419,43 @@ impl Store {
         job: &str,
         expected: Option<&str>,
         mut spec: Spec,
-        paused: Option<(u64, Timestamp, bool)>,
+        transition: Option<(&str, u64, Timestamp, &str)>,
         now: Timestamp,
     ) -> Result<Job> {
         spec.prepare(&self.host)?;
-        let enable = paused.is_some_and(|(_, _, enable)| enable);
         self.write(|tx| {
             let mut job: Job = require(tx, JOBS, job)?;
             if job.state == "archived" {
                 return Err(ARCHIVED.into());
             }
             if expected.is_some_and(|id| id != job.revision_id)
-                || paused.is_some_and(|(generation, updated, _)| {
-                    !job.paused_revision(generation, updated)
+                || transition.is_some_and(|(state, generation, updated, _)| {
+                    job.state != state
+                        || job.lifecycle_generation != generation
+                        || job.updated_at != updated
                 })
             {
                 return Err(CONFLICT.into());
             }
-            if enable || paused.is_none() && spec.calendar != job.spec.calendar {
+            let next_state = transition.map(|(_, _, _, state)| state);
+            if next_state == Some("active")
+                || transition.is_none() && spec.calendar != job.spec.calendar
+            {
                 self.check_future(&spec, now)?;
             }
             if let Some(old) = self.evaluate(tx, &job, before(now)?, now, &mut None)? {
-                save_evaluation(tx, old, None)?;
+                let reason = (next_state == Some("paused") && job.state == "active")
+                    .then_some("job was paused before this trigger was claimed");
+                save_evaluation(tx, old, reason)?;
             }
-            if enable {
+            if let Some(state) = next_state
+                && job.state != state
+            {
                 job.lifecycle_generation = job
                     .lifecycle_generation
                     .checked_add(1)
                     .ok_or("automation lifecycle generation exhausted")?;
-                job.state = "active".into();
+                job.state = state.into();
             }
             job.spec = spec;
             job.revision_id = id(now)?;
@@ -1230,6 +1238,37 @@ mod tests {
                 .is_err()
         );
         assert_eq!(store.job(&job.id).unwrap().state, "active");
+        let mut draft = job.spec.clone();
+        draft.name = "Edited draft".into();
+        let pause_edit = |generation, updated| Some(("active", generation, updated, "paused"));
+        assert!(
+            store
+                .edit_bound(
+                    &job.id,
+                    Some(&job.revision_id),
+                    draft.clone(),
+                    pause_edit(job.lifecycle_generation, job.updated_at),
+                    now
+                )
+                .is_err()
+        );
+        let unchanged = store.job(&job.id).unwrap();
+        assert!(unchanged.spec == job.spec);
+        assert_eq!(unchanged.revision_id, job.revision_id);
+        assert_eq!(unchanged.lifecycle_generation, resumed.lifecycle_generation);
+        let saved = store
+            .edit_bound(
+                &job.id,
+                Some(&resumed.revision_id),
+                draft,
+                pause_edit(resumed.lifecycle_generation, resumed.updated_at),
+                now,
+            )
+            .unwrap();
+        assert_eq!(saved.spec.name, "Edited draft");
+        assert_eq!(saved.state, "paused");
+        assert_ne!(saved.revision_id, resumed.revision_id);
+        assert_eq!(saved.lifecycle_generation, resumed.lifecycle_generation + 1);
     }
 
     #[test]

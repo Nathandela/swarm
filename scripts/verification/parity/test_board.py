@@ -331,20 +331,21 @@ fi
             step(b"v", b"No jobs in this view.")
             step(b"\r", b"No jobs in this view.")
             step(b"v", b"Fixture automation")
-            step(b"\x1b[<0;2;24M\x1b[<0;2;24m", b"New automation")
-            step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
-                 b"\x1b[B\x15claude\r", b"Automations / Created from board")
+            step(b"\x1b[<0;2;24M\x1b[<0;2;24m", b"Automations / New")
+            step(b"Created from board\t\x1b[200~first line\nsecond line\x1b[201~\t"
+                 + os.fsencode(cwd) + b"\t\t\t\t\t\x1b[C\t\x1b[D\x04",
+                 b"Automations / Created from board")
             jobs = json.loads(cli("schedule", "list", "--json").stdout)
             created, = [record for record in jobs if record["spec"]["name"] == "Created from board"]
             assert created["state"] == "paused"
             assert created["spec"]["prompt"] == "first line\nsecond line"
             created_id = created["id"]
-            step(b"e", b"Edit automation")
-            step(b"\x15Revised from board\r", b"Revised from board")
+            step(b"e", b"Automations / Edit")
+            step(b"\x15Revised from board\x04", b"Automations / Revised from board")
             edited = json.loads(cli("schedule", "show", created_id).stdout)
             assert edited["spec"]["name"] == "Revised from board"
             assert edited["revision_id"] != created["revision_id"]
-            step(b"p", b"Edit automation")
+            step(b"p", b"Automations / Edit")
             assert shown(created_id) == edited
             step(b"\x1b[27u", b"Automations / Revised from board")
             resumed = cli("schedule", "resume", created_id)
@@ -464,11 +465,11 @@ fi
             assert revised["id"] == original["id"] and revised["name"] == "Revised instructions"
             assert revised["prompt"] == original["prompt"]
             step(b"\x1b[27u", b"[Templates (t)]")
-            step(b"n", b"New automation")
+            step(b"n", b"Automations / New")
             step(b"Keep job name\x14", picker)
             step(b"\r", b"Third line")
             step(b"\x05", template_editor)
-            step(b"\r", b"New automation")
+            step(b"\r", b"Automations / New")
             copies = {item["name"]: item for item in templates()}
             assert copies["Keep job name"]["prompt"] == revised["prompt"]
             assert copies["Keep job name"]["id"] != revised["id"]

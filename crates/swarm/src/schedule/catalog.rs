@@ -734,6 +734,13 @@ pub(crate) enum Change {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         paused: Option<(u64, jiff::Timestamp)>,
     },
+    SaveDraft {
+        id: String,
+        revision: String,
+        generation: u64,
+        updated_at: jiff::Timestamp,
+        spec: Box<Spec>,
+    },
     Enable {
         id: String,
         revision: String,
@@ -784,6 +791,7 @@ impl Change {
         let target = match &self {
             Self::Create { operation, .. } => operation == &job.id,
             Self::Edit { id, .. } => id == &job.id,
+            Self::SaveDraft { id, .. } => id == &job.id && job.state == "paused",
             Self::Enable { id, .. } => id == &job.id && job.state == "active",
             Self::State { id, value, .. } => id == &job.id && job.state == value.token(),
         };
@@ -807,7 +815,7 @@ pub(crate) fn change(
         return Err("invalid automation creation operation ID".into());
     }
     if matches!(&change,
-        Change::Edit { id, revision, .. } | Change::Enable { id, revision, .. }
+        Change::Edit { id, revision, .. } | Change::SaveDraft { id, revision, .. } | Change::Enable { id, revision, .. }
             | Change::State { id, revision, .. }
             if !super::valid_id(id) || !super::valid_id(revision))
     {
@@ -828,7 +836,20 @@ pub(crate) fn change(
             &id,
             Some(&revision),
             *spec,
-            paused.map(|(generation, updated)| (generation, updated, false)),
+            paused.map(|(generation, updated)| ("paused", generation, updated, "paused")),
+            now,
+        )?,
+        Change::SaveDraft {
+            id,
+            revision,
+            generation,
+            updated_at,
+            spec,
+        } => store.edit_bound(
+            &id,
+            Some(&revision),
+            *spec,
+            Some(("active", generation, updated_at, "paused")),
             now,
         )?,
         Change::Enable {
@@ -865,7 +886,7 @@ pub(crate) fn change(
                     &id,
                     Some(&revision),
                     *spec,
-                    Some((generation, updated_at, true)),
+                    Some(("paused", generation, updated_at, "active")),
                     jiff::Timestamp::now(),
                 )
                 .map_err(|error| {
