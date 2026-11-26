@@ -260,7 +260,10 @@ impl Dispatcher {
                     .readout
                     .try_send(super::call_runtime::Readout::Acknowledge(origin));
             }
-            if phase == "unknown" && !state["input"]["worker_wake"].is_null() {
+            if phase == "unknown"
+                && !state["input"]["worker_wake"].is_null()
+                && state["input"]["draft_retry"] != "executing"
+            {
                 let input = &state["input"];
                 let id = field(input, "source_id");
                 let revision = &input["worker_wake"]["owner_revision"];

@@ -1521,7 +1521,7 @@ mod tests {
                 let err = manager.send(&operation, &forged).unwrap_err();
                 assert!(err.to_string().contains("exact connector cutover"));
             }
-            if rust.is_some() && std::env::var_os("SWARM_DISPATCHER_DRAFT_RACE_FIXTURE").is_some() {
+            if std::env::var_os("SWARM_DISPATCHER_DRAFT_RACE_FIXTURE").is_some() {
                 let mut attachment = Client::dial(&socket, &[]).unwrap();
                 let lease = attachment.request("attach", Some(id), "lease").unwrap();
                 attachment
@@ -1534,8 +1534,12 @@ mod tests {
                     b"unsubmitted dispatcher draft",
                 )
                 .unwrap();
-                let marker = state
-                    .join("rust-v1")
+                let state_dir = if rust.is_some() {
+                    state.join("rust-v1")
+                } else {
+                    state.clone()
+                };
+                let marker = state_dir
                     .join(id.split_once('/').unwrap().1)
                     .join("direct-input-unresolved.json");
                 let deadline = Instant::now() + Duration::from_secs(3);
@@ -1560,8 +1564,12 @@ mod tests {
                     "state":"rejected","rejection_code":crate::shim::manager_terminal::CODE})
                 );
                 assert_eq!(manager.input_status(&composer).unwrap()["state"], "unknown");
-                assert_eq!(inbox.manager()["input"]["operation"], operation);
-                assert_eq!(inbox.manager()["input"]["composer"], composer);
+                assert!(manager.send(&operation, &composer).is_err());
+                assert_eq!(manager.semantic_receipt(&operation, id).unwrap(), receipt);
+                if rust.is_some() {
+                    assert_eq!(inbox.manager()["input"]["operation"], operation);
+                    assert_eq!(inbox.manager()["input"]["composer"], composer);
+                }
                 return;
             }
             let park_fixture = std::env::var_os("SWARM_NATIVE_MAIL_PARK_FIXTURE").is_some();
