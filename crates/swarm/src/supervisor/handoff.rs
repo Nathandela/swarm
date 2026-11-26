@@ -124,8 +124,7 @@ pub(super) fn hands_off(
 }
 
 fn render(values: [&str; 5]) -> io::Result<String> {
-    const TEMPLATE: &str =
-        include_str!("../../../../internal/skeleton/templates/hands-off.md.tmpl");
+    const TEMPLATE: &str = include_str!("../../assets/handoff/hands-off.md.tmpl");
     const KEYS: [&str; 5] = [
         "{{.ConversationID}}",
         "{{.TranscriptPath}}",

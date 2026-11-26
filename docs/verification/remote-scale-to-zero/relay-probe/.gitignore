@@ -1,6 +1,0 @@
-node_modules/
-.wrangler/
-.wrangler-logs/
-.xdg/
-test/*.log
-wrangler.log

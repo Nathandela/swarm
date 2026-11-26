@@ -1,3 +1,0 @@
-ok  	github.com/Nathandela/swarm/internal/adapter/opencode	1.152s [no tests to run]
-ok  	github.com/Nathandela/swarm/internal/skeleton	8.397s
-ok  	github.com/Nathandela/swarm/internal/adapter/opencode	1.477s

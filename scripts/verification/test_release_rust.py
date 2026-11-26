@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Checks release archive allowlists and digest pins without production assets."""
 import importlib.util
+import os
+
 from pathlib import Path
 import tempfile
 import unittest
@@ -53,6 +55,20 @@ class ArchiveTest(unittest.TestCase):
         self.files["../outside"] = b"fixture"
         with self.assertRaisesRegex(ValueError, "invalid archive member"):
             self.inspect()
+
+    def test_media_directories_stay_private_with_a_group_writable_umask(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_mask = os.umask(0o002)
+            try:
+                release.install_members(Path(directory), {"media/p/node_modules/pkg/test.js": b"fixture"})
+            finally:
+                os.umask(old_mask)
+            target = Path(directory) / "media/p/node_modules/pkg/test.js"
+            self.assertEqual(target.read_bytes(), b"fixture")
+            for parent in target.parents:
+                if parent == Path(directory):
+                    break
+                self.assertEqual(parent.stat().st_mode & 0o777, 0o700)
 
     def test_swapped_card(self):
         manifest = {name: release.digest(data) for name, data in self.files.items()}

@@ -1,3 +1,0 @@
-go test fuzz v1
-[]byte("\x1b[c;31m\xeered\x1b[0m")
-uint(4)

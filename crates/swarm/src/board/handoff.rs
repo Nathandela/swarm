@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub(super) const CAP: &str = "hands-off-handoff";
 const MODES: [&str; 3] = ["passive", "manual", "none"];
-const TEMPLATE: &str = include_str!("../../../../internal/tui/templates/handoff-source.md.tmpl");
+const TEMPLATE: &str = include_str!("../../assets/handoff/source.md.tmpl");
 
 pub(super) struct Handoff {
     pub(super) source_id: String,

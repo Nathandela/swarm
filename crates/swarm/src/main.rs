@@ -22,8 +22,8 @@ use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
 const USAGE: &str = include_str!("usage.txt");
-const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
-const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
+const GUIDE: &str = include_str!("../assets/swarm-dispatcher/guide.txt");
+const SKILL: &str = include_str!("../assets/swarm-dispatcher/SKILL.md");
 
 fn guide(args: &[String]) -> u8 {
     let output = match args {

@@ -1,5 +1,0 @@
-# Native attention validation
-
-The additive status flag preserves the existing serialized zero value and retains actual active work while the derived group asks for input. Focused native Go race tests pass across status, daemon persistence, protocol groups, and phone mailbox/restart folding (`native-attention-race.txt`). Existing provider-error derivation tests remain intact.
-
-The focused Android classes `InteractionItemFieldsTest` and `TranscriptPanelTest` passed under Robolectric after a checksum-verified official Temurin ARM64 JDK 21 and official Android SDK 36/build tools were installed only under `/private/tmp/swarm-opencode-implementation-20261018/toolchains`. The host default JDK was x86_64, and the SDK was absent. Gradle resolved the repository's pinned dependencies without version changes. `native-attention-android.txt` records the successful run. The existing main-worktree AAR was used only as an unchanged ABI/body-string test input; `native-attention-aar.txt` pins its checksum. Rebuilding the current Go AAR remains part of the final release gate.

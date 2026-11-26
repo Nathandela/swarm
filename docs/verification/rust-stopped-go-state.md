@@ -7,7 +7,7 @@ This slice rehearses a Go-created, stopped, classic Claude session on a copied p
 Use an isolated checkout and the Go oracle at `3173ecc08077d7646dba57441a42d3242196b5cb`. Build the candidate from the revision under test.
 
 ```bash
-go build -o /private/tmp/swarm-stopped-go ./cmd/swarm
+(cd "$GO_REFERENCE_CHECKOUT" && go build -o /private/tmp/swarm-stopped-go ./cmd/swarm)
 cargo build --locked -p swarm
 python3 scripts/verification/stopped_go_state.py /private/tmp/swarm-stopped-go target/debug/swarm
 cargo test --locked -p swarm --bin swarm supervisor::stopped_go

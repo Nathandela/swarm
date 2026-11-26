@@ -14,7 +14,7 @@ On macOS arm64 with installed Claude Code 2.1.329, the witness copied the execut
 
 Local verification passed `cargo test --workspace --locked -- --test-threads=1` with 72 passing tests and one existing opt-in test ignored. `cargo clippy --workspace --all-targets --locked -- -D warnings` passed. Live account inference, schedule reopen after exit, exact Claude quota fallback, recovery through a manual trust decision and Claude Discord/manager native input are separate open cases. The current route keeps the opening fenced after owner terminal input. A different Claude version needs its own composer and hook witness.
 
-See the [Go scheduled-agent qualification](scheduled-agents/README.md) and [Claude hook reference](https://code.claude.com/docs/en/hooks).
+See the [Go scheduled-agent qualification](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/docs/verification/scheduled-agents/README.md) and [Claude hook reference](https://code.claude.com/docs/en/hooks).
 
 ## Combined runtime on two native hosts
 

@@ -28,6 +28,6 @@ The macOS probe exercises the no-model worker lifecycle with outbound IP denied.
 For pinned JavaScript fixtures and Rust unit and owner tests, run:
 
 ```sh
-node --test internal/opencodebridge/tui.test.mjs
+node --test crates/swarm/assets/opencode/tui.test.mjs
 cargo test --locked --all-targets
 ```

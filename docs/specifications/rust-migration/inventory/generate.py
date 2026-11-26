@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate the CLI flag catalog from the immutable M0 Go pin."""
 import argparse
+from functools import cache
 import re
 import subprocess
 from pathlib import Path
@@ -12,6 +13,14 @@ METHODS = ("Bool", "BoolFunc", "Duration", "Float64", "Func", "Int", "Int64", "T
 CALL = re.compile(r"\b(\w+)\.((?:" + "|".join(METHODS) + r")(?:Var)?)\s*\(")
 QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 SET = re.compile(r"\b(\w+)\s*:?=\s*flag\.NewFlagSet\(\s*\"([^\"]+)\"")
+
+
+CAPTURE_CHECKOUT = "5863d844dee9fa30119f63b3a73bfdc934be4c52"
+
+
+@cache
+def reference_text(commit, path):
+    return subprocess.check_output(["git", "show", f"{commit}:{path}"], cwd=ROOT, text=True)
 
 
 def source_files():
@@ -27,7 +36,7 @@ def arg_strings(call):
 def entries():
     found = []
     for path in source_files():
-        body = subprocess.check_output(["git", "show", f"{PIN}:{path}"], cwd=ROOT, text=True)
+        body = reference_text(PIN, path)
         lines = body.splitlines()
         setters = {}
         calls = []
@@ -139,13 +148,17 @@ def check_ledgers():
                     if ref.startswith(("cmd/", "internal/", "docs/")):
                         source_ref = ref.split(" ", 1)[0].rstrip(".,)")
                         source = source_ref.split("#", 1)[0].split(":", 1)[0]
-                        if not (ROOT / source).exists():
-                            raise SystemExit(f"missing source in {ledger.name}: {source}")
+                        try:
+                            body = ((ROOT / source).read_text()
+                                    if source.startswith("docs/specifications/rust-migration/")
+                                    else reference_text(PIN, source))
+                        except (FileNotFoundError, subprocess.CalledProcessError):
+                            raise SystemExit(f"missing source at Go pin in {ledger.name}: {source}") from None
                         range_match = re.match(r"^([^:]+):(\d+)-(\d+)$", source_ref)
                         scenario_match = re.search(r"\(scenario row (\d+)\)", ref)
                         if range_match and scenario_match:
                             _, first, last = range_match.groups()
-                            lines = (ROOT / source).read_text().splitlines()
+                            lines = body.splitlines()
                             first, last, row_id = int(first), int(last), int(scenario_match.group(1))
                             if last > len(lines) or not any(re.search(r"\|\s*" + str(row_id) + r"\s*\|", line) for line in lines[first - 1:last]):
                                 raise SystemExit(f"invalid scenario line reference in {ledger.name}: {source_ref}, row {row_id}")
@@ -158,13 +171,13 @@ def check_ledgers():
             if ledger.name == "captures.tsv" and row[0] not in ("LOG_M0", "LOG_P2", "RUN_01"):
                 for ref in row[4].split("; "):
                     path, test_name = ref.split("#", 1)
-                    pinned = subprocess.check_output(["git", "show", f"{PIN}:{path}"], cwd=ROOT, text=True)
-                    working = (ROOT / path).read_text()
+                    pinned = reference_text(PIN, path)
+                    working = reference_text(CAPTURE_CHECKOUT, path)
                     declaration = r"\bfunc\s+" + re.escape(test_name) + r"\s*\("
                     if not re.search(declaration, pinned):
                         raise SystemExit(f"test missing at pinned Go ref: {ref}")
                     if not re.search(declaration, working):
-                        raise SystemExit(f"test missing in working source: {ref}")
+                        raise SystemExit(f"test missing in recorded capture checkout: {ref}")
 
 
 def main():

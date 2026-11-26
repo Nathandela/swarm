@@ -1,2 +1,0 @@
-ok  	github.com/Nathandela/swarm/internal/protocol	1.392s
-ok  	github.com/Nathandela/swarm/internal/remotegw	1.374s [no tests to run]

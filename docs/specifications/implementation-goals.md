@@ -1,12 +1,12 @@
 # swarm — Implementation Goals
 
-**Status**: Approved (Draft 2 post [audit-002](../verification/audit-002-implementation-goals.md); independent verification confirmed 35/35 committee findings resolved)
+**Status**: Approved (Draft 2 post [audit-002](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/docs/verification/audit-002-implementation-goals.md); independent verification confirmed 35/35 committee findings resolved)
 **Purpose**: The orchestration contract for building the 15 epics in [build-plan.md](build-plan.md). Each epic closes only when every one of its exit criteria is demonstrably true (a passing automated test, a produced artifact, or a recorded verification). The finished system is audited against this document.
 **Sources**: [system-spec.md](system-spec.md) (EARS ids), [system-invariants.md](../invariants/system-invariants.md) (S1–S12, L1–L3), ADR-001..004, Gate 3 gap resolutions G1–G6.
 
 This document defines the original epic acceptance scopes; it is not the current product inventory. In particular, GG-6 and Epic 11 below constrain the original v1.0 phase. Later adapters and separate product surfaces do not retroactively change those phase criteria. Current implementation and release boundaries are mapped in [docs/INDEX.md](../INDEX.md); accepted amendments stay linked at the criterion they amend.
 
-**Owner amendment 2026-10-16:** [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md)
+**Owner amendment 2026-10-16:** [ADR-033](https://github.com/Nathandela/swarm/blob/f26648d69086e329132ac7849954d2f29a895387/docs/adr/ADR-033-live-only-supervisor-storage.md)
 supersedes the raw terminal archive, final-screen persistence and durable generic
 interaction-history criteria below. Epic 3 now requires a fixed 64 KiB identity
 tail plus header, generation-consistent reads, newest-evidence queue pressure and
