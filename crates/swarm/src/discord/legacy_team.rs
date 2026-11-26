@@ -609,6 +609,7 @@ pub(super) fn native_prepare_witness() {
         | "history-watch-edit"
         | "history-watch-stop"
         | "history-watch-credential"
+        | "history-watch-closed"
         | "history-refuse" => {
             let result = observe(
                 &place,
@@ -847,13 +848,13 @@ pub(super) fn native_prepare_witness() {
 }
 
 #[cfg(test)]
-fn history_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<()> {
+fn history_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<bool> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
     let Ok(phase) = std::env::var("SWARM_TEST_DISCORD_GUILD_PHASE") else {
-        return Ok(());
+        return Ok(false);
     };
     if !phase.starts_with("history-watch") {
-        return Ok(());
+        return Ok(false);
     }
     isolated_guild_fixture(place, cfg)?;
     std::fs::OpenOptions::new()
@@ -865,7 +866,7 @@ fn history_proof_fixture(place: &Place, cfg: &Config, raw: &[u8]) -> io::Result<
     if phase != "history-watch" {
         wait_at_test_boundary("holding supervisor-proven history call")?;
     }
-    Ok(())
+    Ok(phase == "history-watch-closed")
 }
 
 #[cfg(test)]

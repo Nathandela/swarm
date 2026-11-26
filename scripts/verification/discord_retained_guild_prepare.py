@@ -78,6 +78,8 @@ def serve_discord(timestamps=False):
             if route == "/channels/401/messages/500" and rest.change_starter:
                 messages["500"]["content"] = "a changed starter during writer revalidation"
                 rest.change_starter = False
+            if rest.before_response is not None:
+                rest.before_response(route)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
@@ -91,6 +93,7 @@ def serve_discord(timestamps=False):
     rest = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     rest.history = None
     rest.change_starter = False
+    rest.before_response = None
     rest.messages = messages
     Thread(target=rest.serve_forever, daemon=True).start()
     return rest, permissions, wait_for_capture, attempts
@@ -168,6 +171,29 @@ def manager_request(sock, credential, body):
                       f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body)
         with peer.makefile("rb") as response:
             return json.loads(response.read().split(b"\r\n\r\n", 1)[1])
+
+
+def interrupt_history_call(env, binding, turn, call):
+    target = dict(binding=binding, native_input_id=turn["native_input_id"], native_turn_id=turn["native_turn_id"])
+    wire = json.dumps(target, separators=(",", ":")).encode()
+    receipt = owner(env, {"op":"manager_interrupt", "body_version":1, "session_id":binding["session"],
+        "operation_id":"manager-interrupt:" + hashlib.sha256(wire).hexdigest(),
+        "manager_interrupt_request":target}, caps=("manager-interrupt",))
+    ack = receipt["manager_interrupt"]
+    assert ack["native_turn_id"] == turn["native_turn_id"] and ack["native_input_id"] == turn["native_input_id"], receipt
+    def closed():
+        reply = owner(env, {"op":"manager_input_status", "body_version":1, "session_id":binding["session"],
+            "manager_input_status_request":{"binding":binding, "nonce":turn["native_input_id"]}},
+            caps=("manager-provenance",))
+        current = reply.get("manager_input_status", {})
+        return (current.get("state") == "completed" and current.get("reason") == "aborted"
+                and current.get("native_turn_id") == turn["native_turn_id"])
+    await_value(closed)
+    args = json.dumps(call["arguments"], sort_keys=True, separators=(",", ":")).encode()
+    proof = owner(env, {"op":"manager_resolve_call", "body_version":1, "session_id":binding["session"],
+        "manager_call":{"binding":binding, "tool_name":call["name"], "arguments_hash":hashlib.sha256(args).hexdigest(),
+                        "host_meta":call["meta"]}}, caps=("manager-provenance",))
+    assert proof["op"] == "error", proof
 
 
 def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_only=False, queue_only=False,
@@ -333,9 +359,19 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     child.wait(timeout=8)
                 output.join(timeout=3)
 
-    def running_history(start, voice):
+    def running_history(start, voice, original_turn):
         connector = place / "discord.db"
         expected = json.loads(invoke("guild-advance", place, go_port, "history"))
+        def running_runtime():
+            try:
+                current = runtime()
+            except KeyError:
+                return False
+            turn = current["turn"]
+            return (current["binding"] == start["binding"] and current["ready_for_input"] is False
+                    and turn["state"] == "running" and turn["native_turn_id"] == original_turn["native_turn_id"]
+                    and turn["native_input_id"] == original_turn["native_input_id"])
+        await_value(running_runtime)
         exact_voice, exact_connector = voice.read_bytes(), connector.read_bytes()
         sock = Path(start["bridge_socket"])
         auth = Path(start["auth_file"])
@@ -351,6 +387,15 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 voice.write_bytes(exact_voice)
             print("PASS a different Go-readable Voice nonce was refused unchanged", flush=True)
         phase = "history-watch" if native_history == "allow" else f"history-watch-{native_history}"
+        final_read = Event()
+        release_read = Event()
+        permission_reads = []
+        def delay_last_history_read(route):
+            if route == "/channels/399/permissions/member/100":
+                permission_reads.append(route)
+                if len(permission_reads) == 3:
+                    final_read.set()
+                    assert release_read.wait(timeout=12), "fixture did not release the final REST GET"
         with subprocess.Popen([rust_test, *rust_args], env=rust_env(phase), text=True,
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             lines, reader = lines_from(child.stdout)
@@ -383,6 +428,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         source["edited_timestamp"] = "2024-09-22T10:00:00Z"
                     elif native_history == "stop":
                         stop_connector(place)
+                    elif native_history == "closed":
+                        rest.before_response = delay_last_history_read
                     else:
                         original_auth = auth.with_name("bridge.auth.fixture-original")
                         auth.rename(original_auth)
@@ -390,26 +437,37 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         auth.chmod(0o600)
                     child.stdin.write("continue\n")
                     child.stdin.flush()
-                await_value(lambda: tool_output)
+                if native_history == "closed":
+                    assert final_read.wait(timeout=5), "no final history permission GET was held"
+                    actual = json.loads((base / "state/rust-guild-history-call").read_bytes())
+                    interrupt_history_call(env, start["binding"], original_turn, actual["call"])
+                    release_read.set()
+                    marker("Withheld the history response from the closed native call")
+                    assert len(permission_reads) == 3 and not tool_output and len(calls) == 1
+                    rest.before_response = None
+                else:
+                    await_value(lambda: tool_output)
                 if native_history == "allow":
                     pages = tool_pages(tool_output)
                     assert pages == [expected], tool_output
                     actual = base / "state/rust-guild-history-call"
                     assert manager_request(sock, auth.read_text(), actual.read_bytes()) == refused
                     print("PASS malformed JSON, invalid bearer, write tool and exact native call replay disclosed no page", flush=True)
-                else:
+                elif native_history != "closed":
                     assert "manager action is unconfirmed" in json.dumps(tool_output), tool_output
                     assert not tool_pages(tool_output), tool_output
                     source.clear()
                     source.update(original)
                     if original_auth is not None:
                         original_auth.replace(auth)
-                assert calls and len(calls) == 2 and posts == []
+                assert calls and len(calls) == (1 if native_history == "closed" else 2) and posts == []
                 assert voice.read_bytes() == exact_voice and connector.read_bytes() == exact_connector
                 if native_history != "stop":
                     stop_connector(place)
                 assert child.wait(timeout=10) == 0 and not Path(start["bridge_socket"]).exists()
             finally:
+                release_read.set()
+                rest.before_response = None
                 if child.poll() is None:
                     child.terminate()
                     child.wait(timeout=8)
@@ -749,7 +807,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                             connector.write_bytes(actual)
                         print("PASS stale sending connector cannot renew the executing Go native tuple", flush=True)
                     if native_history:
-                        running_history(start, voice)
+                        running_history(start, voice, before)
                 invoke("guild-advance", place, go_port, "advance")
                 assert pending() == []
                 row = native(voice)
@@ -757,13 +815,14 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                 assert row["origin"]["revision"] == REV and row["origin"]["request_id"] == OP
                 assert len(row["native_input_id"]) == 64 and row["request"]["manager_admission"]["nonce"] == row["native_input_id"]
                 assert row["request"]["session"] == session and row["request"]["session_instance"] == instance
-                expected_requests = 2 if native_history else 1
+                expected_requests = 2 if native_history and native_history != "closed" else 1
                 await_value(lambda: len(calls) == expected_requests)
                 native_proof = await_value(lambda: native_input(row["native_input_id"]))
                 if interrupt:
                     keys = ("sequence", "source_id", "operation_id", "native_input_id", "request")
                     assert [row[k] for k in keys] == [interrupted[k] for k in keys]
-                    assert row["phase"] == "running" and row["native_turn_id"] == before["native_turn_id"]
+                    assert row["phase"] == ("completed" if native_history == "closed" else "running")
+                    assert row["native_turn_id"] == before["native_turn_id"]
                     assert native_proof["native_turn_id"] == before["native_turn_id"]
                 semantic = owner(env, {"op":"semantic_status", "session_id":session,
                     "operation_id":row["operation_id"]}, caps=("semantic-send",))["semantic_receipt"]
@@ -819,7 +878,7 @@ if __name__ == "__main__":
     elif len(sys.argv) == 6 and (sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody")
                                  or sys.argv[5].startswith("--native-history")):
         history = {"--native-history":"allow", "--native-history-edit":"edit", "--native-history-stop":"stop",
-                   "--native-history-credential":"credential"}.get(sys.argv[5])
+                   "--native-history-credential":"credential", "--native-history-closed":"closed"}.get(sys.argv[5])
         assert history or sys.argv[5] in ("--native-prepare-rollback", "--native-bridge-custody")
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             first = witness(Path(root).resolve(), *sys.argv[1:4], queue_only=True, prepare_native=True)

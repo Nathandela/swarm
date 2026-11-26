@@ -209,30 +209,53 @@ pub(super) fn serve(
     let mut served = false;
     let until = Instant::now() + Duration::from_secs(45);
     while !status.stopping() && Instant::now() < until {
-        bridge.accept_guarded(|raw| {
+        #[cfg(test)]
+        let mut closing_fixture = false;
+        #[cfg(test)]
+        let mut source_verified = false;
+        let _reply = bridge.accept_guarded(|raw| {
             if served {
                 return Err(unavailable());
             }
             let call = checked_request(raw, request)?;
             let mut owner = owner(place, cfg, request)?;
-            let (native, _) = prove_live_call(
-                &mut owner,
-                request,
-                TOOL,
-                &call.arguments,
-                &call.meta,
-                false,
-            )?;
-            verify_live_runtime(&native, request, &custody)?;
+            let prove = |owner: &mut Client| {
+                let (native, turn) =
+                    prove_live_call(owner, request, TOOL, &call.arguments, &call.meta, false)?;
+                verify_live_runtime(&native, request, &custody)?;
+                Ok::<_, io::Error>(turn)
+            };
+            let turn = prove(&mut owner)?;
             #[cfg(test)]
-            super::history_proof_fixture(place, cfg, raw)?;
+            {
+                closing_fixture = super::history_proof_fixture(place, cfg, raw)?;
+            }
             if recheck()? != input || read()? != row {
+                return Err(unavailable());
+            }
+            #[cfg(test)]
+            {
+                source_verified = true;
+            }
+            if prove(&mut owner)? != turn {
                 return Err(unavailable());
             }
             let stop = status.commit_guard()?;
             served = true;
             Ok((input.history_page.clone(), stop))
         })?;
+        #[cfg(test)]
+        if closing_fixture {
+            assert!(
+                source_verified,
+                "the delayed REST response must verify before rechecking the native call"
+            );
+            assert!(
+                _reply.is_none(),
+                "Rust prepared a page for the closed native call"
+            );
+            println!("Withheld the history response from the closed native call.");
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
     Ok(())
