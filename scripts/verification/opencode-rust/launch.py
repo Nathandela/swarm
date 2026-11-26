@@ -32,10 +32,10 @@ def read_control(stream):
 
 
 @contextmanager
-def owner_stream(env, caps=()):
+def owner_stream(env, caps=(), timeout=70):
     expected = "ep-" + hashlib.sha256(os.path.realpath(env["SWARM_DAEMON_STATE"]).encode()).hexdigest()[:8]
     with socket.socket(socket.AF_UNIX) as client:
-        client.settimeout(70)
+        client.settimeout(timeout)
         client.connect(env["SWARM_DAEMON_SOCK"])
         with client.makefile("rwb") as stream:
             send_control(stream, dict(op="hello", protocol_version=1, build_version="dev", capabilities=list(caps)))
@@ -44,8 +44,8 @@ def owner_stream(env, caps=()):
             yield stream, hello
 
 
-def owner_request(env, request=None, caps=()):
-    with owner_stream(env, caps) as (stream, hello):
+def owner_request(env, request=None, caps=(), timeout=70):
+    with owner_stream(env, caps, timeout=timeout) as (stream, hello):
         if request is None:
             return hello
         send_control(stream, dict(endpoint_id=hello["endpoint_id"], **request))

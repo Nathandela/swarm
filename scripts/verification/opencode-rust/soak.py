@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import sqlite3
+import subprocess
 import time
 
 from launch import history_page
@@ -19,6 +20,62 @@ from processes import alive, birth, sample, thread_wait_snapshot
 MIB = 1024 * 1024
 BUDGETS = {'swarm_rss_bytes': 256 * MIB, 'swarm_fds': 128, 'swarm_disk_bytes': 256 * MIB,
            'whole_run_disk_bytes': 512 * MIB, 'dispatch_seconds': 30, 'rejoin_seconds': 15}
+OUTCOME_UNKNOWN = 'Native semantic submission outcome is unknown; inspect --status'
+
+
+def dispatch_prompt(cli, wait, session, operation, text, persisted, begin):
+    deadline = begin + BUDGETS['dispatch_seconds']
+
+    def remaining():
+        return max(0, deadline - time.monotonic())
+
+    text_hash = hashlib.sha256(text.encode()).hexdigest()
+
+    def recorded():
+        try:
+            record = json.loads(persisted.read_text())
+        except (FileNotFoundError, ValueError):
+            return None
+        if not isinstance(record, dict):
+            return None
+        receipt = record.get('receipt')
+        if (isinstance(receipt, dict) and isinstance(receipt.get('state'), str)
+                and record.get('kind') == 'prompt' and record.get('text_hash') == text_hash
+                and receipt.get('session') == session and receipt.get('operation_id') == operation):
+            return receipt
+        return None
+
+    args = ('message', session, '--operation-id', operation, '--text', text)
+    attempt = cli(*args, check=False, timeout=remaining())
+    if attempt.returncode == 0:
+        initial = json.loads(attempt.stdout)
+        if initial['state'] != 'outcome_unknown':
+            return initial, False
+    else:
+        assert (attempt.returncode == 1 and not attempt.stdout
+                and attempt.stderr == f'message: operation_id={operation}: {OUTCOME_UNKNOWN}\n'), (
+                    args, attempt.stdout, attempt.stderr)
+    initial = recorded()
+    assert initial is not None, (args, attempt.stdout, attempt.stderr)
+    if initial['state'] != 'outcome_unknown':
+        return initial, True
+
+    # Read at most once through the live owner, then let the background checkpoint settle.
+    timeout = min(5, remaining())
+    if timeout > 0:
+        try:
+            cli('message', session, '--status', '--operation-id', operation, check=False, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def resolved():
+        receipt = recorded()
+        return receipt if receipt and receipt['state'] != 'outcome_unknown' else None
+
+    try:
+        return wait(resolved, remaining()), True
+    except AssertionError as error:
+        raise AssertionError((args, attempt.stdout, attempt.stderr, 'read-only reconciliation deadline')) from error
 
 
 def file_sha(path):
@@ -181,15 +238,7 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             begin = time.monotonic()
             dispatch = (index, marker, operation)
             persisted = state / 'opencode-receipts' / (hashlib.sha256(operation.encode()).hexdigest() + '.json')
-            initial = output('message', session, '--operation-id', operation, '--text', text)
-            if initial['state'] == 'outcome_unknown':
-                # The worker may recover a delayed SDK reply from the exact native input.
-                # Observe the saved operation within the same dispatch budget; never resubmit.
-                def resolved():
-                    receipt = json.loads(persisted.read_text())['receipt']
-                    return receipt if receipt['state'] != 'outcome_unknown' else None
-
-                initial = wait(resolved, max(0, BUDGETS['dispatch_seconds'] - (time.monotonic() - begin)))
+            initial, reconciled_ambiguous = dispatch_prompt(cli, wait, session, operation, text, persisted, begin)
             assert initial['state'] in ('native_accepted', 'completed'), initial
             observed = time.monotonic() - begin
             assert observed <= BUDGETS['dispatch_seconds'], observed
@@ -222,7 +271,8 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             result.setdefault('outcome_sources', {}).setdefault(source, 0)
             result['outcome_sources'][source] += 1
             assert output('message', session, '--status', '--operation-id', operation) == durable
-            assert output('message', session, '--operation-id', operation, '--text', text) == durable
+            if not reconciled_ambiguous:
+                assert output('message', session, '--operation-id', operation, '--text', text) == durable
             new_key, messages = conversation()
             assert new_key == key
             mid = durable['native_message_id']

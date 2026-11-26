@@ -176,8 +176,8 @@ if args.hands_off:
 (root/'xdg-state/opencode/model.json').write_text(json.dumps({'recent':[{'providerID':'fixture','modelID':'fixture'}], 'favorite':[], 'variant':{}}))
 from launch import owner_request, history_page, resume_request
 
-def owner(request=None):
-    return owner_request(env, request)
+def owner(request=None, timeout=70):
+    return owner_request(env, request, timeout=timeout)
 
 def wait(check, timeout=25):
     limit=time.monotonic()+timeout
@@ -191,8 +191,9 @@ def wait(check, timeout=25):
         time.sleep(0.15)
     raise AssertionError('condition timed out')
 def cli(*args, check=True, timeout=60):
-    owner()
-    result=subprocess.run([swarm,*args], env=env,capture_output=True,text=True,timeout=timeout)
+    deadline=time.monotonic()+timeout
+    owner(timeout=timeout)
+    result=subprocess.run([swarm,*args], env=env,capture_output=True,text=True,timeout=max(0,deadline-time.monotonic()))
     if check:
         assert result.returncode == 0, (args,result.stdout,result.stderr)
     return result
