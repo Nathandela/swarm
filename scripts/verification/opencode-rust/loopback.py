@@ -395,7 +395,7 @@ try:
         receipt=json.loads(persisted.read_text())['receipt']
         return receipt if receipt['state']=='completed' else None
     durable=wait(checkpointed)
-    assert durable['outcome_source']=='reconciled_message',durable
+    assert durable['outcome_source']=='reconciled_snapshot',durable
     done=wait(completed)
     assert done==durable
     assert output('message',row,'--operation-id',operation,'--text','RUST_SEMANTIC. Reply fixture only.')==done
