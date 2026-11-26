@@ -314,14 +314,14 @@ case "$1:$2" in
   print:*)
     if [ -f "$HOME/active" ]; then
       plist="$HOME/Library/LaunchAgents/com.swarm.discord.plist"
-      values=$(/usr/bin/sed -n 's#.*<key>ProgramArguments</key><array><string>\([^<]*\)</string><string>discord</string><string>run</string><string>--state-dir</string><string>\([^<]*\)</string><string>--unattended</string></array>.*#\1|\2#p' "$plist")
+      values=$(/usr/bin/sed -n 's#.*<key>ProgramArguments</key><array><string>\([^<]*\)</string><string>discord</string><string>run</string><string>--state-dir</string><string>\([^<]*\)</string><string>--unattended</string></array>.*#\1|\2#p' "$HOME/loaded-plist")
       binary=${values%%|*}; place=${values#*|}
       printf 'path = %s\nstate = running\nprogram = %s\narguments = {\n%s\ndiscord\nrun\n--state-dir\n%s\n--unattended\n}\nstdout path = %s/connector.log\nstderr path = %s/connector.log\n' "$plist" "$binary" "$binary" "$place" "$place" "$place"
       exit 0
     fi
     echo 'Could not find service' >&2; exit 113 ;;
-  bootout:*) /bin/rm -f "$HOME/active" ;;
-  bootstrap:*) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; exit 1; fi; : > "$HOME/active" ;;
+  bootout:*) /bin/rm -f "$HOME/active" "$HOME/loaded-plist" ;;
+  bootstrap:*) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; echo "injected service failure" >&2; exit 1; fi; /bin/cp "$3" "$HOME/loaded-plist"; : > "$HOME/active" ;;
   --user:is-enabled) if [ -f "$HOME/enabled" ]; then echo enabled; else echo disabled; exit 1; fi ;;
   --user:is-active) echo inactive; exit 3 ;;
   --user:show)
@@ -341,7 +341,7 @@ case "$1:$2" in
   --user:daemon-reload) if [ -f "$HOME/.config/systemd/user/swarm-discord.service" ]; then /bin/cp "$HOME/.config/systemd/user/swarm-discord.service" "$HOME/loaded"; else /bin/rm -f "$HOME/loaded"; fi ;;
   --user:enable) : > "$HOME/enabled" ;;
   --user:disable) /bin/rm -f "$HOME/enabled" ;;
-  --user:restart) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; : > "$HOME/failed-restart"; exit 1; fi; : > "$HOME/active" ;;
+  --user:restart) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; : > "$HOME/failed-restart"; echo "injected service failure" >&2; exit 1; fi; : > "$HOME/active" ;;
   --user:stop) if [ -f "$HOME/failed-restart" ]; then /bin/rm "$HOME/failed-restart"; else /bin/rm -f "$HOME/active"; fi ;;
   *) exit 100 ;;
 esac
@@ -375,7 +375,7 @@ esac
             "--name",
             "Install fixture",
             "--application-id",
-            "123",
+            if dir == one { "123" } else { "124" },
             "--owner-id",
             "456",
             "--token-file",
@@ -416,7 +416,13 @@ esac
     assert!(original.contains(one.to_str().unwrap()) && !original.contains("token"));
     fs::set_permissions(&unit, fs::Permissions::from_mode(0o640)).unwrap();
     fs::write(fixture.0.join("fail-once"), []).unwrap();
-    assert!(!install(&two).status.success());
+    let failure = install(&two);
+    assert!(!failure.status.success());
+    assert!(
+        String::from_utf8_lossy(&failure.stderr).contains("injected service failure"),
+        "{failure:?}"
+    );
+    assert!(!fixture.0.join("fail-once").exists());
     assert_eq!(fs::read_to_string(&unit).unwrap(), original);
     assert_eq!(
         fs::metadata(&unit).unwrap().permissions().mode() & 0o777,
