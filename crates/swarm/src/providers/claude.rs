@@ -96,9 +96,38 @@ pub(crate) fn argv(label: &str, request: &Value) -> io::Result<Vec<String>> {
     Ok(argv)
 }
 
+/// Keep the launch mode in rollback custody without retaining initial prompts.
+pub(crate) fn has_resume_flag(argv: &[String]) -> bool {
+    let mut args = argv.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--" => break,
+            "--settings" | "--name" | "--model" => {
+                args.next();
+            }
+            "--resume" | "--continue" | "-r" | "-c" => return true,
+            arg if arg.starts_with("--resume=") || arg.starts_with("--continue=") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollback_launch_mode_checks_flags_without_treating_values_as_flags() {
+        let resume = |args: &[&str]| {
+            has_resume_flag(&args.iter().map(|arg| (*arg).into()).collect::<Vec<_>>())
+        };
+        assert!(resume(&["--settings", "{}", "--resume", "session"]));
+        assert!(resume(&["--resume=session"]));
+        assert!(resume(&["-c"]));
+        assert!(!resume(&["--name", "--resume", "prompt"]));
+        assert!(!resume(&["--", "--resume"]));
+    }
 
     #[test]
     fn an_explicit_default_profile_cannot_select_another_directory() {

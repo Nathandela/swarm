@@ -225,7 +225,9 @@ fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
             provider["mode"] == "classic"
                 && config["claude_resume"] == config["go_rollback"]["claude_resume"]
                 && (config["claude_resume"].is_null()
-                    || config["go_rollback"]["cli_identity"].is_object())
+                    && config["go_rollback"]["cli_identity"].is_null()
+                    || config["claude_resume"].is_object()
+                        && config["go_rollback"]["cli_identity"].is_object())
         }
         "agy" => provider["mode"] == "classic",
         "codex" => {
@@ -621,6 +623,17 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
         return Err(io::Error::other(format!(
             "Rust native writer stop proof unavailable for {id}"
         )));
+    }
+    if config["provider"]["name"] == "claude"
+        && if config["claude_resume"].is_object() {
+            proof["claude_resumed"] != true
+        } else {
+            !proof["claude_resumed"].is_null() && proof["claude_resumed"] != false
+        }
+    {
+        return Err(io::Error::other(
+            "Go Claude rollback launch mode disagrees with writer stop proof",
+        ));
     }
     let code = exit["code"]
         .as_u64()

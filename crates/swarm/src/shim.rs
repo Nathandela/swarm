@@ -429,6 +429,7 @@ fn serve(dir: &Path) -> io::Result<()> {
     let pid = std::process::id();
     let mut viewer = Vec::<String>::new();
     let mut opencode_binding = None;
+    let mut rollback_claude_resumed = None;
     let (mut child, master) = (|| {
         if !matches!(
             field(provider, "name"),
@@ -654,6 +655,9 @@ fn serve(dir: &Path) -> io::Result<()> {
             }
             hermes = Some((binding, descriptor));
             argv.clear();
+        }
+        if rollback && provider["name"] == "claude" {
+            rollback_claude_resumed = Some(providers::claude::has_resume_flag(&argv));
         }
         command.args(agy_args).args(&manager_args).args(argv).args(&viewer);
         pty::start(command, cols, rows)
@@ -897,12 +901,13 @@ fn serve(dir: &Path) -> io::Result<()> {
     if rollback {
         // Keep the ordinary Rust exit report even if containment is uncertain.
         let containment = stopped_rollback_containment(worker_pid)?;
-        runtime::write_json(
-            &dir.join("go-stop-proof.json"),
-            &json!({
-                "token":token, "finished_at":exit["finished_at"], "containment":containment,
-            }),
-        )?;
+        let mut proof = json!({
+            "token":token, "finished_at":exit["finished_at"], "containment":containment,
+        });
+        if let Some(resumed) = rollback_claude_resumed {
+            proof["claude_resumed"] = json!(resumed);
+        }
+        runtime::write_json(&dir.join("go-stop-proof.json"), &proof)?;
     }
     if state.provider == "agy" {
         let _ = fs::remove_file(dir.join("h"));

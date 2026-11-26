@@ -182,6 +182,18 @@ def verify(go, rust, installed, root):
         try:
             denied = run(rust_bin, rust_env, "daemon", "export-stopped-go")
             assert denied.returncode and b"confirmed native transcript adoption" in denied.stderr, denied
+            configuration = successor_dir / "session.json"
+            valid_config = disk(configuration)
+            try:
+                for value, reason in [(False, b"unqualified Rust rollback session"),
+                                      (None, b"launch mode disagrees with writer stop proof")]:
+                    rollback = valid_config["go_rollback"] | {"claude_resume": value, "cli_identity": None}
+                    save(configuration, valid_config | {"claude_resume": value, "go_rollback": rollback})
+                    denied = run(rust_bin, rust_env, "daemon", "export-stopped-go")
+                    assert denied.returncode and reason in denied.stderr, denied
+                    assert not (state / successor.split("/")[-1]).exists()
+            finally:
+                save(configuration, valid_config)
         finally:
             held.rename(adoption)
         saved_settings = disk(settings)
