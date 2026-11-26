@@ -257,12 +257,18 @@ func main() {
 			time.Sleep(40 * time.Millisecond)
 		}
 		check(ctx.Err())
+	case "vm-resume-publication":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		check(store.FixtureResumeVMFile(cfg, row, os.Args[4] == "uncertain"))
 	case "vm-read-staged-publication":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
 		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
 		check(err)
-		payload, err := store.FixtureReadStagedVMFile(row)
+		payload, err := store.FixtureReadStagedVMFile(row, os.Args[4])
 		check(err)
 		check(json.NewEncoder(os.Stdout).Encode(payload))
 	case "publication-queue", "publication-read", "publication-phases", "publication-payload", "publication-damage":

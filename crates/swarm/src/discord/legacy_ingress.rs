@@ -1337,9 +1337,27 @@ mod tests {
             .unwrap();
         let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
         let marker = root.join("rust-wake-ready");
-        assert!(
-            service::with_vm_wake(&place, &api, || fs::write(marker, b"ready").unwrap()).unwrap()
-        );
+        let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
+        let run = service::with_vm_wake(&place, &api, !deliver.is_empty(), || {
+            fs::write(marker, b"ready").unwrap()
+        });
+        if std::env::var_os("SWARM_TEST_DISCORD_WAKE_REPLAY").is_some() {
+            assert!(run.unwrap_err().to_string().contains("unconfirmed effects"));
+        } else if deliver == "revoked" {
+            assert!(
+                run.unwrap_err()
+                    .to_string()
+                    .contains("outside the enrolled owner DM")
+            );
+        } else if deliver == "uncertain" {
+            assert!(
+                run.unwrap_err()
+                    .to_string()
+                    .contains("outcome remains unresolved")
+            );
+        } else {
+            assert!(run.unwrap());
+        }
         assert!(!activation::selected(&place).unwrap());
     }
 

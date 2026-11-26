@@ -348,6 +348,7 @@ impl<'a> Request<'a> {
                     "activate-personal",
                     "inspect-personal-vm",
                     "stage-personal-vm-wake",
+                    "deliver-personal-vm-wake",
                 ];
                 &[
                     "settle-personal-ingress",
@@ -505,12 +506,18 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
             ];
             let export = req.get("read-personal-publication-file");
             let source = req.get("read-personal-source-attachment");
-            if req.on("inspect-personal-vm") || req.on("stage-personal-vm-wake") {
-                if req.on("controls")
+            let vm_modes = [
+                "inspect-personal-vm",
+                "stage-personal-vm-wake",
+                "deliver-personal-vm-wake",
+            ];
+            let selected_vm = vm_modes.iter().filter(|flag| req.on(flag)).count();
+            if selected_vm > 0 {
+                if selected_vm != 1
+                    || req.on("controls")
                     || req.on("rollback")
                     || req.on("activate-personal")
-                    || (req.on("stage-personal-vm-wake")
-                        && (req.on("dry-run") || req.on("inspect-personal-vm")))
+                    || (!req.on("inspect-personal-vm") && req.on("dry-run"))
                     || export.is_some()
                     || source.is_some()
                     || ["file-id", "file-sha256", "offset"]
@@ -520,10 +527,13 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 {
                     return Err(invalid("select one migration operation"));
                 }
-                return if req.on("stage-personal-vm-wake") {
-                    legacy_ingress::service::stage_vm_wake(&place)
-                } else {
+                return if req.on("inspect-personal-vm") {
                     legacy_ingress::activation::inspect_vm(&place)
+                } else {
+                    legacy_ingress::service::stage_vm_wake(
+                        &place,
+                        req.on("deliver-personal-vm-wake"),
+                    )
                 };
             }
             if export.is_some() && source.is_some() {

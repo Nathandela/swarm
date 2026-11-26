@@ -340,15 +340,16 @@ impl Room for Discord {
     }
 }
 
-pub(in crate::discord) fn stage_vm_wake(place: &Place) -> io::Result<bool> {
+pub(in crate::discord) fn stage_vm_wake(place: &Place, deliver: bool) -> io::Result<bool> {
     let cfg = personal_config(place, true)?;
     let api = Discord::connect(&cfg)?;
-    with_vm_wake(place, &api, || {})
+    with_vm_wake(place, &api, deliver, || {})
 }
 
 pub(super) fn with_vm_wake(
     place: &Place,
     room: &impl Room,
+    deliver: bool,
     opened: impl FnOnce(),
 ) -> io::Result<bool> {
     let cfg = personal_config(place, true)?;
@@ -369,23 +370,31 @@ pub(super) fn with_vm_wake(
     opened();
     let until = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < until {
+        let mut result = Ok(true);
         if bridge
             .accept_request(|request| {
-                manager_publication::accept_wake(
+                let output = manager_publication::accept_wake(
                     place,
                     &cfg,
                     &mut lease,
                     &binding,
                     &request,
                     |message| room.message(&cfg, message),
-                )
+                )?;
+                if deliver {
+                    result =
+                        publication::deliver_admitted_vm(place, &cfg, &mut lease, &output, room);
+                }
+                Ok(output)
             })?
             .is_some()
         {
-            println!(
-                "Staged the original Go VM file publication using the original connector nonce format."
-            );
-            return Ok(true);
+            if !deliver {
+                println!(
+                    "Staged the original Go VM file publication using the original connector nonce format."
+                );
+            }
+            return result;
         }
         std::thread::sleep(Duration::from_millis(25));
     }
