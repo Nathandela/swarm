@@ -4,6 +4,7 @@ mod handoff;
 pub(crate) mod mail;
 pub(crate) mod mail_files;
 pub(crate) mod mail_store;
+mod maintenance;
 pub(crate) mod manager;
 mod pilot_journal;
 mod reliable;
@@ -103,6 +104,7 @@ struct State {
     pilot_journal: Option<pilot_journal::Journal>,
     context_guard: context_guard::Store,
     launch_gate: Mutex<()>,
+    maintenance_gate: Mutex<String>,
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
     deletion_gate: Mutex<()>,
@@ -224,6 +226,17 @@ impl State {
         managed: Option<Value>,
         mailbox: Option<Value>,
     ) -> io::Result<Arc<Session>> {
+        self.reserve_with_recovery(request, caps, managed, mailbox, None)
+    }
+
+    fn reserve_with_recovery(
+        &self,
+        request: &Value,
+        caps: &[&str],
+        managed: Option<Value>,
+        mailbox: Option<Value>,
+        expected_nonce: Option<&str>,
+    ) -> io::Result<Arc<Session>> {
         if self
             .stopped_go
             .as_ref()
@@ -322,6 +335,25 @@ impl State {
             "agy" | "opencode" | "hermes" | "claude" | "claude-code" | "codex"
         ) && !field(options, "resume_from").is_empty();
         let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
+        if resume && let Some(root) = self.root.parent() {
+            let id = field(options, "resume_from")
+                .rsplit('/')
+                .next()
+                .unwrap_or_default();
+            let journal = match crate::refresh::records(root) {
+                Ok(journal) => journal,
+                Err(_) if expected_nonce.is_none() => Value::Null,
+                Err(error) => return Err(error),
+            };
+            let row = &journal["records"][id];
+            if matches!(field(row, "state"), "claimed" | "waiting")
+                && row["nonce"].as_str() != expected_nonce
+            {
+                return Err(io::Error::other(
+                    "the source is held by native maintenance; inspect refresh progress",
+                ));
+            }
+        }
         if field(launch, "agent") == "hermes" && options.get("resume_from").is_some() && !resume {
             return Err(io::Error::other("resume_from requires a saved session"));
         }
@@ -362,7 +394,26 @@ impl State {
                 if managed.is_some() {
                     return Err(io::Error::other("unsupported Codex resume role"));
                 }
-                let prepared = session.prepare_codex_resume(launch, &qualified)?;
+                let prepared = if let Some(nonce) = expected_nonce {
+                    let root = self
+                        .root
+                        .parent()
+                        .ok_or_else(|| io::Error::other("missing maintenance root"))?;
+                    let document = crate::refresh::records(root)?;
+                    let claim = &document["records"][&session.id];
+                    if claim["nonce"] != nonce || claim["source_instance"] != session.incarnation()
+                    {
+                        return Err(io::Error::other(
+                            "native recovery claim no longer matches the source",
+                        ));
+                    }
+                    let proof = claim["account_proof"]
+                        .as_object()
+                        .map(|_| &claim["account_proof"]);
+                    session.prepare_codex_resume_with_relogin(launch, &qualified, proof)?
+                } else {
+                    session.prepare_codex_resume(launch, &qualified)?
+                };
                 return self.reserve_prepared(prepared, false, None, None);
             }
             if field(launch, "agent") == "opencode" {
@@ -770,6 +821,7 @@ fn serve(configured: PathBuf) -> io::Result<()> {
         sessions: RwLock::new(sessions),
         subscribers: Mutex::new(Vec::new()),
         launch_gate: Mutex::new(()),
+        maintenance_gate: Mutex::new(String::new()),
         operation_locks: std::array::from_fn(|_| Mutex::new(())),
         transactions: RwLock::new(()),
         deletion_gate: Mutex::new(()),
@@ -777,6 +829,8 @@ fn serve(configured: PathBuf) -> io::Result<()> {
         schedule_socket: receipt.as_ref().map(|(path, _)| path.clone()),
     });
     if state.stopped_go.is_none() {
+        let watcher = state.clone();
+        thread::spawn(move || maintenance::run(watcher));
         let handoffs = state.clone();
         let _ = handoffs.handoff_wake.try_send(());
         thread::spawn(move || supervision::run(handoffs, handoff_events));
@@ -870,6 +924,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
+            if *cap == crate::refresh::CAP {
+                return state.stopped_go.is_none();
+            }
             if state.stopped_go.is_some() {
                 return matches!(*cap, "subscribe" | "attach");
             }
@@ -1015,6 +1072,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         let _transaction = (op != "attach").then(|| state.transactions.read().unwrap());
         let result = match op {
             "context_guard_get" | "context_guard_set" => reply(&writer,state,state.context_guard.request(&request,caps.contains(&context_guard::CAPABILITY))),
+            "native_relogin" if caps.contains(&crate::refresh::CAP) => maintenance::manual(state, &request)
+                .and_then(|value| reply(&writer, state, value)),
             "list" => reply(
                 &writer,
                 state,
@@ -1493,6 +1552,7 @@ mod manager_reservation_tests {
             sessions: RwLock::new(rows),
             subscribers: Mutex::new(Vec::new()),
             launch_gate: Mutex::new(()),
+            maintenance_gate: Mutex::new(String::new()),
             operation_locks: std::array::from_fn(|_| Mutex::new(())),
             transactions: RwLock::new(()),
             deletion_gate: Mutex::new(()),

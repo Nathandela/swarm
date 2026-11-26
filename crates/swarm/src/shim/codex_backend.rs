@@ -60,6 +60,36 @@ pub(super) struct Channel {
 }
 
 impl Channel {
+    pub(super) fn prove_saved_thread(&mut self, thread: &str, cwd: &Path) -> io::Result<()> {
+        send(
+            &mut self.connection,
+            json!({"id":2,"method":"thread/read","params":{
+                "threadId":thread,"includeTurns":false,
+            }}),
+        )?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let Some(reply) = read(&mut self.connection)? else {
+                continue;
+            };
+            if reply["id"] == 2 && reply["method"].is_null() {
+                let saved = &reply["result"]["thread"];
+                if reply.get("error").is_none()
+                    && saved["id"] == thread
+                    && Path::new(field(saved, "cwd"))
+                        .canonicalize()
+                        .is_ok_and(|path| path == cwd)
+                {
+                    return Ok(());
+                }
+                return Err(io::Error::other(
+                    "current Codex login cannot read the exact original thread",
+                ));
+            }
+        }
+        Err(io::Error::other("Codex external identity proof timed out"))
+    }
+
     pub(super) fn bind_resume(&mut self, thread: &str, cwd: &Path) -> io::Result<()> {
         send(
             &mut self.connection,
@@ -106,6 +136,17 @@ pub(super) fn start(
     env: &[(String, String)],
     policy: &[String],
 ) -> io::Result<(Backend, Channel)> {
+    start_bounded(executable, cwd, dir, env, policy, Duration::from_secs(60))
+}
+
+pub(super) fn start_bounded(
+    executable: &Path,
+    cwd: &Path,
+    dir: &Path,
+    env: &[(String, String)],
+    policy: &[String],
+    timeout: Duration,
+) -> io::Result<(Backend, Channel)> {
     let socket = dir.join("b");
     let endpoint = format!("unix://{}", socket.display());
     let child = Command::new(executable)
@@ -124,6 +165,7 @@ pub(super) fn start(
         backend.child.as_ref().expect("owned app-server"),
         &socket,
         endpoint,
+        timeout,
     );
     match channel {
         Ok(channel) => Ok((backend, channel)),
@@ -134,9 +176,14 @@ pub(super) fn start(
     }
 }
 
-fn connect(child: &Child, socket: &Path, endpoint: String) -> io::Result<Channel> {
+fn connect(
+    child: &Child,
+    socket: &Path,
+    endpoint: String,
+    timeout: Duration,
+) -> io::Result<Channel> {
     // The reference allows cold native startup to take a full minute under host I/O pressure.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + timeout;
     let stream = loop {
         match UnixStream::connect(socket) {
             Ok(stream) => {

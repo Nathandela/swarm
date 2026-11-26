@@ -44,6 +44,29 @@ fn an_inactive_slot_cannot_become_an_unmanaged_writer_by_removing_its_marker() {
         workspace.canonicalize().unwrap().to_str().unwrap()
     );
     assert!(!root.join("effects").exists());
+    let refresh = |args: &[&str]| {
+        Command::new(&binary)
+            .env_clear()
+            .env("HOME", &root)
+            .arg("refresh")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let status = refresh(&["--json"]);
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    assert!(serde_json::from_slice::<serde_json::Value>(&status.stdout).is_ok());
+    let configure = refresh(&["--auto", "off"]);
+    assert!(!configure.status.success());
+    assert!(
+        String::from_utf8_lossy(&configure.stderr)
+            .contains("managed installation marker is missing")
+    );
+    assert!(!root.join("effects").exists());
     let blocked = run();
     assert!(!blocked.status.success());
     assert!(

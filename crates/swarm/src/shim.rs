@@ -27,6 +27,59 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+fn prove_codex_relogin(
+    plan: &providers::LaunchPlan,
+    cwd: &Path,
+    runtime_root: &Path,
+    thread: &str,
+) -> io::Result<()> {
+    if plan.agent != "codex"
+        || !providers::codex::managed(&plan.version)
+        || !codex_receipt::canonical_thread(thread)
+        || providers::identity(&plan.executable)? != plan.identity
+    {
+        return Err(io::Error::other("unqualified Codex relogin access probe"));
+    }
+    let directory = runtime_root.join(format!(".login-{}", &runtime::random_id()?[..8]));
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    let policy = [
+        "-c".into(),
+        "check_for_update_on_startup=false".into(),
+        "-c".into(),
+        r#"approval_policy="never""#.into(),
+        "-c".into(),
+        r#"sandbox_mode="read-only""#.into(),
+    ];
+    let attempt = codex_backend::start_bounded(
+        &plan.executable,
+        cwd,
+        &directory,
+        &plan.env,
+        &policy,
+        Duration::from_secs(8),
+    );
+    let (mut backend, mut channel) = attempt.inspect_err(|error| {
+        if !error
+            .get_ref()
+            .is_some_and(|e| e.is::<codex_backend::ContainmentUnknown>())
+        {
+            let _ = fs::remove_dir_all(&directory);
+        }
+    })?;
+    let proof = channel.prove_saved_thread(thread, cwd);
+    drop(channel);
+    backend.shutdown()?;
+    fs::remove_dir_all(directory)?;
+    proof?;
+    if providers::identity(&plan.executable)? != plan.identity {
+        return Err(io::Error::other(
+            "Codex executable changed during relogin access proof",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn run(args: &[String]) -> u8 {
     if let [flag, path] = args
         && flag == "--rust-session"
@@ -75,6 +128,7 @@ struct ProviderObservation {
     agy_hook_at: Option<Instant>,
     agy_title: Option<Value>,
     agy_latest: u64,
+    agy_thread_confirmed: bool,
     claude_paste_attempted: bool,
     claude_dispatch: Option<(String, String)>,
     claude_prompt: Option<String>,
@@ -1085,6 +1139,23 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 },
             )
         }
+        "maintenance_probe" => {
+            let result = maintenance_probe(state, &request);
+            let reply = match result {
+                Ok(()) => json!({"type":"ok"}),
+                Err(error) => json!({"type":"error","error":error.to_string()}),
+            };
+            runtime::write_control(&mut stream, &reply)
+        }
+        "maintenance_stop" => {
+            let result = maintenance_stop(state, &request);
+            let reply = match result {
+                Ok(()) => json!({"type":"ok"}),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => json!({"type":"busy"}),
+                Err(err) => json!({"type":"error","error":err.to_string()}),
+            };
+            runtime::write_control(&mut stream, &reply)
+        }
         "signal" if request["sig"] == "term" => {
             terminate(state)?;
             runtime::write_control(&mut stream, &json!({"type": "ok"}))
@@ -1328,6 +1399,157 @@ fn opencode_terminal_ready(state: &State) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn maintenance_probe(state: &State, request: &Value) -> io::Result<()> {
+    let thread = field(request, "conversation_id");
+    let meta = runtime::read_json(&state.dir.join("session.json"))?;
+    let source = runtime::read_json(&state.dir.join("observation.json"))?;
+    let saved = &meta["maintenance_env"];
+    if state.provider != "codex"
+        || state.schedule.is_some()
+        || !meta["manager"].is_null()
+        || !meta["checkout"].is_null()
+        || source["token"] != state.token
+        || source["conversation_id"] != thread
+        || !codex_receipt::canonical_thread(thread)
+        || !request["account"].is_string()
+        || json!(crate::refresh::auth_identity("codex", saved)) != request["account"]
+    {
+        return Err(io::Error::other(
+            "original native account context is unproved",
+        ));
+    }
+    let args = json!({"env":saved});
+    let target = providers::prepare(
+        "codex",
+        &state.working_dir,
+        "",
+        &args,
+        runtime::launch_env(saved),
+    )?;
+    if target.version != field(request, "version")
+        || target.identity != request["identity"]
+        || json!(target.executable) != request["executable"]
+    {
+        return Err(io::Error::other(
+            "Codex executable changed before native access probe",
+        ));
+    }
+    let root = state
+        .dir
+        .parent()
+        .ok_or_else(|| io::Error::other("missing native runtime root"))?;
+    prove_codex_relogin(&target, &state.working_dir, root, thread)?;
+    if json!(crate::refresh::auth_identity("codex", saved)) != request["account"] {
+        return Err(io::Error::other(
+            "Codex account changed during native access probe",
+        ));
+    }
+    Ok(())
+}
+
+fn maintenance_stop(state: &State, request: &Value) -> io::Result<()> {
+    let nonce = field(request, "nonce");
+    let thread = field(request, "conversation_id");
+    let busy = || {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "worker is active or has unresolved input",
+        )
+    };
+    let root = state
+        .dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| io::Error::other("missing maintenance state root"))?;
+    let _policy = runtime::lock(&root.join(".native-maintenance-policy.lock"))?;
+    if let Some(name) = request["automatic_policy"].as_str()
+        && (!matches!(name, crate::refresh::AUTH | crate::refresh::POLICY)
+            || crate::refresh::disabled(root, name)?)
+    {
+        return Err(busy());
+    }
+    let _control = state.control.lock().unwrap();
+    if *_control != 0 || state.terminal_input.load(Ordering::Acquire) {
+        return Err(busy());
+    }
+    if !runtime::valid_id(nonce)
+        || !codex_receipt::canonical_thread(thread)
+        || state.schedule.is_some()
+        || !matches!(state.provider.as_str(), "codex" | "claude" | "agy")
+    {
+        return Err(io::Error::other("unsupported maintenance stop binding"));
+    }
+    let observation = runtime::read_json(&state.dir.join("observation.json"))?;
+    let status = &observation["status"];
+    if observation["token"] != state.token
+        || observation["conversation_id"] != thread
+        || status["Process"] != "running"
+        || status["Turn"] != "idle"
+        || status["Interaction"] != "none"
+        || status["Attention"] == true
+        || state.provider == "codex" && observation["manager_ingress_ready"] != true
+    {
+        return Err(busy());
+    }
+    let journal = crate::refresh::records(root)?;
+    let source = state
+        .dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let claim = &journal["records"][source];
+    let target = Path::new(field(claim, "executable"));
+    if claim["state"] != "claimed"
+        || claim["nonce"] != nonce
+        || claim["conversation_id"] != thread
+        || claim["policy"] != request["automatic_policy"]
+        || claim["agent"] != state.provider
+        || !target.is_absolute()
+        || providers::identity(target)? != claim["identity"]
+        || json!(crate::refresh::auth_identity(
+            &state.provider,
+            &claim["source_env"]
+        )) != claim["account"]
+    {
+        return Err(io::Error::other(
+            "maintenance claim no longer matches the approved target",
+        ));
+    }
+    if !claim["account_proof"].is_null() {
+        let proof = providers::codex_continuity::relogin_proof(
+            &state.dir,
+            &state.token,
+            &state.working_dir,
+            &runtime::launch_env(&claim["source_env"]),
+            thread,
+        )?;
+        if proof != claim["account_proof"] {
+            return Err(io::Error::other(
+                "native rollout or effective authority changed before stop",
+            ));
+        }
+    }
+    let path = state.dir.join("maintenance-stop.json");
+    match runtime::read_json(&path) {
+        Ok(proof)
+            if proof["token"] == state.token
+                && proof["nonce"] == nonce
+                && proof["conversation_id"] == thread => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => runtime::write_json(
+            &path,
+            &json!({
+                "token":state.token,"nonce":nonce,"conversation_id":thread,
+            }),
+        )?,
+        _ => {
+            return Err(io::Error::other(
+                "conflicting durable maintenance stop proof",
+            ));
+        }
+    }
+    terminate(state)
 }
 
 fn queue_agy_prompt(state: &State, request: &Value) -> io::Result<()> {
@@ -1709,6 +1931,10 @@ fn agy_hook_observation(stream: &mut UnixStream, state: &State, payload: &Value)
             observed.conversation = Some(id.to_owned());
             changed = true;
         }
+        if !observed.agy_thread_confirmed {
+            observed.agy_thread_confirmed = true;
+            changed = true;
+        }
     }
     observed.agy_latest = at;
     if let Some(status) = agy::hook_status(field(payload, "agent_state")) {
@@ -1740,7 +1966,7 @@ fn write_agy_observation(state: &State, observed: &ProviderObservation) -> io::R
         &json!({
             "token": state.token, "conversation_id": observed.conversation,
             "status": observed.agy_hook_status.as_ref().or(observed.agy_status.as_ref()),
-            "provider_title": observed.agy_title,
+            "provider_title": observed.agy_title, "native_joined":observed.agy_thread_confirmed,
         }),
     )
 }

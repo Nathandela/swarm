@@ -1,4 +1,4 @@
-usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|checkout|clean|upgrade|version]
+usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|checkout|clean|refresh|relogin|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -37,6 +37,8 @@ usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guid
   swarm clean      preview safe storage cleanup [--apply] [--json]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
+  swarm refresh    report provider CLI refresh progress ([--auto on|off] [--json])
+  swarm relogin    recover native provider sign-in ([--dry-run] [--force] [--auto on|off])
   swarm upgrade    preview a signed managed upgrade, stage it, activate it, or roll back
                    ([--stage|--activate|--rollback|--unattended] [--json] [--dist DIRECTORY])
   swarm version    print the build version

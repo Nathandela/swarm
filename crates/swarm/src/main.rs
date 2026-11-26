@@ -11,6 +11,7 @@ mod ipc;
 mod manager_mcp;
 mod manager_prompt;
 mod providers;
+mod refresh;
 mod release;
 mod schedule;
 mod setup_trust;
@@ -64,7 +65,12 @@ fn main() -> ExitCode {
     });
     let inventory = args.first().is_some_and(|arg| arg == "checkout")
         && args.get(1).is_some_and(|arg| arg == "inventory");
-    let _installation = if read_only || inventory {
+    // These commands decide writer custody after parsing their policy and dry-run flags.
+    let maintenance = matches!(
+        args.first().and_then(|arg| arg.to_str()),
+        Some("refresh" | "relogin")
+    );
+    let _installation = if read_only || inventory || maintenance {
         None
     } else {
         match upgrade::writer(&args) {
@@ -97,6 +103,7 @@ fn main() -> ExitCode {
         Some("--pilot") => ipc::pilot::run(&args[1..], true),
         Some("pilot") => ipc::pilot::run(&args[1..], false),
         Some("daemon") => supervisor::run(&args[1..]),
+        Some(verb @ ("refresh" | "relogin")) => refresh::run(verb, &args[1..]),
         Some("hook") => hook::run(&args[1..]),
         Some("native-input") => providers::agy_input::cli(&args[1..]),
         Some("shim") => shim::run(&args[1..]),
