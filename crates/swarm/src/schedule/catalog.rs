@@ -390,6 +390,45 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn local_cli_can_shorten_go_catalog_template_while_list_stays_oversized() {
+        let temp = Temp::with_go_catalog();
+        let store = Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        let prompt = "x".repeat(crate::ipc::wire::MAX_FRAME);
+        let first = store
+            .save_template(
+                None,
+                "Large first".into(),
+                prompt.clone(),
+                "2026-11-01T06:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        let second = store
+            .save_template(
+                None,
+                "Large second".into(),
+                prompt,
+                "2026-11-01T06:00:01Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert!(serve_templates(&temp.0).is_err());
+
+        store
+            .save_template(
+                Some(&first.id),
+                "Shortened locally".into(),
+                "short prompt".into(),
+                "2026-11-01T06:00:02Z".parse().unwrap(),
+            )
+            .unwrap();
+        assert!(serve_templates(&temp.0).is_err());
+        assert_eq!(store.template(&first.id).unwrap().prompt, "short prompt");
+        assert_eq!(
+            store.template(&second.id).unwrap().prompt.len(),
+            crate::ipc::wire::MAX_FRAME
+        );
+    }
 }
 
 #[derive(Serialize, Deserialize)]
