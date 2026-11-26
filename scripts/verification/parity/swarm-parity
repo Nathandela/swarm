@@ -118,6 +118,8 @@ def role(root, pid, command):
         return None
     if argv[0] in (str(root / "bin/swarm"), str(root / "bin/board"), str(root / "bin/reference-board"), str(root / "bin/codex")) and executable(pid) == argv[0]:
         return "swarm"
+    if argv[0] in (str(root / "bin/native-claude"), str(root / "bin/native-codex")) and executable(pid) == argv[0]:
+        return "fixture"
     launcher = root / "install/swarm"
     if str(root / "install") + "/" in argv[0] and launcher.is_symlink():
         installed = launcher.resolve(strict=True)

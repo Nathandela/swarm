@@ -39,14 +39,20 @@ class ParityTests(unittest.TestCase):
             102: (1, "", "S", f"/usr/bin/tail -f {root}/daemon.log"),
             103: (1, "", "S", f"{root}/bin/swarm shim"),
             104: (100, "", "S", "/usr/bin/sleep 2"),
+            105: (1, "", "S", f"{root}/bin/native-claude"),
+            106: (1, "", "S", f"{root}/bin/native-codex app-server"),
+            107: (1, "", "S", f"{root}/bin/native-codex app-server"),
         }
         executable = {100: "/usr/bin/python3", 101: str(root / "bin/swarm"),
-                      102: "/usr/bin/tail", 103: "/usr/bin/tail", 104: "/usr/bin/sleep"}
+                      102: "/usr/bin/tail", 103: "/usr/bin/tail", 104: "/usr/bin/sleep",
+                      105: str(root / "bin/native-claude"), 106: str(root / "bin/native-codex"),
+                      107: "/usr/bin/tail"}
         with (patch.object(parity, "table", return_value=rows),
               patch.object(parity, "process_identity", side_effect=lambda pid: (pid + 10, rows[pid][0])),
               patch.object(parity, "executable", side_effect=executable.__getitem__)):
             identities = {102: 1}  # PID was recycled after registration.
-            self.assertEqual(parity.owned(root, (100, 110), identities), {100: 110, 101: 111, 104: 114})
+            self.assertEqual(parity.owned(root, (100, 110), identities),
+                             {100: 110, 101: 111, 104: 114, 105: 115, 106: 116})
 
     def test_reused_process_is_never_registered_under_second_birth(self):
         root = Path("/tmp/swarm-parity-owner-test")
