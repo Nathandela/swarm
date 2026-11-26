@@ -234,7 +234,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             board.send(b"m")
             board.wait_bytes(b"More")
             board.send(b"a")
-            board.wait_bytes(b"Fixture automation")
+            board.wait_bytes("active · Fixture automation · 2099-01-01 01:00 · UTC (fixed)".encode())
             board.send(b"\x1b[<0;4;2M\x1b[<32;5;2M\x1b[<0;4;2m")
             board.send(b"\x1b[<0;4;2M\x1b[<0;4;2m")
             board.wait_bytes(b"Status")

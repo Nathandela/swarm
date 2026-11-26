@@ -660,7 +660,14 @@ impl Automation {
             Some(Records::List(_)) => {
                 let mut items: Vec<_> = self
                     .visible_jobs()
-                    .map(|job| format!("{} · {}", job.name(), job.state))
+                    .map(|job| {
+                        format!(
+                            "{} · {} · {}",
+                            job.state,
+                            job.name(),
+                            list_cadence(&job.spec.calendar)
+                        )
+                    })
                     .collect();
                 if items.is_empty() {
                     items.push("No jobs in this view.".into());
@@ -686,14 +693,21 @@ impl Automation {
         let capacity = self.body_capacity((cols, rows));
         let start = (self.selected + 1).saturating_sub(capacity);
         for (index, text) in items.iter().enumerate().skip(start).take(capacity) {
-            let marker = if index == self.selected { "▌" } else { " " };
-            line(
-                output,
-                (index - start) as u16 + 2,
-                cols,
-                "",
-                &format!("{marker} {text}"),
-            );
+            let selected = index == self.selected;
+            let marker = if selected { "▌" } else { " " };
+            let row = (index - start) as u16 + 2;
+            if matches!(&self.records, Some(Records::List(_))) {
+                let style = if selected { ACCENT } else { PLAIN };
+                let text = truncation(text, cols.saturating_sub(2));
+                spans(
+                    output,
+                    row,
+                    cols,
+                    &[(style, marker.into()), (PLAIN, format!(" {text}"))],
+                );
+            } else {
+                line(output, row, cols, "", &format!("{marker} {text}"));
+            }
         }
         if !self.error.is_empty() {
             line(output, 2, cols, "\x1b[33m", &self.error);
@@ -715,6 +729,28 @@ impl Automation {
             );
         }
         self.footer(output, cols, rows);
+    }
+}
+
+fn list_cadence(calendar: &Calendar) -> String {
+    let cadence = match calendar.kind.as_str() {
+        "cron" => calendar.cron.clone(),
+        "once" => format!("{} {}", calendar.date, calendar.time),
+        "weekly" => format!("{} {}", calendar.weekday, calendar.time),
+        kind => {
+            let label = match kind {
+                "daily" => "Daily",
+                "weekdays" => "Weekdays",
+                "" => "Choose",
+                _ => kind,
+            };
+            format!("{label} {}", calendar.time)
+        }
+    };
+    if calendar.time_zone == "host" {
+        format!("{cadence} · Host wall time")
+    } else {
+        format!("{cadence} · {} (fixed)", calendar.time_zone)
     }
 }
 
