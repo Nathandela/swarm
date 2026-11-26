@@ -7,7 +7,9 @@ mod preferences;
 mod term;
 
 use crate::ipc::{self, Client, field};
-use crate::schedule::catalog::{CAP as CATALOG_CAP, Read as CatalogRead};
+use crate::schedule::catalog::{
+    CAP as CATALOG_CAP, CONTROL as CATALOG_CONTROL, Change as CatalogChange, Read as CatalogRead,
+};
 use automation::Automation;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
@@ -29,6 +31,9 @@ const ROSTER_CAPS: &[&str] = &[
     "opencode-observation",
     "resume-relocate",
     CATALOG_CAP,
+    CATALOG_CONTROL,
+    "schedule",
+    "schedule-run-id",
 ];
 
 pub(crate) fn run() -> u8 {
@@ -158,6 +163,32 @@ fn board(path: &Path) -> io::Result<()> {
                         view.receive(result);
                     }
                 }
+                Action::ChangeAutomation(change) => {
+                    let result = connection.as_mut().map_or_else(
+                        || {
+                            Err(io::Error::other(
+                                "daemon disconnected; reconnect before saving",
+                            ))
+                        },
+                        |client| change.remote(client),
+                    );
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        view.changed(result);
+                    }
+                }
+                Action::TriggerAutomation { job, operation } => {
+                    let result = connection.as_mut().map_or_else(
+                        || {
+                            Err(io::Error::other(
+                                "daemon disconnected; reconnect before running",
+                            ))
+                        },
+                        |client| crate::schedule::run_automation(client, &job, &operation),
+                    );
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        view.triggered(&job, &operation, result);
+                    }
+                }
                 Action::Request(message, target) => {
                     let Some(client) = &mut connection else {
                         continue;
@@ -249,7 +280,7 @@ struct Press {
 
 enum Modal {
     Launch(Box<Launch>),
-    Automation(Automation),
+    Automation(Box<Automation>),
     ResumeAgy {
         id: String,
         cwd: Editor,
@@ -284,6 +315,8 @@ enum Action {
     Retry,
     SaveLayout(Layout),
     Catalog(CatalogRead),
+    ChangeAutomation(CatalogChange),
+    TriggerAutomation { job: String, operation: String },
     Request(Value, &'static str),
 }
 
@@ -357,7 +390,14 @@ impl Board {
             return self.mouse(event, geometry, online);
         }
         self.press = None;
-        if let Some(modal) = self.modal.take() {
+        if let Some(mut modal) = self.modal.take() {
+            if key == Key::Escape
+                && let Modal::Automation(view) = &mut modal
+                && view.cancel()
+            {
+                self.modal = Some(modal);
+                return Action::None;
+            }
             if matches!(key, Key::Escape)
                 || (matches!(modal, Modal::Launch(_))
                     && !Launch::readable(geometry)
@@ -447,9 +487,21 @@ impl Board {
                 self.notice.clear();
             }
             Key::Text('a') => {
-                self.modal = Some(Modal::Automation(Automation::default()));
+                self.modal = Some(Modal::Automation(Box::default()));
                 self.notice.clear();
                 return Action::Catalog(CatalogRead::List);
+            }
+            Key::Text('c') if online => {
+                if let Some(row) = self.by_id(id).filter(|row| !linked_dispatcher(row)) {
+                    let directory = field(row, "cwd");
+                    if !directory.is_empty() {
+                        self.modal = Some(Modal::Automation(Box::new(Automation::in_directory(
+                            directory,
+                        ))));
+                        self.notice.clear();
+                        return Action::Catalog(CatalogRead::List);
+                    }
+                }
             }
             Key::Text('g') => self.reveal_attention(geometry.1),
             _ if !online => {}
@@ -719,6 +771,9 @@ impl Board {
                     entries.push(("Resume".into(), Some('r')));
                 }
                 entries.extend([("Rename".into(), Some('e')), ("Tag".into(), Some('t'))]);
+                if !field(row, "cwd").is_empty() {
+                    entries.push(("Schedule in this directory".into(), Some('c')));
+                }
                 if unchanged {
                     let label = if expected_running { "Kill" } else { "Delete" };
                     entries.push((label.into(), Some('x')));
@@ -1193,6 +1248,16 @@ impl Editor {
         }
     }
 
+    fn insert_text(&mut self, text: impl Iterator<Item = char>) {
+        for ch in text {
+            if self.text.len() + ch.len_utf8() > 16384 {
+                break;
+            }
+            self.text.insert(self.cursor, ch);
+            self.cursor += ch.len_utf8();
+        }
+    }
+
     fn apply(&mut self, key: Key) {
         const LIMIT: usize = 16384;
         let previous = self.text[..self.cursor]
@@ -1221,15 +1286,7 @@ impl Editor {
                 self.text.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
             }
-            Key::Paste(paste) => {
-                for c in paste.chars().filter(|ch| !ch.is_control()) {
-                    if self.text.len() + c.len_utf8() > LIMIT {
-                        break;
-                    }
-                    self.text.insert(self.cursor, c);
-                    self.cursor += c.len_utf8();
-                }
-            }
+            Key::Paste(paste) => self.insert_text(paste.chars().filter(|ch| !ch.is_control())),
             _ => {}
         }
     }

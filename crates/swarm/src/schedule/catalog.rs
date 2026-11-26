@@ -1,5 +1,5 @@
 use super::{
-    Job, Result,
+    Job, Result, Spec,
     store::{Occurrence, Store},
 };
 use crate::ipc::{Client, field};
@@ -78,4 +78,96 @@ pub(crate) fn serve(root: &Path, request: &Value) -> Result<Value> {
         return Err("automation catalog result exceeds the owner socket frame limit".into());
     }
     Ok(reply)
+}
+
+pub(crate) const CONTROL: &str = "schedule-catalog-control-v1";
+const CHANGE: &str = "schedule_catalog_change";
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum State {
+    Active,
+    Paused,
+    Archived,
+}
+
+impl State {
+    fn token(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Archived => "archived",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Change {
+    Create {
+        operation: String,
+        spec: Box<Spec>,
+    },
+    Edit {
+        id: String,
+        revision: String,
+        spec: Box<Spec>,
+    },
+    State {
+        id: String,
+        revision: String,
+        expected: String,
+        value: State,
+    },
+}
+
+impl Change {
+    pub(crate) fn remote(self, client: &mut Client) -> io::Result<Records> {
+        if !client.supports(CONTROL) {
+            return Err(io::Error::other(
+                "selected supervisor does not support automation changes",
+            ));
+        }
+        let reply = client.request_body(json!({"op":CHANGE,"change":self}), CHANGE)?;
+        let job: Job = serde_json::from_value(reply["job"].clone())?;
+        let target = match &self {
+            Self::Create { operation, .. } => operation == &job.id,
+            Self::Edit { id, .. } => id == &job.id,
+            Self::State { id, value, .. } => id == &job.id && job.state == value.token(),
+        };
+        if field(&reply, "endpoint_id") != client.endpoint() || !target {
+            return Err(io::Error::other(
+                "automation change reply did not match the request",
+            ));
+        }
+        Ok(Records::Get(Box::new(job)))
+    }
+}
+
+pub(crate) fn change(root: &Path, request: &Value) -> Result<Value> {
+    let change: Change = serde_json::from_value(request["change"].clone())?;
+    if matches!(&change, Change::Create { operation, .. } if !super::valid_id(operation)) {
+        return Err("invalid automation creation operation ID".into());
+    }
+    if matches!(&change,
+        Change::Edit { id, revision, .. } | Change::State { id, revision, .. }
+            if !super::valid_id(id) || !super::valid_id(revision))
+    {
+        return Err("invalid automation job or revision ID".into());
+    }
+    let store = Store::open(root, Path::new("/etc/localtime"))?;
+    let now = jiff::Timestamp::now();
+    let job = match change {
+        Change::Create { operation, spec } => {
+            store.create_bound(*spec, now, true, Some(&operation))?
+        }
+        Change::Edit { id, revision, spec } => store.edit(&id, Some(&revision), *spec, now)?,
+        Change::State {
+            id,
+            revision,
+            expected,
+            value,
+        } => store.set_state_bound(&id, value.token(), Some((&revision, &expected)), now)?,
+    };
+    Ok(json!({"op":CHANGE,"job":job}))
 }

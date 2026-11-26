@@ -107,6 +107,18 @@ pub(super) fn zero_time() -> Timestamp {
 }
 
 impl Occurrence {
+    pub(crate) fn live_session(&self) -> Option<&str> {
+        if !matches!(self.state.as_str(), "working" | "needs-input") {
+            return None;
+        }
+        self.attempts
+            .last()
+            .filter(|attempt| !attempt.session_id.is_empty())
+            .map(|attempt| attempt.session_id.as_str())
+    }
+}
+
+impl Occurrence {
     fn new(
         job: &Job,
         due: String,
@@ -339,21 +351,41 @@ impl Store {
         self.view(|tx| require(tx, JOBS, id))
     }
 
-    pub fn create(&self, mut spec: Spec, now: Timestamp, draft: bool) -> Result<Job> {
+    pub fn create(&self, spec: Spec, now: Timestamp, draft: bool) -> Result<Job> {
+        self.create_bound(spec, now, draft, None)
+    }
+
+    pub(super) fn create_bound(
+        &self,
+        mut spec: Spec,
+        now: Timestamp,
+        draft: bool,
+        operation: Option<&str>,
+    ) -> Result<Job> {
         spec.prepare(&self.host)?;
         if !draft {
             self.check_future(&spec, now)?;
         }
         let job = Job {
-            id: id(now)?,
+            id: operation.map_or_else(|| id(now), |operation| Ok(operation.to_owned()))?,
             revision_id: id(now)?,
             spec,
             state: if draft { "paused" } else { "active" }.into(),
             created_at: now,
             updated_at: now,
         };
-        self.write(|tx| self.set_revision(tx, &job, now))?;
-        Ok(job)
+        self.write(|tx| {
+            if let Some(existing) = get::<Job>(tx, JOBS, &job.id)? {
+                if operation.is_some() && job.spec == existing.spec {
+                    return Ok(existing);
+                }
+                return Err(
+                    "automation creation operation already belongs to a different job".into(),
+                );
+            }
+            self.set_revision(tx, &job, now)?;
+            Ok(job)
+        })
     }
 
     pub fn edit(
@@ -387,8 +419,23 @@ impl Store {
     }
 
     pub fn set_state(&self, id: &str, state: &str, now: Timestamp) -> Result<Job> {
+        self.set_state_bound(id, state, None, now)
+    }
+
+    pub(super) fn set_state_bound(
+        &self,
+        id: &str,
+        state: &str,
+        expected: Option<(&str, &str)>,
+        now: Timestamp,
+    ) -> Result<Job> {
         self.write(|tx| {
             let mut job: Job = require(tx, JOBS, id)?;
+            if expected
+                .is_some_and(|(revision, state)| job.revision_id != revision || job.state != state)
+            {
+                return Err(CONFLICT.into());
+            }
             if job.state == state {
                 return Ok(job);
             }
@@ -934,6 +981,29 @@ mod tests {
             allow_overlap: true,
             ..Spec::default()
         }
+    }
+
+    #[test]
+    fn automation_create_retry_keeps_one_job_and_refuses_changed_contents() {
+        let dir = crate::schedule::Temp::new();
+        let store = Store::open(&dir.0, Path::new("/etc/localtime")).unwrap();
+        let now = ts("2026-01-01T10:00:01Z");
+        let operation = id(now).unwrap();
+        let mut value = spec(&dir.0);
+        let first = store
+            .create_bound(value.clone(), now, true, Some(&operation))
+            .unwrap();
+        let retry = store
+            .create_bound(value.clone(), now, true, Some(&operation))
+            .unwrap();
+        assert_eq!(first.revision_id, retry.revision_id);
+        value.name = "changed payload".into();
+        assert!(
+            store
+                .create_bound(value, now, true, Some(&operation))
+                .is_err()
+        );
+        assert_eq!(store.jobs().unwrap().len(), 1);
     }
 
     #[test]

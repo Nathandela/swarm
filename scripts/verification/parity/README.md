@@ -52,9 +52,11 @@ roster empty.
 The `--automations` witness uses a Rust supervisor and board. It verifies a
 read-only empty catalog, seeds a far-future fixture through `schedule create`,
 and reads its list, detail and empty run history through both the CLI and the
-board. It then stops the supervisor and verifies the board reports its
-disconnection while the CLI still reads the local catalog offline. It never
-starts a scheduled worker.
+board. It creates a paused draft from the board, edits its revision, resumes
+it, records one manual run, opens that run's detail, pauses and archives it.
+The selected fixture provider has no scheduled route, so the run records a
+refusal without starting a worker. After shutdown, the board reports the
+disconnection while the CLI can still read the local catalog offline.
 
 For exact comparisons, pass the same fresh `--form-root /tmp/pb-form-example`
 for the two sequential `--form-grid` commands. The harness creates and removes

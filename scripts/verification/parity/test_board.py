@@ -75,10 +75,51 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
             board.wait_bytes(b"Status")
             board.send(b"h")
             board.wait_bytes(b"No runs for this automation")
+
+            def step(keys, landmark):
+                start = len(board.capture)
+                board.send(keys)
+                board.wait_bytes(landmark, start)
+
+            step(b"\x1b[D", b"Status")
+            step(b"\x1b[D", b"n new")
+            step(b"n", b"New automation")
+            step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
+                 b"\x1b[B\x15claude\r", b"Status")
+            jobs = json.loads(cli("schedule", "list", "--json").stdout)
+            created, = [record for record in jobs if record["spec"]["name"] == "Created from board"]
+            assert created["state"] == "paused"
+            assert created["spec"]["prompt"] == "first line\nsecond line"
+            created_id = created["id"]
+            step(b"e", b"Edit automation")
+            step(b"\x15Revised from board\r", b"Revised from board")
+            edited = json.loads(cli("schedule", "show", created_id).stdout)
+            assert edited["spec"]["name"] == "Revised from board"
+            assert edited["revision_id"] != created["revision_id"]
+            step(b"p", b"Status")
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "active"
+            step(b"r", b"Run recorded")
+            history = json.loads(cli("schedule", "history", created_id).stdout)
+            assert len(history) == 1 and history[0]["manual"] is True
+            assert not (root / "effects/worker").exists()
+            step(b"h", b"enter run")
+            step(b"\r", b"Automation run")
+            step(b"\x1b[D", b"enter run")
+            step(b"\x1b[D", b"Revised from board")
+            step(b"p", "Status · paused".encode())
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
+            step(b"x", b"Archive automation?")
+            step(b"n", b"Status")
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
+            step(b"x", b"Archive automation?")
+            step(b"y", b"Status")
+            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "archived"
+
             daemon.terminate()
             daemon.wait(timeout=5)
             offline = cli("schedule", "list", "--json")
-            assert offline.returncode == 0 and [row["id"] for row in json.loads(offline.stdout)] == [job]
+            assert offline.returncode == 0
+            assert {row["id"] for row in json.loads(offline.stdout)} == {job, created_id}
             board.wait_bytes(b"daemon connection lost")
             board.send(b"u")
             board.wait_bytes(b"daemon disconnected")

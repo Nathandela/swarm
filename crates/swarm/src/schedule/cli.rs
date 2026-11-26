@@ -338,7 +338,7 @@ fn read_spec(args: &[&str]) -> Result<Spec> {
     })
 }
 
-fn duration(input: &str) -> Result<i64> {
+pub(super) fn duration(input: &str) -> Result<i64> {
     let invalid = || -> Box<dyn std::error::Error> { format!("invalid duration {input:?}").into() };
     let sign = if input.starts_with('-') { -1 } else { 1 };
     let mut text = input.strip_prefix(['-', '+']).unwrap_or(input);
