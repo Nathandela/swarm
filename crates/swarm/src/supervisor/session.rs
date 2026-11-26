@@ -2580,15 +2580,18 @@ impl Session {
                 .starts_with("discord-teammate-")
     }
 
-    pub(super) fn dispatcher_runtime_has_draft(&self, request: &Value) -> bool {
-        request["body_version"] == 1
-            && self.is_discord_manager()
-            && self.is_live()
-            && request["manager_runtime_request"]["session_instance"]
-                == codex_receipt::provider_instance(&self.agent, &self.token)
-            && self
-                .status_exchange(&json!({"type":"manager_direct_input"}))
-                .is_ok_and(|response| response["type"] == "ok" && response["unresolved"] == true)
+    pub(super) fn dispatcher_runtime_has_draft(&self, request: &Value) -> io::Result<bool> {
+        if request["body_version"] != 1
+            || !self.is_discord_manager()
+            || !self.is_live()
+            || request["manager_runtime_request"]["session_instance"]
+                != codex_receipt::provider_instance(&self.agent, &self.token)
+        {
+            return Ok(false);
+        }
+        crate::shim::manager_terminal::decode_probe(
+            self.status_exchange(&json!({"type":"manager_direct_input"})),
+        )
     }
 
     pub(super) fn owns_manager_launch(&self, conversation: &str, operation: &Value) -> bool {
