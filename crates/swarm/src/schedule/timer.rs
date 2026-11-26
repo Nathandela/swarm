@@ -75,10 +75,24 @@ pub(super) fn board_install(path: &Path, endpoint: &str, expected: &str) -> Resu
         return Err(STALE_STATUS.into());
     }
     let run = |name: &str, args: &[&str]| Command::new(name).args(args).env("LC_ALL", "C").output();
-    install(&local_manager(&run)?, path, Some(expected))
+    install(
+        &local_manager(&run)?,
+        path,
+        Some(BoardInstall {
+            path,
+            endpoint,
+            expected,
+        }),
+    )
 }
 
-fn install(manager: &Manager<'_>, socket: &Path, expected: Option<&str>) -> Result<()> {
+struct BoardInstall<'a> {
+    path: &'a Path,
+    endpoint: &'a str,
+    expected: &'a str,
+}
+
+fn install(manager: &Manager<'_>, socket: &Path, board: Option<BoardInstall<'_>>) -> Result<()> {
     let exe = stable_executable()?;
     let state = crate::ipc::state_path()?;
     let bindings = [
@@ -97,7 +111,7 @@ fn install(manager: &Manager<'_>, socket: &Path, expected: Option<&str>) -> Resu
         .iter()
         .map(|(key, path)| Ok((*key, safe_path(path)?)))
         .collect::<Result<Vec<_>>>()?;
-    manager.change(Some(render(manager.platform, &exe, &env)), expected)
+    manager.change(Some(render(manager.platform, &exe, &env)), board)
 }
 
 pub(super) fn board_status(cancel: &AtomicBool) -> Result<String> {
@@ -336,7 +350,7 @@ impl Manager<'_> {
         Ok(())
     }
 
-    fn change(&self, rendered: Option<Vec<String>>, expected: Option<&str>) -> Result<()> {
+    fn change(&self, rendered: Option<Vec<String>>, board: Option<BoardInstall<'_>>) -> Result<()> {
         let install = rendered.is_some();
         let dir = self.paths[0].parent().ok_or("invalid timer path")?;
         if install {
@@ -365,13 +379,11 @@ impl Manager<'_> {
             .map(|p| definition(p))
             .collect::<Result<Vec<_>>>()?;
         let state = self.inspect()?;
-        if let Some(expected) = expected {
+        if let Some(board) = &board {
             let installed =
                 self.installed(old.iter().filter(|definition| definition.is_some()).count());
-            if format!("{installed}, {}", state.active) != expected {
-                return Err(
-                    "timer status changed; refresh the list and review before enabling".into(),
-                );
+            if format!("{installed}, {}", state.active) != board.expected {
+                return Err(STALE_STATUS.into());
             }
         }
         if self.platform == Platform::Systemd {
@@ -426,6 +438,10 @@ impl Manager<'_> {
             (Platform::Systemd, false) => self.ctl(&["stop", TIMER]),
         };
         let set_enabled = |on| self.ctl(&[if on { "enable" } else { "disable" }, TIMER]);
+        if let Some(board) = board {
+            // The directory lock and manager reads can outlive the confirmed owner.
+            super::rpc::qualified_board_timer(board.path, board.endpoint)?;
+        }
         let mut undo: Vec<Box<dyn FnOnce() -> Result<()>>> = Vec::new();
         let result: Result<()> = (|| {
             if active && (!install || changed) {
