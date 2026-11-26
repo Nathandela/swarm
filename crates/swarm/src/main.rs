@@ -62,7 +62,7 @@ fn main() -> ExitCode {
     let _installation = if read_only {
         None
     } else {
-        match upgrade::writer() {
+        match upgrade::writer(&args) {
             Ok(lock) => lock,
             Err(error) => {
                 eprintln!("swarm: {error}");

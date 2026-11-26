@@ -2,6 +2,8 @@
 """Local-only Swarm preview release workflow. Build with Python 3.11+, verify with 3.10+."""
 import argparse
 import base64
+from contextlib import ExitStack
+from datetime import datetime, timezone
 import gzip
 import fcntl
 import hashlib
@@ -20,6 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLCHAIN = "stable"
 RUSTC = "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
 NODE_VERSION = "24.17.0"
+DAVE_SOURCE = "72d1c6d081f4993d618806990f1d3a1f6f53ed67"
+DAVE_SHA256 = "f5722792638152c75125245acbc7952a33e1330c0bd813ca344788da330d5c91"
+DAVE_NOTICE_NAMES = {"notices/davey/LICENSE", "notices/davey/Cargo.lock", "notices/davey/source.json"}
 NODE_ARCHIVES = {
     "darwin-aarch64": ("darwin-arm64", "cf7e9152d7bd86c140f6eccf3577abfbaf8960be1ca49d9d900e8484984dcb9a"),
     "darwin-x86_64": ("darwin-x64", "fe50e386f6a5e0b29ce44b989e543da9fb9a80aed0b91a2f0cb19c55106921fc"),
@@ -158,20 +163,66 @@ def check_source(source):
     require(output("git", "rev-parse", "HEAD") == source, "source commit differs from the requested freeze")
 
 
-def rust_notices():
+def locked_packages(manifest, targets, selected):
+    packages = {}
+    for target in targets:
+        graph = json.loads(output("rustup", "run", TOOLCHAIN, "cargo", "metadata", "--frozen",
+                                  "--format-version", "1", "--manifest-path", manifest,
+                                  "--filter-platform", target))
+        by_id = {p["id"]: p for p in graph["packages"]}
+        nodes = {node["id"]: node for node in graph["resolve"]["nodes"]}
+        pending = [p["id"] for p in graph["packages"] if p["name"] == selected and p["source"] is None]
+        require(len(pending) == 1, f"missing application package {selected}")
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if by_id[current]["source"]:
+                packages[current] = by_id[current]
+            pending.extend(dep["pkg"] for dep in nodes[current]["deps"]
+                           if any(kind["kind"] != "dev" for kind in dep["dep_kinds"]))
+    return packages
+
+
+def dave_source(archive, scratch):
+    require(file_hash(archive) == DAVE_SHA256, "wrong DAVE source archive digest")
+    directory = scratch / "dave-source"
+    directory.mkdir()
+    prefix = "davey-" + DAVE_SOURCE
+    with tarfile.open(archive, mode="r:gz") as tar:
+        for member in tar:
+            if member.isdir():
+                continue
+            relative = PurePosixPath(member.name)
+            require(relative.parts[0] == prefix and ".." not in relative.parts and member.isfile(),
+                    "invalid DAVE source archive")
+            path = directory.joinpath(*relative.parts[1:])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("xb") as out:
+                shutil.copyfileobj(tar.extractfile(member), out)
+    return directory
+
+
+def rust_notices(dave):
     """Collect notices from the installed compiler and the locked target graphs."""
     sysroot = Path(output("rustup", "run", TOOLCHAIN, "rustc", "--print", "sysroot"))
     toolchain = sysroot / "share/doc/rust"
     files = {}
     for path in sorted([toolchain / "COPYRIGHT-library.html", *(toolchain / "licenses").glob("*.txt")]):
         files[f"notices/toolchain/{path.name}"] = path.read_bytes()
-    packages = {}
-    for target in TARGETS.values():
-        graph = json.loads(output("rustup", "run", TOOLCHAIN, "cargo", "metadata", "--frozen",
-                                  "--format-version", "1", "--filter-platform", target))
-        for p in graph["packages"]:
-            if p["source"]:
-                packages[p["id"]] = p
+    packages = locked_packages(ROOT / "Cargo.toml", TARGETS.values(), "swarm")
+    dave_targets = [target.replace("-musl", "-gnu") for target in TARGETS.values()]
+    packages.update(locked_packages(dave / "davey-node/Cargo.toml", dave_targets, "snazzah_davey"))
+    files["notices/davey/LICENSE"] = (dave / "LICENSE").read_bytes()
+    files["notices/davey/Cargo.lock"] = (dave / "Cargo.lock").read_bytes()
+    files["notices/davey/source.json"] = json_bytes({
+        "source": DAVE_SOURCE, "archive_sha256": DAVE_SHA256,
+        "npm_package": "@snazzah/davey", "npm_version": "0.2.0",
+    })
+    fallback_dir = ROOT / "packaging/notices"
+    fallback = json.loads((fallback_dir / "sources.json").read_bytes())
     inventory = {}
     for p in sorted(packages.values(), key=lambda item: item["id"]):
         key = f'{p["name"]}-{p["version"]}'
@@ -182,7 +233,23 @@ def rust_notices():
         if p["license_file"]:
             sources.add(package / p["license_file"])
         require(p["license"] or p["license_file"], f"missing declared Cargo license for {key}")
-        inventory[key] = {"license": p["license"], "source": p["source"], "notice_files": []}
+        inventory[key] = {
+            "license": p["license"], "source": p["source"], "notice_files": [],
+            "source_archive": f'https://static.crates.io/crates/{p["name"]}/{key}.crate',
+        }
+        if not sources:
+            revision = json.loads((package / ".cargo_vcs_info.json").read_bytes())["git"]["sha1"]
+            repo = "/".join(p["repository"].removeprefix("https://github.com/").split("/")[:2])
+            upstream = fallback.get(f"{repo}@{revision}")
+            require(upstream, f"no upstream notice collected for {key} at {revision}")
+            inventory[key]["upstream_source"] = f"https://github.com/{repo}/tree/{revision}"
+            inventory[key]["upstream_notices"] = upstream
+            for filename, properties in upstream.items():
+                data = (fallback_dir / (properties["sha256"] + ".txt")).read_bytes()
+                require(digest(data) == properties["sha256"], f"wrong upstream notice digest for {key}")
+                name = f"notices/crates/{key}/{filename}"
+                files[name] = data
+                inventory[key]["notice_files"].append(name)
         for path in sorted(sources):
             relative = path.resolve().relative_to(package.resolve()).as_posix()
             name = f"notices/crates/{key}/{relative}"
@@ -205,7 +272,7 @@ def build(args):
     require(ROOT not in args.output.parents and args.output != ROOT, "release output must be outside checkout")
     with tempfile.TemporaryDirectory(prefix="swarm-release-") as tmp:
         scratch = Path(tmp)
-        notices = rust_notices()
+        notices = rust_notices(dave_source(args.davey_source, scratch))
         pins = stage_media(scratch, args.node_archives)
         pins_file = scratch / "release-media.json"
         pins_file.write_bytes(json_bytes(pins))
@@ -342,7 +409,9 @@ def inspect_archive(data, match):
         listed = {name for package in inventory.values() for name in package["notice_files"]}
         toolchain = {name for name in notices if re.fullmatch(
             r"notices/toolchain/(COPYRIGHT-library\.html|[a-zA-Z0-9_.-]+\.txt)", name)}
-        require(listed | toolchain | {"notices/cargo.json"} == notices, "unlisted third-party notice")
+        dave = notices & DAVE_NOTICE_NAMES
+        require(not dave or dave == DAVE_NOTICE_NAMES, "incomplete DAVE notices")
+        require(listed | toolchain | dave | {"notices/cargo.json"} == notices, "unlisted third-party notice")
         require(all(name.startswith("notices/crates/") for name in listed), "invalid Cargo notice path")
         expected |= notices
     require(files.keys() == expected, "archive contains unlisted or retired members")
@@ -502,9 +571,9 @@ def route(root):
     return data
 
 
-def point(root, active, previous):
+def point(root, active, previous, held=None):
     route_path = Path(tempfile.mkdtemp(dir=root / "routes", prefix="route-"))
-    private_write(route_path / "record.json", json_bytes({"active": active, "previous": previous}))
+    private_write(route_path / "record.json", json_bytes({"active": active, "previous": previous, "held": held}))
     (route_path / "swarm").symlink_to(Path("../..") / "releases" / active / "swarm")
     fsync_path(route_path)
     fsync_path(route_path.parent)
@@ -516,7 +585,7 @@ def point(root, active, previous):
 
 
 def managed_install(root, public, files, compat, media):
-    for name in ("releases", "routes", "effects"):
+    for name in ("releases", "routes", "effects", "inflight"):
         (root / name).mkdir(mode=0o700)
     for name, data in (("admin.lock", b""), ("writers.lock", b""), ("public.pem", public)):
         private_write(root / name, data)
@@ -553,6 +622,36 @@ def compatible(previous, candidate):
             "release compatibility differs; use a separately qualified offline migration")
 
 
+def require_reverse_proof(root, active, current, target):
+    if not (root / "effects" / active.name).exists():
+        return
+    qualified = current.get("rollback_sources", [])
+    require(isinstance(qualified, list) and all(isinstance(source, str) and
+                re.fullmatch(r"[0-9a-f]{40}", source) for source in qualified)
+            and target["source"] in qualified,
+            "active release may have written; keep it available for read/export and reconcile state offline")
+
+
+def report(args, root, installed, outcome, detail, latest="", staged=None, code=0):
+    state = {"checked_at": datetime.now(timezone.utc).isoformat(),
+             "installed": installed, "owner": "self", "outcome": outcome, "detail": detail}
+    if latest:
+        state["latest"] = latest
+    if staged:
+        state["staged_version"] = staged
+    replace_record(root / "upgrade.json", json_bytes(state))
+    print(json.dumps(state) if getattr(args, "json", False) else f"{outcome}: {detail}")
+    return code
+
+
+def local_asset(dist):
+    if dist is None:
+        return None
+    _, entries = artifact_set(dist)
+    group = next(g for g, platforms in GROUPS.items() if host_platform() in platforms)
+    return next(name for name in entries if (m := ASSET.fullmatch(name)) and m[2] == group)
+
+
 def upgrade(args):
     root = args.prefix.resolve(strict=True)
     meta = root.lstat()
@@ -562,46 +661,87 @@ def upgrade(args):
         record = route(root)
         active = release_path(root, record["active"])
         require(args.caller == active.name, "use the current managed launcher")
+        prev_card = json.loads((active / "compat.json").read_bytes())
+        installed = prev_card["version"]
         pending = root / "staged.json"
         staged = json.loads(pending.read_bytes()) if pending.exists() else None
         if staged and staged["from"] != active.name:
             staged = None
         if args.step == "status":
             print(json.dumps({"owner": "self", **record, "staged": staged,
+                              "unfinished_writers": sorted(p.name for p in (root / "inflight").iterdir()),
                               "active_may_have_written": (root / "effects" / active.name).exists()}))
-            return
-        if args.step == "stage":
-            require(args.dist is not None, "stage needs --dist DIRECTORY")
-            _, entries = artifact_set(args.dist)
-            group = next(g for g, platforms in GROUPS.items() if host_platform() in platforms)
-            name = next(name for name in entries if (m := ASSET.fullmatch(name)) and m[2] == group)
+            return 0
+        if args.step in {"check", "stage", "unattended"}:
+            name = local_asset(args.dist)
+            latest = ASSET.fullmatch(name)[1] if name else ""
+            comparison = (version_key(latest) > version_key(installed)) - (version_key(latest) < version_key(installed)) if latest else 0
+            allow = bool(getattr(args, "allow_downgrade", False)) and args.step != "unattended"
+            action, outcome, detail = "stage", "", f"{installed} -> {latest}"
+            if not latest:
+                action, outcome, detail = "refuse", "offline", "no signed Rust distribution selected"
+            elif latest == record.get("held"):
+                action, outcome, detail = "refuse", "held", "this version was rolled back"
+            elif comparison == 0:
+                action, outcome, detail = "current", "current", f"{installed} is current"
+            elif comparison < 0 and not allow:
+                action, outcome, detail = "refuse", "refused-downgrade", "use --allow-downgrade for a qualified older release"
+            if args.step == "check":
+                if getattr(args, "json", False):
+                    print(json.dumps({"Action": action, "Reason": detail, "Latest": latest,
+                                      "Owner": "self", "RefuseOutcome": outcome if action == "refuse" else ""}))
+                else:
+                    print(f"installed {installed}, latest {latest or '(unresolved)'}: would {action} ({detail})")
+                return 0
+            if action != "stage":
+                return report(args, root, installed, outcome, detail, latest)
             files, card, admin, _ = verified_archive(args.dist, name, root / "public.pem")
             old = verified_slot(active)
             compatible(old, card)
-            require(version_key(card["version"]) > version_key(old["version"]), "stage requires a newer signed release")
             selected = populate(root, files | admin, card, args.check_media)
-            replace_record(pending, json_bytes({"from": active.name, "to": selected}))
-            print(f"staged {selected}")
-            return
-        with owner_lock(root / "writers.lock"):
+            staged = {"from": active.name, "to": selected, "downgrade": comparison < 0}
+            replace_record(pending, json_bytes(staged))
+            if args.step == "stage":
+                return report(args, root, installed, "staged", selected, latest, latest)
+        with ExitStack() as custody:
+            custody.enter_context(owner_lock(root / "writers.lock"))
+            for path in dict.fromkeys(getattr(args, "writer_lock", [])):
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    continue
+                custody.enter_context(owner_lock(path))
+            require(not any((root / "inflight").iterdir()),
+                    "unfinished managed writers require offline ownership and effect reconciliation")
             old = verified_slot(active)
-            if args.step == "activate":
+            if args.step in {"activate", "unattended"}:
                 require(staged and staged["from"] == active.name, "no stage for the active release")
                 candidate = release_path(root, staged["to"])
                 target = verified_slot(candidate)
                 compatible(old, target)
-                require(version_key(target["version"]) > version_key(old["version"]), "staged release is no longer newer")
-                # Each complete route owns both its identity and choice of rollback slot.
-                point(root, candidate.name, active.name)
-                print(f"activated {candidate.name}")
-            else:
-                require(record["previous"], "no previous release slot")
-                require(not (root / "effects" / active.name).exists(),
-                        "active release may have written; keep it available for read/export and reconcile state offline")
-                candidate = release_path(root, record["previous"])
-                compatible(old, verified_slot(candidate))
-                point(root, candidate.name, None)
-                print(f"rolled back to {candidate.name}")
+                if version_key(target["version"]) < version_key(old["version"]):
+                    require(staged.get("downgrade"), "staged downgrade was not selected explicitly")
+                    require_reverse_proof(root, active, old, target)
+                require(target["version"] != old["version"], "staged release is already active")
+                point(root, candidate.name, active.name, record.get("held"))
+                return report(args, root, installed, "activated", candidate.name, target["version"])
+            require(record["previous"], "no previous release slot")
+            candidate = release_path(root, record["previous"])
+            previous = verified_slot(candidate)
+            compatible(old, previous)
+            require_reverse_proof(root, active, old, previous)
+            point(root, candidate.name, None, installed)
+            return report(args, root, installed, "rolled-back", candidate.name, previous["version"])
+
+
+def run_upgrade(args):
+    try:
+        return upgrade(args)
+    except BlockingIOError:
+        outcome = "deferred-wirebump" if args.step in {"activate", "rollback", "unattended"} else "busy"
+        detail = "a managed writer or upgrader holds the installation lease"
+        print(json.dumps({"outcome": outcome, "detail": detail}) if args.json else f"{outcome}: {detail}")
+        return 2 if outcome == "deferred-wirebump" else 0
 
 
 def main():
@@ -612,6 +752,7 @@ def main():
     p.add_argument("--version", required=True)
     p.add_argument("--target-dir", type=Path, required=True)
     p.add_argument("--node-archives", type=Path, required=True)
+    p.add_argument("--davey-source", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p = commands.add_parser("sign")
     p.add_argument("dist", type=Path)
@@ -626,7 +767,11 @@ def main():
     p = commands.add_parser("upgrade", help=argparse.SUPPRESS)
     p.add_argument("prefix", type=Path)
     p.add_argument("--caller", required=True)
-    p.add_argument("step", choices=("status", "stage", "activate", "rollback"), default="status", nargs="?")
+    p.add_argument("step", choices=("check", "status", "stage", "activate", "rollback", "unattended"),
+                   default="check", nargs="?")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--allow-downgrade", action="store_true")
+    p.add_argument("--writer-lock", type=Path, action="append", default=[])
     p.add_argument("--dist", type=Path)
     p.add_argument("--check-media", action="store_true")
     args = parser.parse_args()
@@ -637,10 +782,10 @@ def main():
     try:
         require(not getattr(args, "check_media", False) or args.prefix is not None, "--check-media requires --prefix")
         require(not getattr(args, "managed", False) or args.prefix is not None, "--managed requires --prefix")
-        {"build": build, "sign": sign, "verify": verify, "upgrade": upgrade}[args.command](args)
+        return {"build": build, "sign": sign, "verify": verify, "upgrade": run_upgrade}[args.command](args)
     except (ValueError, OSError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"swarm release: {exc}\n")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

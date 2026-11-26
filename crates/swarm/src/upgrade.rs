@@ -1,6 +1,6 @@
 //! A managed installation holds a shared lease before any command can reach a writer.
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -63,7 +63,21 @@ fn owner_file(path: &Path, create: bool) -> io::Result<File> {
     Ok(file)
 }
 
-pub(crate) fn writer() -> io::Result<Option<File>> {
+pub(crate) struct WriterLease {
+    _lock: File,
+    unfinished: Option<PathBuf>,
+}
+
+impl Drop for WriterLease {
+    fn drop(&mut self) {
+        if let Some(marker) = self.unfinished.take() {
+            let _ = fs::remove_file(&marker);
+            let _ = File::open(marker.parent().unwrap()).and_then(|dir| dir.sync_all());
+        }
+    }
+}
+
+pub(crate) fn writer(args: &[std::ffi::OsString]) -> io::Result<Option<WriterLease>> {
     let Some((root, exe)) = identify()? else {
         return Ok(None);
     };
@@ -89,7 +103,35 @@ pub(crate) fn writer() -> io::Result<Option<File>> {
     let marker = root.join("effects").join(generation);
     owner_file(&marker, true)?.sync_all()?;
     File::open(marker.parent().unwrap())?.sync_all()?;
-    Ok(Some(lock))
+    let role = args.first().and_then(|arg| arg.to_str());
+    let second = args.get(1).and_then(|arg| arg.to_str());
+    let supervised_effect = matches!(
+        role,
+        Some("shim" | "schedule-receipt-bridge" | "schedule-agy-worker")
+    ) || matches!(
+        (role, second),
+        (Some("discord"), Some("run")) | (Some("schedule"), Some("tick"))
+    );
+    let unfinished = if supervised_effect {
+        let pid = std::process::id();
+        let birth = crate::supervisor::runtime::birth(pid)?;
+        let path = root.join("inflight").join(format!("{pid}-{birth}"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(generation.as_encoded_bytes())?;
+        file.sync_all()?;
+        File::open(path.parent().unwrap())?.sync_all()?;
+        Some(path)
+    } else {
+        None
+    };
+    Ok(Some(WriterLease {
+        _lock: lock,
+        unfinished,
+    }))
 }
 
 pub(crate) fn launcher() -> io::Result<PathBuf> {
@@ -99,33 +141,180 @@ pub(crate) fn launcher() -> io::Result<PathBuf> {
     }
 }
 
-pub(crate) fn run(args: &[std::ffi::OsString]) -> u8 {
-    let result = (|| -> io::Result<u8> {
-        if args
-            .first()
-            .is_some_and(|arg| arg == "--help" || arg == "-h")
+const USAGE: &str = "usage: swarm upgrade [--stage|--activate|--rollback|--unattended] [--allow-downgrade] [--json] [--dist DIRECTORY]";
+
+fn external_owner() -> (&'static str, &'static str) {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| fs::canonicalize(path).ok());
+    let Some(exe) = exe else {
+        return ("unknown", "installation owner is unresolved");
+    };
+    let path = exe.to_string_lossy();
+    if cfg!(target_os = "macos")
+        && ["/Caskroom/", "/Cellar/", "/homebrew/"]
+            .iter()
+            .any(|part| path.contains(part))
+    {
+        return ("brew", "brew upgrade --cask swarm owns this installation");
+    }
+    for (key, suffix, owner, detail) in [
+        ("CARGO_HOME", "bin", "cargo", "cargo owns this installation"),
+        ("GOBIN", "", "go", "go install owns this installation"),
+        ("GOPATH", "bin", "go", "go install owns this installation"),
+    ] {
+        if std::env::var_os(key)
+            .map(PathBuf::from)
+            .and_then(|path| path.join(suffix).canonicalize().ok())
+            .as_deref()
+            == exe.parent()
         {
-            println!("swarm upgrade status|stage --dist DIRECTORY|activate|rollback");
-            return Ok(0);
+            return (owner, detail);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for (relative, owner, detail) in [
+            (".cargo/bin", "cargo", "cargo owns this installation"),
+            ("go/bin", "go", "go install owns this installation"),
+        ] {
+            if home.join(relative).canonicalize().ok().as_deref() == exe.parent() {
+                return (owner, detail);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    for (tool, flag, owner, detail) in [
+        ("/usr/bin/dpkg", "-S", "dpkg", "apt owns this installation"),
+        ("/usr/bin/rpm", "-qf", "rpm", "dnf owns this installation"),
+    ] {
+        if Command::new(tool)
+            .arg(flag)
+            .arg(&exe)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return (owner, detail);
+        }
+    }
+    (
+        "unknown",
+        "use the installer, package manager, or Cargo that owns this binary",
+    )
+}
+
+pub(crate) fn run(args: &[std::ffi::OsString]) -> u8 {
+    const BOOL: &[&str] = &[
+        "stage",
+        "activate",
+        "rollback",
+        "unattended",
+        "allow-downgrade",
+        "json",
+        "check-media",
+    ];
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()
+    else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let operation = args
+        .first()
+        .map(String::as_str)
+        .filter(|name| matches!(*name, "status" | "stage" | "activate" | "rollback"));
+    let args = if operation.is_some() {
+        &args[1..]
+    } else {
+        &args[..]
+    };
+    let mut set = std::collections::BTreeSet::new();
+    let mut dist = crate::ipc::env_path("SWARM_UPGRADE_DIST");
+    let names = [BOOL, &["dist"]].concat();
+    let parsed = crate::flags::options(args, &names, BOOL, |name, value| {
+        if name == "dist" {
+            dist = Some(PathBuf::from(value));
+        } else if crate::flags::parse_bool(name, value)? {
+            set.insert(name.to_owned());
+        } else {
+            set.remove(name);
+        }
+        Ok(())
+    });
+    match parsed {
+        Ok([]) => {}
+        Err(problem) if problem.is_empty() => {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+        _ => {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+    }
+    let step = ["rollback", "activate", "unattended", "stage"]
+        .into_iter()
+        .find(|name| set.contains(*name))
+        .or(operation)
+        .unwrap_or("check");
+    let result = (|| -> io::Result<u8> {
+        if std::env::var_os("SWARM_UPGRADE_HANDOFF").is_some_and(|value| !value.is_empty()) {
+            return Err(invalid("refusing to run inside an activation handoff"));
         }
         let Some((root, exe)) = identify()? else {
-            if args.is_empty() || (args.len() == 1 && args[0] == "status") {
-                println!(
-                    "owner: external; use the installer, package manager, or Cargo that owns this binary"
-                );
-                return Ok(0);
+            let (owner, detail) = external_owner();
+            let version = option_env!("SWARM_BUILD_VERSION").unwrap_or("dev");
+            let outcome = if version == "dev" {
+                "refused-dev"
+            } else {
+                "refused-owner"
+            };
+            if set.contains("json") {
+                let value = if step == "check" {
+                    serde_json::json!({"Action":"refuse","Reason":detail,"Latest":"","Owner":owner,"RefuseOutcome":outcome})
+                } else {
+                    serde_json::json!({"installed":version,"owner":owner,"outcome":outcome,"detail":detail})
+                };
+                println!("{value}");
+            } else if step == "check" {
+                println!("installed {version}, latest (unresolved): would refuse ({detail})");
+            } else {
+                println!("{outcome}: {detail}");
             }
-            return Err(invalid("this installation belongs to an external owner"));
+            return Ok(0);
         };
         let admin = exe.with_file_name("swarm-rust-install.py");
-        let status = Command::new("python3")
+        let mut command = Command::new("python3");
+        command
             .arg(admin)
             .arg("upgrade")
             .arg(root)
             .arg("--caller")
             .arg(exe.parent().unwrap().file_name().unwrap())
-            .args(args)
-            .status()?;
+            .arg(step);
+        if let Some(path) = dist {
+            command.arg("--dist").arg(path);
+        }
+        for flag in ["json", "allow-downgrade", "check-media"] {
+            if set.contains(flag) {
+                command.arg(format!("--{flag}"));
+            }
+        }
+        if matches!(step, "activate" | "rollback" | "unattended") {
+            let state = crate::ipc::state_path()?;
+            for path in [
+                state.join("daemon.lock"),
+                state.join(".rust-state-writer.lock"),
+                crate::ipc::env_path("SWARM_DAEMON_LOCK")
+                    .unwrap_or_else(|| state.join("daemon.lock")),
+            ] {
+                command.arg("--writer-lock").arg(path);
+            }
+        }
+        let status = command.status()?;
         Ok(status
             .code()
             .and_then(|code| u8::try_from(code).ok())

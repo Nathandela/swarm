@@ -8,6 +8,14 @@ Use a clean, exact source commit, Cargo's locked dependency graph, and the compi
 
 Obtain the four official Node 24.17.0 archives for Darwin and Linux arm64 and x64 as `.tar.xz` files. Verify their upstream signed checksum list in the Node release channel independently. The builder compares each archive to the pinned digest. The extracted Node and its license ship with each target's lock-resolved npm dependencies. npm installation takes place in scratch with lifecycle scripts and binary links disabled. The application embeds the resulting media digests. The Linux application is built for musl, while the bundled Node and DAVE addon require a glibc-based system.
 
+Obtain the [DAVE 0.2.0 source archive](https://codeload.github.com/Snazzah/davey/tar.gz/72d1c6d081f4993d618806990f1d3a1f6f53ed67)
+as a separate build input. Its SHA-256 is pinned by the builder. Unpack a scratch copy and run
+`cargo fetch --locked --manifest-path /path/to/davey-source/Cargo.toml` before the frozen build.
+The builder includes notices for each locked Swarm and DAVE dependency, the upstream DAVE MIT license,
+the locked DAVE source revision and Cargo lock, and the installed Rust standard-library notices.
+Published npm assets retain their accompanying notices. The DAVE producer's exact compiler and
+enabled-feature attestation still needs separate upstream evidence.
+
 Run these gates locally:
 
 ```sh
@@ -18,6 +26,7 @@ cargo test --locked --workspace
 python3 scripts/release-rust.py build \
   --source "$(git rev-parse HEAD)" --version 0.1.0 \
   --node-archives /path/to/verified/node-archives \
+  --davey-source /path/to/davey-source.tar.gz \
   --target-dir /path/to/scratch/cargo-target --output /path/to/new/artifacts
 ```
 
@@ -40,7 +49,23 @@ python3 scripts/release-rust.py verify /path/to/artifacts swarm-rust_0.1.0_darwi
 
 On each target, repeat verification with `--prefix /path/to/new/preview --check-media` to install the matching archive and run its codec, cipher and DAVE checks through the packaged executable's helper resolver. The destination parent must exist and the prefix must be new. Use a private parent owned by your test user. Linux asset suffixes are `linux_amd64` and `linux_arm64`. Use the installed `/path/to/new/preview/swarm` explicitly and a fresh isolated home and daemon state directory for testing. The installed application can run terminal workflows without loading Node. A call with no configured helper path uses the installed architecture-specific bundle. A configured absolute external helper path continues to select the explicit helper.
 
-## First hop and rollback
+## Managed Rust updates
+
+Use `verify --prefix /path/to/new/preview --managed` for a self-updating preview. The trusted public key is pinned at installation. Keep using `/path/to/new/preview/swarm` as the launcher and in user services. Existing unmanaged copies keep the installer, Brew, dpkg, rpm, Go or Cargo as their owner and are refused by self-update. Move to a new private prefix if you explicitly choose a managed install.
+
+```sh
+swarm upgrade --json --dist /path/to/local/signed-release
+swarm upgrade --stage --dist /path/to/local/signed-release --check-media
+swarm upgrade --activate
+swarm upgrade status
+swarm upgrade --rollback
+```
+
+A default check reads the selected local feed metadata and changes no files. Point `SWARM_UPGRADE_DIST` at a previously obtained signed Rust artifact directory to skip the option on repeat runs. Stage verifies the pinned signature, selected archive and members, CLI identity and release ABI. Stage works with live processes. Activation requires the installation's exclusive writer lease and verified immutable generations. A single pointer switch installs the app and its matching media, with the prior generation recorded in that same route. An interrupted switch leaves either complete route addressable. `swarm upgrade --unattended` combines stage and safe activation for an explicit wrapper. It defers while managed writers are live. It neither launches services nor restarts a daemon. An older signed release needs `--allow-downgrade` for manual staging and cold activation.
+
+A potentially effectful command creates a durable generation marker. After that, an older release may only replace the current one when the current signed build explicitly lists the target source in its qualified rollback sources. Session stores, provider data, worktrees and externally published effects remain in place. A killed shim, connector or schedule writer leaves an unfinished identity record. Status shows it, and activation and rollback defer until writer custody and any external effects have been reconciled offline. The current allowlist is empty pending a tested comparable reader pair, so rollback works before the new generation admits writes. The rollback route holds the abandoned release version until another release is selected. A read-only doctor, version or upgrade check does not mark potential effects.
+
+## Go first hop and rollback
 
 This preview install command refuses any existing prefix, including a package-managed path or symlink. It creates no services, touches no provider or Swarm state, and leaves the old command on PATH. For a disposable preview, stop its own test processes and return to the previous explicit executable and state directory. Leave its directory in place if it contains evidence or test work you want to preserve.
 

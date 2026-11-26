@@ -130,6 +130,46 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(release.route(self.root)["active"], self.new_slot)
         self.assertEqual((self.root / "user-work").read_text(), "written after cutover")
 
+    def test_crashed_writer_blocks_switch(self):
+        self.args.step = "activate"
+        (self.root / "inflight/123-456").write_bytes(b"fixture")
+        with self.assertRaisesRegex(ValueError, "unfinished managed writers"):
+            release.upgrade(self.args)
+        self.assertEqual(release.route(self.root)["active"], self.args.caller)
+
+    def test_rollback_with_exact_proof_keeps_new_work(self):
+        card = self.card("0.3.0", "c")
+        card["rollback_sources"] = [self.old["source"]]
+        slot = release.populate(self.root, self.members(card), card, False)
+        release.replace_record(self.root / "staged.json",
+                               release.json_bytes({"from": self.args.caller, "to": slot}))
+        self.args.step = "activate"
+        release.upgrade(self.args)
+        self.args.caller = slot
+        self.args.step = "rollback"
+        (self.root / "effects" / slot).write_bytes(b"")
+        (self.root / "user-work").write_text("written after cutover")
+        release.upgrade(self.args)
+        self.assertEqual(release.route(self.root)["active"], release.release_id(self.old))
+        self.assertEqual((self.root / "user-work").read_text(), "written after cutover")
+
+    def test_interrupted_pointer_rename_preserves_old_route(self):
+        from unittest.mock import patch
+        self.args.step = "activate"
+        rename = release.os.replace
+
+        def interrupt(source, target):
+            if target == self.root / "current":
+                raise OSError("injected crash before rename")
+            return rename(source, target)
+
+        with patch.object(release.os, "replace", interrupt):
+            with self.assertRaisesRegex(OSError, "injected crash"):
+                release.upgrade(self.args)
+        self.assertEqual(release.route(self.root)["active"], self.args.caller)
+        release.upgrade(self.args)
+        self.assertEqual(release.route(self.root)["active"], self.new_slot)
+
     def test_tamper_never_switches_pointer(self):
         self.args.step = "activate"
         (release.release_path(self.root, self.new_slot) / "compat.json").write_text("{}")
