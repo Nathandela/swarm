@@ -242,6 +242,17 @@ impl State {
                 )));
             }
         }
+        if matches!(field(launch, "agent"), "claude" | "claude-code")
+            && options.get("resume_conversation_id").is_some()
+        {
+            if managed.is_some() {
+                return Err(io::Error::other(
+                    "external Claude resume requires ordinary owner scope",
+                ));
+            }
+            let prepared = Session::prepare_claude_external(launch)?;
+            return self.reserve_prepared(prepared, false, None, None);
+        }
         if field(launch, "agent") == "codex" && options.get("resume_conversation_id").is_some() {
             if managed.is_some() {
                 return Err(io::Error::other(

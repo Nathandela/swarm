@@ -321,6 +321,11 @@ fn serve(dir: &Path) -> io::Result<()> {
             let cwd=Path::new(working_dir);
             providers::claude::verify_project_authority(home,cwd,&config["claude_resume"]["project_authority"])?;
             let (_,transcript)=providers::claude::transcript(home,cwd,id)?;
+            if config["claude_resume"]["external_source"].is_object()
+                && providers::claude::external_proof(executable,cwd,&environment,home,id)?
+                    !=config["claude_resume"]["external_source"] {
+                return Err(io::Error::other("Claude external rollout changed before exec"));
+            }
             if &live!=saved || transcript!=config["claude_resume"]["transcript"]
                 || argv.iter().filter(|arg|arg.as_str()=="--resume").count()!=1
                 || !argv.ends_with(&["--resume".to_owned(),id.to_owned()])

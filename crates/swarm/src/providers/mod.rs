@@ -250,6 +250,43 @@ fn probe_output(
     command_output(executable, cwd, env, args, Duration::from_secs(5), limit)
 }
 
+pub(crate) fn claude_agent_view(
+    executable: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    all: bool,
+) -> io::Result<Vec<Value>> {
+    let mut args = vec!["agents", "--json"];
+    if all {
+        args.push("--all");
+    }
+    let output = command_output(
+        executable,
+        cwd,
+        env,
+        &args,
+        Duration::from_secs(15),
+        8 << 20,
+    )?;
+    Ok(serde_json::from_str(&output)?)
+}
+
+pub(crate) fn stop_claude_agent_view(
+    executable: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+) -> io::Result<()> {
+    command_output(
+        executable,
+        cwd,
+        env,
+        &["daemon", "stop", "--any"],
+        Duration::from_secs(30),
+        8 << 20,
+    )?;
+    Ok(())
+}
+
 fn command_output(
     executable: &Path,
     cwd: &Path,

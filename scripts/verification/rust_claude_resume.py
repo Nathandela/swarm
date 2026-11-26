@@ -23,7 +23,7 @@ from rust_claude_worker_input import Provider, save
 TASK = "Reply with a short synthetic test answer."
 
 
-def verify(swarm, installed, root, server, worktree=False):
+def verify(swarm, installed, root, server, worktree=False, external=False):
     home, work, state, tools = [root / name for name in ("home", "work", "s", "bin")]
     for directory in (home, work, state, tools, home / ".claude"):
         directory.mkdir(mode=0o700)
@@ -47,10 +47,10 @@ def verify(swarm, installed, root, server, worktree=False):
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1",
         CLAUDE_CODE_TMPDIR=str(root), CLAUDE_CODE_MAX_RETRIES="0")))
     check_guards(root,[server.server_port])
-    def cli(*args):
+    def cli(*args,expected=0):
         run = subprocess.run(guard([staged,*args]), env=env, cwd=work,
-                             capture_output=True, timeout=15)
-        assert run.returncode==0,(args,run.stderr.decode(errors="replace"))
+                             capture_output=True, timeout=50 if args[0]=="reattach" else 15)
+        assert run.returncode==expected,(args,run.stderr.decode(errors="replace"))
         return run.stdout
 
     def wire(req, caps=()):
@@ -80,6 +80,52 @@ def verify(swarm, installed, root, server, worktree=False):
         with (root / "daemon.log").open("wb") as log:
             daemon=subprocess.Popen(guard([staged,"daemon"]),env=env,cwd=work,stderr=log,stdout=log)
             eventually(lambda:Path(owner_path).exists(),"daemon")
+            if external:
+                def native_cli(*args):
+                    result=subprocess.run(guard([binary,*args]),env=env,cwd=work,capture_output=True,timeout=35,umask=0o077)
+                    assert result.returncode==0,(args,result.stdout,result.stderr)
+                    return result.stdout
+                native_cli("--bg","--name","External fixture",TASK)
+                def original():
+                    rows=json.loads(native_cli("agents","--json","--all"))
+                    return next((row for row in rows if row.get("kind")=="background" and row.get("sessionId")),None)
+                row=eventually(original,"native Claude Agent View registered original",timeout=25)
+                native=row["sessionId"]
+                proof=lambda:next((path for path in (home/".claude/projects").rglob(f"{native}.jsonl")
+                                   if b"Synthetic native input processed" in path.read_bytes()),None)
+                transcript=eventually(proof,"native Claude wrote the external conversation",timeout=25)
+                assert native.encode() in cli("reattach","--cli","claude","--all","--dry-run")
+                if original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled"):
+                    cli("reattach","--cli","claude","--all",expected=1)
+                    assert json.loads(cli("ls","--json"))==[]
+                live = original()["state"] not in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                if live:
+                    refused = wire(dict(agent="claude",name="unconfirmed",cwd=str(work),
+                        options={"resume_conversation_id":native}),("external-resume",))
+                    assert refused["op"]=="error" and "exact stopped source" in refused["error"]
+                before=transcript.read_bytes()
+                def turn_count(data):
+                    rows = [json.loads(line) for line in data.splitlines()]
+                    return sum(row.get("type")=="user" and TASK in json.dumps(row.get("message"))
+                               for row in rows)
+                initial_turns=turn_count(before)
+                assert initial_turns>=1
+                imported=cli("reattach","--cli","claude","--all","--take-over")
+                row,=json.loads(cli("ls","--json"))
+                identity=row["id"]
+                assert identity.encode() in imported
+                directory=state/"rust-v1"/identity.split("/")[1]
+                assert json.loads((directory/"observation.json").read_text())["conversation_id"]==native
+                eventually(lambda:b"Synthetic native input processed" in cli("peek",identity),
+                           "new owner viewer rendered the prior background answer")
+                current=transcript.read_bytes()
+                assert current.startswith(before) and turn_count(current)==initial_turns
+                assert original()["state"] in ("done","stopped","complete","completed","failed","cancelled","canceled")
+                cli("reattach","--cli","claude","--all","--take-over",expected=1)
+                cli("kill",identity)
+                cli("watch",identity,"--until","completed","--timeout","5s")
+                print("Claude Agent View external acquisition preserved prior answer and did not replay the user turn; source was live before takeover:",live)
+                return
             if worktree:
                 created=wire(dict(agent="claude",name="resume fixture",cwd=str(work),worktree=True,
                                   initial_prompt=TASK,cols=100,rows=30))
@@ -220,6 +266,7 @@ if __name__=="__main__":
     parser.add_argument("--candidate",required=True,type=fixtures.binary_path)
     parser.add_argument("--provider",required=True,type=fixtures.binary_path)
     parser.add_argument("--worktree",action="store_true")
+    parser.add_argument("--external",action="store_true")
     args=parser.parse_args()
     root=Path(tempfile.mkdtemp(prefix="cr-",dir=Path("/tmp").resolve()))
     server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Provider)
@@ -230,7 +277,7 @@ if __name__=="__main__":
     thread.start()
     success=False
     try:
-        verify(args.candidate,args.provider,root,server,args.worktree)
+        verify(args.candidate,args.provider,root,server,args.worktree,args.external)
         assert not server.sentinel.exists()
         success=True
     finally:
