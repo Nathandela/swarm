@@ -925,7 +925,7 @@ mod tests {
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::fs;
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::os::unix::fs::PermissionsExt;
     use tungstenite::{Message, WebSocket, accept, client, stream::MaybeTlsStream};
 
@@ -946,6 +946,22 @@ mod tests {
         socket
             .send(Message::Text(value.to_string().into()))
             .unwrap();
+    }
+
+    fn fixture_gateway(
+        address: SocketAddr,
+        cfg: &Config,
+    ) -> (gateway::Connection, gateway::Cursor) {
+        let tcp = TcpStream::connect(address).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let (mut socket, _) =
+            client(format!("ws://{address}"), MaybeTlsStream::Plain(tcp)).unwrap();
+        let cursor = gateway::ready(&mut socket, cfg, "fixture-token").unwrap();
+        let MaybeTlsStream::Plain(tcp) = socket.get_mut() else {
+            unreachable!("fixture uses a plain loopback socket");
+        };
+        tcp.set_read_timeout(Some(FRAME)).unwrap();
+        (socket, cursor)
     }
 
     #[test]
@@ -982,12 +998,14 @@ while read -r line; do :; done
         fs::write(&helper, script).unwrap();
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let address = listener.local_addr().unwrap();
         let (owner_ready, wait_ready) = mpsc::sync_channel::<()>(0);
         let (leave, paused) = mpsc::sync_channel::<()>(0);
         let fixture = thread::spawn(move || {
             let (tcp, _) = listener.accept().unwrap();
             tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            // A valid Gateway handshake can outlast one media frame.
+            thread::sleep(FRAME * 2);
             let mut socket = accept(tcp).unwrap();
             send(
                 &mut socket,
@@ -1040,9 +1058,6 @@ while read -r line; do :; done
             );
             assert!(recv(&mut socket)["d"]["channel_id"].is_null());
         });
-        let tcp = TcpStream::connect(url.trim_start_matches("ws://")).unwrap();
-        tcp.set_read_timeout(Some(FRAME)).unwrap();
-        let (mut socket, _) = client(url, MaybeTlsStream::Plain(tcp)).unwrap();
         let cfg = Config(
             json!({"mode":"teammate","application_id":"3","owner_id":"4","installation_id":"fixture",
             "daemon_socket":"/tmp/native-fixture.sock","guild_ids":["1"],"team_discussion":{"guild_id":"1","thread_id":"6"},
@@ -1051,7 +1066,7 @@ while read -r line; do :; done
         );
         let scope = json!({"installation_id":"fixture","application_id":"3","owner_id":"4","guild_id":"1","channel_id":"6",
             "supervisor_socket":"/tmp/native-fixture.sock","launch":{"manager":{"conversation_id":"discord-teammate-team"}}});
-        let cursor = gateway::ready(&mut socket, &cfg, "fixture-token").unwrap();
+        let (socket, cursor) = fixture_gateway(address, &cfg);
         let backends = Backends {
             live: false,
             audience: |_, scope, speakers| scope.thread == "6" && speakers == ["8", "9"],
@@ -1202,10 +1217,6 @@ while read -r command; do :; done
                 voice(if disconnect { 6 } else { 7 }, "3", Value::Null),
             );
         });
-        let tcp = TcpStream::connect(address).unwrap();
-        tcp.set_read_timeout(Some(FRAME)).unwrap();
-        let (mut socket, _) =
-            client(format!("ws://{address}"), MaybeTlsStream::Plain(tcp)).unwrap();
         let cfg = Config(
             json!({"version":1,"enabled":true,"name":"fixture","mode":"personal","manager_cli":"codex",
             "installation_id":"test","application_id":"3","owner_id":"4","dm_channel_id":"6",
@@ -1217,7 +1228,7 @@ while read -r command; do :; done
             runtime::write_json(&dir.join("config.json"), &cfg.0).unwrap();
             runtime::write_json(&dir.join(".rust-offline-owner.json"), &json!("test")).unwrap();
         }
-        let cursor = gateway::ready(&mut socket, &cfg, "never-real").unwrap();
+        let (socket, cursor) = fixture_gateway(address, &cfg);
         let driver = Driver::start(
             socket,
             cursor,
