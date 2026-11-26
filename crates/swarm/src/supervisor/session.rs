@@ -573,7 +573,8 @@ impl Session {
         Ok(session)
     }
 
-    pub(super) fn start(&self) -> io::Result<()> {
+    pub(super) fn start(&self, log_path: &Path) -> io::Result<()> {
+        let log = crate::clean::DiagnosticLog::open_owner(log_path)?;
         let (provider, scheduled) = self
             .launch_plan
             .lock()
@@ -591,13 +592,15 @@ impl Session {
                 })?;
         }
         let mut shim = Command::new(env::current_exe()?);
-        shim.env_clear().envs(provider.env);
+        shim.env_clear()
+            .envs(provider.env)
+            .env("SWARM_DAEMON_LOG", log_path);
         shim.arg("shim")
             .arg("--rust-session")
             .arg(&self.dir)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(log.output()?)
+            .stderr(log.output()?);
         // The child becomes session leader before exec; daemon/terminal teardown
         // has no controlling-terminal or process-group authority over it.
         unsafe {

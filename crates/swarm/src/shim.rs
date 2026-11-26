@@ -553,7 +553,12 @@ fn serve(dir: &Path) -> io::Result<()> {
             }
         });
     }
+    let mut diagnostic_log = crate::ipc::env_path("SWARM_DAEMON_LOG")
+        .and_then(|path| crate::clean::DiagnosticLog::from_stderr(&path).ok());
     let status = loop {
+        if let Some(log) = &mut diagnostic_log {
+            log.tick();
+        }
         if pty::SHUTDOWN_SIGNAL.load(Ordering::Relaxed) {
             terminate(&state).map_err(|e| io::Error::other(format!("terminate provider: {e}")))?;
         }

@@ -407,7 +407,11 @@ impl State {
     }
 
     fn start(&self, session: &Session) -> io::Result<Value> {
-        session.start()?;
+        let root = self
+            .root
+            .parent()
+            .ok_or_else(|| io::Error::other("session root has no owner directory"))?;
+        session.start(&crate::clean::DiagnosticLog::path(root))?;
         session.await_ready()?;
         self.publish(session);
         Ok(session.view(&self.endpoint))
@@ -480,6 +484,8 @@ fn serve() -> io::Result<()> {
     // Set the process mask before starting workers so there is no bind/chmod exposure.
     unsafe { libc::umask(0o077) };
     runtime::reclaim_socket(&socket)?;
+    let mut log =
+        crate::clean::DiagnosticLog::open_owner(&crate::clean::DiagnosticLog::path(&root))?;
     let listener = runtime::bind(&socket)?;
     crate::environment::save(&root)?;
     let (handoff_wake, handoff_events) = mpsc::sync_channel(1);
@@ -518,6 +524,7 @@ fn serve() -> io::Result<()> {
     let monitor = state.clone();
     thread::spawn(move || {
         loop {
+            log.tick();
             thread::sleep(Duration::from_millis(150));
             let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
             for session in sessions {

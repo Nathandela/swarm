@@ -1,4 +1,6 @@
+mod diagnostic;
 mod files;
+pub(crate) use diagnostic::DiagnosticLog;
 mod hooks;
 
 use crate::{flags, ipc};
@@ -114,34 +116,7 @@ fn parent(path: &Path) -> io::Result<(Directory, &std::ffi::OsStr)> {
 
 fn log(path: &Path, apply: bool) -> Item {
     let mut item = Item::new(path, "diagnostic-log");
-    let run = (|| {
-        let (parent, name) = parent(path)?;
-        let file = parent.open_file(
-            name,
-            if apply {
-                OFlags::WRONLY | OFlags::APPEND
-            } else {
-                OFlags::RDONLY
-            },
-        )?;
-        let meta = parent.verify_file(name, &file)?;
-        item.before = Some((&meta).into());
-        if meta.len() > LOG_LIMIT {
-            item.eligible(meta.len());
-            if apply {
-                let current = parent.verify_file(name, &file)?;
-                if current.len() > LOG_LIMIT {
-                    item.eligible(current.len());
-                    file.set_len(0)?;
-                    item.changed();
-                } else {
-                    item.eligible(0);
-                }
-            }
-        }
-        item.after = Some((&parent.verify_file(name, &file)?).into());
-        Ok(())
-    })();
+    let run = DiagnosticLog::inspect(path, apply, &mut item);
     item.finish(run)
 }
 struct Singleton<'a> {
@@ -237,7 +212,7 @@ fn inventory(root: &Path, lock: &Path, apply: bool, items: &mut Vec<Item>) -> io
 }
 fn report(apply: bool) -> io::Result<Report> {
     let root = ipc::state_path()?;
-    let log_path = ipc::env_path("SWARM_DAEMON_LOG").unwrap_or_else(|| root.join("daemon.log"));
+    let log_path = DiagnosticLog::path(&root);
     let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
     let mut items = vec![log(&log_path, apply)];
     let scan = inventory(&root, &lock, apply, &mut items);
