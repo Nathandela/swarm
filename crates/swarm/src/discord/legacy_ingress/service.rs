@@ -294,7 +294,13 @@ pub(super) trait Room {
     fn verify(&self, cfg: &Config) -> io::Result<()>;
     fn history(&self, cfg: &Config) -> io::Result<Vec<Value>>;
     fn message(&self, cfg: &Config, id: &str) -> io::Result<Value>;
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> crate::discord::rest::Post;
+    fn post(
+        &self,
+        cfg: &Config,
+        nonce: &str,
+        body: &str,
+        files: &[crate::supervisor::mail_files::Captured],
+    ) -> crate::discord::rest::Post;
 }
 
 impl Room for Discord {
@@ -312,8 +318,14 @@ impl Room for Discord {
         self.owner_message(cfg, id)?.ok_or_else(invalid)
     }
 
-    fn post(&self, cfg: &Config, nonce: &str, body: &str) -> crate::discord::rest::Post {
-        self.post_publication(cfg, nonce, body, &[])
+    fn post(
+        &self,
+        cfg: &Config,
+        nonce: &str,
+        body: &str,
+        files: &[crate::supervisor::mail_files::Captured],
+    ) -> crate::discord::rest::Post {
+        self.post_publication(cfg, nonce, body, files)
     }
 }
 
@@ -417,7 +429,7 @@ where
                     room.verify(cfg)?;
                     let scope = cfg.clone();
                     Ok(move |row: &publication::Publication| {
-                        room.post(&scope, &row.nonce, &row.body)
+                        room.post(&scope, &row.nonce, &row.body, &row.files)
                     })
                 })?;
                 manager_publication::complete(place, &cfg, &lease, &row)?;

@@ -347,6 +347,10 @@ impl<'a> Request<'a> {
                     "capture-personal-ingress",
                     "prepare-personal-ingress",
                     "deliver-personal-publication",
+                    "read-personal-publication-file",
+                    "file-id",
+                    "file-sha256",
+                    "offset",
                 ]
             }
             "migrate-supervisor" => {
@@ -490,6 +494,38 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 ("dispatch-personal-ingress", legacy_ingress::dispatch),
                 ("settle-personal-ingress", legacy_ingress::settle),
             ];
+            if let Some(output) = req.get("read-personal-publication-file") {
+                if req.on("controls")
+                    || req.on("rollback")
+                    || req.on("dry-run")
+                    || req.on("activate-personal")
+                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                {
+                    return Err(invalid("select one migration operation"));
+                }
+                let id = req
+                    .get("file-id")
+                    .ok_or_else(|| invalid("missing --file-id"))?;
+                let digest = req
+                    .get("file-sha256")
+                    .ok_or_else(|| invalid("missing --file-sha256"))?;
+                let offset = req
+                    .get("offset")
+                    .unwrap_or("0")
+                    .parse()
+                    .map_err(|_| invalid("invalid offset"))?;
+                let data = legacy_ingress::publication::read(&place, output, id, digest, offset)?;
+                println!("{}", serde_json::to_string_pretty(&data)?);
+                return Ok(true);
+            }
+            if ["file-id", "file-sha256", "offset"]
+                .iter()
+                .any(|flag| req.get(flag).is_some())
+            {
+                return Err(invalid(
+                    "file selection requires --read-personal-publication-file",
+                ));
+            }
             if req.on("activate-personal") {
                 if req.on("controls")
                     || personal.iter().any(|(flag, _)| req.get(flag).is_some())

@@ -220,7 +220,9 @@ fn inspect_voice<'tx>(
     }
     let header: Value = serde_json::from_slice(header)?;
     let conversation = format!("discord-teammate-{id}");
-    if header["version"] != 3 || header["current_conversation"] != conversation {
+    if !matches!(header["version"].as_u64(), Some(3 | 4))
+        || header["current_conversation"] != conversation
+    {
         return Err(invalid());
     }
     let bucket = root.bucket(b"records").ok_or_else(invalid)?;
@@ -1303,14 +1305,20 @@ mod tests {
             fn message(&self, cfg: &Config, id: &str) -> io::Result<Value> {
                 service::Room::message(&self.actual_rest, cfg, id)
             }
-            fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
+            fn post(
+                &self,
+                cfg: &Config,
+                nonce: &str,
+                body: &str,
+                files: &[crate::supervisor::mail_files::Captured],
+            ) -> Post {
                 let status = super::super::local::call(&self.status, "status", "", None).unwrap();
                 assert_eq!(status["connected"], true);
                 assert_eq!(status["installation_id"], "fixture-personal");
                 assert_eq!(body, "Verified native final reply.");
                 let count = self.posts.get() + 1;
                 self.posts.set(count);
-                let result = self.actual_rest.post_publication(cfg, nonce, body, &[]);
+                let result = self.actual_rest.post_publication(cfg, nonce, body, files);
                 if matches!(result, Post::Acknowledged(_)) {
                     if count == 1 {
                         self.close_first.send(()).unwrap();

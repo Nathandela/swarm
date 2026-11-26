@@ -88,7 +88,7 @@ func main() {
 		return
 	}
 	open := discord.OpenStore
-	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" {
+	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" {
 		open = discord.FixtureOpenRead
 	}
 	store, err := open(dir)
@@ -146,13 +146,17 @@ func main() {
 		binding, err := manager.FixtureActivate(ctx, row)
 		check(err)
 		check(json.NewEncoder(os.Stdout).Encode(binding))
-	case "publication-queue", "publication-read", "publication-phases":
+	case "publication-queue", "publication-read", "publication-phases", "publication-payload", "publication-damage":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
 		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
 		check(err)
 		if action == "publication-queue" {
-			check(store.FixtureQueueFinal(row, os.Args[4]))
+			check(store.FixtureQueueFinal(row, os.Args[4], len(os.Args) == 6 && os.Args[5] == "attachment"))
+		} else if action == "publication-payload" || action == "publication-damage" {
+			size, err := store.FixtureFinalPayload(row, action == "publication-damage")
+			check(err)
+			fmt.Println(size)
 		} else if action == "publication-phases" {
 			phases, err := store.FixtureOutputPhases(row)
 			check(err)

@@ -3,7 +3,9 @@ package voice
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -98,8 +100,19 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 	if err != nil {
 		return err
 	}
-	_, err = store.PublishSpeech(binding, permit, Publication{Admission: admission.Sequence, ID: "fixture-final",
-		NativeTurnID: turn, Sequence: 1, Text: "Original final personal reply.", Final: true})
+	publication := Publication{Admission: admission.Sequence, ID: "fixture-final",
+		NativeTurnID: turn, Sequence: 1, Text: "Original final personal reply.", Final: true}
+	if phase == "attachment-final" {
+		data := []byte("header,value\nfixture,1\n")
+		files := []schema.PublicationFile{{ID: "original-file", Name: "fixture.csv", ContentType: "text/csv",
+			SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Size: int64(len(data))}}
+		raw, err := json.Marshal(files)
+		if err != nil {
+			return err
+		}
+		publication.DiscussionFiles = string(raw)
+	}
+	_, err = store.PublishSpeech(binding, permit, publication)
 	if err != nil || phase == "unexported-final" {
 		return err
 	}
