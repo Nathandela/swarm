@@ -187,7 +187,7 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 	if personal {
 		starter = Route{}
 	} else if channel.Type == discordgo.ChannelTypeGuildText {
-		route, err = t.client.teammateThread(ctx, c.Route, clipUTF16(cfg.Name+" discussion", 95), bits&discordgo.PermissionCreatePublicThreads != 0)
+		route, err = t.client.teammateThread(ctx, c.Route, teammateThreadName(cfg.Name, m.Content), bits&discordgo.PermissionCreatePublicThreads != 0)
 		if err != nil {
 			return binding, nil, err
 		}
