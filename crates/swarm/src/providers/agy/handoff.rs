@@ -314,7 +314,10 @@ pub(crate) fn verify(dir: &Path, proof: &Value) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        io::Write,
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    };
 
     struct Scratch(PathBuf);
 
@@ -338,6 +341,16 @@ mod tests {
     const STEP: &str =
         "{\"step_index\":0,\"type\":\"USER_INPUT\",\"created_at\":\"2026-11-16T18:39:25Z\"}\n";
 
+    fn write_log(path: &Path, data: impl AsRef<[u8]>) -> io::Result<()> {
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(data.as_ref())
+    }
+
     fn log_at(home: &Path) -> PathBuf {
         home.join(".gemini/antigravity-cli/brain")
             .join(ID)
@@ -348,7 +361,7 @@ mod tests {
     fn bounds_native_step_evidence_and_transcript_path() -> io::Result<()> {
         let root = Scratch::new()?;
         let home = root.0.join("home");
-        fs::create_dir(&home)?;
+        runtime::private_dir(&home)?;
         let path = log_at(&home);
         fs::create_dir_all(path.parent().unwrap())?;
         let duplicate = STEP.replacen("\"step_index\":0", "\"step_index\":-1,\"step_index\":0", 1);
@@ -368,10 +381,10 @@ mod tests {
             "{}\n".repeat(MAX_RECORDS) + STEP,
             " ".repeat(MAX_RECORD) + "\n" + STEP,
         ] {
-            fs::write(&path, raw)?;
+            write_log(&path, raw)?;
             assert!(transcript(&home, ID).is_err());
         }
-        fs::write(&path, "{}\n".repeat(MAX_RECORDS - 1) + STEP + "{partial")?;
+        write_log(&path, "{}\n".repeat(MAX_RECORDS - 1) + STEP + "{partial")?;
         let (found, _) = transcript(&home, ID)?;
         assert_eq!(found, path);
         fs::set_permissions(&home, fs::Permissions::from_mode(0o755))?;
@@ -425,7 +438,7 @@ mod tests {
         for home in [&home, &forged] {
             let path = log_at(home);
             fs::create_dir_all(path.parent().unwrap())?;
-            fs::write(path, STEP)?;
+            write_log(&path, STEP)?;
         }
         let token = "session-instance";
         let mut metadata = json!({
@@ -459,13 +472,13 @@ mod tests {
         supplied["transcript"] = json!(log_at(&forged));
         assert!(verify(&session, &supplied).is_err());
         let transcript = log_at(&home);
-        fs::write(&transcript, format!("{STEP}{{partial"))?;
+        write_log(&transcript, format!("{STEP}{{partial"))?;
         verify(&session, &proof)?;
-        fs::write(&transcript, STEP.replace(":0", ":1"))?;
+        write_log(&transcript, STEP.replace(":0", ":1"))?;
         assert!(verify(&session, &proof).is_err());
-        fs::write(&transcript, STEP)?;
+        write_log(&transcript, STEP)?;
         fs::rename(&transcript, transcript.with_file_name("previous"))?;
-        fs::write(&transcript, STEP)?;
+        write_log(&transcript, STEP)?;
         assert!(verify(&session, &proof).is_err());
 
         let proof = source(&session)?;
