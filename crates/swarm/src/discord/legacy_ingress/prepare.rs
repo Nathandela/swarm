@@ -107,7 +107,7 @@ pub(super) fn read_voice<'tx>(
                     && value["exported"] == true
                     && value["final"] == true
                     && !field(&value, "id").is_empty()
-                    && grants::publication_projects(cfg, &value["discussion_projects"]).is_ok()
+                    && grants::settled_project_history(&value["discussion_projects"])
                     && ["discussion_attempts", "discussion_files", "recipient_id"]
                         .iter()
                         .all(|key| value[*key].is_null() || value[*key] == "")
@@ -145,7 +145,10 @@ pub(super) fn read_voice<'tx>(
         || state["parked"] == true
         || state["needs_handoff"] == true
         || !state["retirement"].is_null()
-        || (!field(&state, "project").is_empty() && !grants::project(cfg, field(&state, "project")))
+        || !(state["project"].is_null()
+            || state["project"]
+                .as_str()
+                .is_some_and(|path| path.is_empty() || Path::new(path).is_absolute()))
     {
         return Err(invalid());
     }

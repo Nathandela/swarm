@@ -12,12 +12,8 @@ pub(super) fn project(cfg: &Config, root: &str) -> bool {
         return false;
     }
     match cfg.0["projects"].as_object() {
-        Some(grants) if !grants.is_empty() => grants.values().any(|configured| {
-            configured.as_str().is_some_and(|path| {
-                fs::canonicalize(path).is_ok_and(|current| current == Path::new(root))
-            })
-        }),
-        _ => fs::canonicalize(cfg.text("work_dir")).is_ok_and(|current| current == path),
+        Some(grants) if !grants.is_empty() => grants.values().any(|configured| configured == root),
+        _ => cfg.text("work_dir") == root,
     }
 }
 
@@ -25,8 +21,7 @@ pub(super) fn enrolled(cfg: &Config) -> io::Result<BTreeMap<String, String>> {
     let mut rows = BTreeMap::new();
     if let Some(projects) = cfg.0["projects"].as_object() {
         for (name, path) in projects {
-            let selected = fs::canonicalize(path.as_str().ok_or_else(invalid)?)?;
-            let root = selected.to_str().ok_or_else(invalid)?;
+            let root = path.as_str().ok_or_else(invalid)?;
             let name = name.trim().to_lowercase();
             if name.is_empty()
                 || !project(cfg, root)
@@ -37,8 +32,7 @@ pub(super) fn enrolled(cfg: &Config) -> io::Result<BTreeMap<String, String>> {
         }
     }
     if rows.is_empty() {
-        let selected = fs::canonicalize(cfg.text("work_dir"))?;
-        let root = selected.to_str().ok_or_else(invalid)?;
+        let root = cfg.text("work_dir");
         if !project(cfg, root) {
             return Err(invalid());
         }
@@ -110,7 +104,11 @@ fn list(value: &Value) -> io::Result<Vec<String>> {
     }
 }
 
-pub(super) fn publication_projects(cfg: &Config, value: &Value) -> io::Result<()> {
+pub(super) fn settled_project_history(value: &Value) -> bool {
+    list(value).is_ok_and(|roots| roots.iter().all(|root| Path::new(root).is_absolute()))
+}
+
+fn publication_projects(cfg: &Config, value: &Value) -> io::Result<()> {
     for root in list(value)? {
         if !project(cfg, &root) {
             return Err(io::Error::other(
@@ -195,6 +193,28 @@ pub(super) fn output<'tx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_project_cannot_follow_a_retargeted_configured_path() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "discord-project-grant-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&root).unwrap();
+        let enrolled_path = root.join("enrolled");
+        let replacement = root.join("other");
+        runtime::private_dir(&enrolled_path).unwrap();
+        runtime::private_dir(&replacement).unwrap();
+        let recorded = enrolled_path.to_str().unwrap();
+        let cfg = Config(json!({"work_dir":recorded,"projects":{"existing":recorded}}));
+        assert!(project(&cfg, recorded));
+        fs::rename(&enrolled_path, root.join("moved")).unwrap();
+        std::os::unix::fs::symlink(&replacement, &enrolled_path).unwrap();
+        assert!(!project(&cfg, recorded));
+        assert!(!project(&cfg, replacement.to_str().unwrap()));
+        assert!(enrolled(&cfg).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn retained_selection_only_switches_to_one_current_grant() {

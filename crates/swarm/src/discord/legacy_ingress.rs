@@ -1505,6 +1505,29 @@ mod tests {
                     .contains("Approved project for new work")
             );
             assert_eq!(receipt.admission["source_cutover"], true);
+            if room.acknowledge {
+                // Reopening acknowledged history must not require a live grant
+                // for the earlier project. Fresh admission uses only the remaining one.
+                let mut revised = Config(cfg.0.clone());
+                revised.0["projects"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("former");
+                assert!(!grants::project(&revised, cfg.text("work_dir")));
+                let (voice_pin, db) = open_bolt(&directory.join("voice.db"), 64 << 20).unwrap();
+                let history =
+                    prepare::read_voice(&db.begin().unwrap(), &id, &revised, &endpoint).unwrap();
+                assert_eq!(history.conversation["project"], current_project);
+                assert_eq!(
+                    grants::choose(
+                        &grants::enrolled(&revised).unwrap(),
+                        cfg.text("work_dir"),
+                        "Continue"
+                    ),
+                    (current_project.to_owned(), false)
+                );
+                drop(voice_pin);
+            }
             receipt.admission["request"].clone()
         };
         let (mut owner, _) = super::super::migrate_supervisor::verified_owner(
