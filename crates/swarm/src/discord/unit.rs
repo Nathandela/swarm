@@ -131,80 +131,150 @@ impl Unit<'_> {
         }
     }
 
-    fn prior_state(&self) -> io::Result<(bool, bool)> {
+    fn verify_systemd(
+        &self,
+        loaded_body: Option<&str>,
+        process_body: Option<&str>,
+    ) -> io::Result<()> {
+        let active = self.systemd_state("is-active")?;
+        let output = (self.runner)(
+            "systemctl",
+            &[
+                "--user",
+                "show",
+                "--all",
+                "--property=FragmentPath",
+                "--property=DropInPaths",
+                "--property=ExecStart",
+                "--property=ExecMainPID",
+                SERVICE,
+            ],
+        )?;
+        if !output.status.success() {
+            return Err(invalid("unable to establish Discord unit definition"));
+        }
+        let mut fields = std::collections::BTreeMap::new();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                if matches!(
+                    key,
+                    "FragmentPath" | "DropInPaths" | "ExecStart" | "ExecMainPID"
+                ) && fields.insert(key, value).is_some()
+                {
+                    return Err(invalid("ambiguous Discord unit manager state"));
+                }
+            }
+        }
+        let fragment = fields
+            .get("FragmentPath")
+            .ok_or_else(|| invalid("Discord unit fragment is unavailable"))?;
+        let dropins = fields
+            .get("DropInPaths")
+            .ok_or_else(|| invalid("Discord unit drop-ins are unavailable"))?;
+        let exec_start = fields
+            .get("ExecStart")
+            .ok_or_else(|| invalid("Discord unit command is unavailable"))?;
+        let pid = fields
+            .get("ExecMainPID")
+            .and_then(|s| s.parse::<u32>().ok())
+            .ok_or_else(|| invalid("Discord unit PID is unavailable"))?;
+        let disk_body = self.read()?;
+        let bodies = [loaded_body, disk_body.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let loaded_matches = bodies.iter().any(|body| {
+            let Ok(program) = definition::bound_systemd_program(body) else {
+                return false;
+            };
+            let Ok(place) = definition::bound_place(self.platform, body) else {
+                return false;
+            };
+            let Some(place) = place.to_str() else {
+                return false;
+            };
+            let argv = [
+                program.as_str(),
+                "discord",
+                "run",
+                "--state-dir",
+                place,
+                "--unattended",
+            ]
+            .join(" ");
+            self.path.to_str() == Some(*fragment)
+                && dropins.is_empty()
+                && systemd_exec_matches(exec_start, &program, &argv)
+        });
+        if !loaded_matches
+            && (loaded_body.is_some()
+                || !fragment.is_empty()
+                || !dropins.is_empty()
+                || !exec_start.is_empty())
+        {
+            return Err(invalid(if bodies.is_empty() {
+                "loaded Discord service has no owned definition"
+            } else {
+                "loaded Discord unit differs from its previous definition"
+            }));
+        }
+        if loaded_body.is_none() && disk_body.is_none() && !fragment.is_empty()
+            || !dropins.is_empty()
+            || (bodies.is_empty() && !exec_start.is_empty())
+            || (active && pid != 0 && bodies.is_empty())
+        {
+            return Err(invalid("loaded Discord service has no owned definition"));
+        }
+        if active && pid == 0 {
+            return Err(invalid("active Discord service has no main process"));
+        }
+        if active {
+            let processes = [process_body, disk_body.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|body| {
+                    let Ok(program) = definition::bound_systemd_program(body) else {
+                        return false;
+                    };
+                    let Ok(place) = definition::bound_place(self.platform, body) else {
+                        return false;
+                    };
+                    let Ok(place) = place.into_os_string().into_string() else {
+                        return false;
+                    };
+                    let argv = vec![
+                        program.clone(),
+                        "discord".to_owned(),
+                        "run".to_owned(),
+                        "--state-dir".to_owned(),
+                        place,
+                        "--unattended".to_owned(),
+                    ];
+                    verify_systemd_process(pid, &program, &argv).is_ok()
+                });
+            if !processes {
+                return Err(invalid(
+                    "running Discord process differs from its previous command",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn prior_state(&self, expected_body: Option<&str>) -> io::Result<(bool, bool)> {
         if self.platform == Platform::Systemd {
             let enabled = self.systemd_state("is-enabled")?;
             let active = self.systemd_state("is-active")?;
-            let output = (self.runner)(
-                "systemctl",
-                &[
-                    "--user",
-                    "show",
-                    "--property=FragmentPath",
-                    "--property=DropInPaths",
-                    SERVICE,
-                ],
-            )?;
-            if !output.status.success() {
-                return Err(invalid("unable to establish Discord unit definition"));
-            }
-            let mut fragment: Option<String> = None;
-            let mut dropins: Option<String> = None;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if let Some(value) = line.strip_prefix("FragmentPath=") {
-                    if fragment.replace(value.to_owned()).is_some() {
-                        return Err(invalid("ambiguous Discord unit fragment"));
-                    }
-                } else if let Some(value) = line.strip_prefix("DropInPaths=") {
-                    if dropins.replace(value.to_owned()).is_some() {
-                        return Err(invalid("ambiguous Discord unit drop-ins"));
-                    }
-                }
-            }
-            let fragment =
-                fragment.ok_or_else(|| invalid("unable to establish Discord unit fragment"))?;
-            let dropins =
-                dropins.ok_or_else(|| invalid("unable to establish Discord unit drop-ins"))?;
-            let expected = self
-                .path
-                .to_str()
-                .ok_or_else(|| invalid("invalid Discord unit path"))?;
-            if (!fragment.is_empty() && fragment != expected)
-                || (!fragment.is_empty() && !dropins.is_empty())
-                || ((enabled || active) && fragment.is_empty())
-            {
-                return Err(invalid(
-                    "Discord service manager references a foreign definition",
-                ));
-            }
+            self.verify_systemd(expected_body, expected_body)?;
             return Ok((enabled, active));
         }
         let target = format!("gui/{}/{LABEL}", runtime::uid());
         let output = (self.runner)("launchctl", &["print", &target])?;
         if output.status.success() {
-            let body = self
-                .read()?
-                .ok_or_else(|| invalid("loaded Discord LaunchAgent has no definition"))?;
-            let place = definition::bound_place(self.platform, &body)?;
-            let binary = definition::bound_program(&body)?;
-            let expected_args = [
-                binary.as_str(),
-                "discord",
-                "run",
-                "--state-dir",
-                place
-                    .to_str()
-                    .ok_or_else(|| invalid("invalid Discord state path"))?,
-                "--unattended",
-            ];
-            let log = place.join("connector.log");
-            verify_launchd_print(
-                &String::from_utf8_lossy(&output.stdout),
-                &self.path,
-                &expected_args,
-                &log,
-            )?;
+            let body = expected_body
+                .ok_or_else(|| invalid("loaded Discord LaunchAgent has no owned definition"))?;
+            verify_launchd_body(&String::from_utf8_lossy(&output.stdout), &self.path, body)?;
             return Ok((true, true));
         }
         let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
@@ -214,10 +284,21 @@ impl Unit<'_> {
         Err(invalid("unable to establish Discord LaunchAgent state"))
     }
 
-    fn apply_manager(&self, enabled: bool, active: bool) -> io::Result<()> {
+    fn apply_manager(
+        &self,
+        enabled: bool,
+        active: bool,
+        previous_body: Option<&str>,
+        body: Option<&str>,
+        changed: &mut bool,
+    ) -> io::Result<()> {
         match self.platform {
             Platform::Systemd => {
+                self.verify_systemd(previous_body, previous_body)?;
+                *changed = true;
                 self.run("systemctl", &["--user", "daemon-reload"])?;
+                self.verify_systemd(body, previous_body)?;
+                *changed = true;
                 self.run(
                     "systemctl",
                     &[
@@ -226,6 +307,8 @@ impl Unit<'_> {
                         SERVICE,
                     ],
                 )?;
+                self.verify_systemd(body, previous_body)?;
+                *changed = true;
                 self.run(
                     "systemctl",
                     &["--user", if active { "restart" } else { "stop" }, SERVICE],
@@ -236,17 +319,15 @@ impl Unit<'_> {
                 let name = format!("{domain}/{LABEL}");
                 let output = (self.runner)("launchctl", &["print", &name])?;
                 if output.status.success() {
-                    let path = self
-                        .path
-                        .to_str()
-                        .ok_or_else(|| invalid("invalid LaunchAgent path"))?;
-                    if String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .find_map(|line| line.trim().strip_prefix("path = "))
-                        != Some(path)
-                    {
-                        return Err(invalid("loaded Discord LaunchAgent path changed"));
-                    }
+                    let expected = previous_body.ok_or_else(|| {
+                        invalid("loaded Discord LaunchAgent appeared during activation")
+                    })?;
+                    verify_launchd_body(
+                        &String::from_utf8_lossy(&output.stdout),
+                        &self.path,
+                        expected,
+                    )?;
+                    *changed = true;
                     self.run("launchctl", &["bootout", &name])?;
                 } else {
                     let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
@@ -261,6 +342,7 @@ impl Unit<'_> {
                         .path
                         .to_str()
                         .ok_or_else(|| invalid("invalid LaunchAgent path"))?;
+                    *changed = true;
                     self.run("launchctl", &["bootstrap", &domain, path])?;
                 }
                 Ok(())
@@ -276,12 +358,19 @@ impl Unit<'_> {
         } else {
             0o600
         };
-        let (enabled, active) = self.prior_state()?;
+        let (enabled, active) = self.prior_state(old.as_deref())?;
         if old.is_none() && (enabled || active) {
             return Err(invalid("loaded Discord service has no owned definition"));
         }
         self.write(Some(&body), 0o600)?;
-        if let Err(error) = self.apply_manager(true, true) {
+        let mut manager_changed = false;
+        if let Err(error) = self.apply_manager(
+            true,
+            true,
+            old.as_deref(),
+            Some(&body),
+            &mut manager_changed,
+        ) {
             let rollback = (|| {
                 if self.read()?.as_deref() != Some(&body) {
                     return Err(invalid(
@@ -289,15 +378,33 @@ impl Unit<'_> {
                     ));
                 }
                 if old.is_none() {
-                    let stopped = self.apply_manager(false, false);
+                    let stopped = if manager_changed {
+                        self.apply_manager(
+                            false,
+                            false,
+                            Some(&body),
+                            Some(&body),
+                            &mut manager_changed,
+                        )
+                    } else {
+                        Ok(())
+                    };
                     self.write(None, 0)?;
                     stopped?;
-                    if self.platform == Platform::Systemd {
+                    if manager_changed && self.platform == Platform::Systemd {
                         self.run("systemctl", &["--user", "daemon-reload"])?;
                     }
                 } else {
                     self.write(old.as_deref(), previous_mode)?;
-                    self.apply_manager(enabled, active)?;
+                    if manager_changed {
+                        self.apply_manager(
+                            enabled,
+                            active,
+                            Some(&body),
+                            Some(old.as_deref().unwrap()),
+                            &mut manager_changed,
+                        )?;
+                    }
                 }
                 Ok(())
             })();
@@ -318,11 +425,23 @@ impl Unit<'_> {
         if definition::bound_place(self.platform, &body)? != place {
             return Ok(());
         }
-        let (enabled, active) = self.prior_state()?;
+        let (enabled, active) = self.prior_state(Some(&body))?;
+        let mut manager_changed = false;
         if (enabled || active)
-            && let Err(error) = self.apply_manager(false, false)
+            && let Err(error) =
+                self.apply_manager(false, false, Some(&body), Some(&body), &mut manager_changed)
         {
-            return match self.apply_manager(enabled, active) {
+            return match if manager_changed {
+                self.apply_manager(
+                    enabled,
+                    active,
+                    Some(&body),
+                    Some(&body),
+                    &mut manager_changed,
+                )
+            } else {
+                Ok(())
+            } {
                 Ok(()) => Err(error),
                 Err(undo) => Err(io::Error::other(format!(
                     "{error}; restoring Discord service: {undo}"
@@ -384,10 +503,89 @@ fn verify_launchd_print(
     Ok(())
 }
 
+fn verify_launchd_body(output: &str, plist: &Path, body: &str) -> io::Result<()> {
+    let place = definition::bound_place(Platform::Launchd, body)?;
+    let binary = definition::bound_program(body)?;
+    let args = [
+        binary.as_str(),
+        "discord",
+        "run",
+        "--state-dir",
+        place
+            .to_str()
+            .ok_or_else(|| invalid("invalid Discord state path"))?,
+        "--unattended",
+    ];
+    verify_launchd_print(output, plist, &args, &place.join("connector.log"))
+}
+
+fn systemd_exec_matches(value: &str, program: &str, argv: &str) -> bool {
+    if program.contains(" ; argv[]=") || argv.contains(" ; ignore_errors=") {
+        return false;
+    }
+    value
+        .strip_prefix("{ path=")
+        .and_then(|rest| rest.strip_prefix(program))
+        .and_then(|rest| rest.strip_prefix(" ; argv[]="))
+        .and_then(|rest| rest.strip_prefix(argv))
+        .is_some_and(|rest| {
+            rest.starts_with(" ; ignore_errors=no ; start_time=[")
+                && rest.ends_with(" }")
+                && !rest.contains(" } {")
+        })
+}
+
+fn verify_systemd_process(pid: u32, program: &str, expected_argv: &[String]) -> io::Result<()> {
+    verify_systemd_process_at(Path::new("/proc"), pid, program, expected_argv)
+}
+
+fn verify_systemd_process_at(
+    proc_root: &Path,
+    pid: u32,
+    program: &str,
+    expected_argv: &[String],
+) -> io::Result<()> {
+    let proc = proc_root.join(pid.to_string());
+    let status = fs::read_to_string(proc.join("status"))?;
+    let uid = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|uid| uid.parse::<u32>().ok());
+    if uid != Some(runtime::uid()) {
+        return Err(invalid("Discord service process has a foreign owner"));
+    }
+    let raw = fs::read(proc.join("cmdline"))?;
+    let args = raw
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>();
+    let expected = expected_argv
+        .iter()
+        .map(String::as_bytes)
+        .collect::<Vec<_>>();
+    if args != expected {
+        return Err(invalid(
+            "running Discord process differs from its previous command",
+        ));
+    }
+    let actual_exe = fs::read_link(proc.join("exe"))?;
+    let expected_exe = Path::new(program).canonicalize()?;
+    if actual_exe != expected_exe {
+        return Err(invalid(
+            "running Discord executable differs from its previous command",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
-    use std::{cell::RefCell, os::unix::process::ExitStatusExt};
+    use std::{
+        cell::{Cell, RefCell},
+        os::unix::process::ExitStatusExt,
+    };
 
     fn output(stdout: &str, stderr: &str, success: bool) -> Output {
         Output {
@@ -405,51 +603,64 @@ mod ownership_tests {
         }
     }
 
+    fn systemd_report(path: &Path, body: &str) -> String {
+        let program = definition::bound_systemd_program(body).unwrap();
+        let place = definition::bound_place(Platform::Systemd, body).unwrap();
+        let place = place.to_str().unwrap();
+        format!(
+            "FragmentPath={}\nDropInPaths=\nExecStart={{ path={program} ; argv[]={program} discord run --state-dir {place} --unattended ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nExecMainPID=0\n",
+            path.display()
+        )
+    }
+
     #[test]
     fn systemd_reports_fragment_and_dropins_before_mutation() {
-        for manager_state in [
-            "FragmentPath=/tmp/foreign.service\nDropInPaths=\n",
-            "FragmentPath=/tmp/swarm-discord.service\nDropInPaths=/tmp/override.conf\n",
-        ] {
+        for mode in ["fragment", "dropin", "exec"] {
             let dir = std::env::temp_dir().join(format!("swarm-unit-{}", std::process::id()));
             let path = dir.join(SERVICE);
             fs::create_dir_all(&dir).unwrap();
-            fs::write(
-                &path,
-                definition::render(
-                    Platform::Systemd,
-                    Path::new("/bin/swarm"),
-                    Path::new("/tmp/place"),
-                )
-                .unwrap(),
+            let old = definition::render(
+                Platform::Systemd,
+                Path::new("/bin/swarm"),
+                Path::new("/tmp/place"),
             )
             .unwrap();
+            fs::write(&path, &old).unwrap();
+            let good = systemd_report(&path, &old);
+            let changed = match mode {
+                "fragment" => good.replace(path.to_str().unwrap(), "/tmp/foreign.service"),
+                "dropin" => good.replace("DropInPaths=\n", "DropInPaths=/tmp/override.conf\n"),
+                _ => good.replace("argv[]=/bin/swarm", "argv[]=/bin/foreign"),
+            };
+            let shows = Cell::new(0);
             let mutations = RefCell::new(Vec::new());
             let runner = |name: &str, args: &[&str]| -> io::Result<Output> {
                 if args.contains(&"show") {
-                    return Ok(output(manager_state, "", true));
+                    let count = shows.get();
+                    shows.set(count + 1);
+                    return Ok(output(if count == 0 { &good } else { &changed }, "", true));
                 }
                 if args.contains(&"is-enabled") {
                     return Ok(output("enabled\n", "", true));
                 }
                 if args.contains(&"is-active") {
-                    return Ok(output("active\n", "", true));
+                    return Ok(output("inactive\n", "", false));
                 }
                 mutations.borrow_mut().push(format!("{name} {args:?}"));
                 Ok(output("", "", true))
             };
             let service = unit(Platform::Systemd, path.clone(), &runner);
-            assert!(
-                service
-                    .install(Path::new("/bin/new-swarm"), Path::new("/tmp/place"))
-                    .is_err()
-            );
-            assert!(service.stop(Path::new("/tmp/place")).is_err());
+            if mode == "exec" {
+                assert!(
+                    service
+                        .install(Path::new("/bin/new-swarm"), Path::new("/tmp/place"))
+                        .is_err()
+                );
+            } else {
+                assert!(service.stop(Path::new("/tmp/place")).is_err());
+            }
             assert!(mutations.borrow().is_empty());
-            assert_eq!(
-                service.read().unwrap().unwrap(),
-                fs::read_to_string(&path).unwrap()
-            );
+            assert_eq!(service.read().unwrap().unwrap(), old);
             fs::remove_dir_all(dir).unwrap();
         }
     }
@@ -515,6 +726,110 @@ mod ownership_tests {
         assert!(mutations.borrow().is_empty());
         assert!(plist.exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn launchd_install_rechecks_full_loaded_job_at_bootout() {
+        let dir =
+            std::env::temp_dir().join(format!("swarm-launchd-recheck-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let plist = dir.join("com.swarm.discord.plist");
+        let old = definition::render(
+            Platform::Launchd,
+            Path::new("/bin/swarm"),
+            Path::new("/tmp/place"),
+        )
+        .unwrap();
+        fs::write(&plist, &old).unwrap();
+        let report = |program: &str| {
+            format!(
+                "path = {}\nstate = running\nprogram = {program}\narguments = {{\n{program}\ndiscord\nrun\n--state-dir\n/tmp/place\n--unattended\n}}\nstdout path = /tmp/place/connector.log\nstderr path = /tmp/place/connector.log\n",
+                plist.display()
+            )
+        };
+        let good = report("/bin/swarm");
+        let foreign = report("/bin/foreign");
+        let prints = Cell::new(0);
+        let mutations = RefCell::new(Vec::new());
+        let runner = |name: &str, args: &[&str]| -> io::Result<Output> {
+            if args.contains(&"print") {
+                let count = prints.get();
+                prints.set(count + 1);
+                return Ok(output(if count == 0 { &good } else { &foreign }, "", true));
+            }
+            mutations.borrow_mut().push(format!("{name} {args:?}"));
+            Ok(output("", "", true))
+        };
+        let service = unit(Platform::Launchd, plist.clone(), &runner);
+        assert!(
+            service
+                .install(Path::new("/bin/new-swarm"), Path::new("/tmp/place"))
+                .is_err()
+        );
+        assert!(mutations.borrow().is_empty());
+        assert_eq!(fs::read_to_string(&plist).unwrap(), old);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn systemd_process_must_match_the_previous_command_and_user() {
+        let root = std::env::temp_dir().join(format!("swarm-proc-{}", std::process::id()));
+        let proc = root.join("42");
+        fs::create_dir_all(&proc).unwrap();
+        let binary = root.join("swarm");
+        fs::write(&binary, b"test").unwrap();
+        fs::write(
+            proc.join("status"),
+            format!(
+                "Name:\ttest\nUid:\t{}\t{}\t{}\t{}\n",
+                runtime::uid(),
+                runtime::uid(),
+                runtime::uid(),
+                runtime::uid()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            proc.join("cmdline"),
+            [
+                binary.as_os_str().as_encoded_bytes(),
+                b"\0discord\0run\0--state-dir\0/tmp/place\0--unattended\0",
+            ]
+            .concat(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&binary, proc.join("exe")).unwrap();
+        let argv = vec![
+            binary.to_str().unwrap().to_owned(),
+            "discord".into(),
+            "run".into(),
+            "--state-dir".into(),
+            "/tmp/place".into(),
+            "--unattended".into(),
+        ];
+        assert!(verify_systemd_process_at(&root, 42, binary.to_str().unwrap(), &argv).is_ok());
+        let mut foreign = argv.clone();
+        foreign[4] = "/tmp/foreign".into();
+        assert!(verify_systemd_process_at(&root, 42, binary.to_str().unwrap(), &foreign).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn systemd_249_execstart_output_keeps_execmainpid_separate() {
+        let program = "/usr/bin/dbus-daemon";
+        let argv = "/usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only";
+        let exec_start = "{ path=/usr/bin/dbus-daemon ; argv[]=/usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
+        let properties = format!(
+            "ExecMainPID=2456\nExecStart={exec_start}\nFragmentPath=/usr/lib/systemd/user/dbus.service\nDropInPaths=\n"
+        );
+        assert!(systemd_exec_matches(exec_start, program, argv));
+        assert!(properties.contains("ExecMainPID=2456\n"));
+        assert!(properties.contains("; pid=0 ;"));
+        assert!(!systemd_exec_matches(
+            exec_start,
+            program,
+            "/usr/bin/dbus-daemon --foreign"
+        ));
     }
 }
 

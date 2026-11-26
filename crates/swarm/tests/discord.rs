@@ -309,16 +309,34 @@ fn service_activation_restores_the_prior_route_and_only_disconnects_the_selected
     fs::write(&binary, r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/operations"
 case "$1:$2" in
-  print:*) if [ -f "$HOME/active" ]; then exit 0; fi; echo 'Could not find service' >&2; exit 113 ;;
+  print:*)
+    if [ -f "$HOME/active" ]; then
+      plist="$HOME/Library/LaunchAgents/com.swarm.discord.plist"
+      values=$(/usr/bin/sed -n 's#.*<key>ProgramArguments</key><array><string>\([^<]*\)</string><string>discord</string><string>run</string><string>--state-dir</string><string>\([^<]*\)</string><string>--unattended</string></array>.*#\1|\2#p' "$plist")
+      binary=${values%%|*}; place=${values#*|}
+      printf 'path = %s\nstate = running\nprogram = %s\narguments = {\n%s\ndiscord\nrun\n--state-dir\n%s\n--unattended\n}\nstdout path = %s/connector.log\nstderr path = %s/connector.log\n' "$plist" "$binary" "$binary" "$place" "$place" "$place"
+      exit 0
+    fi
+    echo 'Could not find service' >&2; exit 113 ;;
   bootout:*) /bin/rm -f "$HOME/active" ;;
   bootstrap:*) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; exit 1; fi; : > "$HOME/active" ;;
   --user:is-enabled) if [ -f "$HOME/enabled" ]; then echo enabled; else echo disabled; exit 1; fi ;;
-  --user:is-active) if [ -f "$HOME/active" ]; then echo active; else echo inactive; exit 3; fi ;;
-  --user:daemon-reload) ;;
+  --user:is-active) echo inactive; exit 3 ;;
+  --user:show)
+    unit="$HOME/.config/systemd/user/swarm-discord.service"
+    if [ -f "$HOME/loaded" ] && [ -f "$unit" ]; then
+      fragment="$unit"
+      command=$(/usr/bin/sed -n 's/^ExecStart=:"\([^"]*\)" discord run --state-dir "\([^"]*\)" --unattended$/\1|\2/p' "$unit")
+      binary=${command%%|*}; place=${command#*|}
+      printf 'FragmentPath=%s\nDropInPaths=\nExecStart={ path=%s ; argv[]=%s discord run --state-dir %s --unattended ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nExecMainPID=0\n' "$fragment" "$binary" "$binary" "$place"
+    else
+      printf 'FragmentPath=\nDropInPaths=\nExecStart=\nExecMainPID=0\n'
+    fi ;;
+  --user:daemon-reload) if [ -f "$HOME/.config/systemd/user/swarm-discord.service" ]; then : > "$HOME/loaded"; else /bin/rm -f "$HOME/loaded"; fi ;;
   --user:enable) : > "$HOME/enabled" ;;
   --user:disable) /bin/rm -f "$HOME/enabled" ;;
-  --user:restart) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; exit 1; fi; : > "$HOME/active" ;;
-  --user:stop) /bin/rm -f "$HOME/active" ;;
+  --user:restart) if [ -f "$HOME/fail-once" ]; then /bin/rm "$HOME/fail-once"; : > "$HOME/failed-restart"; exit 1; fi; : > "$HOME/active" ;;
+  --user:stop) if [ -f "$HOME/failed-restart" ]; then /bin/rm "$HOME/failed-restart"; else /bin/rm -f "$HOME/active"; fi ;;
   *) exit 100 ;;
 esac
 "#).unwrap();
@@ -407,10 +425,11 @@ esac
     );
     assert_eq!(fs::read_to_string(&unit).unwrap(), original);
     assert!(fixture.0.join("active").exists());
+    let disconnected = run(&["disconnect", "--state-dir", one.to_str().unwrap()]);
     assert!(
-        run(&["disconnect", "--state-dir", one.to_str().unwrap()])
-            .status
-            .success()
+        disconnected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disconnected.stderr)
     );
     assert!(!unit.exists() && !fixture.0.join("active").exists());
 

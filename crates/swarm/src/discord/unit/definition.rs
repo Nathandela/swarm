@@ -115,6 +115,14 @@ pub(super) fn bound_program(body: &str) -> io::Result<String> {
     xml_unescape(program)
 }
 
+pub(super) fn bound_systemd_program(body: &str) -> io::Result<String> {
+    let line = body
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart=:"))
+        .ok_or_else(invalid)?;
+    argument(line).map(|(program, _)| program)
+}
+
 fn xml_unescape(mut text: &str) -> io::Result<String> {
     let mut value = String::new();
     while let Some((head, tail)) = text.split_once('&') {
