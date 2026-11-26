@@ -12,6 +12,8 @@ const MAX_RESPONSE: u64 = 1 << 20;
 pub(super) struct Discord {
     agent: ureq::Agent,
     authorization: String,
+    #[cfg(test)]
+    fixture_origin: Option<String>,
 }
 
 pub(super) enum Post {
@@ -33,11 +35,37 @@ impl Discord {
         Ok(Self {
             agent: config.into(),
             authorization,
+            #[cfg(test)]
+            fixture_origin: None,
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn loopback_fixture(cfg: &Config, port: u16) -> io::Result<Self> {
+        let token = load_token(Path::new(cfg.text("token_file")))?;
+        let agent = ureq::Agent::config_builder()
+            .proxy(None)
+            .max_redirects(0)
+            .timeout_global(Some(Duration::from_secs(3)))
+            .build()
+            .new_agent();
+        Ok(Self {
+            agent,
+            authorization: format!("Bot {token}"),
+            fixture_origin: Some(format!("http://127.0.0.1:{port}/api/v10")),
+        })
+    }
+
+    fn endpoint(&self, path: &str) -> String {
+        #[cfg(test)]
+        if let Some(origin) = &self.fixture_origin {
+            return format!("{origin}{path}");
+        }
+        format!("{API}{path}")
+    }
+
     pub(super) fn request(&self, path: &str, body: Option<&Value>) -> io::Result<Value> {
-        let endpoint = format!("{API}{path}");
+        let endpoint = self.endpoint(path);
         let response = match body {
             Some(body) => self
                 .agent
@@ -184,7 +212,7 @@ impl Discord {
             return Post::Unconfirmed;
         }
         self.post_json(
-            &format!("{API}/channels/{parent}/messages/{message}/threads"),
+            &self.endpoint(&format!("/channels/{parent}/messages/{message}/threads")),
             &json!({"name":name}),
         )
     }
@@ -221,7 +249,7 @@ impl Discord {
         if !snowflake(channel) {
             return Post::Unconfirmed;
         }
-        let url = format!("{API}/channels/{channel}/messages");
+        let url = self.endpoint(&format!("/channels/{channel}/messages"));
         let request = self
             .agent
             .post(url)
@@ -452,6 +480,7 @@ server.listen(0,'127.0.0.1',()=>console.log(server.address().port));"#;
         let tls = TlsConfig::builder().root_certs(roots).build();
         let api = Discord {
             authorization: "Bot fixture".into(),
+            fixture_origin: None,
             agent: ureq::Agent::config_builder()
                 .https_only(true)
                 .proxy(None)

@@ -1279,7 +1279,7 @@ mod tests {
         use super::super::rest::Post;
         struct Room {
             current: Value,
-            second: Value,
+            actual_rest: super::super::rest::Discord,
             posts: std::cell::Cell<u32>,
             status: PathBuf,
             acknowledge: bool,
@@ -1287,42 +1287,26 @@ mod tests {
         }
         impl service::Room for Room {
             fn verify(&self, cfg: &Config) -> io::Result<()> {
-                assert_eq!(cfg.text("owner_id"), "200");
-                assert_eq!(cfg.text("application_id"), "100");
-                assert_eq!(cfg.text("dm_channel_id"), "400");
-                Ok(())
+                service::Room::verify(&self.actual_rest, cfg)
             }
-            fn history(&self, _: &Config) -> io::Result<Vec<Value>> {
-                if self.posts.get() > 0 {
-                    return Ok(vec![self.second.clone(), self.current.clone()]);
-                }
-                Ok(vec![
-                    json!({"id":"501","channel_id":"400","author":{"id":"200"}}),
-                ])
+            fn history(&self, cfg: &Config) -> io::Result<Vec<Value>> {
+                service::Room::history(&self.actual_rest, cfg)
             }
-            fn message(&self, _: &Config, id: &str) -> io::Result<Value> {
-                match id {
-                    "701" => Ok(self.current.clone()),
-                    "702" => Ok(self.second.clone()),
-                    _ => Err(invalid()),
-                }
+            fn message(&self, cfg: &Config, id: &str) -> io::Result<Value> {
+                service::Room::message(&self.actual_rest, cfg, id)
             }
-            fn post(&self, _: &Config, nonce: &str, body: &str) -> Post {
+            fn post(&self, cfg: &Config, nonce: &str, body: &str) -> Post {
                 let status = super::super::local::call(&self.status, "status", "", None).unwrap();
                 assert_eq!(status["connected"], true);
                 assert_eq!(status["installation_id"], "fixture-personal");
                 assert_eq!(body, "Verified native final reply.");
                 let count = self.posts.get() + 1;
                 self.posts.set(count);
-                if self.acknowledge {
-                    if count == 1 {
-                        self.close_first.send(()).unwrap();
-                    }
-                    Post::Acknowledged(json!({"id":(899+count).to_string(),"channel_id":"400",
-                        "author":{"id":"100"},"content":body,"nonce":nonce}))
-                } else {
-                    Post::Unconfirmed
+                let result = self.actual_rest.post_publication(cfg, nonce, body, &[]);
+                if matches!(result, Post::Acknowledged(_)) && count == 1 {
+                    self.close_first.send(()).unwrap();
                 }
+                result
             }
         }
         let place = Place::for_supervisor(Path::new(&root)).unwrap();
@@ -1334,7 +1318,14 @@ mod tests {
         let (close_first, first_closed) = std::sync::mpsc::sync_channel::<()>(1);
         let room = Room {
             current: current.clone(),
-            second: second.clone(),
+            actual_rest: super::super::rest::Discord::loopback_fixture(
+                &place.load().unwrap(),
+                std::env::var("SWARM_TEST_DISCORD_REST_PORT")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            )
+            .unwrap(),
             posts: std::cell::Cell::new(0),
             status: place.dir.clone(),
             acknowledge: std::env::var_os("SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK").is_none(),

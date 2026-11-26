@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Original Go managed personal room with an installed, loopback-only Codex."""
+import http.server
 import json
+import socket
+import threading
 import os
 from pathlib import Path
 import subprocess
@@ -18,6 +21,62 @@ def run(bin, env, *args):
     return result.stdout
 
 
+
+def discord_fixture(acknowledge):
+    posts = []
+    messages = {
+        id: dict(id=id, type=0, channel_id="400", author=dict(id="200", username="synthetic owner"),
+                 attachments=[], content=text)
+        for id, text in [("501", "Original settled source"),
+                         ("701", "Retained real native loopback input."),
+                         ("702", "Second retained real native loopback input.")]
+    }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def payload(self, body):
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
+            if self.path == "/api/v10/users/@me":
+                self.payload(dict(id="100", username="fixturebot", bot=True))
+            elif self.path == "/api/v10/channels/400":
+                self.payload(dict(id="400", type=1, recipients=[dict(id="200", bot=False)]))
+            elif self.path == "/api/v10/channels/400/messages?limit=100":
+                self.payload([messages["702"], messages["701"]] if posts else [messages["501"]])
+            elif self.path.startswith("/api/v10/channels/400/messages/"):
+                self.payload(messages[self.path.rsplit("/", 1)[1]])
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            assert self.path == "/api/v10/channels/400/messages"
+            assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert body["enforce_nonce"] is True and body["allowed_mentions"] == {"parse": []}
+            assert body["content"] == "Verified native final reply."
+            nonce = body["nonce"]
+            assert len(nonce) == 24 and nonce not in posts
+            posts.append(nonce)
+            if acknowledge:
+                self.payload(dict(id=str(899 + len(posts)), channel_id="400", author=dict(id="100"),
+                                  content=body["content"], nonce=nonce, attachments=[]))
+            else:
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, posts
+
 def exercise(go, fixture, codex, rust_test, base, acknowledge):
     assert os.environ.get("SWARM_NATIVE_FIXTURE_OS_ISOLATED") == "1"
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
@@ -28,6 +87,7 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
     env["PATH"] += ":/usr/sbin:/sbin"
     env["TERM"] = "xterm-256color"
     source, calls = model_fixture(base, False, native_publication=True)
+    discord, posts = discord_fixture(acknowledge)
     try:
         place = base / "connector"
         run(fixture, env, "create", place, base / "state", "personal", "true", base / "work")
@@ -46,7 +106,8 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
                 original_credential = auth.read_bytes()
                 assert calls == []
                 test_env = env | {"SWARM_TEST_DISCORD_ACTIVE_ROOT": str(base / "state"),
-                                  "SWARM_TEST_DISCORD_ACTIVE_FIXTURE": fixture}
+                                  "SWARM_TEST_DISCORD_ACTIVE_FIXTURE": fixture,
+                                  "SWARM_TEST_DISCORD_REST_PORT": str(discord.server_port)}
                 if not acknowledge:
                     test_env["SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK"] = "1"
                 run(rust_test, test_env, "retained_original_go_native_manager_roundtrip", "--nocapture")
@@ -68,6 +129,7 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
                     assert (phase, export) == ("sent" if acknowledge else "uncertain", "true")
                     assert len(nonce) == 24 and nonce not in nonces
                     nonces.add(nonce)
+                assert set(posts) == nonces and len(posts) == len(nonces)
                 assert run(fixture, env, "ingress", place, "original-room", "701", "replay").strip() == "0"
                 if acknowledge:
                     assert run(fixture, env, "ingress", place, "original-room", "702", "replay").strip() == "0"
@@ -81,6 +143,8 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
                     if row["role"] == "manager":
                         owner(env, {"op": "kill", "session_id": row["id"]})
     finally:
+        discord.shutdown()
+        discord.server_close()
         source.shutdown()
         source.server_close()
 
