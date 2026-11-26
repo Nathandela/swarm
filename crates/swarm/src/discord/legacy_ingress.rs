@@ -1,5 +1,6 @@
 //! Settle a Go personal ingress candidate from the original voice controller's cutover receipt.
 pub(super) mod prepare;
+pub(super) mod publication;
 
 use super::{
     config::{Config, Place, open_owner_file, snowflake},
@@ -316,13 +317,19 @@ fn identity(file: &fs::File, path: &Path) -> io::Result<bool> {
 }
 
 fn scope(place: &Place, message: &str) -> io::Result<Config> {
+    if !snowflake(message) {
+        return Err(invalid());
+    }
+    retained_config(place)
+}
+
+fn retained_config(place: &Place) -> io::Result<Config> {
     let cfg = place.load()?;
     verify_controls_place(place, &cfg)?;
     if cfg.text("mode") != "personal"
         || cfg.text("project_access") == "vm"
         || !cfg.0["calls"].is_null()
         || !cfg.0["previous_supervisor"].is_null()
-        || !snowflake(message)
         || place.dir.join("bridge.sock").symlink_metadata().is_ok()
     {
         return Err(invalid());
@@ -339,15 +346,10 @@ struct ConnectorLease {
 }
 
 impl ConnectorLease {
-    fn open(
-        place: &Place,
-        cfg: &Config,
-        message: &str,
-        expected: &fs::Metadata,
-    ) -> io::Result<Self> {
+    fn open(place: &Place, cfg: &Config, expected: &fs::Metadata) -> io::Result<Self> {
         let configuration = place.lock()?;
         let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
-        if scope(place, message)?.0 != cfg.0 {
+        if retained_config(place)?.0 != cfg.0 {
             return Err(invalid());
         }
         let source = place.dir.join("discord.db");
@@ -377,7 +379,7 @@ impl ConnectorLease {
 fn voice_location(
     place: &Place,
     cfg: &Config,
-    c: &Candidate,
+    binding: &Value,
 ) -> io::Result<(PathBuf, String, String)> {
     let root = fs::canonicalize(place.supervisor_root())?;
     let endpoint = supervisor::endpoint(&root);
@@ -392,7 +394,7 @@ fn voice_location(
         cfg.text("installation_id"),
         "",
         cfg.text("dm_channel_id"),
-        field(&c.binding, "ID"),
+        field(binding, "ID"),
     ]
     .join("\0");
     let id = format!("{:x}", Sha256::digest(coordinate.as_bytes()));
@@ -408,7 +410,7 @@ pub(super) fn settle(place: &Place, message: &str, dry_run: bool) -> io::Result<
     let source = place.dir.join("discord.db");
     let source_identity = fs::symlink_metadata(&source)?;
     let stage = |c: Candidate| {
-        let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+        let (directory, id, endpoint) = voice_location(place, &cfg, &c.binding)?;
         let (pin, voice, receipt) = controller(
             &directory,
             &id,
@@ -437,7 +439,7 @@ pub(super) fn settle(place: &Place, message: &str, dry_run: bool) -> io::Result<
             return Ok(true);
         }
     }
-    let mut lease = ConnectorLease::open(place, &cfg, message, &source_identity)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &source_identity)?;
     settle_under_lease(place, &cfg, message, &mut lease)
 }
 
@@ -452,7 +454,7 @@ fn settle_under_lease(
         println!("Original personal ingress is already settled.");
         return Ok(true);
     };
-    let (directory, id, endpoint) = voice_location(place, cfg, &row)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &row.binding)?;
     let (voice, _voice_db, receipt) = controller(
         &directory,
         &id,
@@ -643,7 +645,7 @@ fn dispatch_with(
     if dry_run {
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
         let c = pending_dispatch(&db, &cfg, message)?;
-        let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+        let (directory, id, endpoint) = voice_location(place, &cfg, &c.binding)?;
         let (_pin, _voice, receipt) = controller(
             &directory,
             &id,
@@ -655,7 +657,7 @@ fn dispatch_with(
         println!("Verified a prepared original personal DM with no native cutover recorded.");
         return Ok(true);
     }
-    let mut lease = ConnectorLease::open(place, &cfg, message, &expected)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &expected)?;
     dispatch_under_lease(place, &cfg, message, &mut lease, fetch)
 }
 
@@ -674,7 +676,7 @@ fn dispatch_under_lease(
     fetch: impl FnOnce(&Config) -> io::Result<Value>,
 ) -> io::Result<bool> {
     let c = pending_dispatch(&lease.db, cfg, message)?;
-    let (directory, id, endpoint) = voice_location(place, cfg, &c)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &c.binding)?;
     let (voice_pin, voice_db, receipt) = controller(
         &directory,
         &id,
@@ -817,7 +819,7 @@ fn capture_with(
         println!("Original Go ingress can accept a new owner DM after source verification.");
         return Ok(true);
     }
-    let mut lease = ConnectorLease::open(place, &cfg, message, &identity)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &identity)?;
     capture_under_lease(&cfg, message, &mut lease, fetch)
 }
 
@@ -1121,7 +1123,7 @@ mod tests {
                 let c = candidate(&db.begin().unwrap(), &cfg, "701")
                     .unwrap()
                     .unwrap();
-                let (dir, id, endpoint) = voice_location(&place, &cfg, &c).unwrap();
+                let (dir, id, endpoint) = voice_location(&place, &cfg, &c.binding).unwrap();
                 let (_pin, _db, receipt) =
                     controller(&dir, &id, &c.origin, "codex", &endpoint).unwrap();
                 (dir, id, endpoint, receipt)
@@ -1256,7 +1258,7 @@ mod tests {
         let cfg = scope(&place, "701").unwrap();
         let source = place.dir.join("discord.db");
         let expected = fs::symlink_metadata(&source).unwrap();
-        let mut lease = ConnectorLease::open(&place, &cfg, "701", &expected).unwrap();
+        let mut lease = ConnectorLease::open(&place, &cfg, &expected).unwrap();
         assert!(open_bolt(&source, 64 << 20).is_err());
         if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
             let other = Command::new(fixture)
@@ -1276,7 +1278,7 @@ mod tests {
         assert!(dispatch_under_lease(&place, &cfg, "701", &mut lease, |_| Ok(current)).unwrap());
         let request = {
             let c = pending_dispatch(&lease.db, &cfg, "701").unwrap();
-            let (directory, id, endpoint) = voice_location(&place, &cfg, &c).unwrap();
+            let (directory, id, endpoint) = voice_location(&place, &cfg, &c.binding).unwrap();
             let (_pin, _db, receipt) =
                 controller(&directory, &id, &c.origin, "codex", &endpoint).unwrap();
             assert_eq!(receipt.admission["phase"], "executing");

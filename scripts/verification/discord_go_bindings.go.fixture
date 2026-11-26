@@ -3,6 +3,7 @@ package discord
 
 import (
 	"path/filepath"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
@@ -78,4 +79,20 @@ func (s *Store) FixturePersonalGap(installation string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return teammateCheckpointUpdate(tx, installation, "synthetic-reconnected-gateway", 2, true, "")
 	})
+}
+
+func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string) error {
+	return s.teammateQueueOutput(d, TeammatePublication{ID: "fixture-final", Body: "Original final personal reply.",
+		AdmissionID: "da_" + digest([]string{d.InstallationID, source})[:32], Sequence: 1}, time.Now().UTC())
+}
+
+func (s *Store) FixtureFinalState(d TeammateDiscussion) (string, string, error) {
+	var output teammateOutput
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return teammateGet(tx.Bucket([]byte(teammateOutboxBucket)), teammateOutputKey(d.InstallationID, d.ID, "fixture-final"), &output)
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return output.Chunks[0].State, output.Chunks[0].ID, nil
 }

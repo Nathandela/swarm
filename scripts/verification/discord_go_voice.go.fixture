@@ -52,7 +52,17 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 	if err := store.beginControllerInput(binding, prepared); err != nil || phase == "executing" {
 		return err
 	}
-	return store.controllerInputPhase(binding, admission.Sequence, "running", "synthetic-observed-turn", "")
+	turn := "synthetic-observed-turn"
+	if err := store.controllerInputPhase(binding, admission.Sequence, "running", turn, ""); err != nil || phase != "final" {
+		return err
+	}
+	permit, err := store.controllerSpeechPermit(binding, admission.Sequence, nonce, turn)
+	if err != nil {
+		return err
+	}
+	_, err = store.PublishSpeech(binding, permit, Publication{Admission: admission.Sequence, ID: "fixture-final",
+		NativeTurnID: turn, Sequence: 1, Text: "Original final personal reply.", Final: true})
+	return err
 }
 
 func FixturePersonalPhase(dir, message string) (string, bool, error) {

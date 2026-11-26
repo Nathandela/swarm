@@ -17,6 +17,8 @@ Use `swarm discord migrate-state --capture-personal-ingress MESSAGE_ID` to captu
 
 For a captured message, `swarm discord migrate-state --prepare-personal-ingress MESSAGE_ID` prepares the exact operation in the original Go voice controller when its retained manager binding is unambiguous and the controller has no unfinished work. It writes the original connector pending source before committing the voice admission. A stop between commits leaves Go a pending DM and no native send. The witness covers full capture, preparation, native send acknowledgment or loss of acknowledgment, and original Go reopen and replay suppression. Native manager responses in the test come from a local protocol stand-in.
 
+An original final plain-text reply that already exists in both the Go voice ledger and Go connector outbox can be continued with `swarm discord migrate-state --deliver-personal-publication OUTPUT_ID`. Rust checks the original voice publication, sealed owner ingress and enrolled DM before sending once under the existing Go nonce. An acknowledged post stays acknowledged when reopened by Go. A lost reply stays uncertain under the same nonce and Rust refuses another submission. The offline witness uses a synthetic Discord transport.
+
 In a disposable copy of the pinned Go repository, copy the fixture program to `cmd/swarm-discord-state-fixture/main.go`, the bindings fixture to `internal/discord/migration_fixture.go`, the route fixture to `internal/teammatemanager/migration_fixture.go`, and the voice fixture to `internal/voice/migration_fixture.go`. Build `./cmd/swarm-discord-state-fixture` in that copy and run the witness with both binaries.
 
 ```bash

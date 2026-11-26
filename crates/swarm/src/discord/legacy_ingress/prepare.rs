@@ -347,7 +347,7 @@ pub(super) fn with(
         return Ok(true);
     }
     let expected = fs::symlink_metadata(&source)?;
-    let mut lease = ConnectorLease::open(place, &cfg, message, &expected)?;
+    let mut lease = ConnectorLease::open(place, &cfg, &expected)?;
     under_lease(place, &cfg, message, &mut lease, fetch)
 }
 
@@ -370,7 +370,7 @@ pub(super) fn under_lease(
     let (key, row, origin, c) = incoming(&tx, cfg, message, &input)?;
     require_repaired(&tx, cfg, &c.binding)?;
     require_after_boundary(&tx, cfg, &c.binding, message)?;
-    let (directory, id, endpoint) = voice_location(place, cfg, &c)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &c.binding)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let voice_path = directory.join("voice.db");
     let (voice_pin, mut voice_db) = bounded_writer(writable_pin(&voice_path)?)?;

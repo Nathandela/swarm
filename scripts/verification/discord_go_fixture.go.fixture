@@ -78,7 +78,7 @@ func main() {
 		return
 	}
 	open := discord.OpenStore
-	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" {
+	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" {
 		open = discord.FixtureOpenRead
 	}
 	store, err := open(dir)
@@ -102,12 +102,14 @@ func main() {
 		if len(os.Args) == 6 {
 			socket = os.Args[5]
 		}
-		route := discord.Route{ChannelID: channel, MessageID: "500"}
+		route := discord.Route{ChannelID: channel}
 		if cfg.Mode == "teammate" {
 			route.GuildID = "300"
 		}
+		starter := route
+		starter.MessageID = "500"
 		check(store.FixtureBind(discord.TeammateDiscussion{ID: id, InstallationID: cfg.InstallationID,
-			Route: route, Starter: route, SupervisorSocket: socket}))
+			Route: route, Starter: starter, SupervisorSocket: socket}))
 	case "ingress-gap":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
@@ -134,6 +136,18 @@ func main() {
 		binding, err := manager.FixtureActivate(ctx, row)
 		check(err)
 		check(json.NewEncoder(os.Stdout).Encode(binding))
+	case "publication-queue", "publication-read":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		if action == "publication-queue" {
+			check(store.FixtureQueueFinal(row, os.Args[4]))
+		} else {
+			state, nonce, err := store.FixtureFinalState(row)
+			check(err)
+			fmt.Println(state, nonce)
+		}
 	case "voice-ingress":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
