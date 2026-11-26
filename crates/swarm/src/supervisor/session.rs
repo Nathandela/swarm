@@ -38,11 +38,29 @@ pub(super) struct Prepared {
     provider: LaunchPlan,
     pub(super) resume: Value,
     agy_launch: Value,
+    go_rollback: Value,
     scheduled: Option<(worker::Binding, Value)>,
     manager: Value,
 }
 
 impl Prepared {
+    pub(super) fn bind_go_rollback(&mut self, request: &Value) -> io::Result<()> {
+        if self.provider.agent != "claude"
+            || self.isolated
+            || self.lineage != json!({})
+            || !self.manager.is_null()
+            || self.scheduled.is_some()
+            || !self.resume.is_null()
+        {
+            return Err(io::Error::other(
+                "stopped rollback supports ordinary, non-worktree Claude launches",
+            ));
+        }
+        self.go_rollback = json!({"schema":1, "options":request["launch"]["options"],
+            "env":self.provider.env.iter().map(|(key,value)| format!("{key}={value}")).collect::<Vec<_>>()});
+        Ok(())
+    }
+
     pub(super) fn bind_manager(&mut self, mut scope: Value) -> io::Result<()> {
         let version: Vec<_> = self
             .provider
@@ -276,6 +294,7 @@ impl Session {
                 Value::Null
             },
             provider,
+            go_rollback: Value::Null,
             resume: Value::Null,
             scheduled: None,
             manager: Value::Null,
@@ -441,6 +460,7 @@ impl Session {
             scheduled,
             manager,
             resume,
+            go_rollback,
         } = prepared;
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
@@ -482,7 +502,7 @@ impl Session {
         runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": 1, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
+                "schema": 1, "go_rollback":go_rollback, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"lineage":lineage,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
@@ -1310,7 +1330,11 @@ impl Session {
         {
             return self.refresh_provider_status();
         }
-        if self.exit().is_ok() {
+        if let Ok(exit) = self.exit() {
+            if let Some(at) = exit["finished_at"].as_str() {
+                *self.state.lock().unwrap() = (Phase::Exited, at.into());
+                return true;
+            }
             return self.transition(Phase::Exited);
         }
         if self.dial().is_ok() {
@@ -1657,9 +1681,7 @@ fn unrestricted_owner(data: &Value) -> bool {
 }
 
 fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("current UTC timestamp")
+    runtime::timestamp_now()
 }
 
 pub(super) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {

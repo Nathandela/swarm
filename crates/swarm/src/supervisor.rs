@@ -29,6 +29,15 @@ use std::time::Duration;
 const SESSION_LIMIT: usize = 64;
 
 pub(crate) fn run(args: &[String]) -> u8 {
+    if args == ["export-stopped-go"] {
+        return match stopped_go::export::run() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("daemon export-stopped-go: {e}");
+                1
+            }
+        };
+    }
     if args == ["restart"] {
         return match crate::bootstrap::restart() {
             Ok(()) => 0,
@@ -39,7 +48,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
         };
     }
     if !args.is_empty() {
-        eprintln!("usage: swarm daemon");
+        eprintln!("usage: swarm daemon [restart|export-stopped-go]");
         return 2;
     }
     match serve() {
@@ -69,12 +78,14 @@ struct State {
 
 impl State {
     fn rows(&self) -> Vec<Value> {
-        if let Some(store) = &self.stopped_go {
-            return store.rows(&self.endpoint);
-        }
         let sessions = self.sessions.read().unwrap();
         let mut rows: Vec<_> = sessions.values().map(|s| s.view(&self.endpoint)).collect();
-        rows.sort_by(|a, b| field(b, "created_at").cmp(field(a, "created_at")));
+        if let Some(store) = &self.stopped_go {
+            rows.extend(store.rows(&self.endpoint));
+            rows.sort_by_key(|row| std::cmp::Reverse(stopped_go::timestamp(&row["created_at"])));
+        } else {
+            rows.sort_by(|a, b| field(b, "created_at").cmp(field(a, "created_at")));
+        }
         rows
     }
 
@@ -121,6 +132,18 @@ impl State {
         caps: &[&str],
         managed: Option<Value>,
     ) -> io::Result<Arc<Session>> {
+        if self.stopped_go.is_some()
+            && (managed.is_some()
+                || !matches!(field(&request["launch"], "agent"), "claude" | "claude-code")
+                || request["launch"]["worktree"] == true
+                || ["spawned_from", "spawn_intent", "supervision"]
+                    .iter()
+                    .any(|key| !field(&request["launch"], key).is_empty()))
+        {
+            return Err(io::Error::other(
+                "stopped rollback supports ordinary, non-worktree Claude launches",
+            ));
+        }
         if managed.is_some()
             && runtime::launch_env(&request["launch"]["env"])
                 .iter()
@@ -188,6 +211,10 @@ impl State {
                 ));
             }
             prepared.bind_manager(scope.clone())?;
+        }
+        if self.stopped_go.is_some() {
+            prepared.bind_go_rollback(&bound)?;
+            runtime::private_dir(&self.root)?;
         }
         self.reserve_prepared(prepared, false, source, managed)
     }
@@ -343,14 +370,18 @@ fn serve() -> io::Result<()> {
     );
     let runtime_root = root.join("rust-v1");
     let mut sessions = BTreeMap::new();
-    if stopped_go.is_some() {
-        match fs::symlink_metadata(&runtime_root) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            _ => {
-                return Err(io::Error::other(
-                    "mixed Rust and Go state requires separate rollback qualification",
-                ));
+    if let Some(store) = &stopped_go {
+        for path in stopped_go::export::collect(&root)? {
+            let id = path
+                .file_name()
+                .and_then(|x| x.to_str())
+                .expect("validated Rust ID");
+            if store.exported(id)? || stopped_go::export::was_published(&path)? {
+                continue;
             }
+            let session = Session::load(path)?;
+            session.reconcile();
+            sessions.insert(session.id.clone(), Arc::new(session));
         }
     } else {
         runtime::private_dir(&runtime_root)?;
@@ -418,19 +449,19 @@ fn serve() -> io::Result<()> {
         if let Some((_, listener)) = receipt {
             scheduling::receipts(listener, state.clone());
         }
-        let monitor = state.clone();
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(150));
-                let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
-                for session in sessions {
-                    if session.reconcile() {
-                        monitor.publish(&session);
-                    }
+    }
+    let monitor = state.clone();
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(150));
+            let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
+            for session in sessions {
+                if session.reconcile() {
+                    monitor.publish(&session);
                 }
             }
-        });
-    }
+        }
+    });
     for incoming in listener.incoming() {
         let stream = incoming?;
         let state = state.clone();
@@ -490,7 +521,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .filter_map(Value::as_str)
         .filter(|cap| {
             if state.stopped_go.is_some() {
-                return *cap == "subscribe";
+                return matches!(*cap, "subscribe" | "attach");
             }
             worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
                 || guild_worker_available && *cap == "worker-discord-guild-origin-v1"
@@ -540,12 +571,25 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             continue;
         }
         let op = field(&request, "op");
-        if state.stopped_go.is_some() && !matches!(op, "list" | "subscribe" | "rename" | "set_tag")
+        if state.stopped_go.is_some()
+            && !matches!(
+                op,
+                "list"
+                    | "subscribe"
+                    | "rename"
+                    | "set_tag"
+                    | "launch"
+                    | "attach"
+                    | "resize"
+                    | "terminal_subscribe"
+                    | "send_input"
+                    | "kill"
+            )
         {
             reply(
                 &writer,
                 state,
-                json!({"op":"error","error_code":"op_not_implemented","error":"stopped Go compatibility supports roster and labels only"}),
+                json!({"op":"error","error_code":"op_not_implemented","error":"operation is outside stopped Go rollback qualification"}),
             )?;
             continue;
         }
@@ -630,7 +674,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     Some(Value::String(s)) => s,
                     _ => return Err(io::Error::other("invalid session label type")),
                 };
-                if let Some(store) = &state.stopped_go {
+                if let Some(store) = &state.stopped_go
+                    && field(&request, "session_id").split_once('/').is_some_and(|(_, id)| store.contains(id))
+                {
                     let mut value = session::sanitize_name(value);
                     if key == "tag" {
                         value = value.trim().to_owned();

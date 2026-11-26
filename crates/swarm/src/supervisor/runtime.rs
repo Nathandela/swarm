@@ -8,6 +8,12 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
+pub(crate) fn timestamp_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("UTC timestamp")
+}
+
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const SHIM_VERSION: u64 = 1;
 pub(crate) const DATA_OUT: u8 = 2;

@@ -1,4 +1,6 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
+pub(super) mod export;
+
 use super::runtime;
 use crate::ipc::field;
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -69,6 +71,8 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
     "shim_pid",
     "shim_start_time",
     "launch_options",
+    "conversation_id",
+    "env",
     "backend_plan_error",
     "resume_error",
 ];
@@ -172,6 +176,7 @@ struct Entry {
     meta: Value,
     raw: RawFields,
     needs_sync: bool,
+    exported: bool,
 }
 
 impl Entry {
@@ -249,7 +254,7 @@ fn local_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-fn timestamp(value: &Value) -> Option<OffsetDateTime> {
+pub(super) fn timestamp(value: &Value) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value.as_str()?, &Rfc3339).ok()
 }
 
@@ -267,7 +272,7 @@ fn inactive(pid: u32, birth: u64) -> io::Result<()> {
     }
 }
 
-fn exited(file: &File, meta: &Value) -> io::Result<()> {
+fn qualified_role(meta: &Value) -> io::Result<()> {
     let schema = meta["schema_version"].as_u64();
     if schema != Some(1) {
         return Err(io::Error::other(format!(
@@ -298,6 +303,10 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
             "Go session is live or has uncertain custody",
         ));
     }
+    Ok(())
+}
+
+fn exited(file: &File, meta: &Value) -> io::Result<()> {
     let exit = read_at(file, c"exit.json")
         .map_err(|e| io::Error::other(format!("Go exit evidence unavailable: {e}")))?;
     if meta["exit_code"].as_i64().is_none()
@@ -425,6 +434,15 @@ fn valid_meta(meta: &Value, id: &str) -> bool {
         && timestamp(&meta["last_activity"]).is_some()
 }
 
+fn qualified(root: &Path, file: &File, meta: &Value) -> io::Result<bool> {
+    qualified_role(meta)?;
+    match read_at(file, c"rust-origin.json") {
+        Ok(origin) => export::verify(root, meta, &origin).map(|()| true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => exited(file, meta).map(|()| false),
+        Err(e) => Err(e),
+    }
+}
+
 impl Store {
     pub(super) fn open(root: &Path, opted_in: bool) -> io::Result<Option<Self>> {
         let mut rows = BTreeMap::new();
@@ -482,7 +500,8 @@ impl Store {
                     continue;
                 }
             };
-            exited(&file, &meta).map_err(|e| io::Error::other(format!("Go session {id}: {e}")))?;
+            let exported = qualified(root, &file, &meta)
+                .map_err(|e| io::Error::other(format!("Go session {id}: {e}")))?;
             rows.insert(
                 id.to_owned(),
                 Entry {
@@ -490,6 +509,7 @@ impl Store {
                     meta,
                     raw,
                     needs_sync: false,
+                    exported,
                 },
             );
         }
@@ -509,13 +529,24 @@ impl Store {
     }
 
     pub(super) fn rows(&self, endpoint: &str) -> Vec<Value> {
-        let rows = self.rows.lock().unwrap();
-        let mut entries: Vec<_> = rows.values().collect();
-        entries.sort_by_key(|entry| std::cmp::Reverse(timestamp(&entry.meta["created_at"])));
-        entries
-            .into_iter()
+        self.rows
+            .lock()
+            .unwrap()
+            .values()
             .map(|entry| view(&entry.meta, endpoint))
             .collect()
+    }
+
+    pub(super) fn contains(&self, id: &str) -> bool {
+        self.rows.lock().unwrap().contains_key(id)
+    }
+
+    pub(super) fn exported(&self, id: &str) -> io::Result<bool> {
+        match self.rows.lock().unwrap().get(id) {
+            Some(entry) if entry.exported => Ok(true),
+            Some(_) => Err(io::Error::other("Go and Rust session IDs collide")),
+            None => Ok(false),
+        }
     }
 
     pub(super) fn set_label(
@@ -545,7 +576,11 @@ impl Store {
                 "stopped Go session changed outside the supervisor",
             ));
         }
-        exited(&entry.dir, &entry.meta)?;
+        if qualified(&self.root, &entry.dir, &entry.meta)? != entry.exported {
+            return Err(io::Error::other(
+                "stopped Go origin changed outside the supervisor",
+            ));
+        }
         let updated = entry.set_label(key, value, |dir| {
             if !same_file(&dir.metadata()?, &fs::symlink_metadata(&path)?) {
                 return Err(io::Error::other(
@@ -666,6 +701,7 @@ mod tests {
             meta: raw.parsed().unwrap(),
             raw,
             needs_sync: false,
+            exported: false,
         };
         replace_meta(&entry.dir, &entry.raw, || {}).unwrap();
         let error = entry.set_label("tag", "new".into(), |_| {

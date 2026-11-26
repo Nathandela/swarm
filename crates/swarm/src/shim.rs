@@ -92,6 +92,14 @@ fn serve(dir: &Path) -> io::Result<()> {
     }
     let bootstrap = runtime::read_control(&mut io::stdin().lock())?;
     let schedule = worker::read_binding(&config)?;
+    let rollback = config["go_rollback"]["schema"] == 1;
+    #[cfg(target_os = "linux")]
+    if rollback {
+        // Only this dedicated shim can qualify all descendants of its own native process.
+        if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
     // A reservation can spawn a worker at most once, even after its socket disappears.
     OpenOptions::new()
         .write(true)
@@ -348,6 +356,7 @@ fn serve(dir: &Path) -> io::Result<()> {
         },
         None => None,
     };
+    let worker_pid = child.id();
     let pid = std::process::id();
     if let Err(err) = (|| {
         runtime::write_json(
@@ -472,19 +481,69 @@ fn serve(dir: &Path) -> io::Result<()> {
     if state.provider == "agy" {
         let _ = drain_done.recv_timeout(Duration::from_millis(150));
     }
-    runtime::write_json(
-        &dir.join("exit.json"),
-        &json!({
-            "token": token, "code": status.code(), "signal": status.signal(),
-        }),
-    )?;
+    let mut exit = json!({"token":token, "code":status.code(), "signal":status.signal()});
+    if rollback {
+        exit["finished_at"] = json!(runtime::timestamp_now());
+    }
+    runtime::write_json(&dir.join("exit.json"), &exit)?;
     let _ = fs::remove_file(socket);
+    if rollback {
+        // Keep the ordinary Rust exit report even if containment is uncertain.
+        let containment = stopped_rollback_containment(worker_pid)?;
+        runtime::write_json(
+            &dir.join("go-stop-proof.json"),
+            &json!({
+                "token":token, "finished_at":exit["finished_at"], "containment":containment,
+            }),
+        )?;
+    }
     if state.provider == "agy" {
         let _ = fs::remove_file(dir.join("h"));
     }
     // Do not wait for a provider-owned descendant that holds the slave open.
     drop(output);
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn stopped_rollback_containment(_: u32) -> io::Result<&'static str> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        // The PTY child is already joined. ECHILD establishes that this subreaper
+        // has no remaining owned children, including former detached descendants.
+        let pid = unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) };
+        if pid == -1 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ECHILD) {
+                return Ok("linux-subreaper");
+            }
+            if err.kind() != io::ErrorKind::Interrupted {
+                return Err(err);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(
+                "cannot prove all Claude descendants have stopped",
+            ));
+        }
+        if pid <= 0 {
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn stopped_rollback_containment(worker_pid: u32) -> io::Result<&'static str> {
+    // Signal zero observes the group without mutating any process.
+    if unsafe { libc::kill(-(worker_pid as i32), 0) } == -1
+        && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    {
+        Ok("darwin-process-group")
+    } else {
+        Err(io::Error::other(
+            "cannot prove the Claude process group has stopped",
+        ))
+    }
 }
 
 fn terminate(state: &State) -> io::Result<()> {
