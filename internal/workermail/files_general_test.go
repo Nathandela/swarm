@@ -100,6 +100,7 @@ func TestCaptureWorkerFilesUsesDiscordSafeNames(t *testing.T) {
 		"Quarterly deck.pptx":  "Quarterly_deck.pptx",
 		"plain-name_1.2.txt":   "plain-name_1.2.txt",
 		"données été 2026.csv": "donn_es_t_2026.csv",
+		"日本語.csv":              "_.csv",
 	} {
 		data := []byte("column,value\nsynthetic,1\n")
 		if strings.HasSuffix(in, ".docx") || strings.HasSuffix(in, ".pptx") {
@@ -127,7 +128,7 @@ func TestCaptureWorkerFilesUsesDiscordSafeNames(t *testing.T) {
 
 func TestCaptureWorkerFilesRefusesSecretLookingFiles(t *testing.T) {
 	checkout := canonicalTestCheckout(t)
-	for _, name := range []string{".env", "id_rsa", "server.pem", "tls.key", "cert.p12", "prod.env", "credentials.json", ".aws/config.txt", "\u200b.env"} {
+	for _, name := range []string{".env", "id_rsa", "server.pem", "tls.key", "cert.p12", "prod.env", "credentials.json", "token.json", "key.pem.txt", ".aws/config.txt", "\u200b.env"} {
 		path := filepath.Join(checkout, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)

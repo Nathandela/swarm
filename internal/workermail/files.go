@@ -165,12 +165,12 @@ func discordSafeName(name string) string {
 // ponytail: name-based guard; content scanning for secrets is out of scope.
 func secretFilePath(path string) bool {
 	for part := range strings.SplitSeq(strings.ToLower(path), "/") {
-		if strings.HasPrefix(part, ".") || strings.HasPrefix(part, "_.") {
+		if strings.HasPrefix(part, ".") {
 			return true
 		}
 	}
 	base := strings.ToLower(filepath.Base(path))
-	for _, marker := range []string{"id_rsa", "id_ed25519", "id_ecdsa", "credential", "secret", ".env"} {
+	for _, marker := range []string{"id_rsa", "id_ed25519", "id_ecdsa", "credential", "secret", "token", "private_key", ".env", ".pem", ".key"} {
 		if strings.Contains(base, marker) {
 			return true
 		}
