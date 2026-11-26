@@ -161,6 +161,16 @@ fn peer_holds_lock(pid: u32, path: &Path, lock: &fs::File) -> io::Result<bool> {
 }
 
 pub(super) fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<(String, Vec<Value>)> {
+    let (client, rows) = verified_owner(root, socket, lock, &[])?;
+    Ok((client.endpoint().to_owned(), rows))
+}
+
+pub(super) fn verified_owner(
+    root: &Path,
+    socket: &Path,
+    lock: &Path,
+    capabilities: &[&str],
+) -> io::Result<(ipc::Client, Vec<Value>)> {
     let endpoint = real_endpoint(root)?;
     let identity = fs::symlink_metadata(socket)?;
     if !identity.file_type().is_socket()
@@ -171,7 +181,7 @@ pub(super) fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<(Strin
             "supervisor socket has no private owner proof",
         ));
     }
-    let mut client = ipc::Client::dial(socket, &[])?;
+    let mut client = ipc::Client::dial(socket, capabilities)?;
     if client.endpoint() != endpoint {
         return Err(io::Error::other(
             "socket answered for a different supervisor",
@@ -220,7 +230,7 @@ pub(super) fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<(Strin
             "supervisor owner changed during verification",
         ));
     }
-    Ok((endpoint, rows))
+    Ok((client, rows))
 }
 
 struct Plan {

@@ -214,6 +214,11 @@ def inspect(go, rust, fixture, base):
         voice_bytes = voice_db.read_bytes()
         command = ["discord", "migrate-state", "--settle-personal-ingress", "701"]
         code = int(phase == "prepared")
+        dispatch = ["discord", "migrate-state", "--dispatch-personal-ingress", "701"]
+        run(rust, old_env, *dispatch, "--dry-run", code=int(not code))
+        if code:
+            run(rust, old_env, *dispatch, code=1)
+        assert (original_db.read_bytes(), voice_db.read_bytes()) == (before, voice_bytes)
         run(rust, old_env, *command, "--dry-run", code=code)
         assert original_db.read_bytes() == before
         with voice_db.open("rb") as voice_writer:

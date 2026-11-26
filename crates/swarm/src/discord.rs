@@ -394,7 +394,12 @@ impl<'a> Request<'a> {
             }
             "migrate-state" => {
                 flags = &["dry-run", "rollback", "controls"];
-                &["settle-personal-ingress"]
+                &[
+                    "settle-personal-ingress",
+                    "dispatch-personal-ingress",
+                    "capture-personal-ingress",
+                    "prepare-personal-ingress",
+                ]
             }
             "migrate-supervisor" => {
                 flags = &["dry-run"];
@@ -526,11 +531,21 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     match req.command {
         "connect" => return connect(req, place),
         "migrate-state" => {
-            if let Some(message) = req.get("settle-personal-ingress") {
-                if req.on("controls") || req.on("rollback") {
+            type Migration = fn(&Place, &str, bool) -> io::Result<bool>;
+            let personal: [(&str, Migration); 4] = [
+                ("capture-personal-ingress", legacy_ingress::capture),
+                ("prepare-personal-ingress", legacy_ingress::prepare::run),
+                ("dispatch-personal-ingress", legacy_ingress::dispatch),
+                ("settle-personal-ingress", legacy_ingress::settle),
+            ];
+            let mut selected = personal
+                .iter()
+                .filter_map(|(flag, action)| req.get(flag).map(|message| (message, action)));
+            if let Some((message, action)) = selected.next() {
+                if req.on("controls") || req.on("rollback") || selected.next().is_some() {
                     return Err(invalid("select one migration operation"));
                 }
-                return legacy_ingress::settle(&place, message, req.on("dry-run"));
+                return action(&place, message, req.on("dry-run"));
             }
             return legacy_state::migrate(
                 &place,

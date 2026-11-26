@@ -63,11 +63,19 @@ func (s *Store) FixturePendingPersonal(d TeammateDiscussion, owner, id string) (
 	if err != nil {
 		return schema.MessageOrigin{}, err
 	}
-	op, rev := "da_"+digest([]string{d.InstallationID, id})[:32], digest(id)
+	source := &discordgo.Message{ID: id, ChannelID: route.ChannelID, Content: "offline original owner prompt",
+		Author: &discordgo.User{ID: owner, Username: actor.Name}}
+	op, rev := "da_"+digest([]string{d.InstallationID, id})[:32], teammateRevision(source)
 	admission := &TeammateAdmission{Discussion: d, OperationID: op, Revision: rev,
 		Author: actor, Route: route, Authority: AuthorityOwnerDirect, InvokerID: owner, Sequence: pending[0].Sequence}
 	origin := schema.MessageOrigin{Kind: string(admission.Authority), InstallationID: d.InstallationID,
 		DiscussionID: d.ID, RequestID: op, ActorID: owner, ActorName: actor.Name, RequesterID: owner,
 		ChannelID: route.ChannelID, MessageID: id, Revision: rev}
 	return origin, s.teammateCandidateChange(d.InstallationID, pending[0], StateSending, "", admission)
+}
+
+func (s *Store) FixturePersonalGap(installation string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return teammateCheckpointUpdate(tx, installation, "synthetic-reconnected-gateway", 2, true, "")
+	})
 }
