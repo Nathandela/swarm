@@ -7,7 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const PROVIDERS: [&str; 5] = ["agy", "claude", "codex", "hermes", "opencode"];
 
@@ -700,14 +700,25 @@ fn block_cursor(editor: &Editor, width: u16) -> String {
     if width == 0 {
         return String::new();
     }
-    let (visible, cursor) = editor.visible(width);
-    if editor.text[..editor.cursor].width() >= usize::from(width) {
-        return format!("{}█", clip(&visible, width - 1));
-    }
     let before = &editor.text[..editor.cursor];
+    let left = width - 1;
+    if before.width() > usize::from(left) {
+        let mut start = before.len();
+        let mut remaining = usize::from(left);
+        for (index, ch) in before.char_indices().rev() {
+            let cells = ch.width().unwrap_or(1);
+            if cells > remaining {
+                break;
+            }
+            remaining -= cells;
+            start = index;
+        }
+        return format!("{}█", &before[start..]);
+    }
+    let remaining = left.saturating_sub(before.width() as u16);
     format!(
         "{before}█{}",
-        clip(&editor.text[editor.cursor..], width.saturating_sub(cursor))
+        clip(&editor.text[editor.cursor..], remaining)
     )
 }
 
@@ -775,6 +786,17 @@ fn directories(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_viewport_never_moves_suffix_left_of_cursor() {
+        let mut editor = Editor::new("界界X");
+        editor.apply(Key::Left);
+        assert_eq!(block_cursor(&editor, 4), "界█");
+
+        let mut editor = Editor::new("界e\u{301}X");
+        editor.apply(Key::Left);
+        assert_eq!(block_cursor(&editor, 4), "界e\u{301}█");
+    }
 
     #[test]
     fn detection_order_preserves_prompt_focus_and_public_launch_options() {
