@@ -1,12 +1,12 @@
 use super::{
-    Action, Editor, Key, caller_launch_environment, field,
+    Action, Editor, FormViewport, Key, caller_launch_environment, field,
     launch::{
         Completion, DIM, PLAIN, absolute_directory, block_cursor, field as paint_field,
         label_layout, spans, update_directory,
     },
     navigation::truncation,
     running, scheduled_review,
-    session_form::{footer, word_wrap},
+    session_form::word_wrap,
 };
 use serde_json::{Value, json};
 use std::io;
@@ -137,13 +137,14 @@ impl Relocation {
     pub(super) fn update(
         &mut self,
         key: Key,
-        geometry: (u16, u16),
+        viewport: FormViewport<'_>,
         current: Option<&Value>,
         online: bool,
     ) -> Action {
+        let geometry = viewport.geometry;
         let context = self.context(geometry);
         let limit = context.len();
-        let budget = Self::budget(geometry);
+        let budget = Self::budget(viewport);
         if limit > budget {
             match key {
                 Key::PageDown => {
@@ -210,8 +211,8 @@ impl Relocation {
         Ok(cwd)
     }
 
-    fn budget((_, rows): (u16, u16)) -> usize {
-        usize::from(rows.saturating_sub(3).max(1))
+    fn budget(viewport: FormViewport<'_>) -> usize {
+        usize::from(viewport.body_rows().saturating_sub(2).max(1))
     }
 
     fn compact((cols, rows): (u16, u16)) -> bool {
@@ -251,8 +252,10 @@ impl Relocation {
             .collect()
     }
 
-    pub(super) fn view(&self, out: &mut String, geometry: (u16, u16)) {
-        let (cols, rows) = geometry;
+    pub(super) fn view(&self, out: &mut String, viewport: FormViewport<'_>) {
+        let geometry = viewport.geometry;
+        let (cols, _) = geometry;
+        let body = viewport.body_rows();
         let (_, budget) = label_layout("directory", cols);
         let mut field = vec![(PLAIN, block_cursor(&self.directory, budget))];
         let (choices, ghost) = self.completion.as_ref().map_or((&[][..], ""), |value| {
@@ -265,13 +268,15 @@ impl Relocation {
         if !super::launch::Launch::readable(geometry) {
             spans(out, 1, cols, &[(PLAIN, "Resize to 32×8".into())]);
             directory(out, 2);
-            spans(out, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
-            footer(out, rows, cols, "esc back");
+            if body >= 3 {
+                spans(out, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
+            }
+            viewport.footer(out, "esc back");
             return;
         }
         let mut context = self.context(geometry);
         let target = format!("Relocate: {}", self.label());
-        let read = Self::budget(geometry);
+        let read = Self::budget(viewport);
         if context.len() > read {
             spans(out, 1, cols, &[(PLAIN, target)]);
             directory(out, 2);
@@ -285,7 +290,7 @@ impl Relocation {
             for (index, line) in context.into_iter().skip(start).take(read).enumerate() {
                 spans(out, index as u16 + 3, cols, &[(PLAIN, line)]);
             }
-            footer(out, rows, cols, "pgup/down read · esc back");
+            viewport.footer(out, "pgup/down read · esc back");
             return;
         }
         let (sentence, instruction) = if self.reason.is_empty() {
@@ -307,7 +312,8 @@ impl Relocation {
         let extra = usize::from(choices.len() > 1)
             + usize::from(!self.reason.is_empty()) * 2
             + usize::from(!self.error.is_empty()) * 2;
-        let compact = Self::compact(geometry) && paragraph.len() + extra + 2 >= usize::from(rows);
+        let compact =
+            Self::compact(geometry) && paragraph.len() + extra + 2 >= usize::from(body + 1);
         let mut y = 1;
         if compact {
             spans(out, y, cols, &[(PLAIN, target)]);
@@ -315,14 +321,14 @@ impl Relocation {
             y = 3;
             for line in context
                 .into_iter()
-                .take(usize::from(rows.saturating_sub(y)))
+                .take(usize::from((body + 1).saturating_sub(y)))
             {
                 spans(out, y, cols, &[(PLAIN, line)]);
                 y += 1;
             }
         }
         for line in paragraph {
-            if y >= rows {
+            if y > body {
                 break;
             }
             spans(out, y, cols, &[(PLAIN, format!("  {line}"))]);
@@ -330,12 +336,12 @@ impl Relocation {
         }
         if !compact {
             y += 1;
-            if y < rows {
+            if y <= body {
                 directory(out, y);
                 y += 1;
             }
         }
-        if choices.len() > 1 && y < rows {
+        if choices.len() > 1 && y <= body {
             spans(
                 out,
                 y,
@@ -350,7 +356,7 @@ impl Relocation {
                 .filter(|message| !message.is_empty())
             {
                 y += 1;
-                if y >= rows {
+                if y > body {
                     break;
                 }
                 spans(
@@ -376,6 +382,6 @@ impl Relocation {
                 cols - 2,
             )
         };
-        footer(out, rows, cols, &hint);
+        viewport.footer(out, &hint);
     }
 }

@@ -1,4 +1,4 @@
-use super::{Action, Editor, Key, caller_launch_environment, clip};
+use super::{Action, Editor, FormViewport, Key, caller_launch_environment, clip};
 use serde_json::{Map, json};
 use std::collections::HashMap;
 use std::env;
@@ -427,11 +427,12 @@ impl Launch {
         cols >= 32 && rows >= 8
     }
 
-    pub(super) fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> Action {
+    pub(super) fn update(&mut self, key: Key, viewport: FormViewport<'_>) -> Action {
+        let (cols, rows) = viewport.geometry;
         self.update_detection();
         let extras = self.options.len();
         let count = 6 + extras;
-        let (error_lines, budget) = self.error_context(cols, rows);
+        let (error_lines, budget) = self.error_context(viewport);
         if error_lines.len() > budget {
             match key {
                 Key::PageUp => {
@@ -655,7 +656,8 @@ impl Launch {
         ]
     }
 
-    fn error_context(&self, cols: u16, rows: u16) -> (Vec<String>, usize) {
+    fn error_context(&self, viewport: FormViewport<'_>) -> (Vec<String>, usize) {
+        let (cols, rows) = viewport.geometry;
         let compact = cols < 64 && rows <= 10;
         let width = if compact {
             cols
@@ -664,11 +666,20 @@ impl Launch {
         };
         (
             wrap_directory_message(&self.error, width),
-            usize::from(rows.saturating_sub(3).max(1)),
+            usize::from(viewport.body_rows().saturating_sub(2).max(1)),
         )
     }
 
-    pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
+    pub(super) fn view(&self, output: &mut String, viewport: FormViewport<'_>) {
+        let (cols, rows) = viewport.geometry;
+        let body = viewport.body_rows();
+        let footer = |out: &mut String, hint: &str| {
+            if viewport.notice.is_some() {
+                viewport.footer(out, hint);
+            } else {
+                status(out, rows, cols, hint);
+            }
+        };
         let agent = if self.detection_complete {
             PROVIDERS[self.agent]
         } else {
@@ -754,11 +765,13 @@ impl Launch {
             if let Some((label, value)) = fields.get(self.focus) {
                 field(output, 2, cols, label, value, true);
             }
-            spans(output, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
-            status(output, rows, cols, "esc back");
+            if body >= 3 {
+                spans(output, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
+            }
+            footer(output, "esc back");
             return;
         }
-        let (mut error_lines, error_budget) = self.error_context(cols, rows);
+        let (mut error_lines, error_budget) = self.error_context(viewport);
         if error_lines.len() > error_budget {
             spans(
                 output,
@@ -784,7 +797,7 @@ impl Launch {
             {
                 spans(output, offset as u16 + 3, cols, &[(PLAIN, text)]);
             }
-            status(output, rows, cols, "pgup/down read · esc back");
+            footer(output, "pgup/down read · esc back");
             return;
         }
         if compact {
@@ -809,7 +822,7 @@ impl Launch {
             order.insert(0, self.focus);
         }
         for index in order {
-            if row >= rows {
+            if row > body {
                 break;
             }
             let (label, value) = &fields[index];
@@ -817,7 +830,7 @@ impl Launch {
             row += 1;
             if compact && index == self.focus {
                 for text in &error_lines {
-                    if row >= rows {
+                    if row > body {
                         break;
                     }
                     spans(output, row, cols, &[(PLAIN, text.clone())]);
@@ -826,7 +839,7 @@ impl Launch {
             }
             if index == 0
                 && self.focus == 0
-                && row < rows
+                && row <= body
                 && let Some(completion) = &self.completion
                 && (completion.fuzzy || completion.choices.len() > 1)
             {
@@ -838,7 +851,7 @@ impl Launch {
         if !compact && !self.error.is_empty() {
             row += 1;
             for text in error_lines {
-                if row >= rows {
+                if row > body {
                     break;
                 }
                 spans(output, row, cols, &[(PLAIN, "  ".into()), (ERROR, text)]);
@@ -881,7 +894,7 @@ impl Launch {
         } else if hint.width() > usize::from(cols.saturating_sub(2)) {
             hint = format!("esc cancel · enter launch · {tip} · ↑↓ next");
         }
-        status(output, rows, cols, &hint);
+        footer(output, &hint);
     }
 }
 
@@ -1103,12 +1116,16 @@ mod tests {
         }
         assert!(form.options.is_empty());
         probe.send((0, Err(io::Error::other("missing")))).unwrap();
-        form.update(Key::Text('p'), (80, 24));
+        let viewport = FormViewport {
+            geometry: (80, 24),
+            notice: None,
+        };
+        form.update(Key::Text('p'), viewport);
         assert_eq!(PROVIDERS[form.agent], "claude");
         assert_eq!(form.prompt.text, "p");
         form.focus = 4;
-        form.update(Key::Text('x'), (80, 24));
-        form.update(Key::Right, (80, 24));
+        form.update(Key::Text('x'), viewport);
+        form.update(Key::Right, viewport);
         let Action::Request(payload, _) = form.submit(80, 24).unwrap() else {
             panic!("expected launch")
         };
@@ -1117,15 +1134,15 @@ mod tests {
             json!({"model":"sonnet", "dangerously-skip-permissions":"false"})
         );
         form.focus = 3;
-        form.update(Key::Right, (80, 24));
+        form.update(Key::Right, viewport);
         assert_eq!(form.options[1].value.text, "workspace-write");
-        form.update(Key::Right, (80, 24));
+        form.update(Key::Right, viewport);
         assert_eq!(
             form.options.iter().map(|o| o.key).collect::<Vec<_>>(),
             crate::providers::hermes::OPTIONS
         );
         form.focus = 4 + form.options.len() - 1;
-        form.update(Key::Text(' '), (80, 24));
+        form.update(Key::Text(' '), viewport);
         let Action::Request(payload, _) = form.submit(80, 24).unwrap() else {
             panic!("expected launch")
         };

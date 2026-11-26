@@ -251,7 +251,14 @@ fn board(path: &Path) -> io::Result<()> {
                 Ok(client) => {
                     board.notice.clear();
                     board.daemon_version = client.build_version().to_owned();
-                    board.skew_notice = version::notice(client.build_version());
+                    let skew_notice = version::notice(client.build_version());
+                    if board.skew_notice != skew_notice {
+                        board.skew_notice = skew_notice;
+                        previous_editor = None;
+                        previous_options = None;
+                        board.press = None;
+                        board.clamp_top(geometry.1);
+                    }
                     if let Some(result) = upgrade_result.take() {
                         board.note_attention(Some(match result {
                             Ok(()) => "daemon upgraded".into(),
@@ -974,20 +981,21 @@ impl Board {
         online: bool,
     ) -> Action {
         let (_, rows) = geometry;
+        let viewport = self.form_viewport(geometry);
         let action = match &mut modal {
             Modal::Launch(form) => {
                 if matches!(key, Key::Enter) && (!online || !Launch::readable(geometry)) {
                     Action::None
                 } else {
-                    form.update(key, geometry)
+                    form.update(key, viewport)
                 }
             }
             Modal::Handoff(form) => {
                 let source = self.by_id(&form.source_id);
-                form.update(key, source, geometry, self.hands_off, online)
+                form.update(key, source, viewport, self.hands_off, online)
             }
             Modal::Relocate(form) => {
-                form.update(key, geometry, self.by_id(&form.source.id), online)
+                form.update(key, viewport, self.by_id(&form.source.id), online)
             }
             Modal::Automation(view) => {
                 let action = view.update(key, geometry);
@@ -995,7 +1003,7 @@ impl Board {
                 return action;
             }
             Modal::Options(form) => {
-                if form.input(key, geometry, online) {
+                if form.input(key, viewport, online) {
                     self.apply_layout(form.draft, rows);
                     return Action::SaveLayout(form.draft);
                 }
@@ -1068,7 +1076,7 @@ impl Board {
                 let row = self.by_id(id);
                 let sheet = (!inline).then(|| {
                     session_form::Sheet::new(
-                        geometry,
+                        viewport,
                         id,
                         row,
                         session_form::Kind::Edit {
@@ -1109,7 +1117,7 @@ impl Board {
                 let inline = self.inline_session_form(id, geometry);
                 let sheet = (!inline).then(|| {
                     session_form::Sheet::new(
-                        geometry,
+                        viewport,
                         id,
                         row,
                         session_form::Kind::Confirm {
@@ -1542,11 +1550,19 @@ impl Board {
         self.inline_session_row(target, geometry).is_some()
     }
 
+    fn form_viewport(&self, geometry: (u16, u16)) -> FormViewport<'_> {
+        FormViewport {
+            geometry,
+            notice: self.skew_notice.as_deref().filter(|_| geometry.1 >= 3),
+        }
+    }
+
     fn options_frame(&self, geometry: (u16, u16)) -> Option<options::Frame> {
         let Some(Modal::Options(form)) = &self.modal else {
             return None;
         };
-        (self.notice.is_empty() && usable(geometry)).then(|| form.frame(geometry))
+        (self.notice.is_empty() && usable(geometry))
+            .then(|| form.frame(self.form_viewport(geometry)))
     }
 
     fn editor_frame(&self, geometry: (u16, u16)) -> Option<session_form::EditorFrame> {
@@ -1601,12 +1617,13 @@ impl Board {
             line(&mut screen, 1, cols, "", "Need 24×4 · esc back");
             return screen;
         }
+        let viewport = self.form_viewport((cols, rows));
         match &self.modal {
-            Some(Modal::Launch(form)) => form.view(&mut screen, cols, rows),
-            Some(Modal::Handoff(form)) => form.view(&mut screen, cols, rows),
+            Some(Modal::Launch(form)) => form.view(&mut screen, viewport),
+            Some(Modal::Handoff(form)) => form.view(&mut screen, viewport),
             Some(Modal::Automation(view)) => view.view(&mut screen, cols, rows),
-            Some(Modal::Relocate(form)) => form.view(&mut screen, (cols, rows)),
-            Some(Modal::Options(form)) => form.frame((cols, rows)).paint(&mut screen, None),
+            Some(Modal::Relocate(form)) => form.view(&mut screen, viewport),
+            Some(Modal::Options(form)) => form.frame(viewport).paint(&mut screen, None),
             Some(Modal::More { .. }) => {
                 self.build_menu_frame((cols, rows))
                     .expect("More open")
@@ -1622,7 +1639,7 @@ impl Board {
                     self.roster_view(&mut screen, cols, rows);
                 } else {
                     session_form::Sheet::new(
-                        (cols, rows),
+                        viewport,
                         id,
                         self.by_id(id),
                         session_form::Kind::Edit {
@@ -1640,7 +1657,7 @@ impl Board {
                     self.roster_view(&mut screen, cols, rows);
                 } else {
                     session_form::Sheet::new(
-                        (cols, rows),
+                        viewport,
                         id,
                         self.by_id(id),
                         session_form::Kind::Confirm { running: *running },
@@ -1680,6 +1697,44 @@ impl Board {
 
     fn roster_view(&self, screen: &mut String, cols: u16, rows: u16) {
         roster::view(self, screen, cols, rows);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FormViewport<'a> {
+    geometry: (u16, u16),
+    notice: Option<&'a str>,
+}
+
+impl FormViewport<'_> {
+    /// Number of body rows above the permanent final status row.
+    fn body_rows(self) -> u16 {
+        self.geometry
+            .1
+            .saturating_sub(1 + u16::from(self.notice.is_some()))
+    }
+
+    fn notice_spans(self, notice: &str) -> [(&'static str, String); 2] {
+        [
+            (launch::PLAIN, "  ".into()),
+            (
+                launch::TITLE,
+                clip(notice, self.geometry.0.saturating_sub(2)),
+            ),
+        ]
+    }
+
+    fn footer(self, out: &mut String, hint: &str) {
+        let (cols, rows) = self.geometry;
+        if let Some(notice) = self.notice {
+            launch::spans(out, rows - 1, cols, &self.notice_spans(notice));
+        }
+        session_form::footer(
+            out,
+            rows,
+            cols,
+            &navigation::truncation(hint, cols.saturating_sub(2)),
+        );
     }
 }
 

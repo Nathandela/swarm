@@ -47,31 +47,80 @@ def run_inside(root, mode, tmux=None):
 
             run("new-session", "-d", "-s", "anchor", "-c", work, "/bin/sleep", "25")
             captures = []
+            hidden_cursors = []
+            retired_rows = []
             for cols, rows in ((80, 24), (40, 8), (24, 4)):
-                views = []
+                views = {}
                 for source in ("reference-board", "board"):
                     run("new-session", "-d", "-s", "view", "-x", str(cols), "-y", str(rows),
                         "-c", work, root / "bin" / source)
 
-                    def paint():
+                    def paint(*landmarks):
                         raw = run("capture-pane", "-pe", "-S", "0", "-E", str(rows - 1), "-t", "view:0.0")
-                        if b"More (m)" not in raw or b"daemon " not in raw:
+                        cells = resolve_cells(raw, cols, rows)
+                        text = "\n".join("".join(cell[0] for cell in line) for line in cells)
+                        if not all(mark in text for mark in landmarks):
                             return None
                         pattern = "|".join(f"#{{{name}}}" for name in TMUX_MODES)
                         modes = run("display-message", "-p", "-t", "view:0.0", pattern)
                         return {
                             "ansi_base64": base64.b64encode(raw).decode(),
-                            "cells": resolve_cells(raw, cols, rows),
+                            "cells": cells,
                             "terminal_modes": dict(zip(TMUX_MODES, modes.decode().strip().split("|"), strict=True)),
                         }
 
-                    views.append(p.wait_for(paint, f"{source} passive {cols}x{rows} notice"))
+                    scenes = {"roster": p.wait_for(lambda: paint("More (m)", "daemon "),
+                                                   f"{source} passive {cols}x{rows} notice")}
+                    run("send-keys", "-t", "view:0.0", "n")
+                    p.wait_for(lambda: paint("▌ directory", "daemon "), f"{source} launch directory")
+                    run("send-keys", "-t", "view:0.0", "Down", "Down", "Down")
+                    scenes["launch"] = p.wait_for(lambda: paint("▌ agent", "claude", "daemon "),
+                                                 f"{source} selected launch agent")
+                    if rows < 8:
+                        # The pinned notice consumes a body row. It must leave
+                        # the resize gate in effect and still allow Esc below.
+                        run("send-keys", "-t", "view:0.0", "Enter")
+                        p.wait_for(lambda: paint("Resize to 32", "daemon "), f"{source} tiny launch gate")
+                        listed = cli("ls", "--json")
+                        assert listed.returncode == 0 and json.loads(listed.stdout) == []
+                    run("send-keys", "-t", "view:0.0", "Escape")
+                    p.wait_for(lambda: paint("More (m)", "daemon "), f"{source} main roster")
+                    run("send-keys", "-t", "view:0.0", "o")
+                    if rows < 8:
+                        options_marks = ("Resize to 32", "daemon ")
+                    elif cols < 64:
+                        options_marks = ("Options", "▌ group", "daemon ")
+                    else:
+                        options_marks = ("swarm · options", "▌ group", "daemon ", "80%")
+                    scenes["options"] = p.wait_for(lambda: paint(*options_marks), f"{source} options notice")
+                    views[source] = scenes
                     run("kill-session", "-t", "view")
-                captures.append({"cols": cols, "rows": rows, "reference": views[0], "candidate": views[1]})
-                first = compare_projection(*views)
-                if first is not None and receipt["first_divergence"] is None:
-                    receipt["first_divergence"] = {"cols": cols, "rows": rows, **first}
+                for name in ("roster", "launch", "options"):
+                    reference, candidate = (views[arm][name] for arm in ("reference-board", "board"))
+                    captures.append({"cols": cols, "rows": rows, "screen": name,
+                                     "reference": reference, "candidate": candidate})
+                    if name == "options" and cols == 80:
+                        expected = [line.copy() for line in reference["cells"]]
+                        for row, line in enumerate(expected):
+                            if "".join(cell[0] for cell in line).strip() == "logins      Provider logins →":
+                                assert candidate["cells"][row] == [[" ", 1, [], None, None]] * cols
+                                retired_rows.append({"cols": cols, "rows": rows, "row": row + 1})
+                                expected[row] = candidate["cells"][row]
+                        assert len(retired_rows) == 1
+                        reference = {**reference, "cells": expected}
+                    first = compare_projection(reference, candidate)
+                    if first and name == "launch" and "before_modes" in first:
+                        before, after = first["before_modes"], first["after_modes"]
+                        differences = {key for key in before if before[key] != after[key]}
+                        if before["cursor_flag"] == after["cursor_flag"] == "0" and differences <= {"cursor_x", "cursor_y"}:
+                            hidden_cursors.append({"cols": cols, "rows": rows,
+                                                   "coordinates": {k: [before[k], after[k]] for k in differences}})
+                            first = compare_projection(reference, {**candidate, "terminal_modes": before})
+                    if first is not None and receipt["first_divergence"] is None:
+                        receipt["first_divergence"] = {"cols": cols, "rows": rows, "screen": name, **first}
             receipt["frames"] = captures
+            receipt["hidden_cursor_coordinates"] = hidden_cursors
+            receipt["retired_rows"] = retired_rows
             assert hello()["build_version"] == state["build_version"] and daemon.poll() is None
             run("kill-session", "-t", "anchor")
         else:

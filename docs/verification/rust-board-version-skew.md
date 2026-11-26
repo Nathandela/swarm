@@ -1,6 +1,8 @@
 # Rust dashboard daemon version skew
 
-The pinned Go reference is v0.29.22 (`f26648d6`). The Rust dashboard and owner were built from the source accompanying this receipt, with `SWARM_BUILD_VERSION=0.29.22` and `SWARM_BUILD_VERSION=0.29.23`.
+The pinned Go reference is v0.29.22 (`f26648d6`). The Rust dashboard and owner were built from the source changes referenced in each section, with `SWARM_BUILD_VERSION=0.29.22` and `SWARM_BUILD_VERSION=0.29.23`.
+
+## Restart and general roster
 
 | Native host | tmux | Go 0.29.22 SHA-256 | Rust 0.29.22 SHA-256 | Rust 0.29.23 SHA-256 |
 |---|---|---|---|---|
@@ -17,4 +19,15 @@ Each host passed all five disposable PTY scenarios.
 
 Run `scripts/verification/parity/test_version_board.py --mode <case> --supervisor <owner> --board <board> --evidence <new.json>`. For `notice` select the newer Rust owner and older Rust board and also pass `--reference <pinned-go>` and `--tmux <tmux>`. For `upgrade`, `quit` and `foreign` select the older Rust owner and newer Rust board. For `refuse` select the pinned Go owner and newer Rust board. Each arm owns its scratch socket, private state, fixture binary and terminal. Cleanup reported zero survivors in all cases.
 
-This receipt covers the persistent newer-version notice on the general roster and the actionable older-version restart. The Go composed form notice is a separate visual case pending qualification. The mixed older Go owner still requires its matching restart command.
+The mixed older Go owner still requires its matching restart command.
+
+## Composed forms
+
+The live `notice` fixture also compares Launch and Options against the pinned Go dashboard on the same newer owner. The warning occupies the penultimate row, with the status footer on the final row. Launch and Options retain their 24×4 resize gate. Shared viewport budgeting covers Handoff, Relocation and compact rename/tag/confirmation sheets, including the rows available to read before confirming.
+
+| Native host | tmux | Rust 0.29.22 SHA-256 | Rust 0.29.23 SHA-256 |
+|---|---|---|---|
+| macOS arm64 | 3.6a | `8fd29ca807643039621bb5f60c63bf7e22f3ac06512b3166c961223d06764f0b` | `637be7c9262ed0584687ff2d14638011611ddcfb834baa28843e6487eb2936cf` |
+| Linux x86_64 | 3.2a | `00fd31fb3695fade7d237642c03b1b6ce6d025e0cf356767c555d13d52768192` | `9c9bf0ff0c42449dcf59ec78782eef822b1274fb2448e580ff2176f078f486ec` |
+
+All Launch and roster cells and styles matched at 80×24, 40×8 and 24×4. Options matched apart from the deliberately retired Go Provider logins row at 80×24. The fixture checks the exact Go row and empty Rust row and preserves both raw frames. Launch keeps the cursor hidden. The receipt records its coordinate differences after Go's incremental repaint and compares the remaining terminal modes. Enter at 24×4 left the live owner's roster empty in both arms, and Esc returned to the roster.
