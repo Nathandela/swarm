@@ -7,6 +7,7 @@ import os
 import pty
 import select
 import shlex
+import shutil
 import signal
 import termios
 import socket
@@ -145,6 +146,45 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", a
                 subprocess.run([binary,"peek",sid],cwd=work,env=env,stdout=display,
                                stderr=subprocess.DEVNULL,timeout=5)
             return (root / "peek-only").read_text()
+
+        def unverified_peer(action):
+            # A new protocol-speaking child has the same live parent and a real stdout pipe.
+            program = """
+import json, socket, struct, sys
+sock, sid, action = sys.argv[1:]
+with socket.socket(socket.AF_UNIX) as conn:
+    conn.settimeout(5)
+    conn.connect(sock)
+    with conn.makefile("rwb") as stream:
+        def write(**body):
+            frame = bytes([1]) + json.dumps(body).encode()
+            stream.write(struct.pack(">I", len(frame)) + frame)
+            stream.flush()
+
+        def read():
+            size, = struct.unpack(">I", stream.read(4))
+            frame = stream.read(size)
+            assert frame[0] == 1
+            return json.loads(frame[1:])
+
+        write(op="hello", protocol_version=1, capabilities=["agy-permission-cli-v1"])
+        endpoint = read()["endpoint_id"]
+        context = {"endpoint_id": endpoint, "session_id": sid}
+        if action == "peek":
+            write(op="terminal_subscribe", permission_route="pipe", **context)
+            assert read()["op"] == "ok"
+            snapshot = read()["terminal"]
+            assert not snapshot.get("agy_permission"), snapshot
+            write(op="agy_permission_peeked", request="unoffered", **context)
+        else:
+            write(op="send_input", send_input={"text":"1","submit":True}, **context)
+        response = read()
+        assert response["op"] == "error", response
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", program, sock, sid, action],
+                cwd=work, env=env, capture_output=True, text=True, timeout=8)
+            assert result.returncode == 0, (action, result.stdout, result.stderr)
 
         @contextmanager
         def protocol_attach():
@@ -358,9 +398,18 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", a
                         ["/bin/sh","-c",'while [ ! -e "$1" ]; do sleep .02; done; shift; exec "$@"',
                          "prestarted", release, binary, "send",sid,"--text","1"],
                         cwd=work,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-                snapshot = cli("peek", sid).stdout
+                if protected:
+                    unverified_peer("peek")
+                    copied_cli = tools / "copied-swarm"
+                    shutil.copy2(binary, copied_cli)
+                    peek = subprocess.run([copied_cli, "peek", sid], cwd=work, env=env,
+                                          capture_output=True, text=True, timeout=8, check=True)
+                    snapshot = peek.stdout
+                else:
+                    snapshot = cli("peek", sid).stdout
                 assert expected_menu in snapshot and "followed by" not in snapshot
                 if protected:
+                    unverified_peer("send")
                     release.touch()
                     prestarted.communicate(timeout=8)
                     assert prestarted.returncode, "prestarted job used a later peek acknowledgment"
