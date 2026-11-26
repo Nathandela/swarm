@@ -17,7 +17,7 @@ The following **proposed** record illustrates the minimum information. Resolve r
 
 ```yaml
 id: terminal.restart.attached-worker
-oracle: go-main-f26648d6
+oracle: go-main-edee76a0
 requirements: [S1, S3, S10, L2]
 targets: [macos-native, linux-native]
 fixture: two-step-echo
