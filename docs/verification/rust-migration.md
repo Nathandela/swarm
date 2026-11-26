@@ -1,5 +1,9 @@
 # Rust migration qualification
 
+## Approved parity corrections
+
+Nathan approved preserving the combining accent after reattach, delivering exactly one XTerm mouse-mode reply while preserving unsolicited and pasted input, and using numeric prerelease ordering to keep an `rc.10` daemon running under an `rc.2` dashboard with the newer-daemon notice. Prerelease approval is recorded in Discord message `1575388077306810399`. The native test targets are this Darwin arm64 Mac and the Linux x86_64 VM reached by SSH as `tf_nathan`. Translated and virtualized architecture evidence identifies its execution environment. [Release contracts](../specifications/rust-migration/qualification.md)
+
 ## November 26 combined implementation
 
 At `dc269ed8`, 206 default tests passed on each native host. Nine additional cases require external fixtures or run as private subprocesses. Both hosts passed the service replacement regression with an injected service-manager failure. The fixture verifies that failure was reached and the original service recovered. The signed `5e42c2cf` package separately kept its managed writer lease and worker across daemon termination on all three exercised OS/architecture pairs. [Installed launcher receipts](rust-installed-pty.md) · [Service installation](rust-discord-service.md)

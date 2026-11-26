@@ -86,6 +86,14 @@ For a proposed release minimum, run a 24-hour mixed local soak on each OS family
 
 On 25 November 2026 the owner selected preservation of the acute accent in `é` after reattach. The strict fixture compares the full Go **live** grid with both Rust captures and checks the single known Go-restart difference at zero-based cell (4,1). It records the original Go and Rust data. Any other cell, attribute, width, color, cursor or observed mode difference fails. This exception applies to the pinned Go fixture and the Rust reattach contract.
 
+### Approved XTerm mouse-mode correction
+
+On 26 November 2026 Nathan selected exactly one worker reply per accepted mouse-mode query. The shim replies to the worker immediately. When the attached physical terminal also answers the same outstanding query, Swarm consumes that one redundant report. Unsolicited reports and bytes inside bracketed paste reach the worker unchanged. This decision applies to the measured mouse-mode report and does not authorize filtering other input. The Linux XTerm 372 capture and both-host PTY regressions are recorded in the [terminal report witness](../../verification/rust-board-touch-2026-11-26.md).
+
+### Approved dashboard prerelease ordering
+
+On 26 November 2026 Nathan approved this correction in Discord message `1575388077306810399`. A dashboard at `1.0.0-rc.2` leaves a `1.0.0-rc.10` daemon running and displays the newer-daemon notice. Prerelease numeric identifiers use numeric precedence. The original Go comparison sorts these suffixes lexically and can select a restart. The Rust release contract requires that the existing daemon and workers keep running. [Dashboard version-skew verification](../../verification/rust-board-version-skew.md)
+
 ## Local commands and release record
 
 From a clean checkout of the pinned Go reference on a disposable local host with a working shared Go cache, the following are **existing** targeted probes. Run timing probes separately.

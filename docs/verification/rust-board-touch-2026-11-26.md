@@ -19,7 +19,7 @@ Rust unit coverage includes ambiguous and unknown masks, a split live change int
 
 ## Mouse mode report follow-up
 
-The current witness expects the exact 11-byte DECRPM reply `1b 5b 3f 31 30 30 30 3b 31 24 79` from both the detached and attached workers' virtual terminals. It also compares every byte received by the fixture after entering a query and forwarding ordinary native mouse input. On both native hosts the strict Go/Go, Go/Rust and Rust/Rust arms passed.
+Nathan approved exactly one reply on 26 November 2026, with unsolicited and bracketed-paste input preserved. The current witness expects the exact 11-byte DECRPM reply `1b 5b 3f 31 30 30 30 3b 31 24 79` from both the detached and attached workers' virtual terminals. It also compares every byte received by the fixture after entering a query and forwarding ordinary native mouse input. On both native hosts the strict Go/Go, Go/Rust and Rust/Rust arms passed.
 
 XTerm 372 on Linux x86_64, running on a private Xvfb display with TCP disabled, produced the same 11-byte report for restored normal mouse mode. Its bytes were saved verbatim and replayed through the active board PTY in fragments. Rust/Rust passed on Darwin arm64 and Linux x86_64 with exactly one worker report despite the physical terminal response. The Darwin Go/Go negative control forwarded the physical report too and the worker logged two copies, which the witness rejected. The independent capture and replay compose the actual XTerm report with the public Rust attach path.
 
