@@ -6,6 +6,7 @@ mod removal;
 pub(crate) mod runtime;
 mod scheduling;
 mod session;
+mod stopped_go;
 mod supervision;
 
 use crate::ipc::{self, VERSION, field, wire};
@@ -74,12 +75,13 @@ pub(crate) fn run(args: &[String]) -> u8 {
 
 struct State {
     lock_identity: [u64; 2],
+    stopped_go: Option<stopped_go::Store>,
     root: PathBuf,
     endpoint: String,
     socket: PathBuf,
     sessions: RwLock<BTreeMap<String, Arc<Session>>>,
     subscribers: Mutex<Vec<Weak<Subscriber>>>,
-    pilot_journal: pilot_journal::Journal,
+    pilot_journal: Option<pilot_journal::Journal>,
     launch_gate: Mutex<()>,
     operation_locks: [Mutex<()>; 64],
     transactions: RwLock<()>,
@@ -123,6 +125,9 @@ impl State {
     }
 
     fn rows(&self) -> Vec<Value> {
+        if let Some(store) = &self.stopped_go {
+            return store.rows(&self.endpoint);
+        }
         let sessions = self.sessions.read().unwrap();
         let mut rows: Vec<_> = sessions.values().map(|s| s.view(&self.endpoint)).collect();
         rows.sort_by(|a, b| field(b, "created_at").cmp(field(a, "created_at")));
@@ -148,8 +153,12 @@ impl State {
     fn publish(&self, session: &Session) {
         self.pilot_refresh(session);
         let _ = self.handoff_wake.try_send(());
+        self.publish_row(session.view(&self.endpoint));
+    }
+
+    fn publish_row(&self, row: Value) {
         let event = json!({
-            "op": "event", "endpoint_id": self.endpoint, "session": session.view(&self.endpoint)
+            "op": "event", "endpoint_id": self.endpoint, "session": row
         });
         self.subscribers.lock().unwrap().retain(|subscriber| {
             let Some(subscriber) = subscriber.upgrade() else {
@@ -163,13 +172,20 @@ impl State {
         });
     }
 
+    fn journal(&self) -> io::Result<&pilot_journal::Journal> {
+        self.pilot_journal
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Pilot history requires native Rust state"))
+    }
+
     fn pilot_refresh(&self, session: &Session) {
         let rows = self.sessions.read().unwrap();
-        if rows
-            .get(&session.id)
-            .is_some_and(|row| std::ptr::eq(row.as_ref(), session))
+        if let Some(journal) = &self.pilot_journal
+            && rows
+                .get(&session.id)
+                .is_some_and(|row| std::ptr::eq(row.as_ref(), session))
         {
-            pilot_journal::refresh(&self.pilot_journal, session, &self.endpoint);
+            pilot_journal::refresh(journal, session, &self.endpoint);
         }
     }
 
@@ -431,48 +447,63 @@ fn serve() -> io::Result<()> {
     })?;
     runtime::private_dir(&configured)?;
     let root = fs::canonicalize(configured)?;
-    let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| root.join("daemon.lock"));
-    // Alternate sockets and lock overrides cannot create two writers for one state root.
+    let canonical_lock = root.join("daemon.lock");
+    let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| canonical_lock.clone());
+    let opted_in = std::env::var(stopped_go::OPT_IN).ok().as_deref() == Some("1");
+    if opted_in && lock != canonical_lock {
+        return Err(io::Error::other(
+            "stopped Go compatibility requires the canonical daemon lock",
+        ));
+    }
+    // Alternate sockets and lock overrides cannot create two Rust writers for one state root.
     let _lock = runtime::lock(&lock)?;
     use std::os::unix::fs::MetadataExt;
     let lock_meta = _lock.metadata()?;
+    let socket = ipc::socket_path()?;
+    if opted_in {
+        stopped_go::verify_daemon_stopped(&root, &socket)?;
+    }
+    let stopped_go = stopped_go::Store::open(&root, opted_in)?;
     let ownership = root.join(".rust-state-writer.lock");
-    let _state_lock = if lock == ownership {
+    let _state_lock = if lock == ownership || opted_in {
         None
     } else {
         Some(runtime::lock(&ownership)?)
     };
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
-        if entry.path().join("meta.json").symlink_metadata().is_ok() {
-            return Err(io::Error::other(
-                "Go session state requires a separately qualified migration",
-            ));
-        }
-    }
     let endpoint = endpoint(&root);
     let runtime_root = root.join("rust-v1");
-    runtime::private_dir(&runtime_root)?;
-    runtime::private_dir(&runtime_root.join("operations"))?;
-    removal::recover(&runtime_root)?;
     let mut sessions = BTreeMap::new();
-    for entry in fs::read_dir(&runtime_root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() && entry.file_name().to_str().is_some_and(runtime::valid_id)
-        {
-            match Session::load(entry.path()) {
-                Ok(session) => {
-                    session.reconcile();
-                    sessions.insert(session.id.clone(), Arc::new(session));
+    if stopped_go.is_some() {
+        match fs::symlink_metadata(&runtime_root) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            _ => {
+                return Err(io::Error::other(
+                    "mixed Rust and Go state requires separate rollback qualification",
+                ));
+            }
+        }
+    } else {
+        runtime::private_dir(&runtime_root)?;
+        runtime::private_dir(&runtime_root.join("operations"))?;
+        removal::recover(&runtime_root)?;
+        for entry in fs::read_dir(&runtime_root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && entry.file_name().to_str().is_some_and(runtime::valid_id)
+            {
+                match Session::load(entry.path()) {
+                    Ok(session) => {
+                        session.reconcile();
+                        sessions.insert(session.id.clone(), Arc::new(session));
+                    }
+                    Err(err) => eprintln!(
+                        "daemon: session {}: {err}",
+                        entry.file_name().to_string_lossy()
+                    ),
                 }
-                Err(err) => eprintln!(
-                    "daemon: session {}: {err}",
-                    entry.file_name().to_string_lossy()
-                ),
             }
         }
     }
-    let socket = ipc::socket_path()?;
     if let Some(parent) = socket.parent().filter(|p| !p.as_os_str().is_empty()) {
         runtime::private_dir(parent)?;
     }
@@ -481,20 +512,29 @@ fn serve() -> io::Result<()> {
     unsafe { libc::umask(0o077) };
     runtime::reclaim_socket(&socket)?;
     let listener = runtime::bind(&socket)?;
-    crate::environment::save(&root)?;
+    if stopped_go.is_none() {
+        crate::environment::save(&root)?;
+    }
     let (handoff_wake, handoff_events) = mpsc::sync_channel(1);
-    let receipt = scheduling::socket(&socket)
-        .map_err(|e| {
-            eprintln!("daemon: scheduled completion listener unavailable: {e}");
-            e
-        })
-        .ok();
-    let pilot_journal = pilot_journal::Journal::load(
-        &runtime_root,
-        sessions.values().map(|session| session.view(&endpoint)),
-    );
+    let receipt = if stopped_go.is_none() {
+        scheduling::socket(&socket)
+            .map_err(|e| {
+                eprintln!("daemon: scheduled completion listener unavailable: {e}");
+                e
+            })
+            .ok()
+    } else {
+        None
+    };
+    let pilot_journal = stopped_go.is_none().then(|| {
+        pilot_journal::Journal::load(
+            &runtime_root,
+            sessions.values().map(|session| session.view(&endpoint)),
+        )
+    });
     let state = Arc::new(State {
         lock_identity: [lock_meta.dev(), lock_meta.ino()],
+        stopped_go,
         handoff_wake,
         pilot_journal,
         root: runtime_root,
@@ -509,26 +549,28 @@ fn serve() -> io::Result<()> {
         generation: AtomicU64::new(1),
         schedule_socket: receipt.as_ref().map(|(path, _)| path.clone()),
     });
-    let handoffs = state.clone();
-    let _ = handoffs.handoff_wake.try_send(());
-    thread::spawn(move || supervision::run(handoffs, handoff_events));
-    if let Some((_, listener)) = receipt {
-        scheduling::receipts(listener, state.clone());
-    }
-    let monitor = state.clone();
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_millis(150));
-            let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
-            for session in sessions {
-                if session.reconcile() {
-                    monitor.publish(&session);
-                } else {
-                    monitor.pilot_refresh(&session);
+    if state.stopped_go.is_none() {
+        let handoffs = state.clone();
+        let _ = handoffs.handoff_wake.try_send(());
+        thread::spawn(move || supervision::run(handoffs, handoff_events));
+        if let Some((_, listener)) = receipt {
+            scheduling::receipts(listener, state.clone());
+        }
+        let monitor = state.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(150));
+                let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
+                for session in sessions {
+                    if session.reconcile() {
+                        monitor.publish(&session);
+                    } else {
+                        monitor.pilot_refresh(&session);
+                    }
                 }
             }
-        }
-    });
+        });
+    }
     for incoming in listener.incoming() {
         let stream = incoming?;
         let state = state.clone();
@@ -565,21 +607,31 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             json!({"op": "error", "error": "incompatible protocol version"}),
         );
     }
-    let manager_available = crate::discord::native_manager_enrollment()
-        .is_ok_and(|scope| scope["supervisor_socket"] == state.socket.to_string_lossy().as_ref());
-    let worker_origin_available = state.root.parent().is_some_and(|root| {
-        crate::discord::worker_input_installation(root, state.socket.to_string_lossy().as_ref())
-            .is_some()
-    });
-    let guild_worker_available = state.root.parent().is_some_and(|root| {
-        crate::discord::worker_input_guild_available(root, state.socket.to_string_lossy().as_ref())
-    });
+    let manager_available = state.stopped_go.is_none()
+        && crate::discord::native_manager_enrollment().is_ok_and(|scope| {
+            scope["supervisor_socket"] == state.socket.to_string_lossy().as_ref()
+        });
+    let worker_origin_available = state.stopped_go.is_none()
+        && state.root.parent().is_some_and(|root| {
+            crate::discord::worker_input_installation(root, state.socket.to_string_lossy().as_ref())
+                .is_some()
+        });
+    let guild_worker_available = state.stopped_go.is_none()
+        && state.root.parent().is_some_and(|root| {
+            crate::discord::worker_input_guild_available(
+                root,
+                state.socket.to_string_lossy().as_ref(),
+            )
+        });
     let caps: Vec<_> = hello["capabilities"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
+            if state.stopped_go.is_some() {
+                return *cap == "subscribe";
+            }
             worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
                 || guild_worker_available && *cap == "worker-discord-guild-origin-v1"
                 || manager_available
@@ -632,6 +684,15 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             continue;
         }
         let op = field(&request, "op");
+        if state.stopped_go.is_some() && !matches!(op, "list" | "subscribe" | "rename" | "set_tag")
+        {
+            reply(
+                &writer,
+                state,
+                json!({"op":"error","error_code":"op_not_implemented","error":"stopped Go compatibility supports roster and labels only"}),
+            )?;
+            continue;
+        }
         if op == "owner_idle_restart" && caps.contains(&crate::bootstrap::UNATTENDED) {
             let requested = std::path::Path::new(field(&request, "state_dir"));
             if Some(requested) != state.root.parent() || !request["commit"].is_boolean() {
@@ -754,25 +815,38 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 };
                 reply(&writer, state, message)
             }
-            "rename" | "set_tag" => state.session(&request).and_then(|session| {
+            "rename" | "set_tag" => (|| {
                 let key = if op == "rename" { "name" } else { "tag" };
                 let value = match request.get(key) {
                     None | Some(Value::Null) => "",
                     Some(Value::String(s)) => s,
                     _ => return Err(io::Error::other("invalid session label type")),
                 };
-                if session.set_label(key, value)? {
-                    state.publish(&session);
+                if let Some(store) = &state.stopped_go {
+                    let mut value = session::sanitize_name(value);
+                    if key == "tag" {
+                        value = value.trim().to_owned();
+                    }
+                    if let Some(row) = store.set_label(&state.endpoint, field(&request, "session_id"), key, value)? {
+                        state.publish_row(row);
+                    }
+                } else {
+                    let session = state.session(&request)?;
+                    if session.set_label(key, value)? {
+                        state.publish(&session);
+                    }
                 }
                 reply(
                     &writer,
                     state,
                     json!({"op":"ok","session_id":request["session_id"]}),
                 )
-            }),
+            })(),
             "delete" => removal::delete(state, &request).and_then(|()| {
-                if let Some((_,local))=field(&request,"session_id").split_once('/') {
-                    state.pilot_journal.deleted(local);
+                if let Some((_, local)) = field(&request, "session_id").split_once('/')
+                    && let Some(journal) = &state.pilot_journal
+                {
+                    journal.deleted(local);
                 }
                 reply(
                     &writer,
@@ -813,7 +887,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "interaction_history" if caps.contains(&"journal") => state.session(&request).and_then(|session| {
                 state.pilot_refresh(&session);
-                let result=state.pilot_journal.history(&session.id,request["history"]["limit"].as_u64().unwrap_or(20))?;
+                let result=state.journal()?.history(&session.id,request["history"]["limit"].as_u64().unwrap_or(20))?;
                 reply(&writer,state,json!({"op":"interaction_history","journal":result}))
             }),
             "journal_subscribe_from" if caps.contains(&"journal") && caps.contains(&"journal-subscribe-from") => {
@@ -821,7 +895,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 for session in rows{state.pilot_refresh(&session)}
                 let from=request["cursor"].as_u64().unwrap_or_default();
                 let bytes=request["journal_max_bytes"].as_u64().unwrap_or_default();
-                return state.pilot_journal.stream(stream,&state.endpoint,from,bytes);
+                return state.journal()?.stream(stream,&state.endpoint,from,bytes);
             },
             "opencode_history" if caps.contains(&"opencode-history-v1") => state.session(&request).and_then(|session| {
                 let page = session.opencode_history(request["limit"].as_u64().unwrap_or(50),field(&request,"before"))?;
@@ -1073,12 +1147,13 @@ mod manager_reservation_tests {
     fn fixture(root: &std::path::Path, rows: BTreeMap<String, Arc<Session>>) -> State {
         State {
             lock_identity: [0, 0],
+            stopped_go: None,
             handoff_wake: mpsc::sync_channel(1).0,
             schedule_socket: None,
-            pilot_journal: pilot_journal::Journal::load(
+            pilot_journal: Some(pilot_journal::Journal::load(
                 root,
                 rows.values().map(|session| session.view("fixture")),
-            ),
+            )),
             root: root.to_owned(),
             endpoint: "fixture".into(),
             socket: root.join("socket"),

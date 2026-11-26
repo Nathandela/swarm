@@ -128,17 +128,32 @@ fn validate_file(file: &File) -> io::Result<()> {
 }
 
 pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
-    let file = OpenOptions::new()
+    decode_json(open_private(path)?)
+}
+
+fn open_private(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
+        .open(path)
+}
+
+pub(super) fn read_private(path: &Path, max: usize) -> io::Result<Vec<u8>> {
+    read_private_file(open_private(path)?, max)
+}
+
+pub(super) fn decode_json(file: File) -> io::Result<Value> {
+    Ok(serde_json::from_slice(&read_private_file(file, 1 << 20)?)?)
+}
+
+pub(super) fn read_private_file(file: File, max: usize) -> io::Result<Vec<u8>> {
     validate_file(&file)?;
     let mut payload = Vec::new();
-    file.take((1 << 20) + 1).read_to_end(&mut payload)?;
-    if payload.len() > 1 << 20 {
+    file.take(max as u64 + 1).read_to_end(&mut payload)?;
+    if payload.len() > max {
         return Err(io::Error::other("state file exceeds size limit"));
     }
-    Ok(serde_json::from_slice(&payload)?)
+    Ok(payload)
 }
 
 pub(crate) fn write_json(path: &Path, data: &Value) -> io::Result<()> {
