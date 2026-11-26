@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -141,6 +142,27 @@ def witness(base, go, fixture, codex, rust_test=None):
                             assert connector.read_bytes() == before and voice.read_bytes() == before_voice
                     finally:
                         config.write_bytes(enrolled)
+                    copy = base / "malformed"
+                    copy.mkdir(mode=0o700)
+                    shutil.copy2(config, copy / "config.json")
+                    copied = copy / "discord.db"
+                    for field in ("ParentAnchor", "Starter", "StartupNoticeID", "InputNoticeID"):
+                        shutil.copy2(connector, copied)
+                        invoke("guild-damage-binding", copy, field)
+                        malformed = copied.read_bytes()
+                        negative = subprocess.run([fixture, "ingress-state", copy, "original-room"],
+                                                  env=env, capture_output=True, timeout=5)
+                        assert negative.returncode != 0 and b"cannot unmarshal object" in negative.stderr, negative.stderr
+                        backup = connector.with_suffix(".witness-original")
+                        connector.rename(backup)
+                        try:
+                            shutil.copy2(copied, connector)
+                            for phase in ("malformed-binding-dry-run", "malformed-binding"):
+                                rust(phase)
+                                assert connector.read_bytes() == malformed and voice.read_bytes() == before_voice
+                        finally:
+                            backup.replace(connector)
+                    assert connector.read_bytes() == before
                     rust("dry-run")
                     assert connector.read_bytes() == before and voice.read_bytes() == before_voice
                     rust("prepare")

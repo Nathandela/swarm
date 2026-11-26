@@ -291,6 +291,25 @@ func (s *Store) FixtureGuildRecord(d TeammateDiscussion, id, actor, name string)
 	}}, false)
 }
 
+func (s *Store) FixtureDamageGuildBinding(installation, channel, field string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		key := teammateKey(installation, channel)
+		var row map[string]json.RawMessage
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), key, &row); err != nil {
+			return err
+		}
+		switch field {
+		case "ParentAnchor", "StartupNoticeID", "InputNoticeID":
+			row[field] = json.RawMessage(`{}`)
+		case "Starter":
+			row[field] = json.RawMessage(`{"guild_id":{},"channel_id":"401","message_id":"500","parent_id":"399"}`)
+		default:
+			return ErrInvalid
+		}
+		return putJSON(tx, teammateDiscussionBucket, key, row)
+	})
+}
+
 func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager TeammateManager, port, phase string) error {
 	n, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || n == 0 || cfg.Mode != "teammate" {

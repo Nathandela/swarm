@@ -463,6 +463,11 @@ pub(super) fn native_prepare_witness() {
         "prepare" => prepare_with(&place, &cfg, &api, "701", false).unwrap(),
         "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
         "refuse" => assert!(prepare_with(&place, &cfg, &api, "701", false).is_err()),
+        "malformed-binding" | "malformed-binding-dry-run" => {
+            let error =
+                prepare_with(&place, &cfg, &api, "701", phase.ends_with("dry-run")).unwrap_err();
+            assert!(error.to_string().contains("expected a string"), "{error}");
+        }
         phase => panic!("unknown guild test phase {phase}"),
     }
 }

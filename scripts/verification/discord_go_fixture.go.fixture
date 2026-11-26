@@ -206,6 +206,10 @@ func main() {
 		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
 		check(err)
 		check(store.FixtureGuildRecord(row, os.Args[4], os.Args[5], os.Args[6]))
+	case "guild-damage-binding":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		check(store.FixtureDamageGuildBinding(cfg.InstallationID, "401", os.Args[3]))
 	case "guild-advance":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

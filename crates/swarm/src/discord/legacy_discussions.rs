@@ -1,7 +1,7 @@
 //! Read the original Go teammate discussion and replay indexes without changing them.
 use super::config::{Config, snowflake};
 use bbolt_rs::{BucketApi, TxApi};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io};
 
@@ -17,12 +17,12 @@ struct Binding {
     supervisor_socket: String,
 }
 
-#[derive(Deserialize, PartialEq)]
+#[derive(Deserialize, PartialEq, Serialize)]
 pub(super) struct Route {
     pub(super) guild_id: String,
     pub(super) channel_id: String,
     pub(super) message_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) parent_id: String,
 }
 

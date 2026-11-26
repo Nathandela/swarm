@@ -3,6 +3,7 @@ use super::*;
 use crate::discord::{legacy_discussions::operation, legacy_ingress};
 use crate::ipc::field;
 use bbolt_rs::{BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
@@ -255,6 +256,7 @@ pub(super) fn commit(
     if capture::binding(&tx, cfg, &route, &guard, Some(pending))? != *discussion {
         return Err(unavailable());
     }
+    let bound = ready_discussion(discussion)?;
     recheck(&route, &guard)?;
     if !legacy_state::unchanged(&pin, source)? {
         return Err(unavailable());
@@ -270,18 +272,6 @@ pub(super) fn commit(
     } else {
         "external"
     };
-    let mut bound = json!({});
-    for key in [
-        "ID",
-        "InstallationID",
-        "supervisor_socket",
-        "Route",
-        "Starter",
-        "ParentAnchor",
-        "Gap",
-    ] {
-        bound[key] = discussion[key].clone();
-    }
     row["State"] = json!("sending");
     row["Admission"] = json!({"RequireMention":false,"Supersedes":"","Discussion":bound,
         "OperationID":operation(cfg.text("installation_id"), message)?,"Revision":candidate.revision,
@@ -296,14 +286,44 @@ pub(super) fn commit(
     tx.commit().map_err(io::Error::other)
 }
 
-pub(super) fn ready_discussion(discussion: &Value) -> io::Result<()> {
-    if discussion["Gap"] != discussion["RepairEpoch"]
-        || discussion["NotifiedEpoch"] != discussion["RepairEpoch"]
-        || discussion["Error"] != ""
-        || !field(discussion, "StartupNoticeID").is_empty()
-        || !field(discussion, "InputNoticeID").is_empty()
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(super) struct Discussion {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "InstallationID")]
+    installation_id: String,
+    #[serde(rename = "supervisor_socket")]
+    supervisor_socket: String,
+    route: Route,
+    starter: Route,
+    parent_anchor: String,
+    gap: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Binding {
+    #[serde(flatten)]
+    discussion: Discussion,
+    repair_epoch: u64,
+    notified_epoch: u64,
+    error: String,
+    #[serde(rename = "StartupNoticeID", default)]
+    startup_notice_id: String,
+    #[serde(rename = "InputNoticeID", default)]
+    input_notice_id: String,
+}
+
+pub(super) fn ready_discussion(original: &Value) -> io::Result<Discussion> {
+    let binding = Binding::deserialize(original)?;
+    if binding.discussion.gap != binding.repair_epoch
+        || binding.notified_epoch != binding.repair_epoch
+        || !binding.error.is_empty()
+        || !binding.startup_notice_id.is_empty()
+        || !binding.input_notice_id.is_empty()
     {
         return Err(unavailable());
     }
-    Ok(())
+    Ok(binding.discussion)
 }
