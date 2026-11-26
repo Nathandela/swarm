@@ -68,3 +68,33 @@ A fresh same-version retry completed the full capture and cleanup successfully.
 That establishes the journey is reproducible and supports a transient startup
 delay as a possibility, but does not prove that diagnosis. No harness change
 was made because the original timeout's intermediate frame was not retained.
+
+## Timeout diagnostic follow-up
+
+The static-grid capture now writes a private timeout receipt before normal
+cleanup when its focused-frame predicate expires. It contains the last captured
+roster frame, exact wait label, and whether the Go reference or Rust candidate
+was running. The parent copies that diagnostic to `--grid-evidence` and keeps
+the harness's nonzero result. Capture timeout duration and matching policy are
+unchanged.
+
+The same-version success path passed with diagnostics enabled: zero grid or
+mode differences, 17 hidden cursor-coordinate differences, and zero surviving
+fixture processes. The final receipt is
+`/private/tmp/swarm-rust-board-qa-00be1bc8-instrumented-pass-final.json` (SHA-256
+`3ee4bbc5d7063328af9f1b9aff83ae78aa3b849780048d3f6a02a1abebf1d51c`).
+
+The failure path used an isolated fake board that sleeps without drawing. It
+failed as intended with status 1 at `80x24 selected:amber`, arm `candidate`. The
+retained receipt at
+`/private/tmp/swarm-rust-board-qa-00be1bc8-instrumented-failure-final.json`
+has SHA-256 `32cd372d558cdbe6bc9139f17536ea972e9212bc65b5eb238e65e9f346a8f64c`.
+It includes the complete 80×24 last pane frame (blank for this fake board),
+tmux version and all three executable hashes. The timeout remains nonzero.
+
+That failure initially exposed the fixture's 30-second tmux anchor sleep
+outliving the driver. The harness `finally` path now sends `kill-server` to
+that run's private tmux socket before the existing reaper runs. The final fake
+board failure retained the diagnostic and exited nonzero; a process scan found
+no board or private tmux process afterward. The success path also passed with
+the new cleanup.

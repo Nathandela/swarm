@@ -1538,9 +1538,16 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         return {"ansi_base64": base64.b64encode(raw).decode(), "cells": resolve_cells(raw, cols, height),
                 "terminal_modes": dict(zip(TMUX_MODES, modes, strict=True))}
 
+    capture_arm = None
+
     def capture(cols, height, fragment, *, menu=False, form=False):
+        wait_label = f"{cols}x{height} {fragment}"
+        last_frame = None
+
         def observed():
+            nonlocal last_frame
             frame = snapshot(cols, height)
+            last_frame = frame
             text = "\n".join("".join(cell[0] for cell in row) for row in frame["cells"]).lower()
             if form and frame["terminal_modes"]["mouse_sgr_flag"] != "0":
                 return None
@@ -1555,7 +1562,15 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
                 label = fragment.split(":", 1)[1]
                 return frame if any(line.startswith("▌ ") and label in line for line in text.splitlines()) else None
             return frame if fragment in text else None
-        return p.wait_for(observed, f"{cols}x{height} {fragment}")
+        try:
+            return p.wait_for(observed, wait_label)
+        except RuntimeError as error:
+            if static_grid and str(error) == f"deadline waiting for {wait_label}":
+                p.write_json(root / "capture-timeout.json", {
+                    "kind":"roster_capture_timeout", "arm":capture_arm,
+                    "wait_label":wait_label, "frame":last_frame,
+                }, replace=False)
+            raise
 
     def key(*names):
         run("send-keys", "-t", "roster:0.0", *names)
@@ -1702,6 +1717,8 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
             return frames
 
         def collect_static(binary):
+            nonlocal capture_arm
+            capture_arm = "reference" if binary == "reference-board" else "candidate"
             frames = []
             for cols, height in ((80, 24), (40, 8), (24, 4)):
                 run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
@@ -2062,9 +2079,23 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                 print(f"{len(receipt['cursor_coordinates'])} hidden cursor coordinate differences recorded in {evidence}")
             if receipt["first_divergence"] is not None:
                 raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
+        diagnostic = root / "capture-timeout.json"
+        if evidence is not None and diagnostic.exists():
+            receipt = json.loads(diagnostic.read_bytes())
+            receipt["tmux"] = subprocess.check_output([tmux, "-V"], text=True).strip()
+            receipt["board_sha256"] = p.hash_file(client)
+            receipt["supervisor_sha256"] = p.hash_file(supervisor)
+            if reference_board is not None:
+                receipt["reference_board_sha256"] = p.hash_file(reference_board)
+            p.write_json(evidence, receipt, replace=False)
+            print(f"roster capture timeout retained in {evidence}")
         if child.returncode != 0:
             raise RuntimeError(f"board qualification exited {child.returncode}")
     finally:
+        if tmux is not None:
+            subprocess.run([tmux, "-S", root / "tmux.sock", "kill-server"],
+                           env=p.environment(root), stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=2, check=False)
         cleanup = p.reap(root, driver, previous)
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture cleanup has survivors in {root}: {cleanup}")
