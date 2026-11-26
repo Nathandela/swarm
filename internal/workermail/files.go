@@ -60,10 +60,13 @@ func CaptureFiles(checkout string, paths []string) ([]FileSubmission, error) {
 		name := discordSafeName(original)
 		folded := strings.ToLower(name)
 		if original == "." || len(original) > 128 || !utf8.ValidString(original) || strings.TrimSpace(original) != original ||
-			strings.ContainsRune(original, '\\') || strings.ContainsFunc(original, unicode.IsControl) || seen[folded] {
-			return nil, errors.New("worker files: use distinct file names of at most 128 bytes, without surrounding spaces")
+			strings.ContainsRune(original, '\\') || strings.ContainsFunc(original, unicode.IsControl) {
+			return nil, errors.New("worker files: use file names of at most 128 bytes, without surrounding spaces")
 		}
-		if secretFileName(original) {
+		if seen[folded] {
+			return nil, errors.New("worker files: two files would both be named " + name + " in Discord; rename one")
+		}
+		if secretFilePath(relative) || secretFilePath(name) {
 			return nil, errors.New("worker files: " + original + " looks like a secret or hidden file and stays on the VM")
 		}
 		seen[folded] = true
@@ -73,7 +76,7 @@ func CaptureFiles(checkout string, paths []string) ([]FileSubmission, error) {
 		}
 		contentType := workerFileType(name, data)
 		if contentType == "" {
-			return nil, errors.New("worker files: " + name + " was refused: its contents do not match its extension, or it is a program, script or web page")
+			return nil, errors.New("worker files: " + original + " was refused. Share PDF, PNG, JPEG, GIF, WebP, CSV, DOCX, XLSX, PPTX, ODT, ODS, ODP, ZIP, text (txt, md, json, log, yaml, tsv) or opaque .bin/.dat files whose contents match the extension")
 		}
 		total += len(data)
 		sum := sha256.Sum256(data)
@@ -158,24 +161,38 @@ func discordSafeName(name string) string {
 	return b.String()
 }
 
-// ponytail: name-based guard against the common secret files; content scanning is out of scope.
-func secretFileName(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasPrefix(lower, ".") || strings.HasPrefix(lower, "id_rsa") || strings.HasPrefix(lower, "id_ed25519") || strings.HasPrefix(lower, "id_ecdsa") ||
-		slices.Contains(strings.Fields(".pem .key .p12 .pfx .kdbx .keystore .jks"), filepath.Ext(lower))
+// Hidden paths and common credential names stay on the VM.
+// ponytail: name-based guard; content scanning for secrets is out of scope.
+func secretFilePath(path string) bool {
+	for part := range strings.SplitSeq(strings.ToLower(path), "/") {
+		if strings.HasPrefix(part, ".") || strings.HasPrefix(part, "_.") {
+			return true
+		}
+	}
+	base := strings.ToLower(filepath.Base(path))
+	for _, marker := range []string{"id_rsa", "id_ed25519", "id_ecdsa", "credential", "secret", ".env"} {
+		if strings.Contains(base, marker) {
+			return true
+		}
+	}
+	return false
 }
 
-// Office and archive formats are ZIP containers: the bytes must agree with the name.
+// Allowed formats cannot run code when opened. ZIP containers need the ZIP signature.
 var zipFileTypes = map[string]string{
 	".zip":  "application/zip",
 	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".odt":  "application/vnd.oasis.opendocument.text",
+	".ods":  "application/vnd.oasis.opendocument.spreadsheet",
+	".odp":  "application/vnd.oasis.opendocument.presentation",
 }
 
-// Files that run or render active content on a reader's machine stay on the VM.
-// ponytail: extension denylist; add content sniffing for executables if a bypass matters.
-var blockedFileExts = strings.Fields(".exe .dll .com .bat .cmd .msi .scr .ps1 .psm1 .vbs .js .mjs .jar .apk .app .dmg .pkg .deb .rpm .sh .bash .zsh .reg .lnk .html .htm .xhtml .svg .docm .xlsm .pptm")
+var textFileExts = strings.Fields(".txt .md .json .log .yaml .yml .tsv")
+
+// Native program signatures: PE, ELF, Mach-O (both byte orders) and universal binaries.
+var programMagic = [][]byte{[]byte("MZ"), []byte("\x7fELF"), {0xfe, 0xed, 0xfa}, {0xcf, 0xfa, 0xed, 0xfe}, {0xce, 0xfa, 0xed, 0xfe}, {0xca, 0xfe, 0xba, 0xbe}}
 
 func workerFileType(name string, data []byte) string {
 	detected := http.DetectContentType(data)
@@ -186,17 +203,24 @@ func workerFileType(name string, data []byte) string {
 		}
 		return ""
 	}
-	if slices.Contains(blockedFileExts, ext) {
+	if slices.Contains(textFileExts, ext) {
+		if utf8.Valid(data) && bytes.IndexByte(data, 0) < 0 {
+			return "text/plain; charset=utf-8"
+		}
 		return ""
 	}
 	switch ext {
-	case ".png":
-		if detected == "image/png" {
+	case ".png", ".gif", ".webp":
+		if detected == "image/"+ext[1:] {
 			return detected
 		}
 	case ".jpg", ".jpeg":
 		if detected == "image/jpeg" {
 			return detected
+		}
+	case ".bin", ".dat":
+		if !slices.ContainsFunc(programMagic, func(m []byte) bool { return bytes.HasPrefix(data, m) }) {
+			return "application/octet-stream"
 		}
 	case ".pdf":
 		if detected == "application/pdf" {
@@ -222,12 +246,6 @@ func workerFileType(name string, data []byte) string {
 			}
 			hasRecords = true
 		}
-	default:
-		// Anything else travels as an opaque download under its own name.
-		if detected == "text/plain; charset=utf-8" && utf8.Valid(data) && bytes.IndexByte(data, 0) < 0 {
-			return detected
-		}
-		return "application/octet-stream"
 	}
 	return ""
 }

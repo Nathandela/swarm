@@ -76,6 +76,11 @@ func TestCaptureWorkerFilesRejectsDisguisedAndRunnableFiles(t *testing.T) {
 		"setup.exe":  []byte("MZ synthetic"),           // runnable on the reader's machine
 		"run.sh":     []byte("#!/bin/sh\necho hi\n"),   // runnable script
 		"page.html":  []byte("<html>synthetic</html>"), // renders active content in browsers
+		"setup.exe.": []byte("synthetic"),              // Windows drops the trailing dot on save
+		"macro.xls":  []byte("synthetic"),              // legacy Office can carry macros
+		"tool.bin":   []byte("MZ\x90\x00synthetic"),    // a Windows program under an opaque name
+		"elf.dat":    []byte("\x7fELFsynthetic"),       // a Linux program under an opaque name
+		"noext":      []byte("synthetic"),              // no extension says what it is
 	} {
 		path := filepath.Join(checkout, name)
 		if err := os.WriteFile(path, data, 0600); err != nil {
@@ -122,8 +127,11 @@ func TestCaptureWorkerFilesUsesDiscordSafeNames(t *testing.T) {
 
 func TestCaptureWorkerFilesRefusesSecretLookingFiles(t *testing.T) {
 	checkout := canonicalTestCheckout(t)
-	for _, name := range []string{".env", "id_rsa", "server.pem", "tls.key", "cert.p12"} {
+	for _, name := range []string{".env", "id_rsa", "server.pem", "tls.key", "cert.p12", "prod.env", "credentials.json", ".aws/config.txt", "\u200b.env"} {
 		path := filepath.Join(checkout, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte("synthetic"), 0600); err != nil {
 			t.Fatal(err)
 		}
