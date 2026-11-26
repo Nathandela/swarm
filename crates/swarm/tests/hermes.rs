@@ -171,7 +171,13 @@ fn hermes_classic_launch_status_resume_and_delete() {
     let mut fixture = Sandbox::new("c");
     fixture.installed("0.22.5");
     let mut peer = fixture.start();
-    let launched = fixture.launch(&mut peer, json!({"profile":"fixture","model":"fake"}));
+    let source_dir = fixture.path.join("original-checkout");
+    DirBuilder::new().mode(0o700).create(&source_dir).unwrap();
+    let launched = fixture.launch_at(
+        &mut peer,
+        json!({"profile":"fixture","model":"fake"}),
+        &source_dir,
+    );
     assert_eq!(launched["op"], "launch", "{launched}");
     let id = launched["session"]["id"].as_str().unwrap();
     eventually(|| {
@@ -192,7 +198,7 @@ fn hermes_classic_launch_status_resume_and_delete() {
         &relocated.join("ignored-missing"),
     );
     assert_eq!(inherited["op"], "launch", "{inherited}");
-    assert_eq!(inherited["session"]["cwd"], fixture.path.to_str().unwrap());
+    assert_eq!(inherited["session"]["cwd"], source_dir.to_str().unwrap());
     let ordinary = inherited["session"]["id"].as_str().unwrap();
     assert_eq!(
         peer.query(json!({"op":"kill","session_id":ordinary}))["op"],
@@ -203,6 +209,7 @@ fn hermes_classic_launch_status_resume_and_delete() {
         peer.query(json!({"op":"delete","session_id":ordinary}))["op"],
         "ok"
     );
+    fs::rename(&source_dir, fixture.path.join("old-directory")).unwrap();
     let resumed = fixture.launch_at(
         &mut peer,
         json!({"resume_from":id, "resume_relocate":"true"}),
@@ -211,6 +218,18 @@ fn hermes_classic_launch_status_resume_and_delete() {
     assert_eq!(resumed["op"], "launch", "{resumed}");
     assert_eq!(resumed["session"]["cwd"], relocated.to_str().unwrap());
     let successor = resumed["session"]["id"].as_str().unwrap();
+    let duplicate = fixture.launch_at(
+        &mut peer,
+        json!({"resume_from":id,"resume_relocate":"true"}),
+        &fixture.path,
+    );
+    assert_eq!(duplicate["op"], "error", "{duplicate}");
+    assert!(
+        duplicate["error"]
+            .as_str()
+            .unwrap()
+            .contains("live or unconfirmed writer")
+    );
     let trace = eventually(|| {
         fs::read_to_string(fixture.path.join("argv"))
             .ok()

@@ -377,7 +377,6 @@ impl State {
                     format!("{}/{}", self.endpoint, source)
                 };
                 let predecessor = self.session(&json!({"session_id":qualified}))?;
-                predecessor.verify_effective()?;
                 let prepared = Session::prepare_bound(&request, Some(&predecessor))?;
                 return self.reserve_prepared_bound(prepared, false, None, None, Some(predecessor));
             }
@@ -571,8 +570,25 @@ impl State {
                     "Hermes resume source is no longer retained",
                 ));
             }
-            predecessor.verify_effective()?;
-            predecessor.hermes_check_successor()?;
+            let claim = &prepared.lineage["classic_hermes_resume"];
+            if claim.is_object() {
+                predecessor.check_classic_hermes_predecessor(claim)?;
+                let conversation = field(claim, "conversation");
+                if self
+                    .sessions
+                    .read()
+                    .unwrap()
+                    .values()
+                    .any(|row| row.could_own_classic_hermes(conversation))
+                {
+                    return Err(io::Error::other(
+                        "Hermes conversation already has a live or unconfirmed writer",
+                    ));
+                }
+            } else {
+                predecessor.verify_effective()?;
+                predecessor.hermes_check_successor()?;
+            }
         }
         if let Some(directory) = scheduling::conflict(self, &prepared.cwd, scheduled) {
             return Err(io::Error::new(

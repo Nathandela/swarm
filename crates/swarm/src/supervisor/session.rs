@@ -417,6 +417,12 @@ impl Session {
         }
         let tag = sanitize_name(field(req, "tag")).trim().to_owned();
         let mut lineage = json!({});
+        if let Some(original) = source.filter(|s| !s.hermes_native) {
+            lineage["classic_hermes_resume"] = json!({"conversation":launch["resume_conversation_id"],
+                "source":original.id,"instance":original.incarnation(),
+                "relocated":req["options"]["resume_relocate"] == "true"});
+        }
+
         for key in ["spawned_from", "spawn_intent", "supervision"] {
             if !field(req, key).is_empty() {
                 lineage[key] = req[key].clone();

@@ -150,6 +150,41 @@ impl Session {
         view["capabilities"] = capabilities;
     }
 
+    pub(in crate::supervisor) fn could_own_classic_hermes(&self, id: &str) -> bool {
+        if self.agent != "hermes"
+            || self.hermes_native
+            || self.exit().is_ok() && owner_gone(&self.dir, &self.token).is_ok_and(|gone| gone)
+        {
+            return false;
+        }
+        if let Some(thread) = self.lineage["classic_hermes_resume"]["conversation"].as_str() {
+            return thread == id;
+        }
+        // Older classic reservations have only their native observation to identify a live writer.
+        self.hermes_conversation()
+            .map_or(true, |thread| thread == id)
+    }
+
+    pub(in crate::supervisor) fn check_classic_hermes_predecessor(
+        &self,
+        claim: &Value,
+    ) -> io::Result<()> {
+        if claim["source"] != self.id
+            || claim["instance"] != self.incarnation()
+            || claim["conversation"] != self.hermes_conversation()?
+            || self.exit().is_err()
+            || !owner_gone(&self.dir, &self.token)?
+        {
+            return Err(io::Error::other(
+                "classic Hermes source or conversation changed",
+            ));
+        }
+        if claim["relocated"] != true {
+            self.verify_effective()?;
+        }
+        Ok(())
+    }
+
     pub(in crate::supervisor) fn hermes_check_successor(&self) -> io::Result<()> {
         if self.hermes_native {
             let _custody = transfer::lock(&self.dir)?;
