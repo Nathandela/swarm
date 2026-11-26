@@ -196,11 +196,11 @@ def rehearse(binary, provider, implementation, root):
                 rollout.rename(backup)
                 try:
                     shutil.copy2(backup, rollout)
-                    rejected = request(selected, "read-only", original, True)
+                    rejected = request(selected, original, True)
                     assert rejected["op"] == "error" and "observed worker" in rejected["error"], rejected
                     del prior["rollout"]
                     observation.write_text(json.dumps(prior))
-                    rejected = request(selected, "read-only", original, True)
+                    rejected = request(selected, original, True)
                     assert rejected["op"] == "error" and "original rollout proof" in rejected["error"], rejected
                     assert [row["id"] for row in listed(env)] == before
                     assert rollout.read_bytes() == prefix and observed == [PROMPTS[0]]
