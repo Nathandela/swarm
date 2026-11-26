@@ -4,6 +4,8 @@ pub(super) enum Key {
     Enter,
     Backspace,
     CtrlC,
+    CtrlD,
+    CtrlS,
     CtrlU,
     CtrlX,
     Tab,
@@ -108,6 +110,8 @@ impl Keys {
                             b"C" => keys.push(Key::Right),
                             b"D" => keys.push(Key::Left),
                             b"27u" => keys.push(Key::Escape),
+                            b"100;5u" => keys.push(Key::CtrlD),
+                            b"115;5u" => keys.push(Key::CtrlS),
                             b"1;9D" | b"57350;9u" | b"57350;33u" | b"97;5u" => {
                                 keys.push(Key::EditHome)
                             }
@@ -152,7 +156,9 @@ impl Keys {
                 8 | 127 => Some(Key::Backspace),
                 1 => Some(Key::EditHome),
                 3 => Some(Key::CtrlC),
+                4 => Some(Key::CtrlD),
                 5 => Some(Key::EditEnd),
+                19 => Some(Key::CtrlS),
                 21 => Some(Key::CtrlU),
                 24 => Some(Key::CtrlX),
                 b'\t' => Some(Key::Tab),

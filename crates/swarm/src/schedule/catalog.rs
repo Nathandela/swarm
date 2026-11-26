@@ -112,6 +112,16 @@ pub(crate) enum Change {
         id: String,
         revision: String,
         spec: Box<Spec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        paused: Option<(u64, jiff::Timestamp)>,
+    },
+    Enable {
+        id: String,
+        revision: String,
+        generation: u64,
+        updated_at: jiff::Timestamp,
+        spec: Box<Spec>,
+        install_timer: bool,
     },
     State {
         id: String,
@@ -124,35 +134,62 @@ pub(crate) enum Change {
 }
 
 impl Change {
-    pub(crate) fn remote(self, client: &mut Client) -> io::Result<Records> {
+    pub(crate) fn remote(self, client: &mut Client) -> io::Result<Option<Records>> {
         if !client.supports(CONTROL) {
             return Err(io::Error::other(
                 "selected supervisor does not support automation changes",
             ));
         }
-        let reply = client.request_body(json!({"op":CHANGE,"change":self}), CHANGE)?;
+        let request = json!({"op":CHANGE,"change":self});
+        let reply = if matches!(self, Self::Enable { .. }) {
+            client.exchange(request, CHANGE, std::time::Duration::from_secs(60))?
+        } else {
+            client.request_body(request, CHANGE)?
+        };
+        if field(&reply, "endpoint_id") != client.endpoint() {
+            return Err(io::Error::other(
+                "automation change reply came from another supervisor",
+            ));
+        }
+        if let Self::Enable {
+            id,
+            revision,
+            install_timer: false,
+            ..
+        } = &self
+            && reply["timer_confirmation"] == json!({"id":id,"revision":revision})
+        {
+            return Ok(None);
+        }
         let job: Job = serde_json::from_value(reply["job"].clone())?;
         let target = match &self {
             Self::Create { operation, .. } => operation == &job.id,
             Self::Edit { id, .. } => id == &job.id,
+            Self::Enable { id, .. } => id == &job.id && job.state == "active",
             Self::State { id, value, .. } => id == &job.id && job.state == value.token(),
         };
-        if field(&reply, "endpoint_id") != client.endpoint() || !target {
+        if !target {
             return Err(io::Error::other(
                 "automation change reply did not match the request",
             ));
         }
-        Ok(Records::Get(Box::new(job)))
+        Ok(Some(Records::Get(Box::new(job))))
     }
 }
 
-pub(crate) fn change(root: &Path, request: &Value) -> Result<Value> {
+pub(crate) fn change(
+    root: &Path,
+    request: &Value,
+    readiness: impl FnOnce(&Spec) -> Result<()>,
+    conflict: impl Fn(&Path) -> Option<String>,
+) -> Result<Value> {
     let change: Change = serde_json::from_value(request["change"].clone())?;
     if matches!(&change, Change::Create { operation, .. } if !super::valid_id(operation)) {
         return Err("invalid automation creation operation ID".into());
     }
     if matches!(&change,
-        Change::Edit { id, revision, .. } | Change::State { id, revision, .. }
+        Change::Edit { id, revision, .. } | Change::Enable { id, revision, .. }
+            | Change::State { id, revision, .. }
             if !super::valid_id(id) || !super::valid_id(revision))
     {
         return Err("invalid automation job or revision ID".into());
@@ -163,7 +200,53 @@ pub(crate) fn change(root: &Path, request: &Value) -> Result<Value> {
         Change::Create { operation, spec } => {
             store.create_bound(*spec, now, true, Some(&operation))?
         }
-        Change::Edit { id, revision, spec } => store.edit(&id, Some(&revision), *spec, now)?,
+        Change::Edit {
+            id,
+            revision,
+            spec,
+            paused,
+        } => store.edit_bound(
+            &id,
+            Some(&revision),
+            *spec,
+            paused.map(|(generation, updated)| (generation, updated, false)),
+            now,
+        )?,
+        Change::Enable {
+            id,
+            revision,
+            generation,
+            updated_at,
+            mut spec,
+            install_timer,
+        } => {
+            let target = store.job(&id)?;
+            if target.revision_id != revision || !target.paused_revision(generation, updated_at) {
+                return Err("automation revision or state changed".into());
+            }
+            spec.prepare(Path::new("/etc/localtime"))?;
+            store.check_future(&spec, now)?;
+            readiness(&spec)?;
+            super::workspace::preview(root, &id, &spec, &store.active()?, conflict)?;
+            if super::timer::command("status")?.as_deref() != Some("installed, active") {
+                if !install_timer {
+                    return Ok(
+                        json!({"op":CHANGE,"timer_confirmation":{"id":id,"revision":revision}}),
+                    );
+                }
+                super::timer::command("install")?;
+                if super::timer::command("status")?.as_deref() != Some("installed, active") {
+                    return Err("host timer is not active; retry or save paused".into());
+                }
+            }
+            store.edit_bound(
+                &id,
+                Some(&revision),
+                *spec,
+                Some((generation, updated_at, true)),
+                jiff::Timestamp::now(),
+            )?
+        }
         Change::State {
             id,
             revision,

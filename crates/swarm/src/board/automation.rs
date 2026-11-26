@@ -3,6 +3,7 @@ use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
     Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
 };
+use std::{io, path::Path, sync::mpsc};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Default)]
@@ -13,6 +14,8 @@ pub(super) struct Automation {
     job: String,
     draft: Option<Draft>,
     archive: Option<Change>,
+    enable_confirmation: bool,
+    enabling: Option<mpsc::Receiver<io::Result<Option<Records>>>>,
     run: Option<Occurrence>,
     manual: Option<RunState>,
     press: Option<(Mouse, (u16, u16), PointerTarget)>,
@@ -65,10 +68,49 @@ impl Automation {
             Ok(records) => {
                 self.draft = None;
                 self.archive = None;
+                self.enable_confirmation = false;
                 self.receive(Ok(records));
             }
             Err(error) => self.error = error.to_string(),
         }
+    }
+
+    pub(super) fn enable(&mut self, path: &Path, endpoint: &str, change: Change) {
+        let (send, receive) = mpsc::channel();
+        self.enabling = Some(receive);
+        self.error.clear();
+        let path = path.to_owned();
+        let endpoint = endpoint.to_owned();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let mut client =
+                    crate::ipc::Client::dial(&path, &[crate::schedule::catalog::CONTROL])?;
+                if client.endpoint() != endpoint {
+                    return Err(io::Error::other(
+                        "automation owner changed before activation",
+                    ));
+                }
+                change.remote(&mut client)
+            })();
+            let _ = send.send(result);
+        });
+    }
+
+    pub(super) fn poll_enable(&mut self) -> Option<io::Result<Option<Records>>> {
+        let result = match self.enabling.as_ref()?.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(io::Error::other("automation activation status unconfirmed"))
+            }
+        };
+        self.enabling = None;
+        Some(result)
+    }
+
+    pub(super) fn confirm_enable_timer(&mut self) {
+        self.enable_confirmation = true;
+        self.error.clear();
     }
 
     pub(super) fn triggered(&mut self, response: std::io::Result<Option<RunState>>) {
@@ -87,6 +129,14 @@ impl Automation {
 
     pub(super) fn cancel(&mut self) -> bool {
         self.press = None;
+        if self.enabling.is_some() {
+            return true;
+        }
+        if self.enable_confirmation {
+            self.enable_confirmation = false;
+            self.error.clear();
+            return true;
+        }
         let cancelled = self.draft.take().is_some()
             || self.archive.take().is_some()
             || self.run.take().is_some();
@@ -97,12 +147,26 @@ impl Automation {
     }
 
     fn buttons(&self, (cols, rows): (u16, u16)) -> Vec<Button> {
-        let controls: &[(&str, char)] = if let Some(run) = &self.run {
+        let controls: &[(&str, char)] = if self.enabling.is_some() {
+            &[]
+        } else if let Some(run) = &self.run {
             if run.live_session().is_some() {
                 &[("Open worker", 'o'), ("History", '←'), ("Back", '⎋')]
             } else {
                 &[("History", '←'), ("Back", '⎋')]
             }
+        } else if self.enable_confirmation {
+            &[("Save and enable", 'y'), ("Cancel", '⎋')]
+        } else if self
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.enable.is_some())
+        {
+            &[
+                ("Save paused", '↡'),
+                ("Save and enable", '↟'),
+                ("Cancel", '⎋'),
+            ]
         } else if self.draft.is_some() {
             &[("Save", '⏎'), ("Cancel", '⎋')]
         } else if self.archive.is_some() {
@@ -165,10 +229,11 @@ impl Automation {
         let mut buttons = Vec::new();
         let (mut x, mut y) = (1_u16, 0);
         for &(name, key) in controls {
-            let shortcut = if key == '⎋' {
-                "esc".into()
-            } else {
-                key.to_string()
+            let shortcut = match key {
+                '⎋' => "esc".into(),
+                '↟' => "ctrl+s".into(),
+                '↡' => "ctrl+d".into(),
+                _ => key.to_string(),
             };
             let text = if compact {
                 format!("[{shortcut}]")
@@ -216,6 +281,9 @@ impl Automation {
 
     fn rows_at(&self, geometry: (u16, u16)) -> (usize, usize, usize) {
         let budget = self.body_capacity(geometry);
+        if self.enabling.is_some() || self.enable_confirmation {
+            return (0, 0, 0);
+        }
         if let Some(draft) = &self.draft {
             let budget = budget.saturating_sub(1).max(1);
             return (
@@ -301,6 +369,8 @@ impl Automation {
                         PointerTarget::Row(_) | PointerTarget::Button('⏎') => Key::Enter,
                         PointerTarget::Button('⎋') => Key::Escape,
                         PointerTarget::Button('←') => Key::Left,
+                        PointerTarget::Button('↟') => Key::CtrlS,
+                        PointerTarget::Button('↡') => Key::CtrlD,
                         PointerTarget::Button(key) => Key::Text(key),
                     });
                 }
@@ -311,7 +381,7 @@ impl Automation {
 
     pub(super) fn update(&mut self, key: Key, geometry: (u16, u16)) -> Action {
         self.press = None;
-        if !usable(geometry) {
+        if !usable(geometry) || self.enabling.is_some() {
             return Action::None;
         }
         if let Some(run) = &self.run {
@@ -327,13 +397,25 @@ impl Automation {
             }
             return Action::None;
         }
+        if self.enable_confirmation && !matches!(key, Key::Text('y')) {
+            return Action::None;
+        }
         if let Some(draft) = &mut self.draft {
-            if key == Key::Enter {
+            let install_timer = self.enable_confirmation;
+            if key == Key::Enter && (draft.enable.is_none() || draft.focus + 1 == FIELDS.len())
+                || matches!(key, Key::CtrlS | Key::CtrlD) && draft.enable.is_some()
+                || install_timer
+            {
                 if geometry.0 < 32 || geometry.1 < 8 {
                     self.error = "Resize to 32×8 to save".into();
                 } else {
-                    match draft.change() {
-                        Ok(change) => return Action::ChangeAutomation(change),
+                    match draft
+                        .change((key == Key::CtrlS || install_timer).then_some(install_timer))
+                    {
+                        Ok(change) => {
+                            self.enable_confirmation = false;
+                            return Action::ChangeAutomation(change);
+                        }
                         Err(error) => self.error = error,
                     }
                 }
@@ -361,11 +443,15 @@ impl Automation {
                 self.draft = Some(Draft::new(Some(job)));
                 Action::None
             }
+            (Some(Records::Get(job)), Key::Text('p')) if job.state == "paused" => {
+                let mut draft = Draft::new(Some(job));
+                draft.enable = Some((job.lifecycle_generation, job.updated_at));
+                self.draft = Some(draft);
+                Action::None
+            }
             (Some(Records::Get(job)), key @ Key::Text('p' | 'x')) if job.state != "archived" => {
                 let value = if key == Key::Text('x') {
                     State::Archived
-                } else if job.state == "paused" {
-                    State::Active
                 } else {
                     State::Paused
                 };
@@ -464,6 +550,22 @@ impl Automation {
             self.footer(output, cols, rows);
             return;
         }
+        if self.enabling.is_some() {
+            form_header(output, cols, "Checking automation activation…");
+            return;
+        }
+        if self.enable_confirmation {
+            form_header(output, cols, "Save and enable automation?");
+            line(
+                output,
+                2,
+                cols,
+                "",
+                "The per-user timer will be enabled on this host.",
+            );
+            self.footer(output, cols, rows);
+            return;
+        }
         if let Some(draft) = &self.draft {
             let budget = self.body_capacity((cols, rows));
             draft.view(output, cols, budget);
@@ -559,6 +661,7 @@ const FIELDS: [&str; 15] = [
 
 struct Draft {
     target: Option<(String, String)>,
+    enable: Option<(u64, jiff::Timestamp)>,
     operation: Option<String>,
     values: Vec<Editor>,
     focus: usize,
@@ -586,6 +689,7 @@ impl Draft {
         ];
         Self {
             target: job.map(|job| (job.id.clone(), job.revision_id.clone())),
+            enable: None,
             operation: None,
             values: values.iter().map(|value| Editor::new(value)).collect(),
             focus: 0,
@@ -610,7 +714,7 @@ impl Draft {
         }
     }
 
-    fn change(&mut self) -> Result<Change, String> {
+    fn change(&mut self, enable: Option<bool>) -> Result<Change, String> {
         let get = |index: usize| self.values[index].text.trim().to_owned();
         let kind = get(6);
         let (time, date, weekday, cron) = match kind.as_str() {
@@ -646,13 +750,24 @@ impl Draft {
                 .parse()
                 .map_err(|_| "Allow overlap requires true or false")?,
         });
-        Ok(match &self.target {
-            Some((id, revision)) => Change::Edit {
+        Ok(match (&self.target, self.enable.zip(enable)) {
+            (Some((id, revision)), Some(((generation, updated_at), install_timer))) => {
+                Change::Enable {
+                    id: id.clone(),
+                    revision: revision.clone(),
+                    generation,
+                    updated_at,
+                    spec,
+                    install_timer,
+                }
+            }
+            (Some((id, revision)), _) => Change::Edit {
                 id: id.clone(),
                 revision: revision.clone(),
                 spec,
+                paused: self.enable,
             },
-            None => {
+            (None, _) => {
                 if self.operation.is_none() {
                     self.operation =
                         Some(automation_invocation().map_err(|error| error.to_string())?);

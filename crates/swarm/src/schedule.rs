@@ -82,6 +82,12 @@ fn is_zero(value: &u64) -> bool {
 }
 
 impl Job {
+    fn paused_revision(&self, generation: u64, updated: Timestamp) -> bool {
+        self.state == "paused"
+            && self.lifecycle_generation == generation
+            && self.updated_at == updated
+    }
+
     pub(crate) fn name(&self) -> &str {
         &self.spec.name
     }

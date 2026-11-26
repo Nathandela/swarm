@@ -23,7 +23,15 @@ fn root(state: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn describe(state: &Path, run: &Occurrence, isolate: bool) -> Result<(String, String)> {
-    let selected = Path::new(&run.spec.directory);
+    describe_directory(state, &run.id, Path::new(&run.spec.directory), isolate)
+}
+
+fn describe_directory(
+    state: &Path,
+    id: &str,
+    selected: &Path,
+    isolate: bool,
+) -> Result<(String, String)> {
     let source = fs::canonicalize(selected)?;
     if !source.is_dir() || source != selected {
         return Err("scheduled directory changed via a symlink or is unavailable".into());
@@ -38,7 +46,7 @@ pub(super) fn describe(state: &Path, run: &Occurrence, isolate: bool) -> Result<
         let relative = source
             .strip_prefix(&checkout)
             .map_err(|_| "job directory is outside its Git working tree")?;
-        let target = root(state)?.join(&run.id);
+        let target = root(state)?.join(id);
         if overlaps(&checkout, &target) {
             return Err("the scheduled worktree location is inside the source checkout; use a daemon state directory outside the repository".into());
         }
@@ -48,6 +56,77 @@ pub(super) fn describe(state: &Path, run: &Occurrence, isolate: bool) -> Result<
         string_path(&source)?.to_owned(),
         string_path(&workspace)?.to_owned(),
     ))
+}
+
+pub(super) fn preview(
+    state: &Path,
+    id: &str,
+    spec: &super::Spec,
+    active: &[Occurrence],
+    conflict: impl Fn(&Path) -> Option<String>,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let selected = Path::new(&spec.directory);
+    let blocked = |path: &Path| {
+        conflict(path).or_else(|| {
+            active
+                .iter()
+                .find(|run| {
+                    run.reserves()
+                        && !run.workspace.is_empty()
+                        && overlaps(path, Path::new(&run.workspace))
+                })
+                .map(|run| run.workspace.clone())
+        })
+    };
+    if active.iter().any(|run| {
+        run.reserves()
+            && !spec.allow_overlap
+            && (run.spec.workspace == "directory" || spec.workspace == "directory")
+            && overlaps(selected, Path::new(&run.spec.directory))
+    }) {
+        return Err("workspace overlaps an active scheduled directory".into());
+    }
+    if spec.workspace == "directory" {
+        if overlaps(state, selected) {
+            return Err("working directory overlaps the Swarm state directory".into());
+        }
+        if let Some(other) = blocked(selected) {
+            if !spec.allow_overlap {
+                return Err(format!("workspace overlaps {other}; choose a dedicated directory or an isolated Git worktree").into());
+            }
+        } else {
+            return Ok(());
+        }
+    }
+    let (source, workspace) = describe_directory(state, id, selected, true)?;
+    let source = Path::new(&source);
+    git(source, &["rev-parse", "--verify", "HEAD^{commit}"])
+        .map_err(|_| "isolated worktrees need a Git checkout with a commit")?;
+    let prefix = git(source, &["rev-parse", "--show-prefix"])?;
+    if !prefix.is_empty()
+        && git(
+            source,
+            &[
+                "cat-file",
+                "-t",
+                &format!("HEAD:{}", prefix.trim_end_matches('/')),
+            ],
+        )? != "tree"
+    {
+        return Err("working directory is absent from the committed checkout".into());
+    }
+    match fs::symlink_metadata(root(state)?) {
+        Ok(meta) if !meta.is_dir() || meta.mode() & 0o077 != 0 => {
+            return Err("scheduled worktree root must be a private directory".into());
+        }
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
+    if let Some(other) = blocked(Path::new(&workspace)) {
+        return Err(format!("isolated worktree overlaps {other}").into());
+    }
+    Ok(())
 }
 
 pub(super) fn ensure(state: &Path, run: &Occurrence) -> Result<()> {

@@ -165,6 +165,12 @@ fn board(path: &Path) -> io::Result<()> {
             board.persist_layout(layout);
             needs_paint = true;
         }
+        if let Some(Modal::Automation(view)) = &mut board.modal
+            && let Some(result) = view.poll_enable()
+        {
+            automation_changed(view, result, connection.as_mut());
+            needs_paint = true;
+        }
         let spinner = (clock.elapsed().as_millis() / 90) as usize % 10;
         let second = clock.elapsed().as_secs();
         if !board.rows.is_empty()
@@ -398,19 +404,21 @@ fn board(path: &Path) -> io::Result<()> {
                     }
                 }
                 Action::ChangeAutomation(change) => {
-                    let result = connection.as_mut().map_or_else(
-                        || {
-                            Err(io::Error::other(
-                                "daemon disconnected; reconnect before saving",
-                            ))
-                        },
-                        |client| change.remote(client),
-                    );
-                    let state = automation_status(&result, connection.as_mut());
                     if let Some(Modal::Automation(view)) = &mut board.modal {
-                        view.changed(result);
-                        if let Some(state) = state {
-                            view.triggered(state);
+                        if matches!(change, CatalogChange::Enable { .. })
+                            && let Some(client) = &connection
+                        {
+                            view.enable(path, client.endpoint(), change);
+                        } else {
+                            let result = connection.as_mut().map_or_else(
+                                || {
+                                    Err(io::Error::other(
+                                        "daemon disconnected; reconnect before saving",
+                                    ))
+                                },
+                                |client| change.remote(client),
+                            );
+                            automation_changed(view, result, connection.as_mut());
                         }
                     }
                 }
@@ -1754,6 +1762,23 @@ impl FormViewport<'_> {
 
 fn form_header(output: &mut String, cols: u16, title: &str) {
     line(output, 1, cols, "\x1b[38;2;142;180;230;1m", title);
+}
+
+fn automation_changed(
+    view: &mut Automation,
+    result: io::Result<Option<CatalogRecords>>,
+    client: Option<&mut Client>,
+) {
+    if matches!(result, Ok(None)) {
+        view.confirm_enable_timer();
+    } else {
+        let result = result.map(|saved| saved.expect("confirmed automation reply"));
+        let state = automation_status(&result, client);
+        view.changed(result);
+        if let Some(state) = state {
+            view.triggered(state);
+        }
+    }
 }
 
 fn automation_status(

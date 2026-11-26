@@ -32,3 +32,13 @@ Both tests removed their private registrations, including the Linux persistence 
 | --- | --- | --- |
 | macOS arm64 | `7d85efedc2fde7a86b25cebb3f1544c015ac4283ee6642b21e5774ff7c4e6eb1` | `4d381c3b24c09872d73e948619d4577608f9a83be561a0fcd7c16acccece34d9` |
 | Linux x86_64 | `8c447594bfbea5d52c0350398d753a35e04036c996a9f40df1c2f4065e8895d5` | `0d93dd6658fc3d7f5b1b25ee023ca873a3b7ab8b9035d8308dfbff52e64158df` |
+## Enable a paused automation from the board
+
+On a paused job, `p` opens the saved definition. Escape leaves its state and revision untouched. `Ctrl+S` checks the proposed definition, provider and workspace against the current owner. If the timer is already active, the owner saves the edited revision and active state in one catalog transaction. Otherwise the board offers a separate timer confirmation. `Ctrl+D` saves the draft while paused. The CLI's explicit `schedule resume JOB` remains available.
+
+The isolated PTY witness compares the paused editor and cancel against the released Go v0.29.24 binary. The Rust arm also checks unavailable and held preflight, timer confirmation and cancel, a stale revision, and successful activation under an already armed fixture timer. It verifies no timer mutations or scheduled launches occurred. This fixture uses a disposable macOS `launchctl` response and a version-only Claude stub.
+
+```sh
+python3 -Bu scripts/verification/parity/automation_enable.py GO_V0_29_24 --reference-go
+python3 -Bu scripts/verification/parity/automation_enable.py target/debug/swarm
+```

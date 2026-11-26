@@ -402,23 +402,46 @@ impl Store {
         &self,
         job: &str,
         expected: Option<&str>,
+        spec: Spec,
+        now: Timestamp,
+    ) -> Result<Job> {
+        self.edit_bound(job, expected, spec, None, now)
+    }
+
+    pub(super) fn edit_bound(
+        &self,
+        job: &str,
+        expected: Option<&str>,
         mut spec: Spec,
+        paused: Option<(u64, Timestamp, bool)>,
         now: Timestamp,
     ) -> Result<Job> {
         spec.prepare(&self.host)?;
+        let enable = paused.is_some_and(|(_, _, enable)| enable);
         self.write(|tx| {
             let mut job: Job = require(tx, JOBS, job)?;
             if job.state == "archived" {
                 return Err(ARCHIVED.into());
             }
-            if expected.is_some_and(|id| id != job.revision_id) {
+            if expected.is_some_and(|id| id != job.revision_id)
+                || paused.is_some_and(|(generation, updated, _)| {
+                    !job.paused_revision(generation, updated)
+                })
+            {
                 return Err(CONFLICT.into());
             }
-            if spec.calendar != job.spec.calendar {
+            if enable || paused.is_none() && spec.calendar != job.spec.calendar {
                 self.check_future(&spec, now)?;
             }
             if let Some(old) = self.evaluate(tx, &job, before(now)?, now, &mut None)? {
                 save_evaluation(tx, old, None)?;
+            }
+            if enable {
+                job.lifecycle_generation = job
+                    .lifecycle_generation
+                    .checked_add(1)
+                    .ok_or("automation lifecycle generation exhausted")?;
+                job.state = "active".into();
             }
             job.spec = spec;
             job.revision_id = id(now)?;
@@ -471,7 +494,7 @@ impl Store {
         })
     }
 
-    fn check_future(&self, spec: &Spec, now: Timestamp) -> Result<()> {
+    pub(super) fn check_future(&self, spec: &Spec, now: Timestamp) -> Result<()> {
         if Rule::compile(&spec.calendar, &self.host)?
             .find(before(now)?, false)
             .is_none()

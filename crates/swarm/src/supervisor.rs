@@ -1254,7 +1254,12 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer, state, message)
             }            "schedule_catalog_change" => {
                 let message = if caps.contains(&crate::schedule::catalog::CONTROL) {
-                    crate::schedule::catalog::change(state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?, &request)
+                    crate::schedule::catalog::change(
+                        state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?,
+                        &request,
+                        |spec| scheduling::activation_readiness(state, spec),
+                        |path| scheduling::conflict(state, path, true),
+                    )
                         .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
                 } else {
                     json!({"op":"error","error_code":"capability_refused","error":"schedule change requires the owner control capability"})

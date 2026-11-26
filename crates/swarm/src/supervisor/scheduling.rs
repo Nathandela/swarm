@@ -125,6 +125,18 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> Result<Va
     }
 }
 
+pub(super) fn activation_readiness(state: &State, spec: &crate::schedule::Spec) -> Result<()> {
+    let cwd = state.root.parent().ok_or("missing scheduler state path")?;
+    let mut refused = Vec::new();
+    for agent in &spec.agents {
+        match Session::scheduled_provider_available(agent, cwd) {
+            Ok(()) => return Ok(()),
+            Err(error) => refused.push(format!("{agent} · {error}")),
+        }
+    }
+    Err(refused.join(" · ").into())
+}
+
 pub(super) fn conflict(state: &State, path: &Path, scheduled: bool) -> Option<String> {
     let sessions: Vec<_> = state.sessions.read().unwrap().values().cloned().collect();
     sessions.iter().find_map(|session| {
