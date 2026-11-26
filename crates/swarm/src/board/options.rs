@@ -1,8 +1,10 @@
+use super::context_settings::{Context, DESCRIPTION, Owner, Update};
 use super::launch::{ACCENT, DIM, PLAIN, TITLE, block_cursor, field, label_layout, spans};
 use super::navigation::{GROUPS, ORDERS, truncation};
 use super::preferences::Layout;
 use super::session_form::{footer, word_wrap};
 use super::{Editor, Key};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use unicode_width::UnicodeWidthStr;
 
@@ -11,6 +13,8 @@ const MANAGER_NOTICE: [&str; 2] = [
     "Applies to all local managers.",
     "This prompt is visible to the model.",
 ];
+const CONTEXT_HINT: &str =
+    "←→ change · space toggle · type threshold · tab/↑↓ next · enter apply · esc cancel";
 const HINT: &str = "←→ change · tab/↑↓ next · enter apply · esc cancel";
 const CAPTURE_HINT: &str = "←→ change · terminal-wide mouse capture can affect text selection · tab/↑↓ next · enter apply · esc cancel";
 const CAPTURE_NOTICE: [&str; 2] = [
@@ -87,6 +91,7 @@ impl Manager {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
 enum Row {
     Text(Vec<(&'static str, String)>),
     Field(&'static str, Vec<(&'static str, String)>, bool),
@@ -109,130 +114,437 @@ impl Row {
             |parts: &[(&str, String)]| parts.iter().map(|(_, value)| value.width()).sum::<usize>();
         match self {
             Self::Text(parts) => values(parts),
-            Self::Field(label, parts, _) => 2 + label_layout(label, cols).0.width() + values(parts),
+            Self::Field(label, parts, _) => {
+                (2 + label_layout(label, cols).0.width() + values(parts)).min(usize::from(cols))
+            }
         }
     }
 }
 
-pub(super) fn view(
-    out: &mut String,
-    cols: u16,
-    rows: u16,
-    layout: Layout,
-    focus: usize,
-    manager: Option<&Manager>,
-    focus_only: bool,
-) {
-    let manager_focused = focus == 3;
-    let capture_notice = layout.touch_back || focus == 2;
-    let fallback_hint = if manager_focused {
-        MANAGER_HINT
-    } else if focus == 2 {
-        CAPTURE_HINT
-    } else {
-        HINT
-    };
-    let mut context = Vec::new();
-    let body = {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Group,
+    Order,
+    Touch,
+    Manager,
+    Compact,
+    Threshold,
+}
+
+pub(super) struct Form {
+    pub(super) draft: Layout,
+    focus: Focus,
+    manager: Option<Manager>,
+    context: Option<Context>,
+    read_stop: usize,
+}
+
+impl Form {
+    pub(super) fn new(draft: Layout, owner: Option<Owner>) -> Self {
+        Self {
+            draft,
+            focus: Focus::Group,
+            manager: Manager::open(),
+            context: owner.map(Context::open),
+            read_stop: 0,
+        }
+    }
+
+    fn fields(&self) -> Vec<Focus> {
+        let mut fields = vec![Focus::Group, Focus::Order, Focus::Touch];
+        if self.manager.is_some() {
+            fields.push(Focus::Manager);
+        }
+        if self.context.as_ref().is_some_and(Context::loaded) {
+            fields.extend([Focus::Compact, Focus::Threshold]);
+        }
+        fields
+    }
+
+    pub(super) fn disconnected(&mut self) {
+        if let Some(context) = &mut self.context {
+            context.disconnect();
+        }
+    }
+
+    pub(super) fn reconnected(&mut self, owner: Option<&Owner>) {
+        if let Some(context) = &mut self.context {
+            context.reconnect(owner);
+        }
+    }
+
+    pub(super) fn poll(&mut self) -> Update {
+        let Some(context) = &mut self.context else {
+            return Update::Pending;
+        };
+        let update = context.poll();
+        if !self.fields().contains(&self.focus) {
+            self.focus = Focus::Group;
+            self.read_stop = 0;
+        }
+        update
+    }
+
+    pub(super) fn input(&mut self, key: Key, geometry: (u16, u16), online: bool) -> bool {
+        if matches!(key, Key::Up | Key::Down | Key::Tab) {
+            let fields = self.fields();
+            let index = fields
+                .iter()
+                .position(|focus| *focus == self.focus)
+                .unwrap_or_default();
+            let offset = if key == Key::Up { fields.len() - 1 } else { 1 };
+            self.focus = fields[(index + offset) % fields.len()];
+            self.read_stop = 0;
+            return false;
+        }
+
+        let body = self.context_lines(geometry);
+        let budget = Self::budget(geometry);
+        if body.len() > budget {
+            match key {
+                Key::PageDown => {
+                    self.read_stop = (self.read_stop + budget).min(body.len());
+                    return false;
+                }
+                Key::PageUp => {
+                    self.read_stop = self.read_stop.saturating_sub(budget);
+                    return false;
+                }
+                Key::Enter if self.read_stop < body.len() => return false,
+                _ => {}
+            }
+        }
+
+        if self.focus == Focus::Manager {
+            if let Some(manager) = &mut self.manager {
+                manager.update(key, geometry);
+            }
+            return false;
+        }
+
+        let mut context = self.context.as_mut();
+        if context.as_ref().is_some_and(|settings| settings.pending()) {
+            return false;
+        }
+        match key {
+            Key::Enter if fits(geometry) => {
+                if let Some(settings) = context {
+                    if !settings.error.is_empty() {
+                        return false;
+                    }
+                    if settings.dirty() {
+                        if online {
+                            settings.save();
+                        }
+                        return false;
+                    }
+                }
+                true
+            }
+            Key::Left | Key::Right => {
+                match self.focus {
+                    Focus::Group => cycle(&mut self.draft.group, GROUPS.len(), key),
+                    Focus::Order => cycle(&mut self.draft.order, ORDERS.len(), key),
+                    Focus::Touch => self.draft.touch_back = !self.draft.touch_back,
+                    Focus::Compact => {
+                        if let Some(settings) = &mut context {
+                            settings.enabled = !settings.enabled;
+                        }
+                    }
+                    Focus::Threshold => {
+                        if let Some(settings) = context {
+                            settings.update_threshold(key);
+                        }
+                    }
+                    Focus::Manager => {}
+                }
+                false
+            }
+            Key::Text(' ') if self.focus == Focus::Compact => {
+                if let Some(settings) = context {
+                    settings.enabled = !settings.enabled;
+                }
+                false
+            }
+            key if self.focus == Focus::Threshold => {
+                if let Some(settings) = context {
+                    settings.update_threshold(key);
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn budget((_, rows): (u16, u16)) -> usize {
+        usize::from(rows.saturating_sub(3).max(1))
+    }
+
+    fn compact((cols, rows): (u16, u16)) -> bool {
+        cols < 64 && rows <= 10
+    }
+
+    fn context_lines(&self, (cols, rows): (u16, u16)) -> Vec<String> {
+        let width = if Self::compact((cols, rows)) {
+            cols
+        } else {
+            cols.saturating_sub(2).max(1)
+        };
+        let mut source = Vec::new();
+        if self.focus == Focus::Manager {
+            source.extend(MANAGER_NOTICE);
+            if let Some(manager) = &self.manager
+                && !manager.error.is_empty()
+            {
+                source.push(manager.error.as_str());
+            }
+        } else {
+            if self.draft.touch_back || self.focus == Focus::Touch {
+                source.extend(CAPTURE_NOTICE);
+            }
+            if let Some(settings) = &self.context {
+                source.push(DESCRIPTION);
+                if !settings.error.is_empty() {
+                    source.push(settings.error.as_str());
+                }
+            }
+        }
+        source
+            .into_iter()
+            .flat_map(|line| word_wrap(line, width))
+            .collect()
+    }
+
+    fn hint(&self) -> &'static str {
+        if self.focus == Focus::Manager {
+            MANAGER_HINT
+        } else if self.focus == Focus::Touch {
+            CAPTURE_HINT
+        } else if self.context.as_ref().is_some_and(Context::loaded) {
+            CONTEXT_HINT
+        } else {
+            HINT
+        }
+    }
+
+    fn rows(&self, cols: u16) -> Vec<Row> {
         let mut body = vec![
             Row::Text(vec![(TITLE, "swarm".into()), (DIM, " · options".into())]),
             Row::Text(vec![]),
-            Row::Field("group", picker(&GROUPS, layout.group, cols), focus == 0),
-            Row::Field("order", picker(&ORDERS, layout.order, cols), focus == 1),
+            Row::Field(
+                "group",
+                picker(&GROUPS, self.draft.group, cols),
+                self.focus == Focus::Group,
+            ),
+            Row::Field(
+                "order",
+                picker(&ORDERS, self.draft.order, cols),
+                self.focus == Focus::Order,
+            ),
             Row::Field(
                 "CLI button",
                 vec![(
                     PLAIN,
-                    if layout.touch_back {
+                    if self.draft.touch_back {
                         "[x] on"
                     } else {
                         "[ ] off"
                     }
                     .into(),
                 )],
-                focus == 2,
+                self.focus == Focus::Touch,
             ),
         ];
-        if capture_notice {
+        if self.draft.touch_back || self.focus == Focus::Touch {
             for text in CAPTURE_NOTICE {
                 body.push(Row::Text(vec![(DIM, text.into())]));
-                context.extend(word_wrap(text, cols));
             }
         }
-        if let Some(manager) = manager {
-            if manager_focused {
-                context.clear();
+        if let Some(manager) = &self.manager {
+            let focused = self.focus == Focus::Manager;
+            if focused {
                 for notice in MANAGER_NOTICE {
-                    let words = word_wrap(notice, cols.saturating_sub(2));
-                    for line in words {
-                        body.push(Row::Text(vec![(DIM, format!("  {line}"))]));
-                    }
-                    context.extend(word_wrap(notice, cols));
+                    body.extend(indented(notice, cols, DIM));
                 }
                 if manager.saved {
                     body.push(Row::Text(vec![(DIM, "  Manager prompt saved.".into())]));
                 }
             }
             if !manager.error.is_empty() {
-                let error_style = "\x1b[0;38;5;173m";
-                for text in word_wrap(&manager.error, cols.saturating_sub(2)) {
-                    body.push(Row::Text(vec![(error_style, format!("  {text}"))]));
-                }
-                if manager_focused {
-                    context.extend(word_wrap(&manager.error, cols));
-                }
+                body.extend(indented(&manager.error, cols, ERROR));
             }
             body.push(Row::Field(
                 "manager prompt",
-                vec![(PLAIN, manager.value(cols, manager_focused))],
-                manager_focused,
+                vec![(PLAIN, manager.value(cols, focused))],
+                focused,
             ));
         }
+        if let Some(settings) = &self.context {
+            body.push(Row::Text(vec![]));
+            body.push(Row::Text(vec![(DIM, DESCRIPTION.into())]));
+            if settings.loading() {
+                body.push(Row::Text(vec![(
+                    DIM,
+                    "  loading context guard settings…".into(),
+                )]));
+            } else if settings.loaded() {
+                let enabled = if settings.enabled {
+                    "[x] enabled"
+                } else {
+                    "[ ] disabled"
+                };
+                body.push(Row::Field(
+                    "auto compact",
+                    vec![(PLAIN, enabled.into())],
+                    self.focus == Focus::Compact,
+                ));
+                let focussed = self.focus == Focus::Threshold;
+                let mut threshold = if focussed {
+                    block_cursor(
+                        &settings.threshold,
+                        label_layout("threshold", cols.saturating_sub(1)).1,
+                    )
+                } else {
+                    settings.threshold.text.clone()
+                };
+                threshold.push('%');
+                body.push(Row::Field("threshold", vec![(PLAIN, threshold)], focussed));
+                if settings.saving() {
+                    body.push(Row::Text(vec![(
+                        DIM,
+                        "  saving context guard settings…".into(),
+                    )]));
+                }
+                if !settings.error.is_empty() {
+                    body.push(Row::Text(vec![(ERROR, format!("  {}", settings.error))]));
+                }
+            } else {
+                body.push(Row::Text(vec![(DIM, format!("  {}", settings.error))]));
+            }
+        }
         body
-    };
-    let selected = body.iter().position(Row::active).unwrap_or(2);
-    if !fits((cols, rows)) {
-        if focus_only {
-            out.push_str("\x1b[2;1H\x1b[0m\x1b[2K");
-            body[selected].paint(out, 2, cols);
-            return;
-        }
-        spans(out, 1, cols, &[(PLAIN, "Resize to 32×8".into())]);
-        body[selected].paint(out, 2, cols);
-        spans(out, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
-        footer(out, rows, cols, "esc back");
-        return;
     }
-    let budget = usize::from(rows - 1);
-    let compact = cols < 64
-        && rows <= 10
-        && (body.len() > budget || body.iter().any(|row| row.width(cols) > usize::from(cols)));
-    if compact {
-        spans(out, 1, cols, &[(PLAIN, "Options".into())]);
-        body[selected].paint(out, 2, cols);
-        let mut row = 3;
-        for text in context.iter().take(usize::from(rows.saturating_sub(row))) {
-            spans(out, row, cols, &[(PLAIN, text.clone())]);
-            row += 1;
+
+    pub(super) fn frame(&self, geometry: (u16, u16)) -> Frame {
+        let (cols, rows) = geometry;
+        let body = self.rows(cols);
+        let selected = body.iter().position(Row::active).unwrap_or(2);
+        let text = |message: &str| Row::Text(vec![(PLAIN, message.into())]);
+        if !fits(geometry) {
+            return Frame::new(
+                geometry,
+                vec![
+                    text("Resize to 32×8"),
+                    body[selected].clone(),
+                    text("Esc back / n deny"),
+                ],
+                "esc back".into(),
+            );
         }
-        for (index, entry) in body.iter().enumerate().skip(1) {
-            if index == selected || entry.width(cols) == 0 {
+
+        let budget = usize::from(rows - 1);
+        let mut context = self.context_lines(geometry);
+        let reading = Self::budget(geometry);
+        if context.len() > reading {
+            let marker = if self.read_stop >= context.len() {
+                "▌ "
+            } else {
+                "  "
+            };
+            context.push(format!("{marker}Confirm · enter"));
+            let start = self.read_stop.min(context.len().saturating_sub(reading));
+            let mut body_rows = vec![text("Options"), body[selected].clone()];
+            body_rows.extend(
+                context
+                    .iter()
+                    .skip(start)
+                    .take(reading)
+                    .map(|line| text(line)),
+            );
+            return Frame::new(
+                geometry,
+                body_rows,
+                fit_hint("pgup/down read · esc back", cols),
+            );
+        }
+
+        let compact = Self::compact(geometry)
+            && (body.len() > budget || body.iter().any(|row| row.width(cols) > usize::from(cols)));
+        let body_rows = if compact {
+            let mut body_rows = vec![text("Options"), body[selected].clone()];
+            body_rows.extend(context.iter().map(|message| text(message)));
+            let remaining = budget.saturating_sub(body_rows.len());
+            body_rows.extend(
+                body.into_iter()
+                    .enumerate()
+                    .skip(1)
+                    .filter(|(index, entry)| *index != selected && entry.width(cols) != 0)
+                    .take(remaining)
+                    .map(|(_, entry)| entry),
+            );
+            body_rows
+        } else {
+            let start = (selected + 1).saturating_sub(budget);
+            body.into_iter().skip(start).take(budget).collect()
+        };
+        Frame::new(geometry, body_rows, fit_hint(self.hint(), cols))
+    }
+}
+
+pub(super) struct Frame {
+    geometry: (u16, u16),
+    body: Vec<Row>,
+    hint: String,
+}
+
+impl Frame {
+    fn new(geometry: (u16, u16), mut body: Vec<Row>, hint: String) -> Self {
+        body.resize(usize::from(geometry.1.saturating_sub(1)), Row::Text(vec![]));
+        Self {
+            geometry,
+            body,
+            hint,
+        }
+    }
+
+    pub(super) fn paint(&self, out: &mut String, previous: Option<&Self>) {
+        let (cols, rows) = self.geometry;
+        let previous = previous.filter(|frame| frame.geometry == self.geometry);
+        if previous.is_none() {
+            out.push_str("\x1b[?25l\x1b[0m\x1b[H\x1b[2J");
+        }
+        for (index, body) in self.body.iter().enumerate() {
+            let row = index as u16 + 1;
+            if let Some(previous) = previous {
+                if previous.body[index] == *body {
+                    continue;
+                }
+                let _ = write!(out, "\x1b[{row};1H\x1b[0m\x1b[2K");
+            } else if body.width(cols) == 0 {
                 continue;
             }
-            if row >= rows {
-                break;
-            }
-            entry.paint(out, row, cols);
-            row += 1;
+            body.paint(out, row, cols);
         }
-    } else {
-        let start = (selected + 1).saturating_sub(budget);
-        for (index, row) in body.iter().skip(start).take(budget).enumerate() {
-            row.paint(out, index as u16 + 1, cols);
+        if previous.is_none_or(|previous| previous.hint != self.hint) {
+            if previous.is_some() {
+                let _ = write!(out, "\x1b[{rows};1H\x1b[0m\x1b[2K");
+            }
+            footer(out, rows, cols, &self.hint);
         }
     }
-    let hint = fit_hint(fallback_hint, cols);
-    footer(out, rows, cols, &hint);
+}
+
+const ERROR: &str = "\x1b[0;38;5;173m";
+
+fn indented(text: &str, cols: u16, style: &'static str) -> impl Iterator<Item = Row> {
+    word_wrap(text, cols.saturating_sub(2))
+        .into_iter()
+        .map(move |line| Row::Text(vec![(style, format!("  {line}"))]))
+}
+
+fn cycle(current: &mut usize, len: usize, key: Key) {
+    let step = if key == Key::Left { len - 1 } else { 1 };
+    *current = (*current + step) % len;
 }
 
 fn fit_hint(hint: &str, cols: u16) -> String {
@@ -244,7 +556,12 @@ fn fit_hint(hint: &str, cols: u16) -> String {
         .split(" · ")
         .filter(|part| !part.contains("esc"))
         .partition(|part| part.contains("enter"));
-    let retained = std::iter::once("esc cancel")
+    let back = if hint.contains("esc cancel") {
+        "esc cancel"
+    } else {
+        "esc back"
+    };
+    let retained = std::iter::once(back)
         .chain(actions)
         .chain(other)
         .collect::<Vec<_>>()
