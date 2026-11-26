@@ -530,6 +530,20 @@ impl Inbox {
         self.save(next)
     }
 
+    pub(super) fn team_gap_epoch(&self) -> u64 {
+        self.data["team_gap_epoch"].as_u64().unwrap_or_default()
+    }
+
+    pub(super) fn mark_team_gap(&mut self) -> io::Result<()> {
+        let epoch = self
+            .team_gap_epoch()
+            .checked_add(1)
+            .ok_or_else(|| invalid("guild gap epoch exhausted"))?;
+        let mut next = self.data.clone();
+        next["team_gap_epoch"] = json!(epoch);
+        self.save(next)
+    }
+
     pub(super) fn team_cursor(&self) -> Option<&str> {
         self.data["team_history_cursor"].as_str()
     }

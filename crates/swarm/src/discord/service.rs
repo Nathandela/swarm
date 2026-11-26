@@ -244,6 +244,7 @@ fn run_guild(
                     super::worker_proof::invalidate(&place.dir, Some(&flight.operation))?;
                     let _ = flight.join.join();
                 }
+                inbox.mark_team_gap()?;
                 guild_events.clear();
                 driver = loop {
                     if bridge.serve(cfg, &mut inbox, 0, false, "unavailable")? {
@@ -594,8 +595,10 @@ fn request(
             status["teammate"] = json!({
                 "pending": inbox.pending_count(),
                 "gateway_sequence": sequence,
-                "gap_epoch": 0,
-                "ingress_issue": if native { "" } else { "native dispatcher reconciliation is unavailable" }
+                "gap_epoch": inbox.team_gap_epoch(),
+                "ingress_issue": if inbox.team_gap_epoch() > 0 {
+                    "guild mentions outside the linked thread may have been missed during a Gateway gap"
+                } else if native { "" } else { "native dispatcher reconciliation is unavailable" }
             });
             status["connector"] = json!({
                 "state": if native { "scoped_dispatcher" } else { "receipt_only" },
