@@ -7,6 +7,7 @@ pub(super) mod publication;
 pub(super) mod service;
 pub(super) mod source_attachment;
 mod wake;
+mod wake_intent;
 
 use super::{
     config::{Config, LockDescription, Place, PlaceLock, open_owner_file, snowflake},
@@ -1341,7 +1342,15 @@ mod tests {
         let run = service::with_vm_wake(&place, &api, !deliver.is_empty(), || {
             fs::write(marker, b"ready").unwrap()
         });
-        if std::env::var_os("SWARM_TEST_DISCORD_WAKE_REPLAY").is_some() {
+        if std::env::var("SWARM_TEST_DISCORD_WAKE_RECOVER")
+            .is_ok_and(|fault| fault == "after-voice")
+        {
+            assert!(
+                run.unwrap_err()
+                    .to_string()
+                    .contains("durable or ambiguous referent")
+            );
+        } else if std::env::var_os("SWARM_TEST_DISCORD_WAKE_REPLAY").is_some() {
             assert!(run.unwrap_err().to_string().contains("unconfirmed effects"));
         } else if deliver == "revoked" {
             assert!(

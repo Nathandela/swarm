@@ -355,8 +355,6 @@ pub(super) fn with_vm_wake(
     let cfg = personal_config(place, true)?;
     let expected = fs::symlink_metadata(place.dir.join("discord.db"))?;
     let mut lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
-    activation::ready(place, &cfg, &lease.db)?;
-    room.verify(&cfg)?;
     let binding = {
         let tx = lease.db.begin().map_err(io::Error::other)?;
         let key = format!(
@@ -366,6 +364,11 @@ pub(super) fn with_vm_wake(
         );
         value(&tx, "teammate_discussions", key.as_bytes())?.ok_or_else(invalid)?
     };
+    if wake_intent::reconcile(place, &cfg, &binding, &lease)? {
+        return Ok(true);
+    }
+    activation::ready(place, &cfg, &lease.db)?;
+    room.verify(&cfg)?;
     let bridge = Bridge::open(place, &cfg, &binding)?;
     opened();
     let until = std::time::Instant::now() + Duration::from_secs(30);

@@ -314,8 +314,14 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                     restored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
                     assert restored == stored
                     rust_env["SWARM_TEST_DISCORD_REST_PORT"] = str(discord.server_port)
-                    if mode != "prepared":
+                    fault = mode in ("before-pin", "after-pin", "after-voice")
+                    if fault:
+                        rust_env["SWARM_TEST_DISCORD_WAKE_FAULT"] = mode
+                    elif mode != "prepared":
                         rust_env["SWARM_TEST_DISCORD_WAKE_DELIVERY"] = mode
+                    intent = place / ".rust-vm-file-intent-v1.json"
+                    connector = place / "discord.db"
+                    before_crash = (connector.read_bytes(), ledger.read_bytes())
                     stager = subprocess.Popen([rust_test, "retained_original_go_stages_native_vm_file_call", "--nocapture"],
                                               env=rust_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                     try:
@@ -323,7 +329,29 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         assert stager.poll() is None, stager.communicate()
                         release.set()
                         output, errors = stager.communicate(timeout=32)
+                        if fault:
+                            assert stager.returncode == 86, (output, errors, tool_outputs)
+                            proposal = json.loads(intent.read_text())
+                            publication = proposal["request"]["publication"]
+                            assert proposal["request"]["source"]["files"][0]["id"] == file_id
+                            assert len(proposal["nonce"]) == 24
+                            old_pin = lambda: run(fixture, env, "vm-pin-count", base / "state",
+                                                  publication, file_id).strip()
+                            assert old_pin() == ("0" if mode == "before-pin" else "1")
+                            state_after_fault = (connector.read_bytes(), ledger.read_bytes())
+                            assert state_after_fault[0] == before_crash[0]
+                            assert (state_after_fault[1] != before_crash[1]) == (mode == "after-voice")
+                            replay = rust_env.copy()
+                            del replay["SWARM_TEST_DISCORD_WAKE_FAULT"]
+                            replay["SWARM_TEST_DISCORD_WAKE_RECOVER"] = mode
+                            run(rust_test, replay, "retained_original_go_stages_native_vm_file_call", "--nocapture")
+                            assert posts == []
+                            assert old_pin() == ("1" if mode == "after-voice" else "0")
+                            assert intent.exists() == (mode == "after-voice")
+                            assert (connector.read_bytes(), ledger.read_bytes()) == state_after_fault
+                            return
                         assert stager.returncode == 0, (output, errors, tool_outputs)
+                        assert not intent.exists()
                         assert len(file_calls) == 3
                         states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
                         phase = "prepared" if mode == "revoked" else mode
@@ -375,7 +403,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             print(f"PASS original Go admitted native worker wake fixture ({mode})")

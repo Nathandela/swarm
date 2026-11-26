@@ -156,7 +156,7 @@ impl Speech<'_> {
     }
 }
 
-fn publication_id(
+pub(super) fn publication_id(
     conversation: &str,
     sequence: u64,
     turn: &str,
@@ -569,8 +569,28 @@ pub(super) fn accept_wake(
     {
         return Err(invalid());
     }
-    let captures =
-        supervisor::mail_store::pin_publication(place.supervisor_root(), &selection, &publication)?;
+    let mailbox = wake_intent::prepare(
+        place,
+        cfg,
+        binding,
+        &path,
+        json!({
+            "conversation":conversation, "sequence":sequence, "turn":turn,"logical":logical,
+            "publication":publication,"native_input":proof.receipt.admission["native_input_id"],
+            "wake":proof.receipt.admission["source_id"],
+            "admission_hash":format!("{:x}",Sha256::digest(&proof.receipt.raw)),
+            "text_hash":format!("{:x}",Sha256::digest(text.as_bytes())),
+            "output_source":proof.output_source,"source":selection
+        }),
+    )?;
+    wake_fault("before-pin");
+    let captures = supervisor::mail_store::pin_original_publication(
+        place.supervisor_root(),
+        &selection,
+        &publication,
+        mailbox,
+    )?;
+    wake_fault("after-pin");
     let speech = Speech {
         logical,
         text,
@@ -578,26 +598,8 @@ pub(super) fn accept_wake(
         files: &captures,
         checkout: checkout.to_str(),
     };
-    let pub_key = key("publications", &conversation, &publication)?;
-    let mut output = match stage_records(tx, proof.receipt, &turn, &speech) {
-        Ok(output) => output,
-        Err(error) => {
-            let absent = db.begin().is_ok_and(|txn| {
-                txn.bucket(b"controller").is_some_and(|root| {
-                    root.bucket(b"records")
-                        .is_some_and(|records| records.get(&pub_key).is_none())
-                })
-            });
-            if absent {
-                supervisor::mail_store::release_publication(
-                    place.supervisor_root(),
-                    &selection,
-                    &publication,
-                )?;
-            }
-            return Err(error);
-        }
-    };
+    let mut output = stage_records(tx, proof.receipt, &turn, &speech)?;
+    wake_fault("after-voice");
     queue(cfg, lease, binding, &output, &speech)?;
     if output["exported"] != true {
         let tx = db.begin_rw().map_err(io::Error::other)?;
@@ -614,7 +616,15 @@ pub(super) fn accept_wake(
         )?;
     }
     acknowledge_export(cfg, lease, binding, &output)?;
+    wake_intent::clear(place)?;
     Ok(output)
+}
+
+fn wake_fault(_point: &str) {
+    #[cfg(test)]
+    if std::env::var("SWARM_TEST_DISCORD_WAKE_FAULT").is_ok_and(|point| point == _point) {
+        std::process::exit(86);
+    }
 }
 
 pub(super) fn complete(
