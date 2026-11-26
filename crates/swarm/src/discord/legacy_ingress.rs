@@ -387,7 +387,7 @@ impl ConnectorLease {
         let configuration = place.lock()?;
         let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
         let current = if foreground {
-            personal_enrollment(place)?
+            personal_config(place, cfg.text("project_access") == "vm")?
         } else {
             retained_config(place)?
         };
@@ -1318,6 +1318,26 @@ mod tests {
             before,
             [fs::read(&connector).unwrap(), fs::read(&voice).unwrap()]
         );
+    }
+
+    #[test]
+    fn retained_original_go_stages_native_vm_file_call() {
+        let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT") else {
+            return;
+        };
+        let root = Path::new(&root);
+        let place = Place::for_supervisor(root).unwrap();
+        let cfg = place.load().unwrap();
+        let port = std::env::var("SWARM_TEST_DISCORD_REST_PORT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
+        let marker = root.join("rust-wake-ready");
+        assert!(
+            service::with_vm_wake(&place, &api, || fs::write(marker, b"ready").unwrap()).unwrap()
+        );
+        assert!(!activation::selected(&place).unwrap());
     }
 
     #[test]

@@ -22,6 +22,14 @@ fn hash(value: &Value) -> io::Result<String> {
     Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))
 }
 
+pub(super) struct Admitted {
+    pub(super) receipt: Receipt,
+    pub(super) origin: Value,
+    pub(super) source: Value,
+    pub(super) output_source: Value,
+    pub(super) checkout_identity: (u64, u64),
+}
+
 pub(super) fn inspect<'connector, 'voice>(
     place: &Place,
     cfg: &Config,
@@ -30,7 +38,7 @@ pub(super) fn inspect<'connector, 'voice>(
     route: &Value,
     id: &str,
     endpoint: &str,
-) -> io::Result<()> {
+) -> io::Result<Admitted> {
     let root = voice.bucket(b"controller").ok_or_else(invalid)?;
     let raw = root
         .get(b"state")
@@ -109,7 +117,9 @@ pub(super) fn inspect<'connector, 'voice>(
             let admission: Value = serde_json::from_slice(raw)?;
             if field(&admission, "settled_at") == "0001-01-01T00:00:00Z"
                 && admission["native_input_id"] == active_nonce
-                && admitted.replace(admission).is_some()
+                && admitted
+                    .replace((admission, key.to_vec(), raw.to_vec()))
+                    .is_some()
             {
                 return Err(io::Error::other(
                     "duplicate live original VM native admission",
@@ -122,7 +132,7 @@ pub(super) fn inspect<'connector, 'voice>(
             "original VM voice record checksum mismatch",
         ));
     }
-    let admission =
+    let (admission, admission_key, admission_raw) =
         admitted.ok_or_else(|| io::Error::other("no unsettled original VM admission"))?;
     let sequence = admission["sequence"]
         .as_u64()
@@ -329,5 +339,22 @@ pub(super) fn inspect<'connector, 'voice>(
             "unqualified original live admitted VM turn",
         ));
     }
-    Ok(())
+    let output_source =
+        json!({"admission_id":wake_id,"job_id":event["job_id"],"attempt_id":attempt});
+    let binding = manager.clone();
+    let receipt = Receipt {
+        header,
+        binding,
+        conversation: row,
+        admission,
+        key: admission_key,
+        raw: admission_raw,
+    };
+    Ok(Admitted {
+        receipt,
+        origin: origin.clone(),
+        source,
+        output_source,
+        checkout_identity: (project_before.dev(), project_before.ino()),
+    })
 }

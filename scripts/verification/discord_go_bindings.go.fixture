@@ -4,6 +4,8 @@ package discord
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
+
 	"fmt"
 	"path/filepath"
 	"time"
@@ -113,6 +115,37 @@ func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string, attached 
 		return s.teammateQueueOutput(d, publication, time.Now().UTC(), data)
 	}
 	return s.teammateQueueOutput(d, publication, time.Now().UTC())
+}
+
+// FixtureReadStagedVMFile reopens the ordinary old-Go outbox and its media payload.
+func (s *Store) FixtureReadStagedVMFile(d TeammateDiscussion) ([][]byte, error) {
+	var out teammateOutput
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(teammateOutboxBucket))
+		prefix := []byte(d.InstallationID + "\x00" + d.ID + "\x00")
+		c := bucket.Cursor()
+		for key, raw := c.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = c.Next() {
+			var row teammateOutput
+			if err := json.Unmarshal(raw, &row); err != nil {
+				return err
+			}
+			if row.Publication.AttemptID == "" || len(row.Publication.Files) == 0 {
+				continue
+			}
+			if out.Publication.ID != "" || !row.ExportAck || len(row.Chunks) != 1 || row.Chunks[0].State != "prepared" {
+				return ErrConflict
+			}
+			out = row
+		}
+		if out.Publication.ID == "" {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.readFilePayload(d.InstallationID, out)
 }
 
 func (s *Store) FixtureFinalPayload(d TeammateDiscussion, damage bool) (int, error) {

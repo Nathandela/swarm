@@ -77,6 +77,12 @@ func main() {
 		}
 		return
 	}
+	if action == "vm-validate-staged-wake" {
+		data, err := voice.FixtureValidateStagedFileWake(dir, os.Args[3])
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(data))
+		return
+	}
 	if action == "vm-read-admitted-wake" {
 		data, err := voice.FixtureAdmittedFileWake(dir, os.Args[3])
 		check(err)
@@ -251,6 +257,14 @@ func main() {
 			time.Sleep(40 * time.Millisecond)
 		}
 		check(ctx.Err())
+	case "vm-read-staged-publication":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		payload, err := store.FixtureReadStagedVMFile(row)
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(payload))
 	case "publication-queue", "publication-read", "publication-phases", "publication-payload", "publication-damage":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

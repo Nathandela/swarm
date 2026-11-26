@@ -88,7 +88,8 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
     let state = match prepare::read_voice(&voice_tx, &ledger, cfg, &endpoint) {
         Err(_) if cfg.text("project_access") == "vm" => {
             require_no_pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?;
-            return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint);
+            return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint)
+                .map(|_| ());
         }
         result => result?,
     };

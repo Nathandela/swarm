@@ -219,3 +219,37 @@ func FixtureAdmittedFileWake(dir, settings string) ([][]byte, error) {
 	}
 	return result, nil
 }
+
+// FixtureValidateStagedFileWake verifies the ordinary original Go publication.
+func FixtureValidateStagedFileWake(dir, settings string) ([][]byte, error) {
+	store, err := OpenStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	st, err := store.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	d := DiscussionController{store: store, cfg: Config{ConversationID: st.CurrentConversation},
+		scope: DiscussionScope{VMProjectAccess: true, ManagerSettingsDir: settings}}
+	var output DiscussionOutput
+	for _, p := range st.Publications {
+		if p.DiscussionFiles == "" {
+			continue
+		}
+		if output.ID != "" {
+			return nil, ErrConflict
+		}
+		output = publicationOutput(p)
+	}
+	if output.ID == "" {
+		return nil, ErrNotFound
+	}
+	ctx := context.Background()
+	hash := schema.PublicationContentHash(output.Text, output.FileMetadata(), output.RecipientID)
+	if err := d.ValidatePublication(ctx, output, hash); err != nil {
+		return nil, err
+	}
+	return d.ReadPublicationFiles(ctx, output)
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Original Go managed personal room with an installed, loopback-only Codex."""
 import base64
+import hashlib
 import http.server
 import json
 import shlex
@@ -25,7 +26,7 @@ def run(bin, env, *args):
 
 
 
-def discord_fixture(acknowledge):
+def discord_fixture(acknowledge, wake=False):
     posts = []
     messages = {
         id: dict(id=id, type=0, channel_id="400", author=dict(id="200", username="synthetic owner"),
@@ -34,6 +35,10 @@ def discord_fixture(acknowledge):
                          ("701", "Use project former. Retained real native loopback input."),
                          ("702", "Switch to secondary. Second retained real native loopback input.")]
     }
+
+    if wake:
+        messages["701"]["content"] = "offline original owner prompt"
+        messages["701"]["author"]["username"] = "offline fixture"
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -194,6 +199,9 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
     problems = []
     capture = []
     tool_outputs = []
+    file_calls = []
+    file_sha = hashlib.sha256(original_bytes).hexdigest()
+    file_id = hashlib.sha256(f"completion.csv\0{file_sha}".encode()).hexdigest()
 
     def choose(body):
         observed = json.dumps(body["input"], ensure_ascii=False)
@@ -202,8 +210,18 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
         if "Worker message and identity" in observed:
             capture.append(observed)
             waiting.set()
-            release.wait(timeout=30)
-            return None
+            if not release.wait(timeout=60) or len(file_calls) >= 3:
+                return None
+            names = [(tool.get("name"), child.get("name"))
+                     for tool in body.get("tools", []) for child in tool.get("tools", [])
+                     if child.get("name") == "publish"]
+            assert len(names) == 1, names
+            namespace, name = names[0]
+            selected_files = [[file_id, file_id], ["0" * 64], [file_id]][len(file_calls)]
+            file_calls.append(selected_files)
+            return namespace, name, dict(output_id="retained-worker-file", sequence=1,
+                                         text="Verified retained worker file.", final=True,
+                                         file_ids=selected_files)
         with lock:
             if "rollover-worker-file-fixture" in observed and "offline original owner prompt" not in observed and "worker" not in selected and "spawn" in selected:
                 selected.add("worker")
@@ -221,6 +239,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
         return None
 
     model, _ = model_fixture(base, False, fixture_tool=choose)
+    discord, posts = discord_fixture(True, wake=True)
     try:
         place = base / "connector"
         run(fixture, env, "create", place, base / "state", "personal", "true", project)
@@ -263,6 +282,27 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
                         "--nocapture")
                     restored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
                     assert restored == stored
+                    rust_env["SWARM_TEST_DISCORD_REST_PORT"] = str(discord.server_port)
+                    stager = subprocess.Popen([rust_test, "retained_original_go_stages_native_vm_file_call", "--nocapture"],
+                                              env=rust_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    try:
+                        await_value(lambda: (base / "state/rust-wake-ready").exists() or stager.poll() is not None)
+                        assert stager.poll() is None, stager.communicate()
+                        release.set()
+                        output, errors = stager.communicate(timeout=32)
+                        assert stager.returncode == 0, (output, errors, tool_outputs)
+                        assert len(file_calls) == 3
+                        assert posts == []
+                        states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
+                        assert len(states) == 1 and states[0].startswith("prepared true "), states
+                        staged, = json.loads(run(fixture, env, "vm-read-staged-publication", place, "original-room"))
+                        assert base64.b64decode(staged) == original_bytes
+                        voice_staged, = json.loads(run(fixture, env, "vm-validate-staged-wake", ledger.parent, base / "state"))
+                        assert voice_staged == staged
+                    finally:
+                        if stager.poll() is None:
+                            stager.terminate()
+                            stager.communicate(timeout=10)
                 finally:
                     release.set()
                     if ctl.poll() is None:
@@ -274,6 +314,8 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
                 for row in listed(env):
                     owner(env, {"op": "kill", "session_id": row["id"]})
     finally:
+        discord.shutdown()
+        discord.server_close()
         model.shutdown()
         model.server_close()
 
