@@ -1252,7 +1252,19 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     json!({"op":"error","error_code":"capability_refused","error":"schedule catalog requires the owner catalog capability"})
                 };
                 reply(&writer, state, message)
-            }            "schedule_catalog_change" => {
+            }
+            "schedule_templates" => {
+                let message = if caps.contains(&crate::schedule::catalog::CAP) {
+                    crate::schedule::catalog::serve_templates(
+                        state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?,
+                    )
+                    .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
+                } else {
+                    json!({"op":"error","error_code":"capability_refused","error":"schedule catalog requires the owner catalog capability"})
+                };
+                reply(&writer, state, message)
+            }
+            "schedule_catalog_change" => {
                 let message = if caps.contains(&crate::schedule::catalog::CONTROL) {
                     crate::schedule::catalog::change(
                         state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?,
@@ -1261,6 +1273,18 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         |path| scheduling::conflict(state, path, true),
                     )
                         .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
+                } else {
+                    json!({"op":"error","error_code":"capability_refused","error":"schedule change requires the owner control capability"})
+                };
+                reply(&writer, state, message)
+            }
+            "schedule_template_change" => {
+                let message = if caps.contains(&crate::schedule::catalog::CONTROL) {
+                    crate::schedule::catalog::change_template(
+                        state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?,
+                        &request,
+                    )
+                    .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
                 } else {
                     json!({"op":"error","error_code":"capability_refused","error":"schedule change requires the owner control capability"})
                 };

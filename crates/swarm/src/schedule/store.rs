@@ -1315,7 +1315,13 @@ mod tests {
             "Fixture retained"
         );
         assert_eq!(before.attempts[0].session_id, "fixture-session");
-        assert_eq!(store.templates().unwrap()[0].prompt, "Copy me");
+        let template = store.templates().unwrap().pop().unwrap();
+        assert!(valid_id(&template.id));
+        assert_eq!(template.name, "Existing template");
+        assert_eq!(template.prompt, "Copy me");
+        assert_eq!(template.created_at, ts("2026-11-01T05:00:00Z"));
+        assert_eq!(template.updated_at, template.created_at);
+        assert_eq!(store.template(&template.id).unwrap().prompt, "Copy me");
         assert_eq!(fs::read(&path).unwrap(), fixture);
 
         let now = ts("2026-11-01T05:30:10.000000001Z");

@@ -100,12 +100,12 @@ impl Job {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Template {
-    id: String,
-    name: String,
-    prompt: String,
-    created_at: Timestamp,
-    updated_at: Timestamp,
+pub(crate) struct Template {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) prompt: String,
+    pub(crate) created_at: Timestamp,
+    pub(crate) updated_at: Timestamp,
 }
 
 fn validate_text(name: &str, prompt: &str) -> Result<()> {

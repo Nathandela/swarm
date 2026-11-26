@@ -1,5 +1,5 @@
 use super::{
-    Job, Result, Spec,
+    Job, Result, Spec, Template,
     store::{Occurrence, Store},
 };
 use crate::ipc::{Client, field};
@@ -70,6 +70,40 @@ pub(super) fn project(root: &Path, read: Read) -> Result<Records> {
     )
 }
 
+const TEMPLATES: &str = "schedule_templates";
+
+pub(crate) struct TemplateRead;
+
+impl TemplateRead {
+    #[allow(dead_code)]
+    pub(crate) fn remote(client: &mut Client) -> io::Result<Vec<Template>> {
+        if !client.supports(CAP) {
+            return Err(io::Error::other(
+                "selected supervisor does not support the automation catalog",
+            ));
+        }
+        let reply = client.request_body(json!({"op":TEMPLATES}), TEMPLATES)?;
+        if field(&reply, "endpoint_id") != client.endpoint() {
+            return Err(io::Error::other(
+                "personal template reply came from another supervisor",
+            ));
+        }
+        serde_json::from_value(reply["templates"].clone()).map_err(Into::into)
+    }
+}
+
+pub(crate) fn serve_templates(root: &Path) -> Result<Value> {
+    let templates = match Store::existing(root, Path::new("/etc/localtime"))? {
+        Some(store) => store.templates()?,
+        None => Vec::new(),
+    };
+    let reply = json!({"op":TEMPLATES,"templates":templates});
+    if serde_json::to_vec(&reply)?.len() > (1 << 20) - 1024 {
+        return Err("personal template result exceeds the owner socket frame limit".into());
+    }
+    Ok(reply)
+}
+
 pub(crate) fn serve(root: &Path, request: &Value) -> Result<Value> {
     let read = serde_json::from_value(request["query"].clone())?;
     let records = project(root, read)?;
@@ -82,6 +116,170 @@ pub(crate) fn serve(root: &Path, request: &Value) -> Result<Value> {
 
 pub(crate) const CONTROL: &str = "schedule-catalog-control-v1";
 const CHANGE: &str = "schedule_catalog_change";
+const TEMPLATE_CHANGE: &str = "schedule_template_change";
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum TemplateChange {
+    Save {
+        id: Option<String>,
+        name: String,
+        prompt: String,
+    },
+    Delete {
+        id: String,
+    },
+}
+
+impl TemplateChange {
+    #[allow(dead_code)]
+    pub(crate) fn remote(self, client: &mut Client) -> io::Result<Option<Template>> {
+        if !client.supports(CONTROL) {
+            return Err(io::Error::other(
+                "selected supervisor does not support template changes",
+            ));
+        }
+        let reply =
+            client.request_body(json!({"op":TEMPLATE_CHANGE,"change":self}), TEMPLATE_CHANGE)?;
+        if field(&reply, "endpoint_id") != client.endpoint() {
+            return Err(io::Error::other(
+                "personal template reply came from another supervisor",
+            ));
+        }
+        let template = match self {
+            Self::Save { id, name, prompt } => {
+                let template: Template = serde_json::from_value(reply["template"].clone())?;
+                if id.as_ref().is_some_and(|id| id != &template.id)
+                    || template.name != name
+                    || template.prompt != prompt
+                {
+                    return Err(io::Error::other(
+                        "personal template change reply did not match the request",
+                    ));
+                }
+                Some(template)
+            }
+            Self::Delete { id } => {
+                if field(&reply, "template_id") != id {
+                    return Err(io::Error::other(
+                        "personal template delete reply did not match the request",
+                    ));
+                }
+                None
+            }
+        };
+        Ok(template)
+    }
+}
+
+pub(crate) fn change_template(root: &Path, request: &Value) -> Result<Value> {
+    let change: TemplateChange = serde_json::from_value(request["change"].clone())?;
+    let store = Store::open(root, Path::new("/etc/localtime"))?;
+    match change {
+        TemplateChange::Save { id, name, prompt } => {
+            if id.as_ref().is_some_and(|id| !super::valid_id(id)) {
+                return Err("invalid personal template ID".into());
+            }
+            let template =
+                store.save_template(id.as_deref(), name, prompt, jiff::Timestamp::now())?;
+            Ok(json!({"op":TEMPLATE_CHANGE,"template":template}))
+        }
+        TemplateChange::Delete { id } => {
+            if !super::valid_id(&id) {
+                return Err("invalid personal template ID".into());
+            }
+            store.delete_template(&id)?;
+            Ok(json!({"op":TEMPLATE_CHANGE,"template_id":id}))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs::{self, OpenOptions},
+        os::unix::fs::OpenOptionsExt,
+        path::PathBuf,
+    };
+
+    struct Temp(PathBuf);
+
+    impl Temp {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "swarm-template-catalog-{}",
+                super::super::id(jiff::Timestamp::now()).unwrap()
+            ));
+            crate::supervisor::runtime::private_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn with_go_catalog() -> Self {
+            let temp = Self::new();
+            let directory = temp.0.join("schedules");
+            crate::supervisor::runtime::private_dir(&directory).unwrap();
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(directory.join("state.db"))
+                .unwrap();
+            std::io::Write::write_all(
+                &mut file,
+                include_bytes!("../../tests/fixtures/schedule/go-catalog.db"),
+            )
+            .unwrap();
+            temp
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn template_catalog_operations_preserve_go_written_template() {
+        let temp = Temp::with_go_catalog();
+        Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        let listed = serve_templates(&temp.0).unwrap();
+        let templates: Vec<Template> = serde_json::from_value(listed["templates"].clone()).unwrap();
+        assert_eq!(templates.len(), 1);
+        let original = &templates[0];
+        assert_eq!(original.name, "Existing template");
+        assert_eq!(original.prompt, "Copy me");
+        assert_eq!(original.created_at, "2026-11-01T05:00:00Z".parse().unwrap());
+
+        let created = change_template(
+            &temp.0,
+            &json!({"change":{"kind":"save","name":"New","prompt":"First\nSecond"}}),
+        )
+        .unwrap();
+        let created: Template = serde_json::from_value(created["template"].clone()).unwrap();
+        let edited = change_template(
+            &temp.0,
+            &json!({"change":{"kind":"save","id":created.id,"name":"Edited","prompt":"Updated"}}),
+        )
+        .unwrap();
+        let edited: Template = serde_json::from_value(edited["template"].clone()).unwrap();
+        assert_eq!(edited.id, created.id);
+        assert_eq!(edited.created_at, created.created_at);
+        assert_eq!(edited.name, "Edited");
+
+        let deleted =
+            change_template(&temp.0, &json!({"change":{"kind":"delete","id":edited.id}})).unwrap();
+        assert_eq!(deleted["template_id"], created.id);
+        let templates = Store::open(&temp.0, Path::new("/etc/localtime"))
+            .unwrap()
+            .templates()
+            .unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].id, original.id);
+        assert_eq!(templates[0].prompt, "Copy me");
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
