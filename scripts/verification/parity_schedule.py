@@ -60,6 +60,22 @@ esac
 """
 
 
+PROBE_TIMEOUT = """#!/bin/sh
+root="$HOME/.."
+if [ "$1" = "--version" ] && [ -f "$root/effects/probe-fault" ]; then
+    mode=$(cat "$root/effects/probe-fault")
+    printf '%s\n' "$mode" >> "$root/effects/probe-attempts"
+    case "$mode" in
+      once) printf 'recover\n' > "$root/effects/probe-fault"; kill -STOP "$$" ;;
+      recover) rm "$root/effects/probe-fault" ;;
+      always) kill -STOP "$$" ;;
+      *) exit 98 ;;
+    esac
+fi
+exec "$root/bin/codex-fixture" "$@"
+"""
+
+
 def render_invocation(root):
     if sys.platform == "darwin":
         path = root / "home/Library/LaunchAgents/com.swarm.schedule.plist"
@@ -87,7 +103,7 @@ def call_fixture(app, path, method="GET"):
     return body
 
 
-def verify(candidate, provider):
+def verify(candidate, provider, probe_timeout=False):
     root = Path(tempfile.mkdtemp(prefix="sr-", dir=Path("/tmp").resolve()))
     daemon = None
     previous = {}
@@ -98,6 +114,13 @@ def verify(candidate, provider):
             dest = root / "bin" / name
             shutil.copyfile(source, dest)
             dest.chmod(0o700)
+        fault = root / "effects/probe-fault"
+        attempts = root / "effects/probe-attempts"
+        if probe_timeout:
+            wrapper = root / "bin/codex"
+            wrapper.rename(wrapper.with_name("codex-fixture"))
+            wrapper.write_text(PROBE_TIMEOUT)
+            wrapper.chmod(0o700)
         fake = root / "bin" / ("launchctl" if sys.platform == "darwin" else "systemctl")
         fake.write_text(LAUNCHCTL if sys.platform == "darwin" else SYSTEMCTL)
         fake.chmod(0o700)
@@ -132,29 +155,48 @@ def verify(candidate, provider):
             job = json.loads(schedule(
                 "create", "--name", "Cold schedule", "--dir", str(root / "work"),
                 "--agents", "codex", "--authority", "workspace-write", "--workspace", "directory",
-                "--cron", "* * * * *", "--timezone", "UTC", "--catch-up", "2m", "--prompt-file", "-",
+                "--cron", "0 0 31 12 *" if probe_timeout else "* * * * *", "--timezone", "UTC", "--catch-up", "2m", "--prompt-file", "-",
                 stdin=prompt,
             ))
-            schedule("timer", "install")
-            assert schedule("timer", "status").strip() == "installed, active"
-            tick_argv, tick_env = render_invocation(root)
-            assert tick_argv[-3:] == [str(executable), "schedule", "tick"]
-            assert tick_env["SWARM_DAEMON_STATE"] == str(root / "state")
+            if probe_timeout:
+                fault.write_text("once\n")
+                run_args = ("schedule", "run", job["id"], "--operation-id", job["id"])
+                with subprocess.Popen([*guard, executable, *run_args], cwd=root / "work",
+                                      env=env, text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE) as first_call:
+                    fixtures.wait_for(attempts.exists, "paused first version probe")
+                    replay = invoke(*run_args).strip()
+                    output, error = first_call.communicate(timeout=15)
+                    assert first_call.returncode == 0 and output.strip() == replay, error
+                first, = history()
+                assert first["manual"] and first["state"] == "working", first
+                assert len(first["attempts"]) == 1 and first["attempts"][0]["session_id"], first
+                # Retrying the same durable invocation cannot start a second worker.
+                schedule("run", job["id"], "--operation-id", job["id"])
+                again, = history()
+                assert again["attempts"] == first["attempts"]
+                assert attempts.read_text().splitlines() == ["once", "recover"]
+            else:
+                schedule("timer", "install")
+                assert schedule("timer", "status").strip() == "installed, active"
+                tick_argv, tick_env = render_invocation(root)
+                assert tick_argv[-3:] == [str(executable), "schedule", "tick"]
+                assert tick_env["SWARM_DAEMON_STATE"] == str(root / "state")
 
-            daemon.kill()
-            daemon.wait(timeout=5)
-            now = datetime.now(timezone.utc)
-            created = datetime.fromisoformat(job["created_at"].replace("Z", "+00:00"))
-            until_due = (int(created.timestamp()) // 60 + 1) * 60 - now.timestamp()
-            if until_due > 0:
-                time.sleep(until_due + 0.1)
-            # Invoke exactly the installed unit with no fixture provider on the timer's PATH.
-            cold = {"PATH": "/usr/bin:/bin", "HOME": str(root / "none"), **tick_env}
-            completed = subprocess.run([*guard, *tick_argv], cwd=root / "work", env=cold,
-                                       text=True, capture_output=True, timeout=15)
-            assert completed.returncode == 0, completed.stderr
-            first, = history()
-            assert first["state"] == "working" and not first["manual"], first
+                daemon.kill()
+                daemon.wait(timeout=5)
+                now = datetime.now(timezone.utc)
+                created = datetime.fromisoformat(job["created_at"].replace("Z", "+00:00"))
+                until_due = (int(created.timestamp()) // 60 + 1) * 60 - now.timestamp()
+                if until_due > 0:
+                    time.sleep(until_due + 0.1)
+                # Invoke exactly the installed unit with no fixture provider on the timer's PATH.
+                cold = {"PATH": "/usr/bin:/bin", "HOME": str(root / "none"), **tick_env}
+                completed = subprocess.run([*guard, *tick_argv], cwd=root / "work", env=cold,
+                                           text=True, capture_output=True, timeout=15)
+                assert completed.returncode == 0, completed.stderr
+                first, = history()
+                assert first["state"] == "working" and not first["manual"], first
             worker, = rows()
             session = worker["id"]
             session_dir = root / "state/rust-v1" / session.split("/")[1]
@@ -185,7 +227,8 @@ def verify(candidate, provider):
             receipt, = history()
             assert receipt["state"] == "working" and receipt["completion"]["summary"] == "Fixture assistant result"
             # Keep only this occurrence while repeating ticks (including at the next real minute).
-            schedule("pause", job["id"])
+            if not probe_timeout:
+                schedule("pause", job["id"])
             call_fixture(app, "/fixture/schedule-finish", "POST")
             fixtures.wait_for(lambda: (session_dir / "schedule-finish.json").exists(), "independent final assistant message")
             schedule("tick")
@@ -202,9 +245,22 @@ def verify(candidate, provider):
                 return history()[0]["released_at"] != "0001-01-01T00:00:00Z"
 
             fixtures.wait_for(workspace_released, "verified shim exit and workspace release")
-            schedule("timer", "uninstall")
-            assert schedule("timer", "status").strip() == "not installed, inactive"
-            print("Cold generated timer restored private PATH, admitted one exact worker, scoped receipt, verified final assistant item and released workspace.")
+            if probe_timeout:
+                fault.write_text("always\n")
+                schedule("run", job["id"])
+                failed, prior = history()
+                assert prior["id"] == first["id"] and prior["state"] == "ready", prior
+                assert failed["state"] == "exhausted" and len(failed["attempts"]) == 1, failed
+                refused, = failed["attempts"]
+                assert refused["state"] == "rejected" and refused["detail"] == "provider command timed out", refused
+                assert "session_id" not in refused and not refused.get("prompt_started"), refused
+                assert len(rows()) == 1 and rows()[0]["id"] == session
+                assert attempts.read_text().splitlines() == ["once", "recover", "always", "always"]
+                print("One controlled version timeout recovered with one durable occurrence and native turn. Two timeouts refused before native reservation.")
+            else:
+                schedule("timer", "uninstall")
+                assert schedule("timer", "status").strip() == "not installed, inactive"
+                print("Cold generated timer restored private PATH, admitted one exact worker, scoped receipt, verified final assistant item and released workspace.")
     finally:
         if daemon and daemon.poll() is None:
             daemon.terminate()
@@ -220,5 +276,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=fixtures.binary_path)
     parser.add_argument("--provider", required=True, type=fixtures.binary_path)
+    parser.add_argument("--probe-timeout", action="store_true")
     args = parser.parse_args()
-    verify(args.candidate, args.provider)
+    verify(args.candidate, args.provider, args.probe_timeout)

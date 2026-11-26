@@ -295,14 +295,36 @@ fn version_banner(
 ) -> io::Result<String> {
     // A cold Hermes release probe also initializes its Python runtime.
     let budget = Duration::from_secs(if agent == "hermes" { 10 } else { 5 });
-    command_output(
-        executable,
-        cwd,
-        environment,
-        &["--version"],
-        budget,
-        16 * 1024,
-    )
+    let before = identity(executable)?;
+    let probe = || {
+        command_output(
+            executable,
+            cwd,
+            environment,
+            &["--version"],
+            budget,
+            16 * 1024,
+        )
+    };
+    let output = match probe() {
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+            // Retry only the read-only version probe, before reservation or a native write.
+            // Wrappers can change their target independently of their inode, so never cache a banner.
+            if identity(executable)? != before {
+                return Err(io::Error::other(
+                    "provider executable changed after version timeout",
+                ));
+            }
+            probe()
+        }
+        result => result,
+    }?;
+    if identity(executable)? != before {
+        return Err(io::Error::other(
+            "provider executable changed during version probe",
+        ));
+    }
+    Ok(output)
 }
 
 fn admitted_version<'a>(agent: &str, output: &'a str) -> io::Result<&'a str> {
@@ -456,9 +478,9 @@ fn command_output(
     } else {
         Stdio::null()
     };
-    let export = args.first() == Some(&"export");
+    let isolated = args == ["--version"] || args.first() == Some(&"export");
     let mut command = Command::new(executable);
-    if export {
+    if isolated {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
@@ -478,8 +500,9 @@ fn command_output(
         .stdout(Stdio::from(OwnedFd::from(writer)))
         .stderr(stderr)
         .spawn()?;
+    drop(command);
     let mut reaped = false;
-    let kill_export_group = |pid: u32| {
+    let kill_group = |pid: u32| {
         // SAFETY: the creator put this unreaped child in a dedicated process group.
         unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
     };
@@ -488,23 +511,27 @@ fn command_output(
         let mut buffer = [0; 1024];
         let mut output = Vec::new();
         let deadline = Instant::now() + budget;
-        loop {
-            let idle = match output_socket.read(&mut buffer) {
-                Ok(0) => true,
+        let timeout = || io::Error::new(io::ErrorKind::TimedOut, "provider command timed out");
+        let mut read = || -> io::Result<bool> {
+            match output_socket.read(&mut buffer) {
+                Ok(0) => Ok(true),
                 Ok(n) => {
                     output.extend_from_slice(&buffer[..n]);
                     if output.len() > limit {
                         return Err(io::Error::other("provider command output exceeds limit"));
                     }
-                    false
+                    Ok(false)
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => true,
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => false,
-                Err(err) => return Err(err),
-            };
-            let status = if idle && export {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(true),
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(false),
+                Err(err) => Err(err),
+            }
+        };
+        loop {
+            let idle = read()?;
+            let status = if idle && isolated {
                 if crate::supervisor::runtime::child_exited(&child)? {
-                    kill_export_group(child.id());
+                    kill_group(child.id());
                     Some(child.wait()?)
                 } else {
                     None
@@ -519,11 +546,18 @@ fn command_output(
                 if !status.success() {
                     return Err(io::Error::other("provider command failed"));
                 }
+                // An empty read can race with the child writing and exiting. Drain
+                // what it buffered before exit without waiting for an inherited fd.
+                while !read()? {
+                    if Instant::now() >= deadline {
+                        return Err(timeout());
+                    }
+                }
                 return String::from_utf8(output)
                     .map_err(|_| io::Error::other("provider command output is not UTF-8"));
             }
             if Instant::now() >= deadline {
-                return Err(io::Error::other("provider command timed out"));
+                return Err(timeout());
             }
             if idle {
                 std::thread::sleep(Duration::from_millis(10));
@@ -531,8 +565,8 @@ fn command_output(
         }
     })();
     if result.is_err() {
-        if export && !reaped {
-            kill_export_group(child.id());
+        if isolated && !reaped {
+            kill_group(child.id());
         }
         let _ = child.kill();
         let _ = child.wait();
