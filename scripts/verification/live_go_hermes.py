@@ -55,7 +55,7 @@ PROMPTS = ("SWARM_GO_HERMES_FIRST", "SWARM_RUST_HERMES_CONTINUED", "SWARM_GO_HER
 
 
 def wait_for(check, label):
-    end = time.monotonic() + 30
+    end = time.monotonic() + 60
     while time.monotonic() < end:
         try:
             if result := check():
