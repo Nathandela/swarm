@@ -382,6 +382,7 @@ mod tests {
         );
         body["text"] = json!("different");
         assert!(reject_unadmitted(&root, &operation, session, "replacement", &body).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
