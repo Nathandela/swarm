@@ -1988,6 +1988,10 @@ impl Session {
         Ok(Some(record["receipt"].clone()))
     }
 
+    pub(super) fn is_scheduled_agy(&self) -> bool {
+        self.agent == "agy" && self.schedule.is_some()
+    }
+
     pub(super) fn status_exchange(&self, request: &Value) -> io::Result<Value> {
         let mut shim = self.dial()?;
         runtime::write_control(&mut shim, request)?;

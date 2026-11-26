@@ -54,7 +54,9 @@ pub fn run(args: &[String]) -> i32 {
         "requests" | "decide" => &["native-requests-v1"],
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
-        "handoff" | "send" | "kill" | "peek" => &[],
+        "peek" if peek_route().is_some() => &["agy-permission-cli-v1"],
+        "send" => &["agy-permission-cli-v1"],
+        "handoff" | "kill" | "peek" => &[],
         _ => unreachable!(),
     };
     let path = match socket_path() {
@@ -445,6 +447,23 @@ fn list(client: &mut Client, args: &[String]) -> CliResult {
     Ok(())
 }
 
+fn foreground_tty(fd: std::os::fd::RawFd) -> bool {
+    unsafe { libc::tcgetpgrp(fd) == libc::getpid() }
+}
+
+fn peek_route() -> Option<&'static str> {
+    let fd = libc::STDOUT_FILENO;
+    if foreground_tty(fd) {
+        return Some("tty");
+    }
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let stat = unsafe { stat.assume_init() };
+    (stat.st_mode & libc::S_IFMT == libc::S_IFIFO).then_some("pipe")
+}
+
 fn peek(client: &mut Client, args: &[String]) -> CliResult {
     let Some((id, args)) = args.split_first().filter(|(id, _)| !id.starts_with('-')) else {
         return Err((
@@ -469,9 +488,15 @@ fn peek(client: &mut Client, args: &[String]) -> CliResult {
     }
 
     let local = id.split_once('/').map_or(id.as_str(), |(_, local)| local);
-    client
-        .request("terminal_subscribe", Some(id), "ok")
-        .map_err(report)?;
+    if client.supports("agy-permission-cli-v1") {
+        client.request_body(
+            json!({"op":"terminal_subscribe","session_id":id,"permission_route":peek_route()}),
+            "ok",
+        )
+    } else {
+        client.request("terminal_subscribe", Some(id), "ok")
+    }
+    .map_err(report)?;
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     loop {
         let push = client.push(deadline).map_err(|err| {
@@ -499,6 +524,23 @@ fn peek(client: &mut Client, args: &[String]) -> CliResult {
                 .as_str()
                 .ok_or_else(|| (1, "protocol: invalid terminal line".into()))?;
             writeln!(output, "{line}").map_err(report)?;
+        }
+        output.flush().map_err(report)?;
+        let permission = &snapshot["agy_permission"];
+        if client.supports("agy-permission-cli-v1")
+            && let Some(menu) = permission["lines"].as_array()
+            && !menu.is_empty()
+            && lines[start..].windows(menu.len()).any(|lines| {
+                lines
+                    .iter()
+                    .map(|line| line.as_str().map(str::trim_end))
+                    .eq(menu.iter().map(Value::as_str))
+            })
+            && peek_route().is_some()
+        {
+            client.request_body(json!({
+                "op":"agy_permission_peeked","session_id":id,"request":permission["request"],
+            }),"ok").map_err(report)?;
         }
         return Ok(());
     }

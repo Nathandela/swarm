@@ -247,12 +247,8 @@ def verify(binary, native, root):
                         in lines
                         and "1. Allow" in lines
                     ):
-                        # Older migration builds identify the visible request with a code.
-                        match = re.search(
-                            r"option number followed by ([a-f0-9]{12})", screen
-                        )
-                        reply = f"1 {match.group(1)}" if match else "1"
-                        cli("send", sid, "--text", reply)
+                        assert not re.search(r"option number followed by [a-f0-9]{12}", screen)
+                        cli("send", sid, "--text", "1")
                         approved = True
             if runs and runs[0]["state"] in (
                 "ready",
