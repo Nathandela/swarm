@@ -145,7 +145,7 @@ fn run_guild(
     if inbox.cursor().is_none() {
         inbox.checkpoint("")?;
     }
-    let (mut gateway_socket, mut cursor) = gateway::open(cfg)?;
+    let (gateway_socket, cursor) = gateway::open(cfg)?;
     let _guild_authority = {
         let verifier = Discord::connect(cfg)?;
         super::worker_proof::Service::bind(
@@ -167,6 +167,19 @@ fn run_guild(
     } else {
         None
     };
+    let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
+    let scope = call_start
+        .as_ref()
+        .ok()
+        .and_then(|_| dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg)));
+    let driver =
+        super::call_runtime::Driver::start(gateway_socket, cursor, cfg, &place.dir, scope.clone());
+    drop(call_start);
+    use super::call_runtime::Ingress;
+    use std::sync::atomic::Ordering;
+    driver
+        .discussion_ready
+        .store(!inbox.manager()["binding"].is_null(), Ordering::Release);
     loop {
         if worker_send
             .as_ref()
@@ -182,11 +195,10 @@ fn run_guild(
         if bridge.serve(
             cfg,
             &mut inbox,
-            cursor.sequence(),
+            driver.sequence.load(Ordering::Acquire),
             dispatcher.is_some(),
-            "unavailable",
+            driver.status(),
         )? {
-            let _ = gateway_socket.close(None);
             return Ok(());
         }
         super::worker::tick(
@@ -199,10 +211,27 @@ fn run_guild(
         if worker_send.is_none()
             && let (Some(dispatcher), Some(thread)) = (&dispatcher, &thread)
         {
-            dispatcher.tick_calls(cfg, &mut inbox, thread, None)?;
+            dispatcher.tick_calls(cfg, &mut inbox, thread, Some((&place.dir, &driver)))?;
+            driver
+                .discussion_ready
+                .store(!inbox.manager()["binding"].is_null(), Ordering::Release);
         }
-        let Some(event) = cursor.event(&mut gateway_socket)? else {
-            continue;
+        let event = match driver.inbound.recv_timeout(Duration::from_millis(200)) {
+            Ok(Ok(Ingress::Discord(event))) => event,
+            Ok(Ok(Ingress::Transcript(origin, text))) => {
+                if let Some(scope) = &scope
+                    && !inbox.manager()["binding"].is_null()
+                    && super::call_runtime::verify_live(&place.dir, &origin).is_ok()
+                {
+                    inbox.admit_voice(scope, origin, &text)?;
+                }
+                continue;
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(invalid("Discord Gateway owner exited"));
+            }
         };
         if let Some(flight) = &worker_send {
             use super::worker_proof::Invalidation;

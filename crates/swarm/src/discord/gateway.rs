@@ -138,7 +138,14 @@ pub(super) fn ready(
     let intents = if config.text("mode") == "personal" {
         1 << 12 | if calls { 1 | 1 << 7 } else { 0 }
     } else {
-        1 | (1 << 9) | (1 << 12) | (1 << 15)
+        1 | (1 << 9)
+            | (1 << 12)
+            | (1 << 15)
+            | if config.text("mode") == "teammate" && config.0["calls"]["mode"] == "team" {
+                1 << 7
+            } else {
+                0
+            }
     };
     send(
         socket,

@@ -1,4 +1,5 @@
-//! Personal room consent follows a fresh Discord roster and is never replayed.
+//! Room consent follows a fresh Discord roster and is never replayed.
+use super::call_team::{Consent, Scope};
 use super::config::{invalid, snowflake};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -24,6 +25,8 @@ pub(super) struct Room {
     awaiting_leave: bool,
     leave_sent: bool,
     suspended: bool,
+    team: Option<(Scope, Consent)>,
+    roster_version: u64,
 }
 
 #[derive(PartialEq)]
@@ -38,6 +41,7 @@ struct Epoch {
     last_speech: Instant,
     joined_after: Option<u64>,
     ready: bool,
+    speakers: Vec<String>,
 }
 
 pub(super) enum Change {
@@ -67,34 +71,124 @@ impl Room {
             awaiting_leave: false,
             leave_sent: false,
             suspended: false,
+            team: None,
+            roster_version: 0,
         })
     }
 
-    pub(super) fn begin(&mut self, now: Instant) -> Option<u64> {
+    pub(super) fn team(mut self, scope: Scope) -> Self {
+        self.team = Some((scope, Consent::default()));
+        self
+    }
+
+    pub(super) fn is_team(&self) -> bool {
+        self.team.is_some()
+    }
+
+    pub(super) fn team_scope(&self) -> Option<&Scope> {
+        self.team.as_ref().map(|(scope, _)| scope)
+    }
+
+    pub(super) fn team_control(&mut self, event: &Value, now: u64) -> (bool, Change) {
+        let Some((scope, consent)) = &mut self.team else {
+            return (false, Change::Ignore);
+        };
+        if event["d"]["guild_id"] == scope.guild
+            && event["d"]["channel_id"] == scope.thread
+            && consent.revoked(event)
+        {
+            consent.close(now);
+            return (true, self.end());
+        }
+        let (handled, command) = scope.control(event, now);
+        let ended = command.is_some_and(|command| {
+            let session = self
+                .occupants
+                .get(&command.user)
+                .filter(|presence| self.anchor && presence.allowed)
+                .map(|presence| presence.session.as_str());
+            consent.apply(command, session, now)
+        });
+        (handled, if ended { self.end() } else { Change::Ignore })
+    }
+
+    pub(super) fn team_candidate(&self, now: u64) -> Option<(u64, Vec<String>, u64)> {
+        let (scope, consent) = self.team.as_ref()?;
         if !self.anchor
             || self.suspended
-            || self.attempted
-            || self.awaiting_leave
-            || self.active.is_some()
-            || self.bot_room.is_some()
-            || self.occupants.len() != 1
-            || !self
+            || self.occupants.is_empty()
+            || self
                 .occupants
-                .get(&self.owner)
-                .is_some_and(|owner| owner.allowed)
+                .iter()
+                .any(|(user, presence)| !presence.allowed || !scope.configured(user))
         {
             return None;
         }
+        let valid_until = consent.deadline(
+            self.occupants
+                .iter()
+                .map(|(user, presence)| (user.as_str(), presence.session.as_str())),
+            now,
+        )?;
+        Some((
+            self.roster_version,
+            self.occupants.keys().cloned().collect(),
+            valid_until,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn begin(&mut self, now: Instant) -> Option<u64> {
+        self.begin_verified(now, 0, None)
+            .map(|(generation, _)| generation)
+    }
+
+    pub(super) fn begin_verified(
+        &mut self,
+        now: Instant,
+        wall: u64,
+        approved: Option<u64>,
+    ) -> Option<(u64, Vec<String>)> {
+        if !self.anchor
+            || self.suspended
+            || self.awaiting_leave
+            || self.active.is_some()
+            || self.bot_room.is_some()
+        {
+            return None;
+        }
+        let (speakers, deadline) = if self.is_team() {
+            let (version, speakers, until) = self.team_candidate(wall)?;
+            if approved != Some(version) {
+                return None;
+            }
+            (
+                speakers,
+                now + Duration::from_millis(until.saturating_sub(wall)).min(MAX_CALL),
+            )
+        } else {
+            if self.attempted
+                || self.occupants.len() != 1
+                || !self
+                    .occupants
+                    .get(&self.owner)
+                    .is_some_and(|owner| owner.allowed)
+            {
+                return None;
+            }
+            self.attempted = true;
+            (vec![self.owner.clone()], now + MAX_CALL)
+        };
         self.generation = self.generation.checked_add(1)?;
         self.active = Some(Epoch {
             generation: self.generation,
-            deadline: now + MAX_CALL,
+            deadline,
             last_speech: now,
             joined_after: None,
             ready: false,
+            speakers: speakers.clone(),
         });
-        self.attempted = true;
-        Some(self.generation)
+        Some((self.generation, speakers))
     }
 
     pub(super) fn join(&mut self, generation: u64, now: Instant) -> Option<Value> {
@@ -126,11 +220,9 @@ impl Room {
         speech: bool,
         now: Instant,
     ) -> bool {
-        if speaker != self.owner {
-            return false;
-        }
         if let Some(active) = self.current(generation, now)
             && active.ready
+            && active.speakers.iter().any(|user| user == speaker)
         {
             if speech {
                 active.last_speech = now;
@@ -159,6 +251,9 @@ impl Room {
     fn end(&mut self) -> Change {
         if let Some(epoch) = self.active.take() {
             self.awaiting_leave |= epoch.joined_after.is_some();
+            if let Some((_, consent)) = &mut self.team {
+                consent.close(crate::ipc::spawn::now_ms());
+            }
             return Change::End;
         }
         Change::Ignore
@@ -195,6 +290,17 @@ impl Room {
             | "GUILD_ROLE_CREATE"
             | "GUILD_ROLE_UPDATE"
             | "GUILD_ROLE_DELETE" => &data["guild_id"],
+            "THREAD_UPDATE"
+            | "THREAD_DELETE"
+            | "THREAD_MEMBERS_UPDATE"
+            | "THREAD_MEMBER_UPDATE"
+                if self
+                    .team
+                    .as_ref()
+                    .is_some_and(|(scope, _)| data["id"] == scope.thread) =>
+            {
+                &data["guild_id"]
+            }
             _ => return Change::Ignore,
         };
         if guild
@@ -217,6 +323,10 @@ impl Room {
         self.sequence = sequence;
         match kind {
             "GUILD_CREATE" => {
+                self.roster_version += 1;
+                if let Some((_, consent)) = &mut self.team {
+                    consent.close(crate::ipc::spawn::now_ms());
+                }
                 let ended = self.end();
                 self.anchor = self.snapshot(data);
                 // Only a confirmed empty bot state clears a pending leave.
@@ -239,8 +349,21 @@ impl Room {
                 .map_or(Change::Ignore, |_| Change::Voice(event.clone())),
             "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" => Change::Ignore,
             _ => {
-                // Any scoped access change requires a fresh authoritative snapshot.
-                self.anchor = false;
+                self.roster_version += 1;
+                if let Some((_, consent)) = &mut self.team {
+                    // Continuous voice states still describe occupancy. New media
+                    // needs new consents and a fresh permission decision.
+                    consent.close(crate::ipc::spawn::now_ms());
+                    if kind == "GUILD_DELETE"
+                        || data["unavailable"] == true
+                        || matches!(kind, "CHANNEL_UPDATE" | "CHANNEL_DELETE")
+                            && data["id"] == self.room
+                    {
+                        self.anchor = false;
+                    }
+                } else {
+                    self.anchor = false;
+                }
                 self.end()
             }
         }
@@ -334,6 +457,12 @@ impl Room {
         }
         if channel != Some(&self.room) {
             let removed = self.occupants.remove(user).is_some();
+            if removed {
+                self.roster_version += 1;
+                if let Some((_, consent)) = &mut self.team {
+                    consent.remove(user);
+                }
+            }
             if user == self.owner && removed {
                 self.attempted = false;
             }
@@ -345,6 +474,10 @@ impl Room {
         };
         if self.occupants.get(user) == Some(&next) {
             return Change::Ignore;
+        }
+        self.roster_version += 1;
+        if let Some((_, consent)) = &mut self.team {
+            consent.remove(user);
         }
         self.occupants.insert(user.into(), next);
         self.end()

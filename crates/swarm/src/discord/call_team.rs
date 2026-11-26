@@ -9,7 +9,7 @@ const COMMAND_AGE_MS: u64 = 30_000;
 const CLOCK_SKEW_MS: u64 = 2_000;
 const CONSENT_MS: u64 = 30 * 60 * 1_000;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Scope {
     pub(super) guild: String,
     pub(super) room: String,
@@ -193,7 +193,6 @@ impl Scope {
             return Ok(false);
         }
         const ADMIN: u64 = 1 << 3;
-        const MANAGE_THREADS: u64 = 1 << 34;
         const REQUIRED_TEXT: u64 = (1 << 10) | (1 << 16) | (1 << 38);
         const REQUIRED_VOICE: u64 = (1 << 10) | (1 << 20) | (1 << 21);
         for user in std::iter::once(&self.bot).chain(speakers) {
@@ -222,7 +221,7 @@ impl Scope {
             {
                 return Ok(false);
             }
-            if private && text & (ADMIN | MANAGE_THREADS) == 0 {
+            if private {
                 let Some(member) =
                     get(&format!("/channels/{}/thread-members/{user}", self.thread))?
                 else {
@@ -250,7 +249,7 @@ enum Action {
 
 pub(super) struct Control {
     action: Action,
-    user: String,
+    pub(super) user: String,
     id: u64,
     issued: u64,
 }
@@ -260,9 +259,10 @@ pub(super) struct Control {
 #[derive(Default)]
 pub(super) struct Consent {
     by_user: BTreeMap<String, (String, u64)>,
+    sources: BTreeSet<u64>,
     last_control: BTreeMap<String, u64>,
     last_leave: u64,
-    invited_until: u64,
+    invitation: Option<(String, u64)>,
     rearm_after: u64,
 }
 
@@ -292,11 +292,16 @@ impl Consent {
             return false;
         }
         let deadline = control.issued.saturating_add(CONSENT_MS);
+        if self.sources.len() >= 256 {
+            self.close(now);
+            return true;
+        }
+        self.sources.insert(control.id);
+        if control.action == Action::Join {
+            self.invitation = Some((control.user.clone(), deadline));
+        }
         self.by_user
             .insert(control.user, (session.to_owned(), deadline));
-        if control.action == Action::Join {
-            self.invited_until = deadline;
-        }
         false
     }
 
@@ -305,10 +310,10 @@ impl Consent {
         participants: impl Iterator<Item = (&'a str, &'a str)>,
         now: u64,
     ) -> Option<u64> {
-        if self.invited_until <= now {
+        let mut deadline = self.invitation.as_ref()?.1;
+        if deadline <= now {
             return None;
         }
-        let mut deadline = self.invited_until;
         let mut count = 0;
         for (user, session) in participants {
             let (bound, until) = self.by_user.get(user)?;
@@ -321,10 +326,38 @@ impl Consent {
         (count > 0).then_some(deadline)
     }
 
+    pub(super) fn revoked(&self, event: &Value) -> bool {
+        let data = &event["d"];
+        let contains = |id: &Value| {
+            id.as_str()
+                .and_then(|id| id.parse::<u64>().ok())
+                .is_some_and(|id| self.sources.contains(&id))
+        };
+        match event["t"].as_str() {
+            Some("MESSAGE_UPDATE" | "MESSAGE_DELETE") => contains(&data["id"]),
+            Some("MESSAGE_DELETE_BULK") => data["ids"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(contains)),
+            _ => false,
+        }
+    }
+
+    pub(super) fn remove(&mut self, user: &str) {
+        self.by_user.remove(user);
+        if self
+            .invitation
+            .as_ref()
+            .is_some_and(|(inviter, _)| inviter == user)
+        {
+            self.invitation = None;
+        }
+    }
+
     pub(super) fn close(&mut self, at: u64) {
         self.rearm_after = self.rearm_after.max(at);
         self.by_user.clear();
-        self.invited_until = 0;
+        self.sources.clear();
+        self.invitation = None;
     }
 }
 

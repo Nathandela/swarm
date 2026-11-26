@@ -294,7 +294,13 @@ impl Inbox {
         if scope["installation_id"] != installation
             || scope["application_id"] != app
             || scope["owner_id"] != owner
-            || scope["channel_id"] != channel
+            || if let Some(guild) = scope["guild_id"].as_str().filter(|id| snowflake(id)) {
+                !channel.is_empty()
+                    || self.data["team_discussion"]["guild_id"] != guild
+                    || self.data["team_discussion"]["thread_id"] != scope["channel_id"]
+            } else {
+                scope["channel_id"] != channel
+            }
             || scope["supervisor_socket"] != supervisor
             || self.cursor().is_none()
         {
@@ -315,8 +321,8 @@ impl Inbox {
         }
         let receipt = json!({
             "operation_id":id, "revision":origin["revision"], "text":text,
-            "route":{"guild_id":"","channel_id":channel},
-            "author":{"id":owner}, "authority":"owner_direct", "supervisor_socket":supervisor,
+            "route":{"guild_id":scope["guild_id"].as_str().unwrap_or_default(),"channel_id":scope["channel_id"]},
+            "author":{"id":origin["actor_id"]}, "authority":origin["kind"], "supervisor_socket":supervisor,
             "state":"prepared", "voice_origin":origin,
         });
         let mut next = self.data.clone();

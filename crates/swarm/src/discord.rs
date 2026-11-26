@@ -5,8 +5,6 @@ pub(crate) use worker_input::{
 };
 mod call_runtime;
 mod call_speech;
-#[cfg(test)]
-
 mod call_team;
 
 mod call_floor;
