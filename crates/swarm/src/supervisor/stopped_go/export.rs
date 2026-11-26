@@ -141,6 +141,17 @@ pub(in crate::supervisor) fn collect(root: &Path) -> io::Result<Vec<PathBuf>> {
         let entry = entry?;
         let path = entry.path();
         let entry_type = entry.file_type()?;
+        // Native attempts keep diagnostic output here while Go owns the original log.
+        if entry.file_name() == "daemon.log" && entry_type.is_file() {
+            let meta = fs::symlink_metadata(&path)?;
+            if meta.is_file()
+                && meta.uid() == runtime::uid()
+                && meta.nlink() == 1
+                && meta.mode() & 0o077 == 0
+            {
+                continue;
+            }
+        }
         if entry_type.is_dir()
             && let Some(id) = path
                 .file_name()

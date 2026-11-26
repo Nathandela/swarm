@@ -1,10 +1,10 @@
 //! Interactive board auto-start. Scripting commands only dial an existing daemon.
 use crate::{ipc, supervisor::runtime};
 use std::env;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -39,24 +39,7 @@ pub(crate) fn ensure(unattended: bool) -> io::Result<()> {
 
 fn command(socket: &Path, root: &Path, saved: Option<Vec<String>>) -> io::Result<Command> {
     runtime::private_dir(root)?;
-    let log_path = ipc::env_path("SWARM_DAEMON_LOG").unwrap_or_else(|| root.join("daemon.log"));
-    let log = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(log_path)?;
-    let meta = log.metadata()?;
-    // SAFETY: geteuid has no arguments or preconditions.
-    if !meta.is_file()
-        || meta.mode() & 0o077 != 0
-        || meta.uid() != unsafe { libc::geteuid() }
-        || meta.nlink() != 1
-    {
-        return Err(io::Error::other(
-            "daemon log must be a private regular file owned by you",
-        ));
-    }
+    let log = crate::clean::DiagnosticLog::open_owner(&crate::clean::DiagnosticLog::path(root))?;
     let mut cmd = Command::new(env::current_exe()?);
     if let Some(entries) = saved {
         cmd.env_clear();
@@ -74,8 +57,8 @@ fn command(socket: &Path, root: &Path, saved: Option<Vec<String>>) -> io::Result
     cmd.arg("daemon")
         .env("SWARM_DAEMON_STATE", root)
         .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
+        .stdout(log.output()?)
+        .stderr(log.output()?);
     // SAFETY: setsid is async-signal-safe and uses no inherited Rust state.
     unsafe {
         cmd.pre_exec(|| {

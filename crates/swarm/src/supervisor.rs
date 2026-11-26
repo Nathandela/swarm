@@ -482,7 +482,16 @@ impl State {
     }
 
     fn start(&self, session: &Session) -> io::Result<Value> {
-        session.start()?;
+        let root = self
+            .root
+            .parent()
+            .ok_or_else(|| io::Error::other("session root has no owner directory"))?;
+        let log = if self.stopped_go.is_some() {
+            self.root.join("daemon.log")
+        } else {
+            crate::clean::DiagnosticLog::path(root)
+        };
+        session.start(&log)?;
         session.await_ready()?;
         self.publish(session);
         Ok(session.view(&self.endpoint))
@@ -577,6 +586,11 @@ fn serve(configured: PathBuf) -> io::Result<()> {
     // Set the process mask before starting workers so there is no bind/chmod exposure.
     unsafe { libc::umask(0o077) };
     runtime::reclaim_socket(&socket)?;
+    // Imported Go sessions keep their original log and writer custody.
+    let mut log = stopped_go
+        .is_none()
+        .then(|| crate::clean::DiagnosticLog::open_owner(&crate::clean::DiagnosticLog::path(&root)))
+        .transpose()?;
     let listener = runtime::bind(&socket)?;
     if stopped_go.is_none() {
         crate::environment::save(&root)?;
@@ -631,6 +645,9 @@ fn serve(configured: PathBuf) -> io::Result<()> {
             .map(stopped_go::Store::live_ids)
             .unwrap_or_default();
         loop {
+            if let Some(log) = &mut log {
+                log.tick();
+            }
             thread::sleep(Duration::from_millis(150));
             if let Some(store) = &monitor.stopped_go {
                 adopted.retain(|id| match store.observe_exit(id, &monitor.endpoint) {
