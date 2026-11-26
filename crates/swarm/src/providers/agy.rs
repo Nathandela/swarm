@@ -290,3 +290,6 @@ mod tests {
         );
     }
 }
+
+pub(crate) mod handoff;
+pub(crate) use handoff::verify as verify_handoff;

@@ -1,3 +1,4 @@
+pub(crate) mod agy_handoff;
 mod hermes;
 pub(super) mod maintenance;
 mod manager_retire;
@@ -1072,6 +1073,9 @@ impl Session {
         };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
+        let agy_source_home = (provider.agent == "agy")
+            .then(|| providers::agy::handoff::reserve_home(&provider.env))
+            .flatten();
         let maintenance_env = maintenance::environment(&provider);
         let auth_stamp = crate::refresh::auth_identity(provider.agent, &maintenance_env);
         runtime::write_json(
@@ -1079,7 +1083,7 @@ impl Session {
             &json!({
                 "schema": if provider.hermes.is_null() { 1 } else { 2 }, "go_rollback":go_rollback, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"mailbox":mailbox,"lineage":lineage,
                 "maintenance_env":maintenance_env,"auth_stamp":auth_stamp,
-                "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,
+                "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,"agy_source_home":agy_source_home,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
                 "schedule_claude_conversation":claude_conversation,
                 "provider": {"name": provider.agent, "version":provider.version, "agy_status_line":provider.agy_status_line,
