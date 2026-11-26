@@ -139,7 +139,14 @@ def run_inside(root, mode, tmux=None):
                 board_env = {**env, "SWARM_DAEMON_STATE": str(other)}
             board = p.Board([str(root / "bin/board")], root, board_env)
             try:
-                board.wait_bytes(b"upgrading daemon")
+                if mode == "skew":
+                    notice = b"daemon 0.29.23-rc.10 differs from swarm 0.29.23-rc.2"
+                    board.wait_bytes(notice)
+                    assert hello() == state and daemon.poll() is None
+                    receipt["version_notice"] = notice.decode()
+                    receipt["daemon_still_running"] = True
+                else:
+                    board.wait_bytes(b"upgrading daemon")
                 if mode in ("upgrade", "quit"):
                     if mode == "quit":
                         board.send(b"\x03")
@@ -152,10 +159,11 @@ def run_inside(root, mode, tmux=None):
                     assert replacement["build_version"] != state["build_version"]
                     assert replacement["endpoint_id"] == state["endpoint_id"]
                     receipt["replacement_version"] = replacement["build_version"]
-                else:
+                elif mode != "skew":
                     board.wait_bytes(b"daemon upgrade failed")
                     assert hello() == state and daemon.poll() is None
                 assert p.generation(pid) == birth and int(pid_path.read_text()) == pid
+                receipt["worker_identity"] = {"pid": pid, "birth": birth}
                 if mode == "quit":
                     board.close()
                     board = p.Board([str(root / "bin/board")], root, env)
@@ -235,7 +243,7 @@ if __name__ == "__main__":
         run_inside(Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]) if len(sys.argv) == 5 else None)
     else:
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("--mode", required=True, choices=("notice", "upgrade", "refuse", "foreign", "quit"))
+        parser.add_argument("--mode", required=True, choices=("notice", "upgrade", "refuse", "foreign", "quit", "skew"))
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
         parser.add_argument("--board", required=True, type=p.binary_path)
         parser.add_argument("--reference", type=p.binary_path)
