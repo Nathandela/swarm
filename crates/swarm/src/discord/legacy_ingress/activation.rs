@@ -122,7 +122,7 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
         .join(&ledger[..32])
         .join("bridge.sock");
     if current["binding"] != expected
-        || !matches!(current["native_cli"], Value::Null | Value::Bool(false))
+        || !native_cli_matches(&current["native_cli"], cfg.text("project_access") == "vm")
         || current["ready_for_input"] != true
         || current["provider_exhausted"] == true
         || !matches!(field(&current["turn"], "state"), "idle" | "completed")
@@ -135,6 +135,27 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
     }
     open_owner_file(&directory.join("bridge.auth"))?;
     Ok(())
+}
+
+pub(in crate::discord) fn inspect_vm(place: &Place) -> io::Result<bool> {
+    let cfg = personal_config(place, true)?;
+    let checkout = Path::new(cfg.text("work_dir"));
+    let pinned = fs::symlink_metadata(checkout)?;
+    if !checkout.is_absolute() || !pinned.is_dir() || fs::canonicalize(checkout)? != checkout {
+        return Err(invalid());
+    }
+    let source = place.dir.join("discord.db");
+    let (pin, db) = open_bolt(&source, 64 << 20)?;
+    ready(place, &cfg, &db)?;
+    let current = fs::symlink_metadata(checkout)?;
+    if !identity(&pin, &source)?
+        || (current.dev(), current.ino()) != (pinned.dev(), pinned.ino())
+        || personal_config(place, true)?.0 != cfg.0
+    {
+        return Err(invalid());
+    }
+    println!("Verified original Go personal VM manager custody. No migration handoff was written.");
+    Ok(true)
 }
 
 pub(in crate::discord) fn migrate(

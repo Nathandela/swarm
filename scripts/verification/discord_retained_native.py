@@ -77,7 +77,7 @@ def discord_fixture(acknowledge):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, posts
 
-def exercise(go, fixture, codex, rust_test, base, acknowledge):
+def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
     assert os.environ.get("SWARM_NATIVE_FIXTURE_OS_ISOLATED") == "1"
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
     for part in ("home", "home/.codex", "bin", "work", "state"):
@@ -91,7 +91,9 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
     try:
         place = base / "connector"
         run(fixture, env, "create", place, base / "state", "personal", "true", base / "work")
-        if acknowledge:
+        if vm:
+            run(fixture, env, "project-access", place, "vm")
+        if acknowledge and not vm:
             run(fixture, env, "project", place, base / "work")
             (base / "secondary").mkdir(mode=0o700)
             run(fixture, env, "project-add", place, "secondary", base / "secondary")
@@ -112,6 +114,15 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge):
                 test_env = env | {"SWARM_TEST_DISCORD_ACTIVE_ROOT": str(base / "state"),
                                   "SWARM_TEST_DISCORD_ACTIVE_FIXTURE": fixture,
                                   "SWARM_TEST_DISCORD_REST_PORT": str(discord.server_port)}
+                if vm:
+                    assert binding["native_cli"] is True
+                    test_env["SWARM_TEST_DISCORD_ACTIVE_VM"] = "1"
+                    run(rust_test, test_env, "retained_original_go_vm_inspection", "--nocapture")
+                    assert posts == [] and calls == []
+                    reopened = json.loads(run(fixture, env, "activate", place, "original-room"))
+                    assert reopened.pop("generation") == binding.pop("generation") + 1
+                    assert reopened == binding and auth.read_bytes() == original_credential
+                    return
                 if not acknowledge:
                     test_env["SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK"] = "1"
                 run(rust_test, test_env, "retained_original_go_native_manager_roundtrip", "--nocapture")
@@ -158,4 +169,6 @@ if __name__ == "__main__":
     for acknowledge in (True, False):
         with tempfile.TemporaryDirectory(prefix="dn-", dir="/tmp") as directory:
             exercise(go, fixture, codex, rust_test, Path(directory), acknowledge)
+    with tempfile.TemporaryDirectory(prefix="dn-vm-", dir="/tmp") as directory:
+        exercise(go, fixture, codex, rust_test, Path(directory), True, vm=True)
     print("PASS retained Go manager: real Codex through Rust Gateway, authenticated final, and acknowledged or uncertain downgrade")
