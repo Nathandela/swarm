@@ -816,6 +816,40 @@ mod tests {
                     ));
                     let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
                     assert_eq!(listed["notes"][0]["id"], complete["id"]);
+                    if std::env::var_os("SWARM_NATIVE_MAIL_FILES_FIXTURE").is_some() {
+                        let csv = root.join("data.csv");
+                        let pdf = root.join("report.pdf");
+                        std::fs::write(&csv, "source,result\nfixture,ok\n").unwrap();
+                        std::fs::write(&pdf, "%PDF-1.7\n").unwrap();
+                        let receipt = decode(cli(
+                            &[
+                                "message",
+                                "--kind",
+                                "complete",
+                                "--file",
+                                csv.to_str().unwrap(),
+                                "--file",
+                                pdf.to_str().unwrap(),
+                            ],
+                            &worker_proof,
+                        ));
+                        let note = receipt["id"].as_str().unwrap();
+                        assert_eq!(receipt["files"].as_array().unwrap().len(), 2);
+                        std::fs::write(&csv, "edited after queue").unwrap();
+                        assert_eq!(
+                            decode(cli(&["receipt", "--id", note], &worker_proof)),
+                            receipt
+                        );
+                        let listed = invoke("swarm_read_note", "fixture-mail-list", json!({}));
+                        assert!(
+                            listed["notes"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|entry| entry["id"] == note
+                                    && entry["files"] == receipt["files"])
+                        );
+                    }
                 }
                 let mut proxy = Command::new(binary)
                     .arg("manager-mcp")

@@ -1826,6 +1826,21 @@ impl Session {
         )
     }
 
+    pub(super) fn mail_checkout(&self) -> io::Result<(&Path, (u64, u64))> {
+        let path = self.verify_effective()?;
+        let data = runtime::read_json(&self.dir.join("session.json"))?;
+        if data["token"] == self.token
+            && data["id"] == self.id
+            && let (Some(device), Some(inode)) = (
+                data["cwd_identity"][0].as_u64(),
+                data["cwd_identity"][1].as_u64(),
+            )
+        {
+            return Ok((path, (device, inode)));
+        }
+        Err(io::Error::other("worker checkout identity unavailable"))
+    }
+
     pub(super) fn mail_binding(&self, session: &str, proof: &str) -> io::Result<Value> {
         use subtle::ConstantTimeEq;
         if self.mailbox.is_null()

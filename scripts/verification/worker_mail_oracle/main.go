@@ -16,6 +16,7 @@ func main() {
 	var input struct {
 		Binding        workermail.Binding
 		ID, Kind, Text string
+		FileID         string
 	}
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -28,6 +29,8 @@ func main() {
 		out, err = workermail.Submit(os.Args[2], input.Binding, input.ID, input.Kind, input.Text, true)
 	case "lookup":
 		out, err = workermail.Lookup(os.Args[2], input.Binding, input.ID)
+	case "read-file":
+		out, err = workermail.ReadFile(os.Args[2], input.Binding, input.ID, input.FileID)
 	case "pending":
 		out, err = workermail.Pending(os.Args[2], input.Binding.Discussion)
 	default:

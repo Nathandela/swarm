@@ -67,11 +67,50 @@ pub(super) fn request(state: &State, request: &Value) -> io::Result<Value> {
                 "action" | "id" | "proof" | "text" | "kind" | "paths"
             )
         })
-    }) || !input["paths"].is_null()
-    {
-        return Err(refused(
-            "worker files require a compatible mailbox supervisor",
-        ));
+    }) {
+        return Err(refused("invalid worker mailbox request"));
+    }
+    static FILE_CAPTURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    use std::sync::atomic::Ordering::{AcqRel, Acquire};
+    struct CaptureSlot;
+    impl Drop for CaptureSlot {
+        fn drop(&mut self) {
+            FILE_CAPTURES.fetch_sub(1, AcqRel);
+        }
+    }
+    let _slot;
+    let mut files = Vec::new();
+    if !input["paths"].is_null() {
+        let paths = input["paths"]
+            .as_array()
+            .ok_or_else(|| refused("invalid worker paths"))?;
+        if input["action"] != "message"
+            || input["kind"] != "complete"
+            || paths.is_empty()
+            || paths.len() > super::mail_files::MAX_FILES
+        {
+            return Err(refused(
+                "worker files require a completion and 1 to 10 files",
+            ));
+        }
+        let paths: Vec<_> = paths
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<_>>()
+            .ok_or_else(|| refused("invalid worker paths"))?;
+        FILE_CAPTURES
+            .try_update(AcqRel, Acquire, |count| (count < 4).then_some(count + 1))
+            .map_err(|_| refused("worker file capture busy; retry the same completion"))?;
+        _slot = CaptureSlot;
+        let checkout = session.mail_checkout()?;
+        files = super::mail_files::capture(checkout.0, checkout.1, &paths)?;
+        if session.mail_checkout()? != checkout
+            || session.mail_binding(full, field(input, "proof"))? != binding
+        {
+            return Err(refused(
+                "worker mailbox authority changed during file capture",
+            ));
+        }
     }
     let note = match field(input, "action") {
         "message" => mail_store::submit(
@@ -81,12 +120,16 @@ pub(super) fn request(state: &State, request: &Value) -> io::Result<Value> {
             field(input, "kind"),
             field(input, "text"),
             crate::providers::codex_receipt::timely(id),
+            &files,
         )?,
         "receipt" => mail_store::lookup(root, &binding, id)?,
         "reply" => mail_store::settle(root, &binding, id, None, true)?,
         _ => return Err(refused("invalid worker mailbox action")),
     };
     let mut receipt = json!({"id":id,"state":note["State"]});
+    if !note["Files"].is_null() {
+        receipt["files"] = note["Files"].clone();
+    }
     if input["action"] == "reply" && note["State"] != "superseded" {
         if let Some(answer) = note["Answer"].as_str().filter(|text| !text.is_empty()) {
             receipt["state"] = json!("available");

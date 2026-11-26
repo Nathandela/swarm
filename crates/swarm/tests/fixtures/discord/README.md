@@ -58,5 +58,10 @@ under the same relative path and build it there. Run
 `SWARM_GO_WORKER_MAIL_FIXTURE=/path/to/oracle cargo test --locked -p swarm go_and_rust_share_worker_notes -- --ignored`.
 The fixture shares one isolated bbolt file across sequential Go and Rust operations.
 
-The text path supports worker notes and answers during the proved parent turn.
-Post-turn manager wake and file-bearing notes have separate qualification.
+The native path supports worker notes and answers during the proved parent turn.
+Set `SWARM_NATIVE_MAIL_FILES_FIXTURE=1` to also send a two-file completion
+from the bound checkout and compare its receipt with the manager tool response.
+Run `go_reads_the_exact_rust_pinned_worker_files -- --ignored` with the oracle
+above to verify the original immutable bytes through Go's scoped file reader
+after Rust reads the note and the checkout content changes. Post-turn manager
+wake and Discord publication of staged files have separate qualification.

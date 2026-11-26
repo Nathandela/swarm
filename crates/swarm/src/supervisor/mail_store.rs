@@ -1,4 +1,5 @@
-//! Go-compatible text worker mailbox. Note, sequence and pending index commit together.
+//! Go-compatible worker mailbox. Note, sequence and pending index commit together.
+use super::mail_files::{Captured, Descriptor, MAX_BYTES};
 use bbolt_rs::{
     Bolt, BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi,
 };
@@ -97,6 +98,29 @@ fn now() -> io::Result<String> {
     OffsetDateTime::now_utc().format(&Rfc3339).map_err(io_error)
 }
 
+fn descriptors<'tx>(tx: &impl TxApi<'tx>, key: &[u8]) -> io::Result<Vec<Descriptor>> {
+    let Some(root) = tx.bucket(b"note-files") else {
+        return Ok(Vec::new());
+    };
+    let Some(files) = root.bucket(key) else {
+        return Ok(Vec::new());
+    };
+    let manifest: Value = serde_json::from_slice(files.get(b"manifest").ok_or_else(absent)?)?;
+    let descriptors: Vec<Descriptor> = serde_json::from_value(manifest["Files"].clone())?;
+    if descriptors.is_empty() || descriptors.len() > super::mail_files::MAX_FILES {
+        return Err(io_error("damaged worker file manifest"));
+    }
+    Ok(descriptors)
+}
+
+fn with_files<'tx>(tx: &impl TxApi<'tx>, key: &[u8], mut note: Value) -> io::Result<Value> {
+    let files = descriptors(tx, key)?;
+    if !files.is_empty() {
+        note["Files"] = serde_json::to_value(files)?;
+    }
+    Ok(note)
+}
+
 pub(super) fn submit(
     root: &Path,
     binding: &Value,
@@ -104,7 +128,16 @@ pub(super) fn submit(
     kind: &str,
     text: &str,
     fresh: bool,
+    files: &[Captured],
 ) -> io::Result<Value> {
+    let text = if !files.is_empty() && text.is_empty() {
+        "Worker attached files to this completion."
+    } else {
+        text
+    };
+    if !files.is_empty() && kind != "complete" {
+        return Err(io_error("worker files require a completion note"));
+    }
     if !crate::teammate::valid_kind(kind) || !crate::teammate::valid_text(text) {
         return Err(io_error("invalid worker note"));
     }
@@ -123,13 +156,13 @@ pub(super) fn submit(
             || binding
                 .as_object()
                 .is_none_or(|fields| fields.iter().any(|(field, value)| prior[field] != *value))
-            || tx
-                .bucket(b"note-files")
-                .is_some_and(|files| files.bucket(&key).is_some())
+            || !descriptors(&tx, &key)?
+                .iter()
+                .eq(files.iter().map(|file| &file.file))
         {
             return Err(io_error("worker mailbox: conflicting note"));
         }
-        return Ok(prior);
+        return with_files(&tx, &key, prior);
     }
     if !fresh {
         return Err(io_error("worker mailbox: expired new note"));
@@ -168,10 +201,31 @@ pub(super) fn submit(
             .put(&key, serde_json::to_vec(&note)?)
             .map_err(io_error)?;
     }
+    if !files.is_empty() {
+        let bytes: usize = files.iter().map(|file| file.data.len()).sum();
+        if bytes > MAX_BYTES || tx.size().saturating_add(bytes as u64) > 256 << 20 {
+            return Err(io_error("worker file storage full"));
+        }
+        let mut root = tx
+            .create_bucket_if_not_exists(b"note-files")
+            .map_err(io_error)?;
+        let mut bucket = root.create_bucket(&key).map_err(io_error)?;
+        for file in files {
+            bucket.put(&file.file.id, &file.data).map_err(io_error)?;
+        }
+        let descriptors: Vec<_> = files.iter().map(|file| &file.file).collect();
+        bucket
+            .put(
+                b"manifest",
+                serde_json::to_vec(&json!({"Files": descriptors}))?,
+            )
+            .map_err(io_error)?;
+    }
     tx.bucket_mut(b"pending")
         .ok_or_else(absent)?
         .put(order(&note)?, &key)
         .map_err(io_error)?;
+    let note = with_files(&tx, &key, note)?;
     tx.commit().map_err(io_error)?;
     Ok(note)
 }
@@ -185,12 +239,6 @@ pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
         .bucket(b"notes")
         .and_then(|notes| notes.get(&key).map(<[u8]>::to_vec))
         .ok_or_else(absent)?;
-    if tx
-        .bucket(b"note-files")
-        .is_some_and(|files| files.bucket(&key).is_some())
-    {
-        return Err(io_error("worker note requires a file-aware mailbox"));
-    }
     let note: Value = serde_json::from_slice(&data)?;
     if note["ID"] != id
         || binding
@@ -199,7 +247,7 @@ pub(super) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
     {
         return Err(io_error("worker mailbox binding changed"));
     }
-    Ok(note)
+    with_files(&tx, &key, note)
 }
 
 pub(super) fn pending(root: &Path, discussion: &str) -> io::Result<Vec<Value>> {
@@ -225,21 +273,15 @@ pub(super) fn pending(root: &Path, discussion: &str) -> io::Result<Vec<Value>> {
         if !order_key.starts_with(prefix.as_bytes()) || result.len() >= 64 {
             break;
         }
-        // File-bearing Go notes stay queued for the compatible file-aware reader.
-        if tx
-            .bucket(b"note-files")
-            .is_none_or(|files| files.bucket(key).is_none())
+        let raw = notes.get(key).ok_or_else(absent)?;
+        let note: Value = serde_json::from_slice(raw)?;
+        if note["Discussion"] != discussion
+            || note["State"] != "queued"
+            || order(&note)? != order_key
         {
-            let raw = notes.get(key).ok_or_else(absent)?;
-            let note: Value = serde_json::from_slice(raw)?;
-            if note["Discussion"] != discussion
-                || note["State"] != "queued"
-                || order(&note)? != order_key
-            {
-                return Err(io_error("damaged worker pending index"));
-            }
-            result.push(note);
+            return Err(io_error("damaged worker pending index"));
         }
+        result.push(with_files(&tx, key, note)?);
         row = cursor.next();
     }
     Ok(result)
@@ -266,9 +308,15 @@ pub(crate) fn manager_note(
             && (!reply || note["Kind"] == "needs-input")
     };
     if !reply && args.as_object().is_some_and(|obj| obj.is_empty()) {
-        let rows:Vec<_>=pending(root,discussion)?.into_iter().filter(same).take(12)
-            .map(|note|json!({"id":note["ID"],"session":note["Session"],"session_instance":note["Instance"],
-                "kind":note["Kind"],"state":note["State"]})).collect();
+        let rows: Vec<_> = pending(root, discussion)?.into_iter().filter(same).take(12)
+            .map(|note| {
+                let mut row = json!({"id":note["ID"],"session":note["Session"],"session_instance":note["Instance"],
+                    "kind":note["Kind"],"state":note["State"]});
+                if !note["Files"].is_null() {
+                    row["files"] = note["Files"].clone();
+                }
+                row
+            }).collect();
         return Ok(json!({"notes":rows}));
     }
     let picked = {
@@ -286,12 +334,7 @@ pub(crate) fn manager_note(
             }
             if let Some(data) = data {
                 let note: Value = serde_json::from_slice(data)?;
-                if filter(&note)
-                    && note["State"] != "superseded"
-                    && tx
-                        .bucket(b"note-files")
-                        .is_none_or(|files| files.bucket(key).is_none())
-                {
+                if filter(&note) && note["State"] != "superseded" {
                     if chosen.is_some() {
                         return Err(io_error("select one exact worker note"));
                     }
@@ -321,10 +364,12 @@ pub(crate) fn manager_note(
         answer,
         false,
     )?;
-    Ok(
-        json!({"id":updated["ID"],"kind":updated["Kind"],"state":updated["State"],
-        "session":updated["Session"],"session_instance":updated["Instance"],"text":updated["Text"]}),
-    )
+    let mut result = json!({"id":updated["ID"],"kind":updated["Kind"],"state":updated["State"],
+        "session":updated["Session"],"session_instance":updated["Instance"],"text":updated["Text"]});
+    if !updated["Files"].is_null() {
+        result["files"] = updated["Files"].clone();
+    }
+    Ok(result)
 }
 
 pub(super) fn settle(
@@ -337,12 +382,7 @@ pub(super) fn settle(
     let key = key(binding, id)?;
     let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
     let mut tx = db.begin_rw().map_err(io_error)?;
-    if tx
-        .bucket(b"note-files")
-        .is_some_and(|files| files.bucket(&key).is_some())
-    {
-        return Err(io_error("worker note requires a file-aware mailbox"));
-    }
+    let has_files = !descriptors(&tx, &key)?.is_empty();
     let mut note: Value = serde_json::from_slice(
         &tx.bucket(b"notes")
             .and_then(|rows| rows.get(&key).map(<[u8]>::to_vec))
@@ -363,7 +403,7 @@ pub(super) fn settle(
                 .as_str()
                 .is_some_and(crate::teammate::valid_text);
         if !terminal || note["Settled"] != ZERO {
-            return Ok(note);
+            return with_files(&tx, &key, note);
         }
     } else {
         if state == "superseded" {
@@ -381,7 +421,8 @@ pub(super) fn settle(
             note["Answer"] = json!(answer);
             note["State"] = json!("answered");
         } else if state == "queued" {
-            terminal = note["Kind"] != "needs-input";
+            // Keep immutable files available for an explicit later publication.
+            terminal = note["Kind"] != "needs-input" && !has_files;
             note["State"] = json!("ingested");
         }
         tx.bucket_mut(b"pending")
@@ -401,6 +442,7 @@ pub(super) fn settle(
         .ok_or_else(absent)?
         .put(&key, serde_json::to_vec(&note)?)
         .map_err(io_error)?;
+    let note = with_files(&tx, &key, note)?;
     tx.commit().map_err(io_error)?;
     Ok(note)
 }
@@ -408,6 +450,86 @@ pub(super) fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires the locally built pinned Go mailbox oracle"]
+    fn go_reads_the_exact_rust_pinned_worker_files() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let binary = std::env::var_os("SWARM_GO_WORKER_MAIL_FIXTURE").unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "mail-file-interop-{}",
+            crate::supervisor::runtime::random_id().unwrap()
+        ));
+        crate::supervisor::runtime::private_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let csv = root.join("dataset.csv");
+        let pdf = root.join("report.pdf");
+        let csv_data = b"source,result\nfixture,ok\n";
+        let pdf_data = b"%PDF-1.7\n";
+        std::fs::write(&csv, csv_data).unwrap();
+        std::fs::write(&pdf, pdf_data).unwrap();
+        let metadata = root.metadata().unwrap();
+        let identity = (metadata.dev(), metadata.ino());
+        let files = super::super::mail_files::capture(
+            &root,
+            identity,
+            &[csv.to_str().unwrap(), pdf.to_str().unwrap()],
+        )
+        .unwrap();
+        let binding = json!({"Discussion":"discussion","Parent":"manager","Session":"endpoint/worker","Instance":"instance",
+           "Attempt":"attempt","Agent":"codex","Project":root,"ParentInputHash":"owned-input"});
+        let id = "file-note";
+        let queued = submit(&root, &binding, id, "complete", "", true, &files).unwrap();
+        assert_eq!(queued["State"], "queued");
+        assert_eq!(queued["Files"][0]["id"], files[0].file.id);
+        std::fs::write(&csv, "edited checkout").unwrap();
+        let replacement = super::super::mail_files::capture(
+            &root,
+            identity,
+            &[csv.to_str().unwrap(), pdf.to_str().unwrap()],
+        )
+        .unwrap();
+        assert!(submit(&root, &binding, id, "complete", "", true, &replacement).is_err());
+        assert_eq!(lookup(&root, &binding, id).unwrap(), queued);
+        let ingested = manager_note(
+            &root,
+            "discussion",
+            "manager",
+            "owned-input",
+            &json!({"id":id}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(ingested["state"], "ingested");
+        assert_eq!(ingested["files"], queued["Files"]);
+        for file in &files {
+            let mut worker = Command::new(&binary)
+                .arg("read-file")
+                .arg(&root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            write!(
+                worker.stdin.take().unwrap(),
+                "{}",
+                json!({"Binding":binding,"ID":id,"FileID":file.file.id})
+            )
+            .unwrap();
+            let result = worker.wait_with_output().unwrap();
+            assert!(result.status.success());
+            use base64::Engine;
+            let encoded: String = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+                file.data
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     #[ignore = "requires the locally built pinned Go mailbox oracle"]
     fn go_and_rust_share_worker_notes_answers_and_pending_order() {
@@ -455,7 +577,8 @@ mod tests {
                 "go-note",
                 "needs-input",
                 "Go question",
-                false
+                false,
+                &[]
             )
             .unwrap(),
             historical
@@ -467,6 +590,7 @@ mod tests {
             "complete",
             "Rust result",
             true,
+            &[],
         )
         .unwrap();
         assert_eq!(call("pending", "", ""), json!([historical, new]));
@@ -493,6 +617,7 @@ mod tests {
             "needs-input",
             "Which path?",
             true,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -502,7 +627,8 @@ mod tests {
                 "question",
                 "needs-input",
                 "Which path?",
-                false
+                false,
+                &[]
             )
             .unwrap(),
             created
@@ -514,11 +640,23 @@ mod tests {
                 "question",
                 "needs-input",
                 "Different body",
-                true
+                true,
+                &[]
             )
             .is_err()
         );
-        assert!(submit(&root, &worker, "expired", "complete", "Finished", false).is_err());
+        assert!(
+            submit(
+                &root,
+                &worker,
+                "expired",
+                "complete",
+                "Finished",
+                false,
+                &[]
+            )
+            .is_err()
+        );
         assert_eq!(pending(&root, "discussion").unwrap(), [created]);
         let filter = json!({"session":"endpoint/worker","session_instance":"worker-incarnation","id":"question"});
         assert!(
@@ -555,7 +693,7 @@ mod tests {
             receipt
         );
         assert_eq!(
-            submit(&root, &worker, "done", "complete", "Finished", true).unwrap()["Sequence"],
+            submit(&root, &worker, "done", "complete", "Finished", true, &[]).unwrap()["Sequence"],
             2
         );
         std::fs::remove_dir_all(root).unwrap();

@@ -1,5 +1,6 @@
 mod handoff;
 pub(crate) mod mail;
+mod mail_files;
 pub(crate) mod mail_store;
 pub(crate) mod manager;
 mod pilot_journal;
@@ -590,7 +591,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .flatten()
         .filter_map(Value::as_str)
         .filter(|cap| {
-            *cap == crate::teammate::MAIL_CAP
+            matches!(*cap, crate::teammate::MAIL_CAP | crate::teammate::FILE_CAP)
                 || worker_origin_available
                     && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
                 || guild_worker_available && *cap == "worker-discord-guild-origin-v1"
