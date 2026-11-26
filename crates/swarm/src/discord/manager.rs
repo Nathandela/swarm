@@ -1040,7 +1040,8 @@ mod tests {
             .or_else(|| std::env::var_os("SWARM_GO_ORACLE"))
             .expect("set exact owner oracle binary");
         let codex = std::env::var_os("SWARM_FAKE_CODEX").expect("set exact fake-Codex binary");
-        let root = Path::new("/tmp").join(format!("gdm-{}", &runtime::random_id().unwrap()[..10]));
+        let root =
+            crate::test_temp::root().join(format!("gdm-{}", &runtime::random_id().unwrap()[..10]));
         runtime::private_dir(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
         let bin = root.join("bin");

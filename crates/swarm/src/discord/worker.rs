@@ -417,7 +417,7 @@ mod tests {
 
     fn root() -> PathBuf {
         let root =
-            std::path::Path::new("/tmp").join(format!("worker-{}", runtime::random_id().unwrap()));
+            crate::test_temp::root().join(format!("worker-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&root).unwrap();
         root
     }

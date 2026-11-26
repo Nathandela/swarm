@@ -1,4 +1,6 @@
 mod support;
+#[path = "support/temp.rs"]
+mod test_temp;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -14,7 +16,7 @@ struct Place(PathBuf);
 
 impl Place {
     fn new(label: &str) -> Self {
-        let place = Self(Path::new("/tmp").join(format!("sd-{}-{label}", std::process::id())));
+        let place = Self(test_temp::root().join(format!("sd-{}-{label}", std::process::id())));
         DirBuilder::new().mode(0o700).create(&place.0).unwrap();
         place
     }

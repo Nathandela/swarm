@@ -29,10 +29,29 @@ The supported updater scope is one explicit private managed installation and a l
 
 ## Integrated package on November 26
 
-The archives built from `cb630ec5b1131e4b4ae6d706a1132120e03a7dbd` carried the signed manifest, both updater documents, the four architecture slices, pinned media and dependency notices. The rehearsal used a disposable Ed25519 key. On macOS arm64 and Linux x86_64 the installed launcher passed an actual PTY launch, daemon crash and reattach. Both installed media checks passed. The universal macOS output also passed all-slice ad hoc code-signature verification and its x86_64 media check under Rosetta. The arm64 Linux archive passed signature and member verification.
+The archives built from `cb630ec5b1131e4b4ae6d706a1132120e03a7dbd` carried the signed manifest, both updater documents, the four architecture slices, pinned media and dependency notices. The rehearsal used a disposable Ed25519 key. On macOS arm64 and Linux x86_64 the installed launcher passed an actual PTY launch, daemon crash and reattach. Both installed media checks passed. The universal macOS output also passed all-slice ad hoc code-signature verification and its x86_64 media check under Rosetta. A hardware-virtualized ARM64 Linux guest also ran the installed launcher and its packaged media helper.
 
 | Archive | SHA-256 |
 |---|---|
 | Universal macOS | `78f4a2b81b6c79acad52b584255591e18a52d5f1ee3a057df6350ba9ee748654` |
 | Linux x86_64 | `51b4f398246bfa7b778ef345ec95111bc57edd9eb699088e7191981b938dd266` |
 | Linux arm64 | `5ef709452623aeb1f941f28ab12a90f78eba7faa32ed637039cb4e83c6d8cf34` |
+
+
+### Linux arm64 installed board and media
+
+An offline guest on Apple Silicon booted the installed LinuxKit 6.10.14 aarch64 kernel under Apple's Virtualization framework. Its ext4 disk contained the official Docker Library Python 3.13 Debian Bookworm arm64 image, manifest `sha256:1fe519ebd04989f9d6927bfa447fb0767110a1f5934c9fc95d6cfafbfc358c90`. The extra Debian packages for Bubblewrap, process inspection and OpenSSL were checked against the signed Bookworm release index. The VM had two CPUs, 1536 MiB of memory, a serial console and one private disk.
+
+UID 65534 verified the signed archive in the table above, installed it in a private managed prefix, matched the release card to `cb630ec5` and ran the bundled Node/DAVE media check. The public board witness launched a session on a real PTY, attached, killed its daemon, and reattached to the surviving session. It reaped two fixture processes, removed two sockets and found zero survivors. The guest returned status 0 and powered down. The kernel SHA-256 was `a0322f813e924d375694a171624449e4110d6f371f22051fafb86d79784fc926`. The full serial capture SHA-256 was `2d5d5ded9795218757651392f229d587ab8ef6dd7d383f3fdeaf433932fc079f`.
+
+The same witness can run as an ordinary user on an aarch64 Linux host with Python 3, OpenSSL, Bubblewrap, procps, and a short private scratch directory.
+
+```sh
+python3 "$dist/swarm-rust-install.py" verify "$dist" swarm-rust_0.1.0_linux_arm64.tar.gz \
+    --public-key "$public_key" --managed --prefix "$prefix" --check-media
+"$prefix/swarm" release-info
+"$prefix/swarm" release-check-media
+python3 scripts/verification/parity/test_board.py --supervisor "$prefix/swarm" --board "$prefix/swarm"
+```
+
+This run covers the signed November 26 development archive. Release qualification requires rebuilding and running the same checks against the selected release source.

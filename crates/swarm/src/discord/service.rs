@@ -904,10 +904,10 @@ fn respond(stream: &mut UnixStream, status: &str, body: Value) -> io::Result<()>
 mod tests {
     use super::*;
     use crate::supervisor::runtime;
-    use std::path::Path;
 
     fn fixture_dir() -> PathBuf {
-        let root = Path::new("/tmp").join(format!("swarm-dm-{}", runtime::random_id().unwrap()));
+        let root =
+            crate::test_temp::root().join(format!("swarm-dm-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&root).unwrap();
         root
     }

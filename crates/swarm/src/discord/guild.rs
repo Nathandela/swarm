@@ -341,7 +341,7 @@ pub(super) fn ingest(
 mod tests {
     use super::*;
     use crate::{ipc::spawn, supervisor::runtime};
-    use std::{fs, path::Path};
+    use std::fs;
 
     const TARGET: &str = "ep-1234abcd/1234567890abcdef12345678";
 
@@ -386,7 +386,8 @@ mod tests {
         assert_eq!(verified["verified_parent_id"], "111");
         assert!(route(false, false).is_none());
         assert!(route(true, true).is_none());
-        let root = Path::new("/tmp").join(format!("guild-{}", runtime::random_id().unwrap()));
+        let root =
+            crate::test_temp::root().join(format!("guild-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&root).unwrap();
         let mut inbox = Inbox::open(&root, &cfg).unwrap();
         inbox.checkpoint("").unwrap();

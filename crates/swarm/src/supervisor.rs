@@ -1672,8 +1672,7 @@ mod manager_reservation_tests {
 
     #[test]
     fn same_manager_operation_recovers_pre_start_without_replaying_a_claimed_session() {
-        let root =
-            std::path::Path::new("/tmp").join(format!("mgr-{}", runtime::random_id().unwrap()));
+        let root = crate::test_temp::root().join(format!("mgr-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&root).unwrap();
         let home = root.join("home");
         let codex_home = home.join(".codex");

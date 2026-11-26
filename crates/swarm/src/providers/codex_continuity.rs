@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn rollout_checks_exact_cwd_id_and_file_identity() {
-        let root = Path::new("/tmp")
+        let root = crate::test_temp::root()
             .canonicalize()
             .unwrap()
             .join(format!("codex-proof-{}", runtime::random_id().unwrap()));

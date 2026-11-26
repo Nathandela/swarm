@@ -1372,7 +1372,8 @@ mod tests {
 
     #[test]
     fn exact_rest_acknowledgement_has_distinct_evidence() {
-        let dir = Path::new("/tmp").join(format!("r-{}", &runtime::random_id().unwrap()[..12]));
+        let dir =
+            crate::test_temp::root().join(format!("r-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
         let cfg = Config(
             json!({"installation_id":"fixture","application_id":"200","owner_id":"300","dm_channel_id":"400"}),
@@ -1399,7 +1400,8 @@ mod tests {
 
     #[test]
     fn owner_dm_runs_through_bound_manager_and_exact_reply_once() {
-        let dir = Path::new("/tmp").join(format!("d-{}", &runtime::random_id().unwrap()[..12]));
+        let dir =
+            crate::test_temp::root().join(format!("d-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
         let dir = fs::canonicalize(dir).unwrap();
         let socket = dir.join("daemon.sock");

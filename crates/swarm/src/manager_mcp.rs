@@ -244,7 +244,8 @@ mod tests {
 
     #[test]
     fn private_bridge_preserves_exact_call_coordinates_and_refuses_replaced_socket() {
-        let dir = Path::new("/tmp").join(format!("mcp-{}", &runtime::random_id().unwrap()[..12]));
+        let dir =
+            crate::test_temp::root().join(format!("mcp-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
         let socket = dir.join("bridge.sock");
         let listener = runtime::bind(&socket).unwrap();

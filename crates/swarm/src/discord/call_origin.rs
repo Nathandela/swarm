@@ -128,8 +128,8 @@ mod tests {
     #[test]
     fn exact_durable_cutover_still_requires_live_room() {
         use std::io::{Read, Write};
-        let dir = std::path::Path::new("/tmp")
-            .join(format!("v-{}", &runtime::random_id().unwrap()[..12]));
+        let dir =
+            crate::test_temp::root().join(format!("v-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
         let cfg = Config(
             json!({"mode":"personal","installation_id":"fixture","owner_id":"4",

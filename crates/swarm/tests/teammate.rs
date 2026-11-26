@@ -1,4 +1,6 @@
 mod support;
+#[path = "support/temp.rs"]
+mod test_temp;
 
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
@@ -39,7 +41,7 @@ fn cli(path: &Path, args: &[&str]) -> Output {
 }
 #[test]
 fn ordinary_teammate_cli_uses_exact_go_wire_receipts_and_rejects_uncorrelated_ack() {
-    let dir = Path::new("/tmp").join(format!("mail-wire-{}", std::process::id()));
+    let dir = test_temp::root().join(format!("mail-wire-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
     let path = dir.join("socket");

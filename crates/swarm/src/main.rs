@@ -21,6 +21,9 @@ mod socket;
 mod supervisor;
 mod teammate;
 mod terminal_mouse;
+#[cfg(test)]
+#[path = "../tests/support/temp.rs"]
+mod test_temp;
 mod upgrade;
 mod workspace;
 

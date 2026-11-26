@@ -1,4 +1,6 @@
 mod support;
+#[path = "support/temp.rs"]
+mod test_temp;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -7,7 +9,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,12 +28,7 @@ struct Sandbox {
 
 impl Sandbox {
     fn new(suffix: &str) -> Self {
-        let temp = std::env::temp_dir();
-        let root = if temp.as_os_str().len() <= 45 {
-            &temp
-        } else {
-            Path::new("/tmp")
-        };
+        let root = test_temp::root();
         let path = root.join(format!("sh{}{}", std::process::id(), suffix));
         DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self {

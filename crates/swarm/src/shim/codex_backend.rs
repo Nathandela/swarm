@@ -1098,7 +1098,8 @@ mod tests {
 
     #[test]
     fn observed_turn_permanently_revokes_unjoined_manager_exception() {
-        let root = Path::new("/tmp").join(format!("virgin-{}", runtime::random_id().unwrap()));
+        let root =
+            crate::test_temp::root().join(format!("virgin-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&root).unwrap();
         let binding = json!({"native_session_id":"native-thread"});
         let frame = |method, thread| {

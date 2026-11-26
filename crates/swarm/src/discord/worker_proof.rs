@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn effect_socket_denies_revoked_membership_and_gateway_cancellation() {
         let root =
-            std::path::Path::new("/tmp").join(format!("proof-{}", runtime::random_id().unwrap()));
+            crate::test_temp::root().join(format!("proof-{}", runtime::random_id().unwrap()));
         let place = root.join("discord");
         runtime::private_dir(&place).unwrap();
         let socket = root.join("daemon.sock");

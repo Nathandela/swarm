@@ -471,8 +471,8 @@ mod tests {
 
     #[test]
     fn interrupted_commit_recovers_exit_updates_deletion_and_creation_from_previous_head() {
-        let path =
-            Path::new("/tmp").join(format!("pilot-recovery-{}", runtime::random_id().unwrap()));
+        let path = crate::test_temp::root()
+            .join(format!("pilot-recovery-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&path.join("deleted")).unwrap();
         let removed = "0123456789abcdef01234567";
         let before = [
@@ -534,7 +534,8 @@ mod tests {
 
     #[test]
     fn legacy_or_unproven_disappearance_forces_a_recovery_gap() {
-        let path = Path::new("/tmp").join(format!("pilot-gap-{}", runtime::random_id().unwrap()));
+        let path =
+            crate::test_temp::root().join(format!("pilot-gap-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&path).unwrap();
         runtime::write_json(
             &path.join("pilot-journal.json"),
@@ -566,8 +567,8 @@ mod tests {
 
     #[test]
     fn retained_reply_cursor_survives_reload_without_duplication() {
-        let path =
-            Path::new("/tmp").join(format!("pilot-journal-{}", runtime::random_id().unwrap()));
+        let path = crate::test_temp::root()
+            .join(format!("pilot-journal-{}", runtime::random_id().unwrap()));
         runtime::private_dir(&path).unwrap();
         let row = json!({"id":"endpoint/session","group":"working","status":{"Process":"running"}});
         let capture = json!({"sequence":1,"item":{"kind":"agent_message","status":"completed","text":"literal evidence"}});

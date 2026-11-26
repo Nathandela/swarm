@@ -43,7 +43,13 @@ def main():
     parser.add_argument("host", help="authorized SSH hostname or alias")
     parser.add_argument("--stage-parent", choices=["/tmp", "/dev/shm"], default="/tmp",
                         help="remote filesystem for the cross-built test executables")
+    parser.add_argument("--scratch-parent", default="/tmp",
+                        help="existing remote filesystem for private test state and Unix sockets")
     args = parser.parse_args()
+    scratch_parent = args.scratch_parent
+    if (not re.fullmatch(r"/(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*", scratch_parent)
+            or len(scratch_parent) + len("/sw.XXXXXXXX") > 32):
+        parser.error("use a short absolute scratch path suitable for Unix sockets")
     host = args.host
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]*", host):
         parser.error("invalid SSH host")
@@ -52,17 +58,17 @@ def main():
     if platform != "Linux x86_64":
         raise RuntimeError(f"Expected Linux x86_64, got {platform!r}")
     binaries, tests = artifacts()
-    def new_directory(parent):
+    def new_directory(parent, prefix):
         root = subprocess.check_output(
-            [*ssh, f"umask 077 && mktemp -d {parent}/sw-test.XXXXXXXX"], text=True
+            [*ssh, f"umask 077 && mktemp -d {parent}/{prefix}.XXXXXXXX"], text=True
         ).strip()
-        if not re.fullmatch(re.escape(parent) + r"/sw-test\.[A-Za-z0-9]{8}", root):
+        if not re.fullmatch(re.escape(f"{parent}/{prefix}.") + r"[A-Za-z0-9]{8}", root):
             raise RuntimeError("unexpected remote scratch path")
         return root
 
-    root = new_directory(args.stage_parent)
+    root = new_directory(args.stage_parent, "sw-test")
     # Workspace identity tests need a filesystem that reports directory birth time.
-    scratch = root if args.stage_parent == "/tmp" else new_directory("/tmp")
+    scratch = root if args.stage_parent == scratch_parent else new_directory(scratch_parent, "sw")
     print(f"Running {len(tests)} test executables on {host} in {root}, scratch {scratch}", flush=True)
     subprocess.run(["scp", "-q", "-o", "BatchMode=yes", *binaries, f"{host}:{root}/"], check=True)
     failed = []
