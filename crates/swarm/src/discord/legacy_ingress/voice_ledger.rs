@@ -1,6 +1,8 @@
 //! Prove that the retained v3/v4 Voice record set reopens with its exact Go size.
 use super::{BucketApi, Digest, Sha256, TxApi, Value, io, json, prepare::go_bytes, record_hash};
 
+use crate::json_fields::object_fields;
+
 const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: usize = 64 << 20;
 
@@ -74,8 +76,8 @@ pub(super) fn reopen<'tx>(tx: &impl TxApi<'tx>) -> io::Result<Value> {
         if count > expected_count || raw.len() > 1 << 20 {
             return Err(invalid());
         }
-        let row: Value = serde_json::from_slice(raw)?;
-        if !kind.check(&row, false) || go_bytes(&row)? != raw {
+        let row = std::str::from_utf8(raw).map_err(io::Error::other)?;
+        if !kind.check(row, false) {
             return Err(invalid());
         }
         size += go_bytes(&json!(index))?.len() + 1 + usize::from(table == previous) + raw.len();
@@ -114,50 +116,91 @@ macro_rules! fields {
 }
 
 impl Kind {
-    fn check(self, value: &Value, optional: bool) -> bool {
+    fn check(self, raw: &str, optional: bool) -> bool {
+        self.encoded_len(raw, optional) == Some(raw.len())
+    }
+
+    fn encoded_len(self, raw: &str, optional: bool) -> Option<usize> {
         match self {
-            Self::String => value
-                .as_str()
-                .is_some_and(|value| !optional || !value.is_empty()),
-            Self::Bool => value.as_bool().is_some_and(|value| !optional || value),
-            Self::Unsigned => value.as_u64().is_some_and(|value| !optional || value != 0),
-            Self::Signed => value.as_i64().is_some_and(|value| !optional || value != 0),
-            Self::Raw => true,
-            Self::Time => value.as_str().is_some_and(go_timestamp),
+            Self::String | Self::Time => {
+                let text: String = serde_json::from_str(raw).ok()?;
+                if (optional && text.is_empty())
+                    || (matches!(self, Self::Time) && !go_timestamp(&text))
+                {
+                    return None;
+                }
+                Some(go_bytes(&Value::String(text)).ok()?.len())
+            }
+            Self::Bool => {
+                let value: bool = serde_json::from_str(raw).ok()?;
+                (!optional || value).then_some(if value { 4 } else { 5 })
+            }
+            Self::Unsigned => {
+                let value: u64 = serde_json::from_str(raw).ok()?;
+                (!optional || value != 0).then(|| value.to_string().len())
+            }
+            Self::Signed => {
+                let value: i64 = serde_json::from_str(raw).ok()?;
+                (!optional || value != 0).then(|| value.to_string().len())
+            }
+            Self::Raw => Some(go_raw_len(raw)),
             Self::Object(fields) | Self::NonzeroObject(fields) => {
-                value.as_object().is_some_and(|map| {
-                    (!matches!(self, Self::NonzeroObject(_)) || !map.is_empty())
-                        && map
-                            .keys()
-                            .all(|name| fields.iter().any(|Field(field, _, _)| field == name))
-                        && fields.iter().all(|Field(name, kind, optional)| {
-                            map.get(*name)
-                                .map_or(*optional, |value| kind.check(value, *optional))
-                        })
-                })
+                let map = object_fields(raw).ok()?;
+                if matches!(self, Self::NonzeroObject(_)) && map.is_empty() {
+                    return None;
+                }
+                let mut size = 2 + map.len().saturating_sub(1);
+                let mut found = 0;
+                for Field(name, kind, omit_zero) in fields {
+                    if let Some(value) = map.get(*name) {
+                        if !kind.check(value, *omit_zero) {
+                            return None;
+                        }
+                        found += 1;
+                        size += name.len() + 3 + value.len();
+                    } else if !omit_zero {
+                        return None;
+                    }
+                }
+                (found == map.len()).then_some(size)
             }
         }
     }
 }
 
+fn go_raw_len(raw: &str) -> usize {
+    // Go compacts json.RawMessage and escapes HTML, preserving numbers and
+    // escaped strings byte for byte. The object reader has already scanned the JSON.
+    let mut size = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for character in raw.chars() {
+        if !in_string && matches!(character, ' ' | '\t' | '\r' | '\n') {
+            continue;
+        }
+        if escaped {
+            escaped = false;
+        } else if in_string && character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            in_string = !in_string;
+        } else if in_string && matches!(character, '<' | '>' | '&' | '\u{2028}' | '\u{2029}') {
+            size += 6;
+            continue;
+        }
+        size += character.len_utf8();
+    }
+    size
+}
+
 fn go_timestamp(value: &str) -> bool {
-    // Go emits RFC3339Nano, trimming fractional zeroes and spelling a zero
-    // offset as Z. Require the original spelling before counting its bytes.
-    value.parse::<jiff::Timestamp>().is_ok()
-        && value.as_bytes().get(10) == Some(&b'T')
-        && value.as_bytes().get(17).is_some_and(|byte| *byte <= b'5')
-        && !value.ends_with("+00:00")
-        && !value.ends_with("-00:00")
-        && (value.ends_with('Z')
-            || value
-                .get(value.len().saturating_sub(3)..)
-                .is_some_and(|offset| offset.starts_with(':')))
-        && value.split_once('.').is_none_or(|(_, tail)| {
-            tail.bytes()
-                .take_while(u8::is_ascii_digit)
-                .last()
-                .is_some_and(|byte| byte != b'0')
-        })
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+    // Go emits RFC3339Nano with a trimmed fraction and Z for zero offset.
+    OffsetDateTime::parse(value, &Rfc3339).is_ok_and(|timestamp| {
+        timestamp
+            .format(&Rfc3339)
+            .is_ok_and(|encoded| encoded == value)
+    })
 }
 
 // Fields match the Go Voice State at v0.29.26. An optional time.Time remains
@@ -522,6 +565,36 @@ const TABLES: &[(&str, Kind)] = &[
 mod tests {
     use super::*;
     use bbolt_rs::{Bolt, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+
+    #[test]
+    fn go_times_require_the_original_rfc3339_nano_encoding() {
+        for value in [
+            "0001-01-01T00:00:00Z",
+            "2026-11-26T19:00:00.123456789+01:00",
+            "2026-11-26T19:00:00.1-00:30",
+        ] {
+            assert!(go_timestamp(value), "{value}");
+        }
+        for value in [
+            "2026-11-26T19:00:00.1234567890Z",
+            "2026-11-26T19:00:00.10Z",
+            "2026-11-26T19:00:00+00:00",
+            "2016-12-31T23:59:60Z",
+        ] {
+            assert!(!go_timestamp(value), "{value}");
+        }
+    }
+
+    #[test]
+    fn go_raw_message_preserves_numeric_and_string_lexemes() {
+        let opaque = r#"{"exponent":1e+09,"oversized":1e+900,"escaped":"\u003C"}"#;
+        let row = format!(
+            r#"{{"previous":{{"binding":"old","sequence":1}},"cursor":{{"binding":"new","sequence":3}},"metadata":{opaque}}}"#
+        );
+        assert!(Kind::Object(JOURNAL_SNAPSHOT).check(&row, false));
+        let loose = r#"{ "raw" : "<&>" }"#;
+        assert_eq!(go_raw_len(loose), br#"{"raw":"\u003c\u0026\u003e"}"#.len());
+    }
 
     #[test]
     fn logical_size_and_typed_rows_are_checked_in_the_same_transaction() {

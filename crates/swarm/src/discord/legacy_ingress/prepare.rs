@@ -447,15 +447,10 @@ pub(in crate::discord) fn read_guild_publication<'tx>(
         conversation,
         admission["sequence"].as_u64().ok_or_else(invalid)?,
     )?;
-    let cursor = |row: &Value| {
-        row.as_object().is_some_and(|map| map.len() == 2)
-            && row["binding"].is_string()
-            && row["sequence"].as_u64().is_some()
-    };
     let error = || io::Error::other("the original guild Voice records cannot reopen in Go");
     let mut journal = false;
     let mut snapshot = false;
-    for (record_key, raw) in records.iter_entries() {
+    for (record_key, _) in records.iter_entries() {
         let (table, suffix) = std::str::from_utf8(record_key)
             .map_err(io::Error::other)?
             .split_once('\0')
@@ -463,25 +458,8 @@ pub(in crate::discord) fn read_guild_publication<'tx>(
         match table {
             "conversations" if record_key == voice.conversation_key => (),
             "admissions" if record_key == key => (),
-            "journal" | "journal_snapshots" if suffix == conversation => {
-                let row: Value = serde_json::from_slice(raw)?;
-                if !canonical_guild_voice(&row, raw)? {
-                    return Err(error());
-                }
-                if table == "journal" && cursor(&row) {
-                    journal = true;
-                } else if table == "journal_snapshots"
-                    && row
-                        .as_object()
-                        .is_some_and(|map| map.len() == 3 && map.contains_key("metadata"))
-                    && cursor(&row["previous"])
-                    && cursor(&row["cursor"])
-                {
-                    snapshot = true;
-                } else {
-                    return Err(error());
-                }
-            }
+            "journal" if suffix == conversation => journal = true,
+            "journal_snapshots" if suffix == conversation => snapshot = true,
             _ => return Err(error()),
         }
     }

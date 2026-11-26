@@ -192,8 +192,8 @@ func main() {
 		}
 		return
 	}
-	if action == "vm-voice-size" && len(os.Args) == 4 {
-		check(voice.FixtureVMVoiceSize(dir, os.Args[3]))
+	if action == "retained-voice-size" && len(os.Args) == 4 {
+		check(voice.FixtureRetainedVoiceSize(dir, os.Args[3]))
 		return
 	}
 	if action == "guild-publication" {

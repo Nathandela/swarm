@@ -793,6 +793,43 @@ mod tests {
                 .unwrap()
             );
             assert_eq!(original, fs::read(&source).unwrap());
+            if acknowledge && grant.is_empty() {
+                let copy = root.join("voice-size-copy");
+                runtime::private_dir(&copy).unwrap();
+                let copied = copy.join("voice.db");
+                fs::copy(&voice, &copied).unwrap();
+                let copy_path = copy.to_str().unwrap();
+                call(&["retained-voice-size", copy_path, "read"]);
+                call(&["retained-voice-size", copy_path, "damage"]);
+                let damaged = fs::read(&copied).unwrap();
+                let go = Command::new(&fixture)
+                    .args(["retained-voice-size", copy_path, "read"])
+                    .output()
+                    .unwrap();
+                assert!(
+                    !go.status.success() && String::from_utf8_lossy(&go.stderr).contains("corrupt")
+                );
+                assert_eq!(fs::read(&copied).unwrap(), damaged);
+
+                fs::write(&voice, &damaged).unwrap();
+                let rejected = with(
+                    &place,
+                    "fixture-final",
+                    false,
+                    |_| -> io::Result<fn(&Publication) -> Post> {
+                        panic!("unreopenable original Go ledger cannot authorize a first POST");
+                    },
+                );
+                assert!(
+                    rejected
+                        .unwrap_err()
+                        .to_string()
+                        .contains("cannot reopen in Go")
+                );
+                assert_eq!(fs::read(&voice).unwrap(), damaged);
+                assert_eq!(fs::read(&source).unwrap(), original);
+                fs::write(&voice, &voice_before).unwrap();
+            }
             let file_sha = format!("{:x}", Sha256::digest(b"header,value\nfixture,1\n"));
             if attached {
                 assert!(read(&place, "fixture-final", "wrong-file", &file_sha, 0).is_err());

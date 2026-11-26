@@ -663,6 +663,13 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
             command = [rust_test, *rust_args]
             process_env = rust_env(f"publish-{phase}")
             if phase == "stage":
+                with sock.with_name("controller.lock").open("rb") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    invoke("guild-malform-timestamp", voice.parent, "701", "raw-message")
+                original = voice.read_bytes(), connector.read_bytes()
+                for lexeme in (b"1e+09", b"1e+900", br"\u003C"):
+                    assert lexeme in original[0]
+                assert result() is None and pending() == original_ingress and posts == []
                 for probe in ("dry-run", "wrong-message"):
                     checked = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
                     assert checked.returncode == 0 and (voice.read_bytes(), connector.read_bytes()) == original, checked.stdout + checked.stderr
@@ -765,6 +772,8 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
         assert pending() == original_ingress and posts == []
         if not go_owner:
             assert original[1] == connector.read_bytes()
+        if phase == "stage":
+            print("PASS Rust staged the original guild publication with exact Go RawMessage lexemes", flush=True)
         if not go_owner and phase not in ("stage", "after-commit"):
             assert original[0] == voice.read_bytes() and result() is None
             if phase != "closed":

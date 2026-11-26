@@ -348,7 +348,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
         return None, shell, {field: command}
 
     source_change = threading.Event()
-    model, _ = model_fixture(base, False, fixture_tool=choose)
+    model, calls = model_fixture(base, False, fixture_tool=choose)
     discord, posts = discord_fixture(mode != "uncertain" and not lost_ack, wake=True,
                                      change_source=lambda: (mode_fence or "edit") if source_change.is_set() else None,
                                      expected_file=original_bytes, revoke=mode == "revoked")
@@ -445,10 +445,10 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             copied = copy / "voice.db"
                             copied.write_bytes(original_ledgers[1])
                             copied.chmod(0o600)
-                            run(fixture, env, "vm-voice-size", copy, "read")
-                            run(fixture, env, "vm-voice-size", copy, "damage")
+                            run(fixture, env, "retained-voice-size", copy, "read")
+                            run(fixture, env, "retained-voice-size", copy, "damage")
                             damaged = copied.read_bytes()
-                            go_read = subprocess.run([fixture, "vm-voice-size", copy, "read"], env=env,
+                            go_read = subprocess.run([fixture, "retained-voice-size", copy, "read"], env=env,
                                                      capture_output=True, timeout=5)
                             assert go_read.returncode != 0 and b"corrupt" in go_read.stderr
                             assert copied.read_bytes() == damaged

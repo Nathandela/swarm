@@ -880,13 +880,18 @@ mod tests {
                 assert!(rust_step("701", base + 30, &[]).is_err());
                 assert_eq!(fs::read(&db_path).unwrap(), bytes);
             }
-            let reject_damaged_voice = |description: &str| {
+            let reject_damaged_voice = |description: &str, typed: bool| {
+                let expected = if typed {
+                    "the original Voice records cannot reopen in Go".to_owned()
+                } else {
+                    invalid().to_string()
+                };
                 let damaged = fs::read(&db_path).unwrap();
                 assert_eq!(
                     rust_step("701", base + 30, &roster)
                         .unwrap_err()
                         .to_string(),
-                    invalid().to_string(),
+                    expected,
                     "{description}",
                 );
                 assert_eq!(fs::read(&db_path).unwrap(), damaged);
@@ -901,7 +906,7 @@ mod tests {
                     prepare::go_bytes(row).unwrap().len()
                         - prepare::go_bytes(&go_decoded).unwrap().len()
                 });
-                reject_damaged_voice("partial attribution alias");
+                reject_damaged_voice("partial attribution alias", true);
                 let reopened = run(rust_path, "read", base + 30);
                 assert_eq!(
                     reopened["publications"]
@@ -929,7 +934,7 @@ mod tests {
                         row.pointer_mut(section).unwrap()[name] = json!("unrelated");
                         0
                     });
-                    reject_damaged_voice(name);
+                    reject_damaged_voice(name, name == "SESSION_ID");
                     fs::write(&db_path, &bytes).unwrap();
                 }
             }
@@ -944,7 +949,7 @@ mod tests {
                         row[counter_name] = bad;
                         0
                     });
-                    reject_damaged_voice(counter_name);
+                    reject_damaged_voice(counter_name, true);
                     fs::write(&db_path, &bytes).unwrap();
                 }
             }

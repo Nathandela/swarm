@@ -6,7 +6,6 @@ pub(super) mod live;
 
 use super::runtime;
 use crate::ipc::field;
-use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::ffi::CStr;
@@ -92,49 +91,14 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
 #[derive(Clone, PartialEq, Eq)]
 struct RawFields(BTreeMap<String, String>);
 
-fn json_space(text: &str) -> &str {
-    text.trim_start_matches([' ', '\n', '\r', '\t'])
-}
-
-fn next_json<T: DeserializeOwned>(input: &str) -> io::Result<(T, &str, &str)> {
-    let mut stream = serde_json::Deserializer::from_str(input).into_iter::<T>();
-    let value = stream
-        .next()
-        .ok_or_else(|| io::Error::other("missing Go JSON value"))??;
-    let (raw, rest) = input.split_at(stream.byte_offset());
-    Ok((value, raw, json_space(rest)))
-}
-
 impl RawFields {
     fn parse(text: &str) -> io::Result<Self> {
-        let mut rest = json_space(text)
-            .strip_prefix('{')
-            .map(json_space)
-            .ok_or_else(|| io::Error::other("Go metadata must be a JSON object"))?;
-        let mut fields = BTreeMap::new();
-        if !rest.starts_with('}') {
-            loop {
-                let (key, _, after_key) = next_json::<String>(rest)?;
-                let after_colon = after_key
-                    .strip_prefix(':')
-                    .map(json_space)
-                    .ok_or_else(|| io::Error::other("missing Go metadata field separator"))?;
-                let (_, raw, after_value) = next_json::<IgnoredAny>(after_colon)?;
-                if fields.insert(key, raw.into()).is_some() {
-                    return Err(io::Error::other("duplicate Go metadata field"));
-                }
-                if let Some(after_comma) = after_value.strip_prefix(',') {
-                    rest = json_space(after_comma);
-                } else {
-                    rest = after_value;
-                    break;
-                }
-            }
-        }
-        if rest.strip_prefix('}').map(json_space) != Some("") {
-            return Err(io::Error::other("invalid Go metadata object boundary"));
-        }
-        Ok(Self(fields))
+        Ok(Self(
+            crate::json_fields::object_fields(text)?
+                .into_iter()
+                .map(|(key, raw)| (key, raw.to_owned()))
+                .collect(),
+        ))
     }
 
     fn write(&self, mut output: impl Write) -> io::Result<()> {

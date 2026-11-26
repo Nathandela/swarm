@@ -8,6 +8,7 @@ mod environment;
 mod flags;
 mod hook;
 mod ipc;
+mod json_fields;
 mod manager_mcp;
 mod manager_prompt;
 mod providers;
