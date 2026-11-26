@@ -267,6 +267,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
             return
         return run(rust_test, test_env, *rust_args)
     def blocked_admission(voice, action, phase, marker="holding writer manager_runtime reply"):
+        await_value(lambda: manager_observed(
+            start, lambda current: current["ready_for_input"] is True
+            and current["turn"]["state"] in ("idle", "completed")))
         with subprocess.Popen([rust_test, *rust_args], env=rust_env(phase), text=True,
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             waiting = Event()
@@ -291,10 +294,9 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
             finally:
                 try:
                     child.stdin.write("continue\n")
-                    child.stdin.flush()
+                    child.stdin.close()
                 except BrokenPipeError:
                     pass
-                child.stdin.close()
                 child.wait(timeout=15)
                 output.join(timeout=5)
             assert child.returncode == 0, "".join(log)
@@ -359,26 +361,28 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     child.wait(timeout=8)
                 output.join(timeout=3)
 
+    def manager_observed(start, matches_turn):
+        try:
+            current = runtime()
+        except KeyError:
+            return False
+        if not (current["binding"] == start["binding"] and matches_turn(current)):
+            return False
+        rows = owner(env, {"op":"list"}, caps=("manager-provenance", "message-origin"))["sessions"]
+        return len([row for row in rows if row["id"] == start["binding"]["session"]
+                    and row["role"] == "manager" and row["agent"] == "codex"
+                    and row["manager_conversation_id"] == start["binding"]["conversation_id"]
+                    and row["cwd"] == str(base / "work") and row["status"]["Process"] == "running"
+                    and row["capabilities"]["session_instance"] == start["binding"]["session_instance"]]) == 1
+
     def running_history(start, voice, original_turn):
         connector = place / "discord.db"
         expected = json.loads(invoke("guild-advance", place, go_port, "history"))
-        def running_runtime():
-            try:
-                current = runtime()
-            except KeyError:
-                return False
-            turn = current["turn"]
-            if not (current["binding"] == start["binding"] and current["ready_for_input"] is False
-                    and turn["state"] == "running" and turn["native_turn_id"] == original_turn["native_turn_id"]
-                    and turn["native_input_id"] == original_turn["native_input_id"]):
-                return False
-            rows = owner(env, {"op":"list"}, caps=("manager-provenance", "message-origin"))["sessions"]
-            return len([row for row in rows if row["id"] == start["binding"]["session"]
-                        and row["role"] == "manager" and row["agent"] == "codex"
-                        and row["manager_conversation_id"] == start["binding"]["conversation_id"]
-                        and row["cwd"] == str(base / "work") and row["status"]["Process"] == "running"
-                        and row["capabilities"]["session_instance"] == start["binding"]["session_instance"]]) == 1
-        await_value(running_runtime)
+        await_value(lambda: manager_observed(
+            start, lambda current: current["ready_for_input"] is False
+            and current["turn"]["state"] == "running"
+            and current["turn"]["native_turn_id"] == original_turn["native_turn_id"]
+            and current["turn"]["native_input_id"] == original_turn["native_input_id"]))
         exact_voice, exact_connector = voice.read_bytes(), connector.read_bytes()
         sock = Path(start["bridge_socket"])
         auth = Path(start["auth_file"])

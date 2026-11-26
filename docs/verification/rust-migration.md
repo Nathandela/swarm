@@ -4,6 +4,10 @@
 
 Nathan approved preserving the combining accent after reattach, delivering exactly one XTerm mouse-mode reply while preserving unsolicited and pasted input, and using numeric prerelease ordering to keep an `rc.10` daemon running under an `rc.2` dashboard with the newer-daemon notice. Prerelease approval is recorded in Discord message `1575388077306810399`. The native test targets are this Darwin arm64 Mac and the Linux x86_64 VM reached by SSH as `tf_nathan`. Translated and virtualized architecture evidence identifies its execution environment. [Release contracts](../specifications/rust-migration/qualification.md)
 
+## Current Go reference
+
+The latest stable comparison is signed Go v0.29.25 at `44d796734fc60f6f9b9d6705dca44736f0c5741b`. The current source comparison is Go main at `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`, which adds unreleased changes to Discord worker files. The release reconciliation records the Rust evidence and remaining gates for each change in v0.29.24 and v0.29.25. [Release comparisons and signatures](../specifications/rust-migration/reference-checks.md#v02924-and-v02925-release-reconciliation)
+
 ## November 26 combined implementation
 
 The complete suite at `1be8f6c8` passed 215 tests on each native host. Ten tests require explicit prerequisites or an opt-in live test. This revision includes the approved prerelease comparison and XTerm input-preservation contract. The instrumented rc.2/rc.10 board run showed the newer-owner notice and preserved the live worker on both platforms. [Darwin receipt](rust-migration/rc-order-darwin.json) · [Linux receipt](rust-migration/rc-order-linux.json)
@@ -60,7 +64,7 @@ The signed development archive from `cb630ec5` also passed managed installation,
 
 ## Initial fleet round, 25 November 2026
 
-This branch is under development. The active production Go oracle is v0.29.24 at `a716dd50a5faf746ce6f0831fc31d0d73b06ffeb`. The independent Discord call oracle remains `da7b9f2dfa7e2c6960bd860a72459c0448845c82`. Historical artifacts and observations remain pinned to their original releases. The evidence below applies to an isolated Mac or Linux fixture. Production release, migration of existing sessions and real provider/Discord behavior have separate gates in the [roadmap](../specifications/rust-migration/README.md).
+This branch is under development. At this checkpoint the production Go oracle was v0.29.24 at `a716dd50a5faf746ce6f0831fc31d0d73b06ffeb`. The independent Discord call oracle was `da7b9f2dfa7e2c6960bd860a72459c0448845c82`. The evidence below applies to isolated Mac and Linux fixtures. Production release, migration of existing sessions and real provider and Discord behavior have separate gates. [Migration roadmap](../specifications/rust-migration/README.md)
 
 | Exercise | Observations |
 |---|---|
