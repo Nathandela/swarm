@@ -171,4 +171,6 @@ The final binary SHA-256 was `c1c3d2ddb58c12df02d41721000d9681c8f5cc3ae12225e9cc
 
 ## Repository checks
 
-The Go build, vet, and lint gates passed. The entire worktree test package passed under the race detector. Focused race-enabled checks also passed in daemon, protocol, and skeleton, including both remote destination policy routes. The repository-wide test command was still running when the review branch was opened.
+The Go build, vet, and lint gates passed. The entire worktree test package passed under the race detector. Focused race-enabled checks also passed in daemon, protocol, and skeleton, including both remote destination policy routes. A final CLI inventory run against the isolated provider fixture completed and listed all three sibling checkouts with their exact Swarm owners.
+
+The first `go test ./... -timeout 35m` run encountered daemon startup and fixture deadlines and permission expectations under the launch shell's `0077` umask. Serial reruns with standard fixture permissions cleared those failures. The inventory test continued to hit its 15-second deadline from the launch checkout, which shares 195 Git registrations. An overlay restoring upstream `7f67c067` Go sources reproduced the same failure from the same directory. The final binary's test passed from a neutral disposable directory. The remaining suite issue is tracked in `agents-tracker-icxe`.
