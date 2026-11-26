@@ -172,16 +172,11 @@ impl Dispatcher {
                 let id = field(input, "source_id");
                 let revision = &input["worker_wake"]["owner_revision"];
                 let wake_key = field(&input["worker_wake"], "key").to_owned();
-                let source = if inbox.matches_owner_admission(id, revision) {
-                    match api.current(cfg, id) {
-                        Ok(source) => source,
-                        Err(_) => return Ok(()),
-                    }
-                } else {
-                    None
+                let Some(current) = Self::mail_owner_current(cfg, inbox, api, id, revision)? else {
+                    return Ok(());
                 };
                 let expired = !crate::providers::codex_receipt::timely(field(input, "operation"));
-                if source.is_none() || expired {
+                if !current || expired {
                     let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
                         Ok(lock) => lock,
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
@@ -193,7 +188,7 @@ impl Dispatcher {
                             == input["composer"]["manager_admission"]["expected_external_input"]
                         && field(&observed, "native_turn_id").is_empty()
                     {
-                        if source.is_none() {
+                        if !current {
                             inbox.withdraw(id)?;
                         } else if let Some(wakes) = state["worker_wakes"].as_object_mut() {
                             wakes.shift_remove(&wake_key);
@@ -203,12 +198,7 @@ impl Dispatcher {
                     }
                     return Ok(());
                 }
-                if status["ready_for_input"] == true
-                    && let Some(source) = source
-                    && inbox.admit(&source).ok().flatten().is_some_and(|current| {
-                        current["state"] == "accepted" && current["revision"] == *revision
-                    })
-                {
+                if status["ready_for_input"] == true {
                     // The shim serializes native preparation with cancellation.
                     let _ = self
                         .owner
@@ -290,6 +280,42 @@ impl Dispatcher {
         }
     }
 
+    /// None is uncertain transport or a response without exact message coordinates.
+    fn mail_owner_current(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        id: &str,
+        revision: &Value,
+    ) -> io::Result<Option<bool>> {
+        if !inbox.matches_owner_admission(id, revision) {
+            return Ok(Some(false));
+        }
+        let source = match api.current(cfg, id) {
+            Ok(Some(source)) => source,
+            Ok(None) => return Ok(Some(false)),
+            Err(_) => return Ok(None),
+        };
+        if source["id"] != id
+            || source["channel_id"] != cfg.text("dm_channel_id")
+            || !source["author"]["id"].is_string()
+            || !source["content"].is_string()
+            || !source["attachments"].is_array()
+            || !source["type"].is_u64()
+            || !(source["edited_timestamp"].is_null() || source["edited_timestamp"].is_string())
+        {
+            return Ok(None);
+        }
+        match inbox.admit(&source) {
+            Ok(receipt) => Ok(Some(receipt.is_some_and(|current| {
+                current["state"] == "accepted" && current["revision"] == *revision
+            }))),
+            // Exact scoped GET succeeded, but the accepted revision conflicts with it.
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(Some(false)),
+            Err(error) => Err(error),
+        }
+    }
+
     fn wake_from_mail(
         &self,
         cfg: &Config,
@@ -331,18 +357,13 @@ impl Dispatcher {
             let (id, accepted) = inbox
                 .worker_mail_anchor(binding, &note)
                 .ok_or_else(|| invalid("worker wake has no current owner anchor"))?;
-            let source = match api.current(cfg, &id) {
-                Ok(Some(source)) => source,
-                Ok(None) => {
+            match Self::mail_owner_current(cfg, inbox, api, &id, &accepted["revision"])? {
+                Some(true) => {}
+                Some(false) => {
                     inbox.withdraw(&id)?;
                     continue;
                 }
-                Err(_) => continue,
-            };
-            if inbox.admit(&source).ok().flatten().is_none_or(|current| {
-                current["state"] != "accepted" || current["revision"] != accepted["revision"]
-            }) {
-                continue;
+                None => continue,
             }
             let key = mail_wake::key(&note)?;
             let accepted_revision = accepted["revision"].clone();

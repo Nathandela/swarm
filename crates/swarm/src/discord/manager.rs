@@ -904,8 +904,14 @@ mod tests {
                     let deadline = Instant::now() + Duration::from_secs(8);
                     let cancel = std::env::var_os("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").is_some();
                     if cancel {
-                        let lock = super::super::lock_manager_mail_effect(&dispatcher.scope(&cfg))
-                            .unwrap();
+                        let prepared = std::env::var("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").as_deref()
+                            == Ok("prepared");
+                        if prepared {
+                            std::fs::write(root.join(".fixture-mail-hold-turn"), "").unwrap();
+                        }
+                        let lock = (!prepared).then(|| {
+                            super::super::lock_manager_mail_effect(&dispatcher.scope(&cfg)).unwrap()
+                        });
                         loop {
                             let attempt = dispatcher.tick(&cfg, &mut inbox, &fake);
                             if !inbox.manager()["input"]["worker_wake"].is_null() {
@@ -922,24 +928,49 @@ mod tests {
                             std::thread::sleep(Duration::from_millis(20));
                         }
                         let refused = inbox.manager()["input"]["composer"].clone();
-                        assert_eq!(manager.input_status(&refused).unwrap()["state"], "unknown");
-                        let mut replacement = fake.source.clone();
-                        replacement["id"] = json!("407");
-                        replacement["content"] = json!("Independent DM after withdrawn source");
-                        let other = FixtureAudience {
-                            source: replacement.clone(),
-                            posts: std::cell::RefCell::new(Vec::new()),
+                        assert_eq!(
+                            manager.input_status(&refused).unwrap()["state"],
+                            if prepared { "prepared" } else { "unknown" }
+                        );
+                        let mut withdrawal = fake.source.clone();
+                        match std::env::var("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").as_deref() {
+                            Ok("edited") => {
+                                withdrawal["content"] = json!("Edited after cutover");
+                                withdrawal["edited_timestamp"] = json!("2026-01-01T00:00:00Z");
+                            }
+                            Ok("empty") => withdrawal["content"] = json!(""),
+                            Ok("attachment") => withdrawal["attachments"] = json!([{"id":"430"}]),
+                            _ => withdrawal["id"] = json!("407"),
+                        }
+                        let withdrawn = FixtureAudience {
+                            source: withdrawal,
+                            posts: Default::default(),
                         };
-                        dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
+                        dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
                         assert_eq!(inbox.manager()["input"]["composer"], refused);
                         drop(lock);
-                        dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
-                        assert!(inbox.manager()["input"].is_null());
-                        assert_eq!(manager.input_status(&refused).unwrap()["state"], "unknown");
-                        inbox.admit(&replacement).unwrap().unwrap();
-                        dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
-                        assert_eq!(inbox.manager()["input"]["source_id"], "407");
-                        assert!(inbox.manager()["input"]["worker_wake"].is_null());
+                        dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
+                        if prepared {
+                            assert_eq!(inbox.manager()["input"]["composer"], refused);
+                            assert_eq!(
+                                manager.input_status(&refused).unwrap()["state"],
+                                "prepared"
+                            );
+                        } else {
+                            assert!(inbox.manager()["input"].is_null());
+                            assert_eq!(manager.input_status(&refused).unwrap()["state"], "unknown");
+                            let mut replacement = fake.source.clone();
+                            replacement["id"] = json!("407");
+                            replacement["content"] = json!("Independent DM after withdrawn source");
+                            let other = FixtureAudience {
+                                source: replacement.clone(),
+                                posts: Default::default(),
+                            };
+                            inbox.admit(&replacement).unwrap().unwrap();
+                            dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
+                            assert_eq!(inbox.manager()["input"]["source_id"], "407");
+                            assert!(inbox.manager()["input"]["worker_wake"].is_null());
+                        }
                     } else {
                         let wake = loop {
                             dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();

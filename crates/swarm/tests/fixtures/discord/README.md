@@ -69,3 +69,8 @@ wake and Discord publication of staged files have separate qualification.
 Set `SWARM_NATIVE_MAIL_WAKE_FIXTURE=1` alongside `SWARM_NATIVE_MAIL_FIXTURE=1`
 to close the first native turn, reopen the connector, and verify a queued
 completion starts one distinct manager turn and is ingested by its MCP tool.
+
+Set `SWARM_NATIVE_MAIL_CANCEL_FIXTURE` to `edited`, `empty` or `attachment`
+to withdraw an exact still-unprepared wake and admit another owner DM. The
+`prepared` mode verifies that the same scoped withdrawal retains the native
+preparation, even when its turn has no observed receipt.

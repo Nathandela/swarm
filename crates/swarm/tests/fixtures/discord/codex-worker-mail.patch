@@ -6,13 +6,17 @@
 -		reply, err := json.Marshal(s.answer(fr.ID, fr.Method))
 +		answer := s.answer(fr.ID, fr.Method)
 +		reply, err := json.Marshal(answer)
-@@ -152,0 +155,41 @@
+@@ -152,0 +155,45 @@
 +		if fr.Method == "turn/start" {
 +			nonce, _ := fr.Params["clientUserMessageId"].(string)
 +			input, _ := fr.Params["input"].([]any)
 +			if nonce != "" && len(input) == 1 {
 +				turn := answer["result"].(map[string]any)["turn"].(map[string]any)["id"].(string)
 +				wake := turn != "01a0033b-d0be-77e1-88e7-584ddeea562d"
++				if _, err := os.Stat(".fixture-mail-hold-turn"); wake && err == nil {
++					continue
++				}
++
 +				s.broadcast("turn/started", map[string]any{"threadId": fakeThreadID, "turn": map[string]any{"id": turn, "status": "inProgress"}})
 +				s.broadcast("item/started", map[string]any{"threadId": fakeThreadID, "turnId": turn,
 +					"item": map[string]any{"id": "fixture-user-note-" + turn, "type": "userMessage", "clientId": nonce, "content": input}})
@@ -48,11 +52,11 @@
 +				}
 +			}
 +		}
-@@ -179 +222,2 @@
+@@ -179 +226,2 @@
 -		out["result"] = map[string]any{"turn": map[string]any{"id": "01a0033b-d0be-77e1-88e7-584ddeea562d", "status": "inProgress"}}
 +		turn := fmt.Sprintf("01a0033b-d0be-77e1-88e7-%012x", 0x584ddeea562c+s.turnStarts)
 +		out["result"] = map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress"}}
-@@ -198,0 +243,7 @@
+@@ -198,0 +247,7 @@
 +	cwd, _ := os.Getwd()
 +	s.broadcast("thread/started", map[string]any{"thread": map[string]any{
 +		"id": fakeThreadID, "cwd": cwd, "status": map[string]any{"type": "idle"},
@@ -60,7 +64,7 @@
 +}
 +
 +func (s *fakeAppServer) broadcast(method string, params map[string]any) {
-@@ -200,3 +251 @@
+@@ -200,3 +255 @@
 -		"jsonrpc": "2.0",
 -		"method":  "thread/started",
 -		"params":  map[string]any{"thread": map[string]any{"id": fakeThreadID}},
