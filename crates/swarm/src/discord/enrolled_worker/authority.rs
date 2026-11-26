@@ -323,6 +323,7 @@ pub(crate) fn guard(
     let directory = path.join("manager-v1");
     let socket = directory.join(SOCKET);
     let challenge = runtime::random_id()?;
+    verify_bridge(scope, issuer)?;
     verify_issuer(&directory, issuer)?;
     let mut stream = UnixStream::connect(socket)?;
     if issuer["pid"] != runtime::peer_pid(&stream)? {
@@ -338,9 +339,32 @@ pub(crate) fn guard(
         ));
     }
     verify_issuer(&directory, issuer)?;
+    verify_bridge(scope, issuer)?;
     verify_place()?;
     validate_connector(scope, action)?;
     Ok(lock)
+}
+
+fn verify_bridge(scope: &Value, issuer: &Value) -> io::Result<()> {
+    let pin = &scope["bridge_issuer"];
+    let socket = Path::new(field(&scope["launch"]["manager"], "bridge_socket"));
+    if issuer["pid"] != pin["pid"] || issuer["birth"] != pin["birth"] {
+        return Err(invalid("send issuer is outside the bound manager bridge"));
+    }
+    let check = || -> io::Result<()> {
+        let meta = fs::symlink_metadata(socket)?;
+        if !meta.file_type().is_socket() || pin["socket"] != json!([meta.dev(), meta.ino()]) {
+            return Err(invalid("bound manager bridge changed"));
+        }
+        Ok(())
+    };
+    check()?;
+    let peer = UnixStream::connect(socket)?;
+    let pid = runtime::peer_pid(&peer)?;
+    if pin["pid"] != pid || pin["birth"] != runtime::birth(pid)? {
+        return Err(invalid("manager bridge peer identity changed"));
+    }
+    check()
 }
 
 fn verify_issuer(directory: &Path, issuer: &Value) -> io::Result<()> {
@@ -370,7 +394,10 @@ fn verify_issuer(directory: &Path, issuer: &Value) -> io::Result<()> {
 }
 
 #[cfg(test)]
-pub(in crate::discord) fn replace_fixture_issuer(bridge: &Path) -> io::Result<()> {
+pub(in crate::discord) fn replace_fixture_issuer(
+    bridge: &Path,
+    issuer: &mut Value,
+) -> io::Result<()> {
     let Some(root) =
         std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_REPLACED_ISSUER").map(PathBuf::from)
     else {
@@ -380,24 +407,79 @@ pub(in crate::discord) fn replace_fixture_issuer(bridge: &Path) -> io::Result<()
     if withdrawn.exists() {
         return Ok(());
     }
-    let socket = bridge.parent().unwrap().join(SOCKET);
-    fs::remove_file(&socket)?;
-    let replacement = runtime::bind(&socket)?;
-    fs::write(withdrawn, b"source withdrawn after preflight")?;
+    let directory = bridge.parent().unwrap();
+    fs::remove_file(directory.join(SOCKET))?;
+    fs::remove_file(directory.join(LEASE))?;
+    let mut impostor = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--ignored",
+            "--exact",
+            "discord::enrolled_worker::authority::replacement_issuer_process",
+        ])
+        .env("SWARM_FIXTURE_IMPOSTOR_BRIDGE", directory)
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let forged = loop {
+        match runtime::read_json(&root.join(".fixture-impostor-ready")) {
+            Ok(pin) => break pin,
+            Err(err) if err.kind() == io::ErrorKind::NotFound && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => {
+                let _ = impostor.kill();
+                let _ = impostor.wait();
+                return Err(err);
+            }
+        }
+    };
     std::thread::spawn(move || {
-        if let Ok((mut stream, _)) = replacement.accept()
-            && let Ok(req) =
-                runtime::read_control(&mut DeadlineReader(&stream, Instant::now() + TIMEOUT))
+        let _ = impostor.wait();
+    });
+    verify_issuer(directory, &forged)?;
+    *issuer = forged;
+    fs::write(withdrawn, b"source withdrawn after preflight")?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "private subprocess for the enrolled issuer replacement fixture"]
+fn replacement_issuer_process() {
+    let root =
+        PathBuf::from(std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_REPLACED_ISSUER").unwrap());
+    let directory = PathBuf::from(std::env::var_os("SWARM_FIXTURE_IMPOSTOR_BRIDGE").unwrap());
+    let lease = runtime::lock(&directory.join(LEASE)).unwrap();
+    let listener = runtime::bind(&directory.join(SOCKET)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let socket_meta = fs::symlink_metadata(directory.join(SOCKET)).unwrap();
+    let lock_meta = lease.metadata().unwrap();
+    let pid = std::process::id();
+    runtime::write_json(
+        &root.join(".fixture-impostor-ready"),
+        &json!({
+            "pid":pid,"birth":runtime::birth(pid).unwrap(),
+            "socket":[socket_meta.dev(),socket_meta.ino()],
+            "lease":[lock_meta.dev(),lock_meta.ino()]
+        }),
+    )
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok((mut stream, _)) = listener.accept()
+            && let Ok(req) = runtime::read_control(&mut DeadlineReader(&stream, deadline))
         {
-            let _ = fs::write(
+            fs::write(
                 root.join(".fixture-impostor-contacted"),
                 b"unexpected authority request",
-            );
-            let _ = runtime::write_control(
+            )
+            .unwrap();
+            runtime::write_control(
                 &mut stream,
                 &json!({"challenge":req["challenge"],"approved":true}),
-            );
+            )
+            .unwrap();
+            return;
         }
-    });
-    Ok(())
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

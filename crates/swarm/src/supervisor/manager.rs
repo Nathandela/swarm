@@ -84,6 +84,16 @@ pub(super) fn launch_scope(state: &State, launch: &Value) -> io::Result<Value> {
             "manager bridge endpoint lacks exact private ownership",
         ));
     }
+    let peer = std::os::unix::net::UnixStream::connect(socket)?;
+    let bridge_pid = crate::supervisor::runtime::peer_pid(&peer)?;
+    let bridge_birth = crate::supervisor::runtime::birth(bridge_pid)?;
+    let current = fs::symlink_metadata(socket)?;
+    if (current.dev(), current.ino()) != (endpoint.dev(), endpoint.ino()) {
+        return Err(refusal("manager bridge endpoint changed during admission"));
+    }
+    scope["bridge_issuer"] = json!({
+        "socket":[endpoint.dev(),endpoint.ino()],"pid":bridge_pid,"birth":bridge_birth
+    });
     let credential = crate::manager_mcp::read_credential(auth)?;
     scope["credential_hash"] = json!(format!("{:x}", Sha256::digest(credential.as_bytes())));
     scope["endpoint_id"] = json!(state.endpoint);

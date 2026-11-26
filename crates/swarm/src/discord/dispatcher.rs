@@ -868,10 +868,13 @@ impl Dispatcher {
                 Ok(()) if self.send_issuer.borrow().is_object() => {
                     action["state"] = json!("executing");
                     action["issuer"] = self.send_issuer.borrow().clone();
+                    #[cfg(test)]
+                    super::enrolled_worker::authority::replace_fixture_issuer(
+                        &self.socket,
+                        &mut action["issuer"],
+                    )?;
                     state["worker_actions"][key] = action.clone();
                     inbox.set_manager(state.clone())?;
-                    #[cfg(test)]
-                    super::enrolled_worker::authority::replace_fixture_issuer(&self.socket)?;
                     if let Ok(result) = self.owner.enrolled_send(&session, &action, true) {
                         #[cfg(test)]
                         if result["state"] == "native_accepted"
