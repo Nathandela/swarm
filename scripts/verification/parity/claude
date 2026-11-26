@@ -35,7 +35,7 @@ def geometry(*_):
 signal.signal(signal.SIGWINCH, geometry)
 geometry()
 if (effects / "touch-native").exists():
-    os.write(1, b"\x1b[?1000h\x1b[?1006h")
+    os.write(1, b"\x1b[?1000h\x1b[?1006h\x1b[?1000$p")
 os.write(1, b"\x1b[2J\x1b[Hfixture ready\r\n")
 with (effects / "input").open("ab", buffering=0) as log:
     pending = bytearray()

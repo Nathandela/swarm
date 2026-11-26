@@ -380,6 +380,9 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         assert launched.returncode == 0, launched.stderr
         identity = launched.stdout.decode().strip()
         logged = root / "effects/input"
+        report = b"\x1b[?1000;1$y"
+        p.wait_for(lambda: logged.exists() and logged.read_bytes() == report,
+                   "emulator reply with no attachment")
         board = p.Board([str(root / "bin/board")], root, env)
         try:
             board.wait_bytes(b"touch-amber")
@@ -397,7 +400,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             press = b"\x1b[<0;3;24M"
             release = b"\x1b[<0;3;24m"
             native_press = b"\x1b[<0;3;3M"
-            marker(press + release + b"disabled", press + release + b"disabled\r")
+            marker(press + release + b"disabled", report + press + release + b"disabled\r")
             offset = len(board.capture)
             board.send(b"\x11")
             board.wait_bytes(b"More (m)", offset)
@@ -428,20 +431,23 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             board.send(b"\r")
             board.wait_bytes(b"[swarm (ctrl+q)]", offset)
             offset = len(board.capture)
-            marker(b"query mouse", wanted + b"query mouse\r")
+            board.send(b"query mouse\r")
+            wanted += b"query mouse\r" + report
+            p.wait_for(lambda: logged.read_bytes() == wanted, "one attached emulator reply")
             board.wait_bytes(b"fixture queried", offset)
             emitted = board.capture[offset:]
             restore = emitted.find(b"\x1b[?1000h")
             query = emitted.find(b"\x1b[?1000$p")
             assert 0 <= restore < query, emitted
             board.wait_bytes(b"ctrl+q returns to swarm", offset)
-            # The Go shim's VT answers DECRQM itself. A bare PTY transports the
-            # terminal query but has no outer emulator to return another reply.
-            board.send(press + release + b"native after query\r")
-            normal = wanted + b"query mouse\r"
-            native = press + release + b"native after query\r"
-            p.wait_for(lambda: logged.read_bytes() in (normal + native, normal + b"\x1b[?1000;1$y" + native),
-                       "native mouse delivery after ownership release")
+            external = root / "effects/terminal-mouse-reply"
+            if external.exists():
+                physical = external.read_bytes()
+                assert physical == report, physical
+                board.send(physical[:5])
+                board.send(physical[5:])
+            marker(press + release + b"native after query",
+                   wanted + press + release + b"native after query\r")
             offset = len(board.capture)
             board.send(b"\x11")
             board.wait_bytes(b"More (m)", offset)
@@ -977,7 +983,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -997,6 +1003,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             dest = root / "bin" / name
             shutil.copyfile(source, dest)
             dest.chmod(0o700)
+        if terminal_reply is not None:
+            shutil.copyfile(terminal_reply, root / "effects/terminal-mouse-reply")
         p.table()
         command = [*p.guard(root), sys.executable, root / "bin/test_board.py", "_inside", root]
         if handoff:
@@ -1072,6 +1080,8 @@ if __name__ == "__main__":
         modes.add_argument("--touch-back", action="store_true",
                            help="drive the Options toggle and attached native mouse and footer gestures")
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
+        parser.add_argument("--terminal-mouse-reply", type=Path,
+                            help="inject a physical terminal's binary mouse mode report into the attached PTY")
         parser.add_argument("--grid-evidence", type=Path)
         parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
         grids = parser.add_mutually_exclusive_group()
@@ -1082,5 +1092,8 @@ if __name__ == "__main__":
             parser.error("--tmux and --grid-evidence are required together")
         if (args.form_grid or args.board_grid) and not args.tmux:
             parser.error("--form-grid requires --tmux")
+        if args.terminal_mouse_reply and not args.touch_back:
+            parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
-            args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back)
+            args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
+            args.terminal_mouse_reply)

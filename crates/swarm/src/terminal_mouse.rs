@@ -10,6 +10,7 @@ pub(crate) struct Modes {
     pub(crate) known: bool,
     pub(crate) tracking: u16,
     pub(crate) encoding: u16,
+    observed_encoding: u16,
 }
 
 #[derive(Default)]
@@ -33,6 +34,7 @@ pub(crate) struct Change {
     pub(crate) encoding: bool,
     pub(crate) damage: bool,
     pub(crate) query: bool,
+    pub(crate) report: Option<(u16, u8)>,
 }
 
 #[derive(Default)]
@@ -199,7 +201,7 @@ impl Tracker {
                 modes: true,
                 encoding: true,
                 damage: true,
-                query: false,
+                ..Change::default()
             };
         } else if let Some(csi) = bytes
             .strip_prefix(b"\x1b[")
@@ -243,6 +245,12 @@ impl Tracker {
                     return change;
                 }
                 let old_encoding = self.modes.encoding;
+                if final_byte == b'p'
+                    && query
+                    && let Some(mode) = params.split(|byte| *byte == b';').next().and_then(decimal)
+                {
+                    change.report = self.modes.report(mode).map(|status| (mode, status));
+                }
                 let mut changed = false;
                 for parameter in params.split(|byte| *byte == b';') {
                     let Some(mode) = decimal(parameter) else {
@@ -261,6 +269,9 @@ impl Tracker {
                         continue;
                     }
                     change.query |= query;
+                    if mask == 0 && matches!(final_byte, b'h' | b'l') {
+                        self.modes.observed_encoding |= bit;
+                    }
                     match final_byte {
                         b'h' => *bits |= bit,
                         b'l' => *bits &= !bit,
@@ -286,13 +297,40 @@ impl Modes {
                 known: mouse["known"] == true,
                 tracking: mask(&mouse["tracking"], TRACKING.len()),
                 encoding: mask(&mouse["encoding"], ENCODING.len()),
+                ..Self::default()
             }
         } else {
             Self {
                 known: modes["known"] == true,
                 tracking: mode_bit(&modes["tracking"], TRACKING),
                 encoding: mode_bit(&modes["encoding"], ENCODING),
+                ..Self::default()
             }
+        }
+    }
+
+    fn report(&self, mode: u16) -> Option<u8> {
+        let tracking = mode_bit_from_number(mode, TRACKING);
+        let encoding = mode_bit_from_number(mode, ENCODING);
+        if tracking > 0 {
+            return Some(if self.tracking & tracking != 0 { 1 } else { 2 });
+        }
+        if encoding > 0 {
+            return Some(if self.encoding & encoding != 0 {
+                1
+            } else if mode == 1006 || self.observed_encoding & encoding != 0 {
+                2
+            } else {
+                0
+            });
+        }
+        None
+    }
+
+    pub(crate) fn at_reset() -> Self {
+        Self {
+            known: true,
+            ..Self::default()
         }
     }
 
@@ -383,6 +421,25 @@ mod tests {
         assert_eq!(tracker.snapshot()["known"], false);
         tracker.feed(b"h", None, |_, _, _| Ok(())).unwrap();
         assert_eq!(tracker.snapshot()["encoding"], 10);
+    }
+
+    #[test]
+    fn projects_pinned_mouse_mode_report_values_without_emitting_queries_itself() {
+        let mut tracker = Tracker::new(Modes::at_reset());
+        let mut reports = Vec::new();
+        tracker
+            .feed(
+                b"\x1b[?1002$p\x1b[?1000h\x1b[?1000$p\x1b[?1016$p\x1b[?1016l\x1b[?1016$p",
+                None,
+                |_, change, _| {
+                    if let Some(report) = change.report {
+                        reports.push(report);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(reports, [(1002, 2), (1000, 1), (1016, 0), (1016, 2)]);
     }
 
     #[test]
