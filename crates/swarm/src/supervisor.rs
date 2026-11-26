@@ -253,7 +253,9 @@ impl State {
             let launch = &request["launch"];
             let source = field(&launch["options"], "resume_from");
             let (endpoint, local) = source.split_once('/').unwrap_or((&self.endpoint, source));
-            if field(launch, "agent") == "agy" && endpoint == self.endpoint && store.contains(local)
+            if field(launch, "agent") == "agy"
+                && endpoint == self.endpoint
+                && store.is_stopped_agy(local)
             {
                 return Err(io::Error::other(
                     "Go Antigravity resume requires native account and checkout custody; resume this session with Go",
