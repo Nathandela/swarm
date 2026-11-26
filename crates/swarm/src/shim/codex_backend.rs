@@ -284,6 +284,14 @@ fn read(ws: &mut WebSocket<UnixStream>) -> io::Result<Option<Value>> {
     match ws.read() {
         Ok(Message::Text(message)) => {
             let mut frame: Value = serde_json::from_str(message.as_str())?;
+            if frame["method"] == "turn/completed"
+                && frame["params"]["turn"]["error"]["codexErrorInfo"] == "usageLimitExceeded"
+                && !crate::providers::codex_context_guard::unique_keys(message.as_str())
+            {
+                return Err(io::Error::other(
+                    "ambiguous Codex terminal exhaustion evidence",
+                ));
+            }
             let guard_evidence = matches!(
                 field(&frame, "method"),
                 "thread/tokenUsage/updated" | "thread/compacted"

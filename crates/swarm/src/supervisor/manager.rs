@@ -173,14 +173,57 @@ pub(crate) fn mcp_args(scope: &Value, session: &str) -> io::Result<Vec<String>> 
     } else {
         String::new()
     };
-    Ok(vec![
+    let mut flags = Vec::new();
+    if field(manager, "conversation_id").starts_with("discord-teammate-") {
+        flags.extend([
+            "-c".into(),
+            "notice.hide_rate_limit_model_nudge=true".into(),
+        ]);
+    }
+    flags.extend([
         "-c".into(),
         format!(
             "mcp_servers.swarm_voice={{command={command},args={args},required=true{authority}}}"
         ),
-    ])
+    ]);
+    Ok(flags)
 }
 
 fn refusal(reason: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hides_model_nudge_for_both_codex_discord_manager_scopes() {
+        let mut scope = json!({"launch":{"agent":"codex","manager":{
+            "conversation_id":"discord-teammate-fixture","native_cli":false
+        }}});
+        let option = "notice.hide_rate_limit_model_nudge=true";
+        for native in [false, true] {
+            scope["launch"]["manager"]["native_cli"] = json!(native);
+            let flags = mcp_args(&scope, "fixture").unwrap();
+            assert_eq!(flags[..2], ["-c", option]);
+            assert!(flags[3].starts_with("mcp_servers.swarm_voice="));
+            assert_eq!(flags[3].contains("SWARM_MANAGER_VM_CLI"), native);
+        }
+        scope["launch"]["agent"] = json!("claude");
+        assert!(
+            !mcp_args(&scope, "fixture")
+                .unwrap()
+                .iter()
+                .any(|flag| flag == option)
+        );
+        scope["launch"]["agent"] = json!("codex");
+        scope["launch"]["manager"]["conversation_id"] = json!("ordinary");
+        assert!(
+            !mcp_args(&scope, "fixture")
+                .unwrap()
+                .iter()
+                .any(|flag| flag == option)
+        );
+    }
 }

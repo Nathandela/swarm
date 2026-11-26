@@ -46,6 +46,7 @@ impl Ledger {
 
     pub(crate) fn is_virgin(&self) -> bool {
         self.data["blocked"] == false
+            && self.data["system_error"] != true
             && self.data["observed_turn"] == false
             && self.data["turns"]
                 .as_object()
@@ -60,8 +61,22 @@ impl Ledger {
     }
 
     pub(crate) fn snapshot(dir: &Path, binding: &Value) -> io::Result<Value> {
+        let evidence = Self::runtime_snapshot(dir, binding)?;
+        if evidence["system_error"] == true {
+            return Err(refusal(
+                "native manager evidence unavailable after system error",
+            ));
+        }
+        Ok(evidence)
+    }
+
+    pub(crate) fn runtime_snapshot(dir: &Path, binding: &Value) -> io::Result<Value> {
         let data = read_evidence(&dir.join("manager-proof.json"))?;
-        if data["schema"] != 1 || data["binding"] != *binding || data["blocked"] != false {
+        if data["schema"] != 1
+            || data["binding"] != *binding
+            || data["blocked"] != false
+            || data["system_error"] == true && !provider_exhausted(&data)
+        {
             return Err(refusal("native manager evidence unavailable"));
         }
         Ok(data)
@@ -75,6 +90,7 @@ impl Ledger {
         external: u64,
     ) -> io::Result<()> {
         if self.data["blocked"] != false
+            || self.data["system_error"] == true
             || self.data["external_input"] != external
             || !is_hash(nonce)
             || !valid(operation)
@@ -121,7 +137,9 @@ impl Ledger {
             "thread/status/changed" => {
                 let status = field(&params["status"], "type");
                 next["thread_state"] = json!(status);
-                if !matches!(status, "idle" | "active") {
+                if status == "systemError" {
+                    next["system_error"] = json!(true);
+                } else if !matches!(status, "idle" | "active") {
                     next["blocked"] = json!(true);
                 }
             }
@@ -155,8 +173,22 @@ impl Ledger {
                     next["observed_turn"] = json!(true);
                 }
                 if next["current"] == turn && !next["turns"][turn].is_null() {
-                    next["turns"][turn]["closed"] = json!(true);
-                    next["turns"][turn]["reason"] = params["turn"]["status"].clone();
+                    let terminal = &params["turn"];
+                    let exhausted = terminal["status"] == "failed"
+                        && terminal["error"]["codexErrorInfo"] == "usageLimitExceeded";
+                    let current = &mut next["turns"][turn];
+                    if current["closed"] == true
+                        && (current["reason"] != terminal["status"]
+                            || (current["provider_exhausted"] == true) != exhausted)
+                    {
+                        next["blocked"] = json!(true);
+                    } else {
+                        current["closed"] = json!(true);
+                        current["reason"] = terminal["status"].clone();
+                        if exhausted {
+                            current["provider_exhausted"] = json!(true);
+                        }
+                    }
                 }
             }
             "item/started" | "item/completed" => {
@@ -259,6 +291,16 @@ pub(crate) fn input_status(evidence: &Value, nonce: &str) -> Value {
         result["externally_steered"] = json!(true);
     }
     result
+}
+
+pub(crate) fn provider_exhausted(evidence: &Value) -> bool {
+    let turn = &evidence["turns"][field(evidence, "current")];
+    evidence["binding"]["provider"] == "codex"
+        && evidence["externally_steered"] != true
+        && matches!(field(evidence, "thread_state"), "idle" | "systemError")
+        && turn["closed"] == true
+        && turn["reason"] == "failed"
+        && turn["provider_exhausted"] == true
 }
 
 pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
@@ -369,4 +411,53 @@ fn canonical_hash(value: &Value) -> io::Result<String> {
 
 fn refusal(reason: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quota_diagnosis_requires_exact_terminal_root_and_keeps_effects_fenced() {
+        let root = crate::test_temp::root().join(runtime::random_id().unwrap());
+        runtime::private_dir(&root).unwrap();
+        let binding = json!({"provider":"codex","native_session_id":"thread"});
+        let mut ledger = Ledger::open(&root, &binding).unwrap();
+        ledger
+            .observe(
+                &json!({"method":"turn/started","params":{"threadId":"thread",
+            "turn":{"id":"root","status":"inProgress"}}}),
+            )
+            .unwrap();
+        let terminal = |thread, parent, code| {
+            json!({"method":"turn/completed","params":{
+            "threadId":thread,"turn":{"id":"root","rootTurnId":parent,"status":"failed",
+            "error":{"codexErrorInfo":code}}}})
+        };
+        for (thread, parent) in [("other", "root"), ("thread", "different")] {
+            ledger
+                .observe(&terminal(thread, parent, "usageLimitExceeded"))
+                .unwrap();
+        }
+        let system_error = json!({"method":"thread/status/changed",
+            "params":{"threadId":"thread","status":{"type":"systemError"}}});
+        ledger.observe(&system_error).unwrap();
+        assert!(Ledger::runtime_snapshot(&root, &binding).is_err());
+        ledger
+            .observe(&terminal("thread", "root", "usageLimitExceeded"))
+            .unwrap();
+        let status = Ledger::runtime_snapshot(&root, &binding).unwrap();
+        assert!(provider_exhausted(&status));
+        assert!(Ledger::snapshot(&root, &binding).is_err());
+        assert!(
+            ledger
+                .prepare("operation", &"a".repeat(64), "draft", 0)
+                .is_err()
+        );
+        ledger
+            .observe(&terminal("thread", "root", "serverOverloaded"))
+            .unwrap();
+        assert!(Ledger::runtime_snapshot(&root, &binding).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

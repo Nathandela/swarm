@@ -5,7 +5,7 @@ use std::io;
 use std::path::Path;
 
 impl Session {
-    fn native_manager_proof(&self, session: &str) -> io::Result<Value> {
+    fn native_manager_proof(&self, session: &str, runtime_status: bool) -> io::Result<Value> {
         if self.manager.is_null() || !self.is_live() {
             return Err(refuse("session is not an active enrolled manager"));
         }
@@ -81,7 +81,11 @@ impl Session {
         {
             return Err(refuse("manager backend custody changed"));
         }
-        let mut evidence = codex_proof::Ledger::snapshot(&self.dir, binding)?;
+        let mut evidence = if runtime_status {
+            codex_proof::Ledger::runtime_snapshot(&self.dir, binding)?
+        } else {
+            codex_proof::Ledger::snapshot(&self.dir, binding)?
+        };
         evidence["owned_ingress_ready"] = observed["manager_ingress_ready"].clone();
         Ok(evidence)
     }
@@ -91,9 +95,10 @@ impl Session {
             return Err(refuse("manager operation requires body version 1"));
         }
         let session = field(request, "session_id");
-        let evidence = self.native_manager_proof(session)?;
+        let op = field(request, "op");
+        let evidence = self.native_manager_proof(session, op == "manager_runtime")?;
         let binding = &evidence["binding"];
-        let data = match field(request, "op") {
+        let data = match op {
             "manager_runtime" => {
                 if request["manager_runtime_request"]["session_instance"]
                     != binding["session_instance"]
@@ -111,17 +116,29 @@ impl Session {
                     });
                 }
                 let ready = evidence["owned_ingress_ready"] == true
+                    && evidence["system_error"] != true
                     && evidence["thread_state"] == "idle"
                     && matches!(field(&status, "state"), "idle" | "completed");
+                let exhausted = codex_proof::provider_exhausted(&evidence)
+                    && (ready || evidence["system_error"] == true);
+                if exhausted {
+                    status["state"] = json!("completed");
+                    status["reason"] = json!("error");
+                    status["native_turn_id"] = evidence["current"].clone();
+                }
                 let retirement_ready = self.agent != "claude"
                     || field(&status, "state") == "completed"
                         && self.claude_park_resume_record(binding).is_ok();
-                json!({"op":"manager_runtime","session_id":session,"manager_runtime":{
+                let mut view = json!({"op":"manager_runtime","session_id":session,"manager_runtime":{
                     "binding":binding,"ready_for_input":ready,"turn":status,"retirement_ready":retirement_ready,
                     "native_cli":self.manager["launch"]["manager"]["native_cli"] == true,
                     "bridge_socket":self.manager["launch"]["manager"]["bridge_socket"],
                     "auth_file":self.manager["launch"]["manager"]["auth_file"]
-                }})
+                }});
+                if exhausted {
+                    view["manager_runtime"]["provider_exhausted"] = json!(true);
+                }
+                view
             }
             "manager_input_status" => {
                 let input = &request["manager_input_status_request"];
@@ -144,7 +161,7 @@ impl Session {
                     && std::time::Instant::now() < deadline
                 {
                     std::thread::sleep(std::time::Duration::from_millis(15));
-                    observed = self.native_manager_proof(session)?;
+                    observed = self.native_manager_proof(session, false)?;
                 }
                 let result = codex_proof::resolve(&observed, call)?;
                 json!({"op":"manager_resolve_call","session_id":session,"manager_call_proof":result})
@@ -172,7 +189,7 @@ impl Session {
         {
             return Err(refuse("enrolled worker tool lacks exact connector custody"));
         }
-        let evidence = self.native_manager_proof(session)?;
+        let evidence = self.native_manager_proof(session, false)?;
         let mut arguments = call["arguments"].clone();
         arguments.sort_all_objects();
         let proof = codex_proof::resolve(
@@ -241,7 +258,7 @@ impl Session {
                 "worker send lacks exact persisted native authorization",
             ));
         }
-        let evidence = self.native_manager_proof(session)?;
+        let evidence = self.native_manager_proof(session, false)?;
         crate::discord::enrolled_worker::verify_send_evidence(&evidence, action)?;
         Ok(self.manager.clone())
     }
@@ -478,7 +495,7 @@ impl Session {
             }
             return Ok(());
         }
-        let native = self.native_manager_proof(session)?;
+        let native = self.native_manager_proof(session, false)?;
         let admission = &body["manager_admission"];
         let origin = &body["origin"];
         let discussion = field(&native["binding"], "conversation_id")
