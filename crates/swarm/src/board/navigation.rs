@@ -47,9 +47,16 @@ impl Board {
             indexes.sort_by(|&left, &right| self.compare_rows(&self.rows[left], &self.rows[right]));
         }
         self.sections = sections.into_iter().collect();
-        if self.layout.group == 0 {
-            self.sections.sort_by_key(|(id, _)| super::group_rank(id));
-        }
+        self.sections.sort_by_key(|(id, _)| {
+            (
+                id != super::discussions::SECTION,
+                if self.layout.group == 0 {
+                    super::group_rank(id)
+                } else {
+                    0
+                },
+            )
+        });
         if let Some(row) = self.row()
             && self
                 .folded
@@ -78,6 +85,9 @@ impl Board {
     }
 
     fn section(&self, row: &Value) -> String {
+        if super::discussions::manager(row) {
+            return super::discussions::SECTION.into();
+        }
         match self.layout.group {
             1 => Path::new(field(row, "cwd"))
                 .file_name()
@@ -86,7 +96,14 @@ impl Board {
                 .to_owned(),
             2 => {
                 let tag = field(row, "tag");
-                if tag.is_empty() { "(untagged)" } else { tag }.to_owned()
+                if !tag.is_empty() {
+                    tag
+                } else if row["role"] == "manager" {
+                    "manager"
+                } else {
+                    "(untagged)"
+                }
+                .to_owned()
             }
             _ => field(row, "group").to_owned(),
         }
@@ -115,7 +132,9 @@ impl Board {
     }
 
     pub(super) fn section_title(&self, section: &str) -> String {
-        if self.layout.group == 0 {
+        if section == super::discussions::SECTION {
+            "DISPATCHER".into()
+        } else if self.layout.group == 0 {
             super::group_name(super::group_rank(section)).into()
         } else {
             section.into()

@@ -30,7 +30,24 @@ pub(super) fn run(
     touch_back: bool,
     output: &mut impl Write,
 ) -> io::Result<Exit> {
-    let mut client = Client::dial(path, &["attach"])?;
+    run_client(
+        Client::dial(path, &["attach"])?,
+        id,
+        name,
+        touch_back,
+        true,
+        output,
+    )
+}
+
+pub(super) fn run_client(
+    mut client: Client,
+    id: &str,
+    name: &str,
+    touch_back: bool,
+    cycle: bool,
+    output: &mut impl Write,
+) -> io::Result<Exit> {
     let lease = client.request("attach", Some(id), "lease")?;
     if field(&lease, "endpoint_id") != client.endpoint() || field(&lease, "session_id") != id {
         return Err(io::Error::other(
@@ -64,12 +81,15 @@ pub(super) fn run(
         render_snapshot(&snapshot, geometry, &mut paint)?;
     }
     let mut touch = touch_back.then(|| Touch::from_snapshot(&snapshot));
-    repaint(&mut paint, name, geometry, touch.as_mut());
+    repaint(&mut paint, name, geometry, cycle, touch.as_mut());
     output.write_all(paint.as_bytes())?;
     output.flush()?;
     send_control("resize", Some(worker_size(geometry)), &mut stream)?;
 
-    let mut filter = AttachKeys::default();
+    let mut filter = AttachKeys {
+        no_cycle: !cycle,
+        ..AttachKeys::default()
+    };
     let mut repaint_pending = false;
     let mut seen = Vec::new();
     let mut input = [0; 4096];
@@ -86,7 +106,7 @@ pub(super) fn run(
         }
         if repaint_pending && touch.as_ref().is_none_or(Touch::ground) {
             paint.clear();
-            repaint(&mut paint, name, geometry, touch.as_mut());
+            repaint(&mut paint, name, geometry, cycle, touch.as_mut());
             output.write_all(paint.as_bytes())?;
             output.flush()?;
             repaint_pending = false;
@@ -110,7 +130,7 @@ pub(super) fn run(
                         repaint_pending |= touch.needs_paint();
                         if repaint_pending && touch.ground() {
                             paint.clear();
-                            repaint(&mut paint, name, geometry, Some(touch));
+                            repaint(&mut paint, name, geometry, cycle, Some(touch));
                             output.write_all(paint.as_bytes())?;
                             repaint_pending = false;
                         }
@@ -164,14 +184,21 @@ fn worker_size((cols, rows): (u16, u16)) -> (u16, u16) {
     (cols, if rows >= 3 { rows - 1 } else { rows })
 }
 
-fn repaint(output: &mut String, name: &str, (cols, rows): (u16, u16), touch: Option<&mut Touch>) {
+fn repaint(
+    output: &mut String,
+    name: &str,
+    (cols, rows): (u16, u16),
+    cycle: bool,
+    touch: Option<&mut Touch>,
+) {
     use std::fmt::Write;
     let active = touch.is_some_and(|touch| touch.paint((cols, rows), output));
     if rows >= 3 {
+        let nav = if cycle { "  ctrl+p/ctrl+n switch" } else { "" };
         let label = if active {
-            format!("{LABEL}  {name}  ctrl+p/ctrl+n switch")
+            format!("{LABEL}  {name}{nav}")
         } else {
-            format!("{name}  ctrl+q returns to swarm  ctrl+p/ctrl+n switch")
+            format!("{name}  ctrl+q returns to swarm{nav}")
         };
         let text = super::clip(&label, cols);
         let _ = write!(
@@ -318,6 +345,7 @@ fn style(run: &Value, output: &mut String) {
 
 #[derive(Default)]
 struct AttachKeys {
+    no_cycle: bool,
     pending: Vec<u8>,
     paste: bool,
     string_payload: bool,
@@ -373,8 +401,8 @@ impl AttachKeys {
             self.escape = byte == 27;
             if let Some(exit) = match byte {
                 0x11 => Some(Exit::Board),
-                0x0e => Some(Exit::Next),
-                0x10 => Some(Exit::Previous),
+                0x0e if !self.no_cycle => Some(Exit::Next),
+                0x10 if !self.no_cycle => Some(Exit::Previous),
                 _ => None,
             } {
                 self.flush_pending(&mut out, touch.as_deref_mut());
@@ -421,7 +449,9 @@ impl AttachKeys {
             }
             if self.pending == PASTE_START {
                 self.paste = true;
-            } else if let Some(exit) = kitty_command(&self.pending) {
+            } else if let Some(exit) = kitty_command(&self.pending)
+                && (!self.no_cycle || exit == Exit::Board)
+            {
                 self.pending.clear();
                 return (out, Some(exit));
             }
@@ -470,6 +500,18 @@ fn kitty_command(frame: &[u8]) -> Option<Exit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_attach_forwards_cycle_keys_to_its_worker() {
+        let mut keys = AttachKeys {
+            no_cycle: true,
+            ..AttachKeys::default()
+        };
+        for input in [b"\x0e".as_slice(), b"\x10", b"\x1b[110;5u", b"\x1b[112;5u"] {
+            assert_eq!(keys.feed(input), (input.to_vec(), None));
+        }
+        assert_eq!(keys.feed(b"\x11"), (vec![], Some(Exit::Board)));
+    }
 
     #[test]
     fn attachment_controls_survive_chunking_and_preserve_worker_input() {

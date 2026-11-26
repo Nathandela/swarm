@@ -1,6 +1,7 @@
 mod attach;
 mod automation;
 mod context_settings;
+mod discussions;
 mod handoff;
 mod keys;
 mod launch;
@@ -90,10 +91,16 @@ fn board(path: &Path) -> io::Result<()> {
     let mut previous_menu = None;
     let mut previous_editor = None;
     let mut previous_options = None;
+    let mut linked_poll = discussions::Poll::default();
     let mut retry = Instant::now();
     let mut delay = Duration::from_secs(1);
     while !term::stopped() {
         let dimensions = term::size();
+        if let Some(client) = &connection
+            && let Some(snapshot) = linked_poll.update(path, client.endpoint())
+        {
+            needs_paint |= board.update_linked(snapshot, dimensions.1);
+        }
         let saved_layout = match &mut board.modal {
             Some(Modal::Launch(form)) => {
                 needs_paint |= form.update_detection();
@@ -194,6 +201,8 @@ fn board(path: &Path) -> io::Result<()> {
                     Err(_) => connection = None,
                 }
                 if connection.is_none() {
+                    linked_poll = discussions::Poll::default();
+                    board.update_linked(None, geometry.1);
                     board.context_owner = None;
                     if let Some(Modal::Options(form)) = &mut board.modal {
                         form.disconnected();
@@ -248,6 +257,47 @@ fn board(path: &Path) -> io::Result<()> {
                     delay = Duration::from_secs(1);
                 }
                 Action::SaveLayout(layout) => board.persist_layout(layout),
+                Action::Discussion { row, binding, op } => {
+                    if let Some(local) = &connection {
+                        let caps = if op == "attach" { &["attach"][..] } else { &[] };
+                        let result =
+                            discussions::revalidate(path, local.endpoint(), &binding, &row, caps);
+                        let id = field(&row, "id");
+                        match (op, result) {
+                            ("attach", Ok(client)) => {
+                                let attached = attach::run_client(
+                                    client,
+                                    id,
+                                    name(&row),
+                                    board.layout.touch_back,
+                                    false,
+                                    &mut output,
+                                );
+                                if let Err(error) = attached {
+                                    board.notice = error.to_string();
+                                }
+                                board.restore_terminal(&mut output)?;
+                                previous_menu = None;
+                                previous_editor = None;
+                                previous_options = None;
+                                linked_poll = discussions::Poll::default();
+                                needs_paint = true;
+                                break;
+                            }
+                            (op, Ok(mut client)) => {
+                                if let Err(error) = client.exchange(
+                                    json!({"op":op,"session_id":id}),
+                                    "ok",
+                                    Duration::from_secs(2),
+                                ) {
+                                    board.notice = error.to_string();
+                                }
+                                linked_poll = discussions::Poll::default();
+                            }
+                            (_, Err(error)) => board.notice = error.to_string(),
+                        }
+                    }
+                }
                 Action::Attach { id, name } => {
                     if connection.is_some() {
                         board.attach(path, &id, &name, &mut output)?;
@@ -328,6 +378,8 @@ fn board(path: &Path) -> io::Result<()> {
                             }
                             if board.refresh(client).is_err() {
                                 connection = None;
+                                linked_poll = discussions::Poll::default();
+                                board.update_linked(None, geometry.1);
                                 board.notice = "daemon connection lost · reconnecting".to_owned();
                                 retry = Instant::now() + delay;
                             } else if let Some(label) = label
@@ -372,6 +424,7 @@ fn connect(path: &Path) -> io::Result<Client> {
 #[derive(Default)]
 struct Board {
     rows: Vec<Value>,
+    linked: Option<discussions::Snapshot>,
     roster_revision: u64,
     columns: u16,
     spinner: usize,
@@ -435,6 +488,7 @@ enum Modal {
     Confirm {
         id: String,
         running: bool,
+        linked: Option<(crate::discord::linked_board::Binding, Box<Value>)>,
         top: usize,
     },
 }
@@ -442,12 +496,23 @@ enum Modal {
 enum Action {
     None,
     Quit,
-    Attach { id: String, name: String },
+    Attach {
+        id: String,
+        name: String,
+    },
+    Discussion {
+        row: Box<Value>,
+        binding: crate::discord::linked_board::Binding,
+        op: &'static str,
+    },
     Retry,
     SaveLayout(Layout),
     Catalog(CatalogRead),
     ChangeAutomation(CatalogChange),
-    TriggerAutomation { job: String, intent: Manual },
+    TriggerAutomation {
+        job: String,
+        intent: Manual,
+    },
     Request(Value, &'static str),
     Resume(Box<resume::Request>),
 }
@@ -464,7 +529,9 @@ impl Board {
             .display_rows()
             .into_iter()
             .filter_map(|row| match row {
-                Row::Session(row) if running(row) && !linked_dispatcher(row) => {
+                Row::Session(row)
+                    if running(row) && self.linked_binding(field(row, "id")).is_none() =>
+                {
                     Some((field(row, "id").to_owned(), name(row).to_owned()))
                 }
                 _ => None,
@@ -491,6 +558,10 @@ impl Board {
             self.set_focus(Focus::Session(ring[index].0.clone()));
             self.reveal_focus(term::size().1);
         }
+        self.restore_terminal(output)
+    }
+
+    fn restore_terminal(&self, output: &mut impl Write) -> io::Result<()> {
         output.write_all(term::RESTORE.as_bytes())?;
         if !term::stopped() {
             output.write_all(term::ENTER_BOARD.as_bytes())?;
@@ -505,12 +576,58 @@ impl Board {
     }
 
     fn refresh(&mut self, client: &mut Client) -> io::Result<()> {
-        let mut rows = client.sessions()?;
-        rows.retain(|row| !field(row, "id").is_empty() && row["roster_hidden"] != true);
-        self.rows = rows;
+        self.rows = discussions::project(client.sessions()?, client.endpoint(), false);
+        if let Some(linked) = &self.linked {
+            self.rows.extend(linked.rows.iter().cloned());
+        }
         self.roster_revision = self.roster_revision.wrapping_add(1);
         self.rebuild_sections();
         Ok(())
+    }
+
+    fn linked_binding(&self, id: &str) -> Option<&crate::discord::linked_board::Binding> {
+        self.linked
+            .as_ref()
+            .filter(|linked| linked.rows.iter().any(|row| field(row, "id") == id))
+            .map(|linked| &linked.binding)
+    }
+
+    fn update_linked(&mut self, next: Option<discussions::Snapshot>, height: u16) -> bool {
+        if self.linked.as_ref().map(|s| (&s.binding, &s.rows))
+            == next.as_ref().map(|s| (&s.binding, &s.rows))
+        {
+            return false;
+        }
+        if let Some(previous) = self.linked.take() {
+            let endpoint = &previous.binding.endpoint;
+            self.rows
+                .retain(|row| field(row, "endpoint_id") != endpoint);
+            if let Some(Modal::More { target, .. }) = &self.modal
+                && let Some(old) = previous.rows.iter().find(|row| field(row, "id") == target)
+                && next.as_ref().is_none_or(|fresh| {
+                    fresh.binding != previous.binding
+                        || !fresh
+                            .rows
+                            .iter()
+                            .any(|row| discussions::same_target(old, row))
+                })
+            {
+                self.modal = None;
+                self.notice = "Linked dispatcher or target changed; reopen the action".into();
+            }
+        }
+        let at_top = self.top == 0;
+        self.linked = next;
+        if let Some(linked) = &self.linked {
+            self.rows.extend(linked.rows.iter().cloned());
+        }
+        self.press = None;
+        self.roster_revision = self.roster_revision.wrapping_add(1);
+        self.rebuild_sections();
+        if !at_top {
+            self.reveal_focus(height);
+        }
+        true
     }
 
     fn by_id(&self, id: &str) -> Option<&Value> {
@@ -634,7 +751,7 @@ impl Board {
                 return Action::Catalog(CatalogRead::List);
             }
             Key::Text('c') if online => {
-                if let Some(row) = self.by_id(id).filter(|row| !linked_dispatcher(row)) {
+                if let Some(row) = self.by_id(id).filter(|_| self.linked_binding(id).is_none()) {
                     let directory = field(row, "cwd");
                     if !directory.is_empty() {
                         self.modal = Some(Modal::Automation(Box::new(Automation::in_directory(
@@ -649,18 +766,27 @@ impl Board {
             _ if !online => {}
             Key::Enter => {
                 if let Some(row) = self.by_id(id) {
+                    if let Some(binding) = self.linked_binding(id) {
+                        if running(row) {
+                            return Action::Discussion {
+                                row: Box::new(row.clone()),
+                                binding: binding.clone(),
+                                op: "attach",
+                            };
+                        }
+                        self.notice = "This process has exited. Continue the discussion in its Discord thread.".into();
+                        return Action::None;
+                    }
                     if running(row) {
                         return Action::Attach {
                             id: id.to_owned(),
                             name: name(row).to_owned(),
                         };
                     }
-                    if scheduled_review(row) && !linked_dispatcher(row) {
+                    if scheduled_review(row) {
                         return self.begin_resume(id, geometry);
                     }
-                    self.notice = if linked_dispatcher(row) {
-                        "Continue this dispatcher in its Discord thread".into()
-                    } else if resumable(row) {
+                    self.notice = if resumable(row) {
                         if field(row, "agent") == "hermes"
                             && row["status"]["NativeWorkUnknown"] == true
                         {
@@ -674,14 +800,14 @@ impl Board {
                 }
             }
             Key::Text('h') => {
-                if let Some(source) = self.by_id(id).filter(|source| !linked_dispatcher(source)) {
+                if let Some(source) = self.by_id(id).filter(|_| self.linked_binding(id).is_none()) {
                     self.modal = Some(Modal::Handoff(Box::new(Handoff::new(source))));
                     self.notice.clear();
                 }
             }
             Key::Text('r') => return self.begin_resume(id, geometry),
             Key::Text('e' | 't') => {
-                if let Some(row) = self.by_id(id).filter(|row| !linked_dispatcher(row)) {
+                if let Some(row) = self.by_id(id).filter(|_| self.linked_binding(id).is_none()) {
                     let tag = matches!(key, Key::Text('t'));
                     self.modal = Some(Modal::Edit {
                         id: id.to_owned(),
@@ -692,10 +818,13 @@ impl Board {
                 }
             }
             Key::CtrlX => {
-                if let Some(row) = self.by_id(id).filter(|row| !linked_dispatcher(row)) {
+                if let Some(row) = self.by_id(id) {
                     self.modal = Some(Modal::Confirm {
                         id: id.to_owned(),
                         running: running(row),
+                        linked: self
+                            .linked_binding(id)
+                            .map(|binding| (binding.clone(), Box::new(row.clone()))),
                         top: 0,
                     });
                 }
@@ -708,7 +837,7 @@ impl Board {
     fn begin_resume(&mut self, id: &str, geometry: (u16, u16)) -> Action {
         let Some(row) = self
             .by_id(id)
-            .filter(|row| !running(row) && !linked_dispatcher(row))
+            .filter(|row| !running(row) && self.linked_binding(id).is_none())
         else {
             return Action::None;
         };
@@ -904,6 +1033,7 @@ impl Board {
             Modal::Confirm {
                 id,
                 running: was_running,
+                linked,
                 top,
             } => {
                 let row = self.by_id(id);
@@ -929,7 +1059,19 @@ impl Board {
                 {
                     if row.is_some_and(|row| running(row) == *was_running) {
                         let op = if *was_running { "kill" } else { "delete" };
-                        return Action::Request(json!({"op":op,"session_id":id}), "ok");
+                        if let Some((binding, captured)) = linked {
+                            if self.linked_binding(id) == Some(binding)
+                                && row.is_some_and(|row| discussions::same_target(captured, row))
+                            {
+                                return Action::Discussion {
+                                    row: captured.clone(),
+                                    binding: binding.clone(),
+                                    op,
+                                };
+                            }
+                        } else if self.linked_binding(id).is_none() {
+                            return Action::Request(json!({"op":op,"session_id":id}), "ok");
+                        }
                     }
                     self.notice = "Target changed; reopen confirmation".into();
                     return Action::None;
@@ -988,7 +1130,8 @@ impl Board {
             if unchanged && (expected_running || scheduled_review(row)) {
                 entries.push(("Open".into(), Some('⏎')));
             }
-            if !linked_dispatcher(row) {
+            let linked = self.linked_binding(target).is_some();
+            if !linked {
                 entries.extend([("Rename".into(), Some('e')), ("Tag".into(), Some('t'))]);
                 if unchanged && !expected_running && !scheduled_review(row) && resumable(row) {
                     entries.push(("Resume".into(), Some('r')));
@@ -1001,6 +1144,12 @@ impl Board {
                 if !field(row, "cwd").is_empty() {
                     entries.push(("Schedule in this directory".into(), Some('c')));
                 }
+            }
+            if linked && unchanged {
+                entries.push((
+                    if expected_running { "Kill" } else { "Delete" }.into(),
+                    Some('x'),
+                ));
             }
             if !unchanged {
                 entries.push(("Target state changed; reopen More".into(), None));
@@ -1050,7 +1199,10 @@ impl Board {
         } else if let Some(row) = target {
             if !self.visible(rows) {
                 buttons.push(("Show (⏎)", '⏎'));
-            } else if running(row) || scheduled_review(row) || linked_dispatcher(row) {
+            } else if running(row)
+                || scheduled_review(row)
+                || self.linked_binding(field(row, "id")).is_some()
+            {
                 buttons.push(("Open (⏎)", '⏎'));
             } else if resumable(row) {
                 buttons.push(("Resume (r)", 'r'));
@@ -1065,8 +1217,10 @@ impl Board {
         if required > usize::from(cols) {
             buttons.remove(0);
         }
-        if let Some(row) = target.filter(|row| self.visible(rows) && !linked_dispatcher(row)) {
-            buttons.extend([("Rename (e)", 'e'), ("Tag (t)", 't'), ("Handoff (h)", 'h')]);
+        if let Some(row) = target.filter(|_| self.visible(rows)) {
+            if self.linked_binding(field(row, "id")).is_none() {
+                buttons.extend([("Rename (e)", 'e'), ("Tag (t)", 't'), ("Handoff (h)", 'h')]);
+            }
             let lifecycle = if running(row) {
                 "Kill (ctrl+x)"
             } else {
@@ -1415,7 +1569,9 @@ impl Board {
                     .paint(&mut screen, *top);
                 }
             }
-            Some(Modal::Confirm { id, running, top }) => {
+            Some(Modal::Confirm {
+                id, running, top, ..
+            }) => {
                 if self.inline_session_form(id, (cols, rows)) {
                     self.roster_view(&mut screen, cols, rows);
                 } else {
@@ -1477,10 +1633,6 @@ fn running(row: &Value) -> bool {
 fn resumable(row: &Value) -> bool {
     matches!(field(row, "agent"), "agy" | "claude" | "codex" | "opencode")
         || field(row, "agent") == "hermes" && !field(row, "conversation_id").is_empty()
-}
-
-fn linked_dispatcher(row: &Value) -> bool {
-    field(row, "role") == "dispatcher"
 }
 
 struct Editor {

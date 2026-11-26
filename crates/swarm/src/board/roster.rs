@@ -341,7 +341,7 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
                     totals = format!(" ({count}) {input}i {review}r");
                     title = truncation(&title, cols.saturating_sub(2 + totals.width() as u16));
                 }
-                let style = if board.layout.group == 0 {
+                let style = if board.layout.group == 0 && *id != super::discussions::SECTION {
                     group_style(id, true)
                 } else {
                     TITLE
