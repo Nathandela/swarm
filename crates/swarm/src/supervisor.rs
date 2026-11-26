@@ -252,7 +252,7 @@ impl State {
                 || mailbox.is_some()
                 || !matches!(
                     field(&request["launch"], "agent"),
-                    "claude" | "claude-code" | "agy"
+                    "claude" | "claude-code" | "agy" | "codex"
                 )
                 || request["launch"]["worktree"] == true
                 || [
@@ -268,7 +268,7 @@ impl State {
                     .any(|key| !field(&request["launch"], key).is_empty()))
         {
             return Err(io::Error::other(
-                "stopped rollback supports fresh ordinary, non-worktree Claude or agy launches",
+                "stopped rollback supports fresh ordinary, non-worktree Claude, agy or Codex launches",
             ));
         }
         if managed.is_some()

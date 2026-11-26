@@ -12,6 +12,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+pub(in crate::supervisor) mod codex;
+
 const INTENT: &str = "go-rollback-intent.json";
 const STAGING: &CStr = c".go-rollback-stage";
 const PUBLISHED: &str = "go-rollback-published.json";
@@ -42,7 +44,7 @@ pub(in crate::supervisor) fn run() -> io::Result<()> {
             let attempt = validate(&dir)?;
             let plan = attempt.plan(&root_dir, &imported, deleted.contains(&attempt.id))?;
             let proof = if matches!(plan, Plan::Stage(_)) {
-                attempt.agy_resume_proof()?
+                attempt.resume_proof()?
             } else {
                 None
             };
@@ -179,12 +181,24 @@ fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
     fs::symlink_metadata(dir)?;
     runtime::private_dir(dir)?;
     let config = runtime::read_json(&dir.join("session.json"))?;
+    let provider = &config["provider"];
+    let admitted_provider = match ipc::field(provider, "name") {
+        "claude" | "agy" => provider["mode"] == "classic",
+        "codex" => {
+            provider["mode"] == "managed"
+                && provider["version"] == codex::RELEASE
+                && provider["stable_release"] == true
+                && config["go_rollback"]["cli_identity"].is_object()
+                && config["go_rollback"]["codex_profile"].is_object()
+                && config["codex_resume"].is_null()
+        }
+        _ => false,
+    };
     if config["schema"] != 1
         || config["id"] != id
         || !runtime::valid_id(ipc::field(&config, "token"))
         || config["go_rollback"]["schema"] != 1
-        || !matches!(ipc::field(&config["provider"], "name"), "claude" | "agy")
-        || config["provider"]["mode"] != "classic"
+        || !admitted_provider
         || !config["agy_launch"]["options"]["resume_conversation_id"].is_null()
         || !config["agy_launch"]["resumed_from"].is_null()
         || !config["manager"].is_null()
@@ -370,7 +384,10 @@ impl Attempt {
         Ok(Plan::Stage(intent))
     }
 
-    fn agy_resume_proof(&self) -> io::Result<Option<Value>> {
+    fn resume_proof(&self) -> io::Result<Option<Value>> {
+        if self.meta["agent_type"] == "codex" {
+            return codex::resume_proof(&self.dir, &self.meta, &self.token).map(Some);
+        }
         if self.meta["agent_type"] != "agy" {
             return Ok(None);
         }
@@ -397,7 +414,7 @@ impl Attempt {
         &self,
         root: &File,
         intent: Option<Intent>,
-        agy_proof: Option<&Value>,
+        resume_proof: Option<&Value>,
     ) -> io::Result<()> {
         let source = reopen_dir(&self.dir)?;
         let mut intent = match intent {
@@ -473,8 +490,14 @@ impl Attempt {
         }
         staging.sync_all()?;
         verify_stage()?;
-        if let Some(proof) = agy_proof {
-            crate::providers::agy::handoff::verify(&self.dir, proof)?;
+        if let Some(proof) = resume_proof {
+            if self.meta["agent_type"] == "agy" {
+                crate::providers::agy::handoff::verify(&self.dir, proof)?;
+            } else if self.resume_proof()?.as_ref() != Some(proof) {
+                return Err(io::Error::other(
+                    "Codex rollback source changed before publication",
+                ));
+            }
         }
         let dest = CString::new(self.id.as_str())?;
         let source_fd = source.as_raw_fd();
@@ -550,7 +573,7 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
     let observation = runtime::read_json(&dir.join("observation.json"))?;
     let conversation = &observation["conversation_id"];
     let agent = ipc::field(&config["provider"], "name");
-    let valid_conversation = if agent == "agy" {
+    let valid_conversation = if matches!(agent, "agy" | "codex") {
         conversation
             .as_str()
             .is_some_and(crate::providers::codex_receipt::canonical_thread)
@@ -564,7 +587,7 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
     }
     let at = &exit["finished_at"];
     let created = &config["created_at"];
-    Ok(Attempt {
+    let mut attempt = Attempt {
         dir: dir.to_owned(),
         id: id.into(),
         token: token.into(),
@@ -578,7 +601,11 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
             "shim_start_time":owner["birth"], "conversation_id":conversation, "exit_code":code,
             "resumed_from":"", "spawned_from":"", "spawn_intent":"", "supervision":"",
         }),
-    })
+    };
+    if agent == "codex" {
+        attempt.meta["cli_identity"] = config["go_rollback"]["cli_identity"].clone();
+    }
+    Ok(attempt)
 }
 
 pub(super) fn verify(root: &Path, meta: &Value, origin: &Value) -> io::Result<()> {
@@ -594,6 +621,7 @@ pub(super) fn verify(root: &Path, meta: &Value, origin: &Value) -> io::Result<()
         "schema_version",
         "id",
         "agent_type",
+        "cli_identity",
         "cwd",
         "agent_cwd",
         "launch_options",
