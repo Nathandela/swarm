@@ -86,6 +86,8 @@ Append `--interrupt-after-native` to exercise recovery from an interrupted Go co
 
 Append `--prepare-native-only` to stop before a native send. The Rust child exits after committing the connector row. Pinned Go reopens it, accepts the same source, and runs its controller through the durable `prepared` phase. The fixture cancels at Go's pre-send check and rejects any attempt to send. The original manager stays idle. Rust validates the Go tuple, stages it only in a disposable copy of the earlier Voice store, and exits once before committing that second transaction. Go finds no admission in the interrupted copy and reads the exact tuple after a committed retry. The original Voice and connector stores remain byte-identical during the copy checks. Go's initial guild prompt includes authenticated thread history and omits the reply timer for this unaddressed follow-up. The retained personal renderer differs on both fields.
 
+The integrated `797dad1b` rerun passed all four entry points against signed Go v0.29.24 on Linux x86_64. It verified ordinary settlement, the pre-send copy and outside path refusal, acknowledged interruption without a second native turn, and exact queue rendering with source freshness and stop controls. Linux log SHA-256 is `ecab38f59c13945b94f9d6a27cde88df936bd335a31c462edaf2d2d36c07b252`. The nine pinned Go ledger tests also passed on both native hosts. macOS log SHA-256 is `b0334d2fef78e7d379452b4b6dafe935f8449182666e1fed807826a6c7a55e2a`.
+
 Run the nine tests that use the pinned Go helper built above as an explicit group.
 
 ```sh
