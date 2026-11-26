@@ -143,6 +143,22 @@ pub(super) fn run(client: &mut Client, args: &[String]) -> CliResult {
 }
 
 fn claude_reattach(client: &mut Client, all: bool, takeover: bool, dry: bool) -> CliResult {
+    let exact =
+        client.supports("claude-batch-takeover-v1") || client.supports("claude-external-resume-v1");
+    if !exact && !dry {
+        // The pinned Go owner has this owner-only settings read; older Rust only
+        // shares the general external-resume bit for Codex.
+        if !client.supports("context-guard-settings")
+            || !client
+                .request_body(json!({"op":"context_guard_get"}), "context_guard_get")
+                .is_ok_and(|reply| reply["context_guard_settings"].is_object())
+        {
+            return Err((
+                1,
+                "the running owner cannot verify Claude external resume".into(),
+            ));
+        }
+    }
     let here = env::current_dir()
         .map_err(report)?
         .canonicalize()
@@ -161,8 +177,8 @@ fn claude_reattach(client: &mut Client, all: bool, takeover: bool, dry: bool) ->
     )
     .map_err(report)?;
     let rows =
-        providers::claude_agent_view(&plan.executable, &here, &plan.env, all).map_err(report)?;
-    let mut seen = std::collections::BTreeSet::new();
+        providers::claude_agent_view(&plan.executable, &here, &plan.env, true).map_err(report)?;
+    let snapshot = claude::background_inventory(&rows).map_err(report)?;
     let mut eligible = Vec::new();
     let mut failures = 0;
     for row in rows {
@@ -170,9 +186,6 @@ fn claude_reattach(client: &mut Client, all: bool, takeover: bool, dry: bool) ->
             continue;
         }
         let id = field(&row, "sessionId");
-        if !seen.insert(id.to_owned()) {
-            continue;
-        }
         if claude::canonical_id(id)
             && !field(&row, "cwd").trim().is_empty()
             && let Ok(cwd) = here.join(field(&row, "cwd")).canonicalize()
@@ -204,32 +217,68 @@ fn claude_reattach(client: &mut Client, all: bool, takeover: bool, dry: bool) ->
         if has_live && !takeover {
             return Err((1,"live Claude background sessions found; rerun with --take-over to stop Claude's supervisor before adopting them".into()));
         }
-        if !eligible.is_empty() {
-            let profile = claude::profile(&plan.env, &supplied, &Value::Null).map_err(report)?;
-            let home = std::path::Path::new(field(&profile, "home"));
-            for (row, cwd) in &eligible {
-                claude::project_authority(home, cwd).map_err(report)?;
-                claude::transcript(home, cwd, field(row, "sessionId")).map_err(report)?;
-            }
-        }
-        if has_live {
-            if failures != 0 {
-                return Err((
-                    1,
-                    "Claude takeover requires valid native background rows".into(),
-                ));
-            }
-            if providers::identity(&plan.executable).map_err(report)? != plan.identity {
-                return Err((1, "Claude executable changed before takeover".into()));
-            }
-            providers::stop_claude_agent_view(&plan.executable, &here, &plan.env)
-                .map_err(report)?;
-        }
-        for (row, cwd) in &eligible {
-            let result=client.exchange(json!({"op":"launch","launch":{
+        let launch = |row: &Value, cwd: &std::path::Path| {
+            json!({
                 "agent":"claude","name":row["name"],"cwd":cwd,"env":supplied,"cols":80,"rows":24,
                 "options":{"resume_conversation_id":row["sessionId"]},
-            }}),"launch",std::time::Duration::from_secs(45));
+            })
+        };
+        if has_live {
+            if failures != 0 || !client.supports("claude-batch-takeover-v1") {
+                return Err((1,"the owner cannot reserve the whole Claude takeover batch; native sessions remain running".into()));
+            }
+            let launches: Vec<_> = eligible.iter().map(|(row, cwd)| launch(row, cwd)).collect();
+            let reply = client
+                .exchange(
+                    json!({"op":"claude_batch_takeover","launches":launches,"inventory":snapshot}),
+                    "claude_batch_takeover",
+                    std::time::Duration::from_secs(900),
+                )
+                .map_err(report)?;
+            let results = reply["results"]
+                .as_array()
+                .filter(|rows| rows.len() == eligible.len())
+                .ok_or_else(|| {
+                    (
+                        1,
+                        "Claude takeover result is incomplete; check the owner roster".into(),
+                    )
+                })?;
+            for ((row, _), result) in eligible.iter().zip(results) {
+                if result["conversation_id"] != row["sessionId"] {
+                    return Err((
+                        1,
+                        "Claude takeover result does not match the requested native source".into(),
+                    ));
+                }
+                let id = field(&result["session"], "id");
+                if !id.is_empty() {
+                    println!("reattached {:?} as {id}", field(row, "name"));
+                } else {
+                    failures += 1;
+                    eprintln!(
+                        "reattach: {:?}: {}",
+                        field(row, "name"),
+                        field(result, "error")
+                    );
+                    if let Some(session) = result["session_id"].as_str() {
+                        eprintln!("reattach: retained owner reservation {session}");
+                    }
+                }
+            }
+            println!("{} Claude background session(s) processed", eligible.len());
+            return if failures == 0 {
+                Ok(())
+            } else {
+                Err((1, String::new()))
+            };
+        }
+        for (row, cwd) in &eligible {
+            let result = client.exchange(
+                json!({"op":"launch","launch":launch(row,cwd)}),
+                "launch",
+                std::time::Duration::from_secs(45),
+            );
             match result {
                 Ok(reply) if !field(&reply["session"], "id").is_empty() => println!(
                     "reattached {:?} as {}",

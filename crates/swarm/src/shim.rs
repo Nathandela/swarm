@@ -350,7 +350,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             providers::claude::verify_project_authority(home,cwd,&config["claude_resume"]["project_authority"])?;
             let (_,transcript)=providers::claude::transcript(home,cwd,id)?;
             if config["claude_resume"]["external_source"].is_object()
-                && providers::claude::external_proof(executable,cwd,&environment,home,id)?
+                && providers::claude::external_proof(executable,cwd,&environment,home,id,true)?
                     !=config["claude_resume"]["external_source"] {
                 return Err(io::Error::other("Claude external rollout changed before exec"));
             }

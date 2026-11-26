@@ -1,3 +1,4 @@
+mod claude_takeover;
 mod handoff;
 pub(crate) mod mail;
 pub(crate) mod mail_files;
@@ -302,7 +303,7 @@ impl State {
                     "external Claude resume requires ordinary owner scope",
                 ));
             }
-            let prepared = Session::prepare_claude_external(launch)?;
+            let prepared = Session::prepare_claude_external(launch, true)?;
             return self.reserve_prepared(prepared, false, None, None);
         }
         if field(launch, "agent") == "codex" && options.get("resume_conversation_id").is_some() {
@@ -419,13 +420,32 @@ impl State {
 
     fn reserve_prepared_bound(
         &self,
-        mut prepared: session::Prepared,
+        prepared: session::Prepared,
         scheduled: bool,
         source: Option<(String, String)>,
         managed: Option<Value>,
         predecessor: Option<Arc<Session>>,
     ) -> io::Result<Arc<Session>> {
-        let _reservation = self.launch_gate.lock().unwrap();
+        let reservation = self.launch_gate.lock().unwrap();
+        self.reserve_locked(
+            prepared,
+            scheduled,
+            source,
+            managed,
+            predecessor,
+            &reservation,
+        )
+    }
+
+    fn reserve_locked(
+        &self,
+        mut prepared: session::Prepared,
+        scheduled: bool,
+        source: Option<(String, String)>,
+        managed: Option<Value>,
+        predecessor: Option<Arc<Session>>,
+        _reservation: &std::sync::MutexGuard<'_, ()>,
+    ) -> io::Result<Arc<Session>> {
         if let Some((local, instance)) = source {
             if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
                 s.incarnation() == instance
@@ -872,6 +892,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "subscribe"
                         | "owner-launch"
                         | "hands-off-handoff"
+                        | "claude-batch-takeover-v1"
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"
@@ -1129,6 +1150,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>
                 state.session(&request).and_then(|session| reply(&writer,state,session.manager_retire(&request)?)),
             "worker_mail" if caps.contains(&crate::teammate::MAIL_CAP) => mail::request(state,&request).and_then(|body| reply(&writer,state,body)),
+            "claude_batch_takeover" if caps.contains(&"claude-batch-takeover-v1") => {
+                claude_takeover::acquire(state,&request).and_then(|results|{
+                    reply(&writer,state,json!({"op":"claude_batch_takeover","results":results}))
+                })
+            },
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");

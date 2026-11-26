@@ -37,10 +37,10 @@ pub(super) struct Prepared {
     tag: String,
     cols: u16,
     rows: u16,
-    provider: LaunchPlan,
+    pub(super) provider: LaunchPlan,
     pub(super) resume: Value,
     pub(super) claude_resume: Value,
-    claude_profile: Value,
+    pub(super) claude_profile: Value,
     pub(super) codex_resume: Value,
     codex_options: Value,
     agy_launch: Value,
@@ -435,7 +435,10 @@ impl Session {
         Ok(plan)
     }
 
-    pub(super) fn prepare_claude_external(launch: &Value) -> io::Result<Prepared> {
+    pub(super) fn prepare_claude_external(
+        launch: &Value,
+        require_stopped: bool,
+    ) -> io::Result<Prepared> {
         use providers::claude;
         let options = &launch["options"];
         let id = field(options, "resume_conversation_id");
@@ -470,6 +473,7 @@ impl Session {
             &prepared.provider.env,
             home,
             id,
+            require_stopped,
         )?;
         request["claude_retained_conversation"] = json!(id);
         prepared.provider.argv = claude::argv(&sanitize_name(field(launch, "name")), &request)?;
@@ -2155,6 +2159,11 @@ impl Session {
         }
         *current = (next, now());
         true
+    }
+
+    pub(super) fn may_occupy_slot(&self) -> bool {
+        // A lost transport can reconcile to Running during another admission.
+        self.state.lock().unwrap().0 != Phase::Exited
     }
 
     pub(super) fn is_live(&self) -> bool {
