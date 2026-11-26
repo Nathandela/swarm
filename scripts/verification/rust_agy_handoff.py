@@ -2,7 +2,9 @@
 
 import http.server
 import json
+import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,6 +44,7 @@ def verify(candidate, native, root):
     home, work, tools, state = (root / name for name in ("home", "work", "bin", "state"))
     for path in (home, work, tools, state):
         path.mkdir(mode=0o700)
+    shutil.copy2(Path(__file__).parent / "parity/swarm-parity", tools / "driver")
     config = home / ".gemini/antigravity-cli"
     (config / "cache").mkdir(parents=True)
     (config / "settings.json").write_text(json.dumps({"modelProvider":"gemini", "telemetry":{"enabled":False}}))
@@ -53,6 +56,9 @@ def verify(candidate, native, root):
         'completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION '
         'completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE }\n'
         'installation_uuid: "11111111-1111-4111-8111-111111111111"\n')
+    target_home = root / "target-home"
+    target_home.mkdir(mode=0o700)
+    shutil.copytree(config, target_home / ".gemini/antigravity-cli")
     model = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HandoffModel)
     model.daemon_threads = True
     model.guard, model.calls = threading.Lock(), []
@@ -141,13 +147,18 @@ def verify(candidate, native, root):
             source.unlink()
             old.rename(source)
 
-        board = p.Board(guarded([str(candidate)], root, [port]), str(work), env)
+        board = p.Board(guarded([str(candidate)], root, [port]), root, env | {"HOME": str(target_home)})
         board.wait_bytes(b"VendorSource")
         board.send(b"h")
         board.wait_bytes("● agy".encode())
-        if version != "1.4.7":
+        def current_method():
+            board.drain()
+            return next((mode for mode in ("hands-off", "supervised")
+                         if f"◂ {mode} ▸".encode() in board.capture), None)
+
+        if eventually(current_method, "displayed handoff method") == "supervised":
             board.send(b"\t\t\t\x1b[C")
-        board.wait_bytes(b"hands-off")
+        board.wait_bytes("◂ hands-off ▸".encode())
         board.send(b"\r")
 
         def successor():
@@ -156,6 +167,9 @@ def verify(candidate, native, root):
 
         child = eventually(successor, "public board hands-off successor")
         assert child["cwd"] == str(work), child
+        target = state / "rust-v1" / child["id"].split("/")[-1] / "session.json"
+        assert json.loads(target.read_text())["agy_source_home"] is None, "test target did not carry a different HOME"
+
         prompt = eventually(
             lambda: next((call for call in model.calls if str(source) in call and thread in call), None),
             "actual successor request with original native transcript pointer",
@@ -166,16 +180,39 @@ def verify(candidate, native, root):
         )
         print(f"agy {version}: public hands-off used the authenticated "
               f"{'exited' if version == '1.4.7' else 'live'} native transcript and exact project.")
+    except Exception:
+        if board is not None:
+            print(repr(bytes(board.capture[-1600:])), file=sys.stderr)
+        raise
     finally:
-        if board:
-            board.close()
-        for row in rows():
-            if row["status"]["Process"] == "running":
-                cli("kill", row["id"], check=False)
-        daemon.terminate()
-        daemon.wait(timeout=10)
-        model.shutdown()
-        model.server_close()
+        try:
+            if board:
+                try:
+                    if board.child.poll() is None:
+                        board.send(b"\x11")
+                        time.sleep(.1)
+                        board.send(b"q")
+                        until = time.monotonic() + 2
+                        while time.monotonic() < until and board.child.poll() is None:
+                            board.drain()
+                            time.sleep(.02)
+                finally:
+                    # Closing the master first wakes a child blocked on the PTY.
+                    os.close(board.master)
+                    os.close(board.slave)
+                    if board.child.poll() is None:
+                        board.child.kill()
+                    board.child.wait(timeout=5)
+        finally:
+            try:
+                for row in rows():
+                    if row["status"]["Process"] == "running":
+                        cli("kill", row["id"], check=False)
+            finally:
+                daemon.terminate()
+                daemon.wait(timeout=10)
+                model.shutdown()
+                model.server_close()
 
 
 if __name__ == "__main__":

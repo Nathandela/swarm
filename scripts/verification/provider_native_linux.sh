@@ -11,7 +11,7 @@ native_exe=$(realpath "$2")
 mounted=/native/claude
 witness=$3
 case "$witness" in
-  rust_agy_schedule.py)
+  rust_agy_schedule.py|rust_agy_handoff.py)
     test "$#" -eq 3
     mounted=/native/agy
     set -- /fixture/swarm "$mounted" ;;
