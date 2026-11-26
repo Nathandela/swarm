@@ -392,6 +392,69 @@ impl Manager {
         Ok(proof.clone())
     }
 
+    pub(super) fn enrolled_roster(&self, actions: &Value, args: &Value) -> io::Result<Value> {
+        let fields = args
+            .as_object()
+            .ok_or_else(|| invalid("invalid enrolled worker roster request"))?;
+        if fields
+            .keys()
+            .any(|name| !matches!(name.as_str(), "limit" | "after_session_id"))
+            || !args["after_session_id"].is_null()
+                && !args["after_session_id"].as_str().is_some_and(valid)
+            || !args["limit"].is_null() && !args["limit"].as_u64().is_some_and(|limit| limit <= 50)
+        {
+            return Err(invalid("invalid enrolled worker roster page"));
+        }
+        let limit = args["limit"]
+            .as_u64()
+            .filter(|limit| *limit > 0)
+            .unwrap_or(50) as usize;
+        let after = field(args, "after_session_id");
+        let mut client = self.dial()?;
+        let mut rows = client.sessions()?;
+        rows.sort_by(|a, b| field(a, "id").cmp(field(b, "id")));
+        let mut workers = Vec::new();
+        let mut bytes = 2;
+        let mut next = None;
+        for row in rows {
+            let Some(reference) = actions.as_object().and_then(|actions| {
+                actions.values().find(|action| {
+                    row["worker_attempt"] == action["operation_id"]
+                        && row["agent"] == action["arguments"]["agent"]
+                        && row["cwd"] == action["arguments"]["cwd"]
+                })
+            }) else {
+                continue;
+            };
+            let id = field(&row, "id");
+            if id <= after
+                || row["endpoint_id"] != client.endpoint()
+                || row["role"] != "worker"
+                || row["worker_discussion"] != self.conversation
+                || !valid(field(&row, "worker_instance"))
+            {
+                continue;
+            }
+            let worker = json!({"session":id,"session_instance":row["worker_instance"],"agent":row["agent"],
+                    "name":row["name"],"cwd":row["cwd"],"group":row["group"],
+                    "tracking":{"action_id":reference["key"],"attempt_id":row["worker_attempt"]}});
+            let size = serde_json::to_vec(&worker)?.len() + 1;
+            if workers.len() >= limit || bytes + size > 8000 {
+                next = workers
+                    .last()
+                    .map(|previous| field(previous, "session").to_owned());
+                break;
+            }
+            bytes += size;
+            workers.push(worker);
+        }
+        let mut page = json!({"workers":workers});
+        if let Some(next) = next {
+            page["next_session_id"] = json!(next);
+        }
+        Ok(page)
+    }
+
     pub(super) fn enrolled_worker(
         &self,
         session: &str,

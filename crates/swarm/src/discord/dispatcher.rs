@@ -767,6 +767,10 @@ impl Dispatcher {
             ));
         }
         let session = field(&state, "session").to_owned();
+        if tool == "swarm_list" {
+            api.verify(cfg)?;
+            return self.owner.enrolled_roster(&state["worker_actions"], &args);
+        }
         if tool == "swarm_status" {
             let key = field(&args, "action_id");
             let action = &state["worker_actions"][key];
@@ -844,6 +848,7 @@ impl Dispatcher {
                     | "swarm_read_attachment"
                     | "swarm_create"
                     | "swarm_status"
+                    | "swarm_list"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -858,7 +863,7 @@ impl Dispatcher {
         let call = &request["call"];
         let mut args = call["arguments"].clone();
         let tool = field(call, "name");
-        if matches!(tool, "swarm_create" | "swarm_status") {
+        if matches!(tool, "swarm_create" | "swarm_status" | "swarm_list") {
             return self.enrolled_worker_tool(cfg, inbox, api, state, call);
         }
         if tool == "swarm_read_attachment" {

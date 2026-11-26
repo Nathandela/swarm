@@ -93,6 +93,11 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                 "name":"swarm_status","description":"Check an exact returned worker action ID after an uncertain launch.",
                 "inputSchema":{"type":"object","additionalProperties":false,
                     "properties":{"action_id":{"type":"string"}},"required":["action_id"]}
+            },{
+                "name":"swarm_list","description":"List exact enrolled workers belonging to this discussion.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                    "limit":{"type":"integer","minimum":0,"maximum":50},"after_session_id":{"type":"string"}
+                }}
             }]}}),
             Some("tools/call") => {
                 let params = &request["params"];
@@ -105,6 +110,7 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                             | "swarm_read_attachment"
                             | "swarm_create"
                             | "swarm_status"
+                            | "swarm_list"
                     )
                 ) && params["arguments"].is_object()
                     && params["_meta"].is_object()
@@ -133,7 +139,10 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
             && let Some(tools) = response["result"]["tools"].as_array_mut()
         {
             tools.retain(|tool| {
-                !matches!(tool["name"].as_str(), Some("swarm_create" | "swarm_status"))
+                !matches!(
+                    tool["name"].as_str(),
+                    Some("swarm_create" | "swarm_status" | "swarm_list")
+                )
             });
         }
         response["jsonrpc"] = json!("2.0");

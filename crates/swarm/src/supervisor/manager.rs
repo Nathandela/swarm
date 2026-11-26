@@ -121,7 +121,7 @@ pub(crate) fn mcp_args(scope: &Value, session: &str) -> io::Result<Vec<String>> 
         "swarm_read_attachment",
     ];
     if !native_cli {
-        transport.extend(["swarm_create", "swarm_status"]);
+        transport.extend(["swarm_create", "swarm_status", "swarm_list"]);
     }
     if scope["launch"]["agent"] == "claude" {
         let mut server = json!({"mcpServers":{"swarm_voice":{"command":binary,"args":args}}});

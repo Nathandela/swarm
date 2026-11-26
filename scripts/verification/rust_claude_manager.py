@@ -69,6 +69,8 @@ class Model(http.server.BaseHTTPRequestHandler):
             created = tool_result(request,"toolu_fixture_enrolled_create")
             replay = tool_result(request,"toolu_fixture_enrolled_replay")
             status = tool_result(request,"toolu_fixture_enrolled_status")
+            listed = tool_result(request,"toolu_fixture_enrolled_list")
+            after = tool_result(request,"toolu_fixture_enrolled_next")
             arguments = dict(action_id="native-enrolled-job",agent="claude",
                              cwd=str(self.server.approved),prompt="Wait for the synthetic structured worker fixture.")
             if not denied:
@@ -84,8 +86,16 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert mcp_object(created) == mcp_object(replay)
                 structured = ("swarm_status","toolu_fixture_enrolled_status",
                               dict(action_id=mcp_object(created)["action_id"]))
-            else:
+            elif not listed:
                 assert mcp_object(created) == mcp_object(status)
+                structured = ("swarm_list","toolu_fixture_enrolled_list",dict(limit=1))
+            elif not after:
+                workers = mcp_object(listed)["workers"]
+                assert len(workers) == 1 and workers[0]["session"] == mcp_object(created)["session"]
+                structured = ("swarm_list","toolu_fixture_enrolled_next",
+                              dict(limit=1,after_session_id=workers[0]["session"]))
+            else:
+                assert mcp_object(after)["workers"] == []
         call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
         may_publish = not forwarded or self.server.forwarded == "allowed"
         if forwarded and not read_attachment:
@@ -247,6 +257,11 @@ def verify(swarm, provider, test, root, server):
             while not endpoint.exists():
                 assert daemon.poll() is None and time.monotonic() < deadline, "isolated owner socket absent"
                 time.sleep(0.05)
+            if server.enrolled:
+                ordinary = subprocess.run(run([swarm,"spawn","--cli","claude","--worktree=false",
+                                               "--dir",str(server.unapproved),"--prompt","Unrelated synthetic worker."]),
+                                          cwd=project,env=env,capture_output=True,text=True,timeout=8)
+                assert ordinary.returncode == 0, ordinary.stderr
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
                                 "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
             expected_posts = 0 if server.forwarded == "revoked" else (2 if server.park else 1)
